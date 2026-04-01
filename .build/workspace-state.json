@@ -1,0 +1,27 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "peer-plugins",
+          "kind" : "fileSystem",
+          "location" : "/Users/bytedance/peer-plugins",
+          "name" : "PeerPlugins"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/bytedance/peer-plugins"
+        },
+        "subpath" : "peer-plugins"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

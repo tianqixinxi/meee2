@@ -1,0 +1,3 @@
+module CursorPlugin {
+    header "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/include/CursorPlugin-Swift.h"
+}

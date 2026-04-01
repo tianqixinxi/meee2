@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/master.swiftdeps"
+  },
+  "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePlugin.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.dia"
+  },
+  "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePluginExport.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.dia"
+  }
+}

@@ -1,0 +1,3 @@
+module AimePlugin {
+    header "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/include/AimePlugin-Swift.h"
+}

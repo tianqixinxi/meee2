@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/master.swiftdeps"
+  },
+  "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPlugin.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.dia"
+  },
+  "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPluginExport.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.dia"
+  }
+}

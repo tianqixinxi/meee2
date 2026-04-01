@@ -1,0 +1,1448 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.AimePlugin-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/sources",
+      "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePluginExport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerPluginKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "AimePlugin",
+      "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/AimePlugin.swiftmodule",
+      "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/include/AimePlugin-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/AimePlugin.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePlugin.swift",
+        "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePluginExport.swift"
+      ],
+      "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.CursorPlugin-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/sources",
+      "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPluginExport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerPluginKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "CursorPlugin",
+      "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/CursorPlugin.swiftmodule",
+      "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/include/CursorPlugin-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/CursorPlugin.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPlugin.swift",
+        "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPluginExport.swift"
+      ],
+      "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PeerIslandApp-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/sources",
+      "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/App/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "PeerIslandApp",
+      "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandApp.swiftmodule",
+      "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "PeerIslandApp_main",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandApp.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bytedance/peer/App/AppDelegate.swift"
+      ],
+      "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PeerIslandKit-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/sources",
+      "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/HookEvent.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/SessionType.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DebugExporter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DynamicIslandWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DynamicPluginLoader.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/HookReceiver.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/NSScreen+Notch.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/PluginManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/PluginVersionChecker.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/SessionMonitor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/SessionTerminalStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/StatusManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/TerminalManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/VersionChecker.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/IslandView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/PluginSessionRowView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/SessionRowView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/SettingsView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerPluginKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "PeerIslandKit",
+      "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandKit.swiftmodule",
+      "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/include/PeerIslandKit-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandKit.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift",
+        "/Users/bytedance/peer/Sources/Models/HookEvent.swift",
+        "/Users/bytedance/peer/Sources/Models/SessionType.swift",
+        "/Users/bytedance/peer/Sources/Services/DebugExporter.swift",
+        "/Users/bytedance/peer/Sources/Services/DynamicIslandWindow.swift",
+        "/Users/bytedance/peer/Sources/Services/DynamicPluginLoader.swift",
+        "/Users/bytedance/peer/Sources/Services/HookReceiver.swift",
+        "/Users/bytedance/peer/Sources/Services/NSScreen+Notch.swift",
+        "/Users/bytedance/peer/Sources/Services/PluginManager.swift",
+        "/Users/bytedance/peer/Sources/Services/PluginVersionChecker.swift",
+        "/Users/bytedance/peer/Sources/Services/SessionMonitor.swift",
+        "/Users/bytedance/peer/Sources/Services/SessionTerminalStore.swift",
+        "/Users/bytedance/peer/Sources/Services/StatusManager.swift",
+        "/Users/bytedance/peer/Sources/Services/TerminalManager.swift",
+        "/Users/bytedance/peer/Sources/Services/VersionChecker.swift",
+        "/Users/bytedance/peer/Sources/Views/IslandView.swift",
+        "/Users/bytedance/peer/Sources/Views/PluginSessionRowView.swift",
+        "/Users/bytedance/peer/Sources/Views/SessionRowView.swift",
+        "/Users/bytedance/peer/Sources/Views/SettingsView.swift"
+      ],
+      "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.PeerPluginKit-arm64-apple-macosx15.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/sources",
+      "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/PluginSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionPlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionStatus.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "PeerPluginKit",
+      "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerPluginKit.swiftmodule",
+      "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/PluginSession.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionPlugin.swift.o",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionStatus.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j12",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/include/PeerPluginKit-Swift.h",
+        "-swift-version",
+        "5",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g"
+      ],
+      "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/PluginSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionStatus.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerPluginKit.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/PluginSession.swift",
+        "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionPlugin.swift",
+        "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionStatus.swift"
+      ],
+      "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "AimePlugin" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "AimePlugin",
+      "-c",
+      "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePlugin.swift",
+      "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePluginExport.swift",
+      "-I",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/include/AimePlugin-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "CursorPlugin" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "CursorPlugin",
+      "-c",
+      "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPlugin.swift",
+      "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPluginExport.swift",
+      "-I",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/include/CursorPlugin-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PeerIslandApp" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PeerIslandApp",
+      "-c",
+      "/Users/bytedance/peer/App/AppDelegate.swift",
+      "-I",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "PeerIslandApp_main",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PeerIslandKit" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PeerIslandKit",
+      "-c",
+      "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift",
+      "/Users/bytedance/peer/Sources/Models/HookEvent.swift",
+      "/Users/bytedance/peer/Sources/Models/SessionType.swift",
+      "/Users/bytedance/peer/Sources/Services/DebugExporter.swift",
+      "/Users/bytedance/peer/Sources/Services/DynamicIslandWindow.swift",
+      "/Users/bytedance/peer/Sources/Services/DynamicPluginLoader.swift",
+      "/Users/bytedance/peer/Sources/Services/HookReceiver.swift",
+      "/Users/bytedance/peer/Sources/Services/NSScreen+Notch.swift",
+      "/Users/bytedance/peer/Sources/Services/PluginManager.swift",
+      "/Users/bytedance/peer/Sources/Services/PluginVersionChecker.swift",
+      "/Users/bytedance/peer/Sources/Services/SessionMonitor.swift",
+      "/Users/bytedance/peer/Sources/Services/SessionTerminalStore.swift",
+      "/Users/bytedance/peer/Sources/Services/StatusManager.swift",
+      "/Users/bytedance/peer/Sources/Services/TerminalManager.swift",
+      "/Users/bytedance/peer/Sources/Services/VersionChecker.swift",
+      "/Users/bytedance/peer/Sources/Views/IslandView.swift",
+      "/Users/bytedance/peer/Sources/Views/PluginSessionRowView.swift",
+      "/Users/bytedance/peer/Sources/Views/SessionRowView.swift",
+      "/Users/bytedance/peer/Sources/Views/SettingsView.swift",
+      "-I",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/include/PeerIslandKit-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "PeerPluginKit" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "PeerPluginKit",
+      "-c",
+      "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/PluginSession.swift",
+      "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionPlugin.swift",
+      "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionStatus.swift",
+      "-I",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j12",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/include/PeerPluginKit-Swift.h",
+      "-swift-version",
+      "5",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "AimePlugin" : [
+      "PeerPluginKit"
+    ],
+    "CursorPlugin" : [
+      "PeerPluginKit"
+    ],
+    "PeerIslandApp" : [
+      "PeerIslandKit",
+      "PeerPluginKit"
+    ],
+    "PeerIslandKit" : [
+      "PeerPluginKit"
+    ],
+    "PeerPluginKit" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/AimePluginExport.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/sources"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/AimePluginExport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/PluginSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionStatus.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.product/Objects.LinkFileList"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/Plugins/Builtin/CursorPluginExport.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/sources"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/CursorPluginExport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/PluginSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionStatus.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.product/Objects.LinkFileList"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIsland-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIsland-entitlement.plist"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIsland.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/PluginSession.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionPlugin.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/SessionStatus.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIsland.product/Objects.LinkFileList"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/App/AppDelegate.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/sources"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/HookEvent.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Models/SessionType.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DebugExporter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DynamicIslandWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/DynamicPluginLoader.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/HookReceiver.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/NSScreen+Notch.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/PluginManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/PluginVersionChecker.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/SessionMonitor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/SessionTerminalStore.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/StatusManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/TerminalManager.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Services/VersionChecker.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/IslandView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/PluginSessionRowView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/SessionRowView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/Views/SettingsView.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/sources"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/PluginSession.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionPlugin.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer-plugins/Sources/PeerPluginKit/SessionStatus.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/sources"
+    },
+    "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}

@@ -1,0 +1,138 @@
+{
+  "": {
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/master.swiftdeps"
+  },
+  "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.dia"
+  },
+  "/Users/bytedance/peer/Sources/Models/HookEvent.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.dia"
+  },
+  "/Users/bytedance/peer/Sources/Models/SessionType.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/DebugExporter.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DebugExporter.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/DynamicIslandWindow.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicIslandWindow.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/DynamicPluginLoader.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/DynamicPluginLoader.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/HookReceiver.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookReceiver.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/NSScreen+Notch.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/NSScreen+Notch.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/PluginManager.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginManager.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/PluginVersionChecker.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginVersionChecker.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/SessionMonitor.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionMonitor.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/SessionTerminalStore.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionTerminalStore.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/StatusManager.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/StatusManager.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/TerminalManager.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/TerminalManager.dia"
+  },
+  "/Users/bytedance/peer/Sources/Services/VersionChecker.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/VersionChecker.dia"
+  },
+  "/Users/bytedance/peer/Sources/Views/IslandView.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/IslandView.dia"
+  },
+  "/Users/bytedance/peer/Sources/Views/PluginSessionRowView.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/PluginSessionRowView.dia"
+  },
+  "/Users/bytedance/peer/Sources/Views/SessionRowView.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionRowView.dia"
+  },
+  "/Users/bytedance/peer/Sources/Views/SettingsView.swift": {
+    "dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.d",
+    "object": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.swift.o",
+    "swiftmodule": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView~partial.swiftmodule",
+    "swift-dependencies": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.swiftdeps",
+    "diagnostics": "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SettingsView.dia"
+  }
+}
