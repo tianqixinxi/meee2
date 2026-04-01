@@ -71,6 +71,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/include/AimePlugin-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -180,6 +181,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/include/CursorPlugin-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -242,7 +244,7 @@
       "inputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/bytedance/peer/App/AppDelegate.swift"
+          "name" : "/Users/bytedance/peer/App/PeerIslandApp.swift"
         },
         {
           "kind" : "file",
@@ -261,7 +263,7 @@
       "moduleName" : "PeerIslandApp",
       "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandApp.swiftmodule",
       "objects" : [
-        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/PeerIslandApp.swift.o"
       ],
       "otherArguments" : [
         "-target",
@@ -284,6 +286,8 @@
         "-entry-point-function-name",
         "-Xfrontend",
         "PeerIslandApp_main",
+        "-parse-as-library",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -320,7 +324,7 @@
       "outputs" : [
         {
           "kind" : "file",
-          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/PeerIslandApp.swift.o"
         },
         {
           "kind" : "file",
@@ -329,7 +333,7 @@
       ],
       "prepareForIndexing" : false,
       "sources" : [
-        "/Users/bytedance/peer/App/AppDelegate.swift"
+        "/Users/bytedance/peer/App/PeerIslandApp.swift"
       ],
       "tempsPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build",
       "wholeModuleOptimization" : false
@@ -339,6 +343,10 @@
       "fileList" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/sources",
       "importPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
       "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/App/AppDelegate.swift"
+        },
         {
           "kind" : "file",
           "name" : "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift"
@@ -432,6 +440,7 @@
       "moduleName" : "PeerIslandKit",
       "moduleOutputPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules/PeerIslandKit.swiftmodule",
       "objects" : [
+        "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/AppDelegate.swift.o",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/HookEvent.swift.o",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/SessionType.swift.o",
@@ -473,6 +482,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/include/PeerIslandKit-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -507,6 +517,10 @@
       ],
       "outputFileMapPath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/output-file-map.json",
       "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/AppDelegate.swift.o"
+        },
         {
           "kind" : "file",
           "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/ClaudeSession.swift.o"
@@ -590,6 +604,7 @@
       ],
       "prepareForIndexing" : false,
       "sources" : [
+        "/Users/bytedance/peer/Sources/App/AppDelegate.swift",
         "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift",
         "/Users/bytedance/peer/Sources/Models/HookEvent.swift",
         "/Users/bytedance/peer/Sources/Models/SessionType.swift",
@@ -668,6 +683,7 @@
         "-emit-objc-header",
         "-emit-objc-header-path",
         "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/include/PeerPluginKit-Swift.h",
+        "-color-diagnostics",
         "-swift-version",
         "5",
         "-plugin-path",
@@ -762,6 +778,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/AimePlugin.build/include/AimePlugin-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -825,6 +842,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/CursorPlugin.build/include/CursorPlugin-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -864,7 +882,7 @@
       "-module-name",
       "PeerIslandApp",
       "-c",
-      "/Users/bytedance/peer/App/AppDelegate.swift",
+      "/Users/bytedance/peer/App/PeerIslandApp.swift",
       "-I",
       "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/Modules",
       "-target",
@@ -887,6 +905,8 @@
       "-entry-point-function-name",
       "-Xfrontend",
       "PeerIslandApp_main",
+      "-parse-as-library",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -926,6 +946,7 @@
       "-module-name",
       "PeerIslandKit",
       "-c",
+      "/Users/bytedance/peer/Sources/App/AppDelegate.swift",
       "/Users/bytedance/peer/Sources/Models/ClaudeSession.swift",
       "/Users/bytedance/peer/Sources/Models/HookEvent.swift",
       "/Users/bytedance/peer/Sources/Models/SessionType.swift",
@@ -967,6 +988,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/include/PeerIslandKit-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -1031,6 +1053,7 @@
       "-emit-objc-header",
       "-emit-objc-header-path",
       "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/include/PeerPluginKit-Swift.h",
+      "-color-diagnostics",
       "-swift-version",
       "5",
       "-plugin-path",
@@ -1215,7 +1238,11 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/AppDelegate.swift.o"
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/PeerIslandApp.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/AppDelegate.swift.o"
         },
         {
           "kind" : "file",
@@ -1317,7 +1344,7 @@
         },
         {
           "kind" : "file",
-          "name" : "/Users/bytedance/peer/App/AppDelegate.swift"
+          "name" : "/Users/bytedance/peer/App/PeerIslandApp.swift"
         }
       ],
       "outputFilePath" : "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandApp.build/sources"
@@ -1328,6 +1355,10 @@
         {
           "kind" : "virtual",
           "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/bytedance/peer/Sources/App/AppDelegate.swift"
         },
         {
           "kind" : "file",

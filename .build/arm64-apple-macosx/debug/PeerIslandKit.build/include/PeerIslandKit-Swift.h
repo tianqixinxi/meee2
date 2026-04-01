@@ -281,6 +281,7 @@ typedef unsigned int swift_uint4  __attribute__((__ext_vector_type__(4)));
 #endif
 @import AppKit;
 @import Foundation;
+@import ObjectiveC;
 #endif
 
 #endif
@@ -302,6 +303,15 @@ typedef unsigned int swift_uint4  __attribute__((__ext_vector_type__(4)));
 #endif
 
 #if defined(__OBJC__)
+
+@class NSNotification;
+/// AppDelegate - 管理 macOS 特有的窗口和状态栏
+SWIFT_CLASS("_TtC13PeerIslandKit11AppDelegate")
+@interface AppDelegate : NSObject <NSApplicationDelegate>
+- (void)applicationDidFinishLaunching:(NSNotification * _Nonnull)notification;
+- (void)applicationWillTerminate:(NSNotification * _Nonnull)notification;
+- (nonnull instancetype)init OBJC_DESIGNATED_INITIALIZER;
+@end
 
 /// 灵动岛窗口 - 自定义窗口类
 /// 确保窗口正确显示在最顶层
