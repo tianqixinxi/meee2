@@ -28,6 +28,15 @@ mkdir -p "$INSTALL_DIR"
 cp "$DYLIB" "$INSTALL_DIR/libPeerPluginKit.dylib"
 echo "Installed libPeerPluginKit.dylib to $INSTALL_DIR/"
 
+# Install builtin plugins
+BUILTIN_CURSOR=".build/release/libCursorPlugin.dylib"
+if [ -f "$BUILTIN_CURSOR" ]; then
+    PLUGIN_DIR="$HOME/.peer-island/plugins/cursor"
+    mkdir -p "$PLUGIN_DIR"
+    cp "$BUILTIN_CURSOR" "$PLUGIN_DIR/CursorPlugin.dylib"
+    echo "Installed CursorPlugin to $PLUGIN_DIR/"
+fi
+
 # Apply entitlements to disable sandbox
 echo "Applying entitlements..."
 codesign --force --sign - --entitlements PeerIsland.entitlements "$EXECUTABLE"
