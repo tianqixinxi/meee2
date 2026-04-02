@@ -1,3 +1,0 @@
-module PeerPluginKit {
-    header "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerPluginKit.build/include/PeerPluginKit-Swift.h"
-}

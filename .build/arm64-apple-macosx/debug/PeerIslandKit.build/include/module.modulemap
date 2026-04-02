@@ -1,3 +1,0 @@
-module PeerIslandKit {
-    header "/Users/bytedance/peer/.build/arm64-apple-macosx/debug/PeerIslandKit.build/include/PeerIslandKit-Swift.h"
-}
