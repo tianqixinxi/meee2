@@ -13,7 +13,7 @@ let package = Package(
         .library(name: "PeerIslandKit", targets: ["PeerIslandKit"])
     ],
     dependencies: [
-        .package(name: "PeerPluginKit", path: "../peer-plugin-kit"),
+        .package(name: "PeerPluginKit", path: "peer-plugin-kit"),
     ],
     targets: [
         // Library target with all code
