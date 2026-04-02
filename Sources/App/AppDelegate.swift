@@ -37,6 +37,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 创建灵动岛窗口
         setupIslandWindow()
 
+        // 确保 Claude CLI hooks 配置存在
+        SettingsConfigManager.shared.ensureHooksConfigured()
+
         // 加载外部 plugins
         PluginManager.shared.loadExternalPlugins()
 

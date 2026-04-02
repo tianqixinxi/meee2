@@ -503,16 +503,12 @@ struct SettingsView_Previews: PreviewProvider {
 
 // Test plugin for preview
 class TestPlugin: SessionPlugin {
-    let pluginId = "com.peerisland.plugin.test"
-    let displayName = "Test Plugin"
-    let icon = "puzzlepiece.extension"
-    var themeColor: Color { .purple }
-    var config: PluginConfig = PluginConfig(enabled: true)
-    var onSessionsUpdated: (([PluginSession]) -> Void)?
-    var onUrgentEvent: ((PluginSession, String, String?) -> Void)?
-    func initialize() -> Bool { true }
-    func start() -> Bool { return true }
-    func stop() {}
-    func getSessions() -> [PluginSession] { [] }
-    func activateTerminal(for session: PluginSession) {}
+    override var pluginId: String { "com.peerisland.plugin.test" }
+    override var displayName: String { "Test Plugin" }
+    override var icon: String { "puzzlepiece.extension" }
+    override var themeColor: Color { .purple }
+    override func initialize() -> Bool { true }
+    override func start() -> Bool { return true }
+    override func getSessions() -> [PluginSession] { [] }
+    override func activateTerminal(for session: PluginSession) {}
 }

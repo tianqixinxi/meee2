@@ -1,0 +1,28 @@
+# Xcode 编译与IDE配置
+build/
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# CocoaPods 依赖缓存
+Pods/
+
+# Carthage 依赖编译产物
+Carthage/Build/
+
+# Swift Package Manager (SPM) 缓存
+.build/

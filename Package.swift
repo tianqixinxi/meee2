@@ -13,22 +13,19 @@ let package = Package(
         .library(name: "PeerIslandKit", targets: ["PeerIslandKit"])
     ],
     dependencies: [
-        // 本地依赖 PeerPluginKit (开发阶段)
-        .package(path: "../peer-plugins"),
+        .package(name: "PeerPluginKit", path: "../peer-plugin-kit"),
     ],
     targets: [
         // Library target with all code
         .target(
             name: "PeerIslandKit",
-            dependencies: [
-                .product(name: "PeerPluginKit", package: "peer-plugins")
-            ],
+            dependencies: [.product(name: "PeerPluginKit", package: "PeerPluginKit")],
             path: "Sources"
         ),
         // Minimal executable target that just runs the app
         .executableTarget(
             name: "PeerIslandApp",
-            dependencies: ["PeerIslandKit"],
+            dependencies: ["PeerIslandKit", .product(name: "PeerPluginKit", package: "PeerPluginKit")],
             path: "App",
             linkerSettings: [
                 .linkedFramework("Foundation"),

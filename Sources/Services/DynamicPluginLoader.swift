@@ -35,6 +35,9 @@ class DynamicPluginLoader {
     func loadAllPlugins() -> [SessionPlugin] {
         var plugins: [SessionPlugin] = []
 
+        // 预加载 PeerPluginKit，确保所有 plugins 使用同一个类定义
+        preloadPeerPluginKit()
+
         // 确保目录存在
         try? FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
 
@@ -71,6 +74,30 @@ class DynamicPluginLoader {
     }
 
     // MARK: - Private
+
+    /// 预加载 PeerPluginKit 动态库
+    /// 确保所有 plugins 使用同一个 SessionPlugin 类定义
+    private func preloadPeerPluginKit() {
+        let home = NSHomeDirectory()
+        let libPath = URL(fileURLWithPath: home)
+            .appendingPathComponent(".peer-island")
+            .appendingPathComponent("lib")
+            .appendingPathComponent("libPeerPluginKit.dylib")
+
+        guard FileManager.default.fileExists(atPath: libPath.path) else {
+            NSLog("[DynamicPluginLoader] PeerPluginKit not found at: \(libPath.path)")
+            return
+        }
+
+        // 使用 RTLD_GLOBAL 让符号对后续加载的 plugins 可见
+        guard dlopen(libPath.path, RTLD_NOW | RTLD_GLOBAL) != nil else {
+            let error = String(cString: dlerror())
+            NSLog("[DynamicPluginLoader] Failed to preload PeerPluginKit: \(error)")
+            return
+        }
+
+        NSLog("[DynamicPluginLoader] Preloaded PeerPluginKit from: \(libPath.path)")
+    }
 
     private func loadPlugin(from directory: URL) -> SessionPlugin? {
         // 1. 读取 plugin.json
@@ -175,91 +202,4 @@ struct CodableValue: Codable {
     }
 }
 
-// MARK: - Dynamic Plugin Wrapper
-
-/// 动态加载的 Plugin 包装器
-/// 用于包装从外部加载的 Plugin，提供额外的元数据访问
-class DynamicPluginWrapper: SessionPlugin {
-    let pluginId: String
-    let displayName: String
-    let icon: String
-    var themeColor: Color { colorFromHex(metadata.color) }
-    let version: String
-    let helpUrl: String?
-
-    var config: PluginConfig = PluginConfig()
-
-    var onSessionsUpdated: (([PluginSession]) -> Void)?
-    var onUrgentEvent: ((PluginSession, String, String?) -> Void)?
-
-    private let wrappedPlugin: SessionPlugin
-    private let metadata: PluginMetadata
-
-    init(wrapping plugin: SessionPlugin, metadata: PluginMetadata) {
-        self.wrappedPlugin = plugin
-        self.metadata = metadata
-
-        self.pluginId = metadata.id
-        self.displayName = metadata.name
-        self.icon = metadata.icon
-        self.version = metadata.version
-        self.helpUrl = metadata.helpUrl
-    }
-
-    func initialize() -> Bool {
-        return wrappedPlugin.initialize()
-    }
-
-    func start() -> Bool {
-        return wrappedPlugin.start()
-    }
-
-    func stop() {
-        wrappedPlugin.stop()
-    }
-
-    func cleanup() {
-        wrappedPlugin.cleanup()
-    }
-
-    func getSessions() -> [PluginSession] {
-        return wrappedPlugin.getSessions()
-    }
-
-    func refresh() {
-        wrappedPlugin.refresh()
-    }
-
-    func activateTerminal(for session: PluginSession) {
-        wrappedPlugin.activateTerminal(for: session)
-    }
-
-    // MARK: - Error State (forwarded from wrapped plugin)
-
-    var hasError: Bool {
-        return wrappedPlugin.hasError
-    }
-
-    var lastError: String? {
-        return wrappedPlugin.lastError
-    }
-
-    // MARK: - Helpers
-
-    private func colorFromHex(_ hex: String) -> Color {
-        var hexSanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        hexSanitized = hexSanitized.replacingOccurrences(of: "#", with: "")
-
-        var rgb: UInt64 = 0
-
-        guard Scanner(string: hexSanitized).scanHexInt64(&rgb) else {
-            return .blue
-        }
-
-        let r = Double((rgb & 0xFF0000) >> 16) / 255.0
-        let g = Double((rgb & 0x00FF00) >> 8) / 255.0
-        let b = Double(rgb & 0x0000FF) / 255.0
-
-        return Color(red: r, green: g, blue: b)
-    }
-}
+// MARK: - Plugin Metadata
