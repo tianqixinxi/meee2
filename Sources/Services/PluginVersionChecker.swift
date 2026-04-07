@@ -1,6 +1,6 @@
 import Foundation
 import Combine
-import PeerPluginKit
+import Meee2PluginKit
 
 /// Plugin 版本检查器 - 检测统一仓库 PeerPlugins 中的最新版本
 class PluginVersionChecker: ObservableObject {

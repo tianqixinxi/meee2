@@ -63,7 +63,7 @@ class DebugExporter {
         }
 
         // 3. 复制 Plugin 配置
-        let pluginsDir = NSHomeDirectory().appending("/.peer-island/plugins")
+        let pluginsDir = NSHomeDirectory().appending("/.meee2/plugins")
         let pluginsDest = tempDir.appendingPathComponent("plugins")
         if FileManager.default.fileExists(atPath: pluginsDir) {
             try? FileManager.default.copyItem(atPath: pluginsDir, toPath: pluginsDest.path)
@@ -74,7 +74,13 @@ class DebugExporter {
         let systemInfoUrl = tempDir.appendingPathComponent("system_info.json")
         try systemInfo.write(to: systemInfoUrl, atomically: true, encoding: .utf8)
 
-        // 5. 创建 zip
+        // 5. 复制日志文件
+        let logFile = NSHomeDirectory().appending("/Library/Logs/meee2.log")
+        if FileManager.default.fileExists(atPath: logFile) {
+            try? FileManager.default.copyItem(atPath: logFile, toPath: tempDir.appendingPathComponent("meee2.log").path)
+        }
+
+        // 6. 创建 zip
         try zipDirectory(tempDir, to: destination)
 
         // 清理临时目录

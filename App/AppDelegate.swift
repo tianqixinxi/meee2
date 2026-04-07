@@ -28,6 +28,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @AppStorage("selectedScreenId") private var selectedScreenId: String = "builtin"
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // 初始化日志管理器
+        _ = LogManager.shared
+
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 

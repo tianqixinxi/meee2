@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 /// Plugin 管理器
 public class PluginManager: ObservableObject {
@@ -35,9 +35,14 @@ public class PluginManager: ObservableObject {
     // MARK: - Init
 
     private init() {
+        // 设置 plugin 日志回调
+        pluginLogHandler = { message in
+            MLog(message)
+        }
+
         let home = NSHomeDirectory()
         pluginDirectory = URL(fileURLWithPath: home)
-            .appendingPathComponent(".peer-island")
+            .appendingPathComponent(".meee2")
             .appendingPathComponent("plugins")
 
         try? FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
@@ -48,7 +53,7 @@ public class PluginManager: ObservableObject {
     /// 注册内置 plugin
     public func register(_ plugin: SessionPlugin) {
         guard plugin.initialize() else {
-            NSLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
+            MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
             return
         }
 
@@ -61,7 +66,7 @@ public class PluginManager: ObservableObject {
         }
 
         loadedPlugins[plugin.pluginId] = plugin
-        NSLog("[PluginManager] Registered plugin: \(plugin.pluginId)")
+        MLog("[PluginManager] Registered plugin: \(plugin.pluginId)")
     }
 
     /// 启动所有 plugins
@@ -69,7 +74,7 @@ public class PluginManager: ObservableObject {
         for (pluginId, plugin) in loadedPlugins {
             if plugin.config.enabled {
                 _ = plugin.start()  // Result intentionally unused
-                NSLog("[PluginManager] Started plugin: \(pluginId)")
+                MLog("[PluginManager] Started plugin: \(pluginId)")
             }
         }
     }
@@ -99,9 +104,9 @@ public class PluginManager: ObservableObject {
                 }
 
                 loadedPlugins[plugin.pluginId] = plugin
-                NSLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
+                MLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
             } else {
-                NSLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
+                MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
             }
         }
     }

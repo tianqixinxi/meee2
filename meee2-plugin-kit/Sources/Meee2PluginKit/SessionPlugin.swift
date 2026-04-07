@@ -1,6 +1,19 @@
 import Foundation
 import SwiftUI
 
+/// 全局日志回调（由主程序设置）
+public var pluginLogHandler: ((String) -> Void)?
+
+/// Plugin 日志函数
+public func PluginLog(_ message: String) {
+    // 写入主程序的日志文件
+    if let handler = pluginLogHandler {
+        handler(message)
+    }
+    // 同时输出到系统日志
+    NSLog("%@", message)
+}
+
 /// Plugin 配置
 public struct PluginConfig {
     /// 是否启用

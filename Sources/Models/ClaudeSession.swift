@@ -1,5 +1,5 @@
 import Foundation
-import PeerPluginKit
+import Meee2PluginKit
 
 /// AI Session 数据模型
 /// 支持多种 AI 助手（Claude, Cursor, Copilot 等）

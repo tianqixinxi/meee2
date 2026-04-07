@@ -1,5 +1,5 @@
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 展开模式
 enum ExpandMode {

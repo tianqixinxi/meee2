@@ -1,6 +1,6 @@
 import Foundation
 import Combine
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 状态管理器 - 聚合 SessionMonitor 和 HookReceiver 的数据
 /// 作为 UI 的数据源

@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 动态 Plugin 加载器 - 使用 dlopen 加载 .dylib 文件
 class DynamicPluginLoader {
@@ -25,7 +25,7 @@ class DynamicPluginLoader {
     init() {
         let home = NSHomeDirectory()
         pluginDirectory = URL(fileURLWithPath: home)
-            .appendingPathComponent(".peer-island")
+            .appendingPathComponent(".meee2")
             .appendingPathComponent("plugins")
     }
 
@@ -35,8 +35,8 @@ class DynamicPluginLoader {
     func loadAllPlugins() -> [SessionPlugin] {
         var plugins: [SessionPlugin] = []
 
-        // 预加载 PeerPluginKit，确保所有 plugins 使用同一个类定义
-        preloadPeerPluginKit()
+        // 预加载 Meee2PluginKit，确保所有 plugins 使用同一个类定义
+        preloadMeee2PluginKit()
 
         // 确保目录存在
         try? FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
@@ -60,7 +60,7 @@ class DynamicPluginLoader {
             }
         }
 
-        NSLog("[DynamicPluginLoader] Loaded \(plugins.count) external plugins")
+        MLog("[DynamicPluginLoader] Loaded \(plugins.count) external plugins")
         return plugins
     }
 
@@ -68,35 +68,35 @@ class DynamicPluginLoader {
     func unloadAllPlugins() {
         for (path, handle) in loadedHandles {
             dlclose(handle)
-            NSLog("[DynamicPluginLoader] Unloaded: \(path)")
+            MLog("[DynamicPluginLoader] Unloaded: \(path)")
         }
         loadedHandles.removeAll()
     }
 
     // MARK: - Private
 
-    /// 预加载 PeerPluginKit 动态库
+    /// 预加载 Meee2PluginKit 动态库
     /// 确保所有 plugins 使用同一个 SessionPlugin 类定义
-    private func preloadPeerPluginKit() {
+    private func preloadMeee2PluginKit() {
         let home = NSHomeDirectory()
         let libPath = URL(fileURLWithPath: home)
-            .appendingPathComponent(".peer-island")
+            .appendingPathComponent(".meee2")
             .appendingPathComponent("lib")
-            .appendingPathComponent("libPeerPluginKit.dylib")
+            .appendingPathComponent("libMeee2PluginKit.dylib")
 
         guard FileManager.default.fileExists(atPath: libPath.path) else {
-            NSLog("[DynamicPluginLoader] PeerPluginKit not found at: \(libPath.path)")
+            MLog("[DynamicPluginLoader] Meee2PluginKit not found at: \(libPath.path)")
             return
         }
 
         // 使用 RTLD_GLOBAL 让符号对后续加载的 plugins 可见
         guard dlopen(libPath.path, RTLD_NOW | RTLD_GLOBAL) != nil else {
             let error = String(cString: dlerror())
-            NSLog("[DynamicPluginLoader] Failed to preload PeerPluginKit: \(error)")
+            MLog("[DynamicPluginLoader] Failed to preload Meee2PluginKit: \(error)")
             return
         }
 
-        NSLog("[DynamicPluginLoader] Preloaded PeerPluginKit from: \(libPath.path)")
+        MLog("[DynamicPluginLoader] Preloaded Meee2PluginKit from: \(libPath.path)")
     }
 
     private func loadPlugin(from directory: URL) -> SessionPlugin? {
@@ -105,7 +105,7 @@ class DynamicPluginLoader {
 
         guard let configData = try? Data(contentsOf: configFile),
               let config = try? JSONDecoder().decode(PluginMetadata.self, from: configData) else {
-            NSLog("[DynamicPluginLoader] Failed to load plugin.json from: \(directory.path)")
+            MLog("[DynamicPluginLoader] Failed to load plugin.json from: \(directory.path)")
             return nil
         }
 
@@ -114,7 +114,7 @@ class DynamicPluginLoader {
 
         guard let handle = dlopen(dylibPath, RTLD_NOW | RTLD_LOCAL) else {
             let error = String(cString: dlerror())
-            NSLog("[DynamicPluginLoader] Failed to load \(dylibPath): \(error)")
+            MLog("[DynamicPluginLoader] Failed to load \(dylibPath): \(error)")
             return nil
         }
 
@@ -122,7 +122,7 @@ class DynamicPluginLoader {
 
         // 3. 获取创建函数
         guard let createSymbol = dlsym(handle, "createPlugin") else {
-            NSLog("[DynamicPluginLoader] createPlugin symbol not found in \(dylibPath)")
+            MLog("[DynamicPluginLoader] createPlugin symbol not found in \(dylibPath)")
             return nil
         }
 
@@ -135,11 +135,11 @@ class DynamicPluginLoader {
         let pluginObject = Unmanaged<AnyObject>.fromOpaque(pluginPtr).takeUnretainedValue()
 
         guard let plugin = pluginObject as? SessionPlugin else {
-            NSLog("[DynamicPluginLoader] Loaded object does not conform to SessionPlugin: \(dylibPath)")
+            MLog("[DynamicPluginLoader] Loaded object does not conform to SessionPlugin: \(dylibPath)")
             return nil
         }
 
-        NSLog("[DynamicPluginLoader] Loaded plugin: \(config.id)")
+        MLog("[DynamicPluginLoader] Loaded plugin: \(config.id)")
         return plugin
     }
 }
@@ -151,8 +151,8 @@ struct PluginMetadata: Codable {
     let id: String
     let name: String
     let version: String
-    let icon: String
-    let color: String
+    let icon: String?
+    let color: String?
     let dylib: String
     let settings: [PluginSettingDefinition]?
     let helpUrl: String?

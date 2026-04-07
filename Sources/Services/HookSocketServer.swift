@@ -1,6 +1,6 @@
 import Foundation
 import os.log
-import PeerPluginKit
+import Meee2PluginKit
 
 /// Logger for hook socket server
 private let logger = Logger(subsystem: "com.meee2", category: "Hooks")

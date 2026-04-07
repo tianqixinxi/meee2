@@ -1,6 +1,6 @@
 import Foundation
 import Combine
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 监听 Claude CLI sessions 目录变化的服务
 /// 通过文件系统事件检测新 session、session 结束等

@@ -1,6 +1,6 @@
 import Foundation
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 class CursorPlugin: SessionPlugin {
     // MARK: - 标识

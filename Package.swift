@@ -11,17 +11,17 @@ let package = Package(
         .library(name: "CursorPlugin", type: .dynamic, targets: ["CursorPlugin"]),
     ],
     dependencies: [
-        .package(name: "PeerPluginKit", path: "peer-plugin-kit"),
+        .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
     ],
     targets: [
         .target(
             name: "meee2Kit",
-            dependencies: [.product(name: "PeerPluginKit", package: "PeerPluginKit")],
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "Sources"
         ),
         .executableTarget(
             name: "meee2App",
-            dependencies: ["meee2Kit", .product(name: "PeerPluginKit", package: "PeerPluginKit")],
+            dependencies: ["meee2Kit", .product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "App",
             linkerSettings: [
                 .linkedFramework("Foundation"),
@@ -32,8 +32,8 @@ let package = Package(
         // Builtin plugins
         .target(
             name: "CursorPlugin",
-            dependencies: [.product(name: "PeerPluginKit", package: "PeerPluginKit")],
-            path: "peer-plugins-builtin/Sources/Plugins/Builtin",
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
+            path: "plugins-builtin/Sources/Plugins/Builtin",
             sources: ["CursorPlugin.swift", "CursorPluginExport.swift"]
         ),
     ]

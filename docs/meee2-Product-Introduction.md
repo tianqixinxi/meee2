@@ -38,7 +38,7 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 
 ### 5. 插件扩展系统
 
-- **标准化协议**：基于 `PeerPluginKit` 框架，支持第三方开发插件
+- **标准化协议**：基于 `Meee2PluginKit` 框架，支持第三方开发插件
 - **动态加载**：插件可热加载，无需重启应用
 - **独立运行**：每个插件拥有独立的 socket 通信和状态管理
 
@@ -212,13 +212,13 @@ protocol SessionPlugin {
 {
   "hooks": {
     "SessionStart": [{
-      "command": "/path/to/peer-island-bridge --source claude"
+      "command": "/path/to/meee2-bridge --source claude"
     }],
     "PermissionRequest": [{
-      "command": "/path/to/peer-island-bridge --source claude"
+      "command": "/path/to/meee2-bridge --source claude"
     }],
     "Stop": [{
-      "command": "/path/to/peer-island-bridge --source claude"
+      "command": "/path/to/meee2-bridge --source claude"
     }]
   }
 }
@@ -226,10 +226,10 @@ protocol SessionPlugin {
 
 ### 2. 安装插件
 
-将插件放置在 `~/.peer-island/plugins/` 目录：
+将插件放置在 `~/.meee2/plugins/` 目录：
 
 ```
-~/.peer-island/plugins/
+~/.meee2/plugins/
 ├── cursor-plugin/
 │   ├── Package.swift
 │   └── Sources/
@@ -245,7 +245,7 @@ protocol SessionPlugin {
 
 ```
 ┌────────────────────────────────┐
-│  ●  peer-island   Running...   │  ← 项目名 + 状态
+│  ●  meee2   Running...   │  ← 项目名 + 状态
 └────────────────────────────────┘
 ```
 
@@ -253,7 +253,7 @@ protocol SessionPlugin {
 
 ```
 ┌──────────────────────────────────────────┐
-│  ●  peer-island  [Permission]  [Allow][Deny] │  ← Header + 按钮
+│  ●  meee2  [Permission]  [Allow][Deny] │  ← Header + 按钮
 ├──────────────────────────────────────────┤
 │                                          │
 │  需要确认: Bash                          │  ← Message Box
@@ -315,4 +315,4 @@ peer/
 
 - **GitHub**: tianqixinxi/meee2
 - **Claude CLI 文档**: https://docs.anthropic.com/claude-cli
-- **Plugin 开发指南**: 见 `PeerPluginKit` 文档
+- **Plugin 开发指南**: 见 `Meee2PluginKit` 文档

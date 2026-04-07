@@ -31,18 +31,25 @@ cp ".build/release/${APP_NAME}" "$APP_DIR/Contents/MacOS/${APP_NAME}"
 chmod +x "$APP_DIR/Contents/MacOS/${APP_NAME}"
 
 # Copy dylib
-DYLIB_SRC="$HOME/.peer-island/lib/libPeerPluginKit.dylib"
+DYLIB_SRC="$HOME/.meee2/lib/libMeee2PluginKit.dylib"
 if [ -f "$DYLIB_SRC" ]; then
     cp "$DYLIB_SRC" "$APP_DIR/Contents/Frameworks/"
-    echo "Copied libPeerPluginKit.dylib"
+    echo "Copied libMeee2PluginKit.dylib"
 else
-    echo "Warning: libPeerPluginKit.dylib not found at $DYLIB_SRC"
+    echo "Warning: libMeee2PluginKit.dylib not found at $DYLIB_SRC"
 fi
 
 # Copy app icon
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/"
     echo "Copied AppIcon.icns"
+fi
+
+# Copy Bridge scripts
+if [ -d "Bridge" ]; then
+    cp -R Bridge "$APP_DIR/Contents/Resources/"
+    chmod +x "$APP_DIR/Contents/Resources/Bridge/claude-hook-bridge.sh"
+    echo "Copied Bridge scripts"
 fi
 
 # Create Info.plist
@@ -66,7 +73,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.0.1</string>
+    <string>0.0.2</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -94,8 +101,8 @@ echo ""
 echo "=== Signing App Bundle ==="
 
 # Sign frameworks first
-if [ -f "$APP_DIR/Contents/Frameworks/libPeerPluginKit.dylib" ]; then
-    codesign --force --sign - "$APP_DIR/Contents/Frameworks/libPeerPluginKit.dylib"
+if [ -f "$APP_DIR/Contents/Frameworks/libMeee2PluginKit.dylib" ]; then
+    codesign --force --sign - "$APP_DIR/Contents/Frameworks/libMeee2PluginKit.dylib"
 fi
 
 # Sign the app with entitlements

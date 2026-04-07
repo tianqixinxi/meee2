@@ -2,18 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "PeerPluginsBuiltin",
+    name: "Meee2PluginsBuiltin",
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "CursorPlugin", type: .dynamic, targets: ["CursorPlugin"]),
     ],
     dependencies: [
-        .package(name: "PeerPluginKit", path: "../peer-plugin-kit"),
+        .package(name: "Meee2PluginKit", path: "../meee2-plugin-kit"),
     ],
     targets: [
         .target(
             name: "CursorPlugin",
-            dependencies: [.product(name: "PeerPluginKit", package: "PeerPluginKit")],
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "Sources/Plugins/Builtin",
             sources: ["CursorPlugin.swift", "CursorPluginExport.swift"]
         ),

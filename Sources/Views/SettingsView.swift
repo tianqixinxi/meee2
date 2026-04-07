@@ -1,5 +1,5 @@
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 设置面板视图
 public struct SettingsView: View {
@@ -205,6 +205,22 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("Create Plugin") {
+                Text("Create your own plugin to extend meee2 functionality.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Button("Human Read") {
+                        showPluginGuide()
+                    }
+                    Button("Copy2Agent (Recommended)") {
+                        copyPluginGuide()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+
             Section("Info") {
                 Text("Plugins extend meee2 to support additional AI assistants. Click a plugin to expand its settings.")
                     .font(.caption)
@@ -212,6 +228,75 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func showPluginGuide() {
+        let guide = pluginGuideContent
+        let alert = NSAlert()
+        alert.messageText = "Plugin Development Guide"
+        alert.informativeText = guide
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func copyPluginGuide() {
+        let guide = pluginGuideContent
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(guide, forType: .string)
+
+        // Show confirmation
+        let alert = NSAlert()
+        alert.messageText = "Copied!"
+        alert.informativeText = "Plugin guide has been copied to clipboard. Paste it to your AI assistant."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private var pluginGuideContent: String {
+        """
+        # How to Create a meee2 Plugin
+
+        ## Quick Start
+
+        1. Copy the plugin template:
+           cp -r meee2/plugin-template ~/my-plugin
+           cd ~/my-plugin
+
+        2. Rename files and replace placeholders:
+           - {{PLUGIN_NAME}} → YourPluginName
+           - {{PLUGIN_ID}} → com.meee2.plugin.your-plugin
+           - {{DISPLAY_NAME}} → Your Plugin Display Name
+
+        3. Update Package.swift path:
+           .package(name: "Meee2PluginKit", path: "/path/to/meee2/meee2-plugin-kit")
+
+        4. Implement your plugin logic in the Swift file.
+
+        5. Build and install:
+           swift build -c release
+           mkdir -p ~/.meee2/plugins/my-plugin
+           cp .build/release/libYourPlugin.dylib ~/.meee2/plugins/my-plugin/YourPlugin.dylib
+
+        6. Create plugin.json:
+           echo '{"id":"com.meee2.plugin.your-plugin","name":"Your Plugin","version":"1.0.0","dylib":"YourPlugin.dylib"}' > ~/.meee2/plugins/my-plugin/plugin.json
+
+        7. Restart meee2.
+
+        ## Key Methods to Implement
+
+        - pluginId: Unique identifier
+        - displayName: Human-readable name
+        - getSessions(): Return active sessions
+        - activateTerminal(for:): Handle user click
+
+        ## Location
+
+        Plugin template: meee2/plugin-template/
+        Install path: ~/.meee2/plugins/<plugin-name>/
+        """
     }
 
     // MARK: - About Settings

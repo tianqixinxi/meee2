@@ -78,7 +78,7 @@ public class SettingsConfigManager {
     }
 
     /// 检查 hooks 配置，返回是否需要写入
-    /// - 如果没有 peer-island hooks，添加
+    /// - 如果没有 meee2 hooks，添加
     /// - 如果有但路径不对，更新路径
     private func checkAndUpdateHooks(settings: inout [String: Any], bridgePath: String) -> Bool {
         var hooks: [String: Any] = settings["hooks"] as? [String: Any] ?? [:]
@@ -88,7 +88,7 @@ public class SettingsConfigManager {
             var eventHooks = hooks[eventType] as? [[String: Any]] ?? []
             var foundAndUpdated = false
 
-            // 查找现有的 peer-island hook 配置
+            // 查找现有的 meee2 hook 配置
             for i in 0..<eventHooks.count {
                 var hookConfig = eventHooks[i]
                 guard var innerHooks = hookConfig["hooks"] as? [[String: Any]] else { continue }
@@ -195,7 +195,8 @@ public class SettingsConfigManager {
     /// 发布环境：app bundle 内的 Resources/bridge/
     private func getBridgeScriptPath() -> String {
         // 检查是否在 app bundle 中
-        if let bundlePath = Bundle.main.path(forResource: bridgeScriptName, ofType: nil, inDirectory: "bridge") {
+        // Bundle.main.path 会搜索 Contents/Resources/
+        if let bundlePath = Bundle.main.path(forResource: "claude-hook-bridge", ofType: "sh", inDirectory: "Bridge") {
             NSLog("[SettingsConfigManager] Found bridge in bundle: \(bundlePath)")
             return bundlePath
         }
@@ -208,8 +209,8 @@ public class SettingsConfigManager {
         let possiblePaths = [
             // 标准 SwiftPM 构建路径
             URL(fileURLWithPath: resourcePath).appendingPathComponent("Bridge").appendingPathComponent(bridgeScriptName).path,
-            // 源码目录 (相对于 workspace)
-            "/Users/bytedance/peer_island_workspace/peer/Bridge/\(bridgeScriptName)"
+            // 源码目录 (相对于 workspace) - 更新为 meee2
+            "/Users/bytedance/peer_island_workspace/meee2/Bridge/\(bridgeScriptName)"
         ]
 
         for path in possiblePaths {

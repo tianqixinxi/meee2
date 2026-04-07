@@ -1,5 +1,5 @@
 import Foundation
-import PeerPluginKit
+import Meee2PluginKit
 
 /// 用于解码任意 JSON 值的包装类型
 public struct AnyCodable: Decodable, @unchecked Sendable {

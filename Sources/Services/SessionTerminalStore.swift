@@ -16,7 +16,7 @@ struct SessionTerminalInfo: Codable {
 }
 
 /// 持久化 Session-Terminal 映射
-/// 存储位置: ~/.peer-island/session-terminals.json
+/// 存储位置: ~/.meee2/session-terminals.json
 class SessionTerminalStore {
     static let shared = SessionTerminalStore()
 
@@ -27,7 +27,7 @@ class SessionTerminalStore {
 
     private init() {
         let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".peer-island")
+        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
         storeURL = dir.appendingPathComponent("session-terminals.json")
 
         // 确保目录存在

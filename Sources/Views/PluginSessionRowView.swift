@@ -1,5 +1,5 @@
 import SwiftUI
-import PeerPluginKit
+import Meee2PluginKit
 
 /// Plugin Session 行视图 - 展开状态下的单个 plugin session 显示
 /// 固定高度 44px，内容截断显示
