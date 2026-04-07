@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
-VERSION="0.0.4"
+VERSION="0.0.7"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
@@ -74,7 +74,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.0.4</string>
+    <string>0.0.7</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -107,6 +107,36 @@ if [ -f "$APP_DIR/Contents/Frameworks/libMeee2PluginKit.dylib" ]; then
 fi
 
 # Sign the app with entitlements
+codesign --force --sign - --entitlements meee2.entitlements --deep "$APP_DIR"
+
+echo "App bundle created: $APP_DIR"
+
+# Install builtin plugins
+echo ""
+echo "=== Installing Builtin Plugins ==="
+
+# Cursor Plugin
+CURSOR_DYLIB=".build/release/libCursorPlugin.dylib"
+if [ -f "$CURSOR_DYLIB" ]; then
+    # Create plugin directory in app bundle
+    mkdir -p "$APP_DIR/Contents/Resources/Plugins/cursor"
+    cp "$CURSOR_DYLIB" "$APP_DIR/Contents/Resources/Plugins/cursor/CursorPlugin.dylib"
+    # Create plugin.json
+    cat > "$APP_DIR/Contents/Resources/Plugins/cursor/plugin.json" << 'CURSOR_EOF'
+{
+    "id": "com.meee2.plugin.cursor",
+    "name": "Cursor",
+    "version": "1.0.0",
+    "dylib": "CursorPlugin.dylib",
+    "helpUrl": "https://docs.cursor.com"
+}
+CURSOR_EOF
+    echo "Installed Cursor plugin"
+else
+    echo "Warning: CursorPlugin.dylib not found"
+fi
+
+# Sign the app bundle again after adding plugins
 codesign --force --sign - --entitlements meee2.entitlements --deep "$APP_DIR"
 
 echo "App bundle created: $APP_DIR"

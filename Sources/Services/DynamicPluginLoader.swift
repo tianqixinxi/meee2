@@ -38,6 +38,9 @@ class DynamicPluginLoader {
         // 预加载 Meee2PluginKit，确保所有 plugins 使用同一个类定义
         preloadMeee2PluginKit()
 
+        // 安装内置插件（从 app bundle 复制到 ~/.meee2/plugins/）
+        installBuiltinPlugins()
+
         // 确保目录存在
         try? FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
 
@@ -62,6 +65,50 @@ class DynamicPluginLoader {
 
         MLog("[DynamicPluginLoader] Loaded \(plugins.count) external plugins")
         return plugins
+    }
+
+    /// 安装内置插件（从 app bundle 复制）
+    private func installBuiltinPlugins() {
+        guard let bundlePluginsDir = Bundle.main.resourceURL?.appendingPathComponent("Plugins") else {
+            return
+        }
+
+        guard FileManager.default.fileExists(atPath: bundlePluginsDir.path) else {
+            return
+        }
+
+        // 遍历 app bundle 中的插件目录
+        guard let pluginDirs = try? FileManager.default.contentsOfDirectory(
+            at: bundlePluginsDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        for pluginDir in pluginDirs where pluginDir.hasDirectoryPath {
+            let pluginName = pluginDir.lastPathComponent
+            let destDir = pluginDirectory.appendingPathComponent(pluginName)
+
+            // 确保目标目录存在
+            try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+            // 复制插件目录中的所有文件（覆盖已存在的）
+            if let files = try? FileManager.default.contentsOfDirectory(
+                at: pluginDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                for file in files {
+                    let destFile = destDir.appendingPathComponent(file.lastPathComponent)
+                    // 先删除已存在的文件
+                    try? FileManager.default.removeItem(at: destFile)
+                    // 复制新文件
+                    try? FileManager.default.copyItem(at: file, to: destFile)
+                }
+                MLog("[DynamicPluginLoader] Installed builtin plugin: \(pluginName)")
+            }
+        }
     }
 
     /// 卸载所有 Plugin
