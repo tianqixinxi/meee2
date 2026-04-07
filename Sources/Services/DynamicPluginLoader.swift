@@ -79,13 +79,27 @@ class DynamicPluginLoader {
     /// 确保所有 plugins 使用同一个 SessionPlugin 类定义
     private func preloadMeee2PluginKit() {
         let home = NSHomeDirectory()
-        let libPath = URL(fileURLWithPath: home)
+        let libDir = URL(fileURLWithPath: home)
             .appendingPathComponent(".meee2")
             .appendingPathComponent("lib")
-            .appendingPathComponent("libMeee2PluginKit.dylib")
+        let libPath = libDir.appendingPathComponent("libMeee2PluginKit.dylib")
+
+        // 如果 ~/.meee2/lib/ 中不存在，尝试从 app bundle 复制
+        if !FileManager.default.fileExists(atPath: libPath.path) {
+            // 尝试从 app bundle 的 Frameworks 目录复制
+            if let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Frameworks/libMeee2PluginKit.dylib"),
+               FileManager.default.fileExists(atPath: bundlePath.path) {
+                // 创建目标目录
+                try? FileManager.default.createDirectory(at: libDir, withIntermediateDirectories: true)
+                // 复制文件
+                try? FileManager.default.copyItem(at: bundlePath, to: libPath)
+                MLog("[DynamicPluginLoader] Installed Meee2PluginKit from app bundle to: \(libPath.path)")
+            }
+        }
 
         guard FileManager.default.fileExists(atPath: libPath.path) else {
             MLog("[DynamicPluginLoader] Meee2PluginKit not found at: \(libPath.path)")
+            MLog("[DynamicPluginLoader] Please build meee2 from source or ensure the dylib is installed")
             return
         }
 
