@@ -127,15 +127,19 @@ public class PluginManager: ObservableObject {
     }
 
     private func handleUrgentEvent(session: PluginSession, message: String, action: String?) {
-        NotificationCenter.default.post(
-            name: .pluginUrgentEvent,
-            object: nil,
-            userInfo: [
-                "session": session,
-                "message": message,
-                "action": action as Any
-            ]
-        )
+        MLog("[PluginManager] handleUrgentEvent: \(session.title), message: \(message)")
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: .pluginUrgentEvent,
+                object: nil,
+                userInfo: [
+                    "session": session,
+                    "message": message,
+                    "action": action as Any
+                ]
+            )
+            MLog("[PluginManager] Notification posted on main thread")
+        }
     }
 
     // MARK: - Terminal Activation

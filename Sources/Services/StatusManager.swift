@@ -221,17 +221,24 @@ public class StatusManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .assign(to: &$pluginSessions)
 
-        // 监听 plugin 紧急事件 - 确保在主线程处理
-        NotificationCenter.default.publisher(for: .pluginUrgentEvent)
-            .receive(on: DispatchQueue.main)
-            .compactMap { $0.userInfo as? [String: Any] }
-            .sink { [weak self] info in
-                if let session = info["session"] as? PluginSession,
-                   let message = info["message"] as? String {
-                    self?.handlePluginUrgentEvent(session: session, message: message)
-                }
+        // 监听 plugin 紧急事件 - 使用传统 NotificationCenter 方式
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePluginUrgentEventNotification(_:)),
+            name: .pluginUrgentEvent,
+            object: nil
+        )
+    }
+
+    @objc private func handlePluginUrgentEventNotification(_ notification: Notification) {
+        NSLog("[StatusManager] ===== RECEIVED NOTIFICATION =====")
+        if let info = notification.userInfo as? [String: Any] {
+            NSLog("[StatusManager] UserInfo keys: \(info.keys)")
+            if let session = info["session"] as? PluginSession,
+               let message = info["message"] as? String {
+                handlePluginUrgentEvent(session: session, message: message)
             }
-            .store(in: &cancellables)
+        }
     }
 
     /// 合并新加载的 sessions 和当前运行时状态

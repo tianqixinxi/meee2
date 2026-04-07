@@ -313,12 +313,23 @@ public struct SettingsView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if let latest = versionChecker.latestVersion {
-                    HStack {
-                        Text("Latest Version:")
-                        Spacer()
+                // Latest Version - 始终显示
+                HStack {
+                    Text("Latest Version:")
+                    Spacer()
+                    if versionChecker.isChecking {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                            Text("Checking...")
+                                .foregroundColor(.secondary)
+                        }
+                    } else if let latest = versionChecker.latestVersion {
                         Text(latest)
                             .foregroundColor(versionChecker.hasUpdate ? .green : .secondary)
+                    } else {
+                        Text("—")
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -335,15 +346,6 @@ public struct SettingsView: View {
                             Link("Download", destination: url)
                                 .foregroundColor(.blue)
                         }
-                    }
-                }
-
-                if versionChecker.isChecking {
-                    HStack {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                        Text("Checking for updates...")
-                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -370,9 +372,11 @@ public struct SettingsView: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                Text("GitHub: tianqixinxi/meee2")
-                    .font(.caption)
-                    .foregroundColor(.blue)
+                Link(destination: URL(string: "https://github.com/tianqixinxi/meee2")!) {
+                    Text("GitHub: tianqixinxi/meee2")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
             }
         }
         .formStyle(.grouped)
@@ -440,9 +444,10 @@ struct PluginRowView: View {
                                 Link(destination: url) {
                                     Image(systemName: "questionmark.circle")
                                         .font(.system(size: 12))
-                                        .foregroundColor(.secondary.opacity(0.7))
+                                        .foregroundColor(.blue.opacity(0.8))
                                 }
-                                .help("Open documentation")
+                                .buttonStyle(.plain)
+                                .help("Open documentation: \(helpUrl)")
                             }
 
                             // 版本更新提示
@@ -530,6 +535,8 @@ struct PluginRowView: View {
             AimePluginSettings()
         case "com.meee2.plugin.cursor":
             CursorPluginSettings()
+        case "com.meee2.plugin.traecli":
+            TraecliPluginSettings()
         default:
             EmptyView()
         }
@@ -587,6 +594,30 @@ struct AimePluginSettings: View {
 
 struct CursorPluginSettings: View {
     @AppStorage("cursorRefreshInterval") private var refreshInterval: Double = 10.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Refresh interval:")
+                Spacer()
+                Slider(value: $refreshInterval, in: 2...30, step: 1)
+                Text("\(Int(refreshInterval))s")
+                    .frame(width: 40)
+            }
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.1))
+        )
+    }
+}
+
+// MARK: - Traecli Plugin Settings
+
+struct TraecliPluginSettings: View {
+    @AppStorage("traecliRefreshInterval") private var refreshInterval: Double = 10.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

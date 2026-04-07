@@ -36,6 +36,7 @@ public struct IslandView: View {
 
     @State private var isExpanded = false
     @State private var expandMode: ExpandMode = .manual
+    @State private var isClosing = false  // 正在关闭动画中，保持内容显示
     @State private var autoCloseTimer: Timer?
     @State private var carouselTimer: Timer?
     @State private var carouselIndex: Int = 0
@@ -443,89 +444,95 @@ public struct IslandView: View {
             // 刘海下方内容
             ScrollView {
                 VStack(spacing: spacing) {
-                    // 紧急信息面板 - 显示所有（最多3个 Claude + 2个 Plugin）
-                    if statusManager.hasUrgentSession {
-                        // Claude urgent panels
-                        ForEach(statusManager.urgentSessions.prefix(3)) { session in
-                            urgentPanel(
-                                session: session,
-                                message: statusManager.urgentMessages[session.id],
-                                eventType: statusManager.urgentEventTypes[session.id] ?? nil
-                            )
-                        }
-
-                        // Plugin urgent panels
-                        ForEach(statusManager.urgentPluginSessions.prefix(2)) { session in
-                            pluginUrgentPanel(
-                                session: session,
-                                message: statusManager.urgentMessages[session.id]
-                            )
-                        }
-                    }
-
-                    // 常规 session 列表 - 非 auto 模式时显示
-                    if expandMode != .auto {
-                        Divider().background(Color.white.opacity(0.15))
-
-                        if statusManager.sessions.isEmpty && statusManager.pluginSessions.isEmpty {
-                            // 空状态 - 显示帮助提示和 buddy
-                            VStack(spacing: 12) {
-                                // Buddy 动画
-                                if showBuddy, let buddy = buddyReader.buddy {
-                                    BuddyASCIIView(buddy: buddy)
-                                        .frame(width: 80, height: 55)
-                                        .scaleEffect(0.8)
-                                } else {
-                                    Image(systemName: "brain.head.profile")
-                                        .font(.system(size: 28))
-                                        .foregroundColor(.orange.opacity(0.6))
-                                }
-
-                                VStack(spacing: 4) {
-                                    Text("No active sessions")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.7))
-
-                                    Text("Run 'claude' in terminal to start")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.white.opacity(0.4))
-                                }
-                            }
-                            .frame(height: 120)
-                        } else {
-                            LazyVStack(spacing: 6) {
-                                // Claude sessions
-                                ForEach(statusManager.sessions) { session in
-                                    SessionRowView(
-                                        session: session,
-                                        onOpenTerminal: { statusManager.openTerminal(for: session) },
-                                        onConfirm: session.status.needsUserAction && session.id != statusManager.currentUrgentSession?.id ? {
-                                            statusManager.confirmPermission(for: session)
-                                            closeExpanded()
-                                        } : nil
-                                    )
-                                }
-
-                                // Plugin sessions (混合同一列表)
-                                ForEach(statusManager.pluginSessions) { session in
-                                    PluginSessionRowView(
-                                        session: session,
-                                        pluginInfo: statusManager.pluginManager.getPluginInfo(for: session.pluginId),
-                                        onOpenTerminal: { statusManager.openTerminal(forPluginSession: session) }
-                                    )
-                                }
+                    // 如果正在关闭动画中，显示占位内容防止黑屏
+                    if isClosing {
+                        Color.black.opacity(0.01)  // 几乎不可见，但占位
+                            .frame(height: 100)
+                    } else {
+                        // 紧急信息面板 - 显示所有（最多3个 Claude + 2个 Plugin）
+                        if statusManager.hasUrgentSession {
+                            // Claude urgent panels
+                            ForEach(statusManager.urgentSessions.prefix(3)) { session in
+                                urgentPanel(
+                                    session: session,
+                                    message: statusManager.urgentMessages[session.id],
+                                    eventType: statusManager.urgentEventTypes[session.id] ?? nil
+                                )
                             }
 
-                            // Buddy 在底部右下角显示（session 数量 <= 4 时）
-                            if showBuddy, let buddy = buddyReader.buddy,
-                               statusManager.sessions.count + statusManager.pluginSessions.count <= 4 {
-                                HStack {
-                                    Spacer()
-                                    BuddyASCIIView(buddy: buddy)
-                                        .frame(width: 80, height: 50)
-                                        .scaleEffect(0.7)
+                            // Plugin urgent panels
+                            ForEach(statusManager.urgentPluginSessions.prefix(2)) { session in
+                                pluginUrgentPanel(
+                                    session: session,
+                                    message: statusManager.urgentMessages[session.id]
+                                )
+                            }
+                        }
+
+                        // 常规 session 列表 - 非 auto 模式时显示
+                        if expandMode != .auto {
+                            Divider().background(Color.white.opacity(0.15))
+
+                            if statusManager.sessions.isEmpty && statusManager.pluginSessions.isEmpty {
+                                // 空状态 - 显示帮助提示和 buddy
+                                VStack(spacing: 12) {
+                                    // Buddy 动画
+                                    if showBuddy, let buddy = buddyReader.buddy {
+                                        BuddyASCIIView(buddy: buddy)
+                                            .frame(width: 80, height: 55)
+                                            .scaleEffect(0.8)
+                                    } else {
+                                        Image(systemName: "brain.head.profile")
+                                            .font(.system(size: 28))
+                                            .foregroundColor(.orange.opacity(0.6))
+                                    }
+
+                                    VStack(spacing: 4) {
+                                        Text("No active sessions")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.white.opacity(0.7))
+
+                                        Text("Run 'claude' in terminal to start")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.white.opacity(0.4))
+                                    }
                                 }
-                                .padding(.top, 8)
+                                .frame(height: 120)
+                            } else {
+                                LazyVStack(spacing: 6) {
+                                    // Claude sessions
+                                    ForEach(statusManager.sessions) { session in
+                                        SessionRowView(
+                                            session: session,
+                                            onOpenTerminal: { statusManager.openTerminal(for: session) },
+                                            onConfirm: session.status.needsUserAction && session.id != statusManager.currentUrgentSession?.id ? {
+                                                statusManager.confirmPermission(for: session)
+                                                closeExpanded()
+                                            } : nil
+                                        )
+                                    }
+
+                                    // Plugin sessions (混合同一列表)
+                                    ForEach(statusManager.pluginSessions) { session in
+                                        PluginSessionRowView(
+                                            session: session,
+                                            pluginInfo: statusManager.pluginManager.getPluginInfo(for: session.pluginId),
+                                            onOpenTerminal: { statusManager.openTerminal(forPluginSession: session) }
+                                        )
+                                    }
+                                }
+
+                                // Buddy 在底部右下角显示（session 数量 <= 4 时）
+                                if showBuddy, let buddy = buddyReader.buddy,
+                                   statusManager.sessions.count + statusManager.pluginSessions.count <= 4 {
+                                    HStack {
+                                        Spacer()
+                                        BuddyASCIIView(buddy: buddy)
+                                            .frame(width: 80, height: 50)
+                                            .scaleEffect(0.7)
+                                    }
+                                    .padding(.top, 8)
+                                }
                             }
                         }
                     }
@@ -600,8 +607,16 @@ public struct IslandView: View {
             // Ignore 按钮
             Button(action: {
                 NSLog("[IslandView] Ignore button clicked for session: \(session.id)")
-                statusManager.dismissUrgent(sessionId: session.id)
-                closeExpanded()
+                // 设置正在关闭状态，防止动画期间黑屏
+                isClosing = true
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = false
+                    expandMode = .manual
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isClosing = false
+                    statusManager.dismissUrgent(sessionId: session.id)
+                }
             }) {
                 HStack(spacing: 3) {
                     Image(systemName: "xmark")
@@ -619,9 +634,19 @@ public struct IslandView: View {
             // Open 按钮 - 跳转到终端
             Button(action: {
                 NSLog("[IslandView] Open button clicked for session: \(session.id)")
-                statusManager.openTerminal(for: session)
-                statusManager.dismissUrgent(sessionId: session.id)
-                closeExpanded()
+                // 设置正在关闭状态，防止动画期间黑屏
+                isClosing = true
+                // 收起视图
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = false
+                    expandMode = .manual
+                }
+                // 延迟执行清除和跳转，等动画完成
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isClosing = false
+                    statusManager.dismissUrgent(sessionId: session.id)
+                    statusManager.openTerminal(for: session)
+                }
             }) {
                 HStack(spacing: 3) {
                     Image(systemName: session.type == .aime ? "globe" : "terminal")
@@ -698,8 +723,16 @@ public struct IslandView: View {
             // Ignore 按钮
             Button(action: {
                 NSLog("[IslandView] Ignore button clicked for session: \(session.id)")
-                statusManager.dismissUrgent(sessionId: session.id)
-                closeExpanded()
+                // 设置正在关闭状态，防止动画期间黑屏
+                isClosing = true
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = false
+                    expandMode = .manual
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isClosing = false
+                    statusManager.dismissUrgent(sessionId: session.id)
+                }
             }) {
                 HStack(spacing: 5) {
                     Image(systemName: "xmark")
@@ -717,9 +750,19 @@ public struct IslandView: View {
             // Open 按钮 - 跳转到终端
             Button(action: {
                 NSLog("[IslandView] Open button clicked for session: \(session.id)")
-                statusManager.openTerminal(for: session)
-                statusManager.dismissUrgent(sessionId: session.id)
-                closeExpanded()
+                // 设置正在关闭状态，防止动画期间黑屏
+                isClosing = true
+                // 收起视图
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = false
+                    expandMode = .manual
+                }
+                // 延迟执行清除和跳转，等动画完成
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isClosing = false
+                    statusManager.dismissUrgent(sessionId: session.id)
+                    statusManager.openTerminal(for: session)
+                }
             }) {
                 HStack(spacing: 5) {
                     Image(systemName: session.type == .aime ? "globe" : "terminal")
@@ -786,8 +829,16 @@ public struct IslandView: View {
 
                 // Ignore 按钮
                 Button(action: {
-                    statusManager.dismissUrgent(sessionId: session.id)
-                    closeExpanded()
+                    // 设置正在关闭状态，防止动画期间黑屏
+                    isClosing = true
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded = false
+                        expandMode = .manual
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        isClosing = false
+                        statusManager.dismissUrgent(sessionId: session.id)
+                    }
                 }) {
                     HStack(spacing: 3) {
                         Image(systemName: "xmark")
@@ -804,9 +855,17 @@ public struct IslandView: View {
 
                 // Open 按钮
                 Button(action: {
-                    statusManager.openTerminal(forPluginSession: session)
-                    statusManager.dismissUrgent(sessionId: session.id)
-                    closeExpanded()
+                    // 设置正在关闭状态，防止动画期间黑屏
+                    isClosing = true
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded = false
+                        expandMode = .manual
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        isClosing = false
+                        statusManager.dismissUrgent(sessionId: session.id)
+                        statusManager.openTerminal(forPluginSession: session)
+                    }
                 }) {
                     HStack(spacing: 3) {
                         Image(systemName: session.pluginId.contains("aime") ? "globe" : "terminal")

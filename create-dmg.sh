@@ -7,8 +7,9 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
+VERSION="0.0.3"
 APP_DIR=".build/${APP_NAME}.app"
-DMG_NAME="${APP_NAME}.dmg"
+DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
 VOLUME_NAME="${APP_NAME}"
 
@@ -73,7 +74,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.0.2</string>
+    <string>0.0.3</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
