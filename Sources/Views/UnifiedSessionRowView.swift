@@ -1,29 +1,41 @@
 import SwiftUI
+import PeerPluginKit
 
-/// Session 行视图 - 展开状态下的单个 session 显示
-/// 固定高度 44px，内容截断显示
-struct SessionRowView: View {
-    let session: AISession
+/// 统一 Session 行视图
+/// 替代原有的 SessionRowView (AISession) 和 PluginSessionRowView (PluginSession)
+/// 固定高度 44px
+struct UnifiedSessionRowView: View {
+    let session: Session
+    let pluginInfo: (displayName: String, icon: String, themeColor: Color)?
     let onOpenTerminal: () -> Void
-    let onConfirm: (() -> Void)?
 
     @State private var isHovered = false
 
-    // 固定高度
     private let rowHeight: CGFloat = 44
+
+    private var displayIcon: String {
+        session.iconOverride ?? pluginInfo?.icon ?? "brain.head.profile"
+    }
+
+    private var displayColor: Color {
+        if let hex = session.colorOverride, let color = Color(hex: hex) {
+            return color
+        }
+        return pluginInfo?.themeColor ?? .blue
+    }
 
     var body: some View {
         Button(action: onOpenTerminal) {
             HStack(spacing: 10) {
-                // 类型图标 + 状态
+                // 图标 + 状态指示器
                 ZStack {
                     Circle()
-                        .fill(session.type.themeColor.opacity(0.2))
+                        .fill(displayColor.opacity(0.2))
                         .frame(width: 28, height: 28)
 
-                    Image(systemName: session.type.icon)
+                    Image(systemName: displayIcon)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(session.type.themeColor)
+                        .foregroundColor(displayColor)
                 }
                 .overlay(
                     Circle()
@@ -32,29 +44,28 @@ struct SessionRowView: View {
                         .offset(x: 10, y: 10)
                 )
 
-                // 项目信息 - 固定宽度，截断显示
+                // 项目信息
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(session.projectName)
+                        Text(session.title)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundColor(.white)
                             .lineLimit(1)
                             .truncationMode(.tail)
 
-                        // 类型标签
-                        Text(session.type.displayName)
+                        // 插件名称标签
+                        Text(pluginInfo?.displayName ?? "AI")
                             .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(session.type.themeColor)
+                            .foregroundColor(displayColor)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(
-                                Capsule()
-                                    .fill(session.type.themeColor.opacity(0.2))
+                                Capsule().fill(displayColor.opacity(0.2))
                             )
                     }
 
-                    // 任务/状态 - 截断显示
-                    Text(session.currentTask ?? session.status.description)
+                    // 副标题/状态
+                    Text(session.subtitle ?? session.status.description)
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.6))
                         .lineLimit(1)
@@ -97,55 +108,17 @@ struct SessionRowView: View {
     }
 }
 
-// MARK: - PreviewProvider
+// MARK: - Color Hex Extension
 
-struct SessionRowView_Previews: PreviewProvider {
-    static var previews: some View {
-        VStack(spacing: 6) {
-            SessionRowView(
-                session: AISession(
-                    id: "test-1",
-                    pid: 1234,
-                    cwd: "/Users/test/project",
-                    startedAt: Date().addingTimeInterval(-120),
-                    type: .claude,
-                    status: .running,
-                    currentTask: "Writing code...",
-                    toolName: "Write"
-                ),
-                onOpenTerminal: { print("Open terminal") },
-                onConfirm: nil
-            )
-
-            SessionRowView(
-                session: AISession(
-                    id: "test-2",
-                    pid: 1235,
-                    cwd: "/Users/test/urgent",
-                    startedAt: Date().addingTimeInterval(-300),
-                    type: .cursor,
-                    status: .permissionRequest,
-                    currentTask: "Permission required"
-                ),
-                onOpenTerminal: { print("Open terminal") },
-                onConfirm: { print("Confirmed") }
-            )
-
-            SessionRowView(
-                session: AISession(
-                    id: "test-3",
-                    pid: 1236,
-                    cwd: "/Users/test/completed",
-                    startedAt: Date().addingTimeInterval(-600),
-                    type: .copilot,
-                    status: .completed
-                ),
-                onOpenTerminal: { print("Open terminal") },
-                onConfirm: nil
-            )
-        }
-        .padding()
-        .frame(width: 400)
-        .background(Color.black)
+private extension Color {
+    init?(hex: String) {
+        var h = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if h.hasPrefix("#") { h.removeFirst() }
+        guard h.count == 6, let rgb = UInt64(h, radix: 16) else { return nil }
+        self.init(
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
+        )
     }
 }

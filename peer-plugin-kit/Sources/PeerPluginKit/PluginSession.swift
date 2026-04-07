@@ -1,7 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// Plugin Session 数据模型
+/// Plugin Session 数据模型 (已废弃，请使用 Session)
+@available(*, deprecated, message: "Use Session instead")
 public struct PluginSession: Identifiable, Hashable {
     // MARK: - 必需字段
 

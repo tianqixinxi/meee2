@@ -1,4 +1,5 @@
 import Foundation
+import PeerPluginKit
 
 /// Terminal 管理器 - 用于激活 Terminal 并导航到指定目录
 /// 支持多种 Terminal 应用：Terminal.app, iTerm2, Ghostty, tmux
@@ -7,31 +8,38 @@ class TerminalManager {
     // MARK: - 智能跳转
 
     /// 智能跳转：优先使用存储的终端信息，然后尝试窗口匹配
-    static func smartActivateTerminal(forSession session: AISession) {
+    static func smartActivateTerminal(forSession session: Session) {
         NSLog("[TerminalManager] === Starting smart activate for session ===")
-        NSLog("[TerminalManager] Session ID: \(session.id), PID: \(session.pid), cwd: \(session.cwd)")
-        NSLog("[TerminalManager] Project name: \(session.projectName)")
-        NSLog("[TerminalManager] Terminal info: tty=\(session.tty ?? "nil"), termProgram=\(session.termProgram ?? "nil"), termBundleId=\(session.termBundleId ?? "nil"), cmuxSocket=\(session.cmuxSocketPath ?? "nil"), cmuxSurface=\(session.cmuxSurfaceId ?? "nil")")
+        let ti = session.terminalInfo
+        NSLog("[TerminalManager] Session ID: \(session.id), cwd: \(session.cwd ?? "nil")")
+        NSLog("[TerminalManager] Terminal info: tty=\(ti?.tty ?? "nil"), termProgram=\(ti?.termProgram ?? "nil"), cmuxSocket=\(ti?.cmuxSocketPath ?? "nil")")
 
-        // 方法0：优先检测 cmux（cmux 有专用 socket 和 surface 信息）
-        if let cmuxSocket = session.cmuxSocketPath, session.termProgram == "cmux" || session.termBundleId == "cmux" {
+        // 方法0：优先检测 cmux
+        if let cmuxSocket = ti?.cmuxSocketPath, ti?.termProgram == "cmux" || ti?.termBundleId == "cmux" {
             NSLog("[TerminalManager] Method 0: Detected cmux with socket: \(cmuxSocket)")
-            activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: session.cmuxSurfaceId)
+            activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: ti?.cmuxSurfaceId)
             return
         }
 
-        // 方法0.5：从 SessionTerminalStore 获取，检查 cmux 信息
-        if let storedInfo = SessionTerminalStore.shared.get(sessionId: session.id) {
+        // 方法0.5：使用 terminalInfo
+        if let storedInfo = ti {
             NSLog("[TerminalManager] Method 0.5: Using stored info: term=\(storedInfo.termProgram ?? "nil"), cmuxSocket=\(storedInfo.cmuxSocketPath ?? "nil")")
 
-            // cmux 优先
             if let cmuxSocket = storedInfo.cmuxSocketPath, storedInfo.termProgram == "cmux" || storedInfo.termBundleId == "cmux" {
                 NSLog("[TerminalManager] Found cmux from store with socket: \(cmuxSocket)")
                 activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: storedInfo.cmuxSurfaceId)
                 return
             }
 
-            // 其他终端
+            // Ghostty: 用 terminal ID 精确跳转
+            if let ghosttyId = storedInfo.customData?["ghostty_terminal_id"],
+               (storedInfo.termProgram == "ghostty" || storedInfo.termBundleId == "com.mitchellh.ghostty") {
+                NSLog("[TerminalManager] Method 0.5: Ghostty focus terminal: \(ghosttyId)")
+                focusGhosttyTerminal(ghosttyId)
+                return
+            }
+
+            // 其他终端: 用 tty 匹配
             if let tty = storedInfo.tty, let termProgram = storedInfo.termProgram {
                 if let terminalApp = detectTerminalApp(from: termProgram, bundleId: storedInfo.termBundleId) {
                     NSLog("[TerminalManager] Detected terminal app from store: \(terminalApp.rawValue)")
@@ -384,6 +392,21 @@ class TerminalManager {
         }
     }
 
+    /// 使用 Ghostty AppleScript 精确 focus 到指定 terminal
+    private static func focusGhosttyTerminal(_ terminalId: String) {
+        let script = """
+        tell application "Ghostty"
+            activate
+            try
+                set t to terminal id "\(terminalId)"
+                focus t
+            end try
+        end tell
+        """
+        NSLog("[TerminalManager] Focusing Ghostty terminal: \(terminalId)")
+        executeAppleScript(script)
+    }
+
     /// 激活正在运行的终端应用（优先级：cmux > ghostty > iterm2 > terminal）
     private static func activateRunningTerminal() {
         // 检查哪些终端在运行，激活优先级最高的
@@ -439,12 +462,16 @@ class TerminalManager {
     }
 
     /// 查找与 session 关联的 Terminal 窗口
-    private static func findWindowForSession(_ session: AISession) -> WindowInfo? {
-        NSLog("[TerminalManager] findWindowForSession: PID=\(session.pid)")
+    private static func findWindowForSession(_ session: Session) -> WindowInfo? {
+        guard let pid = session.pid else {
+            NSLog("[TerminalManager] findWindowForSession: no PID, searching by project name")
+            return findWindowByProjectName(session.projectName)
+        }
+        NSLog("[TerminalManager] findWindowForSession: PID=\(pid)")
 
         // 方法1：通过进程父链判断终端类型
         NSLog("[TerminalManager] Method 1: Checking parent process chain...")
-        if let terminalApp = getTerminalAppForPID(session.pid) {
+        if let terminalApp = getTerminalAppForPID(pid) {
             NSLog("[TerminalManager] Detected terminal app via parent chain: \(terminalApp.rawValue)")
 
             switch terminalApp {
@@ -461,7 +488,7 @@ class TerminalManager {
 
             case .terminal, .iterm2, .ghostty:
                 // 获取 tty 尝试精确匹配窗口
-                if let tty = getTTYForPID(session.pid) {
+                if let tty = getTTYForPID(pid) {
                     NSLog("[TerminalManager] Found tty: \(tty)")
                     if let windowIndex = findWindowWithTTY(tty, in: terminalApp) {
                         NSLog("[TerminalManager] Found window by tty at index \(windowIndex)")
@@ -489,7 +516,7 @@ class TerminalManager {
 
         // 方法2：通过 tty 查找
         NSLog("[TerminalManager] Method 2: Searching by tty...")
-        if let tty = getTTYForPID(session.pid) {
+        if let tty = getTTYForPID(pid) {
             NSLog("[TerminalManager] Session tty: \(tty)")
 
             // 检查 tmux session
@@ -703,12 +730,12 @@ class TerminalManager {
     }
 
     /// 在 cmux 中通过进程匹配查找窗口
-    private static func findWindowInCmux(forSession session: AISession) -> Int? {
+    private static func findWindowInCmux(forSession session: Session) -> Int? {
         NSLog("[TerminalManager] findWindowInCmux for session: \(session.projectName)")
 
         // 优先使用 cmux CLI 查找匹配 cwd 的 surface
-        if let socketPath = session.cmuxSocketPath {
-            if let tabIndex = findCmuxSurfaceByCwd(socketPath: socketPath, cwd: session.cwd) {
+        if let socketPath = session.terminalInfo?.cmuxSocketPath {
+            if let tabIndex = findCmuxSurfaceByCwd(socketPath: socketPath, cwd: session.cwd ?? "") {
                 NSLog("[TerminalManager] Found cmux surface by cwd at tab \(tabIndex)")
                 return tabIndex
             }
@@ -722,7 +749,7 @@ class TerminalManager {
         }
 
         // 方法2：通过 cwd 匹配
-        let cwd = session.cwd
+        guard let cwd = session.cwd else { return nil }
         let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
         if let index = findWindowWithTitle(containing: cwdName, in: "cmux") {
             NSLog("[TerminalManager] Found cmux window by cwd name at index \(index)")
@@ -1288,4 +1315,5 @@ class TerminalManager {
             return nil
         }
     }
+
 }

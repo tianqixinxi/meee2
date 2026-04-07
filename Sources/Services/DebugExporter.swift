@@ -84,11 +84,11 @@ class DebugExporter {
     private static func collectPluginStatus() -> String {
         var status: [String: Any] = [:]
 
-        let pluginManager = PluginManager.shared
+        let registry = PluginRegistry.shared
 
         // Loaded plugins
         var plugins: [[String: Any]] = []
-        for (id, plugin) in pluginManager.loadedPlugins {
+        for (id, plugin) in registry.plugins {
             plugins.append([
                 "id": id,
                 "displayName": plugin.displayName,
@@ -101,11 +101,11 @@ class DebugExporter {
         status["loadedPlugins"] = plugins
 
         // Session count
-        status["sessionCount"] = pluginManager.sessions.count
+        status["sessionCount"] = registry.allSessions.count
 
         // Error state
-        status["hasError"] = pluginManager.hasError
-        status["errors"] = pluginManager.pluginErrors
+        status["hasError"] = false
+        status["errors"] = [:] as [String: String]
 
         if let data = try? JSONSerialization.data(withJSONObject: status, options: .prettyPrinted),
            let json = String(data: data, encoding: .utf8) {

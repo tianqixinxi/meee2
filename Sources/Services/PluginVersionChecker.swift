@@ -60,7 +60,7 @@ class PluginVersionChecker: ObservableObject {
     }
 
     /// 检查 Plugin 是否有更新
-    func hasUpdate(plugin: SessionPlugin) -> Bool {
+    func hasUpdate(plugin: AIPlugin) -> Bool {
         guard let latest = pluginUpdates[plugin.pluginId] else { return false }
         return isNewerVersion(new: latest, current: plugin.version)
     }

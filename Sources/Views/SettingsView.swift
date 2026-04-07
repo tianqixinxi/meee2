@@ -137,12 +137,12 @@ public struct SettingsView: View {
 
     // MARK: - Plugins Settings
 
-    @ObservedObject private var pluginManager = PluginManager.shared
+    @ObservedObject private var registry = PluginRegistry.shared
 
     private var pluginsSettings: some View {
         Form {
             Section("Installed Plugins") {
-                if pluginManager.loadedPlugins.isEmpty {
+                if registry.plugins.isEmpty {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
@@ -157,8 +157,8 @@ public struct SettingsView: View {
                     }
                     .padding(.vertical, 20)
                 } else {
-                    ForEach(Array(pluginManager.loadedPlugins.keys.sorted()), id: \.self) { pluginId in
-                        if let plugin = pluginManager.loadedPlugins[pluginId] {
+                    ForEach(Array(registry.plugins.keys.sorted()), id: \.self) { pluginId in
+                        if let plugin = registry.plugins[pluginId] {
                             PluginRowView(plugin: plugin)
                         }
                     }
@@ -260,20 +260,19 @@ public struct SettingsView: View {
 // MARK: - Plugin Row View
 
 struct PluginRowView: View {
-    let plugin: SessionPlugin
+    let plugin: AIPlugin
 
     @AppStorage private var enabled: Bool
     @State private var isExpanded = false
     @ObservedObject private var versionChecker = PluginVersionChecker()
 
-    init(plugin: SessionPlugin) {
+    init(plugin: AIPlugin) {
         self.plugin = plugin
-        // Use plugin ID as storage key
         _enabled = AppStorage(wrappedValue: plugin.config.enabled, "plugin_\(plugin.pluginId)_enabled")
     }
 
     private var sessionCount: Int {
-        PluginManager.shared.sessions.filter { $0.pluginId == plugin.pluginId }.count
+        PluginRegistry.shared.allSessions.filter { $0.pluginId == plugin.pluginId }.count
     }
 
     private var hasUpdate: Bool {
@@ -493,22 +492,5 @@ public extension Notification.Name {
 struct SettingsView_Previews: PreviewProvider {
     static var previews: some View {
         SettingsView()
-            .onAppear {
-                // Register a test plugin for preview
-                let testPlugin = TestPlugin()
-                PluginManager.shared.register(testPlugin)
-            }
     }
-}
-
-// Test plugin for preview
-class TestPlugin: SessionPlugin {
-    override var pluginId: String { "com.peerisland.plugin.test" }
-    override var displayName: String { "Test Plugin" }
-    override var icon: String { "puzzlepiece.extension" }
-    override var themeColor: Color { .purple }
-    override func initialize() -> Bool { true }
-    override func start() -> Bool { return true }
-    override func getSessions() -> [PluginSession] { [] }
-    override func activateTerminal(for session: PluginSession) {}
 }

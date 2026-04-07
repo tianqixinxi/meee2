@@ -48,4 +48,12 @@ public class DynamicIslandWindow: NSWindow {
 
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { true }
+
+    /// 阻止 NSHostingView 触发窗口 resize，避免约束循环崩溃
+    public override func setFrame(_ frameRect: NSRect, display displayFlag: Bool) {
+        // 只允许初始化和显式调用（positionIslandWindow），忽略 SwiftUI 自动 resize
+        if frameRect.size == self.frame.size || self.frame.size == .zero {
+            super.setFrame(frameRect, display: displayFlag)
+        }
+    }
 }

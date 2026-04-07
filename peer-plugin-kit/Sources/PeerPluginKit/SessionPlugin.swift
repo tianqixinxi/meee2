@@ -15,8 +15,8 @@ public struct PluginConfig {
     }
 }
 
-/// Plugin 基类
-/// 改为类而非协议，确保动态库加载时类型检查能正常工作
+/// Plugin 基类 (已废弃，请使用 AIPlugin)
+@available(*, deprecated, message: "Use AIPlugin instead")
 open class SessionPlugin: NSObject, ObservableObject {
     // MARK: - 标识
 
