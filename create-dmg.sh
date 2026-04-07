@@ -9,7 +9,8 @@ cd "$(dirname "$0")"
 APP_NAME="meee2"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}.dmg"
-DMG_TEMP="${APP_NAME}-temp.dmg"
+DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
+VOLUME_NAME="${APP_NAME}"
 
 echo "=== Building ${APP_NAME} ==="
 ./build.sh
@@ -38,6 +39,12 @@ else
     echo "Warning: libPeerPluginKit.dylib not found at $DYLIB_SRC"
 fi
 
+# Copy app icon
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp "Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/"
+    echo "Copied AppIcon.icns"
+fi
+
 # Create Info.plist
 cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,7 +66,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>0.0.1</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -96,25 +103,65 @@ codesign --force --sign - --entitlements meee2.entitlements --deep "$APP_DIR"
 
 echo "App bundle created: $APP_DIR"
 
-# Create DMG
+# Create DMG with background
 echo ""
 echo "=== Creating DMG ==="
 
-# Remove old DMG
+# Remove old files
 rm -f "dist/$DMG_NAME"
-rm -f "/tmp/$DMG_TEMP"
+rm -f "$DMG_TEMP"
+rm -rf "/Volumes/$VOLUME_NAME" 2>/dev/null || true
 
 # Create dist directory
 mkdir -p dist
 
-# Create temporary DMG
-hdiutil create -volname "${APP_NAME}" -srcfolder "$APP_DIR" -ov -format UDRW "/tmp/$DMG_TEMP"
+# Create temporary DMG (larger size for background)
+hdiutil create -size 200m -volname "${VOLUME_NAME}" -fs HFS+ -fsargs "-c c=64,a=16,e=16" "$DMG_TEMP"
+
+# Mount the DMG
+hdiutil attach "$DMG_TEMP" -readwrite -noverify -noautoopen
+
+# Copy app to DMG
+cp -R "$APP_DIR" "/Volumes/$VOLUME_NAME/"
+
+# Create Applications symlink
+ln -s /Applications "/Volumes/$VOLUME_NAME/Applications"
+
+# Set DMG window appearance using AppleScript
+echo ""
+echo "=== Configuring DMG Window ==="
+osascript << APPLESCRIPT
+tell application "Finder"
+    tell disk "$VOLUME_NAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {400, 100, 900, 450}
+        set theViewOptions to the icon view options of container window
+        set arrangement of theViewOptions to not arranged
+        set icon size of theViewOptions to 80
+        set position of item "${APP_NAME}.app" of container window to {130, 180}
+        set position of item "Applications" of container window to {370, 180}
+        close
+        open
+        update without registering applications
+        delay 2
+    end tell
+end tell
+APPLESCRIPT
+
+# Make sure it's not busy
+sync
+
+# Unmount
+hdiutil detach "/Volumes/$VOLUME_NAME"
 
 # Convert to compressed DMG
-hdiutil convert "/tmp/$DMG_TEMP" -format UDZO -imagekey zlib-level=9 -o "dist/$DMG_NAME"
+hdiutil convert "$DMG_TEMP" -format UDZO -imagekey zlib-level=9 -o "dist/$DMG_NAME"
 
 # Clean up
-rm -f "/tmp/$DMG_TEMP"
+rm -f "$DMG_TEMP"
 
 echo ""
 echo "=== Done ==="
