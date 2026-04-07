@@ -29,3 +29,4 @@ Carthage/Build/
 
 # DMG 安装包
 dist/
+.DS_Store

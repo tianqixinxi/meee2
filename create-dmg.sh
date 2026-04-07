@@ -77,6 +77,11 @@ EOF
 # Create PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
 
+# Fix rpath for dynamic library
+echo ""
+echo "=== Fixing Rpath ==="
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents/MacOS/${APP_NAME}" 2>/dev/null || true
+
 # Sign the app bundle with entitlements
 echo ""
 echo "=== Signing App Bundle ==="
