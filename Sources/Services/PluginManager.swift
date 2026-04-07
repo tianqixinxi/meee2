@@ -114,6 +114,7 @@ public class PluginManager: ObservableObject {
     // MARK: - Session Management
 
     private func handleSessionsUpdated(pluginId: String, sessions: [PluginSession]) {
+        MLog("[PluginManager] handleSessionsUpdated called for \(pluginId) with \(sessions.count) sessions")
         DispatchQueue.main.async {
             // 移除该 plugin 的旧 sessions
             self.sessions.removeAll { $0.pluginId == pluginId }
@@ -121,6 +122,7 @@ public class PluginManager: ObservableObject {
             self.sessions.append(contentsOf: sessions)
             // 标记加载完成
             self.isLoading = false
+            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
         }
     }
 
