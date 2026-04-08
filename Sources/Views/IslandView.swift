@@ -67,38 +67,49 @@ public struct IslandView: View {
     private let hoverCloseDelay: TimeInterval = 1.0   // 悬停离开后关闭延迟
 
     /// 收起状态高度（包含刘海高度 + 下方内容区）
-    private let compactExtraHeight: CGFloat = 28  // 刘海下方额外高度
-    private let bottomCornerRadius: CGFloat = 16
-    private let topConcaveRadius: CGFloat = 12  // 凹形圆角半径
+    private let compactExtraHeight: CGFloat = 28// 刘海下方额外高度
 
     /// 展开后的尺寸
     private let expandedWidth: CGFloat = 500
     private let expandedMinHeight: CGFloat = 120  // 最小高度
     private let expandedMaxHeight: CGFloat = 700  // 最大高度
-    private let expandedCornerRadius: CGFloat = 12
 
     private let spacing: CGFloat = 12
 
     // MARK: - Computed Properties
 
-    private var notchWidth: CGFloat { max(statusManager.notchSize.width, 200) }
-    private var notchHeight: CGFloat { max(statusManager.notchSize.height, 32) }
+    /// 是否是外接显示器（无刘海）
+    private var isExternalDisplay: Bool { statusManager.notchSize.width == 0 }
 
-    /// 收起状态总宽度
-    private var compactWidth: CGFloat { notchWidth + 60 }
+    private var notchWidth: CGFloat {
+        if isExternalDisplay { return 0 }
+        return max(statusManager.notchSize.width, 200)
+    }
+    private var notchHeight: CGFloat { statusManager.notchSize.height > 0 ? statusManager.notchSize.height : 32 }
+
+    /// 动态圆角（根据刘海高度调整）
+    private var expandedCornerRadius: CGFloat { notchHeight * 0.35 }
+    private var topConcaveRadius: CGFloat { notchHeight * 0.3 }
+    private var bottomCornerRadius: CGFloat { notchHeight * 0.4 }
+
+    /// 收起状态总宽度（外接显示器时更宽以容纳轮播信息）
+    private var compactWidth: CGFloat { isExternalDisplay ? 300 : notchWidth + 60 }
+
+    /// 左右两侧宽度（外接显示器固定 40，内置屏根据刘海计算）
+    private var sideWidth: CGFloat { isExternalDisplay ? 40 : (compactWidth - notchWidth) / 2 }
 
     /// 收起状态总高度（刘海 + 下方内容）
-    /// 如果关闭session显示，高度只等于刘海高度
+    /// 外接显示器时固定为 notchHeight，内置屏根据 showSessionInCompact 决定
     private var compactHeight: CGFloat {
+        if isExternalDisplay {
+            return notchHeight  // 外接显示器固定高度
+        }
         if showSessionInCompact {
             return notchHeight + compactExtraHeight
         } else {
             return notchHeight
         }
     }
-
-    /// 左右两侧宽度
-    private var sideWidth: CGFloat { (compactWidth - notchWidth) / 2 }
 
     /// 动态计算展开高度
     private var calculatedExpandedHeight: CGFloat {
@@ -294,8 +305,72 @@ public struct IslandView: View {
                 .padding(.leading, 12)
                 .frame(width: sideWidth, height: notchHeight)
 
-                // 中间：刘海区域留空
-                Spacer()
+                // 中间：外接显示器直接显示轮播信息，内置屏留空
+                if isExternalDisplay {
+                    // 外接显示器：中间直接显示轮播信息
+                    HStack(spacing: 8) {
+                        let carousel = currentCarouselSession
+
+                        if let claudeSession = carousel.claudeSession {
+                            Circle()
+                                .fill(claudeSession.status.color)
+                                .frame(width: 6, height: 6)
+
+                            Text(claudeSession.projectName)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+
+                            Text(claudeSession.status.description)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+
+                            if claudeSession.status.needsUserAction {
+                                Image(systemName: "hand.raised.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.orange)
+                            }
+
+                            Spacer()
+
+                            Text(claudeSession.formattedDuration)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.5))
+                                .monospacedDigit()
+                        } else if let pluginSession = carousel.pluginSession {
+                            Circle()
+                                .fill(pluginSession.status.color)
+                                .frame(width: 6, height: 6)
+
+                            Text(pluginSession.title)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+
+                            if let subtitle = pluginSession.subtitle, !subtitle.isEmpty {
+                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+
+                            Spacer()
+
+                            Text(pluginSession.formattedDuration)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.5))
+                                .monospacedDigit()
+                        } else {
+                            Text("No active sessions")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.4))
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                } else {
+                    Spacer()
+                }
 
                 // 右侧：状态图标（呼吸动效或闪烁动效）
                 HStack {
@@ -319,8 +394,8 @@ public struct IslandView: View {
             }
             .frame(height: notchHeight)
 
-            // 刘海下方内容 - 仅当开启session显示时
-            if showSessionInCompact {
+            // 刘海下方内容 - 仅内置屏且开启session显示时
+            if !isExternalDisplay && showSessionInCompact {
                 // Session 轮播信息
                 VStack(spacing: 4) {
                     HStack(spacing: 8) {
