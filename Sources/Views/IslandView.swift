@@ -56,7 +56,7 @@ public struct IslandView: View {
 
     /// 是否有活跃 session
     private var hasActiveSessions: Bool {
-        !statusManager.sessions.isEmpty || !statusManager.pluginSessions.isEmpty
+        !statusManager.sessions.isEmpty
     }
 
     // MARK: - Constants
@@ -123,23 +123,10 @@ public struct IslandView: View {
 
         // urgent panels 高度 (固定布局)
         if statusManager.hasUrgentSession {
-            // Claude urgent panels
-            let claudeUrgentCount = min(statusManager.urgentSessions.count, 3)
+            let urgentCount = min(statusManager.urgentSessions.count, 3)
             for (index, _) in statusManager.urgentSessions.prefix(3).enumerated() {
                 height += urgentPanelFixedHeight
-                if index < claudeUrgentCount - 1 {
-                    height += spacing
-                }
-            }
-
-            // Plugin urgent panels
-            let pluginUrgentCount = min(statusManager.urgentPluginSessions.count, 2)
-            if pluginUrgentCount > 0 && claudeUrgentCount > 0 {
-                height += spacing
-            }
-            for (index, _) in statusManager.urgentPluginSessions.prefix(2).enumerated() {
-                height += urgentPanelFixedHeight
-                if index < pluginUrgentCount - 1 {
+                if index < urgentCount - 1 {
                     height += spacing
                 }
             }
@@ -149,7 +136,7 @@ public struct IslandView: View {
         if expandMode != .auto {
             height += spacing  // divider
 
-            let totalSessions = statusManager.sessions.count + statusManager.pluginSessions.count
+            let totalSessions = statusManager.sessions.count
             if totalSessions > 0 {
                 // 每个 session 行约 56
                 height += min(CGFloat(totalSessions) * 56, 250)
@@ -185,21 +172,12 @@ public struct IslandView: View {
         contentHeight > expandedMaxHeight
     }
 
-    /// 当前轮播的 session（包含 Claude 和 Plugin sessions）
-    private var currentCarouselSession: (claudeSession: AISession?, pluginSession: PluginSession?) {
-        let claudeSessions = statusManager.sessions
-        let pluginSessions = statusManager.pluginSessions
-        let totalCount = claudeSessions.count + pluginSessions.count
-
-        guard totalCount > 0 else { return (nil, nil) }
-
-        let index = carouselIndex % totalCount
-
-        if index < claudeSessions.count {
-            return (claudeSessions[index], nil)
-        } else {
-            return (nil, pluginSessions[index - claudeSessions.count])
-        }
+    /// 当前轮播的 session
+    private var currentCarouselSession: PluginSession? {
+        let sessions = statusManager.sessions
+        guard !sessions.isEmpty else { return nil }
+        let index = carouselIndex % sessions.count
+        return sessions[index]
     }
 
     // MARK: - Body
@@ -290,8 +268,7 @@ public struct IslandView: View {
                 HStack {
                     if hasActiveSessions {
                         let carousel = currentCarouselSession
-                        let needsBreathing = (carousel.claudeSession?.status.needsBreathing ?? false) ||
-                                             (carousel.pluginSession?.status.needsBreathing ?? false)
+                        let needsBreathing = carousel?.status.needsBreathing ?? false
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.orange)
@@ -309,24 +286,24 @@ public struct IslandView: View {
                 if isExternalDisplay {
                     // 外接显示器：中间直接显示轮播信息
                     HStack(spacing: 8) {
-                        let carousel = currentCarouselSession
-
-                        if let claudeSession = carousel.claudeSession {
+                        if let session = currentCarouselSession {
                             Circle()
-                                .fill(claudeSession.status.color)
+                                .fill(session.status.color)
                                 .frame(width: 6, height: 6)
 
-                            Text(claudeSession.projectName)
+                            Text(session.title)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
 
-                            Text(claudeSession.status.description)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.6))
-                                .lineLimit(1)
+                            if let subtitle = session.subtitle, !subtitle.isEmpty {
+                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                            }
 
-                            if claudeSession.status.needsUserAction {
+                            if session.status.needsUserAction {
                                 Image(systemName: "hand.raised.fill")
                                     .font(.system(size: 9))
                                     .foregroundColor(.orange)
@@ -334,30 +311,7 @@ public struct IslandView: View {
 
                             Spacer()
 
-                            Text(claudeSession.formattedDuration)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.5))
-                                .monospacedDigit()
-                        } else if let pluginSession = carousel.pluginSession {
-                            Circle()
-                                .fill(pluginSession.status.color)
-                                .frame(width: 6, height: 6)
-
-                            Text(pluginSession.title)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-
-                            if let subtitle = pluginSession.subtitle, !subtitle.isEmpty {
-                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            Text(pluginSession.formattedDuration)
+                            Text(session.formattedDuration)
                                 .font(.system(size: 10))
                                 .foregroundColor(.white.opacity(0.5))
                                 .monospacedDigit()
@@ -372,21 +326,32 @@ public struct IslandView: View {
                     Spacer()
                 }
 
-                // 右侧：状态图标（呼吸动效或闪烁动效）
-                HStack {
-                    let carousel = currentCarouselSession
-                    if let claudeSession = carousel.claudeSession {
-                        Image(systemName: claudeSession.status.icon)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(claudeSession.status.color)
-                            .opacity(claudeSession.status.needsUserAction ? attentionOpacity :
-                                     claudeSession.status.needsBreathing ? statusOpacity : 1.0)
-                    } else if let pluginSession = carousel.pluginSession {
-                        Image(systemName: pluginSession.status.icon)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(pluginSession.status.color)
-                            .opacity(pluginSession.status.needsUserAction ? attentionOpacity :
-                                     pluginSession.status.needsBreathing ? statusOpacity : 1.0)
+                // 右侧：精细状态图标（呼吸动效或闪烁动效）
+                HStack(spacing: 3) {
+                    if let session = currentCarouselSession {
+                        // 优先使用精细状态
+                        let ds = session.detailedStatus ?? DetailedStatus.from(sessionStatus: session.status)
+                        let dsColor = ds.color
+                        let needsAction = ds.needsUserAction
+
+                        // 状态指示点
+                        Circle()
+                            .fill(dsColor)
+                            .frame(width: 6, height: 6)
+
+                        // 状态图标
+                        Image(systemName: ds.sfSymbolName)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(dsColor)
+                            .opacity(needsAction ? attentionOpacity :
+                                     ds.needsBreathing ? statusOpacity : 1.0)
+
+                        // 任务进度（如果有）
+                        if let progress = session.progressText {
+                            Text(progress)
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.cyan)
+                        }
                     }
                 }
                 .padding(.trailing, 12)
@@ -399,25 +364,43 @@ public struct IslandView: View {
                 // Session 轮播信息
                 VStack(spacing: 4) {
                     HStack(spacing: 8) {
-                        let carousel = currentCarouselSession
+                        if let session = currentCarouselSession {
+                            // 优先使用精细状态
+                            let ds = session.detailedStatus ?? DetailedStatus.from(sessionStatus: session.status)
 
-                        if let claudeSession = carousel.claudeSession {
-                            // 显示 Claude session
                             Circle()
-                                .fill(claudeSession.status.color)
+                                .fill(ds.color)
                                 .frame(width: 6, height: 6)
 
-                            Text(claudeSession.projectName)
+                            Text(session.title)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
 
-                            Text(claudeSession.status.description)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.6))
-                                .lineLimit(1)
+                            // 精细状态图标
+                            Image(systemName: ds.sfSymbolName)
+                                .font(.system(size: 9))
+                                .foregroundColor(ds.color.opacity(0.8))
 
-                            if claudeSession.status.needsUserAction {
+                            if let subtitle = session.subtitle, !subtitle.isEmpty {
+                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.6))
+                                    .lineLimit(1)
+                            }
+
+                            // 任务进度标签
+                            if let progress = session.progressText {
+                                Text(progress)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundColor(.cyan)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Capsule().fill(Color.cyan.opacity(0.2)))
+                            }
+
+                            // 用户需要介入提示
+                            if ds.needsUserAction {
                                 Image(systemName: "hand.raised.fill")
                                     .font(.system(size: 9))
                                     .foregroundColor(.orange)
@@ -425,59 +408,24 @@ public struct IslandView: View {
 
                             Spacer()
 
-                            Text(claudeSession.formattedDuration)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.5))
-                                .monospacedDigit()
-                        } else if let pluginSession = carousel.pluginSession {
-                            // 显示 Plugin session
-                            Circle()
-                                .fill(pluginSession.status.color)
-                                .frame(width: 6, height: 6)
-
-                            Text(pluginSession.title)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-
-                            if let subtitle = pluginSession.subtitle, !subtitle.isEmpty {
-                                Text(subtitle.count > 30 ? String(subtitle.prefix(30)) + "..." : subtitle)
+                            // 时间 + 使用统计
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(session.formattedDuration)
                                     .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            Text(pluginSession.formattedDuration)
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.5))
-                                .monospacedDigit()
-                        } else {
-                            // 没有活跃 session，检查状态
-                            if statusManager.pluginManager.hasError {
-                                HStack(spacing: 4) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.orange)
-                                    Text("Plugin error")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                            } else if statusManager.pluginManager.isLoading {
-                                HStack(spacing: 6) {
-                                    ProgressView()
-                                        .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.5)))
-                                        .scaleEffect(0.7)
-                                    Text("Loading...")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.white.opacity(0.5))
-                                }
-                            } else {
-                                Text("No active sessions")
-                                    .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.5))
+                                    .monospacedDigit()
+
+                                // 使用统计（如果有）
+                                if let stats = session.usageStats, stats.turns > 0 {
+                                    Text(stats.formattedCost)
+                                        .font(.system(size: 8, weight: .medium))
+                                        .foregroundColor(.green.opacity(0.7))
+                                }
                             }
+                        } else {
+                            Text("No active sessions")
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.5))
                         }
                     }
 
@@ -495,9 +443,7 @@ public struct IslandView: View {
 
     @ViewBuilder
     private var carouselIndicators: some View {
-        let claudeCount = statusManager.sessions.count
-        let pluginCount = statusManager.pluginSessions.count
-        let totalCount = claudeCount + pluginCount
+        let totalCount = statusManager.sessions.count
 
         if totalCount > 1 {
             HStack(spacing: 4) {
@@ -555,23 +501,10 @@ public struct IslandView: View {
                         Color.black.opacity(0.01)  // 几乎不可见，但占位
                             .frame(height: 100)
                     } else {
-                        // 紧急信息面板 - 显示所有（最多3个 Claude + 2个 Plugin）
+                        // 紧急信息面板 - 显示所有（最多3个）
                         if statusManager.hasUrgentSession {
-                            // Claude urgent panels
                             ForEach(statusManager.urgentSessions.prefix(3)) { session in
-                                urgentPanel(
-                                    session: session,
-                                    message: statusManager.urgentMessages[session.id],
-                                    eventType: statusManager.urgentEventTypes[session.id] ?? nil
-                                )
-                            }
-
-                            // Plugin urgent panels
-                            ForEach(statusManager.urgentPluginSessions.prefix(2)) { session in
-                                pluginUrgentPanel(
-                                    session: session,
-                                    message: statusManager.urgentMessages[session.id]
-                                )
+                                urgentPanel(session: session)
                             }
                         }
 
@@ -579,7 +512,7 @@ public struct IslandView: View {
                         if expandMode != .auto {
                             Divider().background(Color.white.opacity(0.15))
 
-                            if statusManager.sessions.isEmpty && statusManager.pluginSessions.isEmpty {
+                            if statusManager.sessions.isEmpty {
                                 // 空状态 - 显示帮助提示和 buddy
                                 VStack(spacing: 12) {
                                     // Buddy 动画
@@ -606,31 +539,19 @@ public struct IslandView: View {
                                 .frame(height: 120)
                             } else {
                                 LazyVStack(spacing: 6) {
-                                    // Claude sessions
+                                    // 统一的 session 列表
                                     ForEach(statusManager.sessions) { session in
-                                        SessionRowView(
-                                            session: session,
-                                            onOpenTerminal: { statusManager.openTerminal(for: session) },
-                                            onConfirm: session.status.needsUserAction && session.id != statusManager.currentUrgentSession?.id ? {
-                                                statusManager.confirmPermission(for: session)
-                                                closeExpanded()
-                                            } : nil
-                                        )
-                                    }
-
-                                    // Plugin sessions (混合同一列表)
-                                    ForEach(statusManager.pluginSessions) { session in
                                         PluginSessionRowView(
                                             session: session,
-                                            pluginInfo: statusManager.pluginManager.getPluginInfo(for: session.pluginId),
-                                            onOpenTerminal: { statusManager.openTerminal(forPluginSession: session) }
+                                            pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
+                                            onOpenTerminal: { statusManager.activateTerminal(for: session) }
                                         )
                                     }
                                 }
 
                                 // Buddy 在底部右下角显示（session 数量 <= 4 时）
                                 if showBuddy, let buddy = buddyReader.buddy,
-                                   statusManager.sessions.count + statusManager.pluginSessions.count <= 4 {
+                                   statusManager.sessions.count <= 4 {
                                     HStack {
                                         Spacer()
                                         BuddyASCIIView(buddy: buddy)
@@ -654,61 +575,63 @@ public struct IslandView: View {
     // MARK: - Urgent Panel (固定布局)
 
     @ViewBuilder
-    private func urgentPanel(session: AISession, message: String?, eventType: HookEventType?) -> some View {
-        VStack(spacing: 4) {
-            // Header: icon + title + 状态标签 + buttons，固定高度 44
-            urgentPanelHeaderWithButtons(session: session, eventType: eventType)
-                .frame(height: 44)
+    private func urgentPanel(session: PluginSession) -> some View {
+        if let event = session.urgentEvent {
+            VStack(spacing: 4) {
+                // Header: icon + title + 状态标签 + buttons，固定高度 44
+                urgentPanelHeaderWithButtons(session: session, event: event)
+                    .frame(height: 44)
 
-            // Message Box: 固定高度 120
-            urgentPanelMessageFixed(message: message)
-                .frame(height: 120)
+                // Message Box: 固定高度 120
+                urgentPanelMessageFixed(message: event.message)
+                    .frame(height: 120)
+            }
+            .padding(10)
+            .background(urgentPanelBackground)
         }
-        .padding(10)
-        .background(urgentPanelBackground)
     }
 
     @ViewBuilder
-    private func urgentPanelHeaderWithButtons(session: AISession, eventType: HookEventType?) -> some View {
+    private func urgentPanelHeaderWithButtons(session: PluginSession, event: UrgentEventInfo) -> some View {
         HStack(spacing: 6) {
             // Icon
             ZStack {
                 Circle()
-                    .fill(session.type.themeColor.opacity(0.3))
+                    .fill((statusManager.getPluginInfo(for: session.pluginId)?.themeColor ?? .blue).opacity(0.3))
                     .frame(width: 24, height: 24)
-                sessionTypeIcon(for: session.type, size: 12)
+                Image(systemName: statusManager.getPluginInfo(for: session.pluginId)?.icon ?? "brain.head.profile")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(statusManager.getPluginInfo(for: session.pluginId)?.themeColor ?? .blue)
             }
 
             // Title
-            Text(session.projectName)
+            Text(session.title)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.white)
                 .lineLimit(1)
 
             // 状态标签
-            if let eventType = eventType {
-                HStack(spacing: 3) {
-                    Image(systemName: eventType == .permissionRequest ? "lock.shield" : "bell.fill")
-                        .font(.system(size: 9))
-                    Text(eventType == .permissionRequest ? "Permission" : eventType.rawValue)
-                        .font(.system(size: 9, weight: .medium))
-                }
-                .foregroundColor(.orange)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.orange.opacity(0.15)))
+            HStack(spacing: 3) {
+                Image(systemName: event.eventType == "permission" ? "lock.shield" : "bell.fill")
+                    .font(.system(size: 9))
+                Text(event.eventType == "permission" ? "Permission" : event.eventType)
+                    .font(.system(size: 9, weight: .medium))
             }
+            .foregroundColor(.orange)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.orange.opacity(0.15)))
 
             Spacer()
 
             // Buttons in header (smaller size)
-            urgentPanelHeaderButtons(session: session, eventType: eventType)
+            urgentPanelHeaderButtons(session: session, event: event)
         }
     }
 
     /// Header 中的按钮（紧凑样式）
     @ViewBuilder
-    private func urgentPanelHeaderButtons(session: AISession, eventType: HookEventType?) -> some View {
+    private func urgentPanelHeaderButtons(session: PluginSession, event: UrgentEventInfo) -> some View {
         HStack(spacing: 6) {
             // Ignore 按钮
             Button(action: {
@@ -747,15 +670,13 @@ public struct IslandView: View {
                     isExpanded = false
                     expandMode = .manual
                 }
-                // 延迟执行清除和跳转，等动画完成
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     isClosing = false
-                    statusManager.dismissUrgent(sessionId: session.id)
-                    statusManager.openTerminal(for: session)
+                    statusManager.activateTerminal(for: session)
                 }
             }) {
                 HStack(spacing: 3) {
-                    Image(systemName: session.type == .aime ? "globe" : "terminal")
+                    Image(systemName: "terminal")
                         .font(.system(size: 8, weight: .medium))
                     Text("Open")
                         .font(.system(size: 9, weight: .medium))
@@ -763,12 +684,39 @@ public struct IslandView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(Color.systemBlue)
-                )
+                .background(Capsule().fill(Color.blue.opacity(0.5)))
             }
             .buttonStyle(.plain)
+
+            // Approve 按钮 - 仅权限请求时显示
+            if event.eventType == "permission" && event.respond != nil {
+                Button(action: {
+                    NSLog("[IslandView] Approve button clicked for session: \(session.id)")
+                    // 响应权限
+                    event.respond?(.allow)
+                    // 收起视图
+                    isClosing = true
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isExpanded = false
+                        expandMode = .manual
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        isClosing = false
+                    }
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .medium))
+                        Text("Approve")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.green.opacity(0.5)))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -819,74 +767,6 @@ public struct IslandView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.white.opacity(0.08))
         )
-    }
-
-    @ViewBuilder
-    private func urgentPanelButtons(session: AISession, eventType: HookEventType?) -> some View {
-        HStack(spacing: 10) {
-            Spacer()
-
-            // Ignore 按钮
-            Button(action: {
-                NSLog("[IslandView] Ignore button clicked for session: \(session.id)")
-                // 设置正在关闭状态，防止动画期间黑屏
-                isClosing = true
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isExpanded = false
-                    expandMode = .manual
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    isClosing = false
-                    statusManager.dismissUrgent(sessionId: session.id)
-                }
-            }) {
-                HStack(spacing: 5) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .medium))
-                    Text("Ignore")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundColor(.white.opacity(0.8))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(Capsule().fill(Color.white.opacity(0.2)))
-            }
-            .buttonStyle(.plain)
-
-            // Open 按钮 - 跳转到终端
-            Button(action: {
-                NSLog("[IslandView] Open button clicked for session: \(session.id)")
-                // 设置正在关闭状态，防止动画期间黑屏
-                isClosing = true
-                // 收起视图
-                withAnimation(.easeInOut(duration: 0.25)) {
-                    isExpanded = false
-                    expandMode = .manual
-                }
-                // 延迟执行清除和跳转，等动画完成
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    isClosing = false
-                    statusManager.dismissUrgent(sessionId: session.id)
-                    statusManager.openTerminal(for: session)
-                }
-            }) {
-                HStack(spacing: 5) {
-                    Image(systemName: session.type == .aime ? "globe" : "terminal")
-                        .font(.system(size: 10, weight: .medium))
-                    Text("Open")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(Color.systemBlue)
-                        .shadow(color: .blue.opacity(0.3), radius: 4, y: 2)
-                )
-            }
-            .buttonStyle(.plain)
-        }
     }
 
     private var urgentPanelBackground: some View {
@@ -970,7 +850,7 @@ public struct IslandView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         isClosing = false
                         statusManager.dismissUrgent(sessionId: session.id)
-                        statusManager.openTerminal(forPluginSession: session)
+                        statusManager.activateTerminal(for: session)
                     }
                 }) {
                     HStack(spacing: 3) {
@@ -1047,7 +927,7 @@ public struct IslandView: View {
         guard carouselTimer == nil else { return }
         carouselTimer = Timer.scheduledTimer(withTimeInterval: carouselInterval, repeats: true) { _ in
             withAnimation(.easeInOut(duration: 0.3)) {
-                let totalCount = self.statusManager.sessions.count + self.statusManager.pluginSessions.count
+                let totalCount = self.statusManager.sessions.count
                 if totalCount > 0 {
                     self.carouselIndex = (self.carouselIndex + 1) % totalCount
                 }
@@ -1284,8 +1164,20 @@ struct IslandView_Previews: PreviewProvider {
                 IslandView(statusManager: {
                     let sm = StatusManager()
                     sm.notchSize = CGSize(width: 220, height: 38)
-                    let s1 = AISession(id: "1", pid: 1, cwd: "/Users/test/project-one", startedAt: Date().addingTimeInterval(-120))
-                    let s2 = AISession(id: "2", pid: 2, cwd: "/Users/test/project-two", startedAt: Date().addingTimeInterval(-300), type: .cursor)
+                    let s1 = PluginSession(
+                        id: "com.meee2.plugin.claude-1",
+                        pluginId: "com.meee2.plugin.claude",
+                        title: "project-one",
+                        status: .running,
+                        startedAt: Date().addingTimeInterval(-120)
+                    )
+                    let s2 = PluginSession(
+                        id: "com.meee2.plugin.cursor-2",
+                        pluginId: "com.meee2.plugin.cursor",
+                        title: "project-two",
+                        status: .thinking,
+                        startedAt: Date().addingTimeInterval(-300)
+                    )
                     sm.sessions = [s1, s2]
                     return sm
                 }())

@@ -81,6 +81,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 设置菜单（简化版：只有 Settings 和 Quit）
         let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Open TUI...", action: #selector(openTUI), keyEquivalent: "t"))
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
@@ -120,7 +121,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func sessionsDidChange() {
-        let hasSessions = !statusManager.sessions.isEmpty || !statusManager.pluginSessions.isEmpty
+        let hasSessions = !statusManager.sessions.isEmpty
         DispatchQueue.main.async { [weak self] in
             self?.updateStatusBarIcon(hasActiveSessions: hasSessions)
         }
@@ -145,6 +146,30 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openTUI() {
+        // 获取可执行文件路径
+        guard let execPath = Bundle.main.executablePath else {
+            NSLog("[AppDelegate] Failed to get executable path")
+            return
+        }
+
+        // 使用 AppleScript 在 Terminal 中运行 TUI
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "\(execPath) tui"
+        end tell
+        """
+
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                NSLog("[AppDelegate] AppleScript error: \(error)")
+            }
+        }
     }
 
     private func createSettingsWindow() {

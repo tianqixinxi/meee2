@@ -1,77 +1,48 @@
 import Foundation
 import Combine
+import SwiftUI
 import Meee2PluginKit
 
-/// 状态管理器 - 聚合 SessionMonitor 和 HookReceiver 的数据
+/// 状态管理器 - 聚合所有插件的数据
 /// 作为 UI 的数据源
 public class StatusManager: ObservableObject {
     // MARK: - Published Properties
 
-    /// 所有活跃的 sessions (Claude CLI)
-    @Published public var sessions: [AISession] = []
-
-    /// Plugin sessions (Cursor, Copilot, Aider, etc.)
-    @Published public var pluginSessions: [PluginSession] = []
-
-    /// 最活跃的 session (显示在紧凑视图)
-    @Published public var activeSession: AISession?
+    /// 所有 sessions (来自所有插件，包括 Claude)
+    @Published public var sessions: [PluginSession] = []
 
     /// 是否有需要用户介入的 session
     @Published public var hasUrgentSession: Bool = false
 
-    /// 当前需要用户介入的 Claude session 列表
-    @Published public var urgentSessions: [AISession] = []
-
-    /// 当前需要用户介入的 Plugin session 列表
-    @Published public var urgentPluginSessions: [PluginSession] = []
-
-    /// 紧急事件对应的详细信息
-    @Published public var urgentMessages: [String: String] = [:]  // sessionId -> message
-
-    /// 紧急事件对应的类型
-    @Published public var urgentEventTypes: [String: HookEventType?] = [:]  // sessionId -> eventType
-
-    /// 当前显示的紧急 session（优先显示 Claude，然后 Plugin）
-    public var currentUrgentSession: AISession? {
-        urgentSessions.first
-    }
-
-    public var currentUrgentPluginSession: PluginSession? {
-        urgentPluginSessions.first
-    }
-
-    public var currentUrgentMessage: String? {
-        if let session = currentUrgentSession {
-            return urgentMessages[session.id]
-        }
-        if let session = currentUrgentPluginSession {
-            return urgentMessages[session.id]
-        }
-        return nil
-    }
-
-    public var currentUrgentEventType: HookEventType? {
-        if let session = currentUrgentSession {
-            return urgentEventTypes[session.id] ?? nil
-        }
-        return nil
-    }
+    /// 系统状态
+    @Published public var systemStatus: SystemStatus = .idle
 
     /// 最新的事件消息
     @Published public var latestMessage: String?
 
-    /// 系统状态
-    @Published public var systemStatus: SystemStatus = .idle
-
     /// 刘海尺寸 (由 AppDelegate 设置)
     @Published public var notchSize: CGSize = CGSize(width: 150, height: 32)
 
+    // MARK: - Computed Properties
+
+    /// 当前紧急 session 列表 (urgentEvent != nil)
+    public var urgentSessions: [PluginSession] {
+        sessions.filter { $0.urgentEvent != nil }
+    }
+
+    /// 当前第一个紧急 session
+    public var currentUrgentSession: PluginSession? {
+        urgentSessions.first
+    }
+
+    /// 当前紧急消息
+    public var currentUrgentMessage: String? {
+        currentUrgentSession?.urgentEvent?.message
+    }
+
     // MARK: - Private Properties
 
-    private var sessionMonitor: SessionMonitor
-    private let hookSocketServer = HookSocketServer.shared
-    var pluginManager: PluginManager  // Internal access for UI
-
+    let pluginManager: PluginManager
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - System Status
@@ -86,16 +57,11 @@ public class StatusManager: ObservableObject {
     // MARK: - Initialization
 
     public init() {
-        sessionMonitor = SessionMonitor()
         pluginManager = PluginManager.shared
-
         setupBindings()
-        setupPluginBindings()
     }
 
     deinit {
-        sessionMonitor.stopMonitoring()
-        hookSocketServer.stop()
         pluginManager.stopAll()
     }
 
@@ -103,499 +69,74 @@ public class StatusManager: ObservableObject {
 
     /// 启动监控
     public func start() {
-        // 启动 session 文件监控
-        sessionMonitor.startMonitoring()
+        // 注册 ClaudePlugin (内置插件)
+        let claudePlugin = ClaudePlugin()
+        pluginManager.register(claudePlugin)
 
-        // 启动 socket server
-        hookSocketServer.start(
-            onEvent: { [weak self] event in
-                self?.handleHookEvent(event)
-            },
-            onPermissionFailure: { [weak self] sessionId, toolUseId in
-                self?.handlePermissionFailure(sessionId: sessionId, toolUseId: toolUseId)
-            }
-        )
-
-        // 启动 plugins
+        // 启动所有 plugins
         pluginManager.startAll()
 
-        NSLog("[StatusManager] Started")
+        NSLog("[StatusManager] Started with ClaudePlugin registered")
     }
 
     /// 停止监控
     public func stop() {
-        sessionMonitor.stopMonitoring()
-        hookSocketServer.stop()
         pluginManager.stopAll()
         NSLog("[StatusManager] Stopped")
     }
 
-    /// 跳转到指定 session 的 Terminal（智能跳转）
-    func openTerminal(for session: AISession) {
-        TerminalManager.smartActivateTerminal(forSession: session)
-    }
+    // MARK: - Session Operations
 
-    /// 跳转到指定 Plugin session 的 Terminal
-    func openTerminal(forPluginSession session: PluginSession) {
+    /// 激活 session 对应的终端
+    public func activateTerminal(for session: PluginSession) {
         pluginManager.activateTerminal(for: session)
     }
 
-    // MARK: - Permission Approval
+    /// 响应权限请求
+    public func respondToPermission(for session: PluginSession, decision: PermissionDecision) {
+        session.urgentEvent?.respond?(decision)
+    }
 
-    /// 批准权限请求
-    func approvePermission(for session: AISession) {
-        NSLog("[StatusManager] ========== APPROVE PERMISSION ==========")
-        NSLog("[StatusManager] Session ID: \(session.id)")
-        NSLog("[StatusManager] Session PID: \(session.pid)")
-
-        let hasPending = hookSocketServer.hasPendingPermission(sessionId: session.id)
-        NSLog("[StatusManager] Has pending permission: \(hasPending)")
-
-        if let details = hookSocketServer.getPendingPermission(sessionId: session.id) {
-            NSLog("[StatusManager] Pending details - toolName: \(details.toolName ?? "nil"), toolId: \(details.toolId ?? "nil")")
-        } else {
-            NSLog("[StatusManager] WARNING: No pending permission details found!")
+    /// 关闭指定紧急 session
+    public func dismissUrgent(sessionId: String) {
+        // 通过响应 .deny 来关闭权限请求
+        if let session = sessions.first(where: { $0.id == sessionId }),
+           let event = session.urgentEvent {
+            event.respond?(.deny(reason: "Dismissed by user"))
         }
-
-        // 直接使用 sessionId 发送响应，HookSocketServer 会自动查找对应的 toolUseId
-        hookSocketServer.respondToPermissionBySession(
-            sessionId: session.id,
-            decision: "allow"
-        )
-
-        // 清理状态
-        dismissUrgent(sessionId: session.id)
-        latestMessage = "已批准权限请求"
     }
 
-    /// 拒绝权限请求
-    func denyPermission(for session: AISession, reason: String? = nil) {
-        NSLog("[StatusManager] denyPermission called for session: \(session.id)")
+    // MARK: - Plugin Info
 
-        // 直接使用 sessionId 发送响应，HookSocketServer 会自动查找对应的 toolUseId
-        hookSocketServer.respondToPermissionBySession(
-            sessionId: session.id,
-            decision: "deny",
-            reason: reason
-        )
-
-        // 清理状态
-        dismissUrgent(sessionId: session.id)
-        latestMessage = "已拒绝权限请求"
-    }
-
-    /// 处理权限失败 (socket 断开等)
-    private func handlePermissionFailure(sessionId: String, toolUseId: String) {
-        NSLog("[StatusManager] Permission socket failed for session: \(sessionId), toolUseId: \(toolUseId)")
-        dismissUrgent(sessionId: sessionId)
-    }
-
-    /// 确认权限请求 (旧方法，保留兼容)
-    func confirmPermission(for session: AISession) {
-        approvePermission(for: session)
+    /// 获取 plugin 信息
+    public func getPluginInfo(for pluginId: String) -> (displayName: String, icon: String, themeColor: Color)? {
+        pluginManager.getPluginInfo(for: pluginId)
     }
 
     // MARK: - Private Methods
 
-    /// 设置数据绑定
     private func setupBindings() {
-        // 监听 session 变化，合并运行时状态
-        sessionMonitor.$sessions
+        // 订阅 PluginManager.sessions
+        pluginManager.$sessions
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] newSessions in
+            .sink { [weak self] sessions in
                 guard let self = self else { return }
-                // 合并状态：保留当前的运行时状态（status, currentTask, toolName）
-                self.sessions = self.mergeWithCurrentState(newSessions)
-                self.updateActiveSession()
+                self.sessions = sessions
                 self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
             }
             .store(in: &cancellables)
-    }
 
-    /// 设置 Plugin 数据绑定
-    private func setupPluginBindings() {
-        // 订阅 plugin sessions 变化
+        // 检测 urgent 状态
         pluginManager.$sessions
+            .map { $0.contains { $0.urgentEvent != nil } }
             .receive(on: DispatchQueue.main)
-            .assign(to: &$pluginSessions)
-
-        // 监听 plugin 紧急事件 - 使用传统 NotificationCenter 方式
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handlePluginUrgentEventNotification(_:)),
-            name: .pluginUrgentEvent,
-            object: nil
-        )
+            .assign(to: &$hasUrgentSession)
     }
 
-    @objc private func handlePluginUrgentEventNotification(_ notification: Notification) {
-        NSLog("[StatusManager] ===== RECEIVED NOTIFICATION =====")
-        if let info = notification.userInfo as? [String: Any] {
-            NSLog("[StatusManager] UserInfo keys: \(info.keys)")
-            if let session = info["session"] as? PluginSession,
-               let message = info["message"] as? String {
-                handlePluginUrgentEvent(session: session, message: message)
-            }
-        }
-    }
-
-    /// 合并新加载的 sessions 和当前运行时状态
-    private func mergeWithCurrentState(_ newSessions: [AISession]) -> [AISession] {
-        let currentMap = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
-
-        return newSessions.map { newSession in
-            if let current = currentMap[newSession.id] {
-                // 保留运行时状态
-                var merged = newSession
-                // 如果当前状态是 completed，保持 completed
-                if current.status == .completed {
-                    merged.status = .completed
-                } else {
-                    merged.status = current.status
-                }
-                merged.currentTask = current.currentTask
-                merged.toolName = current.toolName
-                merged.lastUpdated = current.lastUpdated
-
-                // 合并终端信息（优先使用当前的，因为可能从 hook 更新过）
-                merged.tty = current.tty
-                merged.termProgram = current.termProgram
-                merged.termBundleId = current.termBundleId
-                merged.cmuxSocketPath = current.cmuxSocketPath
-                merged.cmuxSurfaceId = current.cmuxSurfaceId
-                merged.lastActivityTimestamp = current.lastActivityTimestamp
-
-                // 如果当前没有终端信息，尝试从 SessionTerminalStore 补充
-                if merged.tty == nil && merged.termProgram == nil {
-                    if let storedInfo = SessionTerminalStore.shared.get(sessionId: newSession.id) {
-                        merged.tty = storedInfo.tty
-                        merged.termProgram = storedInfo.termProgram
-                        merged.termBundleId = storedInfo.termBundleId
-                        merged.cmuxSocketPath = storedInfo.cmuxSocketPath
-                        merged.cmuxSurfaceId = storedInfo.cmuxSurfaceId
-                    }
-                }
-
-                return merged
-            }
-
-            // 新 session，尝试从 SessionTerminalStore 补充终端信息
-            var merged = newSession
-            if let storedInfo = SessionTerminalStore.shared.get(sessionId: newSession.id) {
-                merged.tty = storedInfo.tty
-                merged.termProgram = storedInfo.termProgram
-                merged.termBundleId = storedInfo.termBundleId
-                merged.cmuxSocketPath = storedInfo.cmuxSocketPath
-                merged.cmuxSurfaceId = storedInfo.cmuxSurfaceId
-            }
-
-            return merged
-        }
-    }
-
-    /// 处理 hook 事件
-    /// 注意：此方法从 HookSocketServer.queue 线程调用，必须在主线程上更新 @Published 属性
-    private func handleHookEvent(_ event: HookEvent) {
-        // 触发音效（可以在任何线程）
-        if let eventType = event.event, let soundEvent = eventType.soundEvent {
-            SoundManager.shared.play(event: soundEvent)
-        }
-
-        // 更新对应 session 的状态
-        if let sessionId = event.sessionId {
-            // 更新 SessionTerminalStore（可以在任何线程）
-            SessionTerminalStore.shared.update(
-                sessionId: sessionId,
-                tty: event.tty,
-                termProgram: event.termProgram,
-                termBundleId: event.termBundleId,
-                cmuxSocketPath: event.cmuxSocketPath,
-                cmuxSurfaceId: event.cmuxSurfaceId,
-                cwd: event.cwd ?? "",
-                status: event.inferredStatus.rawValue
-            )
-
-            // 检查 session 是否在列表中
-            NSLog("[StatusManager] Session \(sessionId) checking if exists in list")
-
-            // 在主线程上更新 @Published 属性
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-
-                // 先更新 session 状态（包含终端信息）
-                self.updateSessionStatus(
-                    sessionId: sessionId,
-                    status: event.inferredStatus,
-                    task: event.statusDescription,
-                    tool: event.toolName,
-                    terminalInfo: (tty: event.tty, termProgram: event.termProgram, termBundleId: event.termBundleId, cmuxSocketPath: event.cmuxSocketPath, cmuxSurfaceId: event.cmuxSurfaceId)
-                )
-
-                // 检查是否需要用户介入，添加到紧急列表
-                if event.shouldShowUrgentPanel {
-                    // 查找或创建 session
-                    var urgentSession = self.sessions.first(where: { $0.id == sessionId })
-                    if urgentSession == nil {
-                        // Session 不在列表中，创建一个临时 session
-                        NSLog("[StatusManager] Session not in list, creating temporary urgent session")
-                        urgentSession = AISession(
-                            id: sessionId,
-                            pid: 0,
-                            cwd: event.cwd ?? "/",
-                            startedAt: Date(),
-                            status: event.inferredStatus,
-                            currentTask: event.statusDescription,
-                            toolName: event.toolName
-                        )
-                    }
-
-                    if let session = urgentSession {
-                        // 如果不在紧急列表中，添加
-                        if !self.urgentSessions.contains(where: { $0.id == sessionId }) {
-                            self.urgentSessions.append(session)
-                            NSLog("[StatusManager] Added urgent session: \(session.projectName), total urgent: \(self.urgentSessions.count)")
-                        } else {
-                            // 更新已存在的 session
-                            if let index = self.urgentSessions.firstIndex(where: { $0.id == sessionId }) {
-                                self.urgentSessions[index] = session
-                            }
-                        }
-
-                        // 存储消息和事件类型
-                        self.urgentMessages[sessionId] = self.buildUrgentMessage(from: event)
-                        self.urgentEventTypes[sessionId] = event.event
-                    }
-
-                    self.hasUrgentSession = !self.urgentSessions.isEmpty
-                    NSLog("[StatusManager] hasUrgentSession: \(self.hasUrgentSession), urgent count: \(self.urgentSessions.count)")
-                }
-
-                // 设置最新消息
-                self.latestMessage = event.statusDescription
-
-                // 用户提交新的提示时重置状态
-                if event.event == .userPromptSubmit {
-                    self.clearUrgentSessions()
-                }
-
-                // 刷新 sessions
-                self.sessionMonitor.refreshSessions()
-            }
-        } else {
-            // 没有 sessionId，仍需在主线程更新 latestMessage
-            DispatchQueue.main.async { [weak self] in
-                self?.latestMessage = event.statusDescription
-            }
-        }
-    }
-
-    /// 清除所有紧急状态
-    private func clearUrgentSessions() {
-        urgentSessions.removeAll()
-        urgentPluginSessions.removeAll()
-        urgentMessages.removeAll()
-        urgentEventTypes.removeAll()
-        hasUrgentSession = false
-    }
-
-    /// 处理 Plugin 紧急事件
-    private func handlePluginUrgentEvent(session: PluginSession, message: String) {
-        NSLog("[StatusManager] Plugin urgent event: \(session.pluginId), session: \(session.title), message: \(message)")
-
-        // 添加到紧急列表（如果不存在）
-        if !urgentPluginSessions.contains(where: { $0.id == session.id }) {
-            urgentPluginSessions.append(session)
-        }
-
-        // 存储消息
-        urgentMessages[session.id] = message
-        hasUrgentSession = true
-        systemStatus = .needsAttention
-        latestMessage = message
-
-        NSLog("[StatusManager] Plugin urgent session added, total urgent: \(urgentSessions.count + urgentPluginSessions.count)")
-    }
-
-    /// 关闭指定紧急 session
-    func dismissUrgent(sessionId: String) {
-        // 先检查 Claude sessions
-        if let index = urgentSessions.firstIndex(where: { $0.id == sessionId }) {
-            let dismissed = urgentSessions.remove(at: index)
-            urgentMessages.removeValue(forKey: dismissed.id)
-            urgentEventTypes.removeValue(forKey: dismissed.id)
-            NSLog("[StatusManager] Dismissed urgent session: \(dismissed.projectName)")
-        }
-        // 再检查 Plugin sessions
-        else if let index = urgentPluginSessions.firstIndex(where: { $0.id == sessionId }) {
-            let dismissed = urgentPluginSessions.remove(at: index)
-            urgentMessages.removeValue(forKey: dismissed.id)
-            NSLog("[StatusManager] Dismissed urgent plugin session: \(dismissed.title)")
-        }
-
-        NSLog("[StatusManager] Remaining urgent: \(urgentSessions.count + urgentPluginSessions.count)")
-
-        // 更新状态
-        hasUrgentSession = !urgentSessions.isEmpty || !urgentPluginSessions.isEmpty
-
-        if !hasUrgentSession {
-            systemStatus = .running
-        }
-    }
-
-    /// 关闭当前紧急 session（第一个），显示下一个
-    func dismissCurrentUrgent() {
-        guard !urgentSessions.isEmpty else { return }
-
-        // 移除第一个
-        let dismissed = urgentSessions.removeFirst()
-        urgentMessages.removeValue(forKey: dismissed.id)
-        urgentEventTypes.removeValue(forKey: dismissed.id)
-
-        NSLog("[StatusManager] Dismissed urgent session: \(dismissed.projectName), remaining: \(urgentSessions.count)")
-
-        // 更新状态
-        hasUrgentSession = !urgentSessions.isEmpty
-
-        if urgentSessions.isEmpty {
-            // 没有更多紧急事件
-            systemStatus = .running
-        }
-    }
-
-    /// 构建紧急信息展示内容
-    private func buildUrgentMessage(from event: HookEvent) -> String {
-        switch event.event {
-        case .permissionRequest:
-            let tool = event.toolName ?? "Unknown tool"
-            let permission = event.permission ?? "Permission required"
-
-            // 检查是否有 AskUserQuestion 的选项
-            if tool == "AskUserQuestion", let toolInput = event.toolInputDict {
-                NSLog("[StatusManager] AskUserQuestion detected, toolInput: \(toolInput)")
-                // 解析 questions 中的 options
-                // questions 是 [[String: Any]]，需要处理 Optional 包装
-                if let questionsAny = toolInput["questions"] {
-                    NSLog("[StatusManager] questions raw: \(questionsAny)")
-                    // 处理 Optional 包装
-                    let questionsArray: [[String: Any]]?
-                    if let arr = questionsAny as? [[String: Any]] {
-                        questionsArray = arr
-                    } else if let optArr = questionsAny as? [Any], let first = optArr.first as? [String: Any] {
-                        // 可能是 [Optional(...)]
-                        questionsArray = [first]
-                    } else {
-                        questionsArray = nil
-                    }
-
-                    if let questions = questionsArray {
-                        var optionsText = ""
-                        for q in questions {
-                            if let opts = q["options"] as? [[String: Any]] {
-                                for (index, opt) in opts.enumerated() {
-                                    let label = opt["label"] as? String ?? ""
-                                    let desc = opt["description"] as? String
-                                    if let d = desc {
-                                        optionsText += "\(index + 1). \(label) - \(d)\n"
-                                    } else {
-                                        optionsText += "\(index + 1). \(label)\n"
-                                    }
-                                }
-                            }
-                        }
-                        if !optionsText.isEmpty {
-                            NSLog("[StatusManager] Parsed options: \(optionsText)")
-                            return "AskUserQuestion:\n\(optionsText.trimmingCharacters(in: .newlines))"
-                        }
-                    }
-                }
-            }
-
-            return "\(tool): \(permission)"
-
-        case .notification:
-            return event.notification ?? "Task completed"
-
-        case .stop, .sessionEnd:
-            return event.lastAssistantMessage ?? event.statusDescription ?? "Task finished"
-
-        default:
-            return event.statusDescription ?? "Needs attention"
-        }
-    }
-
-    /// 更新指定 session 的状态 (含终端信息)
-    private func updateSessionStatus(
-        sessionId: String,
-        status: SessionStatus,
-        task: String? = nil,
-        tool: String? = nil,
-        terminalInfo: (tty: String?, termProgram: String?, termBundleId: String?, cmuxSocketPath: String?, cmuxSurfaceId: String?)? = nil
-    ) {
-        NSLog("[StatusManager] updateSessionStatus called: sessionId=\(sessionId), status=\(status.rawValue), task=\(task ?? "nil"), tool=\(tool ?? "nil")")
-
-        if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
-            let currentStatus = sessions[index].status
-            let oldTask = sessions[index].currentTask ?? "nil"
-
-            // 如果当前状态是 completed，只能被 userPromptSubmit 事件改变
-            // 其他事件不应该覆盖 completed 状态
-            if currentStatus == .completed && status != .completed && status != .thinking {
-                NSLog("[StatusManager] Session is completed, ignoring status change to \(status.rawValue)")
-                return
-            }
-
-            var updated = sessions[index].withStatus(status, task: task, tool: tool)
-
-            // 更新终端信息
-            if let info = terminalInfo {
-                updated = updated.withTerminalInfo(
-                    tty: info.tty,
-                    termProgram: info.termProgram,
-                    termBundleId: info.termBundleId,
-                    cmuxSocketPath: info.cmuxSocketPath,
-                    cmuxSurfaceId: info.cmuxSurfaceId
-                )
-            }
-
-            sessions[index] = updated
-            NSLog("[StatusManager] Session updated: \(currentStatus.rawValue) -> \(status.rawValue), task: \(oldTask) -> \(task ?? "nil")")
-            updateActiveSession()
-            updateSystemStatus()
-        } else {
-            NSLog("[StatusManager] Session NOT FOUND in sessions list, cannot update")
-        }
-    }
-
-    /// 更新活跃 session (优先选择需要用户介入的)
-    private func updateActiveSession() {
-        // 如果已经有紧急 session，保持不变
-        guard currentUrgentSession == nil else {
-            return
-        }
-
-        // 优先选择需要用户介入的 session
-        let urgent = sessions.filter { $0.status.needsUserAction }
-        if let firstUrgent = urgent.first {
-            activeSession = firstUrgent
-            return
-        }
-
-        // 否则选择最近活跃的 session
-        let runningSessions = sessions.filter { $0.status == .running || $0.status == .idle }
-        if let running = runningSessions.first {
-            activeSession = running
-            return
-        }
-
-        // 最后选择最近更新的 session
-        activeSession = sessions.first
-    }
-
-    /// 更新系统状态
     private func updateSystemStatus() {
-        if sessions.isEmpty && urgentSessions.isEmpty {
+        if sessions.isEmpty {
             systemStatus = .idle
             return
         }
@@ -605,8 +146,7 @@ public class StatusManager: ObservableObject {
             return
         }
 
-        // 如果有紧急 session，保持 needsAttention 状态
-        if !urgentSessions.isEmpty || sessions.contains(where: { $0.status.needsUserAction }) {
+        if hasUrgentSession || sessions.contains(where: { $0.status.needsUserAction }) {
             systemStatus = .needsAttention
             return
         }
@@ -619,7 +159,7 @@ public class StatusManager: ObservableObject {
 
 extension StatusManager {
     /// 格式化运行时间
-    func formatDuration(_ duration: TimeInterval) -> String {
+    public func formatDuration(_ duration: TimeInterval) -> String {
         if duration < 60 {
             return String(format: "%.0fs", duration)
         } else if duration < 3600 {

@@ -15,6 +15,9 @@ public class PluginManager: ObservableObject {
     /// 已加载的 plugins
     @Published public var loadedPlugins: [String: SessionPlugin] = [:]
 
+    /// 加载失败的插件
+    @Published public var failedPlugins: [DynamicPluginLoader.FailedPlugin] = []
+
     /// 是否正在加载
     @Published public var isLoading: Bool = true
 
@@ -23,7 +26,7 @@ public class PluginManager: ObservableObject {
 
     /// 是否有任何错误
     public var hasError: Bool {
-        !pluginErrors.isEmpty
+        !pluginErrors.isEmpty || !failedPlugins.isEmpty
     }
 
     // MARK: - Private
@@ -91,6 +94,11 @@ public class PluginManager: ObservableObject {
     /// 扫描并加载外部 plugins
     public func loadExternalPlugins() {
         let externalPlugins = dynamicLoader.loadAllPlugins()
+
+        // 更新失败插件列表
+        DispatchQueue.main.async {
+            self.failedPlugins = self.dynamicLoader.failedPlugins
+        }
 
         for plugin in externalPlugins {
             if plugin.initialize() {

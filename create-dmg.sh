@@ -165,6 +165,20 @@ cp -R "$APP_DIR" "/Volumes/$VOLUME_NAME/"
 # Create Applications symlink
 ln -s /Applications "/Volumes/$VOLUME_NAME/Applications"
 
+# Create CLI install script
+cat > "/Volumes/$VOLUME_NAME/install-cli.sh" << 'EOF'
+#!/bin/bash
+echo "Installing meee2 CLI to /usr/local/bin..."
+sudo ln -sf /Applications/meee2.app/Contents/MacOS/meee2 /usr/local/bin/meee2
+echo ""
+echo "Done! You can now use 'meee2' command in terminal:"
+echo "  meee2          - Start GUI (default)"
+echo "  meee2 tui      - Start TUI dashboard"
+echo "  meee2 list     - List sessions"
+echo "  meee2 --help   - Show help"
+EOF
+chmod +x "/Volumes/$VOLUME_NAME/install-cli.sh"
+
 # Set DMG window appearance using AppleScript
 echo ""
 echo "=== Configuring DMG Window ==="
@@ -181,6 +195,7 @@ tell application "Finder"
         set icon size of theViewOptions to 80
         set position of item "${APP_NAME}.app" of container window to {130, 180}
         set position of item "Applications" of container window to {370, 180}
+        set position of item "install-cli.sh" of container window to {250, 280}
         close
         open
         update without registering applications

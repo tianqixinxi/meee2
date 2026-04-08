@@ -129,6 +129,14 @@ public struct HookEvent: Decodable, Sendable {
         return nil
     }
 
+    /// 工具输出字典 (用于解析结构化数据)
+    public var toolOutputDict: [String: Any]? {
+        if let raw = rawToolOutput, let dict = raw.value as? [String: Any] {
+            return dict
+        }
+        return nil
+    }
+
     /// 权限请求详情
     public let permission: String?
     public let resource: String?

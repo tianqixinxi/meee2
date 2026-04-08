@@ -23,6 +23,25 @@ struct PluginSessionRowView: View {
         return "Open"
     }
 
+    /// 获取精细状态（优先使用详细状态，否则根据 status 推断）
+    private var effectiveDetailedStatus: DetailedStatus {
+        if let ds = session.detailedStatus {
+            return ds
+        }
+        // 根据 status 推断
+        switch session.status {
+        case .running: return .active
+        case .thinking: return .thinking
+        case .tooling: return .tooling
+        case .waitingInput: return .waitingForUser
+        case .permissionRequest: return .permissionRequired
+        case .failed: return .dead
+        case .completed: return .completed
+        case .compacting: return .compacting
+        case .idle: return .idle
+        }
+    }
+
     var body: some View {
         Button(action: onOpenTerminal) {
             HStack(spacing: 10) {
@@ -37,8 +56,9 @@ struct PluginSessionRowView: View {
                         .foregroundColor(session.accentColor ?? pluginInfo?.themeColor ?? .blue)
                 }
                 .overlay(
+                    // 精细状态指示器
                     Circle()
-                        .fill(session.status.color)
+                        .fill(effectiveDetailedStatus.color)
                         .frame(width: 8, height: 8)
                         .offset(x: 10, y: 10)
                 )
@@ -62,27 +82,67 @@ struct PluginSessionRowView: View {
                                 Capsule()
                                     .fill((session.accentColor ?? pluginInfo?.themeColor ?? .blue).opacity(0.2))
                             )
+
+                        // 任务进度标签
+                        if let progress = session.progressText {
+                            Text(progress)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.cyan)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(
+                                    Capsule()
+                                        .fill(Color.cyan.opacity(0.2))
+                                )
+                        }
                     }
 
                     // 副标题/状态 - 截断显示
-                    Text(session.subtitle ?? session.status.description)
-                        .font(.system(size: 10))
-                        .foregroundColor(.white.opacity(0.6))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack(spacing: 6) {
+                        // 精细状态图标
+                        if session.detailedStatus != nil {
+                            Image(systemName: effectiveDetailedStatus.icon)
+                                .font(.system(size: 9))
+                                .foregroundColor(effectiveDetailedStatus.color)
+                        }
+
+                        Text(session.subtitle ?? session.status.description)
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.6))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+
+                        // 工具名称
+                        if let tool = session.toolName {
+                            Text("• \(tool)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.4))
+                                .lineLimit(1)
+                        }
+                    }
                 }
-                .frame(maxWidth: 280, alignment: .leading)
+                .frame(maxWidth: 260, alignment: .leading)
 
                 Spacer()
 
-                // 右侧：时间
+                // 右侧：时间 + 使用统计
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(session.formattedDuration)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(.white.opacity(0.5))
                         .monospacedDigit()
 
-                    if session.status.needsUserAction {
+                    // 使用统计（如果有）
+                    if let stats = session.usageStats, stats.turns > 0 {
+                        HStack(spacing: 4) {
+                            Text(stats.formattedTokens)
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.white.opacity(0.4))
+                            Text(stats.formattedCost)
+                                .font(.system(size: 8, weight: .medium))
+                                .foregroundColor(.green.opacity(0.8))
+                        }
+                    } else if session.status.needsUserAction {
                         HStack(spacing: 2) {
                             Image(systemName: "hand.raised.fill")
                                 .font(.system(size: 8))
