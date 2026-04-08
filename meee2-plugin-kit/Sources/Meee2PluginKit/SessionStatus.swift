@@ -23,8 +23,10 @@ public enum SessionStatus: String, Codable {
             return "wrench.and.screwdriver"
         case .running:
             return "arrow.triangle.2.circlepath"
-        case .waitingInput, .permissionRequest:
+        case .waitingInput:
             return "hand.raised.fill"
+        case .permissionRequest:
+            return "key.fill"
         case .completed:
             return "checkmark.circle.fill"
         case .failed:
@@ -56,6 +58,16 @@ public enum SessionStatus: String, Codable {
         }
     }
 
+    /// 是否需要呼吸动效（running、tooling、thinking 状态）
+    public var needsBreathing: Bool {
+        switch self {
+        case .running, .tooling, .thinking:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// 是否需要用户介入
     public var needsUserAction: Bool {
         switch self {
@@ -68,7 +80,31 @@ public enum SessionStatus: String, Codable {
         }
     }
 
-    /// 状态的简短描述
+    /// 状态的简短描述（用于折叠状态显示）
+    public var shortDescription: String {
+        switch self {
+        case .idle:
+            return "Idle"
+        case .thinking:
+            return "..."
+        case .tooling:
+            return "Tool"
+        case .running:
+            return "Run"
+        case .waitingInput:
+            return "Ask"
+        case .permissionRequest:
+            return "Perm"
+        case .completed:
+            return "Done"
+        case .failed:
+            return "Err"
+        case .compacting:
+            return "Ctx"
+        }
+    }
+
+    /// 状态的详细描述
     public var description: String {
         switch self {
         case .idle:

@@ -101,6 +101,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("SessionsDidChange"),
             object: nil
         )
+
+        // 监听打开设置窗口的通知
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openSettings),
+            name: NSNotification.Name("openSettings"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {

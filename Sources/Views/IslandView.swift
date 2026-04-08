@@ -47,6 +47,18 @@ public struct IslandView: View {
     @State private var hoverExpandTimer: Timer?
     @State private var hoverCloseTimer: Timer?
 
+    // MARK: - Animation State
+
+    @State private var statusOpacity: Double = 1.0
+    @State private var attentionOpacity: Double = 1.0
+    @State private var breathTimer: Timer?
+    @State private var attentionTimer: Timer?
+
+    /// 是否有活跃 session
+    private var hasActiveSessions: Bool {
+        !statusManager.sessions.isEmpty || !statusManager.pluginSessions.isEmpty
+    }
+
     // MARK: - Constants
 
     private let animation: Animation = .interactiveSpring(duration: 0.5, extraBounce: 0.2, blendDuration: 0.1)
@@ -63,7 +75,7 @@ public struct IslandView: View {
     private let expandedWidth: CGFloat = 500
     private let expandedMinHeight: CGFloat = 120  // 最小高度
     private let expandedMaxHeight: CGFloat = 700  // 最大高度
-    private let expandedCornerRadius: CGFloat = 20
+    private let expandedCornerRadius: CGFloat = 12
 
     private let spacing: CGFloat = 12
 
@@ -261,28 +273,48 @@ public struct IslandView: View {
     @ViewBuilder
     private var compactContent: some View {
         VStack(spacing: 0) {
-            // 顶部：刘海区域 - 左右两侧显示简单信息
+            // 顶部：刘海区域 - 左侧显示产品图标，右侧显示状态图标
             HStack(spacing: 0) {
-                // 左侧：Claude 大脑图标（产品标识）
+                // 左侧：产品图标（活跃时呼吸动效）
                 HStack {
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.orange)
+                    if hasActiveSessions {
+                        let carousel = currentCarouselSession
+                        let needsBreathing = (carousel.claudeSession?.status.needsBreathing ?? false) ||
+                                             (carousel.pluginSession?.status.needsBreathing ?? false)
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.orange)
+                            .opacity(needsBreathing ? statusOpacity : 1.0)
+                    } else {
+                        Image(systemName: "brain.head.profile")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.orange.opacity(0.5))
+                    }
                 }
+                .padding(.leading, 12)
                 .frame(width: sideWidth, height: notchHeight)
 
                 // 中间：刘海区域留空
                 Spacer()
 
-                // 右侧：session 数量 (包含 plugins)
+                // 右侧：状态图标（呼吸动效或闪烁动效）
                 HStack {
-                    let totalCount = statusManager.sessions.count + statusManager.pluginSessions.count
-                    if totalCount > 0 {
-                        Text("\(totalCount)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white.opacity(0.8))
+                    let carousel = currentCarouselSession
+                    if let claudeSession = carousel.claudeSession {
+                        Image(systemName: claudeSession.status.icon)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(claudeSession.status.color)
+                            .opacity(claudeSession.status.needsUserAction ? attentionOpacity :
+                                     claudeSession.status.needsBreathing ? statusOpacity : 1.0)
+                    } else if let pluginSession = carousel.pluginSession {
+                        Image(systemName: pluginSession.status.icon)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(pluginSession.status.color)
+                            .opacity(pluginSession.status.needsUserAction ? attentionOpacity :
+                                     pluginSession.status.needsBreathing ? statusOpacity : 1.0)
                     }
                 }
+                .padding(.trailing, 12)
                 .frame(width: sideWidth, height: notchHeight)
             }
             .frame(height: notchHeight)
@@ -408,7 +440,7 @@ public struct IslandView: View {
     @ViewBuilder
     private var expandedContent: some View {
         VStack(spacing: 0) {
-            // 顶部刘海区域 - 左右两侧显示信息，点击收起
+            // 顶部刘海区域 - 左侧 Sessions 标题，右侧菜单按钮
             HStack(spacing: 0) {
                 // 左侧：Sessions 标题
                 Text("Sessions")
@@ -418,24 +450,23 @@ public struct IslandView: View {
 
                 Spacer()
 
-                // 中间：下拉箭头
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.3))
-
-                Spacer()
-
-                // 右侧：Session 数量
-                if !statusManager.sessions.isEmpty || !statusManager.pluginSessions.isEmpty {
-                    let totalCount = statusManager.sessions.count + statusManager.pluginSessions.count
-                    Text("\(totalCount)")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white.opacity(0.6))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.white.opacity(0.15)))
-                        .padding(.trailing, spacing)
+                // 右侧：菜单按钮
+                Menu {
+                    Button("Settings...") {
+                        NotificationCenter.default.post(name: NSNotification.Name("openSettings"), object: nil)
+                    }
+                    Divider()
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(.white.opacity(0.8))
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .padding(.trailing, spacing)
             }
             .frame(height: notchHeight)
             .contentShape(Rectangle())
@@ -784,10 +815,10 @@ public struct IslandView: View {
     }
 
     private var urgentPanelBackground: some View {
-        RoundedRectangle(cornerRadius: 12)
+        RoundedRectangle(cornerRadius: 8)
             .fill(Color.white.opacity(0.1))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.white.opacity(0.15), lineWidth: 1)
             )
     }
@@ -947,11 +978,56 @@ public struct IslandView: View {
                 }
             }
         }
+        startBreathingAnimation()
     }
 
     private func stopCarousel() {
         carouselTimer?.invalidate()
         carouselTimer = nil
+        stopBreathingAnimation()
+    }
+
+    // MARK: - Breathing Animation
+
+    private func startBreathingAnimation() {
+        guard breathTimer == nil else { return }
+        breathTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+            withAnimation(.easeInOut(duration: 0.75)) {
+                self.statusOpacity = self.statusOpacity == 1.0 ? 0.6 : 1.0
+            }
+        }
+        startAttentionAnimation()
+    }
+
+    private func stopBreathingAnimation() {
+        breathTimer?.invalidate()
+        breathTimer = nil
+        statusOpacity = 1.0
+        stopAttentionAnimation()
+    }
+
+    // MARK: - Attention Animation (faster flash for Ask/Perm states)
+
+    private func startAttentionAnimation() {
+        guard attentionTimer == nil else { return }
+        attentionTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+            withAnimation(.easeInOut(duration: 0.25)) {
+                self.attentionOpacity = self.attentionOpacity == 1.0 ? 0.3 : 1.0
+            }
+        }
+    }
+
+    private func stopAttentionAnimation() {
+        attentionTimer?.invalidate()
+        attentionTimer = nil
+        attentionOpacity = 1.0
+    }
+
+    // MARK: - Helper Functions
+
+    private func truncatedTitle(_ title: String, maxChars: Int) -> String {
+        if title.count <= maxChars { return title }
+        return String(title.prefix(maxChars - 1)) + "…"
     }
 
     // MARK: - Timer Management
