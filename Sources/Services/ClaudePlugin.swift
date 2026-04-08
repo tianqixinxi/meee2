@@ -320,10 +320,22 @@ class ClaudePlugin: SessionPlugin {
         }
         sessionUsageLock.unlock()
 
-        // 更新工具名称
+        // 更新工具名称和终端信息
         hookStatesLock.lock()
-        if let hook = hookStates[sessionId], let tool = hook.toolName {
-            data.currentTool = tool
+        if let hook = hookStates[sessionId] {
+            if let tool = hook.toolName {
+                data.currentTool = tool
+            }
+            // 更新终端信息 (从 Hook 事件获取)
+            if let tty = hook.tty, let termProgram = hook.termProgram {
+                data.terminalInfo = PluginTerminalInfo(
+                    tty: tty,
+                    termProgram: termProgram,
+                    termBundleId: hook.termBundleId,
+                    cmuxSocketPath: hook.cmuxSocketPath,
+                    cmuxSurfaceId: hook.cmuxSurfaceId
+                )
+            }
         }
         hookStatesLock.unlock()
 
@@ -487,6 +499,14 @@ class ClaudePlugin: SessionPlugin {
             usageStats = sessionUsage[aiSession.id]
             sessionUsageLock.unlock()
 
+            // 优先使用 Hook 事件中的终端信息 (更准确)
+            // 如果 Hook 事件没有终端信息，使用 AISession 中的
+            let tty = hookEvent?.tty ?? aiSession.tty
+            let termProgram = hookEvent?.termProgram ?? aiSession.termProgram
+            let termBundleId = hookEvent?.termBundleId ?? aiSession.termBundleId
+            let cmuxSocketPath = hookEvent?.cmuxSocketPath ?? aiSession.cmuxSocketPath
+            let cmuxSurfaceId = hookEvent?.cmuxSurfaceId ?? aiSession.cmuxSurfaceId
+
             // 构建 SessionData
             let transcriptPath = getTranscriptPath(for: aiSession.id)
             let data = SessionData(
@@ -504,11 +524,11 @@ class ClaudePlugin: SessionPlugin {
                 tasks: tasks ?? [],
                 currentTask: aiSession.currentTask,
                 terminalInfo: PluginTerminalInfo(
-                    tty: aiSession.tty,
-                    termProgram: aiSession.termProgram,
-                    termBundleId: aiSession.termBundleId,
-                    cmuxSocketPath: aiSession.cmuxSocketPath,
-                    cmuxSurfaceId: aiSession.cmuxSurfaceId
+                    tty: tty,
+                    termProgram: termProgram,
+                    termBundleId: termBundleId,
+                    cmuxSocketPath: cmuxSocketPath,
+                    cmuxSurfaceId: cmuxSurfaceId
                 ),
                 usageStats: usageStats
             )

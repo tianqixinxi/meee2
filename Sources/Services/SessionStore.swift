@@ -285,6 +285,12 @@ public class SessionStore: ObservableObject {
             .sorted { $0.lastActivity > $1.lastActivity }
     }
 
+    /// 从磁盘重新加载所有会话 (用于 CLI/TUI 同步 GUI 的更新)
+    public func reloadFromDisk() {
+        let newSessions = listAllFromDisk()
+        sessions = newSessions
+    }
+
     // MARK: - 未读通知
 
     /// 设置未读通知
