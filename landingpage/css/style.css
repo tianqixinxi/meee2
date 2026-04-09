@@ -565,7 +565,7 @@ code {
 
 .arch-layer.integrations-bottom {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     padding: 0;
     overflow: hidden;
 }
@@ -783,8 +783,8 @@ code {
     }
 
     .install-steps {
-        grid-template-columns: 1fr;
-        max-width: 500px;
+        grid-template-columns: repeat(2, 1fr);
+        max-width: 700px;
         margin: 0 auto 60px;
     }
 }
@@ -802,6 +802,10 @@ code {
         grid-template-columns: 1fr;
     }
 
+    .install-steps {
+        grid-template-columns: 1fr;
+    }
+
     .arch-services {
         grid-template-columns: 1fr;
     }
@@ -816,12 +820,11 @@ code {
     }
 
     .arch-layer.integrations-bottom {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, 1fr);
     }
 
     .arch-integration.claude-int {
-        border-right: none;
-        border-bottom: 1px solid var(--color-border);
+        border-right: 1px solid var(--color-border);
     }
 
     .footer-content {

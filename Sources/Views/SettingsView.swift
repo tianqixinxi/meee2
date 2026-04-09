@@ -79,18 +79,34 @@ public struct SettingsView: View {
                 }
 
                 // 显示当前选中屏幕的详细信息
-                if let currentScreen = availableScreens.first(where: { $0.id == selectedScreenId }) {
-                    HStack {
-                        Text("Current:")
-                            .foregroundColor(.secondary)
-                        Text(currentScreen.name)
-                            .fontWeight(.medium)
-                        if currentScreen.hasNotch {
-                            Image(systemName: "notch")
-                                .foregroundColor(.blue)
+                if let screen = NSScreen.screens.first(where: { $0.screenId == selectedScreenId }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Resolution:")
+                                .foregroundColor(.secondary)
+                            Text("\(Int(screen.frame.width)) x \(Int(screen.frame.height))")
+                                .fontWeight(.medium)
+                        }
+                        HStack {
+                            Text("Has Notch:")
+                                .foregroundColor(.secondary)
+                            if screen.notchSize != .zero && screen.notchSize.height > 25 {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "xmark.circle")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        HStack {
+                            Text("Screen ID:")
+                                .foregroundColor(.secondary)
+                            Text(screen.screenId)
+                                .font(.system(.caption, design: .monospaced))
                         }
                     }
                     .font(.caption)
+                    .padding(.top, 4)
                 }
             }
 
@@ -182,7 +198,7 @@ public struct SettingsView: View {
     private var pluginsSettings: some View {
         Form {
             Section("Installed Plugins") {
-                if pluginManager.loadedPlugins.isEmpty {
+                if pluginManager.loadedPlugins.isEmpty && pluginManager.failedPlugins.isEmpty {
                     HStack {
                         Spacer()
                         VStack(spacing: 8) {
@@ -197,9 +213,17 @@ public struct SettingsView: View {
                     }
                     .padding(.vertical, 20)
                 } else {
+                    // 成功加载的插件
                     ForEach(Array(pluginManager.loadedPlugins.keys.sorted()), id: \.self) { pluginId in
                         if let plugin = pluginManager.loadedPlugins[pluginId] {
                             PluginRowView(plugin: plugin)
+                        }
+                    }
+
+                    // 加载失败的插件
+                    if !pluginManager.failedPlugins.isEmpty {
+                        ForEach(pluginManager.failedPlugins) { failedPlugin in
+                            FailedPluginRowView(failedPlugin: failedPlugin)
                         }
                     }
                 }
@@ -554,6 +578,89 @@ struct PluginRowView: View {
             plugin.stop()
             NSLog("[Settings] Disabled plugin: \(plugin.pluginId)")
         }
+    }
+}
+
+// MARK: - Failed Plugin Row View
+
+struct FailedPluginRowView: View {
+    let failedPlugin: DynamicPluginLoader.FailedPlugin
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Icon - 使用警告图标
+            ZStack {
+                Circle()
+                    .fill(Color.red.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.red)
+            }
+
+            // Info
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(failedPlugin.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.primary)
+
+                    Text("v\(failedPlugin.version)")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+
+                    // 不兼容标签
+                    if failedPlugin.isCompatibilityError {
+                        Text("Incompatible")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(Color.red.opacity(0.15))
+                            )
+                    }
+                }
+
+                HStack(spacing: 4) {
+                    Text(failedPlugin.error)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+
+                    if failedPlugin.isCompatibilityError {
+                        Text("— Download new version required")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+
+            Spacer()
+
+            // 帮助链接或下载按钮
+            if let helpUrl = failedPlugin.helpUrl, let url = URL(string: helpUrl) {
+                Link(destination: url) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 12))
+                        Text("Update")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule()
+                            .fill(Color.blue.opacity(0.1))
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Download new version from: \(helpUrl)")
+            }
+        }
+        .padding(.vertical, 8)
     }
 }
 

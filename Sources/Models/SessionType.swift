@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Session 类型 - 支持多种 AI 助手
+/// Session 类型 - 用于 Claude CLI sessions
 public enum SessionType: String, Codable, CaseIterable {
     case claude
     case cursor
@@ -12,7 +12,7 @@ public enum SessionType: String, Codable, CaseIterable {
     public var icon: String {
         switch self {
         case .claude:
-            return "brain.head.profile"  // Claude 使用大脑图标
+            return "brain.head.profile"
         case .cursor:
             return "cursorarrow"
         case .copilot:
@@ -22,11 +22,6 @@ public enum SessionType: String, Codable, CaseIterable {
         case .other:
             return "questionmark.circle"
         }
-    }
-
-    /// 是否是自定义图标（非 SF Symbol）
-    var isCustomIcon: Bool {
-        return false  // 全部使用 SF Symbol
     }
 
     /// 类型显示名称

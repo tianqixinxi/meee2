@@ -99,6 +99,9 @@ open class SessionPlugin: NSObject, ObservableObject {
     /// 激活指定 session 的终端
     open func activateTerminal(for session: PluginSession) {}
 
+    /// 清除 session 的 urgentEvent 状态
+    open func clearUrgentEvent(sessionId: String) {}
+
     // MARK: - 配置 UI
 
     /// 配置视图 (显示在设置中)

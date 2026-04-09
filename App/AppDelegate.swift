@@ -81,9 +81,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 设置菜单（简化版：只有 Settings 和 Quit）
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
+        let tuiItem = NSMenuItem(title: "Open TUI...", action: #selector(openTUI), keyEquivalent: "t")
+        tuiItem.target = self
+        menu.addItem(tuiItem)
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
 
         statusItem?.menu = menu
 
@@ -101,6 +108,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("SessionsDidChange"),
             object: nil
         )
+
+        // 监听打开设置窗口的通知
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openSettings),
+            name: NSNotification.Name("openSettings"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -112,7 +127,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func sessionsDidChange() {
-        let hasSessions = !statusManager.sessions.isEmpty || !statusManager.pluginSessions.isEmpty
+        let hasSessions = !statusManager.sessions.isEmpty
         DispatchQueue.main.async { [weak self] in
             self?.updateStatusBarIcon(hasActiveSessions: hasSessions)
         }
@@ -137,6 +152,146 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openTUI() {
+        NSLog("[AppDelegate] openTUI called")
+
+        // 检查 CLI 是否已安装
+        let cliPath = "/usr/local/bin/meee2"
+        let expectedTarget = "/Applications/meee2.app/Contents/MacOS/meee2"
+
+        var needsInstall = false
+        if !FileManager.default.fileExists(atPath: cliPath) {
+            NSLog("[AppDelegate] CLI not found at \(cliPath)")
+            needsInstall = true
+        } else if let linkDest = try? FileManager.default.destinationOfSymbolicLink(atPath: cliPath),
+                  linkDest != expectedTarget {
+            NSLog("[AppDelegate] CLI symlink points to \(linkDest), expected \(expectedTarget)")
+            needsInstall = true
+        } else {
+            NSLog("[AppDelegate] CLI already installed correctly")
+        }
+
+        if needsInstall {
+            NSLog("[AppDelegate] Attempting to install CLI...")
+            // 使用 AppleScript 执行 sudo 安装（会弹出授权提示）
+            let installScript = """
+            do shell script "ln -sf \(expectedTarget) \(cliPath)" with administrator privileges
+            """
+
+            if let appleScript = NSAppleScript(source: installScript) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    NSLog("[AppDelegate] CLI install error: \(error)")
+                    // 用户取消授权或其他错误
+                    DispatchQueue.main.async {
+                        let alert = NSAlert()
+                        alert.messageText = "CLI Installation Required"
+                        alert.informativeText = "To use TUI, meee2 CLI needs to be installed to /usr/local/bin/. Please authorize the installation."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    }
+                    return
+                }
+                NSLog("[AppDelegate] CLI installed successfully")
+            }
+        }
+
+        // 检测用户正在使用的终端并在其中运行 TUI
+        NSLog("[AppDelegate] Launching TUI...")
+        launchTUI()
+    }
+
+    /// 检测并启动 TUI 到用户正在使用的终端
+    private func launchTUI() {
+        // 检测最前面的应用是否是终端
+        let frontmostApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
+
+        NSLog("[AppDelegate] Frontmost app: \(frontmostApp)")
+
+        // 根据终端类型选择启动方式
+        switch frontmostApp {
+        case "com.mitchellh.ghostty":
+            // Ghostty
+            launchTUIInGhostty()
+        case "com.googlecode.iterm2":
+            // iTerm2
+            launchTUIIniTerm2()
+        case "com.apple.Terminal":
+            // Terminal.app
+            launchTUIInTerminal()
+        default:
+            // 默认使用 Terminal.app
+            launchTUIInTerminal()
+        }
+    }
+
+    private func launchTUIInGhostty() {
+        // Ghostty 使用 ghostty 命令打开新窗口
+        let script = """
+        tell application "Ghostty"
+            activate
+        end tell
+        do shell script "/Applications/Ghostty.app/Contents/MacOS/ghostty -e meee2 tui &"
+        """
+
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                NSLog("[AppDelegate] Ghostty launch error: \(error), falling back to Terminal")
+                launchTUIInTerminal()
+            } else {
+                NSLog("[AppDelegate] TUI launched in Ghostty")
+            }
+        }
+    }
+
+    private func launchTUIIniTerm2() {
+        let script = """
+        tell application "iTerm2"
+            activate
+            tell current window
+                create tab with default profile
+                tell current session
+                    write text "meee2 tui"
+                end tell
+            end tell
+        end tell
+        """
+
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                NSLog("[AppDelegate] iTerm2 launch error: \(error), falling back to Terminal")
+                launchTUIInTerminal()
+            } else {
+                NSLog("[AppDelegate] TUI launched in iTerm2")
+            }
+        }
+    }
+
+    private func launchTUIInTerminal() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "meee2 tui"
+        end tell
+        """
+
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error = error {
+                NSLog("[AppDelegate] Terminal launch error: \(error)")
+            } else {
+                NSLog("[AppDelegate] TUI launched in Terminal")
+            }
+        }
     }
 
     private func createSettingsWindow() {

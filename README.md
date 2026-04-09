@@ -40,7 +40,10 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 ## 安装
 
 ### 方式一：下载预编译版本
-从 [GitHub Releases](https://github.com/tianqixinxi/meee2/releases) 下载最新的 `.app` 文件。
+
+从 [GitHub Releases](https://github.com/tianqixinxi/meee2/releases) 下载最新的 `.dmg` 文件，拖拽到 Applications 文件夹安装。
+
+当前最新版本：**v0.1.0**
 
 ### 方式二：自行编译
 ```bash
@@ -104,10 +107,15 @@ swift build -c release
 
 ```
 ~/.meee2/plugins/
-├── TraecliPlugin.dylib      # Trae CLI 插件
-├── AimePlugin.dylib         # Aime 插件
+├── my-plugin/
+│   ├── MyPlugin.dylib
+│   └── plugin.json
 └── ...
 ```
+
+**内置插件**（Cursor）已随主程序自动安装，无需手动配置。
+
+**插件开发**：参考 `plugin-template/` 目录和 `docs/PLUGIN_DEVELOPMENT.md` 创建自定义插件。
 
 ---
 

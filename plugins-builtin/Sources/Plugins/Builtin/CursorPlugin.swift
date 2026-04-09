@@ -9,7 +9,7 @@ class CursorPlugin: SessionPlugin {
     override var displayName: String { "Cursor" }
     override var icon: String { "cursorarrow" }
     override var themeColor: Color { .blue }
-    override var version: String { "1.0.0" }
+    override var version: String { "0.1.0" }
     override var helpUrl: String? { "https://docs.cursor.com/meee2-plugin" }
 
     // MARK: - Private
@@ -118,6 +118,14 @@ class CursorPlugin: SessionPlugin {
             // 回退：直接激活 Cursor 应用
             openCursorApp()
         }
+    }
+
+    // MARK: - Urgent Event
+
+    override func clearUrgentEvent(sessionId: String) {
+        // 清除消息缓存，防止下次刷新时重复触发
+        lastMessages.removeValue(forKey: sessionId)
+        PluginLog("[CursorPlugin] Cleared urgent event for session: \(sessionId)")
     }
 
     // MARK: - Private

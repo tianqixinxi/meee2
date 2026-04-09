@@ -3,7 +3,7 @@ import SwiftUI
 import Meee2PluginKit
 
 /// 动态 Plugin 加载器 - 使用 dlopen 加载 .dylib 文件
-class DynamicPluginLoader {
+public class DynamicPluginLoader {
     // MARK: - Types
 
     /// Plugin 工厂函数类型
@@ -12,10 +12,25 @@ class DynamicPluginLoader {
     /// Plugin 销毁函数类型
     typealias PluginDestroyFunction = @convention(c) (UnsafeMutableRawPointer) -> Void
 
+    /// 加载失败的插件信息
+    public struct FailedPlugin: Identifiable {
+        public let id: String
+        public let name: String
+        public let version: String
+        public let dylibPath: String
+        public let error: String
+        public let isCompatibilityError: Bool  // 是否为 ABI 不兼容错误
+
+        public var helpUrl: String?
+    }
+
     // MARK: - Properties
 
     /// 已加载的动态库句柄
     private var loadedHandles: [String: UnsafeMutableRawPointer] = [:]
+
+    /// 加载失败的插件列表
+    public private(set) var failedPlugins: [FailedPlugin] = []
 
     /// Plugin 目录
     private let pluginDirectory: URL
@@ -32,8 +47,11 @@ class DynamicPluginLoader {
     // MARK: - Public
 
     /// 扫描并加载所有外部 Plugin
-    func loadAllPlugins() -> [SessionPlugin] {
+    public func loadAllPlugins() -> [SessionPlugin] {
         var plugins: [SessionPlugin] = []
+
+        // 清空上次失败的列表
+        failedPlugins = []
 
         // 预加载 Meee2PluginKit，确保所有 plugins 使用同一个类定义
         preloadMeee2PluginKit()
@@ -63,7 +81,7 @@ class DynamicPluginLoader {
             }
         }
 
-        MLog("[DynamicPluginLoader] Loaded \(plugins.count) external plugins")
+        MLog("[DynamicPluginLoader] Loaded \(plugins.count) external plugins, \(failedPlugins.count) failed")
         return plugins
     }
 
@@ -131,16 +149,22 @@ class DynamicPluginLoader {
             .appendingPathComponent("lib")
         let libPath = libDir.appendingPathComponent("libMeee2PluginKit.dylib")
 
-        // 如果 ~/.meee2/lib/ 中不存在，尝试从 app bundle 复制
-        if !FileManager.default.fileExists(atPath: libPath.path) {
-            // 尝试从 app bundle 的 Frameworks 目录复制
-            if let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Frameworks/libMeee2PluginKit.dylib"),
-               FileManager.default.fileExists(atPath: bundlePath.path) {
+        // 尝试从 app bundle 获取 dylib
+        let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Frameworks/libMeee2PluginKit.dylib")
+
+        // 如果 app bundle 中有 dylib，检查是否需要更新
+        if let bundlePath = bundlePath, FileManager.default.fileExists(atPath: bundlePath.path) {
+            let needsUpdate = !FileManager.default.fileExists(atPath: libPath.path) ||
+                              shouldUpdateLibrary(bundlePath: bundlePath, installedPath: libPath)
+
+            if needsUpdate {
                 // 创建目标目录
                 try? FileManager.default.createDirectory(at: libDir, withIntermediateDirectories: true)
-                // 复制文件
+                // 删除旧版本（如果存在）
+                try? FileManager.default.removeItem(at: libPath)
+                // 复制新版本
                 try? FileManager.default.copyItem(at: bundlePath, to: libPath)
-                MLog("[DynamicPluginLoader] Installed Meee2PluginKit from app bundle to: \(libPath.path)")
+                MLog("[DynamicPluginLoader] Updated Meee2PluginKit from app bundle to: \(libPath.path)")
             }
         }
 
@@ -160,6 +184,20 @@ class DynamicPluginLoader {
         MLog("[DynamicPluginLoader] Preloaded Meee2PluginKit from: \(libPath.path)")
     }
 
+    /// 检查是否需要更新库文件（比较修改时间）
+    private func shouldUpdateLibrary(bundlePath: URL, installedPath: URL) -> Bool {
+        guard let bundleAttrs = try? FileManager.default.attributesOfItem(atPath: bundlePath.path),
+              let installedAttrs = try? FileManager.default.attributesOfItem(atPath: installedPath.path),
+              let bundleModDate = bundleAttrs[.modificationDate] as? Date,
+              let installedModDate = installedAttrs[.modificationDate] as? Date else {
+            // 无法获取属性，保守地更新
+            return true
+        }
+
+        // 如果 app bundle 中的版本更新，需要更新
+        return bundleModDate > installedModDate
+    }
+
     private func loadPlugin(from directory: URL) -> SessionPlugin? {
         // 1. 读取 plugin.json
         let configFile = directory.appendingPathComponent("plugin.json")
@@ -176,6 +214,29 @@ class DynamicPluginLoader {
         guard let handle = dlopen(dylibPath, RTLD_NOW | RTLD_LOCAL) else {
             let error = String(cString: dlerror())
             MLog("[DynamicPluginLoader] Failed to load \(dylibPath): \(error)")
+
+            // 检测是否为 ABI 不兼容错误（Symbol not found 且包含 Meee2PluginKit）
+            let isCompatError = error.contains("Symbol not found") && error.contains("Meee2PluginKit")
+
+            // 构建用户友好的错误消息
+            let errorMessage: String
+            if isCompatError {
+                errorMessage = "This plugin needs to be rebuilt for the current meee2 version. Please check the plugin's documentation for update instructions."
+            } else {
+                errorMessage = error
+            }
+
+            // 记录失败插件
+            failedPlugins.append(FailedPlugin(
+                id: config.id,
+                name: config.name,
+                version: config.version,
+                dylibPath: dylibPath,
+                error: errorMessage,
+                isCompatibilityError: isCompatError,
+                helpUrl: config.helpUrl
+            ))
+
             return nil
         }
 
@@ -217,6 +278,8 @@ struct PluginMetadata: Codable {
     let dylib: String
     let settings: [PluginSettingDefinition]?
     let helpUrl: String?
+    /// 最低 PluginKit 版本要求 (可选)
+    let minKitVersion: String?
 }
 
 /// Plugin 设置定义
