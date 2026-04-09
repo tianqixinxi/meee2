@@ -40,9 +40,27 @@ public struct DashboardView {
     private mutating func refreshData() {
         // 从磁盘重新加载，同步 GUI 进程的更新
         SessionStore.shared.reloadFromDisk()
-        sessions = SessionStore.shared.sessions
+        // 只显示活跃 sessions，并验证进程存活
+        var activeSessions = SessionStore.shared.listActive()
+        activeSessions = activeSessions.filter { session in
+            // 验证进程是否存活
+            guard let pid = session.pid else { return false }
+            let isAlive = checkProcessAlive(pid: pid)
+            if !isAlive {
+                // 进程已结束，清理缓存
+                SessionStore.shared.delete(session.sessionId)
+            }
+            return isAlive
+        }
+        sessions = activeSessions
         lastRefresh = Date()
         refreshCaches()
+    }
+
+    /// 检查进程是否存活
+    private func checkProcessAlive(pid: Int) -> Bool {
+        let result = kill(pid_t(pid), 0)
+        return result == 0
     }
 
     private mutating func refreshCaches() {
@@ -369,8 +387,8 @@ public struct DashboardView {
 
         // 等待用户回到 TUI 窗口
         // 提示用户按任意键返回
-        print("\n\x1b[1;36m→ 已跳转到 session 终端\x1b[0m")
-        print("\x1b[2m按 Enter 返回 TUI...\x1b[0m")
+        print("\n\u{1b}[1;36m→ 已跳转到 session 终端\u{1b}[0m")
+        print("\u{1b}[2m按 Enter 返回 TUI...\u{1b}[0m")
 
         // 等待用户按键
         _ = read(STDIN_FILENO, UnsafeMutablePointer<UInt8>.allocate(capacity: 1), 1)

@@ -12,67 +12,29 @@ public enum SessionStatus: String, Codable {
     case failed         // 任务失败
     case compacting     // 正在压缩上下文
 
-    /// 状态对应的 SF Symbol 图标名称
+    /// 状态对应的 SF Symbol 图标名称（与 DetailedStatus 保持一致）
     public var icon: String {
-        switch self {
-        case .idle:
-            return "circle"
-        case .thinking:
-            return "brain.head.profile"
-        case .tooling:
-            return "wrench.and.screwdriver"
-        case .running:
-            return "arrow.triangle.2.circlepath"
-        case .waitingInput:
-            return "hand.raised.fill"
-        case .permissionRequest:
-            return "key.fill"
-        case .completed:
-            return "checkmark.circle.fill"
-        case .failed:
-            return "xmark.circle.fill"
-        case .compacting:
-            return "rectangle.compress.vertical"
-        }
+        DetailedStatus.from(sessionStatus: self).icon
     }
 
-    /// 状态对应的颜色
+    /// 状态对应的颜色（与 DetailedStatus 保持一致）
     public var color: Color {
-        switch self {
-        case .idle:
-            return .gray
-        case .thinking:
-            return .purple
-        case .tooling:
-            return .cyan
-        case .running:
-            return .blue
-        case .waitingInput, .permissionRequest:
-            return .orange
-        case .completed:
-            return .green
-        case .failed:
-            return .red
-        case .compacting:
-            return .purple
-        }
+        DetailedStatus.from(sessionStatus: self).color
     }
 
-    /// 是否需要呼吸动效（running、tooling、thinking 状态）
+    /// 动画类型（与 DetailedStatus 保持一致）
+    public var animation: StatusAnimation {
+        DetailedStatus.from(sessionStatus: self).animation
+    }
+
+    /// 是否需要呼吸动效（与 DetailedStatus 保持一致）
     public var needsBreathing: Bool {
-        switch self {
-        case .running, .tooling, .thinking:
-            return true
-        default:
-            return false
-        }
+        DetailedStatus.from(sessionStatus: self).needsBreathing
     }
 
     /// 是否需要用户介入
     public var needsUserAction: Bool {
         switch self {
-        case .thinking, .tooling:
-            return false
         case .waitingInput, .permissionRequest:
             return true
         default:

@@ -268,11 +268,12 @@ public struct IslandView: View {
                 HStack {
                     if hasActiveSessions {
                         let carousel = currentCarouselSession
-                        let needsBreathing = carousel?.status.needsBreathing ?? false
+                        let ds = carousel.map { effectiveDetailedStatus(for: $0) }
+                        let hasAnimation = ds?.animation != StatusAnimation.none
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.orange)
-                            .opacity(needsBreathing ? statusOpacity : 1.0)
+                            .opacity(hasAnimation ? statusOpacity : 1.0)
                     } else {
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 12, weight: .medium))
@@ -329,22 +330,15 @@ public struct IslandView: View {
                 // 右侧：精细状态图标（呼吸动效或闪烁动效）
                 HStack(spacing: 3) {
                     if let session = currentCarouselSession {
-                        // 优先使用精细状态
-                        let ds = session.detailedStatus ?? DetailedStatus.from(sessionStatus: session.status)
+                        let ds = effectiveDetailedStatus(for: session)
                         let dsColor = ds.color
-                        let needsAction = ds.needsUserAction
 
-                        // 状态指示点
-                        Circle()
-                            .fill(dsColor)
-                            .frame(width: 6, height: 6)
-
-                        // 状态图标
+                        // 状态图标（已包含状态指示，无需额外显示点）
                         Image(systemName: ds.sfSymbolName)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(dsColor)
-                            .opacity(needsAction ? attentionOpacity :
-                                     ds.needsBreathing ? statusOpacity : 1.0)
+                            .opacity(ds.animation == .bounce ? attentionOpacity :
+                                     ds.animation == .pulse ? statusOpacity : 1.0)
 
                         // 任务进度（如果有）
                         if let progress = session.progressText {
@@ -365,8 +359,7 @@ public struct IslandView: View {
                 VStack(spacing: 4) {
                     HStack(spacing: 8) {
                         if let session = currentCarouselSession {
-                            // 优先使用精细状态
-                            let ds = session.detailedStatus ?? DetailedStatus.from(sessionStatus: session.status)
+                            let ds = effectiveDetailedStatus(for: session)
 
                             Circle()
                                 .fill(ds.color)
@@ -636,6 +629,8 @@ public struct IslandView: View {
             // Ignore 按钮
             Button(action: {
                 NSLog("[IslandView] Ignore button clicked for session: \(session.id)")
+                // 立即清除 urgentEvent 状态
+                statusManager.clearUrgentEvent(session: session)
                 // 设置正在关闭状态，防止动画期间黑屏
                 isClosing = true
                 withAnimation(.easeInOut(duration: 0.25)) {
@@ -644,7 +639,6 @@ public struct IslandView: View {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     isClosing = false
-                    statusManager.dismissUrgent(sessionId: session.id)
                 }
             }) {
                 HStack(spacing: 3) {
@@ -663,6 +657,8 @@ public struct IslandView: View {
             // Open 按钮 - 跳转到终端
             Button(action: {
                 NSLog("[IslandView] Open button clicked for session: \(session.id)")
+                // 立即清除 urgentEvent 状态
+                statusManager.clearUrgentEvent(session: session)
                 // 设置正在关闭状态，防止动画期间黑屏
                 isClosing = true
                 // 收起视图
@@ -983,6 +979,14 @@ public struct IslandView: View {
     private func truncatedTitle(_ title: String, maxChars: Int) -> String {
         if title.count <= maxChars { return title }
         return String(title.prefix(maxChars - 1)) + "…"
+    }
+
+    /// 获取有效的精细状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
+    private func effectiveDetailedStatus(for session: PluginSession) -> DetailedStatus {
+        if let detailed = session.detailedStatus, detailed != .idle {
+            return detailed
+        }
+        return DetailedStatus.from(sessionStatus: session.status)
     }
 
     // MARK: - Timer Management

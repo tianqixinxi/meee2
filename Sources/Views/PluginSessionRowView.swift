@@ -23,12 +23,13 @@ struct PluginSessionRowView: View {
         return "Open"
     }
 
-    /// 获取精细状态（优先使用详细状态，否则根据 status 推断）
+    /// 获取精细状态（优先使用详细状态，但需要结合 session.status 校正）
     private var effectiveDetailedStatus: DetailedStatus {
-        if let ds = session.detailedStatus {
+        // 如果有 detailedStatus 且不是 idle，直接使用
+        if let ds = session.detailedStatus, ds != .idle {
             return ds
         }
-        // 根据 status 推断
+        // 根据 status 推断（处理 detailedStatus 为 idle 但 status 为 running 的情况）
         switch session.status {
         case .running: return .active
         case .thinking: return .thinking

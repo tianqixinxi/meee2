@@ -120,6 +120,14 @@ class CursorPlugin: SessionPlugin {
         }
     }
 
+    // MARK: - Urgent Event
+
+    override func clearUrgentEvent(sessionId: String) {
+        // 清除消息缓存，防止下次刷新时重复触发
+        lastMessages.removeValue(forKey: sessionId)
+        PluginLog("[CursorPlugin] Cleared urgent event for session: \(sessionId)")
+    }
+
     // MARK: - Private
 
     /// 扫描 Cursor projects 目录

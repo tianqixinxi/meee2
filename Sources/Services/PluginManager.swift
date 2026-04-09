@@ -158,6 +158,12 @@ public class PluginManager: ObservableObject {
         plugin.activateTerminal(for: session)
     }
 
+    /// 清除 session 的 urgentEvent 状态
+    public func clearUrgentEvent(sessionId: String, pluginId: String) {
+        guard let plugin = loadedPlugins[pluginId] else { return }
+        plugin.clearUrgentEvent(sessionId: sessionId)
+    }
+
     // MARK: - Plugin Info
 
     /// 获取 plugin 信息

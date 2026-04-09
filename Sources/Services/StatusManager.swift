@@ -92,6 +92,11 @@ public class StatusManager: ObservableObject {
         pluginManager.activateTerminal(for: session)
     }
 
+    /// 清除 session 的 urgentEvent 状态
+    public func clearUrgentEvent(session: PluginSession) {
+        pluginManager.clearUrgentEvent(sessionId: session.id, pluginId: session.pluginId)
+    }
+
     /// 响应权限请求
     public func respondToPermission(for session: PluginSession, decision: PermissionDecision) {
         session.urgentEvent?.respond?(decision)

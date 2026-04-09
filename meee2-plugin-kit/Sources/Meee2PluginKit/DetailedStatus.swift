@@ -1,6 +1,14 @@
 import Foundation
 import SwiftUI
 
+/// 动画类型枚举
+public enum StatusAnimation {
+    case none           // 无动画
+    case pulse          // 脉冲呼吸
+    case rotate         // 旋转
+    case bounce         // 弹跳
+}
+
 /// 精细状态枚举 - 用于更详细的会话状态展示
 /// 移植自 csm 的 detailed_status 字段
 public enum DetailedStatus: String, Codable, CaseIterable {
@@ -17,30 +25,30 @@ public enum DetailedStatus: String, Codable, CaseIterable {
     /// 状态图标（SF Symbol 名称，用于 GUI）
     public var icon: String {
         switch self {
-        case .idle: return "moon.zzz"
+        case .idle: return "ellipsis.circle"
         case .thinking: return "brain.head.profile"
-        case .tooling: return "wrench.and.screwdriver"
-        case .active: return "bolt.fill"
-        case .waitingForUser: return "hourglass"
-        case .permissionRequired: return "lock.shield"
+        case .tooling: return "wrench.and.screwdriver.fill"
+        case .active: return "play.circle.fill"
+        case .waitingForUser: return "hand.raised.fill"
+        case .permissionRequired: return "lock.shield.fill"
         case .compacting: return "rectangle.compress.vertical"
         case .completed: return "checkmark.circle.fill"
-        case .dead: return "xmark.circle"
+        case .dead: return "xmark.circle.fill"
         }
     }
 
     /// 终端图标（文本图标，用于 CLI/TUI）
     public var terminalIcon: String {
         switch self {
-        case .idle: return "💤"
-        case .thinking: return "🤔"
+        case .idle: return "○"
+        case .thinking: return "🧠"
         case .tooling: return "🔧"
-        case .active: return "⚡"
-        case .waitingForUser: return "⏳"
-        case .permissionRequired: return "🔐"
+        case .active: return "▶"
+        case .waitingForUser: return "✋"
+        case .permissionRequired: return "🔒"
         case .compacting: return "📦"
         case .completed: return "✅"
-        case .dead: return "💀"
+        case .dead: return "❌"
         }
     }
 
@@ -77,14 +85,22 @@ public enum DetailedStatus: String, Codable, CaseIterable {
         }
     }
 
-    /// 是否需要呼吸动效
-    public var needsBreathing: Bool {
+    /// 动画类型
+    public var animation: StatusAnimation {
         switch self {
-        case .thinking, .tooling, .active, .compacting:
-            return true
-        default:
-            return false
+        case .thinking: return .pulse
+        case .tooling: return .pulse
+        case .active: return .pulse
+        case .compacting: return .pulse
+        case .waitingForUser: return .bounce
+        case .permissionRequired: return .bounce
+        default: return .none
         }
+    }
+
+    /// 是否需要呼吸动效（兼容旧代码）
+    public var needsBreathing: Bool {
+        animation != .none
     }
 
     /// 是否需要用户介入

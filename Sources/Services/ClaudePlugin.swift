@@ -174,6 +174,27 @@ class ClaudePlugin: SessionPlugin {
         }
     }
 
+    /// 清除 session 的 urgentEvent 状态
+    override func clearUrgentEvent(sessionId: String) {
+        // 从 session 中提取原始 ID
+        let originalId = sessionId.hasPrefix("\(pluginId)-")
+            ? String(sessionId.dropFirst("\(pluginId)-".count))
+            : sessionId
+
+        // 清除 hook 状态
+        hookStatesLock.lock()
+        hookStates.removeValue(forKey: originalId)
+        hookStatesLock.unlock()
+
+        // 清除待响应权限
+        pendingPermissionsLock.lock()
+        pendingPermissions.removeValue(forKey: originalId)
+        pendingPermissionsLock.unlock()
+
+        // 立即通知更新
+        notifySessionsUpdated()
+    }
+
     // MARK: - Hook 事件处理
 
     private func handleHookEvent(_ event: HookEvent) {
