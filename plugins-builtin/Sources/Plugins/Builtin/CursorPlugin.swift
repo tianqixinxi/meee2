@@ -9,7 +9,7 @@ class CursorPlugin: SessionPlugin {
     override var displayName: String { "Cursor" }
     override var icon: String { "cursorarrow" }
     override var themeColor: Color { .blue }
-    override var version: String { "1.0.0" }
+    override var version: String { "0.1.0" }
     override var helpUrl: String? { "https://docs.cursor.com/meee2-plugin" }
 
     // MARK: - Private

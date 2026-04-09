@@ -79,18 +79,34 @@ public struct SettingsView: View {
                 }
 
                 // 显示当前选中屏幕的详细信息
-                if let currentScreen = availableScreens.first(where: { $0.id == selectedScreenId }) {
-                    HStack {
-                        Text("Current:")
-                            .foregroundColor(.secondary)
-                        Text(currentScreen.name)
-                            .fontWeight(.medium)
-                        if currentScreen.hasNotch {
-                            Image(systemName: "notch")
-                                .foregroundColor(.blue)
+                if let screen = NSScreen.screens.first(where: { $0.screenId == selectedScreenId }) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Resolution:")
+                                .foregroundColor(.secondary)
+                            Text("\(Int(screen.frame.width)) x \(Int(screen.frame.height))")
+                                .fontWeight(.medium)
+                        }
+                        HStack {
+                            Text("Has Notch:")
+                                .foregroundColor(.secondary)
+                            if screen.notchSize != .zero && screen.notchSize.height > 25 {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            } else {
+                                Image(systemName: "xmark.circle")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        HStack {
+                            Text("Screen ID:")
+                                .foregroundColor(.secondary)
+                            Text(screen.screenId)
+                                .font(.system(.caption, design: .monospaced))
                         }
                     }
                     .font(.caption)
+                    .padding(.top, 4)
                 }
             }
 
