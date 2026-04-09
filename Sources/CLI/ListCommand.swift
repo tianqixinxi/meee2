@@ -32,9 +32,18 @@ public struct ListCommand {
         for session in sessions {
             let shortId = String(session.sessionId.prefix(8))
             let shortProject = truncate(session.project, maxLen: 20)
-            let statusIcon = session.detailedStatus.terminalIcon
-            let status = session.detailedStatus.displayName
-            let statusText = "\(statusIcon)\(status)"
+
+            // 获取有效状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
+            let effectiveStatus: DetailedStatus
+            if session.detailedStatus != .idle {
+                effectiveStatus = session.detailedStatus
+            } else {
+                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
+            }
+
+            let statusIcon = effectiveStatus.terminalIcon
+            let status = effectiveStatus.displayName
+            let statusText = "\(statusIcon) \(status)"
             let tool = session.currentTool ?? "-"
             let progress = formatProgress(session.tasks)
             let cost = session.usageStats?.formattedCost ?? "-"
@@ -56,11 +65,11 @@ public struct ListCommand {
                     case "user":
                         prefix = TUIColor.cyan + ">" + TUIColor.reset
                     case "assistant":
-                        prefix = TUIColor.yellow + "◀" + TUIColor.reset
+                        prefix = TUIColor.yellow + "<" + TUIColor.reset  // ASCII instead of ◀
                     case "tool":
-                        prefix = TUIColor.dim + "⚡" + TUIColor.reset
+                        prefix = TUIColor.dim + "*" + TUIColor.reset  // ASCII instead of ⚡
                     default:
-                        prefix = "·"
+                        prefix = "."  // ASCII instead of ·
                     }
                     print("  \(prefix) \(text)")
                 }
@@ -85,8 +94,16 @@ public struct ListCommand {
     private static func printSimple(_ sessions: [SessionData]) {
         for session in sessions {
             let shortId = String(session.sessionId.prefix(8))
-            let icon = session.detailedStatus.terminalIcon
-            print("\(shortId) \(session.project) \(icon)\(session.detailedStatus.displayName)")
+
+            // 获取有效状态
+            let effectiveStatus: DetailedStatus
+            if session.detailedStatus != .idle {
+                effectiveStatus = session.detailedStatus
+            } else {
+                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
+            }
+
+            print("\(shortId) \(session.project) \(effectiveStatus.terminalIcon) \(effectiveStatus.displayName)")
         }
     }
 
@@ -99,8 +116,29 @@ public struct ListCommand {
     // MARK: - Formatting Helpers
 
     private static func pad(_ text: String, to width: Int) -> String {
-        if text.count >= width { return String(text.prefix(width)) }
-        return text + String(repeating: " ", count: width - text.count)
+        let displayWidth = calcDisplayWidth(text)
+        if displayWidth > width { return truncateForDisplay(text, maxWidth: width) }
+        return text + String(repeating: " ", count: width - displayWidth)
+    }
+
+    private static func calcDisplayWidth(_ text: String) -> Int {
+        var w = 0
+        for char in text {
+            if char.isEmoji || char.isCJK { w += 2 } else { w += 1 }
+        }
+        return w
+    }
+
+    private static func truncateForDisplay(_ text: String, maxWidth: Int) -> String {
+        var w = 0
+        var result = ""
+        for char in text {
+            let charWidth = char.isEmoji || char.isCJK ? 2 : 1
+            if w + charWidth > maxWidth - 2 { return result + ".." }
+            result.append(char)
+            w += charWidth
+        }
+        return result
     }
 
     private static func truncate(_ text: String, maxLen: Int) -> String {
@@ -110,6 +148,25 @@ public struct ListCommand {
 
     private static func oneline(_ text: String) -> String {
         text.split(separator: "\n").joined(separator: " ")
+    }
+}
+
+// MARK: - Character Extensions for Display Width
+
+private extension Character {
+    var isEmoji: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        // ASCII chars (0x00-0x7F) are never displayed as emoji, even if they have emoji variants
+        if scalar.value < 0x80 { return false }
+        // Check for actual emoji presentation
+        return scalar.properties.isEmoji && scalar.properties.generalCategory != .decimalNumber
+    }
+
+    var isCJK: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        return (0x4E00...0x9FFF).contains(scalar.value) || // CJK Unified Ideographs
+               (0x3000...0x303F).contains(scalar.value) || // CJK Symbols and Punctuation
+               (0xFF00...0xFFEF).contains(scalar.value)    // Halfwidth and Fullwidth Forms
     }
 }
 

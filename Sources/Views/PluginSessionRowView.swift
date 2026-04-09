@@ -2,7 +2,7 @@ import SwiftUI
 import Meee2PluginKit
 
 /// Plugin Session 行视图 - 展开状态下的单个 plugin session 显示
-/// 固定高度 44px，内容截断显示
+/// 固定高度 56px（增加以显示 last message）
 struct PluginSessionRowView: View {
     let session: PluginSession
     let pluginInfo: (displayName: String, icon: String, themeColor: Color)?
@@ -11,7 +11,7 @@ struct PluginSessionRowView: View {
     @State private var isHovered = false
 
     // 固定高度
-    private let rowHeight: CGFloat = 44
+    private let rowHeight: CGFloat = 56
 
     // 按钮 label 根据 plugin 类型
     private var buttonLabel: String {
@@ -120,6 +120,15 @@ struct PluginSessionRowView: View {
                                 .foregroundColor(.white.opacity(0.4))
                                 .lineLimit(1)
                         }
+                    }
+
+                    // 最后消息 - 如果有
+                    if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
+                        Text(lastMsg)
+                            .font(.system(size: 9))
+                            .foregroundColor(.white.opacity(0.4))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
                 .frame(maxWidth: 260, alignment: .leading)

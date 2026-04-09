@@ -107,6 +107,9 @@ public struct PluginSession: Identifiable, Hashable {
     /// 使用统计
     public var usageStats: UsageStats?
 
+    /// 最后消息摘要
+    public var lastMessage: String?
+
     /// 进度描述 (如 "2/5")
     public var progressText: String? {
         guard let tasks = tasks, !tasks.isEmpty else { return nil }
@@ -135,7 +138,8 @@ public struct PluginSession: Identifiable, Hashable {
         urgentEvent: UrgentEventInfo? = nil,
         detailedStatus: DetailedStatus? = nil,
         tasks: [SessionTask]? = nil,
-        usageStats: UsageStats? = nil
+        usageStats: UsageStats? = nil,
+        lastMessage: String? = nil
     ) {
         self.id = id
         self.pluginId = pluginId
@@ -155,6 +159,7 @@ public struct PluginSession: Identifiable, Hashable {
         self.detailedStatus = detailedStatus
         self.tasks = tasks
         self.usageStats = usageStats
+        self.lastMessage = lastMessage
     }
 
     /// 向后兼容初始化器 (不含新增字段，用于旧插件)

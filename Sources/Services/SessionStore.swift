@@ -45,6 +45,10 @@ public struct SessionData: Codable, Identifiable {
 
     public var usageStats: UsageStats?
 
+    // MARK: - 最后消息
+
+    public var lastMessage: String?          // 最后一条消息摘要
+
     // MARK: - 初始化
 
     public init(
@@ -62,7 +66,8 @@ public struct SessionData: Codable, Identifiable {
         tasks: [SessionTask] = [],
         currentTask: String? = nil,
         terminalInfo: PluginTerminalInfo? = nil,
-        usageStats: UsageStats? = nil
+        usageStats: UsageStats? = nil,
+        lastMessage: String? = nil
     ) {
         self.sessionId = sessionId
         self.project = project
@@ -79,6 +84,7 @@ public struct SessionData: Codable, Identifiable {
         self.currentTask = currentTask
         self.terminalInfo = terminalInfo
         self.usageStats = usageStats
+        self.lastMessage = lastMessage
     }
 
     // MARK: - Codable
@@ -99,6 +105,7 @@ public struct SessionData: Codable, Identifiable {
         case currentTask = "current_task"
         case terminalInfo = "terminal_info"
         case usageStats = "usage_stats"
+        case lastMessage = "last_message"
     }
 
     /// 从 JSON 字典创建
@@ -129,6 +136,7 @@ public struct SessionData: Codable, Identifiable {
         currentTask = try container.decodeIfPresent(String.self, forKey: .currentTask)
         terminalInfo = try container.decodeIfPresent(PluginTerminalInfo.self, forKey: .terminalInfo)
         usageStats = try container.decodeIfPresent(UsageStats.self, forKey: .usageStats)
+        lastMessage = try container.decodeIfPresent(String.self, forKey: .lastMessage)
     }
 
     /// 编码为 JSON
@@ -153,6 +161,7 @@ public struct SessionData: Codable, Identifiable {
         try container.encodeIfPresent(currentTask, forKey: .currentTask)
         try container.encodeIfPresent(terminalInfo, forKey: .terminalInfo)
         try container.encodeIfPresent(usageStats, forKey: .usageStats)
+        try container.encodeIfPresent(lastMessage, forKey: .lastMessage)
     }
 }
 
@@ -450,7 +459,8 @@ extension SessionData {
             terminalInfo: terminalInfo,
             detailedStatus: detailedStatus,
             tasks: tasks,
-            usageStats: usageStats
+            usageStats: usageStats,
+            lastMessage: lastMessage
         )
     }
 }

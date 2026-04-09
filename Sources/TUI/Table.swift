@@ -1,20 +1,20 @@
 import Foundation
 
-// MARK: - Unicode Box Drawing Characters
-
-/// Unicode box drawing characters (prettier than ACS)
+// MARK: - ASCII Box Drawing Characters
+//
+/// ASCII box drawing characters (consistent width across all terminals)
 public struct BoxChars {
-    public static let horizontal = "─"
-    public static let vertical = "│"
-    public static let topLeft = "┌"
-    public static let topRight = "┐"
-    public static let bottomLeft = "└"
-    public static let bottomRight = "┘"
-    public static let leftTee = "├"
-    public static let rightTee = "┤"
-    public static let topTee = "┬"
-    public static let bottomTee = "┴"
-    public static let cross = "┼"
+    public static let horizontal = "-"
+    public static let vertical = "|"
+    public static let topLeft = "+"
+    public static let topRight = "+"
+    public static let bottomLeft = "+"
+    public static let bottomRight = "+"
+    public static let leftTee = "+"
+    public static let rightTee = "+"
+    public static let topTee = "+"
+    public static let bottomTee = "+"
+    public static let cross = "+"
 }
 
 // MARK: - Column Definition
@@ -128,7 +128,7 @@ public func drawTableRow(row: Int, widths: [Int], cells: [String], attrs: [Chtyp
 
     var line = borderColor + BoxChars.vertical + ANSIColor.reset
 
-    for (i, (w, cell)) in zip(widths, cells).enumerated() {
+    for (i, cell) in cells.enumerated() {
         let text = cell  // Already padded by caller
 
         // Apply attribute if provided
@@ -149,11 +149,25 @@ public func drawTableRow(row: Int, widths: [Int], cells: [String], attrs: [Chtyp
 
 // MARK: - Table Header Drawing
 
-/// Draw table header row with bold headers
+/// Draw table header row with bold/underline headers (no background)
 public func drawTableHeader(row: Int, widths: [Int], columns: [TableColumn] = defaultColumns) {
-    let headers = columns.map { $0.header }
-    let attrs: [Chtype] = columns.map { _ in A_BOLD | A_DIM }
-    drawTableRow(row: row, widths: widths, cells: headers, attrs: attrs)
+    // Build header line with underline + bold styling
+    move(CursesInt(row), 0)
+
+    let borderColor = ANSIColor.dim
+
+    // Build line with headers
+    var line = borderColor + BoxChars.vertical + ANSIColor.reset
+
+    for (_, (w, col)) in zip(widths, columns).enumerated() {
+        // Pad header to match column width (headers are ASCII, but use same function for consistency)
+        let padded = padToDisplayWidth(col.header, width: w)
+        // Apply bold + underline to header
+        line += ANSIColor.bold + ANSIColor.underline + padded + ANSIColor.reset
+        line += borderColor + BoxChars.vertical + ANSIColor.reset
+    }
+
+    addstr(line)
 }
 
 // MARK: - Helper Functions
@@ -198,6 +212,48 @@ public func oneline(_ text: String) -> String {
 /// Short ID (first 8 characters)
 public func shortId(_ id: String) -> String {
     String(id.prefix(8))
+}
+
+// MARK: - Display Width Padding
+
+/// Pad string to specified display width (accounts for emoji/CJK characters)
+public func padToDisplayWidth(_ text: String, width: Int, padChar: String = " ") -> String {
+    let displayWidth = calcDisplayWidth(text)
+    if displayWidth >= width {
+        return text
+    }
+    let padding = String(repeating: padChar, count: width - displayWidth)
+    return text + padding
+}
+
+/// Calculate display width of string (emoji/CJK = 2, others = 1)
+public func calcDisplayWidth(_ text: String) -> Int {
+    var width = 0
+    for char in text {
+        if char.isEmoji || char.isCJK {
+            width += 2
+        } else {
+            width += 1
+        }
+    }
+    return width
+}
+
+private extension Character {
+    var isEmoji: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        // ASCII chars (0x00-0x7F) are never displayed as emoji, even if they have emoji variants
+        if scalar.value < 0x80 { return false }
+        // Check for actual emoji presentation
+        return scalar.properties.isEmoji && scalar.properties.generalCategory != .decimalNumber
+    }
+
+    var isCJK: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        return (0x4E00...0x9FFF).contains(scalar.value) || // CJK Unified Ideographs
+               (0x3000...0x303F).contains(scalar.value) || // CJK Symbols and Punctuation
+               (0xFF00...0xFFEF).contains(scalar.value)    // Halfwidth and Fullwidth Forms
+    }
 }
 
 // MARK: - Column Equatable Conformance

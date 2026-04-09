@@ -435,12 +435,21 @@ class ClaudePlugin: SessionPlugin {
 
     /// 获取 transcript 路径
     private func getTranscriptPath(for sessionId: String) -> String? {
-        // 从 session 文件获取 transcript 路径
         let home = NSHomeDirectory()
-        let transcriptPath = "\(home)/.claude/sessions/\(sessionId)/transcript.jsonl"
-        if FileManager.default.fileExists(atPath: transcriptPath) {
-            return transcriptPath
+        let projectsDir = "\(home)/.claude/projects"
+
+        // 遍历项目目录查找匹配的 transcript 文件
+        guard let projectDirs = try? FileManager.default.contentsOfDirectory(atPath: projectsDir) else {
+            return nil
         }
+
+        for projectDir in projectDirs {
+            let transcriptPath = "\(projectsDir)/\(projectDir)/\(sessionId).jsonl"
+            if FileManager.default.fileExists(atPath: transcriptPath) {
+                return transcriptPath
+            }
+        }
+
         return nil
     }
 
@@ -530,6 +539,25 @@ class ClaudePlugin: SessionPlugin {
 
             // 构建 SessionData
             let transcriptPath = getTranscriptPath(for: aiSession.id)
+
+            // 加载最后消息
+            var lastMessage: String? = nil
+            if let path = transcriptPath {
+                let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
+                if let last = msgs.last {
+                    let prefix: String
+                    switch last.role {
+                    case "user": prefix = ">"
+                    case "assistant": prefix = "◀"
+                    case "tool": prefix = "⚡"
+                    default: prefix = "·"
+                    }
+                    // 截断到 100 字符
+                    let text = last.text.replacingOccurrences(of: "\n", with: " ")
+                    lastMessage = "\(prefix) \(String(text.prefix(100)))"
+                }
+            }
+
             let data = SessionData(
                 sessionId: aiSession.id,
                 project: aiSession.projectName,
@@ -551,7 +579,8 @@ class ClaudePlugin: SessionPlugin {
                     cmuxSocketPath: cmuxSocketPath,
                     cmuxSurfaceId: cmuxSurfaceId
                 ),
-                usageStats: usageStats
+                usageStats: usageStats,
+                lastMessage: lastMessage
             )
 
             // 写入 SessionStore

@@ -51,6 +51,7 @@ public struct ANSIColor {
     public static let reset = "\u{1B}[0m"
     public static let bold = "\u{1B}[1m"
     public static let dim = "\u{1B}[2m"
+    public static let underline = "\u{1B}[4m"
     public static let reverse = "\u{1B}[7m"
 
     public static let green = "\u{1B}[32m"

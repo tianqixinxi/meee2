@@ -154,10 +154,6 @@ public struct DashboardView {
         drawTableHeader(row: row, widths: widths, columns: columns)
         row += 1
 
-        // ── Table Header Border ────────────────────────────────
-        drawHorizontalLine(row: row, widths: widths, kind: "mid")
-        row += 1
-
         // ── Session Rows ───────────────────────────────────────
         let maxRows = min(sessions.count, h - row - 5)  // Leave space for detail and status
 
@@ -223,16 +219,18 @@ public struct DashboardView {
                 column: col.key,
                 session: session,
                 extras: extras,
-                isSelected: isSelected
+                isSelected: isSelected,
+                maxWidth: w
             )
-            cells.append(String(text.prefix(w)).padding(toLength: w, withPad: " ", startingAt: 0))
+            // Use display-width-aware padding for emoji/CJK alignment
+            cells.append(padToDisplayWidth(text, width: w))
         }
 
         // Use the standard table row drawing
         drawTableRow(row: row, widths: widths, cells: cells, attrs: nil, isSelected: isSelected)
     }
 
-    private func extractCellData(column key: String, session: SessionData, extras: SessionExtras, isSelected: Bool) -> (text: String, attr: Chtype) {
+    private func extractCellData(column key: String, session: SessionData, extras: SessionExtras, isSelected: Bool, maxWidth: Int = 0) -> (text: String, attr: Chtype) {
         var text: String
         var attr: Chtype = A_NORMAL
 
@@ -247,13 +245,19 @@ public struct DashboardView {
             text = shortPath(session.project)
 
         case "status":
-            let status = session.detailedStatus
-            let icon = status.terminalIcon
-            let name = status.displayName
-            if let tool = session.currentTool, !tool.isEmpty {
-                text = "⚡\(tool)"
+            // 获取有效状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
+            let effectiveStatus: DetailedStatus
+            if session.detailedStatus != .idle {
+                effectiveStatus = session.detailedStatus
             } else {
-                text = "\(icon)\(name)"
+                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
+            }
+            let icon = effectiveStatus.terminalIcon
+            let name = effectiveStatus.displayName
+            if let tool = session.currentTool, !tool.isEmpty {
+                text = "*\(tool)"  // Use * instead of lightning emoji
+            } else {
+                text = "\(icon) \(name)"
             }
 
         case "cost":
@@ -263,12 +267,14 @@ public struct DashboardView {
             if let last = extras.messages.last {
                 let prefix: String
                 switch last.role {
-                case "user": prefix = ">"
-                case "assistant": prefix = "◀"
-                case "tool": prefix = "⚡"
-                default: prefix = "·"
+                case "user": prefix = ">"  // ASCII
+                case "assistant": prefix = "<"  // ASCII instead of ◀
+                case "tool": prefix = "*"  // ASCII instead of ⚡
+                default: prefix = "."  // ASCII instead of ·
                 }
-                text = "\(prefix) \(oneline(last.text))"
+                let msg = "\(prefix) \(oneline(last.text))"
+                // 根据列宽度截断，考虑 emoji 显示宽度
+                text = truncateForDisplay(msg, maxWidth: maxWidth)
             } else {
                 text = ""
             }
@@ -292,8 +298,8 @@ public struct DashboardView {
 
         // Section header
         move(CursesInt(row), 0)
-        let headerText = "─── \(shortId(sid)) · \(shortPath(session.project)) "
-        let remaining = max(0, width - headerText.count)
+        let headerText = "--- \(shortId(sid)) · \(shortPath(session.project)) "
+        let remaining = max(0, width - calcDisplayWidth(headerText))
         let header = ANSIColor.cyan + ANSIColor.dim + headerText + String(repeating: BoxChars.horizontal, count: remaining) + ANSIColor.reset
         addstr(header.truncate(maxWidth: width))
 
@@ -309,13 +315,13 @@ public struct DashboardView {
                 prefix = " > "
                 prefixColor = ANSIColor.cyan + ANSIColor.bold
             case "assistant":
-                prefix = " ◀ "
+                prefix = " < "
                 prefixColor = ANSIColor.yellow + ANSIColor.bold
             case "tool":
-                prefix = " ⚡ "
+                prefix = " * "
                 prefixColor = ANSIColor.magenta + ANSIColor.dim
             default:
-                prefix = " · "
+                prefix = " . "
                 prefixColor = ANSIColor.dim
             }
 
@@ -408,5 +414,49 @@ extension String {
         if self.count <= maxWidth { return self }
         if maxWidth <= 2 { return String(self.prefix(maxWidth)) }
         return String(self.prefix(maxWidth - 2)) + ".."
+    }
+}
+
+/// Truncate string considering display width (emoji = 2 chars, CJK = 2 chars)
+private func truncateForDisplay(_ text: String, maxWidth: Int) -> String {
+    if maxWidth <= 0 { return "" }
+
+    var displayWidth = 0
+    var result = ""
+
+    for char in text {
+        let charWidth: Int
+        if char.isEmoji || char.isCJK {
+            charWidth = 2
+        } else {
+            charWidth = 1
+        }
+
+        if displayWidth + charWidth > maxWidth - 2 {
+            // Not enough space, add ".."
+            if result.isEmpty {
+                return ".."
+            }
+            return result + ".."
+        }
+
+        result.append(char)
+        displayWidth += charWidth
+    }
+
+    return result
+}
+
+private extension Character {
+    var isEmoji: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        return scalar.properties.isEmoji
+    }
+
+    var isCJK: Bool {
+        guard let scalar = unicodeScalars.first else { return false }
+        return (0x4E00...0x9FFF).contains(scalar.value) || // CJK Unified Ideographs
+               (0x3000...0x303F).contains(scalar.value) || // CJK Symbols and Punctuation
+               (0xFF00...0xFFEF).contains(scalar.value)    // Halfwidth and Fullwidth Forms
     }
 }
