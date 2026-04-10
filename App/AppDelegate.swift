@@ -231,11 +231,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func launchTUIInGhostty() {
         // Ghostty 使用 ghostty 命令打开新窗口
+        // 检查 Ghostty 是否安装
+        let ghosttyPath = "/Applications/Ghostty.app/Contents/MacOS/ghostty"
+        guard FileManager.default.fileExists(atPath: ghosttyPath) else {
+            NSLog("[AppDelegate] Ghostty not found at \(ghosttyPath), falling back to Terminal")
+            launchTUIInTerminal()
+            return
+        }
+
         let script = """
         tell application "Ghostty"
             activate
         end tell
-        do shell script "/Applications/Ghostty.app/Contents/MacOS/ghostty -e meee2 tui &"
+        do shell script "\(ghosttyPath) -e meee2 tui &"
         """
 
         if let appleScript = NSAppleScript(source: script) {
@@ -247,10 +255,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 NSLog("[AppDelegate] TUI launched in Ghostty")
             }
+        } else {
+            NSLog("[AppDelegate] Failed to create AppleScript for Ghostty, falling back to Terminal")
+            launchTUIInTerminal()
         }
     }
 
     private func launchTUIIniTerm2() {
+        // 检查 iTerm2 是否安装
+        guard FileManager.default.fileExists(atPath: "/Applications/iTerm.app") ||
+              FileManager.default.fileExists(atPath: "/Applications/iTerm2.app") else {
+            NSLog("[AppDelegate] iTerm2 not found, falling back to Terminal")
+            launchTUIInTerminal()
+            return
+        }
+
         let script = """
         tell application "iTerm2"
             activate
@@ -272,6 +291,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 NSLog("[AppDelegate] TUI launched in iTerm2")
             }
+        } else {
+            NSLog("[AppDelegate] Failed to create AppleScript for iTerm2, falling back to Terminal")
+            launchTUIInTerminal()
         }
     }
 
@@ -288,9 +310,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             appleScript.executeAndReturnError(&error)
             if let error = error {
                 NSLog("[AppDelegate] Terminal launch error: \(error)")
+                // 显示错误提示
+                DispatchQueue.main.async {
+                    let alert = NSAlert()
+                    alert.messageText = "Failed to Launch TUI"
+                    alert.informativeText = "Could not open Terminal. Error: \(error[NSAppleScript.errorMessage] ?? "Unknown error")"
+                    alert.alertStyle = .warning
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
             } else {
                 NSLog("[AppDelegate] TUI launched in Terminal")
             }
+        } else {
+            NSLog("[AppDelegate] Failed to create AppleScript for Terminal")
         }
     }
 

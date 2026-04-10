@@ -152,15 +152,15 @@ class SessionMonitor: ObservableObject {
         }
 
         let jsonData = content.data(using: .utf8) ?? Data()
-        var session = try? JSONDecoder().decode(AISession.self, from: jsonData)
+        guard var session = try? JSONDecoder().decode(AISession.self, from: jsonData) else {
+            return nil
+        }
 
         // 检查进程是否仍然存活
-        if session != nil {
-            let isAlive = checkProcessAlive(pid: session!.pid)
-            if !isAlive {
-                // 进程已结束，标记为完成状态
-                session!.status = .completed
-            }
+        let isAlive = checkProcessAlive(pid: session.pid)
+        if !isAlive {
+            // 进程已结束，标记为完成状态
+            session.status = .completed
         }
 
         return session

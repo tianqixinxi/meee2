@@ -942,12 +942,12 @@ class TerminalManager {
             try checkTask.run()
             checkTask.waitUntilExit()
             let data = checkPipe.fileHandleForReading.readDataToEndOfFile()
-            let tmuxPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if tmuxPath == nil || tmuxPath!.isEmpty {
+            guard let tmuxPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !tmuxPath.isEmpty else {
                 print("[TerminalManager] tmux not found in PATH")
                 return nil
             }
-            print("[TerminalManager] tmux path: \(tmuxPath!)")
+            print("[TerminalManager] tmux path: \(tmuxPath)")
         } catch {
             print("[TerminalManager] Failed to check tmux: \(error)")
             return nil

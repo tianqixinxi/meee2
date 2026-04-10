@@ -35,6 +35,9 @@ public class PluginManager: ObservableObject {
     private let dynamicLoader = DynamicPluginLoader()
     private let queue = DispatchQueue(label: "com.meee2.pluginmanager", qos: .utility)
 
+    /// 确保线程安全的锁
+    private let sessionsLock = NSLock()
+
     // MARK: - Init
 
     private init() {
@@ -55,17 +58,24 @@ public class PluginManager: ObservableObject {
 
     /// 注册内置 plugin
     public func register(_ plugin: SessionPlugin) {
-        guard plugin.initialize() else {
-            MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
+        do {
+            guard plugin.initialize() else {
+                MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
+                return
+            }
+        } catch {
+            MLog("[PluginManager] Exception initializing plugin \(plugin.pluginId): \(error)")
             return
         }
 
         plugin.onSessionsUpdated = { [weak self] sessions in
-            self?.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
+            guard let self = self else { return }
+            self.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
         }
 
         plugin.onUrgentEvent = { [weak self] session, message, action in
-            self?.handleUrgentEvent(session: session, message: message, action: action)
+            guard let self = self else { return }
+            self.handleUrgentEvent(session: session, message: message, action: action)
         }
 
         loadedPlugins[plugin.pluginId] = plugin
@@ -75,9 +85,13 @@ public class PluginManager: ObservableObject {
     /// 启动所有 plugins
     public func startAll() {
         for (pluginId, plugin) in loadedPlugins {
-            if plugin.config.enabled {
-                _ = plugin.start()  // Result intentionally unused
-                MLog("[PluginManager] Started plugin: \(pluginId)")
+            do {
+                if plugin.config.enabled {
+                    _ = plugin.start()  // Result intentionally unused
+                    MLog("[PluginManager] Started plugin: \(pluginId)")
+                }
+            } catch {
+                MLog("[PluginManager] Error starting plugin \(pluginId): \(error)")
             }
         }
     }
@@ -85,7 +99,11 @@ public class PluginManager: ObservableObject {
     /// 停止所有 plugins
     public func stopAll() {
         for plugin in loadedPlugins.values {
-            plugin.stop()
+            do {
+                plugin.stop()
+            } catch {
+                MLog("[PluginManager] Error stopping plugin: \(error)")
+            }
         }
     }
 
@@ -93,28 +111,40 @@ public class PluginManager: ObservableObject {
 
     /// 扫描并加载外部 plugins
     public func loadExternalPlugins() {
-        let externalPlugins = dynamicLoader.loadAllPlugins()
+        var externalPlugins: [SessionPlugin] = []
+
+        do {
+            externalPlugins = dynamicLoader.loadAllPlugins()
+        } catch {
+            MLog("[PluginManager] Error loading external plugins: \(error)")
+        }
 
         // 更新失败插件列表
-        DispatchQueue.main.async {
-            self.failedPlugins = self.dynamicLoader.failedPlugins
+        DispatchQueue.main.async { [weak self] in
+            self?.failedPlugins = self?.dynamicLoader.failedPlugins ?? []
         }
 
         for plugin in externalPlugins {
-            if plugin.initialize() {
-                // 设置回调
-                plugin.onSessionsUpdated = { [weak self] sessions in
-                    self?.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
-                }
+            do {
+                if plugin.initialize() {
+                    // 设置回调
+                    plugin.onSessionsUpdated = { [weak self] sessions in
+                        guard let self = self else { return }
+                        self.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
+                    }
 
-                plugin.onUrgentEvent = { [weak self] session, message, action in
-                    self?.handleUrgentEvent(session: session, message: message, action: action)
-                }
+                    plugin.onUrgentEvent = { [weak self] session, message, action in
+                        guard let self = self else { return }
+                        self.handleUrgentEvent(session: session, message: message, action: action)
+                    }
 
-                loadedPlugins[plugin.pluginId] = plugin
-                MLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
-            } else {
-                MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
+                    loadedPlugins[plugin.pluginId] = plugin
+                    MLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
+                } else {
+                    MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
+                }
+            } catch {
+                MLog("[PluginManager] Exception loading external plugin \(plugin.pluginId): \(error)")
             }
         }
     }
@@ -123,30 +153,44 @@ public class PluginManager: ObservableObject {
 
     private func handleSessionsUpdated(pluginId: String, sessions: [PluginSession]) {
         MLog("[PluginManager] handleSessionsUpdated called for \(pluginId) with \(sessions.count) sessions")
-        DispatchQueue.main.async {
-            // 移除该 plugin 的旧 sessions
-            self.sessions.removeAll { $0.pluginId == pluginId }
-            // 添加新 sessions
-            self.sessions.append(contentsOf: sessions)
-            // 标记加载完成
-            self.isLoading = false
-            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            do {
+                // 移除该 plugin 的旧 sessions
+                self.sessions.removeAll { $0.pluginId == pluginId }
+                // 添加新 sessions
+                self.sessions.append(contentsOf: sessions)
+                // 标记加载完成
+                self.isLoading = false
+                MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
+            } catch {
+                MLog("[PluginManager] Error updating sessions: \(error)")
+            }
         }
     }
 
     private func handleUrgentEvent(session: PluginSession, message: String, action: String?) {
         MLog("[PluginManager] handleUrgentEvent: \(session.title), message: \(message)")
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(
-                name: .pluginUrgentEvent,
-                object: nil,
-                userInfo: [
-                    "session": session,
-                    "message": message,
-                    "action": action as Any
-                ]
-            )
-            MLog("[PluginManager] Notification posted on main thread")
+
+        DispatchQueue.main.async { [weak self] in
+            guard self != nil else { return }
+
+            do {
+                NotificationCenter.default.post(
+                    name: .pluginUrgentEvent,
+                    object: nil,
+                    userInfo: [
+                        "session": session,
+                        "message": message,
+                        "action": action as Any
+                    ]
+                )
+                MLog("[PluginManager] Notification posted on main thread")
+            } catch {
+                MLog("[PluginManager] Error posting urgent event: \(error)")
+            }
         }
     }
 
@@ -154,14 +198,30 @@ public class PluginManager: ObservableObject {
 
     /// 激活 session 对应的终端
     public func activateTerminal(for session: PluginSession) {
-        guard let plugin = loadedPlugins[session.pluginId] else { return }
-        plugin.activateTerminal(for: session)
+        guard let plugin = loadedPlugins[session.pluginId] else {
+            MLog("[PluginManager] Plugin not found for session: \(session.pluginId)")
+            return
+        }
+
+        do {
+            plugin.activateTerminal(for: session)
+        } catch {
+            MLog("[PluginManager] Error activating terminal: \(error)")
+        }
     }
 
     /// 清除 session 的 urgentEvent 状态
     public func clearUrgentEvent(sessionId: String, pluginId: String) {
-        guard let plugin = loadedPlugins[pluginId] else { return }
-        plugin.clearUrgentEvent(sessionId: sessionId)
+        guard let plugin = loadedPlugins[pluginId] else {
+            MLog("[PluginManager] Plugin not found: \(pluginId)")
+            return
+        }
+
+        do {
+            plugin.clearUrgentEvent(sessionId: sessionId)
+        } catch {
+            MLog("[PluginManager] Error clearing urgent event: \(error)")
+        }
     }
 
     // MARK: - Plugin Info

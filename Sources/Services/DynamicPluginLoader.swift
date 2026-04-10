@@ -244,14 +244,19 @@ public class DynamicPluginLoader {
 
         // 3. 获取创建函数
         guard let createSymbol = dlsym(handle, "createPlugin") else {
-            MLog("[DynamicPluginLoader] createPlugin symbol not found in \(dylibPath)")
+            let error = String(cString: dlerror())
+            MLog("[DynamicPluginLoader] createPlugin symbol not found in \(dylibPath): \(error)")
             return nil
         }
 
         let createFunc = unsafeBitCast(createSymbol, to: PluginCreateFunction.self)
 
-        // 4. 创建 Plugin 实例
+        // 4. 创建 Plugin 实例 - 添加保护
         let pluginPtr = createFunc()
+        guard pluginPtr != nil else {
+            MLog("[DynamicPluginLoader] createPlugin returned nil for \(dylibPath)")
+            return nil
+        }
 
         // 将指针转换为 AnyObject，然后检查是否符合 SessionPlugin
         let pluginObject = Unmanaged<AnyObject>.fromOpaque(pluginPtr).takeUnretainedValue()
