@@ -10,8 +10,8 @@ struct PluginSessionRowView: View {
 
     @State private var isHovered = false
 
-    // 固定高度
-    private let rowHeight: CGFloat = 56
+    // 固定高度（简化后减小）
+    private let rowHeight: CGFloat = 44
 
     // 按钮 label 根据 plugin 类型
     private var buttonLabel: String {
@@ -64,8 +64,9 @@ struct PluginSessionRowView: View {
                         .offset(x: 10, y: 10)
                 )
 
-                // 项目信息 - 固定宽度，截断显示
+                // 项目信息 - 简化为两行
                 VStack(alignment: .leading, spacing: 2) {
+                    // 第一行：标题 + 时间
                     HStack(spacing: 6) {
                         Text(session.title)
                             .font(.system(size: 12, weight: .semibold))
@@ -73,93 +74,55 @@ struct PluginSessionRowView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
 
-                        // Plugin 名称标签
+                        // 时间
+                        Text(session.formattedDuration)
+                            .font(.system(size: 10))
+                            .foregroundColor(.white.opacity(0.5))
+                            .monospacedDigit()
+                    }
+
+                    // 第二行：Plugin名称 + lastMessage（不截断，靠布局自适应）
+                    HStack(spacing: 6) {
+                        // Plugin 名称
                         Text(pluginInfo?.displayName ?? "Plugin")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(session.accentColor ?? pluginInfo?.themeColor ?? .blue)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(
-                                Capsule()
-                                    .fill((session.accentColor ?? pluginInfo?.themeColor ?? .blue).opacity(0.2))
-                            )
 
-                        // 任务进度标签
+                        // lastMessage（只显示一行）
+                        if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
+                            Text(lastMsg)
+                                .font(.system(size: 10))
+                                .foregroundColor(.white.opacity(0.4))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Spacer()
+
+                // 右侧：状态 + 使用统计
+                VStack(alignment: .trailing, spacing: 2) {
+                    // 状态文字
+                    Text(session.subtitle ?? effectiveDetailedStatus.displayName)
+                        .font(.system(size: 9))
+                        .foregroundColor(effectiveDetailedStatus.needsUserAction ? .orange : .white.opacity(0.5))
+                        .lineLimit(1)
+
+                    // 任务进度 + 使用统计
+                    HStack(spacing: 6) {
                         if let progress = session.progressText {
                             Text(progress)
                                 .font(.system(size: 9, weight: .medium))
                                 .foregroundColor(.cyan)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule()
-                                        .fill(Color.cyan.opacity(0.2))
-                                )
-                        }
-                    }
-
-                    // 副标题/状态 - 截断显示
-                    HStack(spacing: 6) {
-                        // 精细状态图标
-                        if session.detailedStatus != nil {
-                            Image(systemName: effectiveDetailedStatus.icon)
-                                .font(.system(size: 9))
-                                .foregroundColor(effectiveDetailedStatus.color)
                         }
 
-                        Text(session.subtitle ?? session.status.description)
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.6))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-
-                        // 工具名称
-                        if let tool = session.toolName {
-                            Text("• \(tool)")
-                                .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.4))
-                                .lineLimit(1)
-                        }
-                    }
-
-                    // 最后消息 - 如果有
-                    if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
-                        Text(lastMsg)
-                            .font(.system(size: 9))
-                            .foregroundColor(.white.opacity(0.4))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                .frame(maxWidth: 260, alignment: .leading)
-
-                Spacer()
-
-                // 右侧：时间 + 使用统计
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(session.formattedDuration)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.5))
-                        .monospacedDigit()
-
-                    // 使用统计（如果有）
-                    if let stats = session.usageStats, stats.turns > 0 {
-                        HStack(spacing: 4) {
-                            Text(stats.formattedTokens)
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundColor(.white.opacity(0.4))
+                        if let stats = session.usageStats, stats.turns > 0 {
                             Text(stats.formattedCost)
                                 .font(.system(size: 8, weight: .medium))
                                 .foregroundColor(.green.opacity(0.8))
                         }
-                    } else if session.status.needsUserAction {
-                        HStack(spacing: 2) {
-                            Image(systemName: "hand.raised.fill")
-                                .font(.system(size: 8))
-                            Text("Action")
-                                .font(.system(size: 8, weight: .medium))
-                        }
-                        .foregroundColor(.orange)
                     }
                 }
             }

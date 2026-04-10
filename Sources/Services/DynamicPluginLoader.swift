@@ -143,45 +143,50 @@ public class DynamicPluginLoader {
     /// 预加载 Meee2PluginKit 动态库
     /// 确保所有 plugins 使用同一个 SessionPlugin 类定义
     private func preloadMeee2PluginKit() {
+        // 先检查 SessionPlugin 符号是否已存在（说明库已加载）
+        // nil 表示搜索所有已加载的库
+        let symbolName = "_$s14Meee2PluginKit13SessionPluginCMm"  // Swift mangled name for SessionPlugin class metadata
+        if dlsym(nil, symbolName) != nil {
+            MInfo("[DynamicPluginLoader] Meee2PluginKit already loaded (SessionPlugin symbol found), skip dlopen")
+            return
+        }
+
+        // 清除之前的 dlerror
+        dlerror()
+
         let home = NSHomeDirectory()
         let libDir = URL(fileURLWithPath: home)
             .appendingPathComponent(".meee2")
             .appendingPathComponent("lib")
         let libPath = libDir.appendingPathComponent("libMeee2PluginKit.dylib")
 
-        // 尝试从 app bundle 获取 dylib
+        // 尝试从 app bundle 复制 dylib
         let bundlePath = Bundle.main.resourceURL?.appendingPathComponent("Frameworks/libMeee2PluginKit.dylib")
-
-        // 如果 app bundle 中有 dylib，检查是否需要更新
         if let bundlePath = bundlePath, FileManager.default.fileExists(atPath: bundlePath.path) {
             let needsUpdate = !FileManager.default.fileExists(atPath: libPath.path) ||
                               shouldUpdateLibrary(bundlePath: bundlePath, installedPath: libPath)
 
             if needsUpdate {
-                // 创建目标目录
                 try? FileManager.default.createDirectory(at: libDir, withIntermediateDirectories: true)
-                // 删除旧版本（如果存在）
                 try? FileManager.default.removeItem(at: libPath)
-                // 复制新版本
                 try? FileManager.default.copyItem(at: bundlePath, to: libPath)
-                MLog("[DynamicPluginLoader] Updated Meee2PluginKit from app bundle to: \(libPath.path)")
+                MInfo("[DynamicPluginLoader] Updated Meee2PluginKit from app bundle to: \(libPath.path)")
             }
         }
 
+        // 加载库
         guard FileManager.default.fileExists(atPath: libPath.path) else {
-            MLog("[DynamicPluginLoader] Meee2PluginKit not found at: \(libPath.path)")
-            MLog("[DynamicPluginLoader] Please build meee2 from source or ensure the dylib is installed")
+            MWarn("[DynamicPluginLoader] Meee2PluginKit not found at: \(libPath.path)")
             return
         }
 
-        // 使用 RTLD_GLOBAL 让符号对后续加载的 plugins 可见
         guard dlopen(libPath.path, RTLD_NOW | RTLD_GLOBAL) != nil else {
             let error = String(cString: dlerror())
-            MLog("[DynamicPluginLoader] Failed to preload Meee2PluginKit: \(error)")
+            MError("[DynamicPluginLoader] Failed to preload Meee2PluginKit: \(error)")
             return
         }
 
-        MLog("[DynamicPluginLoader] Preloaded Meee2PluginKit from: \(libPath.path)")
+        MInfo("[DynamicPluginLoader] Preloaded Meee2PluginKit from: \(libPath.path)")
     }
 
     /// 检查是否需要更新库文件（比较修改时间）

@@ -84,7 +84,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 设置菜单（简化版：只有 Settings 和 Quit）
         let menu = NSMenu()
-        let tuiItem = NSMenuItem(title: "Open TUI...", action: #selector(openTUI), keyEquivalent: "t")
+        let tuiItem = NSMenuItem(title: "TUI", action: #selector(openTUI), keyEquivalent: "t")
         tuiItem.target = self
         menu.addItem(tuiItem)
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
@@ -117,6 +117,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             selector: #selector(openSettings),
             name: NSNotification.Name("openSettings"),
+            object: nil
+        )
+
+        // 监听打开 TUI 的通知
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openTUI),
+            name: NSNotification.Name("openTUI"),
             object: nil
         )
     }

@@ -490,13 +490,55 @@ class ClaudePlugin: SessionPlugin {
         case .permissionRequest:
             let tool = event.toolName ?? "Unknown tool"
             let permission = event.permission ?? "Permission required"
-            return "\(tool): \(permission)"
+
+            // 构建 base message
+            var message = "**\(tool)**: \(permission)"
+
+            // 添加 toolInput 详情
+            if let input = event.toolInput, !input.isEmpty {
+                // 尝试解析 JSON 并格式化显示
+                if let dict = event.toolInputDict {
+                    message += "\n\n**Input:**\n"
+                    for (key, value) in dict {
+                        let valueStr = formatValue(value)
+                        message += "- \(key): \(valueStr)\n"
+                    }
+                } else {
+                    // 非 JSON，直接显示
+                    message += "\n\n**Input:** \(input)"
+                }
+            }
+
+            // 添加 resource 信息
+            if let resource = event.resource, !resource.isEmpty {
+                message += "\n\n**Resource:** \(resource)"
+            }
+
+            return message
         case .notification:
             return event.notification ?? "Notification"
         case .stop, .sessionEnd:
             return event.lastAssistantMessage ?? "Task finished"
         default:
             return event.statusDescription ?? "Needs attention"
+        }
+    }
+
+    /// 格式化值显示
+    private func formatValue(_ value: Any) -> String {
+        if let str = value as? String {
+            // 截断长字符串
+            if str.count > 100 {
+                return String(str.prefix(100)) + "..."
+            }
+            return str
+        } else if let dict = value as? [String: Any] {
+            // 显示字典的 key 数量
+            return "{\(dict.keys.joined(separator: ", "))}"
+        } else if let arr = value as? [Any] {
+            return "[\(arr.count) items]"
+        } else {
+            return String(describing: value)
         }
     }
 

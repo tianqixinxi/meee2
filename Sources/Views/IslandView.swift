@@ -264,20 +264,21 @@ public struct IslandView: View {
         VStack(spacing: 0) {
             // 顶部：刘海区域 - 左侧显示产品图标，右侧显示状态图标
             HStack(spacing: 0) {
-                // 左侧：产品图标（活跃时呼吸动效）
+                // 左侧：产品图标（颜色和动效根据状态）
                 HStack {
                     if hasActiveSessions {
                         let carousel = currentCarouselSession
                         let ds = carousel.map { effectiveDetailedStatus(for: $0) }
                         let hasAnimation = ds?.animation != StatusAnimation.none
+                        let needsAction = ds?.needsUserAction ?? false
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.orange)
+                            .foregroundColor(needsAction ? .orange : .blue)
                             .opacity(hasAnimation ? statusOpacity : 1.0)
                     } else {
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.orange.opacity(0.5))
+                            .foregroundColor(.gray.opacity(0.6))
                     }
                 }
                 .padding(.leading, 12)
@@ -288,8 +289,10 @@ public struct IslandView: View {
                     // 外接显示器：中间直接显示轮播信息
                     HStack(spacing: 8) {
                         if let session = currentCarouselSession {
+                            let ds = effectiveDetailedStatus(for: session)
+
                             Circle()
-                                .fill(session.status.color)
+                                .fill(ds.color)
                                 .frame(width: 6, height: 6)
 
                             Text(session.title)
@@ -310,18 +313,12 @@ public struct IslandView: View {
                                     .lineLimit(1)
                             }
 
-                            if session.status.needsUserAction {
-                                Image(systemName: "hand.raised.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.orange)
-                            }
-
                             Spacer()
 
-                            Text(session.formattedDuration)
+                            // 显示状态而不是时间
+                            Text(ds.displayName)
                                 .font(.system(size: 10))
-                                .foregroundColor(.white.opacity(0.5))
-                                .monospacedDigit()
+                                .foregroundColor(ds.color.opacity(0.8))
                         } else {
                             Text("No active sessions")
                                 .font(.system(size: 11))
@@ -333,24 +330,17 @@ public struct IslandView: View {
                     Spacer()
                 }
 
-                // 右侧：精细状态图标（呼吸动效或闪烁动效）
+                // 右侧：只在需要用户介入时显示图标
                 HStack(spacing: 3) {
                     if let session = currentCarouselSession {
                         let ds = effectiveDetailedStatus(for: session)
-                        let dsColor = ds.color
 
-                        // 状态图标（已包含状态指示，无需额外显示点）
-                        Image(systemName: ds.sfSymbolName)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(dsColor)
-                            .opacity(ds.animation == .bounce ? attentionOpacity :
-                                     ds.animation == .pulse ? statusOpacity : 1.0)
-
-                        // 任务进度（如果有）
-                        if let progress = session.progressText {
-                            Text(progress)
-                                .font(.system(size: 8, weight: .medium))
-                                .foregroundColor(.cyan)
+                        // 只在需要介入时显示图标
+                        if ds.needsUserAction {
+                            Image(systemName: "hand.raised.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.orange)
+                                .opacity(ds.animation == .bounce ? attentionOpacity : 1.0)
                         }
                     }
                 }
@@ -376,11 +366,6 @@ public struct IslandView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
 
-                            // 精细状态图标
-                            Image(systemName: ds.sfSymbolName)
-                                .font(.system(size: 9))
-                                .foregroundColor(ds.color.opacity(0.8))
-
                             if let subtitle = session.subtitle, !subtitle.isEmpty {
                                 Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
                                     .font(.system(size: 10))
@@ -404,21 +389,13 @@ public struct IslandView: View {
                                     .background(Capsule().fill(Color.cyan.opacity(0.2)))
                             }
 
-                            // 用户需要介入提示
-                            if ds.needsUserAction {
-                                Image(systemName: "hand.raised.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.orange)
-                            }
-
                             Spacer()
 
-                            // 时间 + 使用统计
+                            // 显示状态 + 使用统计（而不是时间）
                             VStack(alignment: .trailing, spacing: 1) {
-                                Text(session.formattedDuration)
+                                Text(ds.displayName)
                                     .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.5))
-                                    .monospacedDigit()
+                                    .foregroundColor(ds.color.opacity(0.8))
 
                                 // 使用统计（如果有）
                                 if let stats = session.usageStats, stats.turns > 0 {
@@ -478,6 +455,9 @@ public struct IslandView: View {
 
                 // 右侧：菜单按钮
                 Menu {
+                    Button("TUI") {
+                        NotificationCenter.default.post(name: NSNotification.Name("openTUI"), object: nil)
+                    }
                     Button("Settings...") {
                         NotificationCenter.default.post(name: NSNotification.Name("openSettings"), object: nil)
                     }
@@ -757,11 +737,16 @@ public struct IslandView: View {
     private func urgentPanelMessageFixed(message: String?) -> some View {
         ScrollView {
             if let message = message, !message.isEmpty {
-                Text(attributedStringFromMarkdown(message))
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.85))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                // 检测是否包含 Markdown 表格
+                if message.contains("|") && message.contains("\n") {
+                    markdownTableOrText(message)
+                } else {
+                    Text(attributedStringFromMarkdown(message))
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
             } else {
                 Text("No message content")
                     .font(.system(size: 12))
@@ -775,6 +760,126 @@ public struct IslandView: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.white.opacity(0.08))
         )
+    }
+
+    /// 检测并渲染 Markdown 表格或普通文本
+    @ViewBuilder
+    private func markdownTableOrText(_ message: String) -> some View {
+        let lines = message.split(separator: "\n", omittingEmptySubsequences: false)
+        let tableData = parseMarkdownTable(lines: lines)
+
+        if let table = tableData {
+            // 渲染表格
+            markdownTableView(table)
+        } else {
+            // 普通文本（可能有部分表格语法但格式不完整）
+            Text(attributedStringFromMarkdown(message))
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+    }
+
+    /// 解析 Markdown 表格
+    private func parseMarkdownTable(lines: [String.SubSequence]) -> MarkdownTable? {
+        // 找表格开始（包含 | 的行）
+        var tableStartIndex = -1
+        for (index, line) in lines.enumerated() {
+            if line.contains("|") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                tableStartIndex = index
+                break
+            }
+        }
+
+        if tableStartIndex < 0 { return nil }
+
+        // 表头行
+        let headerLine = lines[tableStartIndex].trimmingCharacters(in: .whitespaces)
+        let headers = parseTableRow(headerLine)
+
+        if headers.isEmpty { return nil }
+
+        // 分隔行（跳过）
+        var rowIndex = tableStartIndex + 1
+        if rowIndex < lines.count && lines[rowIndex].contains("-") && lines[rowIndex].contains("|") {
+            rowIndex += 1  // 跳过分隔行
+        }
+
+        // 数据行
+        var rows: [[String]] = []
+        while rowIndex < lines.count {
+            let line = lines[rowIndex].trimmingCharacters(in: .whitespaces)
+            if line.contains("|") && !line.isEmpty {
+                let row = parseTableRow(line)
+                if !row.isEmpty {
+                    rows.append(row)
+                }
+            } else if !line.isEmpty {
+                // 非表格行，停止解析
+                break
+            }
+            rowIndex += 1
+        }
+
+        if rows.isEmpty { return nil }
+
+        return MarkdownTable(headers: headers, rows: rows)
+    }
+
+    /// 解析单行表格数据
+    private func parseTableRow(_ line: String) -> [String] {
+        // 去掉首尾的 |
+        var trimmed = line
+        if trimmed.hasPrefix("|") { trimmed = String(trimmed.dropFirst()) }
+        if trimmed.hasSuffix("|") { trimmed = String(trimmed.dropLast()) }
+
+        // 按 | 分割
+        return trimmed.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+
+    /// 渲染 Markdown 表格
+    @ViewBuilder
+    private func markdownTableView(_ table: MarkdownTable) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            // 表头
+            HStack(spacing: 8) {
+                ForEach(table.headers.indices, id: \.self) { index in
+                    Text(table.headers[index])
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.1))
+
+            // 数据行
+            ForEach(table.rows.indices, id: \.self) { rowIndex in
+                HStack(spacing: 8) {
+                    ForEach(table.rows[rowIndex].indices, id: \.self) { colIndex in
+                        let cell = table.rows[rowIndex][colIndex]
+                        Text(attributedStringFromMarkdown(cell))
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.75))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(rowIndex % 2 == 0 ? Color.clear : Color.white.opacity(0.05))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
+    }
+
+    /// Markdown 表格数据结构
+    struct MarkdownTable {
+        let headers: [String]
+        let rows: [[String]]
     }
 
     private var urgentPanelBackground: some View {

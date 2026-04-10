@@ -55,18 +55,37 @@ public enum DetailedStatus: String, Codable, CaseIterable {
     /// SF Symbol 名称（与 icon 相同，用于 SwiftUI Image）
     public var sfSymbolName: String { icon }
 
-    /// 状态颜色
+    /// 状态颜色（简化为4种核心颜色）
     public var color: Color {
         switch self {
-        case .idle: return .gray
-        case .thinking: return .purple
-        case .tooling: return .blue
-        case .active: return .green
-        case .waitingForUser: return .orange
-        case .permissionRequired: return .red
-        case .compacting: return .cyan
-        case .completed: return .green
-        case .dead: return .red
+        case .waitingForUser, .permissionRequired:
+            return .orange  // 需要用户介入（最重要）
+        case .thinking, .tooling, .active, .compacting:
+            return .blue    // 正在运行中
+        case .idle, .completed:
+            return .gray    // 空闲/完成
+        case .dead:
+            return .red     // 异常终止
+        }
+    }
+
+    /// 是否显示右侧状态图标（只在需要用户介入时显示）
+    public var showsRightIcon: Bool {
+        switch self {
+        case .waitingForUser, .permissionRequired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 右侧状态图标（只用于需要介入的情况）
+    public var rightIcon: String? {
+        switch self {
+        case .waitingForUser, .permissionRequired:
+            return "hand.raised.fill"
+        default:
+            return nil
         }
     }
 
