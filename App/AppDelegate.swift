@@ -49,6 +49,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动状态监控
         statusManager.start()
 
+        // 发送使用统计（异步，不阻塞启动）
+        UsageTracker.shared.trackLaunch()
+
         // 监听屏幕变化 (处理多显示器)
         NotificationCenter.default.addObserver(
             self,

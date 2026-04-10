@@ -175,6 +175,16 @@ public struct SettingsView: View {
                     }
                 }
             }
+
+            Section("Usage Statistics") {
+                @AppStorage("usageTrackingEnabled") var usageTrackingEnabled: Bool = true
+
+                Toggle("Help improve meee2", isOn: $usageTrackingEnabled)
+
+                Text("Send anonymous usage statistics (device ID, version, OS) to help us understand usage. No personal information collected.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
     }
