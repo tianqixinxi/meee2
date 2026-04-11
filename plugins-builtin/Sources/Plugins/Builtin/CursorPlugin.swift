@@ -175,10 +175,10 @@ class CursorPlugin: SessionPlugin {
                         title: projectName,
                         status: status,
                         startedAt: lastActivity,
-                        subtitle: lastMessage,
                         cwd: projectPath,
                         icon: "cursorarrow",
-                        accentColor: .blue
+                        accentColor: .blue,
+                        lastMessage: lastMessage
                     )
                     sessions.append(session)
                 }

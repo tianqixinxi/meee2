@@ -43,6 +43,20 @@ struct PluginSessionRowView: View {
         }
     }
 
+    /// 右侧状态文字：如果 lastMessage 存在，显示 subtitle；否则显示状态名
+    private var rightStatusText: String {
+        if session.lastMessage != nil {
+            return session.subtitle ?? effectiveDetailedStatus.displayName
+        } else {
+            return effectiveDetailedStatus.displayName
+        }
+    }
+
+    /// 第二行显示的消息：优先 lastMessage，fallback subtitle
+    private var displayMessage: String? {
+        session.lastMessage ?? session.subtitle
+    }
+
     var body: some View {
         Button(action: onOpenTerminal) {
             HStack(spacing: 10) {
@@ -81,16 +95,16 @@ struct PluginSessionRowView: View {
                             .monospacedDigit()
                     }
 
-                    // 第二行：Plugin名称 + lastMessage（不截断，靠布局自适应）
+                    // 第二行：Plugin名称 + 消息（优先 lastMessage，fallback subtitle）
                     HStack(spacing: 6) {
                         // Plugin 名称
                         Text(pluginInfo?.displayName ?? "Plugin")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(session.accentColor ?? pluginInfo?.themeColor ?? .blue)
 
-                        // lastMessage（只显示一行）
-                        if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
-                            Text(lastMsg)
+                        // 消息
+                        if let msg = displayMessage, !msg.isEmpty {
+                            Text(msg)
                                 .font(.system(size: 10))
                                 .foregroundColor(.white.opacity(0.4))
                                 .lineLimit(1)
@@ -104,8 +118,8 @@ struct PluginSessionRowView: View {
 
                 // 右侧：状态 + 使用统计
                 VStack(alignment: .trailing, spacing: 2) {
-                    // 状态文字
-                    Text(session.subtitle ?? effectiveDetailedStatus.displayName)
+                    // 状态文字：如果 lastMessage 存在，显示 subtitle 或状态；否则显示状态
+                    Text(rightStatusText)
                         .font(.system(size: 9))
                         .foregroundColor(effectiveDetailedStatus.needsUserAction ? .orange : .white.opacity(0.5))
                         .lineLimit(1)

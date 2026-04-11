@@ -157,17 +157,15 @@ public class PluginManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            do {
-                // 移除该 plugin 的旧 sessions
-                self.sessions.removeAll { $0.pluginId == pluginId }
-                // 添加新 sessions
-                self.sessions.append(contentsOf: sessions)
-                // 标记加载完成
-                self.isLoading = false
-                MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
-            } catch {
-                MLog("[PluginManager] Error updating sessions: \(error)")
-            }
+            // 移除该 plugin 的旧 sessions
+            self.sessions.removeAll { $0.pluginId == pluginId }
+            // 添加新 sessions
+            self.sessions.append(contentsOf: sessions)
+            // 统一按 startedAt 排序（最近的在前）
+            self.sessions.sort { $0.startedAt > $1.startedAt }
+            // 标记加载完成
+            self.isLoading = false
+            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
         }
     }
 

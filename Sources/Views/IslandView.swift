@@ -41,6 +41,39 @@ public struct IslandView: View {
     @State private var carouselTimer: Timer?
     @State private var carouselIndex: Int = 0
 
+    // MARK: - Plugin Tab Filter
+
+    /// 当前选中的 plugin tab ("all" 表示显示全部)
+    @State private var selectedPluginTab: String = "all"
+
+    /// 获取可用的 plugin tab 列表
+    private var availablePluginTabs: [(id: String, name: String, icon: String)] {
+        var tabs: [(id: String, name: String, icon: String)] = [("all", "All", "square.grid.2x2")]
+
+        // 从 sessions 中提取 plugin IDs，按 displayName 排序保证顺序稳定
+        let pluginIds = Set(statusManager.sessions.map { $0.pluginId })
+        let sortedPluginIds = pluginIds.sorted { id1, id2 in
+            let info1 = statusManager.getPluginInfo(for: id1)
+            let info2 = statusManager.getPluginInfo(for: id2)
+            return (info1?.displayName ?? id1) < (info2?.displayName ?? id2)
+        }
+
+        for pluginId in sortedPluginIds {
+            if let info = statusManager.getPluginInfo(for: pluginId) {
+                tabs.append((pluginId, info.displayName, info.icon))
+            }
+        }
+        return tabs
+    }
+
+    /// 根据 tab 过滤 sessions
+    private var filteredSessions: [PluginSession] {
+        if selectedPluginTab == "all" {
+            return statusManager.sessions
+        }
+        return statusManager.sessions.filter { $0.pluginId == selectedPluginTab }
+    }
+
     // MARK: - Hover State
 
     @State private var isHovered = false
@@ -495,9 +528,7 @@ public struct IslandView: View {
 
                         // 常规 session 列表 - 非 auto 模式时显示
                         if expandMode != .auto {
-                            Divider().background(Color.white.opacity(0.15))
-
-                            if statusManager.sessions.isEmpty {
+                            if filteredSessions.isEmpty {
                                 // 空状态 - 显示帮助提示和 buddy
                                 VStack(spacing: 12) {
                                     // Buddy 动画
@@ -516,7 +547,7 @@ public struct IslandView: View {
                                             .font(.system(size: 13, weight: .medium))
                                             .foregroundColor(.white.opacity(0.7))
 
-                                        Text("Run 'claude' in terminal to start")
+                                        Text(selectedPluginTab == "all" ? "Run 'claude' in terminal to start" : "No sessions for this plugin")
                                             .font(.system(size: 11))
                                             .foregroundColor(.white.opacity(0.4))
                                     }
@@ -524,8 +555,8 @@ public struct IslandView: View {
                                 .frame(height: 120)
                             } else {
                                 LazyVStack(spacing: 6) {
-                                    // 统一的 session 列表
-                                    ForEach(statusManager.sessions) { session in
+                                    // 统一的 session 列表（已过滤）
+                                    ForEach(filteredSessions) { session in
                                         PluginSessionRowView(
                                             session: session,
                                             pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
@@ -536,7 +567,7 @@ public struct IslandView: View {
 
                                 // Buddy 在底部右下角显示（session 数量 <= 4 时）
                                 if showBuddy, let buddy = buddyReader.buddy,
-                                   statusManager.sessions.count <= 4 {
+                                   filteredSessions.count <= 4 {
                                     HStack {
                                         Spacer()
                                         BuddyASCIIView(buddy: buddy)
@@ -553,6 +584,11 @@ public struct IslandView: View {
                 .padding(.bottom, spacing)
             }
             .scrollIndicators(needsScroll ? .visible : .hidden)
+
+            // 固定 footer - Plugin Tab Picker（只在非 auto 模式且有多个 plugin 时显示）
+            if expandMode != .auto && availablePluginTabs.count > 1 {
+                pluginTabPicker
+            }
         }
         .frame(width: expandedWidth, height: calculatedExpandedHeight)
     }
@@ -889,6 +925,38 @@ public struct IslandView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color.white.opacity(0.15), lineWidth: 1)
             )
+    }
+
+    // MARK: - Plugin Tab Picker
+
+    @ViewBuilder
+    private var pluginTabPicker: some View {
+        HStack(spacing: 4) {
+            ForEach(availablePluginTabs, id: \.id) { tab in
+                Button(action: {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        selectedPluginTab = tab.id
+                    }
+                }) {
+                    HStack(spacing: 2) {
+                        Image(systemName: tab.icon)
+                            .font(.system(size: 8))
+                        Text(tab.name)
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(selectedPluginTab == tab.id ? .white : .white.opacity(0.5))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(selectedPluginTab == tab.id ? Color.orange.opacity(0.8) : Color.white.opacity(0.1))
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, spacing)
     }
 
     // MARK: - Plugin Urgent Panel (固定布局)
