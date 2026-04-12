@@ -161,11 +161,11 @@ class CursorPlugin: SessionPlugin {
             let projectName = parseProjectName(from: projectDir.lastPathComponent)
             let projectPath = parseProjectPath(from: projectDir.lastPathComponent)
 
-            // 获取最近的 transcript 活动时间和最后消息
-            if let (lastActivity, lastMessage) = getLastTranscriptActivityAndMessage(transcriptsDir: transcriptsDir) {
+            // 获取最近的 transcript 活动时间、最后消息和状态
+            if let (lastActivity, lastMessage, detectedStatus) = getLastTranscriptActivityAndMessage(transcriptsDir: transcriptsDir) {
                 let timeSinceActivity = Date().timeIntervalSince(lastActivity)
-                let isActive = timeSinceActivity < activeThreshold
-                let status: SessionStatus = isActive ? .running : .idle
+                // 使用 TranscriptStatusParser 检测的状态，而非简单的时间判断
+                let status: SessionStatus = detectedStatus
 
                 // 只显示最近活跃的 session (1小时内)
                 if timeSinceActivity < 3600 {
@@ -237,9 +237,9 @@ class CursorPlugin: SessionPlugin {
         return nil
     }
 
-    /// 获取 transcripts 目录中最后活动时间和最后一条 assistant 消息
-    /// 返回: (最后活动时间, 最后消息)
-    private func getLastTranscriptActivityAndMessage(transcriptsDir: URL) -> (Date, String?)? {
+    /// 获取 transcripts 目录中最后活动时间、最后消息和状态
+    /// 返回: (最后活动时间, 最后消息, 状态)
+    private func getLastTranscriptActivityAndMessage(transcriptsDir: URL) -> (Date, String?, SessionStatus)? {
         guard let transcriptDirs = try? FileManager.default.contentsOfDirectory(
             at: transcriptsDir,
             includingPropertiesForKeys: [.contentModificationDateKey],
@@ -273,13 +273,25 @@ class CursorPlugin: SessionPlugin {
             }
         }
 
-        // 解析最后消息
+        // 解析最后消息和状态
+        var detectedStatus: SessionStatus = .idle
         if let file = latestFile {
             lastMessage = parseLastAssistantMessage(from: file)
+            // 使用 TranscriptStatusParser 检测状态
+            let result = TranscriptStatusParser.detectStatus(file: file)
+            detectedStatus = result.status
+            // 如果检测到当前工具，用它作为 lastMessage
+            if let tool = result.currentTool, lastMessage == nil {
+                lastMessage = "🔧 \(tool)"
+            }
+            // 使用文件修改时间作为最后活动时间（如果解析器没返回）
+            if result.lastActivity != nil {
+                latestDate = result.lastActivity
+            }
         }
 
         if let date = latestDate {
-            return (date, lastMessage)
+            return (date, lastMessage, detectedStatus)
         }
         return nil
     }
