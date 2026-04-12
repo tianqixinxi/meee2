@@ -57,6 +57,10 @@ class TerminalManager {
 
         // 尝试找到已存在的窗口（原有逻辑）
         if let windowInfo = findWindowForSession(session) {
+            if windowInfo.activationDone {
+                NSLog("[TerminalManager] Activation already completed, skipping activateWindow")
+                return
+            }
             NSLog("[TerminalManager] Found window info: app=\(windowInfo.app.rawValue), windowIndex=\(windowInfo.windowIndex ?? -1)")
             activateWindow(windowInfo)
         } else {
@@ -182,15 +186,25 @@ class TerminalManager {
             return nil
         }
 
-        // cmux 输出格式: "holmes-skill · 当前目录 · c85cb01c-a61c-47"
-        // sessionId: c85cb01c-a61c-4716-8b52-33b87fcd089e
-        // 匹配前 8 位 + 连字符: c85cb01c-a61c
-        let shortPrefix = String(sessionId.prefix(13)) // "c85cb01c-a61c"
-        let shortId = String(sessionId.prefix(8))       // "c85cb01c"
+        // cmux 标题格式: "meee2 · 任务描述 · 67cfc8da-a755-41"
+        // 完整 sessionId: "67cfc8da-a755-41ef-a8ad-5386171fe14f"
+        // cmux 显示前 16 位: "67cfc8da-a755-41" (8+1+4+1+2=16)
+        let shortPrefix16 = String(sessionId.prefix(16)) // "67cfc8da-a755-41"
+        let shortPrefix13 = String(sessionId.prefix(13)) // "67cfc8da-a755" (fallback)
+        let shortId8 = String(sessionId.prefix(8))       // "67cfc8da" (last fallback)
 
         for (ws, surf, title, _) in surfaces {
-            if title.contains(shortPrefix) || title.contains(shortId) {
-                NSLog("[TerminalManager] Found surface \(surf) in \(ws) for session \(sessionId)")
+            // 优先匹配最长的前缀
+            if title.contains(shortPrefix16) {
+                NSLog("[TerminalManager] Found surface \(surf) in \(ws) for session \(sessionId) (matched 16-char prefix)")
+                return (surf, ws)
+            }
+            if title.contains(shortPrefix13) {
+                NSLog("[TerminalManager] Found surface \(surf) in \(ws) for session \(sessionId) (matched 13-char prefix)")
+                return (surf, ws)
+            }
+            if title.contains(shortId8) {
+                NSLog("[TerminalManager] Found surface \(surf) in \(ws) for session \(sessionId) (matched 8-char prefix)")
                 return (surf, ws)
             }
         }
@@ -200,7 +214,7 @@ class TerminalManager {
     }
 
     /// 通过 cwd 在 cmux 中查找对应的 surface（使用单次 tree --all 查询）
-    private static func findCmuxSurfaceByCwd(socketPath: String, cwd: String) -> Int? {
+    private static func findCmuxSurfaceByCwd(socketPath: String, cwd: String) -> (surfaceRef: String, workspaceRef: String)? {
         NSLog("[TerminalManager] findCmuxSurfaceByCwd: socket=\(socketPath), cwd=\(cwd)")
 
         guard let surfaces = listAllCmuxSurfaces(socketPath: socketPath) else {
@@ -209,13 +223,10 @@ class TerminalManager {
 
         let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
 
-        for (_, surf, title, _) in surfaces {
+        for (ws, surf, title, _) in surfaces {
             if title.contains(cwdName) || title.contains(cwd) {
-                let numStr = surf.replacingOccurrences(of: "surface:", with: "")
-                if let tabIndex = Int(numStr) {
-                    NSLog("[TerminalManager] Found cmux surface by cwd at tab \(tabIndex)")
-                    return tabIndex
-                }
+                NSLog("[TerminalManager] Found cmux surface by cwd: surface=\(surf), workspace=\(ws)")
+                return (surf, ws)
             }
         }
 
@@ -335,6 +346,7 @@ class TerminalManager {
         let app: TerminalApp
         let windowIndex: Int?
         let sessionName: String?  // for tmux
+        var activationDone: Bool = false  // 表示激活已完成，不需要再调用 activateWindow
     }
 
     /// 支持的 Terminal 应用
@@ -380,7 +392,8 @@ class TerminalManager {
                     if let (surfaceRef, workspaceRef) = findCmuxSurfaceBySessionId(socketPath: defaultSocket, sessionId: session.id) {
                         NSLog("[TerminalManager] Found cmux surface \(surfaceRef) in workspace \(workspaceRef)")
                         activateCmuxWithSocket(defaultSocket, sessionId: session.id, cmuxSurfaceId: nil, surfaceRef: surfaceRef, workspaceRef: workspaceRef)
-                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil)
+                        // 激活已完成
+                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil, activationDone: true)
                     }
                 }
 
@@ -389,15 +402,17 @@ class TerminalManager {
                     if let (surfaceRef, workspaceRef) = findCmuxSurfaceBySessionId(socketPath: socketPath, sessionId: session.id) {
                         NSLog("[TerminalManager] Found cmux surface \(surfaceRef) in workspace \(workspaceRef)")
                         activateCmuxWithSocket(socketPath, sessionId: session.id, cmuxSurfaceId: nil, surfaceRef: surfaceRef, workspaceRef: workspaceRef)
-                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil)
+                        // 激活已完成
+                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil, activationDone: true)
                     }
                 }
 
                 // 最后尝试 cwd 匹配（在当前 workspace）
                 NSLog("[TerminalManager] Session ID not found, trying cwd matching...")
-                if let windowIndex = findWindowInCmux(forSession: session) {
-                    NSLog("[TerminalManager] Found cmux window at index \(windowIndex)")
-                    return WindowInfo(app: .cmux, windowIndex: windowIndex, sessionName: nil)
+                if findAndActivateCmuxByCwd(forSession: session) {
+                    // cwd 匹配成功，激活已完成
+                    NSLog("[TerminalManager] cmux activation completed via cwd matching")
+                    return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil, activationDone: true)
                 }
 
                 NSLog("[TerminalManager] No specific cmux surface found, activating cmux directly")
@@ -647,20 +662,23 @@ class TerminalManager {
     }
 
     /// 在 cmux 中通过 cwd 匹配查找窗口（fallback，当 session ID 不匹配时使用）
-    private static func findWindowInCmux(forSession session: AISession) -> Int? {
-        NSLog("[TerminalManager] findWindowInCmux for session: \(session.projectName)")
+    /// 找到后直接激活，返回 true 表示已处理，false 表示未找到
+    private static func findAndActivateCmuxByCwd(forSession session: AISession) -> Bool {
+        NSLog("[TerminalManager] findAndActivateCmuxByCwd for session: \(session.projectName)")
 
         let defaultSocket = "\(NSHomeDirectory())/Library/Application Support/cmux/cmux.sock"
         let socketPath = session.cmuxSocketPath ?? (FileManager.default.fileExists(atPath: defaultSocket) ? defaultSocket : nil)
 
         if let socketPath = socketPath {
-            if let tabIndex = findCmuxSurfaceByCwd(socketPath: socketPath, cwd: session.cwd) {
-                return tabIndex
+            if let (surfaceRef, workspaceRef) = findCmuxSurfaceByCwd(socketPath: socketPath, cwd: session.cwd) {
+                NSLog("[TerminalManager] Found cmux surface by cwd: \(surfaceRef) in \(workspaceRef)")
+                activateCmuxSurface(socketPath: socketPath, surfaceRef: surfaceRef, workspaceRef: workspaceRef)
+                return true
             }
         }
 
-        NSLog("[TerminalManager] findWindowInCmux: No window found via cmux CLI")
-        return nil
+        NSLog("[TerminalManager] findAndActivateCmuxByCwd: No window found via cmux CLI")
+        return false
     }
 
     /// 在 Terminal.app 中查找 tty

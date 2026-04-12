@@ -95,7 +95,7 @@ public struct DashboardView {
         }
 
         // Configure terminal
-        curs_set(0)  // Hide cursor
+        _ = curs_set(0)  // Hide cursor
         initCursesColors()
 
         // Main event loop
@@ -232,7 +232,7 @@ public struct DashboardView {
 
     private func extractCellData(column key: String, session: SessionData, extras: SessionExtras, isSelected: Bool, maxWidth: Int = 0) -> (text: String, attr: Chtype) {
         var text: String
-        var attr: Chtype = A_NORMAL
+        let attr: Chtype = A_NORMAL
 
         switch key {
         case "badge":
@@ -407,7 +407,7 @@ public struct DashboardView {
 
         // 重新进入 TUI
         _ = initscr()
-        curs_set(0)
+        _ = curs_set(0)
     }
 }
 

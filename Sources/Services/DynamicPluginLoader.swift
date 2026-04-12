@@ -258,7 +258,8 @@ public class DynamicPluginLoader {
 
         // 4. 创建 Plugin 实例 - 添加保护
         let pluginPtr = createFunc()
-        guard pluginPtr != nil else {
+        // pluginPtr 是 non-optional，检查指针是否有效
+        guard pluginPtr != UnsafeMutableRawPointer(bitPattern: 0) else {
             MLog("[DynamicPluginLoader] createPlugin returned nil for \(dylibPath)")
             return nil
         }

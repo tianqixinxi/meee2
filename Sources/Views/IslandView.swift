@@ -333,16 +333,16 @@ public struct IslandView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
 
-                            if let subtitle = session.subtitle, !subtitle.isEmpty {
-                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            } else if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
-                                // 显示 lastMessage（当没有 subtitle 时）
+                            // 显示 lastMessage 或 subtitle（优先 lastMessage）
+                            if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
                                 Text(lastMsg.count > 25 ? String(lastMsg.prefix(25)) + "…" : lastMsg)
                                     .font(.system(size: 10))
                                     .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            } else if let subtitle = session.subtitle, !subtitle.isEmpty {
+                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.6))
                                     .lineLimit(1)
                             }
 
@@ -399,16 +399,16 @@ public struct IslandView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
 
-                            if let subtitle = session.subtitle, !subtitle.isEmpty {
-                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            } else if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
-                                // 显示 lastMessage（当没有 subtitle 时）
+                            // 显示 lastMessage 或 subtitle（优先 lastMessage）
+                            if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
                                 Text(lastMsg.count > 25 ? String(lastMsg.prefix(25)) + "…" : lastMsg)
                                     .font(.system(size: 10))
                                     .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            } else if let subtitle = session.subtitle, !subtitle.isEmpty {
+                                Text(subtitle.count > 20 ? String(subtitle.prefix(20)) + "…" : subtitle)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.white.opacity(0.6))
                                     .lineLimit(1)
                             }
 

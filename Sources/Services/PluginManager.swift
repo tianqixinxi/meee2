@@ -58,13 +58,8 @@ public class PluginManager: ObservableObject {
 
     /// 注册内置 plugin
     public func register(_ plugin: SessionPlugin) {
-        do {
-            guard plugin.initialize() else {
-                MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
-                return
-            }
-        } catch {
-            MLog("[PluginManager] Exception initializing plugin \(plugin.pluginId): \(error)")
+        guard plugin.initialize() else {
+            MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
             return
         }
 
@@ -85,13 +80,9 @@ public class PluginManager: ObservableObject {
     /// 启动所有 plugins
     public func startAll() {
         for (pluginId, plugin) in loadedPlugins {
-            do {
-                if plugin.config.enabled {
-                    _ = plugin.start()  // Result intentionally unused
-                    MLog("[PluginManager] Started plugin: \(pluginId)")
-                }
-            } catch {
-                MLog("[PluginManager] Error starting plugin \(pluginId): \(error)")
+            if plugin.config.enabled {
+                _ = plugin.start()  // Result intentionally unused
+                MLog("[PluginManager] Started plugin: \(pluginId)")
             }
         }
     }
@@ -99,11 +90,7 @@ public class PluginManager: ObservableObject {
     /// 停止所有 plugins
     public func stopAll() {
         for plugin in loadedPlugins.values {
-            do {
-                plugin.stop()
-            } catch {
-                MLog("[PluginManager] Error stopping plugin: \(error)")
-            }
+            plugin.stop()
         }
     }
 
@@ -113,11 +100,7 @@ public class PluginManager: ObservableObject {
     public func loadExternalPlugins() {
         var externalPlugins: [SessionPlugin] = []
 
-        do {
-            externalPlugins = dynamicLoader.loadAllPlugins()
-        } catch {
-            MLog("[PluginManager] Error loading external plugins: \(error)")
-        }
+        externalPlugins = dynamicLoader.loadAllPlugins()
 
         // 更新失败插件列表
         DispatchQueue.main.async { [weak self] in
@@ -125,26 +108,22 @@ public class PluginManager: ObservableObject {
         }
 
         for plugin in externalPlugins {
-            do {
-                if plugin.initialize() {
-                    // 设置回调
-                    plugin.onSessionsUpdated = { [weak self] sessions in
-                        guard let self = self else { return }
-                        self.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
-                    }
-
-                    plugin.onUrgentEvent = { [weak self] session, message, action in
-                        guard let self = self else { return }
-                        self.handleUrgentEvent(session: session, message: message, action: action)
-                    }
-
-                    loadedPlugins[plugin.pluginId] = plugin
-                    MLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
-                } else {
-                    MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
+            if plugin.initialize() {
+                // 设置回调
+                plugin.onSessionsUpdated = { [weak self] sessions in
+                    guard let self = self else { return }
+                    self.handleSessionsUpdated(pluginId: plugin.pluginId, sessions: sessions)
                 }
-            } catch {
-                MLog("[PluginManager] Exception loading external plugin \(plugin.pluginId): \(error)")
+
+                plugin.onUrgentEvent = { [weak self] session, message, action in
+                    guard let self = self else { return }
+                    self.handleUrgentEvent(session: session, message: message, action: action)
+                }
+
+                loadedPlugins[plugin.pluginId] = plugin
+                MLog("[PluginManager] Loaded external plugin: \(plugin.pluginId)")
+            } else {
+                MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
             }
         }
     }
@@ -183,20 +162,16 @@ public class PluginManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard self != nil else { return }
 
-            do {
-                NotificationCenter.default.post(
-                    name: .pluginUrgentEvent,
-                    object: nil,
-                    userInfo: [
-                        "session": session,
-                        "message": message,
-                        "action": action as Any
-                    ]
-                )
-                MLog("[PluginManager] Notification posted on main thread")
-            } catch {
-                MLog("[PluginManager] Error posting urgent event: \(error)")
-            }
+            NotificationCenter.default.post(
+                name: .pluginUrgentEvent,
+                object: nil,
+                userInfo: [
+                    "session": session,
+                    "message": message,
+                    "action": action as Any
+                ]
+            )
+            MLog("[PluginManager] Notification posted on main thread")
         }
     }
 
@@ -209,11 +184,7 @@ public class PluginManager: ObservableObject {
             return
         }
 
-        do {
-            plugin.activateTerminal(for: session)
-        } catch {
-            MLog("[PluginManager] Error activating terminal: \(error)")
-        }
+        plugin.activateTerminal(for: session)
     }
 
     /// 清除 session 的 urgentEvent 状态
@@ -223,11 +194,7 @@ public class PluginManager: ObservableObject {
             return
         }
 
-        do {
-            plugin.clearUrgentEvent(sessionId: sessionId)
-        } catch {
-            MLog("[PluginManager] Error clearing urgent event: \(error)")
-        }
+        plugin.clearUrgentEvent(sessionId: sessionId)
     }
 
     // MARK: - Plugin Info

@@ -125,6 +125,30 @@ class ClaudePlugin: SessionPlugin {
                         self?.respondToPermission(sessionId: sessionId, decision: decision)
                     }
                 )
+            } else if let hook = hookEvent, hook.event == .stop || hook.event == .sessionEnd {
+                // Stop/SessionEnd 事件：显示 urgent panel
+                // 如果 hook 有 lastAssistantMessage，使用它；否则从 transcript 获取
+                var message: String
+                if let lastMsg = hook.lastAssistantMessage, !lastMsg.isEmpty {
+                    message = lastMsg
+                } else if let transcriptPath = data.transcriptPath {
+                    // 从 transcript 获取最后 assistant 消息
+                    let msgs = TranscriptParser.loadMessages(transcriptPath: transcriptPath, count: 5)
+                    if let lastAssistant = msgs.last(where: { $0.role == "assistant" }) {
+                        message = lastAssistant.text.replacingOccurrences(of: "\n", with: " ")
+                    } else {
+                        message = "任务完成"
+                    }
+                } else {
+                    message = "任务完成"
+                }
+                session.urgentEvent = UrgentEventInfo(
+                    id: "\(sessionId)-\(hook.event?.rawValue ?? "stop")",
+                    eventType: hook.event?.rawValue ?? "stop",
+                    message: String(message.prefix(200)),
+                    actionLabel: nil,
+                    respond: nil
+                )
             } else if let hook = hookEvent, hook.shouldShowUrgentPanel {
                 session.urgentEvent = UrgentEventInfo(
                     id: "\(sessionId)-\(hook.event?.rawValue ?? "event")",
@@ -151,11 +175,36 @@ class ClaudePlugin: SessionPlugin {
             ? String(session.id.dropFirst("\(pluginId)-".count))
             : session.id
 
-        // 创建临时 AISession 用于跳转
+        // 先尝试从 sessionMonitor 找到完整 session
         if let aiSession = sessionMonitor.sessions.first(where: { $0.id == originalId }) {
             TerminalManager.smartActivateTerminal(forSession: aiSession)
-        } else if let info = session.terminalInfo {
-            // 回退：创建临时 AISession 用于跳转
+            return
+        }
+
+        // 从 SessionStore 获取 PID 和终端信息
+        if let sessionData = sessionStore.get(originalId) {
+            let pid = sessionData.pid ?? 0
+            let info = sessionData.terminalInfo
+
+            let tempSession = AISession(
+                id: originalId,
+                pid: pid,
+                cwd: sessionData.project,
+                startedAt: sessionData.startedAt,
+                status: SessionStatus(rawValue: sessionData.status) ?? .running
+            )
+            var mutableSession = tempSession
+            mutableSession.tty = info?.tty
+            mutableSession.termProgram = info?.termProgram
+            mutableSession.termBundleId = info?.termBundleId
+            mutableSession.cmuxSocketPath = info?.cmuxSocketPath
+            mutableSession.cmuxSurfaceId = info?.cmuxSurfaceId
+            TerminalManager.smartActivateTerminal(forSession: mutableSession)
+            return
+        }
+
+        // 最后回退：使用 PluginSession 中的信息
+        if let info = session.terminalInfo {
             let tempSession = AISession(
                 id: originalId,
                 pid: 0,
@@ -163,7 +212,6 @@ class ClaudePlugin: SessionPlugin {
                 startedAt: session.startedAt,
                 status: session.status
             )
-            // 使用反射或直接设置终端信息
             var mutableSession = tempSession
             mutableSession.tty = info.tty
             mutableSession.termProgram = info.termProgram
@@ -204,6 +252,20 @@ class ClaudePlugin: SessionPlugin {
         hookStatesLock.lock()
         hookStates[sessionId] = event
         hookStatesLock.unlock()
+
+        // 更新 SessionTerminalStore（用于终端跳转）
+        if event.tty != nil || event.termProgram != nil || event.cmuxSocketPath != nil {
+            SessionTerminalStore.shared.update(
+                sessionId: sessionId,
+                tty: event.tty,
+                termProgram: event.termProgram,
+                termBundleId: event.termBundleId,
+                cmuxSocketPath: event.cmuxSocketPath,
+                cmuxSurfaceId: event.cmuxSurfaceId,
+                cwd: event.cwd ?? "",
+                status: event.status ?? "running"
+            )
+        }
 
         // 更新精细状态
         updateDetailedStatus(sessionId: sessionId, event: event)
@@ -341,21 +403,32 @@ class ClaudePlugin: SessionPlugin {
         }
         sessionUsageLock.unlock()
 
-        // 更新工具名称和终端信息
+        // 更新工具名称、终端信息和 lastMessage
         hookStatesLock.lock()
         if let hook = hookStates[sessionId] {
             if let tool = hook.toolName {
                 data.currentTool = tool
             }
-            // 更新终端信息 (从 Hook 事件获取)
-            if let tty = hook.tty, let termProgram = hook.termProgram {
+            // 更新终端信息 (从 Hook 事件获取) - 只要有一个字段存在就更新
+            if hook.tty != nil || hook.termProgram != nil || hook.cmuxSocketPath != nil {
                 data.terminalInfo = PluginTerminalInfo(
-                    tty: tty,
-                    termProgram: termProgram,
+                    tty: hook.tty,
+                    termProgram: hook.termProgram,
                     termBundleId: hook.termBundleId,
                     cmuxSocketPath: hook.cmuxSocketPath,
                     cmuxSurfaceId: hook.cmuxSurfaceId
                 )
+            }
+            // 更新 lastMessage（从 hook 的 lastAssistantMessage 或 transcript）
+            if let lastAssistantMsg = hook.lastAssistantMessage, !lastAssistantMsg.isEmpty {
+                data.lastMessage = String(lastAssistantMsg.prefix(100))
+            } else if let transcriptPath = data.transcriptPath {
+                // 从 transcript 文件获取最后消息
+                let msgs = TranscriptParser.loadMessages(transcriptPath: transcriptPath, count: 1)
+                if let last = msgs.last {
+                    let text = last.text.replacingOccurrences(of: "\n", with: " ")
+                    data.lastMessage = String(text.prefix(100))
+                }
             }
         }
         hookStatesLock.unlock()
@@ -578,29 +651,65 @@ class ClaudePlugin: SessionPlugin {
                 continue
             }
 
-            // 如果 store 中已有同 PID 的 session，更新它而不是创建新记录
-            // 这避免了 hook 创建的 session 和 PID.json 创建的 session 产生重复
-            if let existingPidMatch = sessionStore.sessions.first(where: { $0.pid == aiSession.pid }) {
-                // 更新现有记录
-                sessionStore.update(existingPidMatch.sessionId) { data in
-                    data.project = aiSession.projectName
-                    data.startedAt = aiSession.startedAt
-                    data.lastActivity = aiSession.lastUpdated
-                    data.status = aiSession.status.rawValue
-                    data.detailedStatus = .idle // 会被后续 hook 状态覆盖
+            // 检查 hook 状态中是否有真实的 session ID（可能是 --resume 后的新 session）
+            // hookStates 中的 session ID 是正确的，而 PID.json 中可能是旧的
+            var realSessionId = aiSession.id
+            hookStatesLock.lock()
+            // 遍历 hookStates 找到匹配当前 session 的真实 ID
+            for (hookSessionId, hookEvent) in hookStates {
+                // 如果 hook 的 cwd 和 aiSession 的 cwd 匹配，使用 hook 的 session ID
+                if let hookCwd = hookEvent.cwd, hookCwd == aiSession.cwd {
+                    realSessionId = hookSessionId
+                    NSLog("[ClaudePlugin] Found real session ID from hook: \(hookSessionId) (PID.json had \(aiSession.id))")
+                    break
                 }
-                continue
             }
-            // 获取 hook 状态
+            hookStatesLock.unlock()
+
+            // 如果 store 中已有同 PID 的 session，检查 session ID 是否正确
+            if let existingPidMatch = sessionStore.sessions.first(where: { $0.pid == aiSession.pid }) {
+                // 如果 session ID 不匹配，说明 PID.json 是旧的 --resume session
+                // 需要删除旧记录，用真实的 session ID 创建新记录
+                if existingPidMatch.sessionId != realSessionId {
+                    NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Deleting old and creating new.")
+                    sessionStore.delete(existingPidMatch.sessionId)
+                    // 继续创建新记录（不 continue）
+                } else {
+                    // session ID 匹配，正常更新
+                    let transcriptPath = getTranscriptPath(for: realSessionId)
+
+                    var lastMessage: String? = nil
+                    if let path = transcriptPath {
+                        let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
+                        if let last = msgs.last {
+                            let text = last.text.replacingOccurrences(of: "\n", with: " ")
+                            lastMessage = String(text.prefix(100))
+                        }
+                    }
+
+                    sessionStore.update(existingPidMatch.sessionId) { data in
+                        data.project = aiSession.projectName
+                        data.startedAt = aiSession.startedAt
+                        data.lastActivity = aiSession.lastUpdated
+                        data.status = aiSession.status.rawValue
+                        data.detailedStatus = .idle
+                        data.transcriptPath = transcriptPath
+                        data.lastMessage = lastMessage
+                    }
+                    continue
+                }
+            }
+
+            // 获取 hook 状态（使用真实的 session ID）
             var hookEvent: HookEvent?
             hookStatesLock.lock()
-            hookEvent = hookStates[aiSession.id]
+            hookEvent = hookStates[realSessionId]
             hookStatesLock.unlock()
 
             // 获取精细状态
             var detailedStatus: DetailedStatus = .idle
             detailedStatusesLock.lock()
-            if let ds = detailedStatuses[aiSession.id] {
+            if let ds = detailedStatuses[realSessionId] {
                 detailedStatus = ds
             }
             detailedStatusesLock.unlock()
@@ -608,13 +717,13 @@ class ClaudePlugin: SessionPlugin {
             // 获取任务
             var tasks: [SessionTask]? = nil
             sessionTasksLock.lock()
-            tasks = sessionTasks[aiSession.id]
+            tasks = sessionTasks[realSessionId]
             sessionTasksLock.unlock()
 
             // 获取使用统计
             var usageStats: UsageStats? = nil
             sessionUsageLock.lock()
-            usageStats = sessionUsage[aiSession.id]
+            usageStats = sessionUsage[realSessionId]
             sessionUsageLock.unlock()
 
             // 优先使用 Hook 事件中的终端信息 (更准确)
@@ -625,29 +734,22 @@ class ClaudePlugin: SessionPlugin {
             let cmuxSocketPath = hookEvent?.cmuxSocketPath ?? aiSession.cmuxSocketPath
             let cmuxSurfaceId = hookEvent?.cmuxSurfaceId ?? aiSession.cmuxSurfaceId
 
-            // 构建 SessionData
-            let transcriptPath = getTranscriptPath(for: aiSession.id)
+            // 构建 SessionData（使用真实的 session ID）
+            let transcriptPath = getTranscriptPath(for: realSessionId)
 
             // 加载最后消息
             var lastMessage: String? = nil
             if let path = transcriptPath {
                 let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
                 if let last = msgs.last {
-                    let prefix: String
-                    switch last.role {
-                    case "user": prefix = ">"
-                    case "assistant": prefix = "◀"
-                    case "tool": prefix = "⚡"
-                    default: prefix = "·"
-                    }
                     // 截断到 100 字符
                     let text = last.text.replacingOccurrences(of: "\n", with: " ")
-                    lastMessage = "\(prefix) \(String(text.prefix(100)))"
+                    lastMessage = String(text.prefix(100))
                 }
             }
 
             let data = SessionData(
-                sessionId: aiSession.id,
+                sessionId: realSessionId,
                 project: aiSession.projectName,
                 pid: aiSession.pid,
                 ghosttyTerminalId: nil,
