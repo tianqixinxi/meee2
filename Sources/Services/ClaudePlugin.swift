@@ -145,7 +145,7 @@ class ClaudePlugin: SessionPlugin {
                 session.urgentEvent = UrgentEventInfo(
                     id: "\(sessionId)-\(hook.event?.rawValue ?? "stop")",
                     eventType: hook.event?.rawValue ?? "stop",
-                    message: String(message.prefix(200)),
+                    message: String(message.prefix(2000)),  // 扩大截断限制以容纳表格
                     actionLabel: nil,
                     respond: nil
                 )

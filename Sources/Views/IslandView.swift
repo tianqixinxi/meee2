@@ -188,8 +188,8 @@ public struct IslandView: View {
     }
 
     /// Urgent panel 固定布局高度
-    /// header(44) + message(104) + buttons(36) + spacing(12*2) + padding(14*2) = 236
-    private let urgentPanelFixedHeight: CGFloat = 188
+    /// header(44) + message(150) + padding(10*2) = 214
+    private let urgentPanelFixedHeight: CGFloat = 214
 
     /// 估算 message 高度（已弃用，使用固定布局）
     private func estimateMessageHeight(for message: String?) -> CGFloat {
@@ -594,9 +594,9 @@ public struct IslandView: View {
                 urgentPanelHeaderWithButtons(session: session, event: event)
                     .frame(height: 44)
 
-                // Message Box: 固定高度 120
+                // Message Box: 固定高度 150（给表格更多空间）
                 urgentPanelMessageFixed(message: event.message)
-                    .frame(height: 120)
+                    .frame(height: 150)
             }
             .padding(10)
             .background(urgentPanelBackground)
@@ -782,7 +782,7 @@ public struct IslandView: View {
                     .padding(10)
             }
         }
-        .frame(height: 120)  // 固定高度
+        .frame(height: 150)  // 固定高度
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.white.opacity(0.08))
@@ -793,9 +793,12 @@ public struct IslandView: View {
     @ViewBuilder
     private func markdownTableOrText(_ message: String) -> some View {
         let lines = message.split(separator: "\n", omittingEmptySubsequences: false)
+        let _ = NSLog("[IslandView] Message lines count: \(lines.count), first 3 lines: \(lines.prefix(3))")
         let tableData = parseMarkdownTable(lines: lines)
 
         if let table = tableData {
+            // 调试日志 - 在渲染前输出
+            let _ = NSLog("[IslandView] Table parsed: headers=\(table.headers.count), rows=\(table.rows.count)")
             // 渲染表格
             markdownTableView(table)
         } else {
@@ -810,12 +813,20 @@ public struct IslandView: View {
 
     /// 解析 Markdown 表格
     private func parseMarkdownTable(lines: [String.SubSequence]) -> MarkdownTable? {
-        // 找表格开始（包含 | 的行）
+        // Unicode 表格分隔符字符（用于跳过非数据行）
+        let separatorChars: Set<Character> = ["┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "┼", "─"]
+
+        // 找表格开始（包含 | 的行，且不是分隔行）
         var tableStartIndex = -1
         for (index, line) in lines.enumerated() {
-            if line.contains("|") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                tableStartIndex = index
-                break
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains("|") && !trimmed.isEmpty {
+                // 检查是否是分隔行（包含大量分隔符字符）
+                let separatorCount = trimmed.filter { separatorChars.contains($0) }.count
+                if separatorCount < 3 {  // 不是分隔行
+                    tableStartIndex = index
+                    break
+                }
             }
         }
 
@@ -827,23 +838,68 @@ public struct IslandView: View {
 
         if headers.isEmpty { return nil }
 
-        // 分隔行（跳过）
+        // 分隔行（跳过所有类型的分隔行）
         var rowIndex = tableStartIndex + 1
-        if rowIndex < lines.count && lines[rowIndex].contains("-") && lines[rowIndex].contains("|") {
-            rowIndex += 1  // 跳过分隔行
+        while rowIndex < lines.count {
+            let line = lines[rowIndex].trimmingCharacters(in: .whitespaces)
+            // Unicode 分隔行: ├─┼─┤ 等
+            let separatorCount = line.filter { separatorChars.contains($0) }.count
+            if separatorCount >= 3 {
+                rowIndex += 1
+                continue
+            }
+            // Markdown 分隔行：整行只有 | 和 - (以及空格)，没有其他字符
+            let nonSeparatorChars = line.filter { c in
+                !separatorChars.contains(c) && c != "|" && c != "-" && c != " "
+            }
+            if nonSeparatorChars.isEmpty && line.contains("-") && line.contains("|") {
+                rowIndex += 1
+                continue
+            }
+            break
         }
 
         // 数据行
         var rows: [[String]] = []
         while rowIndex < lines.count {
             let line = lines[rowIndex].trimmingCharacters(in: .whitespaces)
-            if line.contains("|") && !line.isEmpty {
+            NSLog("[IslandView] Parsing row \(rowIndex): '\(line.prefix(50))...'")
+
+            if line.isEmpty {
+                NSLog("[IslandView]   -> Empty line, skipping")
+                rowIndex += 1
+                continue
+            }
+
+            // 检查是否是分隔行（数据行之间的分隔）
+            let separatorCount = line.filter { separatorChars.contains($0) }.count
+            if separatorCount >= 3 {
+                NSLog("[IslandView]   -> Unicode separator (\(separatorCount) chars), skipping")
+                rowIndex += 1
+                continue
+            }
+
+            // Markdown 分隔行判断：整行只有 | 和 - (以及空格)，没有其他字符
+            // 例如 "|------|------|" 是分隔行，但 "| deer-flow | Claw3D |" 不是
+            let nonSeparatorChars = line.filter { c in
+                !separatorChars.contains(c) && c != "|" && c != "-" && c != " "
+            }
+            NSLog("[IslandView]   -> nonSeparatorChars: '\(nonSeparatorChars)' (count: \(nonSeparatorChars.count))")
+            if nonSeparatorChars.isEmpty && line.contains("-") && line.contains("|") {
+                NSLog("[IslandView]   -> Markdown separator, skipping")
+                rowIndex += 1
+                continue
+            }
+
+            if line.contains("|") || line.contains("│") {
                 let row = parseTableRow(line)
+                NSLog("[IslandView]   -> Table row parsed: \(row)")
                 if !row.isEmpty {
                     rows.append(row)
                 }
-            } else if !line.isEmpty {
+            } else {
                 // 非表格行，停止解析
+                NSLog("[IslandView]   -> Non-table line, STOP parsing")
                 break
             }
             rowIndex += 1
@@ -856,51 +912,54 @@ public struct IslandView: View {
 
     /// 解析单行表格数据
     private func parseTableRow(_ line: String) -> [String] {
-        // 去掉首尾的 |
+        // 去掉首尾的 | 或 │（Unicode 边框字符）
         var trimmed = line
-        if trimmed.hasPrefix("|") { trimmed = String(trimmed.dropFirst()) }
-        if trimmed.hasSuffix("|") { trimmed = String(trimmed.dropLast()) }
+        if trimmed.hasPrefix("|") || trimmed.hasPrefix("│") { trimmed = String(trimmed.dropFirst()) }
+        if trimmed.hasSuffix("|") || trimmed.hasSuffix("│") { trimmed = String(trimmed.dropLast()) }
 
-        // 按 | 分割
+        // 按 | 或 │ 分割
         return trimmed.split(separator: "|", omittingEmptySubsequences: false)
+            .flatMap { $0.split(separator: "│", omittingEmptySubsequences: false) }
             .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     /// 渲染 Markdown 表格
     @ViewBuilder
     private func markdownTableView(_ table: MarkdownTable) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let rowHeight: CGFloat = 22  // 每行固定高度
+
+        VStack(alignment: .leading, spacing: 2) {
             // 表头
             HStack(spacing: 8) {
                 ForEach(table.headers.indices, id: \.self) { index in
                     Text(table.headers[index])
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundColor(.white.opacity(0.9))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color.white.opacity(0.1))
+            .frame(height: rowHeight)
+            .padding(.horizontal, 8)
+            .background(Color.white.opacity(0.12))
 
-            // 数据行
-            ForEach(table.rows.indices, id: \.self) { rowIndex in
+            // 数据行 - 给每行固定高度确保正确渲染
+            ForEach(Array(table.rows.indices), id: \.self) { rowIndex in
                 HStack(spacing: 8) {
-                    ForEach(table.rows[rowIndex].indices, id: \.self) { colIndex in
-                        let cell = table.rows[rowIndex][colIndex]
+                    ForEach(table.headers.indices, id: \.self) { colIndex in
+                        let cell = colIndex < table.rows[rowIndex].count ? table.rows[rowIndex][colIndex] : ""
                         Text(attributedStringFromMarkdown(cell))
-                            .font(.system(size: 11))
+                            .font(.system(size: 10))
                             .foregroundColor(.white.opacity(0.75))
+                            .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(rowIndex % 2 == 0 ? Color.clear : Color.white.opacity(0.05))
+                .frame(height: rowHeight)
+                .padding(.horizontal, 8)
+                .background(rowIndex % 2 == 0 ? Color.clear : Color.white.opacity(0.04))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 6)
     }
 
     /// Markdown 表格数据结构
@@ -1040,7 +1099,7 @@ public struct IslandView: View {
             }
             .frame(height: 44)
 
-            // Message: 固定高度 120，可滚动
+            // Message: 固定高度 150，可滚动
             ScrollView {
                 if let message = message, !message.isEmpty {
                     Text(attributedStringFromMarkdown(message))
@@ -1056,7 +1115,7 @@ public struct IslandView: View {
                         .padding(8)
                 }
             }
-            .frame(height: 120)
+            .frame(height: 150)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.white.opacity(0.08))
