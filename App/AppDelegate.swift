@@ -240,6 +240,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - TUI Launch
+
+    /// 解析 meee2 二进制文件路径（开发时用 .build/debug/，打包后用 app bundle）
+    private var meee2BinaryPath: String {
+        // 1. 优先使用 bundle 内的可执行文件（生产环境）
+        if let bundlePath = Bundle.main.executablePath,
+           FileManager.default.fileExists(atPath: bundlePath) {
+            return bundlePath
+        }
+        // 2. 开发环境：.build/debug/meee2
+        let debugPath = "/Users/bytedance/peer_island_workspace/meee2/.build/debug/meee2"
+        if FileManager.default.fileExists(atPath: debugPath) {
+            return debugPath
+        }
+        // 3. 最后尝试 PATH 中的 meee2
+        return "meee2"
+    }
+
     private func launchTUIInGhostty() {
         // Ghostty 使用 ghostty 命令打开新窗口
         // 检查 Ghostty 是否安装
@@ -250,11 +268,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        let binaryPath = meee2BinaryPath
         let script = """
         tell application "Ghostty"
             activate
         end tell
-        do shell script "\(ghosttyPath) -e meee2 tui &"
+        do shell script "\(ghosttyPath) -e \(binaryPath) tui &"
         """
 
         if let appleScript = NSAppleScript(source: script) {
@@ -281,13 +300,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        let binaryPath = meee2BinaryPath
         let script = """
         tell application "iTerm2"
             activate
             tell current window
                 create tab with default profile
                 tell current session
-                    write text "meee2 tui"
+                    write text "\(binaryPath) tui"
                 end tell
             end tell
         end tell
@@ -309,10 +329,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func launchTUIInTerminal() {
+        let binaryPath = meee2BinaryPath
         let script = """
         tell application "Terminal"
             activate
-            do script "meee2 tui"
+            do script "\(binaryPath) tui"
         end tell
         """
 

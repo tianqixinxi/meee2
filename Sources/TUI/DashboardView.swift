@@ -370,7 +370,7 @@ public struct DashboardView {
         // 暂时退出 alternate screen (恢复原终端)
         endwin()
 
-        // Create AISession with terminal info
+        // Create AISession with full terminal info (same as GUI)
         var aiSession = AISession(
             id: session.sessionId,
             pid: session.pid ?? 0,
@@ -379,7 +379,7 @@ public struct DashboardView {
             status: SessionStatus(rawValue: session.status) ?? .running
         )
 
-        // Add terminal info
+        // Copy all terminal info from SessionData (same as GUI path)
         if let info = session.terminalInfo {
             aiSession.tty = info.tty
             aiSession.termProgram = info.termProgram
@@ -388,21 +388,26 @@ public struct DashboardView {
             aiSession.cmuxSurfaceId = info.cmuxSurfaceId
         }
 
-        // Activate using TerminalManager
+        // Activate using TerminalManager (same as GUI)
         TerminalManager.smartActivateTerminal(forSession: aiSession)
 
-        // 等待用户回到 TUI 窗口
-        // 提示用户按任意键返回
-        print("\n\u{1b}[1;36m→ 已跳转到 session 终端\u{1b}[0m")
-        print("\u{1b}[2m按 Enter 返回 TUI...\u{1b}[0m")
+        // 等待 cmux 完成窗口切换
+        usleep(300_000) // 300ms
 
-        // 等待用户按键
-        _ = read(STDIN_FILENO, UnsafeMutablePointer<UInt8>.allocate(capacity: 1), 1)
+        // 显示返回提示（已在正常终端，endwin 恢复了原始终端）
+        print("")
+        print("\u{1b}[1;36m→ 已跳转到 session 终端\u{1b}[0m")
+        print("\u{1b}[2m按 Enter 返回 TUI (或 Ctrl+C 退出)\u{1b}[0m")
+        print("")
+
+        // 等待用户按键返回
+        // 在正常终端模式下，read 会阻塞直到有输入
+        var buf: UInt8 = 0
+        _ = read(STDIN_FILENO, &buf, 1)
 
         // 重新进入 TUI
-        let term = initscr()
+        _ = initscr()
         curs_set(0)
-        // term 已在 run() 的 defer 中管理，这里不需要再次 defer
     }
 }
 
