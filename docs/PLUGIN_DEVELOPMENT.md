@@ -1,10 +1,16 @@
 # Plugin Development Guide
 
-This guide explains how to create plugins for meee2.
+This guide explains how to create plugins for meee2. Optimized for AI agent comprehension.
 
-## Overview
+## Quick Reference
 
-meee2 supports dynamic plugins that can be loaded from `~/.meee2/plugins/`. Each plugin is a Swift dynamic library (`.dylib`) that conforms to the `SessionPlugin` protocol defined in `Meee2PluginKit`.
+| What | Where | Key Points |
+|------|-------|------------|
+| Plugin base class | `SessionPlugin.swift` | Inherit from `SessionPlugin`, override required properties |
+| Export function | `@_cdecl("createPlugin")` | Required C-exported factory function |
+| Install location | `~/.meee2/plugins/{name}/` | Directory must contain `.dylib` and `plugin.json` |
+| Sessions callback | `onSessionsUpdated?(sessions)` | Call when sessions change |
+| Urgent callback | `onUrgentEvent?(session, message, action)` | Call for permission requests, notifications |
 
 ## Plugin Structure
 

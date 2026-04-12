@@ -1,5 +1,18 @@
 // meee2 Landing Page - JavaScript
 
+// Supabase configuration
+const SUPABASE_URL = 'https://mpypmxskhowzumxgaxnr.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1weXBteHNraG93enVteGdheG5yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4Mjg5MDcsImV4cCI6MjA5MTQwNDkwN30.OYvnj4eSDkDXrSxo7IN3H78JXG3oyOhy3jhdvTw4FSg';
+
+// Initialize Supabase client
+let supabaseClient;
+try {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log('Supabase client initialized');
+} catch (e) {
+    console.error('Failed to init Supabase:', e);
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize scroll animations
     initScrollAnimations();
@@ -9,6 +22,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize navigation highlight
     initNavHighlight();
+
+    // Fetch user count from Supabase
+    fetchUserCount();
 });
 
 // Scroll animations using Intersection Observer
@@ -122,6 +138,74 @@ function copyConfig() {
         }, 2000);
     }).catch(err => {
         console.error('Failed to copy: ', err);
+    });
+}
+
+// Fetch user count from Supabase RPC function
+async function fetchUserCount() {
+    const userCountEl = document.getElementById('user-count');
+
+    if (!supabaseClient) {
+        console.warn('Supabase client not initialized');
+        userCountEl.textContent = '100+';
+        return;
+    }
+
+    try {
+        console.log('Calling get_user_count RPC...');
+        const { data, error } = await supabaseClient.rpc('get_user_count');
+
+        if (error) {
+            console.error('Supabase RPC error:', error);
+            userCountEl.textContent = '100+';
+            return;
+        }
+
+        console.log('User count:', data);
+        const count = data || 0;
+        userCountEl.textContent = formatNumber(count);
+    } catch (err) {
+        console.error('Failed to fetch user count:', err);
+        userCountEl.textContent = '100+';
+    }
+}
+
+// Format number with base count for launch display
+function formatNumber(num) {
+    return (num + 1000).toString();
+}
+
+// Copy plugin creation prompt
+function copyPluginPrompt() {
+    const prompt = `Create a meee2 plugin for [YOUR_TOOL_NAME]:
+
+Requirements:
+- Plugin ID: com.meee2.plugin.[name]
+- Display name: [Your Tool Name]
+- Icon: [SF Symbol name]
+- Theme color: [SwiftUI Color]
+
+The plugin should:
+1. Monitor [describe your tool's session/activity]
+2. Return PluginSession list via getSessions()
+3. Implement terminal jump via activateTerminal()
+
+Reference:
+- Template: https://github.com/tianqixinxi/meee2/tree/main/plugin-template
+- Docs: https://github.com/tianqixinxi/meee2/blob/main/docs/PLUGIN_DEVELOPMENT.md`;
+
+    navigator.clipboard.writeText(prompt).then(() => {
+        const btn = document.querySelector('.plugin-code-preview .copy-btn');
+        const originalText = btn.textContent;
+        btn.textContent = 'Copied!';
+        btn.style.color = '#22c55e';
+
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.color = '';
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
     });
 }
 

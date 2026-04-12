@@ -159,8 +159,16 @@ public class PluginManager: ObservableObject {
 
             // 移除该 plugin 的旧 sessions
             self.sessions.removeAll { $0.pluginId == pluginId }
-            // 添加新 sessions
-            self.sessions.append(contentsOf: sessions)
+            // 添加新 sessions（去重）
+            var uniqueSessions: [PluginSession] = []
+            var seenIds = Set<String>()
+            for session in sessions {
+                if !seenIds.contains(session.id) {
+                    seenIds.insert(session.id)
+                    uniqueSessions.append(session)
+                }
+            }
+            self.sessions.append(contentsOf: uniqueSessions)
             // 统一按 startedAt 排序（最近的在前）
             self.sessions.sort { $0.startedAt > $1.startedAt }
             // 标记加载完成

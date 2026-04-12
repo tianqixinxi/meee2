@@ -228,8 +228,32 @@ code {
 
 .hero-subtitle {
     font-size: 1.25rem;
-    margin-bottom: 40px;
+    margin-bottom: 24px;
     line-height: 1.7;
+}
+
+.hero-stats {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 40px;
+    font-size: 1rem;
+    color: var(--color-text-secondary);
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.stat-item strong {
+    color: var(--color-text);
+    font-weight: 600;
+}
+
+.stat-divider {
+    color: var(--color-text-muted);
 }
 
 .hero-actions {
@@ -350,6 +374,36 @@ code {
     color: var(--color-cursor);
 }
 
+.session-icon.trae {
+    background: rgba(168, 85, 247, 0.2);
+    color: #a855f7;
+}
+
+.session-icon.aime {
+    background: rgba(34, 197, 94, 0.2);
+    color: #22c55e;
+}
+
+.island-tabs {
+    display: flex;
+    gap: 4px;
+    padding-top: 12px;
+    margin-top: 12px;
+    border-top: 1px solid var(--color-border);
+}
+
+.island-tabs .tab {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    color: var(--color-text-muted);
+}
+
+.island-tabs .tab.active {
+    background: rgba(255, 107, 53, 0.2);
+    color: var(--color-accent);
+}
+
 .session-info {
     display: flex;
     flex-direction: column;
@@ -385,7 +439,7 @@ code {
 
 .features-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 24px;
 }
 
@@ -436,6 +490,47 @@ code {
     margin: 0 auto;
 }
 
+.integrations-grid.four-cols {
+    grid-template-columns: repeat(4, 1fr);
+    max-width: 1000px;
+    gap: 24px;
+}
+
+.integrations-grid.four-cols .integration-card {
+    padding: 24px;
+}
+
+.integrations-grid.four-cols .integration-icon {
+    width: 40px;
+    height: 40px;
+    margin-bottom: 12px;
+}
+
+.integrations-grid.four-cols h3 {
+    font-size: 1rem;
+}
+
+.integrations-grid.four-cols .integration-status {
+    font-size: 0.75rem;
+}
+
+.integrations-grid.four-cols .integration-desc {
+    font-size: 0.8rem;
+}
+
+.plugin-info {
+    text-align: center;
+    margin-top: 40px;
+    padding: 20px;
+    background: var(--color-bg-card);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--color-border);
+}
+
+.plugin-info a {
+    color: var(--color-accent);
+}
+
 .integration-card {
     background: var(--color-bg-card);
     padding: 40px;
@@ -463,6 +558,30 @@ code {
 
 .integration-card.cursor:hover {
     border-color: var(--color-cursor);
+}
+
+.integration-card.trae {
+    border-color: rgba(168, 85, 247, 0.3);
+}
+
+.integration-card.trae:hover {
+    border-color: #a855f7;
+}
+
+.integration-card.trae .integration-icon {
+    background: rgba(168, 85, 247, 0.1);
+}
+
+.integration-card.aime {
+    border-color: rgba(34, 197, 94, 0.3);
+}
+
+.integration-card.aime:hover {
+    border-color: #22c55e;
+}
+
+.integration-card.aime .integration-icon {
+    background: rgba(34, 197, 94, 0.1);
 }
 
 .integration-icon {
@@ -563,6 +682,15 @@ code {
     color: var(--color-text-secondary);
 }
 
+.arch-service.highlight {
+    background: rgba(255, 107, 53, 0.05);
+}
+
+.arch-service.highlight span {
+    color: var(--color-accent);
+    font-weight: 500;
+}
+
 .arch-layer.integrations-bottom {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -586,6 +714,58 @@ code {
 .arch-integration.cursor-int {
     background: rgba(59, 130, 246, 0.1);
     color: var(--color-cursor);
+}
+
+.arch-layer.plugins {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+}
+
+.arch-plugins-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.arch-plugin {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.arch-plugin.claude-plugin {
+    background: rgba(217, 119, 6, 0.1);
+    color: var(--color-claude);
+}
+
+.arch-plugin.trae-plugin {
+    background: rgba(168, 85, 247, 0.1);
+    color: #a855f7;
+}
+
+.arch-plugin.cursor-plugin {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--color-cursor);
+}
+
+.arch-plugin.aime-plugin {
+    background: rgba(34, 197, 94, 0.1);
+    color: #22c55e;
+}
+
+.arch-plugin.custom-plugin {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--color-text-muted);
+}
+
+.plugins-note {
+    margin-top: 12px;
+    font-size: 0.8rem;
+    color: var(--color-text-muted);
 }
 
 .arch-icon {
@@ -623,6 +803,147 @@ code {
 /* Installation Section */
 .install {
     padding: 120px 0;
+}
+
+.install-simple {
+    display: flex;
+    gap: 40px;
+    justify-content: center;
+    margin-bottom: 40px;
+}
+
+.install-simple-step {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    max-width: 400px;
+}
+
+.step-icon {
+    width: 56px;
+    height: 56px;
+    background: linear-gradient(135deg, var(--color-gradient-start), var(--color-gradient-end));
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    flex-shrink: 0;
+}
+
+.step-content h3 {
+    margin-bottom: 8px;
+}
+
+.step-content p {
+    margin-bottom: 16px;
+    line-height: 1.7;
+}
+
+.install-note {
+    text-align: center;
+    padding: 20px;
+    background: var(--color-bg-card);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--color-border);
+}
+
+.install-note a {
+    color: var(--color-accent);
+}
+
+/* Plugins Development Section */
+.plugins {
+    padding: 120px 0;
+    background: var(--color-bg-elevated);
+}
+
+.plugin-dev-content {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    max-width: 900px;
+    margin: 0 auto;
+}
+
+.plugin-code-preview {
+    background: #1a1a1a;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--color-border);
+}
+
+.code-header {
+    padding: 12px 16px;
+    background: var(--color-bg-card);
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.9rem;
+    color: var(--color-text-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.plugin-code-preview .copy-btn {
+    padding: 6px 12px;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.plugin-code-preview .copy-btn:hover {
+    background: var(--color-bg-card);
+    color: var(--color-text);
+}
+
+.plugin-code-preview pre {
+    padding: 20px;
+    margin: 0;
+    font-size: 0.85rem;
+    line-height: 1.6;
+}
+
+.plugin-code-preview code {
+    background: transparent;
+    color: #e0e0e0;
+}
+
+.plugin-features {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.plugin-feature {
+    padding: 20px;
+    background: var(--color-bg-card);
+    border-radius: var(--border-radius);
+    border: 1px solid var(--color-border);
+}
+
+.plugin-feature h4 {
+    margin-bottom: 8px;
+    font-size: 1.1rem;
+}
+
+.plugin-feature p {
+    font-size: 0.95rem;
+    line-height: 1.6;
+}
+
+.plugin-feature a {
+    color: var(--color-accent);
+}
+
+.plugin-feature.highlight {
+    background: linear-gradient(135deg, rgba(255, 107, 53, 0.1), rgba(245, 158, 11, 0.1));
+    border-color: rgba(255, 107, 53, 0.3);
+}
+
+.plugin-feature.highlight h4 {
+    color: var(--color-accent);
 }
 
 .install-steps {
@@ -782,6 +1103,10 @@ code {
         grid-template-columns: repeat(2, 1fr);
     }
 
+    .integrations-grid.four-cols {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
     .install-steps {
         grid-template-columns: repeat(2, 1fr);
         max-width: 700px;
@@ -800,6 +1125,10 @@ code {
 
     .integrations-grid {
         grid-template-columns: 1fr;
+    }
+
+    .integrations-grid.four-cols {
+        grid-template-columns: repeat(2, 1fr);
     }
 
     .install-steps {
@@ -821,6 +1150,19 @@ code {
 
     .arch-layer.integrations-bottom {
         grid-template-columns: repeat(2, 1fr);
+    }
+
+    .arch-plugins-row {
+        flex-wrap: wrap;
+    }
+
+    .install-simple {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .plugin-dev-content {
+        grid-template-columns: 1fr;
     }
 
     .arch-integration.claude-int {

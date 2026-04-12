@@ -424,19 +424,10 @@ public struct IslandView: View {
 
                             Spacer()
 
-                            // 显示状态 + 使用统计（而不是时间）
-                            VStack(alignment: .trailing, spacing: 1) {
-                                Text(ds.displayName)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(ds.color.opacity(0.8))
-
-                                // 使用统计（如果有）
-                                if let stats = session.usageStats, stats.turns > 0 {
-                                    Text(stats.formattedCost)
-                                        .font(.system(size: 8, weight: .medium))
-                                        .foregroundColor(.green.opacity(0.7))
-                                }
-                            }
+                            // 显示状态（而不是时间或 cost）
+                            Text(ds.displayName)
+                                .font(.system(size: 10))
+                                .foregroundColor(ds.color.opacity(0.8))
                         } else {
                             Text("No active sessions")
                                 .font(.system(size: 11))

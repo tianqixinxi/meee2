@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Supabase JS SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -21,7 +23,7 @@
             <div class="nav-links">
                 <a href="#features">Features</a>
                 <a href="#integrations">Integrations</a>
-                <a href="#architecture">Architecture</a>
+                <a href="#plugins">Plugins</a>
                 <a href="#install">Install</a>
             </div>
             <a href="https://github.com/tianqixinxi/meee2" target="_blank" class="nav-cta">GitHub</a>
@@ -39,6 +41,19 @@
                 <p class="hero-subtitle">
                     meee2 is a macOS native app that displays AI coding assistant status in a Dynamic Island-style UI. Monitor sessions, approve permissions, and jump to terminals — all without switching windows.
                 </p>
+                <div class="hero-stats">
+                    <span class="stat-item">
+                        <strong id="user-count">--</strong> users
+                    </span>
+                    <span class="stat-divider">•</span>
+                    <span class="stat-item">
+                        <strong>100%</strong> free
+                    </span>
+                    <span class="stat-divider">•</span>
+                    <span class="stat-item">
+                        <strong>macOS</strong> native
+                    </span>
+                </div>
                 <div class="hero-actions">
                     <a href="https://github.com/tianqixinxi/meee2/releases" target="_blank" class="btn btn-primary">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -66,7 +81,7 @@
                     <div class="island expanded">
                         <div class="island-header">
                             <span>Sessions</span>
-                            <span class="session-count">2</span>
+                            <span class="session-count">3</span>
                         </div>
                         <div class="island-body">
                             <div class="session-item">
@@ -77,12 +92,25 @@
                                 </div>
                             </div>
                             <div class="session-item">
-                                <div class="session-icon cursor"></div>
+                                <div class="session-icon trae"></div>
                                 <div class="session-info">
                                     <span class="session-name">workspace</span>
+                                    <span class="session-status">Thinking</span>
+                                </div>
+                            </div>
+                            <div class="session-item">
+                                <div class="session-icon cursor"></div>
+                                <div class="session-info">
+                                    <span class="session-name">codebase</span>
                                     <span class="session-status">Idle</span>
                                 </div>
                             </div>
+                        </div>
+                        <div class="island-tabs">
+                            <span class="tab active">All</span>
+                            <span class="tab">Claude</span>
+                            <span class="tab">Trae</span>
+                            <span class="tab">Cursor</span>
                         </div>
                     </div>
                 </div>
@@ -150,8 +178,21 @@
                             <line x1="9" y1="21" x2="9" y2="9"/>
                         </svg>
                     </div>
-                    <h3>Multi-session Management</h3>
-                    <p>Monitor multiple AI sessions simultaneously. Sessions are sorted by activity level, so you always see what's most important.</p>
+                    <h3>Plugin Tab Filter</h3>
+                    <p>Filter sessions by plugin source with bottom tabs. Quick switch between All, Claude, Cursor, Trae, and Aime views.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8"/>
+                            <line x1="16" y1="13" x2="8" y2="13"/>
+                            <line x1="16" y1="17" x2="8" y2="17"/>
+                        </svg>
+                    </div>
+                    <h3>Rich Message Display</h3>
+                    <p>Permission requests show full toolInput details. Markdown formatting for structured information like tables and code blocks.</p>
                 </div>
 
                 <div class="feature-card">
@@ -172,9 +213,9 @@
     <section id="integrations" class="integrations">
         <div class="container">
             <h2 class="section-title">Supported AI Assistants</h2>
-            <p class="section-subtitle">Built-in support for popular AI coding tools</p>
+            <p class="section-subtitle">Plugin-based architecture for extensibility</p>
 
-            <div class="integrations-grid">
+            <div class="integrations-grid four-cols">
                 <div class="integration-card claude">
                     <div class="integration-icon">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
@@ -183,7 +224,18 @@
                     </div>
                     <h3>Claude CLI</h3>
                     <p class="integration-status">Full Support</p>
-                    <p class="integration-desc">Complete integration with session monitoring, permission approval, and real-time status updates.</p>
+                    <p class="integration-desc">Session monitoring, permission approval with toolInput details, real-time status updates.</p>
+                </div>
+
+                <div class="integration-card trae">
+                    <div class="integration-icon" style="color: #a855f7;">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/>
+                        </svg>
+                    </div>
+                    <h3>Trae CLI</h3>
+                    <p class="integration-status">Plugin</p>
+                    <p class="integration-desc">Monitor Trae CLI agent sessions with terminal jump support.</p>
                 </div>
 
                 <div class="integration-card cursor">
@@ -193,8 +245,75 @@
                         </svg>
                     </div>
                     <h3>Cursor</h3>
-                    <p class="integration-status">Built-in Plugin (v0.1.0)</p>
-                    <p class="integration-desc">Monitor Cursor agent sessions and quickly jump to the right project workspace.</p>
+                    <p class="integration-status">Built-in Plugin</p>
+                    <p class="integration-desc">Monitor Cursor agent sessions and jump to project workspace.</p>
+                </div>
+
+                <div class="integration-card aime">
+                    <div class="integration-icon" style="color: #22c55e;">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                        </svg>
+                    </div>
+                    <h3>Aime</h3>
+                    <p class="integration-status">Plugin</p>
+                    <p class="integration-desc">Track Aime sessions with real-time progress updates.</p>
+                </div>
+            </div>
+
+            <div class="plugin-info">
+                <p>🔌 <strong>Plugin System</strong>: Create custom plugins with Meee2PluginKit. See <a href="https://github.com/tianqixinxi/meee2/tree/main/plugin-template" target="_blank">plugin-template</a> for details.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Plugin Development Section -->
+    <section id="plugins" class="plugins">
+        <div class="container">
+            <h2 class="section-title">Create Your Own Plugin</h2>
+            <p class="section-subtitle">Just copy this prompt to any AI agent — they'll build it for you</p>
+
+            <div class="plugin-dev-content">
+                <div class="plugin-code-preview">
+                    <div class="code-header">
+                        <span>Prompt for AI Agent</span>
+                        <button onclick="copyPluginPrompt()" class="copy-btn">Copy</button>
+                    </div>
+                    <pre><code>Create a meee2 plugin for [YOUR_TOOL_NAME]:
+
+Requirements:
+- Plugin ID: com.meee2.plugin.[name]
+- Display name: [Your Tool Name]
+- Icon: [SF Symbol name]
+- Theme color: [SwiftUI Color]
+
+The plugin should:
+1. Monitor [describe your tool's session/activity]
+2. Return PluginSession list via getSessions()
+3. Implement terminal jump via activateTerminal()
+
+Reference:
+- Template: https://github.com/tianqixinxi/meee2/tree/main/plugin-template
+- Docs: https://github.com/tianqixinxi/meee2/blob/main/docs/PLUGIN_DEVELOPMENT.md</code></pre>
+                </div>
+
+                <div class="plugin-features">
+                    <div class="plugin-feature highlight">
+                        <h4>🤖 AI-Powered Creation</h4>
+                        <p>Copy the prompt → paste to Claude/Cursor/ChatGPT → get a working plugin. No coding required.</p>
+                    </div>
+                    <div class="plugin-feature">
+                        <h4>⚡ Dynamic Loading</h4>
+                        <p>Drop .dylib to ~/.meee2/plugins/ — no app restart.</p>
+                    </div>
+                    <div class="plugin-feature">
+                        <h4>📋 Template Ready</h4>
+                        <p>plugin-template provides boilerplate structure.</p>
+                    </div>
+                    <div class="plugin-feature">
+                        <h4>📖 Full Docs</h4>
+                        <p><a href="https://github.com/tianqixinxi/meee2/blob/main/docs/PLUGIN_DEVELOPMENT.md" target="_blank">PLUGIN_DEVELOPMENT.md</a> for details.</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -204,7 +323,7 @@
     <section id="architecture" class="architecture">
         <div class="container">
             <h2 class="section-title">Architecture</h2>
-            <p class="section-subtitle">A simple, efficient design for seamless integration</p>
+            <p class="section-subtitle">Plugin-based design for maximum extensibility</p>
 
             <div class="architecture-diagram">
                 <div class="arch-layer ui">
@@ -217,7 +336,7 @@
                     </div>
                     <div class="arch-content">
                         <h4>Dynamic Island UI</h4>
-                        <p>SwiftUI-based native macOS interface</p>
+                        <p>SwiftUI native macOS + Plugin Tab Filter</p>
                     </div>
                 </div>
 
@@ -233,7 +352,7 @@
                     </div>
                     <div class="arch-content">
                         <h4>Status Manager</h4>
-                        <p>State aggregation and UI data binding</p>
+                        <p>Aggregates sessions from all plugins</p>
                     </div>
                 </div>
 
@@ -248,7 +367,16 @@
                                     <polyline points="22,6 12,13 2,6"/>
                                 </svg>
                             </div>
-                            <span>Hook Socket Server</span>
+                            <span>Hook Socket</span>
+                        </div>
+                        <div class="arch-service highlight">
+                            <div class="arch-icon">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
+                                    <rect x="9" y="9" width="6" height="6"/>
+                                </svg>
+                            </div>
+                            <span>Plugin Manager</span>
                         </div>
                         <div class="arch-service">
                             <div class="arch-icon">
@@ -258,35 +386,20 @@
                             </div>
                             <span>File Monitor</span>
                         </div>
-                        <div class="arch-service">
-                            <div class="arch-icon">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
-                                    <rect x="9" y="9" width="6" height="6"/>
-                                    <line x1="9" y1="1" x2="9" y2="4"/>
-                                    <line x1="15" y1="1" x2="15" y2="4"/>
-                                    <line x1="9" y1="20" x2="9" y2="23"/>
-                                    <line x1="15" y1="20" x2="15" y2="23"/>
-                                    <line x1="20" y1="9" x2="23" y2="9"/>
-                                    <line x1="20" y1="14" x2="23" y2="14"/>
-                                    <line x1="1" y1="9" x2="4" y2="9"/>
-                                    <line x1="1" y1="14" x2="4" y2="14"/>
-                                </svg>
-                            </div>
-                            <span>Builtin Plugins</span>
-                        </div>
                     </div>
                 </div>
 
                 <div class="arch-arrow">↓</div>
 
-                <div class="arch-layer integrations-bottom">
-                    <div class="arch-integration claude-int">
-                        <span>Claude CLI</span>
+                <div class="arch-layer plugins">
+                    <div class="arch-plugins-row">
+                        <div class="arch-plugin claude-plugin">Claude</div>
+                        <div class="arch-plugin trae-plugin">Trae</div>
+                        <div class="arch-plugin cursor-plugin">Cursor</div>
+                        <div class="arch-plugin aime-plugin">Aime</div>
+                        <div class="arch-plugin custom-plugin">Custom...</div>
                     </div>
-                    <div class="arch-integration cursor-int">
-                        <span>Cursor</span>
-                    </div>
+                    <p class="plugins-note">Plugins via Meee2PluginKit</p>
                 </div>
             </div>
         </div>
@@ -296,55 +409,40 @@
     <section id="install" class="install">
         <div class="container">
             <h2 class="section-title">Installation</h2>
-            <p class="section-subtitle">Get started in minutes</p>
+            <p class="section-subtitle">Get started in seconds</p>
 
-            <div class="install-steps">
-                <div class="install-step">
-                    <div class="step-number">1</div>
-                    <h3>Download meee2</h3>
-                    <p>Download the latest release (v0.1.0) from GitHub and drag to Applications folder.</p>
-                    <a href="https://github.com/tianqixinxi/meee2/releases" target="_blank" class="btn btn-small">
-                        Download v0.1.0
-                    </a>
+            <div class="install-simple">
+                <div class="install-simple-step">
+                    <div class="step-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="7 10 12 15 17 10"/>
+                            <line x1="12" y1="15" x2="12" y2="3"/>
+                        </svg>
+                    </div>
+                    <div class="step-content">
+                        <h3>Download</h3>
+                        <p>Download the latest release from GitHub, drag to Applications folder.</p>
+                        <a href="https://github.com/tianqixinxi/meee2/releases" target="_blank" class="btn btn-small btn-primary">
+                            Download for macOS
+                        </a>
+                    </div>
                 </div>
-
-                <div class="install-step">
-                    <div class="step-number">2</div>
-                    <h3>Configure Claude CLI Hooks</h3>
-                    <p>Add hook configuration to <code>~/.claude/settings.json</code></p>
-                    <button class="btn btn-small btn-outline" onclick="copyConfig()">
-                        Copy Config
-                    </button>
-                </div>
-
-                <div class="install-step">
-                    <div class="step-number">3</div>
-                    <h3>Start meee2</h3>
-                    <p>Launch meee2 and it will automatically detect and monitor your AI coding sessions. Built-in Cursor plugin is ready to use.</p>
+                <div class="install-simple-step">
+                    <div class="step-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                        </svg>
+                    </div>
+                    <div class="step-content">
+                        <h3>Launch</h3>
+                        <p>Open meee2 — it automatically monitors Cursor, Trae CLI, Aime, and more.</p>
+                    </div>
                 </div>
             </div>
 
-            <div class="config-preview" id="config-preview">
-                <div class="config-header">
-                    <span>~/.claude/settings.json</span>
-                    <button onclick="copyConfig()" class="copy-btn">Copy</button>
-                </div>
-                <pre><code>{
-  "hooks": {
-    "SessionStart": [{
-      "command": "/Applications/meee2.app/Contents/Resources/Bridge/meee2-bridge --source claude"
-    }],
-    "PermissionRequest": [{
-      "command": "/Applications/meee2.app/Contents/Resources/Bridge/meee2-bridge --source claude"
-    }],
-    "Notification": [{
-      "command": "/Applications/meee2.app/Contents/Resources/Bridge/meee2-bridge --source claude"
-    }],
-    "Stop": [{
-      "command": "/Applications/meee2.app/Contents/Resources/Bridge/meee2-bridge --source claude"
-    }]
-  }
-}</code></pre>
+            <div class="install-note">
+                <p><strong>Claude CLI</strong> requires hooks configuration. <a href="https://github.com/tianqixinxi/meee2#configuration" target="_blank">View setup guide →</a></p>
             </div>
         </div>
     </section>

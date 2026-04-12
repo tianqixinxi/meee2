@@ -544,7 +544,53 @@ class ClaudePlugin: SessionPlugin {
 
     /// 同步 sessions 到 SessionStore（供 CLI/TUI 使用）
     private func syncToStore(_ sessions: [AISession]) {
+        // 清理 SessionStore 中进程已死亡的 session
+        // SessionMonitor 会将死进程标记为 completed，但其 PID.json 文件仍存在于 ~/.claude/sessions/
+        // 所以每次 sync 都会看到死 session，需要主动清理
+        var sessionsToDelete: [String] = []
+        for storeSession in sessionStore.listAll() {
+            if let pid = storeSession.pid, !SessionStore.processAlive(pid) {
+                sessionsToDelete.append(storeSession.sessionId)
+            }
+        }
+
+        for sessionIdToDelete in sessionsToDelete {
+            sessionStore.delete(sessionIdToDelete)
+            // 清理相关缓存
+            hookStatesLock.lock()
+            hookStates.removeValue(forKey: sessionIdToDelete)
+            hookStatesLock.unlock()
+            pendingPermissionsLock.lock()
+            pendingPermissions.removeValue(forKey: sessionIdToDelete)
+            pendingPermissionsLock.unlock()
+            sessionTasksLock.lock()
+            sessionTasks.removeValue(forKey: sessionIdToDelete)
+            sessionTasksLock.unlock()
+            sessionUsageLock.lock()
+            sessionUsage.removeValue(forKey: sessionIdToDelete)
+            sessionUsageLock.unlock()
+        }
+
         for aiSession in sessions {
+            // 只同步活跃 session 到 SessionStore
+            // 死 session 不写入，避免同 project 出现多个历史 session 记录
+            if !SessionStore.processAlive(aiSession.pid) {
+                continue
+            }
+
+            // 如果 store 中已有同 PID 的 session，更新它而不是创建新记录
+            // 这避免了 hook 创建的 session 和 PID.json 创建的 session 产生重复
+            if let existingPidMatch = sessionStore.sessions.first(where: { $0.pid == aiSession.pid }) {
+                // 更新现有记录
+                sessionStore.update(existingPidMatch.sessionId) { data in
+                    data.project = aiSession.projectName
+                    data.startedAt = aiSession.startedAt
+                    data.lastActivity = aiSession.lastUpdated
+                    data.status = aiSession.status.rawValue
+                    data.detailedStatus = .idle // 会被后续 hook 状态覆盖
+                }
+                continue
+            }
             // 获取 hook 状态
             var hookEvent: HookEvent?
             hookStatesLock.lock()

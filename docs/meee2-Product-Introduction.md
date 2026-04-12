@@ -13,11 +13,13 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 - **Session 追踪**：自动检测并监控所有活跃的 AI 助手会话
 - **状态展示**：实时显示当前正在执行的工具、任务进度、运行时长
 - **多会话管理**：支持同时监控多个 AI 会话，按活跃度排序
+- **Plugin 分类过滤**：底部 Tab 快速切换查看不同插件的 session
 
 ### 2. 权限审批交互
 
 - **即时通知**：当 Claude CLI 需要用户授权时，灵动岛自动弹出提示
 - **快捷操作**：直接在灵动岛中点击 **Allow / Deny** 按钮完成审批
+- **详细信息**：显示完整的 toolInput 内容和 Markdown 格式化文本
 - **无需切换**：无需回到终端窗口，即可完成权限决策
 
 ### 3. 智能 Terminal 跳转
@@ -260,6 +262,17 @@ protocol SessionPlugin {
 │  tool_input:                             │
 │    command: "rm -rf /tmp/test"          │
 │                                          │
+└──────────────────────────────────────────┘
+
+Session List View:
+┌──────────────────────────────────────────┐
+│  Sessions                        [▼]     │
+│                                          │
+│  ● Claude    my-project   Running       │
+│  ● Cursor    workspace    Idle          │
+│  ● Trae CLI  codebase     Thinking      │
+│                                          │
+│  [All] [Claude] [Cursor] [Trae]         │  ← Plugin Tab Filter
 └──────────────────────────────────────────┘
 ```
 

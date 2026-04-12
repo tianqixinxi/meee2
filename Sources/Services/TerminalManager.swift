@@ -461,14 +461,36 @@ class TerminalManager {
 
             switch terminalApp {
             case .cmux:
-                // cmux 特殊处理：通过标题匹配
-                NSLog("[TerminalManager] Terminal is cmux, searching for window by title...")
+                // cmux 特殊处理：通过 session ID 在所有 workspace 中查找 surface
+                NSLog("[TerminalManager] Terminal is cmux, searching for surface by session ID...")
+
+                // 尝试默认 cmux socket
+                let defaultSocket = "\(NSHomeDirectory())/Library/Application Support/cmux/cmux.sock"
+                if FileManager.default.fileExists(atPath: defaultSocket) {
+                    if let (surfaceRef, workspaceRef) = findCmuxSurfaceBySessionId(socketPath: defaultSocket, sessionId: session.id) {
+                        NSLog("[TerminalManager] Found cmux surface \(surfaceRef) in workspace \(workspaceRef)")
+                        activateCmuxWithSocket(defaultSocket, sessionId: session.id, cmuxSurfaceId: nil)
+                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil)
+                    }
+                }
+
+                // 如果 session 有 cmuxSocketPath，也尝试
+                if let socketPath = session.cmuxSocketPath, socketPath != defaultSocket {
+                    if let (surfaceRef, workspaceRef) = findCmuxSurfaceBySessionId(socketPath: socketPath, sessionId: session.id) {
+                        NSLog("[TerminalManager] Found cmux surface \(surfaceRef) in workspace \(workspaceRef)")
+                        activateCmuxWithSocket(socketPath, sessionId: session.id, cmuxSurfaceId: nil)
+                        return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil)
+                    }
+                }
+
+                // 最后尝试 cwd 匹配（在当前 workspace）
+                NSLog("[TerminalManager] Session ID not found, trying cwd matching...")
                 if let windowIndex = findWindowInCmux(forSession: session) {
                     NSLog("[TerminalManager] Found cmux window at index \(windowIndex)")
                     return WindowInfo(app: .cmux, windowIndex: windowIndex, sessionName: nil)
                 }
-                // 找不到特定窗口，直接激活 cmux
-                NSLog("[TerminalManager] No specific cmux window found, will activate cmux directly")
+
+                NSLog("[TerminalManager] No specific cmux surface found, activating cmux directly")
                 return WindowInfo(app: .cmux, windowIndex: nil, sessionName: nil)
 
             case .terminal, .iterm2, .ghostty:
@@ -536,7 +558,7 @@ class TerminalManager {
         NSLog("[TerminalManager] getTerminalAppForPID: \(pid)")
 
         let task = Process()
-        task.launchPath = "/usr/bin/ps"
+        task.launchPath = "/bin/ps"
         task.arguments = ["-p", String(pid), "-o", "ppid="]
 
         let pipe = Pipe()
@@ -574,7 +596,7 @@ class TerminalManager {
 
         // 获取完整命令路径
         let task = Process()
-        task.launchPath = "/usr/bin/ps"
+        task.launchPath = "/bin/ps"
         task.arguments = ["-p", String(ppid), "-o", "command="]
 
         let pipe = Pipe()
@@ -617,7 +639,7 @@ class TerminalManager {
 
             // 获取父进程的父进程
             let ppidTask = Process()
-            ppidTask.launchPath = "/usr/bin/ps"
+            ppidTask.launchPath = "/bin/ps"
             ppidTask.arguments = ["-p", String(ppid), "-o", "ppid="]
 
             let ppidPipe = Pipe()
@@ -671,7 +693,7 @@ class TerminalManager {
     /// 获取指定 PID 的 tty
     private static func getTTYForPID(_ pid: Int) -> String? {
         let task = Process()
-        task.launchPath = "/usr/bin/lsof"
+        task.launchPath = "/usr/sbin/lsof"
         task.arguments = ["-p", String(pid), "-F", "n"]
 
         let pipe = Pipe()
@@ -718,40 +740,42 @@ class TerminalManager {
     private static func findWindowInCmux(forSession session: AISession) -> Int? {
         NSLog("[TerminalManager] findWindowInCmux for session: \(session.projectName)")
 
-        // 优先使用 cmux CLI 查找匹配 cwd 的 surface
+        // 方法0：优先使用 cmux socket 路径（如果已知）
         if let socketPath = session.cmuxSocketPath {
+            if let tabIndex = findCmuxSurfaceByPid(socketPath: socketPath, pid: session.pid) {
+                return tabIndex
+            }
             if let tabIndex = findCmuxSurfaceByCwd(socketPath: socketPath, cwd: session.cwd) {
                 NSLog("[TerminalManager] Found cmux surface by cwd at tab \(tabIndex)")
                 return tabIndex
             }
         }
 
-        // 方法1：通过窗口标题匹配项目名
-        let projectName = session.projectName
-        if let index = findWindowWithTitle(containing: projectName, in: "cmux") {
-            NSLog("[TerminalManager] Found cmux window by project name at index \(index)")
-            return index
+        // 方法0.5：尝试默认 cmux socket（没有 socket 路径时）
+        let defaultSocket = "\(NSHomeDirectory())/Library/Application Support/cmux/cmux.sock"
+        if FileManager.default.fileExists(atPath: defaultSocket) {
+            if let tabIndex = findCmuxSurfaceByPid(socketPath: defaultSocket, pid: session.pid) {
+                return tabIndex
+            }
+            if let tabIndex = findCmuxSurfaceByCwd(socketPath: defaultSocket, cwd: session.cwd) {
+                NSLog("[TerminalManager] Found cmux surface by cwd at tab \(tabIndex)")
+                return tabIndex
+            }
         }
 
-        // 方法2：通过 cwd 匹配
-        let cwd = session.cwd
-        let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
-        if let index = findWindowWithTitle(containing: cwdName, in: "cmux") {
-            NSLog("[TerminalManager] Found cmux window by cwd name at index \(index)")
-            return index
-        }
-
-        NSLog("[TerminalManager] findWindowInCmux: No window found")
+        NSLog("[TerminalManager] findWindowInCmux: No window found via cmux CLI, falling back to title matching")
         return nil
     }
 
-    /// 通过 cwd 在 cmux 中查找对应的 surface
-    private static func findCmuxSurfaceByCwd(socketPath: String, cwd: String) -> Int? {
+    /// 通过 PID 在 cmux 中查找对应的 surface（cmux list-pane-surfaces 包含 PID 信息）
+    private static func findCmuxSurfaceByPid(socketPath: String, pid: Int) -> Int? {
+        NSLog("[TerminalManager] findCmuxSurfaceByPid: socket=\(socketPath), pid=\(pid)")
+
         let task = Process()
         task.launchPath = "/Applications/cmux.app/Contents/Resources/bin/cmux"
-        var env3 = ProcessInfo.processInfo.environment
-        env3["CMUX_SOCKET_PATH"] = socketPath
-        task.environment = env3
+        var env = ProcessInfo.processInfo.environment
+        env["CMUX_SOCKET_PATH"] = socketPath
+        task.environment = env
         task.arguments = ["list-pane-surfaces"]
 
         let pipe = Pipe()
@@ -764,27 +788,79 @@ class TerminalManager {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             guard let output = String(data: data, encoding: .utf8) else { return nil }
 
-            // 输出格式: surface:2  meee2 · 继续执行上次的优化plan · ed75540c-bfc3-49  [selected]
-            // 或: surface:8  bytedance@KHQ3WMG6T6:~/peer_island
-            let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
+            NSLog("[TerminalManager] cmux list-pane-surfaces output:\n\(output)")
 
             for line in output.split(separator: "\n") {
-                // 检查是否包含 cwd 名称
-                if line.contains(cwdName) || line.contains(cwd) {
-                    // 提取 surface:index
-                    if let range = line.range(of: "surface:(\\d+)", options: .regularExpression) {
-                        let match = String(line[range])
-                        let numStr = match.replacingOccurrences(of: "surface:", with: "")
+                let lineStr = String(line)
+                // cmux output format: "surface:2  title [selected]" or "surface:2  user@host:~/path (pid:12345)"
+                // Try to match PID in parentheses
+                if lineStr.contains("pid:\(pid)") || lineStr.contains("pid: \(pid)") {
+                    if let match = lineStr.range(of: "surface:(\\d+)", options: .regularExpression) {
+                        let numStr = String(lineStr[match]).replacingOccurrences(of: "surface:", with: "")
                         if let tabIndex = Int(numStr) {
+                            NSLog("[TerminalManager] Found cmux surface by PID \(pid) at tab \(tabIndex)")
                             return tabIndex
                         }
                     }
                 }
             }
         } catch {
-            NSLog("[TerminalManager] Failed to list cmux surfaces: \(error)")
+            NSLog("[TerminalManager] Failed to list cmux surfaces by PID: \(error)")
         }
 
+        return nil
+    }
+
+    /// 通过 cwd 在 cmux 中查找对应的 surface（检查所有 workspace）
+    private static func findCmuxSurfaceByCwd(socketPath: String, cwd: String) -> Int? {
+        NSLog("[TerminalManager] findCmuxSurfaceByCwd: socket=\(socketPath), cwd=\(cwd)")
+
+        // 先获取所有 workspace
+        guard let workspaces = listCmuxWorkspaces(socketPath: socketPath) else {
+            NSLog("[TerminalManager] Failed to list cmux workspaces")
+            return nil
+        }
+
+        let cwdName = URL(fileURLWithPath: cwd).lastPathComponent
+        NSLog("[TerminalManager] Searching for cwd '\(cwdName)' in \(workspaces.count) workspaces")
+
+        // 遍历所有 workspace 查找
+        for workspaceRef in workspaces {
+            let task = Process()
+            task.launchPath = "/Applications/cmux.app/Contents/Resources/bin/cmux"
+            var env = ProcessInfo.processInfo.environment
+            env["CMUX_SOCKET_PATH"] = socketPath
+            task.environment = env
+            task.arguments = ["list-pane-surfaces", "--workspace", workspaceRef]
+
+            let pipe = Pipe()
+            task.standardOutput = pipe
+
+            do {
+                try task.run()
+                task.waitUntilExit()
+
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                guard let output = String(data: data, encoding: .utf8) else { continue }
+
+                for line in output.split(separator: "\n") {
+                    let lineStr = String(line)
+                    if lineStr.contains(cwdName) || lineStr.contains(cwd) {
+                        if let range = lineStr.range(of: "surface:(\\d+)", options: .regularExpression) {
+                            let numStr = String(lineStr[range]).replacingOccurrences(of: "surface:", with: "")
+                            if let tabIndex = Int(numStr) {
+                                NSLog("[TerminalManager] Found cmux surface by cwd in \(workspaceRef) at tab \(tabIndex)")
+                                return tabIndex
+                            }
+                        }
+                    }
+                }
+            } catch {
+                NSLog("[TerminalManager] Failed to list surfaces in \(workspaceRef): \(error)")
+            }
+        }
+
+        NSLog("[TerminalManager] No cmux surface found for cwd '\(cwdName)'")
         return nil
     }
 
