@@ -285,6 +285,9 @@ class ClaudePlugin: SessionPlugin {
             // 工具调用后 - 可能是 TaskCreate/TaskUpdate
             handleTaskSync(sessionId: sessionId, event: event)
 
+            // 更新使用统计（每次工具调用后 transcript 会更新）
+            updateUsageStats(sessionId: sessionId, event: event)
+
         case .permissionRequest:
             // 权限请求
             detailedStatusesLock.lock()

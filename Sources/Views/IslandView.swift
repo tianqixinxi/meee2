@@ -358,6 +358,7 @@ public struct IslandView: View {
                                 .foregroundColor(.white.opacity(0.4))
                         }
                     }
+                    .padding(.horizontal, 8)
                     .frame(maxWidth: .infinity)
                 } else {
                     Spacer()
@@ -378,7 +379,6 @@ public struct IslandView: View {
                     }
                 }
                 .padding(.trailing, 12)
-                .frame(width: sideWidth, height: notchHeight)
             }
             .frame(height: notchHeight)
 
@@ -928,38 +928,59 @@ public struct IslandView: View {
     private func markdownTableView(_ table: MarkdownTable) -> some View {
         let rowHeight: CGFloat = 22  // 每行固定高度
 
+        // 预计算带稳定 id 的行数据，避免编译器超时
+        let rowsWithIds = table.rows.enumerated().map { (index, row) in
+            TableRow(id: row.joined(separator: "|"), cells: row)
+        }
+
         VStack(alignment: .leading, spacing: 2) {
             // 表头
-            HStack(spacing: 8) {
-                ForEach(table.headers.indices, id: \.self) { index in
-                    Text(table.headers[index])
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(.white.opacity(0.9))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .frame(height: rowHeight)
-            .padding(.horizontal, 8)
-            .background(Color.white.opacity(0.12))
+            headerRow(table.headers, rowHeight: rowHeight)
 
-            // 数据行 - 给每行固定高度确保正确渲染
-            ForEach(Array(table.rows.indices), id: \.self) { rowIndex in
-                HStack(spacing: 8) {
-                    ForEach(table.headers.indices, id: \.self) { colIndex in
-                        let cell = colIndex < table.rows[rowIndex].count ? table.rows[rowIndex][colIndex] : ""
-                        Text(attributedStringFromMarkdown(cell))
-                            .font(.system(size: 10))
-                            .foregroundColor(.white.opacity(0.75))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(height: rowHeight)
-                .padding(.horizontal, 8)
-                .background(rowIndex % 2 == 0 ? Color.clear : Color.white.opacity(0.04))
+            // 数据行
+            ForEach(rowsWithIds, id: \.id) { row in
+                dataRow(row.cells, columnCount: table.headers.count, rowIndex: rowsWithIds.firstIndex(of: row) ?? 0, rowHeight: rowHeight)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 表头行
+    private func headerRow(_ headers: [String], rowHeight: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            ForEach(headers.indices, id: \.self) { index in
+                Text(headers[index])
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(height: rowHeight)
+        .padding(.horizontal, 8)
+        .background(Color.white.opacity(0.12))
+    }
+
+    /// 数据行
+    private func dataRow(_ cells: [String], columnCount: Int, rowIndex: Int, rowHeight: CGFloat) -> some View {
+        HStack(spacing: 8) {
+            ForEach(0..<columnCount, id: \.self) { colIndex in
+                let cell = colIndex < cells.count ? cells[colIndex] : ""
+                Text(attributedStringFromMarkdown(cell))
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(height: rowHeight)
+        .padding(.horizontal, 8)
+        .background(rowIndex % 2 == 0 ? Color.clear : Color.white.opacity(0.04))
+    }
+
+    /// 表格行数据（带稳定 id）
+    struct TableRow: Identifiable, Equatable {
+        let id: String
+        let cells: [String]
     }
 
     /// Markdown 表格数据结构

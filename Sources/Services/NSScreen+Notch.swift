@@ -66,7 +66,7 @@ public extension NSScreen {
 
         // 尝试获取显示器名称
         let nameKey = NSDeviceDescriptionKey(rawValue: "NSDisplayName")
-        if let name = deviceDescription[nameKey] as? String {
+        if let name = deviceDescription[nameKey] as? String, !name.isEmpty {
             return name
         }
 
