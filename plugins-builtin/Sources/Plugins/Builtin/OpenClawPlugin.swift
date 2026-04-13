@@ -26,13 +26,24 @@ class OpenClawPlugin: SessionPlugin {
     // 刷新间隔（秒）
     @AppStorage("openclawRefreshInterval") private var refreshInterval: Double = 10.0
 
-    // OpenClaw agents 路径
-    private let openclawAgentsPath: URL = {
+    // OpenClaw agents 路径（可配置）
+    @AppStorage("openclawAgentsPath") private var agentsPathString: String = ""
+
+    // 默认路径
+    private var defaultAgentsPath: URL {
         let home = NSHomeDirectory()
         return URL(fileURLWithPath: home)
             .appendingPathComponent(".openclaw")
             .appendingPathComponent("agents")
-    }()
+    }
+
+    // 实际使用的路径
+    private var openclawAgentsPath: URL {
+        if agentsPathString.isEmpty {
+            return defaultAgentsPath
+        }
+        return URL(fileURLWithPath: agentsPathString)
+    }
 
     // 活跃时间阈值（秒）- session 更新时间在此阈值内视为活跃
     private let activeThreshold: TimeInterval = 3600  // 1小时

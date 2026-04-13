@@ -23,13 +23,24 @@ class CursorPlugin: SessionPlugin {
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("cursorRefreshInterval") private var refreshInterval: Double = 10.0
 
-    // Cursor projects 路径
-    private let cursorProjectsPath: URL = {
+    // Cursor projects 路径（可配置）
+    @AppStorage("cursorProjectsPath") private var projectsPathString: String = ""
+
+    // 默认路径
+    private var defaultProjectsPath: URL {
         let home = NSHomeDirectory()
         return URL(fileURLWithPath: home)
             .appendingPathComponent(".cursor")
             .appendingPathComponent("projects")
-    }()
+    }
+
+    // 实际使用的路径
+    private var cursorProjectsPath: URL {
+        if projectsPathString.isEmpty {
+            return defaultProjectsPath
+        }
+        return URL(fileURLWithPath: projectsPathString)
+    }
 
     // 活跃时间阈值（秒）- 文件修改时间在此阈值内视为活跃
     private let activeThreshold: TimeInterval = 300  // 5分钟

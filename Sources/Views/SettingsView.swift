@@ -571,6 +571,8 @@ struct PluginRowView: View {
             CursorPluginSettings()
         case "com.meee2.plugin.traecli":
             TraecliPluginSettings()
+        case "com.meee2.plugin.openclaw":
+            OpenClawPluginSettings()
         default:
             EmptyView()
         }
@@ -711,6 +713,12 @@ struct AimePluginSettings: View {
 
 struct CursorPluginSettings: View {
     @AppStorage("cursorRefreshInterval") private var refreshInterval: Double = 10.0
+    @AppStorage("cursorProjectsPath") private var projectsPath: String = ""
+
+    private var defaultPath: String {
+        let home = NSHomeDirectory()
+        return home + "/.cursor/projects"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -721,6 +729,32 @@ struct CursorPluginSettings: View {
                 Text("\(Int(refreshInterval))s")
                     .frame(width: 40)
             }
+
+            // 路径配置
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Projects directory:")
+                    .font(.system(size: 11))
+
+                HStack(spacing: 8) {
+                    TextField("Path", text: $projectsPath)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+
+                    Button("Reset") {
+                        projectsPath = ""
+                    }
+                    .font(.system(size: 11))
+
+                    Button("Browse...") {
+                        browseCursorPath()
+                    }
+                    .font(.system(size: 11))
+                }
+
+                Text("Default: \(defaultPath)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
         }
         .font(.system(size: 11))
         .padding(12)
@@ -728,6 +762,86 @@ struct CursorPluginSettings: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.secondary.opacity(0.1))
         )
+    }
+
+    private func browseCursorPath() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select Cursor projects directory"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            projectsPath = url.path
+        }
+    }
+}
+
+// MARK: - Traecli Plugin Settings
+
+struct OpenClawPluginSettings: View {
+    @AppStorage("openclawRefreshInterval") private var refreshInterval: Double = 10.0
+    @AppStorage("openclawAgentsPath") private var agentsPath: String = ""
+
+    private var defaultPath: String {
+        let home = NSHomeDirectory()
+        return home + "/.openclaw/agents"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Refresh interval:")
+                Spacer()
+                Slider(value: $refreshInterval, in: 2...30, step: 1)
+                Text("\(Int(refreshInterval))s")
+                    .frame(width: 40)
+            }
+
+            // 路径配置
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Agents directory:")
+                    .font(.system(size: 11))
+
+                HStack(spacing: 8) {
+                    TextField("Path", text: $agentsPath)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+
+                    Button("Reset") {
+                        agentsPath = ""
+                    }
+                    .font(.system(size: 11))
+
+                    Button("Browse...") {
+                        browseOpenClawPath()
+                    }
+                    .font(.system(size: 11))
+                }
+
+                Text("Default: \(defaultPath)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.1))
+        )
+    }
+
+    private func browseOpenClawPath() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Select OpenClaw agents directory"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            agentsPath = url.path
+        }
     }
 }
 
