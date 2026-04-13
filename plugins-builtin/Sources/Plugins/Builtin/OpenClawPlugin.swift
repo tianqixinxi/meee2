@@ -90,18 +90,23 @@ class OpenClawPlugin: SessionPlugin {
 
     override func refresh() {
         let sessions = getSessions()
+        NSLog("[OpenClawPlugin] Refresh: found \(sessions.count) sessions")
 
         // 检测新消息 - 使用 lastMessage 而不是 subtitle
         for session in sessions {
-            guard let newMessage = session.lastMessage else { continue }
-
+            let newMessage = session.lastMessage
             let previousMessage = lastMessages[session.id]
-            if previousMessage != newMessage {
+
+            NSLog("[OpenClawPlugin] Session \(session.title): newMessage=\(newMessage?.prefix(30) ?? "nil"), previousMessage=\(previousMessage?.prefix(30) ?? "nil")")
+
+            if let msg = newMessage, previousMessage != msg {
                 if previousMessage != nil {
-                    NSLog("[OpenClawPlugin] New message detected for \(session.title): \(newMessage.prefix(50))...")
-                    onUrgentEvent?(session, newMessage, nil)
+                    NSLog("[OpenClawPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
+                    onUrgentEvent?(session, msg, nil)
+                } else {
+                    NSLog("[OpenClawPlugin] First load, skipping urgent for \(session.title)")
                 }
-                lastMessages[session.id] = newMessage
+                lastMessages[session.id] = msg
             }
         }
 

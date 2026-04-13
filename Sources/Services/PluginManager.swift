@@ -69,7 +69,11 @@ public class PluginManager: ObservableObject {
         }
 
         plugin.onUrgentEvent = { [weak self] session, message, action in
-            guard let self = self else { return }
+            MLog("[PluginManager] onUrgentEvent callback invoked for \(session.title)")
+            guard let self = self else {
+                MLog("[PluginManager] ERROR: self is nil in onUrgentEvent callback!")
+                return
+            }
             self.handleUrgentEvent(session: session, message: message, action: action)
         }
 
@@ -98,9 +102,11 @@ public class PluginManager: ObservableObject {
 
     /// 扫描并加载外部 plugins
     public func loadExternalPlugins() {
+        MLog("[PluginManager] loadExternalPlugins called")
         var externalPlugins: [SessionPlugin] = []
 
         externalPlugins = dynamicLoader.loadAllPlugins()
+        MLog("[PluginManager] dynamicLoader returned \(externalPlugins.count) plugins")
 
         // 更新失败插件列表
         DispatchQueue.main.async { [weak self] in
@@ -108,7 +114,10 @@ public class PluginManager: ObservableObject {
         }
 
         for plugin in externalPlugins {
+            MLog("[PluginManager] Processing external plugin: \(plugin.pluginId)")
             if plugin.initialize() {
+                MLog("[PluginManager] Plugin \(plugin.pluginId) initialized successfully")
+
                 // 设置回调
                 plugin.onSessionsUpdated = { [weak self] sessions in
                     guard let self = self else { return }
@@ -116,7 +125,11 @@ public class PluginManager: ObservableObject {
                 }
 
                 plugin.onUrgentEvent = { [weak self] session, message, action in
-                    guard let self = self else { return }
+                    MLog("[PluginManager] onUrgentEvent callback invoked for \(session.title)")
+                    guard let self = self else {
+                        MLog("[PluginManager] ERROR: self is nil in onUrgentEvent callback!")
+                        return
+                    }
                     self.handleUrgentEvent(session: session, message: message, action: action)
                 }
 
@@ -136,32 +149,77 @@ public class PluginManager: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
+            // 保存该 plugin 的旧 sessions 的 urgentEvent 状态
+            var existingUrgentEvents: [String: UrgentEventInfo] = [:]
+            for session in self.sessions where session.pluginId == pluginId {
+                if let event = session.urgentEvent {
+                    existingUrgentEvents[session.id] = event
+                    MLog("[PluginManager] Preserving urgentEvent for session: \(session.id)")
+                }
+            }
+
             // 移除该 plugin 的旧 sessions
             self.sessions.removeAll { $0.pluginId == pluginId }
-            // 添加新 sessions（去重）
+
+            // 添加新 sessions，并恢复 urgentEvent
             var uniqueSessions: [PluginSession] = []
             var seenIds = Set<String>()
             for session in sessions {
                 if !seenIds.contains(session.id) {
                     seenIds.insert(session.id)
-                    uniqueSessions.append(session)
+                    var updatedSession = session
+                    // 恢复 urgentEvent（如果有）
+                    if let existingEvent = existingUrgentEvents[session.id] {
+                        updatedSession.urgentEvent = existingEvent
+                        MLog("[PluginManager] Restored urgentEvent for session: \(session.id)")
+                    }
+                    uniqueSessions.append(updatedSession)
                 }
             }
             self.sessions.append(contentsOf: uniqueSessions)
+
             // 统一按 startedAt 排序（最近的在前）
             self.sessions.sort { $0.startedAt > $1.startedAt }
+
             // 标记加载完成
             self.isLoading = false
-            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count)")
+            MLog("[PluginManager] Sessions updated, total: \(self.sessions.count), urgentEvents preserved: \(existingUrgentEvents.count)")
         }
     }
 
     private func handleUrgentEvent(session: PluginSession, message: String, action: String?) {
-        MLog("[PluginManager] handleUrgentEvent: \(session.title), message: \(message)")
+        MLog("[PluginManager] handleUrgentEvent: \(session.title), message: \(message.prefix(50))")
 
         DispatchQueue.main.async { [weak self] in
-            guard self != nil else { return }
+            guard let self = self else { return }
 
+            // 创建 urgent event info
+            let urgentEvent = UrgentEventInfo(
+                id: "\(session.id)-urgent",
+                eventType: "message",
+                message: message,
+                actionLabel: action
+            )
+
+            // 复制数组，修改后重新赋值（触发 @Published 更新）
+            var updatedSessions = self.sessions
+
+            if let index = updatedSessions.firstIndex(where: { $0.id == session.id }) {
+                updatedSessions[index].urgentEvent = urgentEvent
+                MLog("[PluginManager] Updated urgentEvent for session: \(session.id)")
+            } else {
+                // session 不存在，添加新的（带 urgentEvent）
+                var newSession = session
+                newSession.urgentEvent = urgentEvent
+                updatedSessions.append(newSession)
+                MLog("[PluginManager] Added new session with urgentEvent: \(session.id)")
+            }
+
+            // 重新赋值触发 @Published 更新
+            self.sessions = updatedSessions
+            MLog("[PluginManager] Urgent event processed, sessions count: \(self.sessions.count)")
+
+            // 发送通知（可选，用于其他监听者）
             NotificationCenter.default.post(
                 name: .pluginUrgentEvent,
                 object: nil,
@@ -171,7 +229,6 @@ public class PluginManager: ObservableObject {
                     "action": action as Any
                 ]
             )
-            MLog("[PluginManager] Notification posted on main thread")
         }
     }
 
@@ -194,7 +251,20 @@ public class PluginManager: ObservableObject {
             return
         }
 
+        // 通知 plugin 清除内部状态
         plugin.clearUrgentEvent(sessionId: sessionId)
+
+        // 直接清除 sessions 数组中的 urgentEvent
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            var updatedSessions = self.sessions
+            if let index = updatedSessions.firstIndex(where: { $0.id == sessionId }) {
+                updatedSessions[index].urgentEvent = nil
+                self.sessions = updatedSessions
+                MLog("[PluginManager] Cleared urgentEvent in sessions array for: \(sessionId)")
+            }
+        }
     }
 
     // MARK: - Plugin Info

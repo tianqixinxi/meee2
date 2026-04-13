@@ -212,6 +212,7 @@ public struct PluginSession: Identifiable, Hashable {
         hasher.combine(startedAt)
         hasher.combine(subtitle)
         hasher.combine(cwd)
+        hasher.combine(urgentEvent?.id)  // 添加 urgentEvent
     }
 
     public static func == (lhs: PluginSession, rhs: PluginSession) -> Bool {
@@ -220,7 +221,8 @@ public struct PluginSession: Identifiable, Hashable {
         lhs.title == rhs.title &&
         lhs.status == rhs.status &&
         lhs.subtitle == rhs.subtitle &&
-        lhs.cwd == rhs.cwd
+        lhs.cwd == rhs.cwd &&
+        lhs.urgentEvent?.id == rhs.urgentEvent?.id  // 添加 urgentEvent 比较
     }
 
     // MARK: - Computed
