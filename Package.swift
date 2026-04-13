@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "meee2Kit", targets: ["meee2Kit"]),
         // Builtin plugins
         .library(name: "CursorPlugin", type: .dynamic, targets: ["CursorPlugin"]),
+        .library(name: "OpenClawPlugin", type: .dynamic, targets: ["OpenClawPlugin"]),
     ],
     dependencies: [
         .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
@@ -34,7 +35,15 @@ let package = Package(
             name: "CursorPlugin",
             dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "plugins-builtin/Sources/Plugins/Builtin",
+            exclude: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift"],
             sources: ["CursorPlugin.swift", "CursorPluginExport.swift"]
+        ),
+        .target(
+            name: "OpenClawPlugin",
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
+            path: "plugins-builtin/Sources/Plugins/Builtin",
+            exclude: ["CursorPlugin.swift", "CursorPluginExport.swift"],
+            sources: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift"]
         ),
     ]
 )
