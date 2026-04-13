@@ -9,7 +9,7 @@ class OpenClawPlugin: SessionPlugin {
     override var displayName: String { "OpenClaw" }
     override var icon: String { "house.fill" }
     override var themeColor: Color { .red }
-    override var version: String { "0.1.0" }
+    override var version: String { "0.1.2" }
     override var helpUrl: String? { nil }
 
     // MARK: - Private

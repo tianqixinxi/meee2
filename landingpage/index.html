@@ -92,7 +92,7 @@
                                 </div>
                             </div>
                             <div class="session-item">
-                                <div class="session-icon trae"></div>
+                                <div class="session-icon openclaw"></div>
                                 <div class="session-info">
                                     <span class="session-name">workspace</span>
                                     <span class="session-status">Thinking</span>
@@ -109,7 +109,6 @@
                         <div class="island-tabs">
                             <span class="tab active">All</span>
                             <span class="tab">Claude</span>
-                            <span class="tab">Trae</span>
                             <span class="tab">Cursor</span>
                         </div>
                     </div>
@@ -179,7 +178,7 @@
                         </svg>
                     </div>
                     <h3>Plugin Tab Filter</h3>
-                    <p>Filter sessions by plugin source with bottom tabs. Quick switch between All, Claude, Cursor, Trae, and Aime views.</p>
+                    <p>Filter sessions by plugin source with bottom tabs. Quick switch between All, Claude, and Cursor views.</p>
                 </div>
 
                 <div class="feature-card">
@@ -215,7 +214,7 @@
             <h2 class="section-title">Supported AI Assistants</h2>
             <p class="section-subtitle">Plugin-based architecture for extensibility</p>
 
-            <div class="integrations-grid four-cols">
+            <div class="integrations-grid three-cols">
                 <div class="integration-card claude">
                     <div class="integration-icon">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
@@ -225,17 +224,6 @@
                     <h3>Claude CLI</h3>
                     <p class="integration-status">Full Support</p>
                     <p class="integration-desc">Session monitoring, permission approval with toolInput details, real-time status updates.</p>
-                </div>
-
-                <div class="integration-card trae">
-                    <div class="integration-icon" style="color: #a855f7;">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-2-1h-6v-2h6v2zM7.5 17l-1.41-1.41L8.67 13l-2.59-2.59L7.5 9l4 4-4 4z"/>
-                        </svg>
-                    </div>
-                    <h3>Trae CLI</h3>
-                    <p class="integration-status">Plugin</p>
-                    <p class="integration-desc">Monitor Trae CLI agent sessions with terminal jump support.</p>
                 </div>
 
                 <div class="integration-card cursor">
@@ -249,15 +237,15 @@
                     <p class="integration-desc">Monitor Cursor agent sessions and jump to project workspace.</p>
                 </div>
 
-                <div class="integration-card aime">
-                    <div class="integration-icon" style="color: #22c55e;">
+                <div class="integration-card openclaw">
+                    <div class="integration-icon" style="color: #ef4444;">
                         <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
                         </svg>
                     </div>
-                    <h3>Aime</h3>
-                    <p class="integration-status">Plugin</p>
-                    <p class="integration-desc">Track Aime sessions with real-time progress updates.</p>
+                    <h3>OpenClaw</h3>
+                    <p class="integration-status">Built-in Plugin</p>
+                    <p class="integration-desc">Monitor OpenClaw agent sessions with web UI jump support.</p>
                 </div>
             </div>
 
@@ -394,9 +382,8 @@ Reference:
                 <div class="arch-layer plugins">
                     <div class="arch-plugins-row">
                         <div class="arch-plugin claude-plugin">Claude</div>
-                        <div class="arch-plugin trae-plugin">Trae</div>
                         <div class="arch-plugin cursor-plugin">Cursor</div>
-                        <div class="arch-plugin aime-plugin">Aime</div>
+                        <div class="arch-plugin openclaw-plugin">OpenClaw</div>
                         <div class="arch-plugin custom-plugin">Custom...</div>
                     </div>
                     <p class="plugins-note">Plugins via Meee2PluginKit</p>
@@ -436,7 +423,7 @@ Reference:
                     </div>
                     <div class="step-content">
                         <h3>Launch</h3>
-                        <p>Open meee2 — it automatically monitors Cursor, Trae CLI, Aime, and more.</p>
+                        <p>Open meee2 — it automatically monitors Cursor, OpenClaw, and more.</p>
                     </div>
                 </div>
             </div>

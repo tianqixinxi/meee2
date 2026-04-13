@@ -1,6 +1,6 @@
 # meee2 - macOS 灵动岛 AI 助手监控工具
 
-meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic Island（灵动岛）** 的形式展示在屏幕顶部。用户无需切换窗口，即可实时了解 Claude CLI、Trae CLI、Cursor 等 AI 助手的工作状态，并直接在灵动岛中进行权限审批等交互操作。
+meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic Island（灵动岛）** 的形式展示在屏幕顶部。用户无需切换窗口，即可实时了解 Claude CLI、Cursor 等 AI 助手的工作状态，并直接在灵动岛中进行权限审批等交互操作。
 
 ---
 
@@ -12,7 +12,7 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 - **Session 追踪**：自动检测并监控所有活跃的 AI 助手会话
 - **状态展示**：实时显示当前正在执行的工具、任务进度、运行时长
 - **多会话管理**：支持同时监控多个 AI 会话，按活跃度排序
-- **Plugin 分类**：底部 Tab 快速过滤不同插件的 session（All / Claude / Cursor / Trae / Aime）
+- **Plugin 分类**：底部 Tab 快速过滤不同插件的 session
 
 ### 2. 权限审批交互
 - **即时通知**：当 Claude CLI 需要用户授权时，灵动岛自动弹出提示
@@ -29,9 +29,8 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 | AI 助手 | 状态 | 主题色 |
 |---------|------|--------|
 | Claude CLI | ✅ 完整支持 | 橘色 |
-| Trae CLI | ✅ 插件支持 | 紫色 |
 | Cursor | ✅ 插件支持 | 蓝色 |
-| Aime | ✅ 插件支持 | 绿色 |
+| OpenClaw | ✅ 插件支持 | 红色 |
 
 ### 5. 事件音效系统
 - 支持为不同事件配置不同的系统音效
@@ -149,9 +148,9 @@ swift build -c release
 │  └─────────────────────────────────────────┘ │
 │                                               │
 │  ● Cursor    my-project    Idle              │
-│  ● Trae CLI  workspace     Running           │
+│  ● OpenClaw  workspace     Running           │
 │                                               │
-│  [All] [Claude] [Cursor] [Trae] [Aime]       │  ← Plugin Tab Filter
+│  [All] [Claude] [Cursor] [OpenClaw]          │  ← Plugin Tab Filter
 └───────────────────────────────────────────────┘
 ```
 
@@ -221,7 +220,7 @@ swift build -c release
 │                        Plugin System                            │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ TraecliPlugin│  │ CursorPlugin │  │  AimePlugin  │  ...     │
+│  │CursorPlugin  │  │OpenClawPlugin│  │  CustomPlugin│  ...     │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
 │         │                 │                 │                   │
 │         └─────────────────┼─────────────────┘                   │
@@ -311,7 +310,7 @@ struct AISession: Identifiable {
     let pid: Int            // 进程 ID
     let cwd: String         // 工作目录
     let startedAt: Date     // 启动时间
-    let type: SessionType   // claude/cursor/traecli/aime/other
+    let type: SessionType   // claude/cursor/openclaw/other
 
     var status: SessionStatus  // running/idle/completed/waiting_for_approval/error
     var currentTask: String?   // 当前任务描述
@@ -626,8 +625,8 @@ meee2 使用 `@AppStorage` 存储用户设置，键名前缀为插件 ID：
 
 ```swift
 // 插件设置
-@AppStorage("plugin_com.meee2.plugin.traecli_enabled") var enabled: Bool = true
-@AppStorage("traecliRefreshInterval") var refreshInterval: Double = 10.0
+@AppStorage("plugin_com.meee2.plugin.cursor_enabled") var enabled: Bool = true
+@AppStorage("cursorRefreshInterval") var refreshInterval: Double = 10.0
 
 // 全局设置
 @AppStorage("showSessionInCompact") var showSessionInCompact: Bool = true

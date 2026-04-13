@@ -7,7 +7,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
-VERSION="0.1.1"
+VERSION="0.1.2"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
@@ -74,7 +74,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.1</string>
+    <string>0.1.2</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -126,7 +126,7 @@ if [ -f "$CURSOR_DYLIB" ]; then
 {
     "id": "com.meee2.plugin.cursor",
     "name": "Cursor",
-    "version": "0.1.0",
+    "version": "0.1.2",
     "dylib": "CursorPlugin.dylib",
     "helpUrl": "https://docs.cursor.com"
 }

@@ -33,9 +33,8 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 | AI 助手 | 状态 | 主题色 |
 |---------|------|--------|
 | Claude CLI | ✅ 完整支持 | 橙色 |
-| Cursor | ✅ 插件支持 | 蓝色 |
-| GitHub Copilot | ✅ 插件支持 | 紫色 |
-| Aime | ✅ 插件支持 | 绿色 |
+| Cursor | ✅ 内置插件 | 蓝色 |
+| OpenClaw | ✅ 内置插件 | 红色 |
 | 其他 | 🔌 可扩展 | 灰色 |
 
 ### 5. 插件扩展系统
@@ -82,7 +81,7 @@ meee2 是一款 macOS 原生应用，将 AI 编程助手的状态以 **Dynamic I
 │                        Plugin System                            │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ CursorPlugin │  │CopilotPlugin │  │  AimePlugin  │  ...     │
+│  │ CursorPlugin │  │OpenClawPlugin│  │ CustomPlugin │  ...     │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
 │         │                 │                 │                   │
 │         └─────────────────┼─────────────────┘                   │
@@ -152,7 +151,7 @@ struct AISession {
     let pid: Int            // 进程 ID
     let cwd: String         // 工作目录
     let startedAt: Date     // 启动时间
-    let type: SessionType   // claude/cursor/copilot/aime
+    let type: SessionType   // claude/cursor/openclaw/other
 
     var status: SessionStatus  // running/completed/waiting/error
     var toolName: String?      // 当前工具名称
@@ -270,9 +269,9 @@ Session List View:
 │                                          │
 │  ● Claude    my-project   Running       │
 │  ● Cursor    workspace    Idle          │
-│  ● Trae CLI  codebase     Thinking      │
+│  ● OpenClaw  codebase     Thinking      │
 │                                          │
-│  [All] [Claude] [Cursor] [Trae]         │  ← Plugin Tab Filter
+│  [All] [Claude] [Cursor] [OpenClaw]     │  ← Plugin Tab Filter
 └──────────────────────────────────────────┘
 ```
 
