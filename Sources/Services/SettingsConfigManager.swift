@@ -192,38 +192,51 @@ public class SettingsConfigManager {
 
     /// 获取 bridge 脚本路径
     /// 开发环境：源码目录下的 Bridge/
-    /// 发布环境：app bundle 内的 Resources/bridge/
+    /// 按优先级返回 bridge 脚本绝对路径：
+    ///   1. Release: `.app` bundle 内的 `Resources/Bridge/...`
+    ///   2. Dev: 用 `#file` 编译期锁定的源码路径回推 repo root，拼出 `Bridge/...`
+    ///   3. Fallback: CWD-relative（兼容脚本从 repo 根目录 swift run 启动）
+    /// 之前的 bug：Bundle.main.resourcePath 拼 `Bridge/...` 会得到
+    /// `.build/debug/Bridge/claude-hook-bridge.sh` 这种不存在的路径，还被
+    /// 兜底写进 settings.json，导致 hook 永远 fail。
     private func getBridgeScriptPath() -> String {
-        // 检查是否在 app bundle 中
-        // Bundle.main.path 会搜索 Contents/Resources/
+        // 1. Release bundle
         if let bundlePath = Bundle.main.path(forResource: "claude-hook-bridge", ofType: "sh", inDirectory: "Bridge") {
             NSLog("[SettingsConfigManager] Found bridge in bundle: \(bundlePath)")
             return bundlePath
         }
 
-        // 开发环境：尝试查找源码目录
-        // Bundle.main.resourcePath 在开发时可能是 .build 或其他路径
-        let resourcePath = Bundle.main.resourcePath ?? ""
+        // 2. Dev: 用 #file 指向本 swift 源码 → 向上退到 repo root → 拼 Bridge/...
+        //    #file 在编译时烙进字符串，指向 Sources/Services/SettingsConfigManager.swift
+        let devBridgeFromSourceTree: String = {
+            let thisFileURL = URL(fileURLWithPath: #file)
+            // .../Sources/Services/SettingsConfigManager.swift
+            //    ↓ 3 次 deletingLastPathComponent
+            // .../meee2/
+            let repoRoot = thisFileURL
+                .deletingLastPathComponent() // Services/
+                .deletingLastPathComponent() // Sources/
+                .deletingLastPathComponent() // meee2/
+            return repoRoot.appendingPathComponent("Bridge")
+                .appendingPathComponent(bridgeScriptName)
+                .path
+        }()
 
-        // 尝试多个可能的开发路径
-        let possiblePaths = [
-            // 标准 SwiftPM 构建路径
-            URL(fileURLWithPath: resourcePath).appendingPathComponent("Bridge").appendingPathComponent(bridgeScriptName).path,
-            // 源码目录 (相对于 workspace) - 更新为 meee2
-            "/Users/bytedance/peer_island_workspace/meee2/Bridge/\(bridgeScriptName)"
-        ]
-
-        for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path) {
-                NSLog("[SettingsConfigManager] Found bridge at dev path: \(path)")
-                return path
-            }
+        if FileManager.default.fileExists(atPath: devBridgeFromSourceTree) {
+            NSLog("[SettingsConfigManager] Found bridge via #file: \(devBridgeFromSourceTree)")
+            return devBridgeFromSourceTree
         }
 
-        // 默认使用第一个可能的路径（即使不存在，用户可能需要手动安装）
-        let defaultPath = possiblePaths[0]
-        NSLog("[SettingsConfigManager] Using default dev path: \(defaultPath)")
-        return defaultPath
+        // 3. CWD-relative（兜底）
+        let cwdPath = FileManager.default.currentDirectoryPath + "/Bridge/\(bridgeScriptName)"
+        if FileManager.default.fileExists(atPath: cwdPath) {
+            NSLog("[SettingsConfigManager] Found bridge via CWD: \(cwdPath)")
+            return cwdPath
+        }
+
+        // 都 miss 也返回 #file 推出来的路径（比之前 .build/debug 可信得多）
+        NSLog("[SettingsConfigManager] WARN: bridge script not found, using source-tree path: \(devBridgeFromSourceTree)")
+        return devBridgeFromSourceTree
     }
 
     /// 写入 settings.json

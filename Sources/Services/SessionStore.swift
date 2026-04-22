@@ -49,6 +49,11 @@ public struct SessionData: Codable, Identifiable {
 
     public var lastMessage: String?          // 最后一条消息摘要
 
+    // MARK: - 权限请求
+
+    public var pendingPermissionTool: String?    // 待审批的工具名称
+    public var pendingPermissionMessage: String? // 待审批的权限描述
+
     // MARK: - 初始化
 
     public init(
@@ -106,6 +111,8 @@ public struct SessionData: Codable, Identifiable {
         case terminalInfo = "terminal_info"
         case usageStats = "usage_stats"
         case lastMessage = "last_message"
+        case pendingPermissionTool = "pending_permission_tool"
+        case pendingPermissionMessage = "pending_permission_message"
     }
 
     /// 从 JSON 字典创建
@@ -137,6 +144,8 @@ public struct SessionData: Codable, Identifiable {
         terminalInfo = try container.decodeIfPresent(PluginTerminalInfo.self, forKey: .terminalInfo)
         usageStats = try container.decodeIfPresent(UsageStats.self, forKey: .usageStats)
         lastMessage = try container.decodeIfPresent(String.self, forKey: .lastMessage)
+        pendingPermissionTool = try container.decodeIfPresent(String.self, forKey: .pendingPermissionTool)
+        pendingPermissionMessage = try container.decodeIfPresent(String.self, forKey: .pendingPermissionMessage)
     }
 
     /// 编码为 JSON
@@ -162,6 +171,8 @@ public struct SessionData: Codable, Identifiable {
         try container.encodeIfPresent(terminalInfo, forKey: .terminalInfo)
         try container.encodeIfPresent(usageStats, forKey: .usageStats)
         try container.encodeIfPresent(lastMessage, forKey: .lastMessage)
+        try container.encodeIfPresent(pendingPermissionTool, forKey: .pendingPermissionTool)
+        try container.encodeIfPresent(pendingPermissionMessage, forKey: .pendingPermissionMessage)
     }
 }
 
@@ -228,6 +239,7 @@ public class SessionStore: ObservableObject {
 
     /// 创建会话 (自动更新 @Published sessions)
     public func create(_ session: SessionData) {
+        let existed = sessions.contains(where: { $0.sessionId == session.sessionId })
         saveToDisk(session)
         // 更新内存
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
@@ -235,6 +247,7 @@ public class SessionStore: ObservableObject {
         } else {
             sessions.append(session)
         }
+        SessionEventBus.shared.publish(existed ? .sessionMetadataChanged(sessionId: session.sessionId) : .sessionAdded(sessionId: session.sessionId))
         MLog("[SessionStore] Created session: \(session.sessionId.prefix(8))")
     }
 
@@ -249,6 +262,7 @@ public class SessionStore: ObservableObject {
         changes(&sessions[idx])
         sessions[idx].lastActivity = Date()
         saveToDisk(sessions[idx])
+        SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
     }
 
     /// 删除会话 (自动更新 @Published sessions)
@@ -260,17 +274,42 @@ public class SessionStore: ObservableObject {
         clearQueue(sessionId)
         clearUnread(sessionId)
 
+        SessionEventBus.shared.publish(.sessionRemoved(sessionId: sessionId))
         MLog("[SessionStore] Deleted session: \(sessionId.prefix(8))")
     }
 
     /// 更新或插入会话 (自动更新 @Published sessions)
+    /// **粘性字段保留**：ClaudePlugin 的 sync 路径会周期性用新建 SessionData 覆盖，
+    /// 此时 ghosttyTerminalId / terminalInfo 常为 nil/空。若 store 里已有有效值，
+    /// 保留旧值——这些是"累积发现"的元数据，不能被后续事件无意清零。
     public func upsert(_ session: SessionData) {
-        if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
-            sessions[idx] = session
-        } else {
-            sessions.append(session)
+        var merged = session
+        let existing = sessions.first(where: { $0.sessionId == session.sessionId })
+        if let ex = existing {
+            // Ghostty 原生 terminal id：只在 hook 里主动捕获过一次就该粘着
+            if (merged.ghosttyTerminalId ?? "").isEmpty,
+               let prev = ex.ghosttyTerminalId, !prev.isEmpty {
+                merged.ghosttyTerminalId = prev
+            }
+            // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
+            let ti = merged.terminalInfo
+            let incomingEmpty = ti == nil ||
+                ((ti?.tty ?? "").isEmpty &&
+                 (ti?.termProgram ?? "").isEmpty &&
+                 (ti?.cmuxSocketPath ?? "").isEmpty)
+            if incomingEmpty, let prevInfo = ex.terminalInfo {
+                merged.terminalInfo = prevInfo
+            }
         }
-        saveToDisk(session)
+
+        let existed = existing != nil
+        if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
+            sessions[idx] = merged
+        } else {
+            sessions.append(merged)
+        }
+        saveToDisk(merged)
+        SessionEventBus.shared.publish(existed ? .sessionMetadataChanged(sessionId: session.sessionId) : .sessionAdded(sessionId: session.sessionId))
     }
 
     /// 创建或更新会话 (兼容旧接口)
@@ -283,15 +322,15 @@ public class SessionStore: ObservableObject {
         sessions.contains { $0.sessionId == sessionId }
     }
 
-    /// 列出所有会话 (从内存读取)
+    /// 列出所有会话 (从内存读取，按启动时间降序)
     public func listAll() -> [SessionData] {
-        sessions.sorted { $0.lastActivity > $1.lastActivity }
+        sessions.sorted { $0.startedAt > $1.startedAt }
     }
 
-    /// 列出活跃会话（非 dead 和 completed）
+    /// 列出活跃会话（非 dead 和 completed，按启动时间降序）
     public func listActive() -> [SessionData] {
         sessions.filter { $0.status != "dead" && $0.status != "completed" }
-            .sorted { $0.lastActivity > $1.lastActivity }
+            .sorted { $0.startedAt > $1.startedAt }
     }
 
     /// 从磁盘重新加载所有会话 (用于 CLI/TUI 同步 GUI 的更新)

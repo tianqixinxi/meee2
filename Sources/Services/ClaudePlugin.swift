@@ -174,9 +174,24 @@ class ClaudePlugin: SessionPlugin {
         let originalId = session.id.hasPrefix("\(pluginId)-")
             ? String(session.id.dropFirst("\(pluginId)-".count))
             : session.id
+        NSLog("========== [JUMP FLOW begin] sid=\(originalId.prefix(8)) title=\(session.title) ==========")
+        MLog("[ClaudePlugin] activateTerminal called, originalId=\(originalId)")
 
         // 先尝试从 sessionMonitor 找到完整 session
-        if let aiSession = sessionMonitor.sessions.first(where: { $0.id == originalId }) {
+        if var aiSession = sessionMonitor.sessions.first(where: { $0.id == originalId }) {
+            MLog("[ClaudePlugin] Found in sessionMonitor, pid=\(aiSession.pid), termProgram=\(aiSession.termProgram ?? "nil")")
+            // sessionMonitor 的 AISession 不含终端信息，从 SessionStore 补充
+            if aiSession.termProgram == nil, let sessionData = sessionStore.get(originalId),
+               let info = sessionData.terminalInfo {
+                aiSession.tty = info.tty
+                aiSession.termProgram = info.termProgram
+                aiSession.termBundleId = info.termBundleId
+                aiSession.cmuxSocketPath = info.cmuxSocketPath
+                aiSession.cmuxSurfaceId = info.cmuxSurfaceId
+                aiSession.ghosttyTerminalId = sessionData.ghosttyTerminalId
+                MLog("[ClaudePlugin] Enriched from SessionStore: tty=\(info.tty ?? "nil"), termProgram=\(info.termProgram ?? "nil"), ghosttyId=\(sessionData.ghosttyTerminalId ?? "nil")")
+            }
+            enrichTerminalInfoIfMissing(&aiSession, originalId: originalId)
             TerminalManager.smartActivateTerminal(forSession: aiSession)
             return
         }
@@ -199,6 +214,8 @@ class ClaudePlugin: SessionPlugin {
             mutableSession.termBundleId = info?.termBundleId
             mutableSession.cmuxSocketPath = info?.cmuxSocketPath
             mutableSession.cmuxSurfaceId = info?.cmuxSurfaceId
+            mutableSession.ghosttyTerminalId = sessionData.ghosttyTerminalId
+            enrichTerminalInfoIfMissing(&mutableSession, originalId: originalId)
             TerminalManager.smartActivateTerminal(forSession: mutableSession)
             return
         }
@@ -218,6 +235,7 @@ class ClaudePlugin: SessionPlugin {
             mutableSession.termBundleId = info.termBundleId
             mutableSession.cmuxSocketPath = info.cmuxSocketPath
             mutableSession.cmuxSurfaceId = info.cmuxSurfaceId
+            enrichTerminalInfoIfMissing(&mutableSession, originalId: originalId)
             TerminalManager.smartActivateTerminal(forSession: mutableSession)
         }
     }
@@ -269,6 +287,13 @@ class ClaudePlugin: SessionPlugin {
 
         // 更新精细状态
         updateDetailedStatus(sessionId: sessionId, event: event)
+
+        // DEBUG: 记录状态流转。每个 hook 的 event type + 转换前/后 detailedStatus。
+        detailedStatusesLock.lock()
+        let dsBefore = detailedStatuses[sessionId]?.rawValue ?? "nil"
+        detailedStatusesLock.unlock()
+        let eventName = event.event?.rawValue ?? "nil"
+        NSLog("[StatusFlow] sid=\(sessionId.prefix(8)) evt=\(eventName) tool=\(event.toolName ?? "nil") before=\(dsBefore)")
 
         // 处理不同类型的事件
         switch event.event {
@@ -365,11 +390,27 @@ class ClaudePlugin: SessionPlugin {
             break
         }
 
+        detailedStatusesLock.lock()
+        let dsAfter = detailedStatuses[sessionId]?.rawValue ?? "nil"
+        detailedStatusesLock.unlock()
+        if dsAfter != dsBefore {
+            NSLog("[StatusFlow] sid=\(sessionId.prefix(8)) evt=\(eventName) → \(dsBefore) → \(dsAfter)")
+        }
+
         // 更新 SessionStore (实时性保障)
         updateSessionInStore(sessionId: sessionId)
 
         // 通知更新 (在更新 SessionStore 之后)
         notifySessionsUpdated()
+
+        // 统一事件总线：任何 hook 都代表一次元数据变动
+        SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
+
+        // 若本次事件带来新 transcript 内容（Stop/PostToolUse/SessionEnd 或带 lastAssistantMessage），再发一个 transcriptAppended
+        let hasAssistant = (event.lastAssistantMessage?.isEmpty == false)
+        if event.event == .postToolUse || event.event == .stop || event.event == .sessionEnd || hasAssistant {
+            SessionEventBus.shared.publish(.transcriptAppended(sessionId: sessionId))
+        }
 
         // 触发音效
         if let eventType = event.event, let soundEvent = eventType.soundEvent {
@@ -422,6 +463,11 @@ class ClaudePlugin: SessionPlugin {
                     cmuxSurfaceId: hook.cmuxSurfaceId
                 )
             }
+            // Ghostty 原生 terminal ID — 仅在 SessionStart/UserPromptSubmit 等 hook
+            // 里 bridge 会捕获；只要 hook 带来了新值就覆盖（用户可能 --resume 到别的 tab）。
+            if let gtid = hook.ghosttyTerminalId, !gtid.isEmpty {
+                data.ghosttyTerminalId = gtid
+            }
             // 更新 lastMessage（从 hook 的 lastAssistantMessage 或 transcript）
             if let lastAssistantMsg = hook.lastAssistantMessage, !lastAssistantMsg.isEmpty {
                 data.lastMessage = String(lastAssistantMsg.prefix(100))
@@ -435,6 +481,17 @@ class ClaudePlugin: SessionPlugin {
             }
         }
         hookStatesLock.unlock()
+
+        // 更新权限请求状态
+        pendingPermissionsLock.lock()
+        if let pending = pendingPermissions[sessionId] {
+            data.pendingPermissionTool = pending.event.toolName
+            data.pendingPermissionMessage = pending.event.permission
+        } else {
+            data.pendingPermissionTool = nil
+            data.pendingPermissionMessage = nil
+        }
+        pendingPermissionsLock.unlock()
 
         // 写入 SessionStore
         sessionStore.upsert(data)
@@ -656,15 +713,20 @@ class ClaudePlugin: SessionPlugin {
 
             // 检查 hook 状态中是否有真实的 session ID（可能是 --resume 后的新 session）
             // hookStates 中的 session ID 是正确的，而 PID.json 中可能是旧的
+            //
+            // 重要：只有当 aiSession.id 不在 hookStates 里时才走 cwd 回退——
+            // 否则同一 cwd 下两个独立 session 会互相吞并。
             var realSessionId = aiSession.id
             hookStatesLock.lock()
-            // 遍历 hookStates 找到匹配当前 session 的真实 ID
-            for (hookSessionId, hookEvent) in hookStates {
-                // 如果 hook 的 cwd 和 aiSession 的 cwd 匹配，使用 hook 的 session ID
-                if let hookCwd = hookEvent.cwd, hookCwd == aiSession.cwd {
-                    realSessionId = hookSessionId
-                    NSLog("[ClaudePlugin] Found real session ID from hook: \(hookSessionId) (PID.json had \(aiSession.id))")
-                    break
+            let idIsKnownToHooks = hookStates[aiSession.id] != nil
+            if !idIsKnownToHooks {
+                // PID.json 的 ID 不在 hook stream 中 —— 可能是 --resume 的陈旧 ID
+                for (hookSessionId, hookEvent) in hookStates {
+                    if let hookCwd = hookEvent.cwd, hookCwd == aiSession.cwd {
+                        realSessionId = hookSessionId
+                        NSLog("[ClaudePlugin] Remapped stale session ID via cwd: \(hookSessionId) (PID.json had \(aiSession.id))")
+                        break
+                    }
                 }
             }
             hookStatesLock.unlock()
@@ -695,7 +757,10 @@ class ClaudePlugin: SessionPlugin {
                         data.startedAt = aiSession.startedAt
                         data.lastActivity = aiSession.lastUpdated
                         data.status = aiSession.status.rawValue
-                        data.detailedStatus = .idle
+                        // 不要碰 detailedStatus：SessionMonitor 每 2s 跑一次这条
+                        // 路径，如果这里硬写 .idle，会把 hook 刚刚设的 .thinking /
+                        // .tooling 冲掉，UI 就出现"回复到一半突然 idle"的抖动。
+                        // detailedStatus 的权威源是 hook 事件（handleHookEvent）。
                         data.transcriptPath = transcriptPath
                         data.lastMessage = lastMessage
                     }
@@ -784,6 +849,100 @@ class ClaudePlugin: SessionPlugin {
     private func notifySessionsUpdated() {
         let sessions = getSessions()
         onSessionsUpdated?(sessions)
+    }
+
+    // MARK: - 终端信息现场推导（回退路径）
+
+    /// 当 SessionStore/AISession 缺少 tty 时，走 `ps` 从进程树现场推导，并回写 SessionStore。
+    /// 处理历史上 terminal_info 被空数据覆盖的脏数据场景。
+    private func enrichTerminalInfoIfMissing(_ aiSession: inout AISession, originalId: String) {
+        guard aiSession.tty == nil || aiSession.tty?.isEmpty == true else { return }
+        guard aiSession.pid > 0 else {
+            MWarn("[ClaudePlugin] Cannot derive terminal info: pid=0 for \(originalId)")
+            return
+        }
+
+        guard let derived = Self.deriveTerminalInfoLive(forPID: aiSession.pid) else {
+            MWarn("[ClaudePlugin] Live-derive failed for pid=\(aiSession.pid) (\(originalId))")
+            return
+        }
+
+        aiSession.tty = derived.tty
+        aiSession.termProgram = derived.termProgram
+        aiSession.termBundleId = derived.termBundleId
+        MInfo("[ClaudePlugin] Live-derived terminal info for \(originalId): tty=\(derived.tty ?? "nil"), termProgram=\(derived.termProgram ?? "nil")")
+
+        // 回写 SessionStore 供下次快速跳转
+        sessionStore.update(originalId) { data in
+            data.terminalInfo = derived
+        }
+    }
+
+    /// 从 pid 现场推导 TTY + 终端应用（走进程树）。失败返回 nil。
+    private static func deriveTerminalInfoLive(forPID pid: Int) -> PluginTerminalInfo? {
+        guard let rawTTY = runPS(["-o", "tty=", "-p", "\(pid)"])?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawTTY.isEmpty, rawTTY != "??" else {
+            return nil
+        }
+
+        // 沿 ppid 链最多向上 8 层，匹配已知终端应用
+        var termProgram: String? = nil
+        var termBundleId: String? = nil
+        var currentPid = pid
+        for _ in 0..<8 {
+            guard let ppidStr = runPS(["-o", "ppid=", "-p", "\(currentPid)"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  let ppid = Int(ppidStr), ppid > 1 else { break }
+
+            guard let command = runPS(["-o", "command=", "-p", "\(ppid)"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines) else { break }
+
+            if command.contains("Ghostty.app") || command.contains("ghostty") {
+                termProgram = "ghostty"
+                termBundleId = "com.mitchellh.ghostty"
+                break
+            } else if command.contains("iTerm.app") || command.contains("iTerm2") {
+                termProgram = "iTerm.app"
+                termBundleId = "com.googlecode.iterm2"
+                break
+            } else if command.contains("Terminal.app") {
+                termProgram = "Apple_Terminal"
+                termBundleId = "com.apple.Terminal"
+                break
+            } else if command.contains("cmux") {
+                termProgram = "cmux"
+                termBundleId = "cmux"
+                break
+            }
+
+            currentPid = ppid
+        }
+
+        return PluginTerminalInfo(
+            tty: rawTTY,
+            termProgram: termProgram,
+            termBundleId: termBundleId,
+            cmuxSocketPath: nil,
+            cmuxSurfaceId: nil
+        )
+    }
+
+    private static func runPS(_ args: [String]) -> String? {
+        let task = Process()
+        task.launchPath = "/bin/ps"
+        task.arguments = args
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)
     }
 }
 

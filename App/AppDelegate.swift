@@ -12,6 +12,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 设置窗口
     private var settingsWindow: NSWindow?
 
+    /// Board 窗口控制器 (static 强引用，防止被释放)
+
     /// 状态管理器
     private let statusManager = StatusManager()
 
@@ -21,8 +23,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 默认灵动岛尺寸 (无刘海时使用)
     private let defaultIslandSize = CGSize(width: 150, height: 32)
 
-    /// 展开后的灵动岛高度
-    private let expandedHeight: CGFloat = 200
+    /// 展开后的灵动岛最大高度（匹配 IslandView.expandedMaxHeight）
+    private let expandedHeight: CGFloat = 700
 
     /// 用户选择的屏幕 ID
     @AppStorage("selectedScreenId") private var selectedScreenId: String = "builtin"
@@ -48,6 +50,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 启动状态监控
         statusManager.start()
+
+        // 自动启动 Board HTTP/WS 服务器 —— 开发工具，一直监听 9876。
+        // 之前只在点击菜单 Open Board 时启动，导致浏览器直接访问 localhost:9876
+        // 连不上。
+        do {
+            try BoardServer.shared.start()
+            NSLog("[AppDelegate] BoardServer listening on \(BoardServer.shared.url)")
+        } catch {
+            NSLog("[AppDelegate] BoardServer failed to start: \(error)")
+        }
 
         // 发送使用统计（异步，不阻塞启动）
         UsageTracker.shared.trackLaunch()
@@ -87,6 +99,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let tuiItem = NSMenuItem(title: "TUI", action: #selector(openTUI), keyEquivalent: "t")
         tuiItem.target = self
         menu.addItem(tuiItem)
+        let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
+        boardItem.target = self
+        menu.addItem(boardItem)
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -127,6 +142,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("openTUI"),
             object: nil
         )
+
+        // 监听打开 Board 的通知（来自灵动岛右上角菜单）
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openBoardMenu),
+            name: NSNotification.Name("openBoard"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -165,77 +188,96 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    @objc private func openBoardMenu() {
+        if !BoardServer.shared.isRunning {
+            do {
+                try BoardServer.shared.start()
+            } catch {
+                NSLog("[AppDelegate] failed to start board server: \(error)")
+                let alert = NSAlert()
+                alert.messageText = "Failed to start Board server"
+                alert.informativeText = "\(error)"
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+                return
+            }
+        }
+        _ = try? Process.run(
+            URL(fileURLWithPath: "/usr/bin/open"),
+            arguments: [BoardServer.shared.url]
+        )
+    }
+
     @objc private func openTUI() {
         NSLog("[AppDelegate] openTUI called")
 
-        // 检查 CLI 是否已安装
-        let cliPath = "/usr/local/bin/meee2"
-        let expectedTarget = "/Applications/meee2.app/Contents/MacOS/meee2"
-
-        var needsInstall = false
-        if !FileManager.default.fileExists(atPath: cliPath) {
-            NSLog("[AppDelegate] CLI not found at \(cliPath)")
-            needsInstall = true
-        } else if let linkDest = try? FileManager.default.destinationOfSymbolicLink(atPath: cliPath),
-                  linkDest != expectedTarget {
-            NSLog("[AppDelegate] CLI symlink points to \(linkDest), expected \(expectedTarget)")
-            needsInstall = true
-        } else {
-            NSLog("[AppDelegate] CLI already installed correctly")
-        }
-
-        if needsInstall {
-            NSLog("[AppDelegate] Attempting to install CLI...")
-            // 使用 AppleScript 执行 sudo 安装（会弹出授权提示）
-            let installScript = """
-            do shell script "ln -sf \(expectedTarget) \(cliPath)" with administrator privileges
-            """
-
-            if let appleScript = NSAppleScript(source: installScript) {
-                var error: NSDictionary?
-                appleScript.executeAndReturnError(&error)
-                if let error = error {
-                    NSLog("[AppDelegate] CLI install error: \(error)")
-                    // 用户取消授权或其他错误
-                    DispatchQueue.main.async {
-                        let alert = NSAlert()
-                        alert.messageText = "CLI Installation Required"
-                        alert.informativeText = "To use TUI, meee2 CLI needs to be installed to /usr/local/bin/. Please authorize the installation."
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
-                    }
-                    return
-                }
-                NSLog("[AppDelegate] CLI installed successfully")
-            }
-        }
-
-        // 检测用户正在使用的终端并在其中运行 TUI
-        NSLog("[AppDelegate] Launching TUI...")
-        launchTUI()
-    }
-
-    /// 检测并启动 TUI 到用户正在使用的终端
-    private func launchTUI() {
-        // 检测最前面的应用是否是终端
+        // 捕获主线程需要的值
         let frontmostApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
 
+        // 所有 AppleScript 操作放到后台线程，避免阻塞 GUI
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            // 检查 CLI 是否已安装
+            let cliPath = "/usr/local/bin/meee2"
+            let expectedTarget = "/Applications/meee2.app/Contents/MacOS/meee2"
+
+            var needsInstall = false
+            if !FileManager.default.fileExists(atPath: cliPath) {
+                NSLog("[AppDelegate] CLI not found at \(cliPath)")
+                needsInstall = true
+            } else if let linkDest = try? FileManager.default.destinationOfSymbolicLink(atPath: cliPath),
+                      linkDest != expectedTarget {
+                NSLog("[AppDelegate] CLI symlink points to \(linkDest), expected \(expectedTarget)")
+                needsInstall = true
+            } else {
+                NSLog("[AppDelegate] CLI already installed correctly")
+            }
+
+            if needsInstall {
+                NSLog("[AppDelegate] Attempting to install CLI...")
+                let installScript = """
+                do shell script "ln -sf \(expectedTarget) \(cliPath)" with administrator privileges
+                """
+
+                if let appleScript = NSAppleScript(source: installScript) {
+                    var error: NSDictionary?
+                    appleScript.executeAndReturnError(&error)
+                    if let error = error {
+                        NSLog("[AppDelegate] CLI install error: \(error)")
+                        DispatchQueue.main.async {
+                            let alert = NSAlert()
+                            alert.messageText = "CLI Installation Required"
+                            alert.informativeText = "To use TUI, meee2 CLI needs to be installed to /usr/local/bin/. Please authorize the installation."
+                            alert.alertStyle = .warning
+                            alert.addButton(withTitle: "OK")
+                            alert.runModal()
+                        }
+                        return
+                    }
+                    NSLog("[AppDelegate] CLI installed successfully")
+                }
+            }
+
+            // 在后台线程启动 TUI
+            NSLog("[AppDelegate] Launching TUI...")
+            self.launchTUIAsync(frontmostApp: frontmostApp)
+        }
+    }
+
+    /// 在后台线程启动 TUI（frontmostApp 已在主线程捕获）
+    private func launchTUIAsync(frontmostApp: String) {
         NSLog("[AppDelegate] Frontmost app: \(frontmostApp)")
 
-        // 根据终端类型选择启动方式
         switch frontmostApp {
         case "com.mitchellh.ghostty":
-            // Ghostty
             launchTUIInGhostty()
         case "com.googlecode.iterm2":
-            // iTerm2
             launchTUIIniTerm2()
         case "com.apple.Terminal":
-            // Terminal.app
             launchTUIInTerminal()
         default:
-            // 默认使用 Terminal.app
             launchTUIInTerminal()
         }
     }
@@ -249,10 +291,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
            FileManager.default.fileExists(atPath: bundlePath) {
             return bundlePath
         }
-        // 2. 开发环境：.build/debug/meee2
-        let debugPath = "/Users/bytedance/peer_island_workspace/meee2/.build/debug/meee2"
-        if FileManager.default.fileExists(atPath: debugPath) {
-            return debugPath
+        // 2. /usr/local/bin/meee2 (CLI symlink)
+        let cliPath = "/usr/local/bin/meee2"
+        if FileManager.default.fileExists(atPath: cliPath) {
+            return cliPath
         }
         // 3. 最后尝试 PATH 中的 meee2
         return "meee2"
@@ -443,9 +485,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             // 设置 SwiftUI 内容
-            let contentView = NSHostingView(rootView: IslandView(statusManager: statusManager))
-            contentView.frame = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
-            islandWindow?.contentView = contentView
+            let hostingView = NSHostingView(rootView: IslandView(statusManager: statusManager))
+            hostingView.sizingOptions = []  // 禁用自动调整窗口大小，防止约束循环
+            hostingView.frame = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
+            hostingView.autoresizingMask = [.width, .height]
+            islandWindow?.contentView = hostingView
         }
 
         // 定位窗口

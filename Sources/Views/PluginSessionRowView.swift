@@ -7,6 +7,10 @@ struct PluginSessionRowView: View {
     let session: PluginSession
     let pluginInfo: (displayName: String, icon: String, themeColor: Color)?
     let onOpenTerminal: () -> Void
+    /// 其他活跃 session（用于右键 "Connect to..." 列表）；默认为空以保持旧调用点兼容
+    var otherActiveSessions: [PluginSession] = []
+    /// 用户点击某个目标 session 时回调 —— 父视图负责打开 A2AConnectSheet
+    var onConnectRequest: ((PluginSession) -> Void)? = nil
 
     @State private var isHovered = false
 
@@ -55,6 +59,12 @@ struct PluginSessionRowView: View {
     /// 第二行显示的消息：优先 lastMessage，fallback subtitle
     private var displayMessage: String? {
         session.lastMessage ?? session.subtitle
+    }
+
+    /// A2A inbox 待取消息数（0 时不显示徽章）
+    /// session.id 对 Claude plugin 而言即 sessionId；其他 plugin 不在 A2A 中，peekInbox 会返回空
+    private var inboxCount: Int {
+        MessageRouter.shared.peekInbox(sessionId: session.id).count
     }
 
     var body: some View {
@@ -124,7 +134,7 @@ struct PluginSessionRowView: View {
                         .foregroundColor(effectiveDetailedStatus.needsUserAction ? .orange : .white.opacity(0.5))
                         .lineLimit(1)
 
-                    // 任务进度 + 使用统计
+                    // 任务进度 + 使用统计 + A2A inbox 徽章
                     HStack(spacing: 6) {
                         if let progress = session.progressText {
                             Text(progress)
@@ -136,6 +146,14 @@ struct PluginSessionRowView: View {
                             Text(stats.formattedCost)
                                 .font(.system(size: 8, weight: .medium))
                                 .foregroundColor(.green.opacity(0.8))
+                        }
+
+                        // A2A 收件箱徽章：仅在有待取消息时显示
+                        let count = inboxCount
+                        if count > 0 {
+                            Text("📨\(count)")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.white.opacity(0.75))
                         }
                     }
                 }
@@ -152,6 +170,43 @@ struct PluginSessionRowView: View {
         .onHover { hovering in
             isHovered = hovering
         }
+        .contextMenu {
+            if otherActiveSessions.isEmpty {
+                // 没有其他 session 时，展示一个 disabled 提示
+                Text("Connect to... (no other sessions)")
+            } else {
+                Menu("Connect to...") {
+                    ForEach(otherActiveSessions, id: \.id) { other in
+                        Button(otherLabel(other)) {
+                            onConnectRequest?(other)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("Open terminal") { onOpenTerminal() }
+        }
+    }
+
+    /// 子菜单项 label: "<title> · <short cwd>"
+    private func otherLabel(_ other: PluginSession) -> String {
+        let title = other.title
+        if let cwd = other.cwd, !cwd.isEmpty {
+            return "\(title) · \(shortCwd(cwd))"
+        }
+        return title
+    }
+
+    /// 把 "/Users/<user>/..." 折叠成 "~/..."
+    private func shortCwd(_ cwd: String) -> String {
+        let home = NSHomeDirectory()
+        if cwd == home { return "~" }
+        if cwd.hasPrefix(home + "/") {
+            return "~" + String(cwd.dropFirst(home.count))
+        }
+        return cwd
     }
 }
 
@@ -169,7 +224,7 @@ struct PluginSessionRowView_Previews: PreviewProvider {
                     startedAt: Date().addingTimeInterval(-120),
                     subtitle: "Writing code...",
                     toolName: "Edit",
-                    cwd: "/Users/test/project",
+                    cwd: "/tmp/test/project",
                     icon: "cursorarrow",
                     accentColor: .blue
                 ),
@@ -185,7 +240,7 @@ struct PluginSessionRowView_Previews: PreviewProvider {
                     status: .permissionRequest,
                     startedAt: Date().addingTimeInterval(-300),
                     subtitle: "Permission required",
-                    cwd: "/Users/test/another"
+                    cwd: "/tmp/test/another"
                 ),
                 pluginInfo: ("Copilot", "sparkles", .purple),
                 onOpenTerminal: { print("Open VSCode") }

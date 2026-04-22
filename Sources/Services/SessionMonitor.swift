@@ -76,7 +76,7 @@ class SessionMonitor: ObservableObject {
         refreshTimer = nil
 
         isMonitoring = false
-        print("SessionMonitor stopped")
+        MLog("[SessionMonitor] Stopped")
     }
 
     /// 手动刷新 sessions

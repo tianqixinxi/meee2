@@ -64,6 +64,9 @@ public struct AISession: Identifiable, Codable, Hashable {
     /// cmux surface ID (用于 cmux tab 定位)
     public var cmuxSurfaceId: String?
 
+    /// Ghostty 原生 terminal ID（AppleScript `id of terminal`），跳转优先用此字段
+    public var ghosttyTerminalId: String?
+
     /// 最后活动时间戳 (用于清理过期 session)
     public var lastActivityTimestamp: Double?
 

@@ -14,7 +14,10 @@ public struct CLI {
         switch command {
         case "tui":
             runTUI()
-            return false  // 返回 false 表示退出，不启动 GUI
+            return false
+
+        case "board":
+            return BoardCommand.run()  // 返回 false 表示退出，不启动 GUI
 
         case "list":
             let format: OutputFormat = args.contains("--json") ? .json :
@@ -48,6 +51,18 @@ public struct CLI {
             NoteCommand.run(sessionId: args[1], note: args[2])
             return false
 
+        case "msg":
+            MsgCommand.run(args: Array(args.dropFirst()))
+            return false
+
+        case "whoami":
+            WhoAmICommand.run()
+            return false
+
+        case "channel":
+            ChannelCommand.run(args: Array(args.dropFirst()))
+            return false
+
         case "--help", "-h", "help":
             printHelp()
             return false
@@ -76,13 +91,23 @@ public struct CLI {
           meee2                  Start GUI (default)
           meee2 gui              Start GUI
           meee2 tui              Start TUI dashboard
+          meee2 board            Open whiteboard visualization (sessions + A2A channels)
           meee2 list             List sessions
           meee2 list --json      List sessions in JSON format
           meee2 send <id> "msg"  Send message to session
           meee2 jump <id>        Jump to session terminal
           meee2 note <id> "note" Add note to session
+          meee2 channel <sub>    Manage A2A channels (ls, create, join, leave, mode, info)
+          meee2 msg <sub>        A2A messaging (send, ls, get, hold, deliver, drop, edit)
+          meee2 whoami           Show this session's A2A identity + memberships
           meee2 --help           Show this help
           meee2 --version        Show version
+
+        A2A examples:
+          meee2 channel create <name>
+          meee2 channel join <name> --as <agent>
+          meee2 msg send --channel <name> --from <a> --to <b> "message"
+          meee2 msg ls --channel <name>
 
         Session ID can be short prefix (e.g., first 8 characters).
         """)
@@ -90,7 +115,7 @@ public struct CLI {
 
     private static func printUsage() {
         print("Usage: meee2 <command> [args]")
-        print("Commands: gui, tui, list, send, jump, note, help, version")
+        print("Commands: gui, tui, board, list, send, jump, note, channel, msg, whoami, help, version")
         print("Run 'meee2 --help' for more information")
     }
 

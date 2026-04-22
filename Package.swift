@@ -13,12 +13,25 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
+        .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0"),
     ],
     targets: [
         .target(
             name: "meee2Kit",
-            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
-            path: "Sources"
+            dependencies: [
+                .product(name: "Meee2PluginKit", package: "Meee2PluginKit"),
+                .product(name: "Swifter", package: "swifter"),
+            ],
+            path: "Sources",
+            resources: [
+                .copy("Board/WebDist"),
+            ]
+        ),
+        .testTarget(
+            name: "meee2Tests",
+            dependencies: ["meee2Kit"],
+            path: "Tests",
+            exclude: ["Fixtures"]
         ),
         .executableTarget(
             name: "meee2App",

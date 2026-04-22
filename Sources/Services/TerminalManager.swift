@@ -14,28 +14,36 @@ class TerminalManager {
         NSLog("[TerminalManager] Terminal info: tty=\(session.tty ?? "nil"), termProgram=\(session.termProgram ?? "nil"), termBundleId=\(session.termBundleId ?? "nil"), cmuxSocket=\(session.cmuxSocketPath ?? "nil"), cmuxSurface=\(session.cmuxSurfaceId ?? "nil")")
 
         // 方法0：优先检测 cmux（cmux 有专用 socket 和 surface 信息）
-        if let cmuxSocket = session.cmuxSocketPath, session.termProgram == "cmux" || session.termBundleId == "cmux" {
+        if let cmuxSocket = session.cmuxSocketPath, !cmuxSocket.isEmpty, session.termProgram == "cmux" || session.termBundleId == "cmux" {
             NSLog("[TerminalManager] Method 0: Detected cmux with socket: \(cmuxSocket)")
             activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: session.cmuxSurfaceId)
             return
         }
 
-        // 方法0.5：从 SessionTerminalStore 获取，检查 cmux 信息
-        if let storedInfo = SessionTerminalStore.shared.get(sessionId: session.id) {
-            NSLog("[TerminalManager] Method 0.5: Using stored info: term=\(storedInfo.termProgram ?? "nil"), cmuxSocket=\(storedInfo.cmuxSocketPath ?? "nil")")
+        // 方法0.5：优先使用 AISession 自带的终端信息（由调用方从 SessionData.terminalInfo/ghosttyTerminalId 填充）
+        // 旧逻辑从 SessionTerminalStore.shared 取，但该 store 并未针对所有 session 同步；
+        // AISession 才是权威来源。只有当 AISession 字段为空时才回退到 SessionTerminalStore。
+        let effTerm = session.termProgram ?? SessionTerminalStore.shared.get(sessionId: session.id)?.termProgram
+        let effBundle = session.termBundleId ?? SessionTerminalStore.shared.get(sessionId: session.id)?.termBundleId
+        let effTty = session.tty ?? SessionTerminalStore.shared.get(sessionId: session.id)?.tty
+        let effCmuxSocket = session.cmuxSocketPath ?? SessionTerminalStore.shared.get(sessionId: session.id)?.cmuxSocketPath
+        let effCmuxSurface = session.cmuxSurfaceId ?? SessionTerminalStore.shared.get(sessionId: session.id)?.cmuxSurfaceId
+
+        if effTerm != nil || effTty != nil || effCmuxSocket != nil {
+            NSLog("[TerminalManager] Method 0.5: Using effective info: term=\(effTerm ?? "nil"), tty=\(effTty ?? "nil"), ghosttyId=\(session.ghosttyTerminalId ?? "nil"), cmuxSocket=\(effCmuxSocket ?? "nil")")
 
             // cmux 优先
-            if let cmuxSocket = storedInfo.cmuxSocketPath, storedInfo.termProgram == "cmux" || storedInfo.termBundleId == "cmux" {
-                NSLog("[TerminalManager] Found cmux from store with socket: \(cmuxSocket)")
-                activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: storedInfo.cmuxSurfaceId)
+            if let cmuxSocket = effCmuxSocket, !cmuxSocket.isEmpty, effTerm == "cmux" || effBundle == "cmux" {
+                NSLog("[TerminalManager] Method 0.5: cmux with socket: \(cmuxSocket)")
+                activateCmuxWithSocket(cmuxSocket, sessionId: session.id, cmuxSurfaceId: effCmuxSurface)
                 return
             }
 
-            // Ghostty / iTerm2: 使用 TerminalJumper 精确跳转
-            if let termProgram = storedInfo.termProgram {
+            // Ghostty / iTerm2: 使用 TerminalJumper 精确跳转（会用 ghosttyTerminalId / marker race）
+            if let termProgram = effTerm {
                 let lower = termProgram.lowercased()
                 if lower.contains("ghostty") || lower.contains("iterm") {
-                    NSLog("[TerminalManager] Using TerminalJumper for \(termProgram)")
+                    NSLog("[TerminalManager] Method 0.5: Using TerminalJumper for \(termProgram)")
                     Task {
                         _ = await TerminalJumper.shared.jump(to: session)
                     }
@@ -44,16 +52,16 @@ class TerminalManager {
             }
 
             // 其他终端
-            if let tty = storedInfo.tty, let termProgram = storedInfo.termProgram {
-                if let terminalApp = detectTerminalApp(from: termProgram, bundleId: storedInfo.termBundleId) {
-                    NSLog("[TerminalManager] Detected terminal app from store: \(terminalApp.rawValue)")
+            if let tty = effTty, let termProgram = effTerm {
+                if let terminalApp = detectTerminalApp(from: termProgram, bundleId: effBundle) {
+                    NSLog("[TerminalManager] Method 0.5: Detected terminal app: \(terminalApp.rawValue)")
                     activateTerminal(app: terminalApp, tty: tty)
                     return
                 }
             }
         }
 
-        NSLog("[TerminalManager] Stored terminal info not available, falling back to detection methods")
+        NSLog("[TerminalManager] No effective terminal info on AISession, falling back to detection methods")
 
         // 尝试找到已存在的窗口（原有逻辑）
         if let windowInfo = findWindowForSession(session) {
@@ -637,7 +645,7 @@ class TerminalManager {
                 }
             }
         } catch {
-            print("Failed to get TTY for PID \(pid): \(error)")
+            MLog("[TerminalManager] Failed to get TTY for PID \(pid): \(error)")
         }
 
         return nil
@@ -822,7 +830,7 @@ class TerminalManager {
     /// 查找使用指定 tty 的 tmux session
     private static func findTmuxSessionWithTTY(_ tty: String) -> String? {
         let ttyName = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
-        print("[TerminalManager] Looking for tmux session with tty: \(ttyName)")
+        MLog("[TerminalManager] Looking for tmux session with tty: \(ttyName)")
 
         // 检查 tmux 是否可用
         let checkTask = Process()
@@ -837,12 +845,12 @@ class TerminalManager {
             let data = checkPipe.fileHandleForReading.readDataToEndOfFile()
             guard let tmuxPath = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !tmuxPath.isEmpty else {
-                print("[TerminalManager] tmux not found in PATH")
+                MLog("[TerminalManager] tmux not found in PATH")
                 return nil
             }
-            print("[TerminalManager] tmux path: \(tmuxPath)")
+            MLog("[TerminalManager] tmux path: \(tmuxPath)")
         } catch {
-            print("[TerminalManager] Failed to check tmux: \(error)")
+            MLog("[TerminalManager] Failed to check tmux: \(error)")
             return nil
         }
 
@@ -860,21 +868,21 @@ class TerminalManager {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
-            print("[TerminalManager] tmux sessions: \(output)")
+            MLog("[TerminalManager] tmux sessions: \(output)")
 
             let sessionNames = output.split(separator: "\n").filter { !$0.isEmpty }
-            print("[TerminalManager] Found \(sessionNames.count) tmux sessions")
+            MLog("[TerminalManager] Found \(sessionNames.count) tmux sessions")
 
             for sessionName in sessionNames {
                 let name = String(sessionName)
-                print("[TerminalManager] Checking session: \(name)")
+                MLog("[TerminalManager] Checking session: \(name)")
                 if tmuxSessionHasTTY(name, tty: ttyName) {
-                    print("[TerminalManager] Found matching session: \(name)")
+                    MLog("[TerminalManager] Found matching session: \(name)")
                     return name
                 }
             }
         } catch {
-            print("[TerminalManager] Failed to list tmux sessions: \(error)")
+            MLog("[TerminalManager] Failed to list tmux sessions: \(error)")
         }
 
         return nil
@@ -898,19 +906,19 @@ class TerminalManager {
 
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
-            print("[TerminalManager] Session '\(session)' pane ttys: \(output)")
-            print("[TerminalManager] Looking for tty: \(ttyName) or \(shortTTY)")
+            MLog("[TerminalManager] Session '\(session)' pane ttys: \(output)")
+            MLog("[TerminalManager] Looking for tty: \(ttyName) or \(shortTTY)")
 
             // 检查完整路径或短名称
             for line in output.split(separator: "\n") {
                 let paneTTY = String(line)
                 if paneTTY == ttyName || paneTTY == shortTTY || paneTTY.contains(shortTTY) {
-                    print("[TerminalManager] Match found! pane tty: \(paneTTY)")
+                    MLog("[TerminalManager] Match found! pane tty: \(paneTTY)")
                     return true
                 }
             }
         } catch {
-            print("[TerminalManager] Failed to list panes for session \(session): \(error)")
+            MLog("[TerminalManager] Failed to list panes for session \(session): \(error)")
         }
 
         return false
@@ -926,7 +934,7 @@ class TerminalManager {
         do {
             try task.run()
         } catch {
-            print("Failed to activate tmux session: \(error)")
+            MLog("[TerminalManager] Failed to activate tmux session: \(error)")
         }
     }
 
@@ -1047,7 +1055,7 @@ class TerminalManager {
         do {
             try task.run()
         } catch {
-            print("Failed to activate Ghostty: \(error)")
+            MLog("[TerminalManager] Failed to activate Ghostty: \(error)")
         }
     }
 
@@ -1060,7 +1068,7 @@ class TerminalManager {
         do {
             try task.run()
         } catch {
-            print("Failed to activate app \(bundleId): \(error)")
+            MLog("[TerminalManager] Failed to activate app \(bundleId): \(error)")
         }
     }
 
@@ -1111,7 +1119,7 @@ class TerminalManager {
         do {
             try task.run()
         } catch {
-            print("Failed to activate Ghostty: \(error)")
+            MLog("[TerminalManager] Failed to activate Ghostty: \(error)")
         }
     }
 
@@ -1169,7 +1177,7 @@ class TerminalManager {
             try task.run()
             task.waitUntilExit()
         } catch {
-            print("AppleScript execution failed: \(error)")
+            MLog("[TerminalManager] AppleScript execution failed: \(error)")
         }
     }
 
@@ -1189,7 +1197,7 @@ class TerminalManager {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            print("AppleScript execution failed: \(error)")
+            MLog("[TerminalManager] AppleScript execution failed: \(error)")
             return nil
         }
     }

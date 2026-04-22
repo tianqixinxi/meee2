@@ -1,0 +1,44 @@
+#!/bin/bash
+# Pre-commit hook: fast checks only (full validation via scripts/validate.sh)
+
+cd "$(git rev-parse --show-toplevel)"
+
+# 1. Check for hardcoded user paths in staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(swift)$' || true)
+if [ -n "$STAGED" ]; then
+    HARDCODED=$(echo "$STAGED" | xargs grep -n '"/Users/[a-zA-Z]' 2>/dev/null || true)
+    if [ -n "$HARDCODED" ]; then
+        echo "ERROR: Hardcoded user paths detected:"
+        echo "$HARDCODED"
+        echo ""
+        echo "Use Bundle.main, NSHomeDirectory(), or FileManager instead."
+        exit 1
+    fi
+fi
+
+# 2. Check for potential secrets in staged files
+if [ -n "$STAGED" ]; then
+    SECRETS=$(echo "$STAGED" | xargs grep -inE '(api_key|apikey|secret|password)\s*[:=]' 2>/dev/null | grep -v 'CLAUDE.md' | grep -v '\.md:' || true)
+    if [ -n "$SECRETS" ]; then
+        echo "WARNING: Possible secrets in staged files:"
+        echo "$SECRETS"
+        echo ""
+        echo "If intentional, commit with: git commit --no-verify"
+        exit 1
+    fi
+fi
+
+# 3. Quick compile check
+# Redirect both stdout+stderr to a log: inside a git hook, streaming tons of
+# build progress to inherited FDs sometimes gets swift-build killed mid-run
+# (observed on macOS: build aborts at a different `[N/M]` each invocation).
+# If there's a real compile error we dump the log so it's still visible.
+BUILD_LOG=$(mktemp -t meee2-precommit.XXXXXX)
+if ! swift build >"$BUILD_LOG" 2>&1; then
+    echo "ERROR: Build failed. Fix compilation errors before committing."
+    echo "Full output:"
+    cat "$BUILD_LOG"
+    rm -f "$BUILD_LOG"
+    exit 1
+fi
+rm -f "$BUILD_LOG"

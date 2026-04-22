@@ -48,4 +48,10 @@ public class DynamicIslandWindow: NSWindow {
 
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { true }
+
+    /// 防止 NSHostingView 的 safe area insets 变化触发无限约束更新循环
+    public override var contentLayoutRect: NSRect {
+        return NSRect(origin: .zero, size: frame.size)
+    }
+
 }

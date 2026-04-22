@@ -1,0 +1,66 @@
+// Mirror of Swift DTOs in Sources/Board/BoardDTO.swift. Keep in sync.
+
+export type Mode = 'auto' | 'intercept' | 'paused'
+export type MessageStatus = 'pending' | 'held' | 'delivered' | 'dropped'
+
+export interface TranscriptEntry {
+  role: string // "user" | "assistant" | "tool" | other
+  text: string // already truncated server-side (~200 chars)
+}
+
+export interface Session {
+  id: string
+  title: string
+  project: string
+  pluginId: string
+  pluginDisplayName: string
+  pluginColor: string // "#FF9500"
+  status: string
+  inboxPending: number
+  recentMessages: TranscriptEntry[]
+  currentTool: string | null
+  costUSD: number | null
+}
+
+export interface Member {
+  alias: string
+  sessionId: string
+}
+
+export interface Channel {
+  name: string
+  mode: Mode
+  members: Member[]
+  pendingCount: number
+  description: string | null
+  createdAt: string // ISO8601
+}
+
+export interface Message {
+  id: string
+  channel: string
+  fromAlias: string
+  toAlias: string // alias or "*"
+  content: string
+  replyTo: string | null
+  status: MessageStatus
+  createdAt: string
+  deliveredAt: string | null
+  deliveredTo: string[]
+  injectedByHuman: boolean
+}
+
+export interface BoardState {
+  sessions: Session[]
+  channels: Channel[]
+}
+
+export interface ApiError {
+  error: { code: string; message: string }
+}
+
+// Selection state — what's picked on the board.
+export type Selection =
+  | { kind: 'none' }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'channel'; channelName: string }

@@ -268,6 +268,41 @@ public class HookSocketServer {
             cleanupCache(sessionId: sessionId)
         }
 
+        // A2A: Stop 事件到达时，排空会话的 inbox 消息
+        // 如果有消息，返回 {decision:"block", reason:...} 强迫 Claude 继续处理
+        // 如果无消息，按原逻辑关闭 socket（下游 Stop 处理仍会触发）
+        NSLog("[HookSocketServer] Incoming event.type=\(event.event?.rawValue ?? "nil") sessionId=\(event.sessionId?.prefix(8) ?? "nil")")
+        if event.event == .stop, let sessionId = event.sessionId {
+            let messages = MessageRouter.shared.drainInbox(sessionId: sessionId)
+            NSLog("[HookSocketServer] Stop event: drainInbox for \(sessionId.prefix(8)) returned \(messages.count) messages")
+            if !messages.isEmpty {
+                let header = "📨 You have \(messages.count) A2A message(s) from other agents:\n\n"
+                let combined = header + messages.map { $0.renderForInbox() }.joined(separator: "\n\n")
+
+                NSLog("[HookSocketServer] A2A: writing block-decision response (\(combined.count) chars) to \(sessionId.prefix(8))")
+
+                let response = PermissionResponse(decision: "block", reason: combined)
+                if let data = try? JSONEncoder().encode(response) {
+                    data.withUnsafeBytes { bytes in
+                        guard let baseAddress = bytes.baseAddress else {
+                            logger.error("Failed to get A2A response buffer address")
+                            return
+                        }
+                        let result = write(clientSocket, baseAddress, data.count)
+                        if result < 0 {
+                            logger.error("A2A write failed with errno: \(errno)")
+                        }
+                    }
+                } else {
+                    logger.error("Failed to encode A2A PermissionResponse")
+                }
+                close(clientSocket)
+                eventHandler?(event)
+                return
+            }
+            // 空 inbox：fall through 到下面的 else 分支关闭 socket
+        }
+
         // Handle permission requests
         if event.expectsResponse {
             NSLog("[HookSocketServer] Permission request expects response")

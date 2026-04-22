@@ -37,6 +37,9 @@ public struct IslandView: View {
     @State private var isExpanded = false
     @State private var expandMode: ExpandMode = .manual
     @State private var isClosing = false  // 正在关闭动画中，保持内容显示
+
+    /// 右键 "Connect to..." 发起的 A2A 连接请求 —— 驱动 A2AConnectSheet
+    @State private var connectRequest: ConnectRequest? = nil
     @State private var autoCloseTimer: Timer?
     @State private var carouselTimer: Timer?
     @State private var carouselIndex: Int = 0
@@ -267,6 +270,11 @@ public struct IslandView: View {
                 openExpanded()
             }
         }
+        .sheet(item: $connectRequest) { req in
+            A2AConnectSheet(request: req) {
+                connectRequest = nil
+            }
+        }
     }
 
     // MARK: - Background
@@ -477,25 +485,41 @@ public struct IslandView: View {
 
                 Spacer()
 
-                // 右侧：菜单按钮
-                Menu {
-                    Button("TUI") {
-                        NotificationCenter.default.post(name: NSNotification.Name("openTUI"), object: nil)
+                // 右侧：Board 快捷按钮 + 菜单
+                HStack(spacing: 8) {
+                    // 专门的 Board 入口 —— 点一下打开浏览器里的 board
+                    Button(action: {
+                        NotificationCenter.default.post(name: NSNotification.Name("openBoard"), object: nil)
+                    }) {
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(size: 13))
+                            .foregroundColor(.white.opacity(0.8))
                     }
-                    Button("Settings...") {
-                        NotificationCenter.default.post(name: NSNotification.Name("openSettings"), object: nil)
+                    .buttonStyle(.plain)
+                    .help("Open Board in browser")
+
+                    Menu {
+                        Button("Open Board") {
+                            NotificationCenter.default.post(name: NSNotification.Name("openBoard"), object: nil)
+                        }
+                        Button("TUI") {
+                            NotificationCenter.default.post(name: NSNotification.Name("openTUI"), object: nil)
+                        }
+                        Button("Settings...") {
+                            NotificationCenter.default.post(name: NSNotification.Name("openSettings"), object: nil)
+                        }
+                        Divider()
+                        Button("Quit") {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.system(size: 14))
+                            .foregroundColor(.white.opacity(0.8))
                     }
-                    Divider()
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 14))
-                        .foregroundColor(.white.opacity(0.8))
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
                 }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
                 .padding(.trailing, spacing)
             }
             .frame(height: notchHeight)
@@ -551,7 +575,11 @@ public struct IslandView: View {
                                         PluginSessionRowView(
                                             session: session,
                                             pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
-                                            onOpenTerminal: { statusManager.activateTerminal(for: session) }
+                                            onOpenTerminal: { statusManager.activateTerminal(for: session) },
+                                            otherActiveSessions: filteredSessions.filter { $0.id != session.id },
+                                            onConnectRequest: { target in
+                                                connectRequest = ConnectRequest(fromSession: session, toSession: target)
+                                            }
                                         )
                                     }
                                 }

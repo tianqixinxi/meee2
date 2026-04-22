@@ -572,8 +572,12 @@ public struct BuddyASCIIView: View {
 }
 
 // MARK: - Preview
-
-#Preview {
+// 注：之前用 `#Preview { ... }` 宏。在某些环境下 (e.g. pre-commit hook 里的
+// swift build) 会报 "external macro implementation type 'PreviewsMacros.SwiftUIView'
+// could not be found"。改回老写法 `PreviewProvider` 以保证 hook 稳定编译。
+#if DEBUG
+struct BuddyASCIIView_Previews: PreviewProvider {
+    static var previews: some View {
     VStack(spacing: 20) {
         BuddyASCIIView(
             buddy: BuddyInfo(
@@ -608,4 +612,6 @@ public struct BuddyASCIIView: View {
     }
     .padding()
     .background(Color.black)
+    }
 }
+#endif

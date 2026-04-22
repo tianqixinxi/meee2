@@ -159,6 +159,11 @@ public struct HookEvent: Decodable, Sendable {
     /// cmux surface ID (用于 cmux tab 定位)
     public let cmuxSurfaceId: String?
 
+    /// Ghostty 原生 terminal ID（来自 AppleScript `id of terminal`），用于
+    /// `tell application "Ghostty" to focus (terminal id "X")` 精确跳转。
+    /// 只在 SessionStart/UserPromptSubmit 这类用户刚触发的事件里由 bridge 捕获。
+    public let ghosttyTerminalId: String?
+
     /// 时间戳
     public let timestamp: Date?
 
@@ -348,6 +353,7 @@ public struct HookEvent: Decodable, Sendable {
         case termBundleId
         case cmuxSocketPath
         case cmuxSurfaceId
+        case ghosttyTerminalId
         case timestamp
     }
 
@@ -372,6 +378,7 @@ public struct HookEvent: Decodable, Sendable {
         termBundleId: String? = nil,
         cmuxSocketPath: String? = nil,
         cmuxSurfaceId: String? = nil,
+        ghosttyTerminalId: String? = nil,
         timestamp: Date? = nil,
         rawData: String? = nil
     ) {
@@ -392,6 +399,7 @@ public struct HookEvent: Decodable, Sendable {
         self.termBundleId = termBundleId
         self.cmuxSocketPath = cmuxSocketPath
         self.cmuxSurfaceId = cmuxSurfaceId
+        self.ghosttyTerminalId = ghosttyTerminalId
         self.timestamp = timestamp
         self.rawData = rawData
     }
@@ -429,6 +437,7 @@ public struct HookEvent: Decodable, Sendable {
         termBundleId = try container.decodeIfPresent(String.self, forKey: .termBundleId)
         cmuxSocketPath = try container.decodeIfPresent(String.self, forKey: .cmuxSocketPath)
         cmuxSurfaceId = try container.decodeIfPresent(String.self, forKey: .cmuxSurfaceId)
+        ghosttyTerminalId = try container.decodeIfPresent(String.self, forKey: .ghosttyTerminalId)
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp)
     }
 }
@@ -476,6 +485,7 @@ public extension HookEvent {
             termBundleId: nil,
             cmuxSocketPath: nil,
             cmuxSurfaceId: nil,
+            ghosttyTerminalId: nil,
             timestamp: Date()
         )
         event.rawData = data

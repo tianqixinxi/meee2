@@ -30,3 +30,10 @@ Carthage/Build/
 # DMG 安装包
 dist/
 .DS_Store
+
+# Web frontend (Wave 10b) — only node_modules is ignored; the built bundle
+# under Sources/Board/WebDist IS committed as a shippable asset.
+web/node_modules/
+web/dist/
+web/.vite/
+web/tsconfig.tsbuildinfo
