@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Build · Test · Lint
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install SwiftLint
+        run: |
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
+          swiftlint version
+
+      - name: Build (debug)
+        run: swift build
+
+      - name: Test
+        run: swift test --parallel
+
+      - name: SwiftLint (strict)
+        run: swiftlint lint --strict --quiet
+
+      - name: Hardcoded path scan
+        run: |
+          HARDCODED=$(grep -rn '"/Users/[a-zA-Z]' Sources/ App/ plugins-builtin/ 2>/dev/null \
+            | grep -v '\.build/' | grep -v 'CLAUDE.md' | grep -v 'Preview' \
+            | grep -v '/// ' | grep -v '// ' | grep -v '/Users/test/' || true)
+          if [ -n "$HARDCODED" ]; then
+            echo "::error::Hardcoded user paths found:"
+            echo "$HARDCODED"
+            exit 1
+          fi
+
+      - name: Bare print() scan in Services
+        run: |
+          PRINTS=$(grep -rn '^\s*print(' Sources/Services/ 2>/dev/null \
+            | grep -v 'HookReceiver.swift' || true)
+          if [ -n "$PRINTS" ]; then
+            echo "::error::Bare print() in Services (use MLog):"
+            echo "$PRINTS"
+            exit 1
+          fi

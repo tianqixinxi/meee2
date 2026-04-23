@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability
+    url: https://github.com/anthropics/meee2/security/advisories/new
+    about: Please report security issues privately — see SECURITY.md. Do not file a public issue.
+  - name: Plugin Development Questions
+    url: https://github.com/anthropics/meee2/blob/main/docs/PLUGIN_DEVELOPMENT.md
+    about: Read the plugin development guide first.

@@ -32,6 +32,17 @@ public class HookSocketServer {
     public static let shared = HookSocketServer()
     public static let socketPath = "/tmp/meee2.sock"
 
+    // MARK: - Permission-timeout policy
+
+    /// 权限请求等待用户回复的最长时间。超过这个时限还没有响应，
+    /// 会用 `permissionTimeoutDecision` 自动回复并释放 socket，避免 Claude CLI 永远挂起。
+    /// 设为 0 或负数表示禁用（仅在测试里这么干）。
+    public static var permissionTimeoutSeconds: TimeInterval = 300
+
+    /// 超时时自动采用的决策。合法值："deny" / "allow" / "ask"。
+    /// 默认 "deny" 最安全：工具调用被拒，用户重试即可重新触发一次请求。
+    public static var permissionTimeoutDecision: String = "deny"
+
     private var serverSocket: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var eventHandler: HookEventHandler?
@@ -271,12 +282,27 @@ public class HookSocketServer {
         // A2A: Stop 事件到达时，排空会话的 inbox 消息
         // 如果有消息，返回 {decision:"block", reason:...} 强迫 Claude 继续处理
         // 如果无消息，按原逻辑关闭 socket（下游 Stop 处理仍会触发）
-        NSLog("[HookSocketServer] Incoming event.type=\(event.event?.rawValue ?? "nil") sessionId=\(event.sessionId?.prefix(8) ?? "nil")")
+        NSLog("[StateTrace][hook-ingress][socket] sid=\(event.sessionId?.prefix(8) ?? "-") evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferred=\(event.inferredStatus.rawValue)")
         if event.event == .stop, let sessionId = event.sessionId {
             let messages = MessageRouter.shared.drainInbox(sessionId: sessionId)
             NSLog("[HookSocketServer] Stop event: drainInbox for \(sessionId.prefix(8)) returned \(messages.count) messages")
             if !messages.isEmpty {
-                let header = "📨 You have \(messages.count) A2A message(s) from other agents:\n\n"
+                // 根据 inbox 里消息的来源调整 header 文案：
+                //  - 纯 A2A：保留原有 "📨 ... from other agents" 文案
+                //  - 纯 human（Web/CLI 直接注入）：用 "💬 operator message(s)"
+                //  - 混合：通用 "📨 incoming messages"
+                let humanCount = messages.filter { $0.isHumanDirect }.count
+                let a2aCount = messages.count - humanCount
+                let header: String
+                if a2aCount == 0 {
+                    header = humanCount == 1
+                        ? "💬 Operator sent you a message:\n\n"
+                        : "💬 Operator sent you \(humanCount) messages:\n\n"
+                } else if humanCount == 0 {
+                    header = "📨 You have \(messages.count) A2A message(s) from other agents:\n\n"
+                } else {
+                    header = "📨 Incoming messages (\(humanCount) from operator, \(a2aCount) from agents):\n\n"
+                }
                 let combined = header + messages.map { $0.renderForInbox() }.joined(separator: "\n\n")
 
                 NSLog("[HookSocketServer] A2A: writing block-decision response (\(combined.count) chars) to \(sessionId.prefix(8))")
@@ -342,6 +368,8 @@ public class HookSocketServer {
             NSLog("[HookSocketServer] Total pending permissions: \(pendingPermissions.count)")
             permissionsLock.unlock()
 
+            scheduleAutoResponse(toolUseId: toolUseId)
+
             eventHandler?(event)
             return
         } else {
@@ -353,6 +381,30 @@ public class HookSocketServer {
     }
 
     // MARK: - Private - Permission Response
+
+    /// 为一个刚收下来的 pending permission 安排超时兜底：过了 `permissionTimeoutSeconds`
+    /// 还没有被 user / A2A 回复，就用 `permissionTimeoutDecision` 自动回，避免 Claude CLI 挂死。
+    /// 真实响应路径下，`sendPermissionResponse` 已经从 dict 里 remove 了 entry，
+    /// 这里 fire 的时候找不到就是 no-op。
+    private func scheduleAutoResponse(toolUseId: String) {
+        let timeout = Self.permissionTimeoutSeconds
+        guard timeout > 0 else { return }
+
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self = self else { return }
+
+            self.permissionsLock.lock()
+            let stillPending = self.pendingPermissions[toolUseId]
+            self.permissionsLock.unlock()
+
+            guard let pending = stillPending else { return }
+
+            let decision = Self.permissionTimeoutDecision
+            let reason = "meee2: no response within \(Int(timeout))s, defaulting to \(decision)"
+            logger.warning("Permission \(toolUseId.prefix(12), privacy: .public) for \(pending.sessionId.prefix(8), privacy: .public) timed out after \(Int(timeout))s — auto \(decision, privacy: .public)")
+            self.sendPermissionResponse(toolUseId: toolUseId, decision: decision, reason: reason)
+        }
+    }
 
     private func sendPermissionResponse(toolUseId: String, decision: String, reason: String?) {
         permissionsLock.lock()

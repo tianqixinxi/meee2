@@ -8,6 +8,16 @@ import Combine
 public struct SessionData: Codable, Identifiable {
     public var id: String { sessionId }
 
+    // MARK: - Schema 版本
+
+    /// 当前磁盘格式版本。新增迁移时 +1，永不回退。
+    /// 早于 schemaVersion 引入的旧文件解码为 0，由 SessionStore 加载时自动迁移。
+    public static let currentSchemaVersion: Int = 1
+
+    /// 本条记录对应的 schema 版本。新建记录默认为 currentSchemaVersion；
+    /// 磁盘上的旧文件会带着解码出的版本号进入内存，迁移完成后覆写。
+    public var schemaVersion: Int = SessionData.currentSchemaVersion
+
     // MARK: - 基本信息
 
     public let sessionId: String
@@ -23,8 +33,8 @@ public struct SessionData: Codable, Identifiable {
 
     // MARK: - 状态信息
 
-    public var status: String               // csm 兼容: idle, active, waiting, dead, completed
-    public var detailedStatus: DetailedStatus
+    /// 会话状态（hook 驱动的权威值，统一 SessionStatus 枚举）
+    public var status: SessionStatus
     public var currentTool: String?         // 当前工具名称
     public var description: String?         // 用户备注
 
@@ -64,8 +74,7 @@ public struct SessionData: Codable, Identifiable {
         transcriptPath: String? = nil,
         startedAt: Date = Date(),
         lastActivity: Date = Date(),
-        status: String = "idle",
-        detailedStatus: DetailedStatus = .idle,
+        status: SessionStatus = .idle,
         currentTool: String? = nil,
         description: String? = nil,
         tasks: [SessionTask] = [],
@@ -82,7 +91,6 @@ public struct SessionData: Codable, Identifiable {
         self.startedAt = startedAt
         self.lastActivity = lastActivity
         self.status = status
-        self.detailedStatus = detailedStatus
         self.currentTool = currentTool
         self.description = description
         self.tasks = tasks
@@ -95,6 +103,7 @@ public struct SessionData: Codable, Identifiable {
     // MARK: - Codable
 
     enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
         case sessionId = "session_id"
         case project
         case pid
@@ -103,7 +112,7 @@ public struct SessionData: Codable, Identifiable {
         case startedAt = "started_at"
         case lastActivity = "last_activity"
         case status
-        case detailedStatus = "detailed_status"
+        case detailedStatus = "detailed_status"  // 旧字段，读取时兼容
         case currentTool = "current_tool"
         case description
         case tasks
@@ -119,6 +128,9 @@ public struct SessionData: Codable, Identifiable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
+        // Schema 版本：缺失视为 0（pre-versioned 旧文件），由 SessionStore.loadFromDisk 负责迁移到当前版本
+        schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+
         sessionId = try container.decode(String.self, forKey: .sessionId)
         project = try container.decode(String.self, forKey: .project)
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
@@ -132,10 +144,14 @@ public struct SessionData: Codable, Identifiable {
         let lastActivityStr = try container.decodeIfPresent(String.self, forKey: .lastActivity) ?? ""
         lastActivity = ISO8601DateFormatter().date(from: lastActivityStr) ?? Date()
 
-        status = try container.decodeIfPresent(String.self, forKey: .status) ?? "idle"
-
-        let detailedStatusStr = try container.decodeIfPresent(String.self, forKey: .detailedStatus) ?? "idle"
-        detailedStatus = DetailedStatus.from(csmString: detailedStatusStr)
+        // 兼容旧文件：优先读 detailed_status，缺失回退到 status（并把旧 case 名迁移到新枚举）
+        if let ds = try container.decodeIfPresent(String.self, forKey: .detailedStatus) {
+            status = SessionStatus.from(rawString: ds)
+        } else if let s = try container.decodeIfPresent(String.self, forKey: .status) {
+            status = SessionStatus.from(rawString: s)
+        } else {
+            status = .idle
+        }
 
         currentTool = try container.decodeIfPresent(String.self, forKey: .currentTool)
         description = try container.decodeIfPresent(String.self, forKey: .description)
@@ -152,6 +168,7 @@ public struct SessionData: Codable, Identifiable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
+        try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(sessionId, forKey: .sessionId)
         try container.encode(project, forKey: .project)
         try container.encodeIfPresent(pid, forKey: .pid)
@@ -162,8 +179,7 @@ public struct SessionData: Codable, Identifiable {
         try container.encode(formatter.string(from: startedAt), forKey: .startedAt)
         try container.encode(formatter.string(from: lastActivity), forKey: .lastActivity)
 
-        try container.encode(status, forKey: .status)
-        try container.encode(detailedStatus.csmString, forKey: .detailedStatus)
+        try container.encode(status.rawValue, forKey: .status)
         try container.encodeIfPresent(currentTool, forKey: .currentTool)
         try container.encodeIfPresent(description, forKey: .description)
         try container.encode(tasks, forKey: .tasks)
@@ -329,7 +345,7 @@ public class SessionStore: ObservableObject {
 
     /// 列出活跃会话（非 dead 和 completed，按启动时间降序）
     public func listActive() -> [SessionData] {
-        sessions.filter { $0.status != "dead" && $0.status != "completed" }
+        sessions.filter { $0.status != .dead && $0.status != .completed }
             .sorted { $0.startedAt > $1.startedAt }
     }
 
@@ -443,7 +459,16 @@ public class SessionStore: ObservableObject {
 
     private func loadFromDisk(_ path: URL) -> SessionData? {
         guard let data = try? Data(contentsOf: path) else { return nil }
-        return try? JSONDecoder().decode(SessionData.self, from: data)
+        guard var session = try? JSONDecoder().decode(SessionData.self, from: data) else { return nil }
+
+        // 旧版本自动迁移：只在真正需要时触发，迁移完成后立刻覆写磁盘
+        if session.schemaVersion < SessionData.currentSchemaVersion {
+            let from = session.schemaVersion
+            session = SessionDataMigrations.apply(to: session, from: from)
+            MLog("[SessionStore] Migrated \(session.sessionId.prefix(8)) schema v\(from) → v\(SessionData.currentSchemaVersion)")
+            saveToDisk(session)
+        }
+        return session
     }
 
     private func listAllFromDisk() -> [SessionData] {
@@ -480,23 +505,61 @@ public class SessionStore: ObservableObject {
     }
 }
 
+// MARK: - SessionData 迁移
+
+/// 磁盘上的 `SessionData` 版本迁移器。每引入一次破坏性字段变更，
+/// 在这里新增一段 vN→vN+1 的 step 并把 `currentSchemaVersion` +1。
+/// 所有 step 应当满足：
+///   - 幂等：对已经是目标版本的记录是 no-op；
+///   - 不丢字段：保留旧字段的语义，哪怕只是为了 downgrade 容错；
+///   - 纯函数：不触碰 store / 不做 I/O，仅修改传入的值。
+enum SessionDataMigrations {
+
+    /// 从 `from` 升级到 `SessionData.currentSchemaVersion`，沿途逐步迁移。
+    static func apply(to session: SessionData, from: Int) -> SessionData {
+        var s = session
+        var v = max(0, from)
+        while v < SessionData.currentSchemaVersion {
+            s = step(s, from: v)
+            v += 1
+        }
+        s.schemaVersion = SessionData.currentSchemaVersion
+        return s
+    }
+
+    /// 单步迁移：从 v → v+1。新增 case 时记得同步 `SessionData.currentSchemaVersion`。
+    private static func step(_ s: SessionData, from v: Int) -> SessionData {
+        switch v {
+        case 0:
+            // v0 → v1：首次引入 `schema_version` 字段本身。
+            // 旧文件的 `detailed_status` → `status` 映射已经由 `init(from:)` 处理，
+            // 这里不需要额外改动数据；只是把版本号打上。
+            return s
+        default:
+            return s
+        }
+    }
+}
+
 // MARK: - SessionData 转换
 
 extension SessionData {
-    /// 转换为 PluginSession (供 GUI 使用)
+    /// 转换为 PluginSession (供 GUI 使用)。`status` 字段已经过
+    /// `TranscriptStatusResolver` 解析，与 TUI / Board 同源。
     public func toPluginSession(pluginId: String = "com.meee2.plugin.claude") -> PluginSession {
-        PluginSession(
+        let resolvedStatus = TranscriptStatusResolver.resolve(for: self)
+        NSLog("[StateTrace][pluginSession] sid=\(sessionId.prefix(8)) hook=\(status.rawValue) → resolved=\(resolvedStatus.rawValue) (for Island/StatusManager)")
+        return PluginSession(
             id: sessionId,
             pluginId: pluginId,
             title: project,
-            status: SessionStatus(rawValue: status) ?? .running,
+            status: resolvedStatus,
             startedAt: startedAt,
             subtitle: currentTask,
             lastUpdated: lastActivity,
             toolName: currentTool,
             cwd: project,
             terminalInfo: terminalInfo,
-            detailedStatus: detailedStatus,
             tasks: tasks,
             usageStats: usageStats,
             lastMessage: lastMessage

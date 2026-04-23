@@ -188,6 +188,18 @@ swift build -c release
 
 > 本章节面向 AI 助手和开发者，包含项目架构、核心模块、API 接口等技术细节。
 
+## 开发者文档索引
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 模块划分、数据流、各子系统（hook ingress / 状态裁决 / 持久化 / 插件加载 / UI surfaces / A2A / 权限 / 终端跳转）、并发模型、文件系统布局与"屋内规矩" |
+| [`docs/SCHEMAS.md`](docs/SCHEMAS.md) | 所有公共/共享类型的字段参考：Models、`SessionData`、`meee2-plugin-kit` 公共 SDK、Board HTTP DTO |
+| [`docs/PLUGIN_DEVELOPMENT.md`](docs/PLUGIN_DEVELOPMENT.md) | 如何编写、打包、安装第三方插件 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地构建、测试、提交 PR 的完整流程 |
+| [`SECURITY.md`](SECURITY.md) | 漏洞报告流程与信任边界说明 |
+
+下文的「系统架构」「核心模块」小节是快速入门摘要；完整的内容请看 `docs/` 下的专门文档。
+
 ---
 
 ## 系统架构

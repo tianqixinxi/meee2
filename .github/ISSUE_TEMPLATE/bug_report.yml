@@ -1,0 +1,88 @@
+name: Bug Report
+description: Something in meee2 is broken or behaving unexpectedly.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please include enough detail that someone can reproduce locally.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what's wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to Reproduce
+      description: |
+        Exact steps. Include commands you ran, what you clicked, and what you expected vs. what happened.
+      placeholder: |
+        1. Launch meee2 from the menu bar
+        2. Run `claude` in a terminal
+        3. When the permission dialog appears, click Deny
+        4. Observed: ...
+        5. Expected: ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: meee2 version / commit
+      description: Output of `meee2 --version` or `git rev-parse --short HEAD` if built from source.
+      placeholder: "v0.1.2 (52fc9c3)"
+    validations:
+      required: true
+
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "14.4 (23E214) / M2 Pro"
+    validations:
+      required: true
+
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal & Claude CLI version
+      description: Which terminal you use (Ghostty / iTerm2 / Terminal.app / cmux) and `claude --version`.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface?
+      multiple: true
+      options:
+        - Dynamic Island / menu bar UI
+        - TUI (`meee2 dashboard`)
+        - CLI (`meee2 list / send / jump / ...`)
+        - Web Board (`localhost:9876`)
+        - Plugin loading
+        - Hook bridge (shell script)
+        - Permission requests
+        - Terminal jumping
+        - Other / unsure
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Relevant output. For app logs, `~/.meee2/logs/`. For CI-style reproduction, include `swift build` / `swift test` output.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I'm on the latest `main` or a tagged release.
+          required: true

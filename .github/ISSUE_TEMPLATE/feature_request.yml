@@ -1,0 +1,49 @@
+name: Feature Request
+description: Suggest a capability, UI improvement, or new plugin.
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem?
+      description: Describe the frustration or missing capability. Concrete scenarios help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like meee2 to do? Rough UX / API sketch is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Anything you've tried, or other designs you rejected and why.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Dynamic Island / menu bar UI
+        - TUI dashboard
+        - CLI
+        - Web Board
+        - Plugin SDK (meee2-plugin-kit)
+        - A new built-in plugin
+        - Hook bridge / event protocol
+        - Packaging / distribution
+        - Docs
+        - Other
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: I've read existing issues to confirm this isn't already tracked.
+          required: true
