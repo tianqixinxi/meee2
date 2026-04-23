@@ -1265,12 +1265,10 @@ public struct IslandView: View {
         return String(title.prefix(maxChars - 1)) + "…"
     }
 
-    /// 获取有效的精细状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
-    private func effectiveDetailedStatus(for session: PluginSession) -> DetailedStatus {
-        if let detailed = session.detailedStatus, detailed != .idle {
-            return detailed
-        }
-        return DetailedStatus.from(sessionStatus: session.status)
+    /// 获取 session 的展示状态 —— `PluginSession.status` 已经是 resolver 统一
+    /// 解析后的值，Island / TUI / Web 三端用同一份逻辑。
+    private func effectiveDetailedStatus(for session: PluginSession) -> SessionStatus {
+        return session.status
     }
 
     // MARK: - Timer Management
@@ -1456,7 +1454,7 @@ struct IslandView_Previews: PreviewProvider {
                         id: "com.meee2.plugin.claude-1",
                         pluginId: "com.meee2.plugin.claude",
                         title: "project-one",
-                        status: .running,
+                        status: .active,
                         startedAt: Date().addingTimeInterval(-120)
                     )
                     let s2 = PluginSession(

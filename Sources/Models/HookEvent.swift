@@ -178,11 +178,11 @@ public struct HookEvent: Decodable, Sendable {
         if let status = status {
             switch status {
             case "waiting_for_approval":
-                return .permissionRequest
+                return .permissionRequired
             case "waiting_for_input":
                 return .completed
             case "running_tool", "processing", "starting":
-                return .running
+                return .active
             case "compacting":
                 return .compacting
             default:
@@ -197,10 +197,10 @@ public struct HookEvent: Decodable, Sendable {
             if let msg = notification, msg.contains("completed") || msg.contains("finished") {
                 return .completed
             }
-            return .running
+            return .active
 
         case .permissionRequest:
-            return .permissionRequest
+            return .permissionRequired
 
         case .postToolUse:
             // 正在使用工具
@@ -214,22 +214,19 @@ public struct HookEvent: Decodable, Sendable {
             return .compacting
 
         case .sessionStart:
-            return .running
+            return .active
 
         case .sessionEnd, .stop:
             return .completed
 
-        case .subagentStart:
-            return .running
-
-        case .subagentStop:
-            return .running
+        case .subagentStart, .subagentStop:
+            return .active
 
         case .userPromptSubmit:
             return .thinking
 
         case .none:
-            return .running
+            return .active
         }
     }
 

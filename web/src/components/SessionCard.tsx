@@ -21,60 +21,9 @@ const ROLE_COLOR_CLASS: Record<string, string> = {
   tool: 'session-card__msg--tool',
 }
 
-// Status → dot color class + whether it pulses.
-interface StatusStyle {
-  className: string
-  pulse: boolean
-}
-function statusStyle(status: string, urgent: boolean): StatusStyle {
-  if (urgent) {
-    return { className: 'session-card__dot--urgent', pulse: true }
-  }
-  const map: Record<string, StatusStyle> = {
-    running: { className: 'session-card__dot--running', pulse: false },
-    active: { className: 'session-card__dot--running', pulse: false },
-    thinking: { className: 'session-card__dot--thinking', pulse: false },
-    tooling: { className: 'session-card__dot--tooling', pulse: false },
-    waiting: { className: 'session-card__dot--urgent', pulse: true },
-    waitingInput: { className: 'session-card__dot--urgent', pulse: true },
-    waiting_input: { className: 'session-card__dot--urgent', pulse: true },
-    permissionRequest: { className: 'session-card__dot--urgent', pulse: true },
-    permission_request: { className: 'session-card__dot--urgent', pulse: true },
-    completed: { className: 'session-card__dot--completed', pulse: false },
-    compacting: { className: 'session-card__dot--thinking', pulse: false },
-    idle: { className: 'session-card__dot--idle', pulse: false },
-    failed: { className: 'session-card__dot--urgent', pulse: false },
-    dead: { className: 'session-card__dot--urgent', pulse: false },
-    unknown: { className: 'session-card__dot--idle', pulse: false },
-  }
-  return map[status] ?? { className: 'session-card__dot--idle', pulse: false }
-}
-
-// Status → top running-indicator-bar class. `null` → no bar rendered.
-function statusBarClass(status: string): string | null {
-  switch (status) {
-    case 'active':
-    case 'running':
-    case 'thinking':
-    case 'tooling':
-    case 'compacting':
-      return 'session-card__status-bar session-card__status-bar--active'
-    case 'waiting':
-    case 'waitingInput':
-    case 'waiting_input':
-    case 'permissionRequest':
-    case 'permission_request':
-      return 'session-card__status-bar session-card__status-bar--waiting'
-    case 'completed':
-      return 'session-card__status-bar session-card__status-bar--completed'
-    case 'dead':
-    case 'failed':
-      return 'session-card__status-bar session-card__status-bar--dead'
-    default:
-      // idle / unknown → no bar
-      return null
-  }
-}
+// 后端 SessionStatus 枚举值：
+//   idle, thinking, tooling, active, waitingForUser, permissionRequired,
+//   compacting, completed, dead
 
 function costText(cost: number | null): string {
   if (cost == null) return ''
@@ -116,16 +65,26 @@ export function SessionCard({
   onSelect,
   onActivate,
 }: SessionCardProps) {
+  // waitingForUser 语义等同 idle，不算 urgent；只有真正的 permissionRequired
+  // 或 inbox 里有待处理消息才算
   const urgent =
     session.inboxPending > 0 ||
-    session.status === 'permissionRequest' ||
-    session.status === 'permission_request' ||
-    session.status === 'waitingInput' ||
-    session.status === 'waiting_input'
+    session.status === 'permissionRequired'
 
   // 新分类：是否 active（halo + 呼吸）/ waiting / completed / dead / idle。
   // 同时决定 halo 的颜色（live-color CSS 变量）。
   const liveKind = classifyLive(session.status, urgent)
+
+  // [StateTrace] Web 端渲染日志
+  console.log(
+    '[StateTrace][web-card]',
+    'sid=' + session.id.slice(0, 8),
+    'status=' + session.status,
+    'urgent=' + urgent,
+    'badge=' + (liveKind.badge ?? '-'),
+    'haloColor=' + (liveKind.haloColor ?? '-'),
+    'dim=' + liveKind.dim
+  )
   const cost = costText(session.costUSD)
   const messages = session.recentMessages ?? []
   // 新设计更紧凑 → 多容一条消息
@@ -134,18 +93,22 @@ export function SessionCard({
 
   const footerStatus = session.currentTool
     ? `⚡ ${session.currentTool}`
-    : session.status === 'running' || session.status === 'active'
-    ? '● running'
+    : session.status === 'active'
+    ? '● active'
     : session.status === 'thinking'
     ? '✦ thinking'
     : session.status === 'tooling'
     ? '⚡ tooling'
+    : session.status === 'compacting'
+    ? '📦 compacting'
     : session.status === 'completed'
     ? '✓ completed'
     : session.status === 'idle'
     ? '○ idle'
-    : session.status === 'waiting'
-    ? '⚠ waiting'
+    : session.status === 'waitingForUser'
+    ? '○ idle'
+    : session.status === 'permissionRequired'
+    ? '🔒 permission'
     : session.status === 'dead'
     ? '✖ dead'
     : `● ${session.status}`
@@ -239,24 +202,18 @@ function classifyLive(status: string, urgent: boolean): {
   }
   switch (status) {
     case 'active':
-    case 'running':
     case 'thinking':
     case 'tooling':
     case 'compacting':
       return { halo: 'active', badge: 'LIVE', haloColor: '#22C55E', dim: false }
-    case 'waiting':
-    case 'waitingInput':
-    case 'waiting_input':
-    case 'permissionRequest':
-    case 'permission_request':
+    case 'permissionRequired':
       return { halo: 'active', badge: 'WAIT', haloColor: '#EAB308', dim: false }
     case 'dead':
-    case 'failed':
       return { halo: null, badge: 'DEAD', haloColor: '#EF4444', dim: true }
     case 'completed':
       return { halo: null, badge: null, haloColor: null, dim: true }
     case 'idle':
-    case 'unknown':
+    case 'waitingForUser':  // 语义等同 idle
     default:
       return { halo: null, badge: null, haloColor: null, dim: true }
   }

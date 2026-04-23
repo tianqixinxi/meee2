@@ -96,10 +96,7 @@ public struct PluginSession: Identifiable, Hashable {
     /// 紧急事件信息 (nil 表示无紧急事件)
     public var urgentEvent: UrgentEventInfo?
 
-    // MARK: - 增强字段 (csm 兼容)
-
-    /// 精细状态
-    public var detailedStatus: DetailedStatus?
+    // MARK: - 增强字段
 
     /// 任务列表
     public var tasks: [SessionTask]?
@@ -136,7 +133,6 @@ public struct PluginSession: Identifiable, Hashable {
         icon: String? = nil,
         accentColor: Color? = nil,
         urgentEvent: UrgentEventInfo? = nil,
-        detailedStatus: DetailedStatus? = nil,
         tasks: [SessionTask]? = nil,
         usageStats: UsageStats? = nil,
         lastMessage: String? = nil
@@ -156,50 +152,9 @@ public struct PluginSession: Identifiable, Hashable {
         self.icon = icon
         self.accentColor = accentColor
         self.urgentEvent = urgentEvent
-        self.detailedStatus = detailedStatus
         self.tasks = tasks
         self.usageStats = usageStats
         self.lastMessage = lastMessage
-    }
-
-    /// 向后兼容初始化器 (不含新增字段，用于旧插件)
-    /// 注意：新字段 (detailedStatus, tasks, usageStats) 会设为 nil
-    @_disfavoredOverload
-    public init(
-        id: String,
-        pluginId: String,
-        title: String,
-        status: SessionStatus,
-        startedAt: Date,
-        subtitle: String? = nil,
-        lastUpdated: Date? = nil,
-        progress: Int? = nil,
-        errorMessage: String? = nil,
-        toolName: String? = nil,
-        cwd: String? = nil,
-        terminalInfo: PluginTerminalInfo? = nil,
-        icon: String? = nil,
-        accentColor: Color? = nil,
-        urgentEvent: UrgentEventInfo? = nil
-    ) {
-        self.id = id
-        self.pluginId = pluginId
-        self.title = title
-        self.status = status
-        self.startedAt = startedAt
-        self.subtitle = subtitle
-        self.lastUpdated = lastUpdated
-        self.progress = progress
-        self.errorMessage = errorMessage
-        self.toolName = toolName
-        self.cwd = cwd
-        self.terminalInfo = terminalInfo
-        self.icon = icon
-        self.accentColor = accentColor
-        self.urgentEvent = urgentEvent
-        self.detailedStatus = nil
-        self.tasks = nil
-        self.usageStats = nil
     }
 
     // MARK: - Hashable

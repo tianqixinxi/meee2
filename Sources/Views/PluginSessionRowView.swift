@@ -27,23 +27,19 @@ struct PluginSessionRowView: View {
         return "Open"
     }
 
-    /// 获取精细状态（优先使用详细状态，但需要结合 session.status 校正）
-    private var effectiveDetailedStatus: DetailedStatus {
-        // 如果有 detailedStatus 且不是 idle，直接使用
-        if let ds = session.detailedStatus, ds != .idle {
-            return ds
-        }
-        // 根据 status 推断（处理 detailedStatus 为 idle 但 status 为 running 的情况）
-        switch session.status {
-        case .running: return .active
-        case .thinking: return .thinking
-        case .tooling: return .tooling
-        case .waitingInput: return .waitingForUser
-        case .permissionRequest: return .permissionRequired
-        case .failed: return .dead
-        case .completed: return .completed
-        case .compacting: return .compacting
-        case .idle: return .idle
+    /// session.status 现在就是 resolver 统一解析后的值（Island / TUI / Web 三端同源）
+    private var effectiveDetailedStatus: SessionStatus {
+        session.status
+    }
+
+    /// StateTrace 日志用：把 SessionStatus.color 转成可读字符串（SwiftUI Color
+    /// 的 description 在日志里太长，这里根据 case 反推）
+    private func colorName(_ s: SessionStatus) -> String {
+        switch s {
+        case .permissionRequired: return "orange"
+        case .thinking, .tooling, .active, .compacting: return "blue"
+        case .idle, .completed, .waitingForUser: return "gray"
+        case .dead: return "red"
         }
     }
 
@@ -170,6 +166,12 @@ struct PluginSessionRowView: View {
         .onHover { hovering in
             isHovered = hovering
         }
+        .onAppear {
+            NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) APPEAR status=\(session.status.rawValue) displayName=\(effectiveDetailedStatus.displayName) color=\(colorName(effectiveDetailedStatus))")
+        }
+        .onChange(of: session.status) { newValue in
+            NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) CHANGE → \(newValue.rawValue) displayName=\(newValue.displayName) color=\(colorName(newValue))")
+        }
         .contextMenu {
             if otherActiveSessions.isEmpty {
                 // 没有其他 session 时，展示一个 disabled 提示
@@ -220,7 +222,7 @@ struct PluginSessionRowView_Previews: PreviewProvider {
                     id: "cursor-test-1",
                     pluginId: "com.meee2.plugin.cursor",
                     title: "MyProject",
-                    status: .running,
+                    status: .active,
                     startedAt: Date().addingTimeInterval(-120),
                     subtitle: "Writing code...",
                     toolName: "Edit",
@@ -237,7 +239,7 @@ struct PluginSessionRowView_Previews: PreviewProvider {
                     id: "copilot-test-1",
                     pluginId: "com.meee2.plugin.copilot",
                     title: "AnotherProject",
-                    status: .permissionRequest,
+                    status: .permissionRequired,
                     startedAt: Date().addingTimeInterval(-300),
                     subtitle: "Permission required",
                     cwd: "/tmp/test/another"

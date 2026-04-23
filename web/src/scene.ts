@@ -166,17 +166,15 @@ export function shortenProject(p: string): string {
 
 export function statusLabel(status: string): string {
   const map: Record<string, string> = {
-    running: '● running',
+    active: '● active',
     idle: '○ idle',
     thinking: '✦ thinking',
     tooling: '⚡ tooling',
-    waitingInput: '⌛ waiting',
-    waiting_input: '⌛ waiting',
-    permissionRequest: '⚠ permission',
-    permission_request: '⚠ permission',
+    waitingForUser: '○ idle',
+    permissionRequired: '🔒 permission',
     completed: '✓ completed',
     compacting: '⇣ compacting',
-    failed: '✖ failed',
+    dead: '✖ dead',
   }
   return map[status] ?? status
 }

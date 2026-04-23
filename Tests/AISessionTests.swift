@@ -83,7 +83,7 @@ final class AISessionTests: XCTestCase {
 
     func testDefaultStatus() {
         let session = AISession(id: "s", pid: 1, cwd: "/tmp")
-        XCTAssertEqual(session.status, .running)
+        XCTAssertEqual(session.status, .active)
     }
 
     func testDefaultType() {

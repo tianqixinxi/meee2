@@ -657,13 +657,8 @@ public struct DashboardView {
             text = shortPath(session.project)
 
         case "status":
-            // 获取有效状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
-            let effectiveStatus: DetailedStatus
-            if session.detailedStatus != .idle {
-                effectiveStatus = session.detailedStatus
-            } else {
-                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
-            }
+            // Island / TUI / Board 三端共用的 resolver 统一解析结果
+            let effectiveStatus = TranscriptStatusResolver.resolve(for: session)
             let icon = effectiveStatus.terminalIcon
             let name = effectiveStatus.displayName
             if let tool = session.currentTool, !tool.isEmpty {
@@ -671,6 +666,7 @@ public struct DashboardView {
             } else {
                 text = "\(icon) \(name)"
             }
+            NSLog("[StateTrace][tui-dashboard] sid=\(session.sessionId.prefix(8)) resolved=\(effectiveStatus.rawValue) render='\(text)'")
 
         case "cost":
             text = formatCost(extras.usage?.costUSD ?? 0)
@@ -988,7 +984,7 @@ public struct DashboardView {
             pid: session.pid ?? 0,
             cwd: session.project,
             startedAt: session.startedAt,
-            status: SessionStatus(rawValue: session.status) ?? .running
+            status: session.status
         )
 
         // Copy all terminal info from SessionData (same as GUI path)

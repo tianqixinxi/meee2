@@ -15,6 +15,8 @@ import type { BoardState, Selection } from '../types'
 import {
   buildScene,
   buildSessionEmbeddable,
+  RECT_W,
+  RECT_H,
   isManagedElementId,
   parseSessionLink,
   parseSessionFromElement,
@@ -29,6 +31,12 @@ import {
   type LayoutMap,
 } from '../layout'
 import { loadDismissed, saveDismissed } from '../dismissed'
+import {
+  loadAppState,
+  saveAppState,
+  loadUserShapes,
+  saveUserShapes,
+} from '../boardPersistence'
 import { activateSession } from '../api'
 import { SessionOverlay } from './SessionOverlay'
 
@@ -39,6 +47,15 @@ function RefreshIcon() {
          strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 12a9 9 0 1 1-3-6.7" />
       <polyline points="21 3 21 9 15 9" />
+    </svg>
+  )
+}
+function TerminalIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
     </svg>
   )
 }
@@ -104,8 +121,12 @@ interface Props {
   onRefresh: () => void
   /** Invoked from the <MainMenu> "New channel" item. */
   onNewChannel: () => void
+  /** Invoked from the <MainMenu> "New Claude session" item. */
+  onNewSession: () => void
   /** Invoked from the <MainMenu> "Fit to content" item. */
   onFit: () => void
+  /** 未读通知的 session id 集合（Claude 刚回复完、用户还没点） */
+  unreadSids: Set<string>
 }
 
 export default function Board({
@@ -120,12 +141,36 @@ export default function Board({
   onNeedTemplate,
   onRefresh,
   onNewChannel,
+  onNewSession,
   onFit,
+  unreadSids,
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const layoutRef = useRef<LayoutMap>(loadLayout())
   const saveLayoutDebounced = useMemo(
     () => debounce((m: LayoutMap) => saveLayout(m), 400),
+    [],
+  )
+  // Persisted Excalidraw appState + user-drawn shapes.
+  // 只读一次 —— Excalidraw 的 initialData 只在首次挂载生效。
+  const initialDataRef = useRef<{ elements: any[]; appState: any }>({
+    elements: loadUserShapes(),
+    appState: (() => {
+      const s = loadAppState()
+      if (!s) return undefined
+      return {
+        scrollX: s.scrollX,
+        scrollY: s.scrollY,
+        zoom: { value: s.zoom },
+      }
+    })(),
+  })
+  const saveAppStateDebounced = useMemo(
+    () => debounce((s: { scrollX: number; scrollY: number; zoom: number }) => saveAppState(s), 400),
+    [],
+  )
+  const saveShapesDebounced = useMemo(
+    () => debounce((els: readonly any[]) => saveUserShapes(els), 400),
     [],
   )
   // Sids the user has explicitly removed from canvas (last copy deleted).
@@ -236,13 +281,13 @@ export default function Board({
       if (sid) knownSessionIds.add(sid)
     }
 
-    // A session appears first-time on the canvas → create one embeddable.
-    // Sessions the user has explicitly removed (dismissed) are NOT re-added —
-    // they stay off the canvas until the user clicks "Add to canvas" again.
+    // 所有 session 都默认在画板上显示一张 card。即使用户之前把它 dismiss
+    // 过（locally 删除过卡片），下一次 scene rebuild 也会自动加回来——和
+    // 用户 "所有 session card 应该默认显示" 的诉求一致。
+    // 保留 dismissedRef 只是为了不影响 onChange 里的计数/清理路径。
     const newSessionIds: string[] = []
     for (const sid of ids) {
       if (knownSessionIds.has(sid)) continue
-      if (dismissedRef.current.has(sid)) continue
       newSessionIds.push(sid)
     }
 
@@ -405,6 +450,12 @@ export default function Board({
       if (parseSessionFromElement(el) !== sid) continue
       matchIds.push(el.id)
     }
+    console.log(
+      '[SelectionTrace] push-back effect sid=%s matchIds=%o stateTick=%s',
+      sid.slice(0, 8),
+      matchIds,
+      !!state,
+    )
     if (matchIds.length === 0) return
     const selected: Record<string, true> = {}
     for (const id of matchIds) selected[id] = true
@@ -419,7 +470,6 @@ export default function Board({
 
   // -- onChange: capture movement + selection --------------------------
   const handleChange = useMemo(() => {
-    let dragging = false
     return (elements: readonly ExcalidrawElement[], appState: AppState) => {
       if (!state) return
 
@@ -523,7 +573,16 @@ export default function Board({
           (cur.kind === 'none' && next.kind === 'none') ||
           (cur.kind === 'session' && next.kind === 'session' && cur.sessionId === next.sessionId) ||
           (cur.kind === 'channel' && next.kind === 'channel' && cur.channelName === next.channelName)
+        console.log(
+          '[SelectionTrace] onChange selIds=%s selSig=%s cur=%o next=%o same=%s',
+          selIds.length,
+          selSig || '(empty)',
+          cur,
+          next,
+          same,
+        )
         if (!same) {
+          console.log('[SelectionTrace] → firing onSelectionChange to', next)
           onSelectionChange(next)
         }
       }
@@ -547,10 +606,12 @@ export default function Board({
 
       // Movement tracking. For layout persistence we save position *per
       // session id*, keyed to the first embeddable we see for that sid.
-      const draggingNow = !!appState.draggingElement
-      if (draggingNow) dragging = true
-      const movementCaptureDue = dragging && !draggingNow
-      if (draggingNow || movementCaptureDue) {
+      //
+      // 之前靠 `appState.draggingElement` 触发 —— 这个字段在新版 Excalidraw
+      // 里常为 undefined，导致 drag 结束后根本没 trigger 保存，位置刷新即丢。
+      // 改成：每次 onChange 里都 diff 对比 layoutRef，发现 x/y 变了就 save。
+      // debounce 400ms 会把连续拖动合并掉。
+      {
         let changed = false
         const next: LayoutMap = { ...layoutRef.current }
         // First rect per session → canonical position.
@@ -572,15 +633,47 @@ export default function Board({
           saveLayoutDebounced(next)
         }
       }
-      if (movementCaptureDue) {
-        dragging = false
-      }
-
       // Report counts on every change so sidebar stays in sync with
       // copy/paste/delete performed natively by Excalidraw.
       reportCountsRef.current(elements)
+
+      // 强制等比例缩放：session card 的 aspect ratio 锁成 RECT_W:RECT_H。
+      // 用户拖任意 handle 时 Excalidraw 会允许宽高独立变，这里检测到比例偏离
+      // 就把 width/height 纠正回来（以较大的那一维为准，让用户"拉大"的意图
+      // 更直观）。feedback 循环由"发现已经对就不更新"天然避免。
+      const RATIO = RECT_W / RECT_H
+      let aspectNeedsFix = false
+      const fixedElements = elements.map((el) => {
+        if (el.type !== 'rectangle') return el
+        if (!parseSessionFromElement(el)) return el
+        const w = el.width
+        const h = el.height
+        if (!w || !h) return el
+        const actual = w / h
+        if (Math.abs(actual - RATIO) < 0.01) return el // 已经比例正确
+        aspectNeedsFix = true
+        // 以较大的那一维为基准
+        const newW = Math.max(w, h * RATIO)
+        const newH = newW / RATIO
+        return { ...el, width: newW, height: newH } as ExcalidrawElement
+      })
+      if (aspectNeedsFix && api) {
+        try {
+          api.updateScene({ elements: fixedElements as any })
+        } catch (e) {
+          console.warn('[Board] aspect-ratio clamp updateScene failed', e)
+        }
+      }
+
+      // 持久化 viewport + 用户画的非 session 元素
+      saveAppStateDebounced({
+        scrollX: appState.scrollX ?? 0,
+        scrollY: appState.scrollY ?? 0,
+        zoom: appState.zoom?.value ?? 1,
+      })
+      saveShapesDebounced(elements)
     }
-  }, [state, selection, onSelectionChange, saveLayoutDebounced, api])
+  }, [state, selection, onSelectionChange, saveLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced])
 
   // -- Minimal UI options --------------------------------------------
   const uiOptions = useMemo(
@@ -613,6 +706,7 @@ export default function Board({
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Excalidraw
         theme="dark"
+        initialData={initialDataRef.current as any}
         excalidrawAPI={(a) => setApi(a)}
         onChange={handleChange}
         UIOptions={uiOptions as any}
@@ -620,6 +714,9 @@ export default function Board({
         gridModeEnabled={false}
       >
         <MainMenu>
+          <MainMenu.Item onSelect={onNewSession} icon={<TerminalIcon />}>
+            New Claude session…
+          </MainMenu.Item>
           <MainMenu.Item onSelect={onNewChannel} icon={<PlusSquareIcon />}>
             New channel
           </MainMenu.Item>
@@ -674,6 +771,7 @@ export default function Board({
         state={state}
         templateCache={templateCache}
         onNeedTemplate={onNeedTemplate}
+        unreadSids={unreadSids}
       />
     </div>
   )

@@ -1,5 +1,6 @@
 import Foundation
 import Swifter
+import Meee2PluginKit
 
 /// BoardAPI —— 所有 REST 路由的处理器
 /// 每个处理器返回 HttpResponse；成功时以 `.raw(status, reason, headers, writer)` 发送 JSON。
@@ -84,7 +85,11 @@ enum BoardAPI {
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
         let sessions = PluginManager.shared.sessions.map { BoardDTOBuilder.sessionDTO($0) }
-        let channels = ChannelRegistry.shared.list().map { BoardDTOBuilder.channelDTO($0) }
+        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
+        // 不在 UI 里显示，保持 channel 列表干净
+        let channels = ChannelRegistry.shared.list()
+            .filter { !$0.name.hasPrefix("__") }
+            .map { BoardDTOBuilder.channelDTO($0) }
         let state = StateDTO(sessions: sessions, channels: channels)
         return jsonResponse(state)
     }
@@ -107,6 +112,161 @@ enum BoardAPI {
         }
         PluginManager.shared.activateTerminal(for: session)
         return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    /// POST /api/sessions/:id/inject
+    /// 直接向某个 session 的 inbox 注入一条 human 消息。消息会在下一个
+    /// Stop hook 到达时由 HookSocketServer 拦截并塞给 Claude 作为下一轮输入。
+    /// Body: {"content": "..."}; 响应: {"message": MessageDTO}
+    static func injectToSession(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let content = json["content"] as? String, !content.isEmpty else {
+            return errorResponse("bad_request", "missing or empty 'content'", status: 400)
+        }
+
+        // 在 PluginManager 的 session 列表中做 short-id 匹配，拿回真实的 sessionId
+        let sessions = PluginManager.shared.sessions
+        let match = sessions.first(where: { $0.id == sid })
+            ?? sessions.first(where: { $0.id.hasPrefix(sid) })
+        guard let session = match else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+
+        // Claude plugin 把 sessionId 前缀成 "com.meee2.plugin.claude-xxxx"，
+        // inbox 文件以原始 sessionId 为 key
+        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
+
+        // 统一路径（方案 B 全量）：operator 被看作 per-session 的一个
+        // 普通 channel member，走 MessageRouter.send() → audit → deliverPending
+        // → inbox 写入；resting session 的 Ghostty push 由 deliverPending
+        // 的钩子自动触发（见 MessageRouter.pushToRestingSessionIfNeeded）。
+        do {
+            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: realSessionId)
+            let written = try MessageRouter.shared.send(
+                channel: channelName,
+                fromAlias: "operator",
+                toAlias: "session",
+                content: content,
+                injectedByHuman: true
+            )
+            let status = SessionStore.shared.get(realSessionId)?.status.rawValue ?? "?"
+            NSLog("[inject] via channel=\(channelName) msg=\(written.id) sid=\(realSessionId.prefix(8)) status=\(status)")
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(MessageEnvelope(message: BoardDTOBuilder.messageDTO(written)),
+                                status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// GET /api/sessions/:id/transcript?limit=...
+    /// 返回该 session 的完整 transcript entries（user/assistant），每个
+    /// entry 的 blocks 保留原始结构：text / thinking / tool_use / tool_result。
+    static func getTranscript(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+
+        // short-id 匹配
+        let sessions = PluginManager.shared.sessions
+        let match = sessions.first(where: { $0.id == sid })
+            ?? sessions.first(where: { $0.id.hasPrefix(sid) })
+        guard let session = match else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+
+        // SessionStore 拿 transcriptPath
+        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
+        let data = SessionStore.shared.get(realSessionId)
+        let transcriptPath = data?.transcriptPath
+
+        // 可选 limit —— 最新 N 条（tail）
+        var limit: Int? = nil
+        if let q = req.queryParams.first(where: { $0.0 == "limit" })?.1,
+           let n = Int(q), n > 0 {
+            limit = n
+        }
+
+        let entries = FullTranscriptReader.read(transcriptPath: transcriptPath, limit: limit)
+        return jsonResponse(FullTranscriptEnvelope(entries: entries, sessionId: realSessionId))
+    }
+
+    /// POST /api/sessions/spawn
+    /// Body: `{"cwd": "/abs/or/~path", "command": "claude", "createIfMissing": false, "termProgram": "ghostty"}`
+    /// 行为：按 cwd 打开一个新 Ghostty 窗口，并在里面跑 command（默认 "claude"）。
+    /// 用 Claude Code 现有的 OAuth（`~/.claude/`）——新起的 `claude` 进程会直接读。
+    static func spawnSession(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard var cwd = json["cwd"] as? String, !cwd.isEmpty else {
+            return errorResponse("bad_request", "missing 'cwd'", status: 400)
+        }
+
+        // ~ 展开
+        if cwd.hasPrefix("~") {
+            let home = NSHomeDirectory()
+            cwd = home + String(cwd.dropFirst(1))
+        }
+        // 转 URL-绝对路径
+        cwd = (cwd as NSString).standardizingPath
+
+        let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
+        let command = (json["command"] as? String) ?? "claude"
+        let termProgram = (json["termProgram"] as? String)
+
+        // Ensure dir exists / create if requested
+        var isDir: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
+            if createIfMissing {
+                do {
+                    try FileManager.default.createDirectory(
+                        atPath: cwd,
+                        withIntermediateDirectories: true
+                    )
+                } catch {
+                    return errorResponse("mkdir_failed", "mkdir -p failed: \(error.localizedDescription)", status: 500)
+                }
+            } else {
+                return errorResponse("not_found", "cwd does not exist: \(cwd) (pass createIfMissing=true to mkdir)", status: 404)
+            }
+        }
+
+        let spawner = SpawnerRouter.forTerminal(termProgram)
+
+        // Fire-and-forget async spawn; don't block the HTTP response waiting
+        // for AppleScript. Client can poll `/api/state` to see the new session
+        // appear once the hook bridge fires its SessionStart.
+        let semaphore = DispatchSemaphore(value: 0)
+        var outcome: SpawnResult = .failed(reason: "no outcome")
+        Task {
+            outcome = await spawner.spawn(cwd: cwd, command: command)
+            semaphore.signal()
+        }
+        // 等最多 2s；Ghostty 开窗一般 200-500ms
+        _ = semaphore.wait(timeout: .now() + 2.0)
+
+        switch outcome {
+        case .success:
+            BoardServer.shared.broadcastStateChanged()
+            struct SpawnResp: Encodable {
+                let ok: Bool
+                let cwd: String
+                let command: String
+            }
+            return jsonResponse(SpawnResp(ok: true, cwd: cwd, command: command), status: 201, reason: "Created")
+        case .failed(let reason):
+            return errorResponse("spawn_failed", reason, status: 500)
+        }
     }
 
     // MARK: - Channels
@@ -365,7 +525,9 @@ enum BoardAPI {
     }
 
     /// GET /api/card-templates/:id
-    /// 200 `{"template":Entry}` or 404
+    /// 总是 200：有条目返回 `{"template":Entry}`，没条目返回 `{"template":null}`。
+    /// 原来用 404 — 但 "找不到 entry" 是正常路径（客户端回退 bundled default），
+    /// 每次轮询都在浏览器 console 吼一声 Failed to load resource 太噪。
     static func getCardTemplate(_ req: HttpRequest) -> HttpResponse {
         guard let id = req.params[":id"] else {
             return errorResponse("bad_request", "missing template id", status: 400)
@@ -373,9 +535,7 @@ enum BoardAPI {
         guard CardTemplateStore.isValidId(id) else {
             return mapCardTemplateError(.invalidId(id))
         }
-        guard let entry = CardTemplateStore.shared.get(id) else {
-            return mapCardTemplateError(.notFound(id))
-        }
+        let entry = CardTemplateStore.shared.get(id)
         return jsonResponse(CardTemplateEnvelope(template: entry))
     }
 

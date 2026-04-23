@@ -18,11 +18,11 @@ import {
   deleteTemplate,
   getTemplate,
   putTemplate,
-  templateIdForPlugin,
+  templateIdForSession,
 } from '../cardTemplateStore'
 
 interface Props {
-  pluginId: string
+  sessionId: string
   pluginDisplayName: string
   /** Called whenever the local source changes — parent broadcasts to CardHosts. */
   onSaved: (templateId: string, source: string) => void
@@ -31,11 +31,11 @@ interface Props {
 type Status = 'idle' | 'loading' | 'saving' | 'saved' | 'error'
 
 export default function TemplateEditor({
-  pluginId,
+  sessionId,
   pluginDisplayName,
   onSaved,
 }: Props) {
-  const templateId = useMemo(() => templateIdForPlugin(pluginId), [pluginId])
+  const templateId = useMemo(() => templateIdForSession(sessionId), [sessionId])
 
   const [source, setSource] = useState<string>(DEFAULT_TEMPLATE)
   const [loaded, setLoaded] = useState<string>(DEFAULT_TEMPLATE) // last persisted value

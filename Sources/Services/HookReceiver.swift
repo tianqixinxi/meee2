@@ -210,11 +210,11 @@ class HookReceiver {
                 body = ""
             }
 
-            NSLog("[HookReceiver] Request body: \(body)")
+            NSLog("[StateTrace][hook-ingress] raw body: \(body)")
 
             // 解析 hook 事件
             if let event = HookEvent.parse(from: body) {
-                NSLog("[HookReceiver] Parsed event: \(event.event?.rawValue ?? "nil"), sessionId: \(event.sessionId ?? "nil"), statusDescription: \(event.statusDescription ?? "nil")")
+                NSLog("[StateTrace][hook-ingress] parsed sid=\((event.sessionId ?? "-").prefix(8)) evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferredStatus=\(event.inferredStatus.rawValue)")
                 // 在主线程回调
                 DispatchQueue.main.async {
                     self.onHookReceived?(event)

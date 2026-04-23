@@ -1,19 +1,5 @@
 import Foundation
-
-// MARK: - LiveStatus
-
-/// The canonical "live" status surfaced to the board UI, derived from a
-/// combination of hook events, process liveness, and the transcript tail.
-/// Distinct from `SessionData.status` (hook-only) — this is the resolved
-/// value, used only on the Board/web path.
-public enum LiveStatus: String, Sendable {
-    case active       // Claude is working (post-user-msg, mid-turn, tool in flight)
-    case idle         // waiting for user input
-    case waiting      // permission request or similar user-intervention
-    case completed    // stop ran, no follow-up
-    case dead         // process gone or terminal closed
-    case unknown
-}
+import Meee2PluginKit
 
 // MARK: - Terminal reachability cache
 
@@ -109,51 +95,125 @@ private func probeGhosttyTerminal(_ terminalId: String) -> Bool {
     return output == "ok"
 }
 
+// MARK: - Resolved-status cache
+
+/// Short-TTL cache for resolved SessionStatus keyed by sessionId. Lets the
+/// Island / TUI re-read at UI frame rates without thrashing the transcript
+/// file I/O. Invalidated on every hook event (ClaudePlugin calls invalidate).
+private struct ResolvedCacheEntry {
+    let at: Date
+    let status: SessionStatus
+}
+
+private let _resolvedCacheLock = NSLock()
+private var _resolvedCache: [String: ResolvedCacheEntry] = [:]
+private let _resolvedCacheTTL: TimeInterval = 1.0
+
 // MARK: - Resolver
 
 public enum TranscriptStatusResolver {
     /// Resolve the "true" live status by combining process liveness and the
     /// tail of the transcript JSONL. Falls back to `hookStatus` when
-    /// transcript is absent.
+    /// transcript is absent. Returns the unified SessionStatus.
     public static func resolve(
+        sessionId: String? = nil,
         transcriptPath: String?,
-        hookStatus: String,
+        hookStatus: SessionStatus,
         pid: Int?,
         ghosttyTerminalId: String?
-    ) -> LiveStatus {
+    ) -> SessionStatus {
+        // Short-TTL cache: if called multiple times within 1s for the same
+        // session, return the cached value. Invalidated by ClaudePlugin on
+        // each hook event.
+        if let sid = sessionId {
+            _resolvedCacheLock.lock()
+            if let cached = _resolvedCache[sid],
+               Date().timeIntervalSince(cached.at) < _resolvedCacheTTL {
+                _resolvedCacheLock.unlock()
+                NSLog("[StateTrace][resolver] sid=\(sid.prefix(8)) hook=\(hookStatus.rawValue) → \(cached.status.rawValue) (CACHED)")
+                return cached.status
+            }
+            _resolvedCacheLock.unlock()
+        }
+
+        let out = resolveUncached(
+            transcriptPath: transcriptPath,
+            hookStatus: hookStatus,
+            pid: pid,
+            ghosttyTerminalId: ghosttyTerminalId
+        )
+
+        if let sid = sessionId {
+            _resolvedCacheLock.lock()
+            _resolvedCache[sid] = ResolvedCacheEntry(at: Date(), status: out)
+            _resolvedCacheLock.unlock()
+        }
+
+        return out
+    }
+
+    /// Invalidate the resolved-status cache for a session (call on hook event).
+    public static func invalidate(sessionId: String) {
+        _resolvedCacheLock.lock()
+        _resolvedCache.removeValue(forKey: sessionId)
+        _resolvedCacheLock.unlock()
+        NSLog("[StateTrace][resolver] sid=\(sessionId.prefix(8)) cache INVALIDATED")
+    }
+
+    /// 对 SessionData 做一次解析 —— Island / TUI / Board 三端的唯一入口。
+    /// `data.status` 是 hook 事件直接写入的权威状态；resolver 基于 transcript
+    /// 尾部 + 进程存活 + 终端可达性做二次校准，输出展示用的 status。
+    public static func resolve(for data: SessionData) -> SessionStatus {
+        return resolve(
+            sessionId: data.sessionId,
+            transcriptPath: data.transcriptPath,
+            hookStatus: data.status,
+            pid: data.pid,
+            ghosttyTerminalId: data.ghosttyTerminalId
+        )
+    }
+
+    private static func resolveUncached(
+        transcriptPath: String?,
+        hookStatus: SessionStatus,
+        pid: Int?,
+        ghosttyTerminalId: String?
+    ) -> SessionStatus {
         let sidTag = (transcriptPath as NSString?)?.lastPathComponent.prefix(8) ?? "?"
 
         // Step 0: process liveness
         if let pid = pid, !SessionStore.processAlive(pid) {
-            NSLog("[Resolver] sid=\(sidTag) hookStatus=\(hookStatus) → DEAD (pid \(pid) gone)")
+            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (pid \(pid) gone)")
             return .dead
         }
 
         // Step 0.5: Ghostty reachability (cached)
         if let gtid = ghosttyTerminalId, !gtid.isEmpty {
             if !terminalAlive(gtid) {
-                NSLog("[Resolver] sid=\(sidTag) hookStatus=\(hookStatus) → DEAD (ghostty \(gtid.prefix(8)) gone)")
+                NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (ghostty \(gtid.prefix(8)) gone)")
                 return .dead
             }
         }
 
         // Step 1: read tail & find last user/assistant/system entry.
-        let fallback = mapHookStatus(hookStatus)
         guard let tail = readTail(path: transcriptPath, bytes: 4096) else {
-            NSLog("[Resolver] sid=\(sidTag) hookStatus=\(hookStatus) → \(fallback) (no transcript)")
-            return fallback
+            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no transcript)")
+            return hookStatus
         }
 
         guard let last = findLastRelevantEntry(tail: tail) else {
-            NSLog("[Resolver] sid=\(sidTag) hookStatus=\(hookStatus) → \(fallback) (no relevant entry)")
-            return fallback
+            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no relevant entry)")
+            return hookStatus
         }
 
         let tsStr = last.timestamp.map { ISO8601DateFormatter().string(from: $0) } ?? "?"
         let age: String = last.timestamp.map { String(format: "%.1fs", Date().timeIntervalSince($0)) } ?? "?"
 
-        // Step 2: apply csm-style rules
-        let out: LiveStatus
+        // Step 2: apply csm-style rules. Keep hook-driven status when it
+        // already carries more information than transcript-based heuristics
+        // (thinking / tooling / waitingForUser / permissionRequired /
+        // compacting). Only override in the specific cases below.
+        let out: SessionStatus
         let reason: String
         switch last.type {
         case "user":
@@ -163,30 +223,47 @@ public enum TranscriptStatusResolver {
                       Date().timeIntervalSince(ts) > _abandonedUserEntryThreshold {
                 out = .idle; reason = "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)"
             } else {
-                out = .active; reason = "user-recent"
+                // Keep the more-specific hook status if any (thinking/tooling
+                // etc). Fall back to .active when the hook is generic idle /
+                // active / completed.
+                if isSpecific(hookStatus) {
+                    out = hookStatus; reason = "user-recent+hook-specific(\(hookStatus.rawValue))"
+                } else {
+                    out = .active; reason = "user-recent"
+                }
             }
         case "assistant":
-            let h = hookStatus.lowercased()
-            if h == "idle" || h == "completed" {
-                out = .active; reason = "assistant+hook=idle/completed → mid-turn"
-            } else if h == "active" || h == "running" {
-                out = .active; reason = "assistant+hook=active/running"
+            // waitingForUser 在语义上等同 idle（Claude 回完一轮等你回），
+            // transcript 尾巴是 assistant 时应当跟 idle 一样被识别为 mid-turn。
+            if hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
+                out = .active; reason = "assistant+hook=\(hookStatus.rawValue) → mid-turn"
             } else {
-                out = fallback; reason = "assistant+fallback(\(hookStatus))"
+                out = hookStatus; reason = "assistant+hook=\(hookStatus.rawValue)"
             }
         case "system":
-            let h = hookStatus.lowercased()
-            if h == "active" || h == "running" {
+            if hookStatus == .active {
                 out = .idle; reason = "system+hook=active → force-idle"
             } else {
-                out = fallback; reason = "system+fallback(\(hookStatus))"
+                out = hookStatus; reason = "system+hook=\(hookStatus.rawValue)"
             }
         default:
-            out = fallback; reason = "unknown-type(\(last.type))"
+            out = hookStatus; reason = "unknown-type(\(last.type))"
         }
 
-        NSLog("[Resolver] sid=\(sidTag) hookStatus=\(hookStatus) last={type=\(last.type) age=\(age) ts=\(tsStr)} → \(out) (\(reason))")
+        NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) last={type=\(last.type) age=\(age) ts=\(tsStr)} → \(out.rawValue) (\(reason))")
         return out
+    }
+
+    /// States that carry more specific info than what the transcript tail can
+    /// tell us. We keep these rather than overriding to `.active`.
+    /// `.waitingForUser` 不在这里——它的语义本来就是 idle。
+    private static func isSpecific(_ s: SessionStatus) -> Bool {
+        switch s {
+        case .thinking, .tooling, .permissionRequired, .compacting:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Returns:
@@ -220,32 +297,6 @@ public enum TranscriptStatusResolver {
             return .some(nil)
         default:
             return nil
-        }
-    }
-
-    // MARK: - Hook-status fallback mapping
-
-    /// Map a raw hook-status string to a LiveStatus. Used when we can't read
-    /// the transcript.
-    public static func mapHookStatus(_ raw: String) -> LiveStatus {
-        switch raw.lowercased() {
-        case "running", "active", "thinking", "tooling", "compacting":
-            return .active
-        // `waitingForUser` / `waitingForInput` 这一类是 "Claude 回完一轮、等你输入"，
-        // 语义就是 idle —— 不要当成"需要你点确认的 permission"的 waiting。
-        // waiting 只留给真正 user-intervention-required 的 permission 状态。
-        case "idle", "waitingforuser", "waiting_for_user":
-            return .idle
-        case "completed":
-            return .completed
-        case "permissionrequest", "permission_request",
-             "permissionrequired", "permission_required",
-             "waitinginput", "waiting_input", "waiting":
-            return .waiting
-        case "failed", "dead":
-            return .dead
-        default:
-            return .unknown
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Meee2PluginKit
 
 /// MessageRouter 错误
 public enum MessageRouterError: Error, CustomStringConvertible {
@@ -27,7 +28,9 @@ public enum MessageRouterError: Error, CustomStringConvertible {
 ///
 /// 持久化：
 ///   - 消息信封: ~/.meee2/messages/<channel>/<msg-id>.json
-///   - 接收方收件箱: ~/.meee2/inbox/<sessionId>.jsonl （append-only）
+///   - 接收方收件箱: ~/.claude/teams/meee2/inboxes/<sessionId>.json
+///     （JSON **数组**，对齐 oh-my-claudecode / Claude Code 原生 Agent Teams
+///      约定；人被视为"operator" agent，走同一个 inbox 协议）
 /// 线程安全：所有公开方法通过串行 DispatchQueue 同步。
 public final class MessageRouter {
     public static let shared = MessageRouter()
@@ -36,6 +39,7 @@ public final class MessageRouter {
     private let baseDir: URL
     private let messagesDir: URL
     private let inboxDir: URL
+    private let legacyInboxDir: URL
 
     /// 内存缓存：msgId -> A2AMessage。所有访问须持 queue
     private var cache: [String: A2AMessage] = [:]
@@ -46,12 +50,71 @@ public final class MessageRouter {
         let home = NSHomeDirectory()
         baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
         messagesDir = baseDir.appendingPathComponent("messages")
-        inboxDir = baseDir.appendingPathComponent("inbox")
+        // 新路径：~/.claude/teams/meee2/inboxes/<sid>.json
+        // oh-my-claudecode 和 Claude Code 原生 Agent Teams 都用这个根
+        let claudeDir = URL(fileURLWithPath: home).appendingPathComponent(".claude")
+        inboxDir = claudeDir
+            .appendingPathComponent("teams")
+            .appendingPathComponent("meee2")
+            .appendingPathComponent("inboxes")
+        // 旧路径：用于首次启动迁移 legacy .jsonl 文件
+        legacyInboxDir = baseDir.appendingPathComponent("inbox")
 
         try? fileManager.createDirectory(at: messagesDir, withIntermediateDirectories: true)
         try? fileManager.createDirectory(at: inboxDir, withIntermediateDirectories: true)
 
+        migrateLegacyInboxes()
         loadAll()
+    }
+
+    /// 一次性把 ~/.meee2/inbox/<sid>.jsonl 转成 ~/.claude/teams/meee2/inboxes/<sid>.json
+    /// 转完删除旧文件。重复运行安全（老文件没了就不做事）。
+    private func migrateLegacyInboxes() {
+        queue.sync {
+            guard fileManager.fileExists(atPath: legacyInboxDir.path) else { return }
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: legacyInboxDir,
+                includingPropertiesForKeys: nil
+            ) else { return }
+            var migrated = 0
+            for oldFile in entries where oldFile.pathExtension == "jsonl" {
+                let sid = oldFile.deletingPathExtension().lastPathComponent
+                let newFile = inboxDir.appendingPathComponent("\(sid).json")
+                guard let content = try? String(contentsOf: oldFile, encoding: .utf8) else { continue }
+                let messages = parseJsonl(content)
+                if messages.isEmpty {
+                    try? fileManager.removeItem(at: oldFile)
+                    continue
+                }
+                // 合并进新文件（如果已有）
+                var existing: [A2AMessage] = []
+                if fileManager.fileExists(atPath: newFile.path),
+                   let data = try? Data(contentsOf: newFile) {
+                    existing = (try? jsonArrayDecoder.decode([A2AMessage].self, from: data)) ?? []
+                }
+                let combined = existing + messages
+                if let data = try? jsonArrayEncoder.encode(combined) {
+                    try? data.write(to: newFile, options: .atomic)
+                    try? fileManager.removeItem(at: oldFile)
+                    migrated += messages.count
+                }
+            }
+            if migrated > 0 {
+                MLog("[MessageRouter] migrated \(migrated) legacy inbox message(s) → \(inboxDir.path)")
+            }
+        }
+    }
+
+    private var jsonArrayEncoder: JSONEncoder {
+        let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys, .prettyPrinted]
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }
+    private var jsonArrayDecoder: JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
     }
 
     // MARK: - Send
@@ -278,12 +341,24 @@ public final class MessageRouter {
             return (msg, recipients)
         }
 
-        // 2) 写入每个接收方的 inbox jsonl（append-only）
+        // 2) 写入每个接收方的 inbox（JSON 数组追加）
         for member in recipientMembers {
             do {
                 try appendToInbox(sessionId: member.sessionId, message: msgToDeliver)
             } catch {
                 MWarn("[MessageRouter] appendToInbox failed for \(member.sessionId.prefix(8)): \(error)")
+            }
+        }
+
+        // 3) Resting session 推送钩子：operator channel 的消息、接收者
+        //    status 是 idle/waitingForUser/completed 且有 ghosttyTerminalId →
+        //    立刻 Ghostty input text 推过去（绕开 Stop hook 依赖）。非 operator
+        //    频道不做这事——A2A 之间走正常 Stop hook drain 逻辑。
+        //    推送成功后从 inbox 里移除这条消息，避免 Stop hook 再 drain 一次
+        //    导致 Claude 看到两遍。
+        if msgToDeliver.channel.hasPrefix("__ops-") {
+            for member in recipientMembers where !member.sessionId.isEmpty {
+                pushToRestingSessionIfNeeded(sessionId: member.sessionId, message: msgToDeliver)
             }
         }
 
@@ -327,10 +402,8 @@ public final class MessageRouter {
 
             defer { try? fileManager.removeItem(at: tmp) }
 
-            guard let content = try? String(contentsOf: tmp, encoding: .utf8) else {
-                return []
-            }
-            return parseJsonl(content)
+            guard let data = try? Data(contentsOf: tmp) else { return [] }
+            return (try? jsonArrayDecoder.decode([A2AMessage].self, from: data)) ?? []
         }
     }
 
@@ -339,13 +412,17 @@ public final class MessageRouter {
         queue.sync {
             let path = inboxPath(sessionId)
             guard fileManager.fileExists(atPath: path.path) else { return [] }
-            guard let content = try? String(contentsOf: path, encoding: .utf8) else { return [] }
-            return parseJsonl(content)
+            guard let data = try? Data(contentsOf: path) else { return [] }
+            return (try? jsonArrayDecoder.decode([A2AMessage].self, from: data)) ?? []
         }
     }
 
     /// 直接把一条合成消息写进某会话的 inbox（用于 `msg halt` 等场景）。
     /// 不需要该会话在某个频道中。返回已写入的 A2AMessage。
+    ///
+    /// 注：这是 legacy 入口。Web UI 发消息已经改走 `send()` + 每 session 的
+    /// operator channel（人 = 普通 agent 同路径）；这里保留给 CLI `msg halt`
+    /// 和 A2AConnectSheet 等 side-path 使用。
     @discardableResult
     public func injectDirectToInbox(sessionId: String, message: A2AMessage) throws -> A2AMessage {
         try queue.sync {
@@ -353,6 +430,79 @@ public final class MessageRouter {
         }
         SessionEventBus.shared.publish(.messageMutated(id: message.id, channel: message.channel))
         return message
+    }
+
+    /// 查 SessionStore 判断接收者是不是 resting 态，如果是就调 Ghostty
+    /// `input text` + `send key "enter"` 立刻推送。
+    /// 推送成功 → 从 inbox 移除该条，避免下一次 Stop hook 重复 drain。
+    /// 推送失败或目标不符合条件 → 留在 inbox，下次 Stop hook 照常 drain。
+    private func pushToRestingSessionIfNeeded(sessionId: String, message: A2AMessage) {
+        guard let data = SessionStore.shared.get(sessionId) else { return }
+        let restingStatuses: Set<SessionStatus> = [.idle, .waitingForUser, .completed]
+        guard restingStatuses.contains(data.status) else { return }
+        guard let gid = data.ghosttyTerminalId, !gid.isEmpty else { return }
+        let msgId = message.id
+        let content = message.content
+        Task { [weak self] in
+            let ok = await GhosttyInputStream().sendText(terminalId: gid, text: content)
+            NSLog("[MessageRouter] operator direct-push sid=\(sessionId.prefix(8)) ok=\(ok) (Ghostty input)")
+            if ok {
+                self?.queue.async {
+                    self?.removeFromInbox(sessionId: sessionId, messageId: msgId)
+                }
+            }
+        }
+    }
+
+    /// 从 inbox JSON 数组中移除指定 id 的消息，原子写回。调用方须持 queue。
+    private func removeFromInbox(sessionId: String, messageId: String) {
+        let path = inboxPath(sessionId)
+        guard fileManager.fileExists(atPath: path.path),
+              let data = try? Data(contentsOf: path),
+              var list = try? jsonArrayDecoder.decode([A2AMessage].self, from: data) else {
+            return
+        }
+        let before = list.count
+        list.removeAll { $0.id == messageId }
+        if list.count == before { return }
+        do {
+            if list.isEmpty {
+                try fileManager.removeItem(at: path)
+            } else {
+                let out = try jsonArrayEncoder.encode(list)
+                try out.write(to: path, options: .atomic)
+            }
+        } catch {
+            MWarn("[MessageRouter] removeFromInbox failed for \(sessionId.prefix(8))/\(messageId): \(error)")
+        }
+    }
+
+    /// 返回某 session 对应的 per-session operator channel 名字，确保它存在
+    /// 且包含两个约定成员：`operator`（人）和 `session`（这个 session）。
+    ///
+    /// 这是"人 = agent"统一化的核心：operator 把消息发给 session 用的不是
+    /// 一个特殊接口，就是 A2A channel.send 的普通调用——send() → audit →
+    /// deliverPending → inbox 路径完整复用。
+    ///
+    /// Channel 名：`__ops-<sessionId>`（双下划线前缀，BoardDTO 会把这类
+    /// 自动创建的 channel 从公开列表里过滤掉，不污染 UI）。
+    @discardableResult
+    public func ensureOperatorChannel(sessionId: String) throws -> String {
+        let name = "__ops-\(sessionId)"
+        let reg = ChannelRegistry.shared
+        if let existing = reg.get(name) {
+            if existing.memberByAlias("operator") == nil {
+                _ = try reg.join(channel: name, alias: "operator", sessionId: "")
+            }
+            if existing.memberByAlias("session") == nil {
+                _ = try reg.join(channel: name, alias: "session", sessionId: sessionId)
+            }
+            return name
+        }
+        _ = try reg.create(name: name, description: "operator↔session (auto)", mode: .auto)
+        _ = try reg.join(channel: name, alias: "operator", sessionId: "")
+        _ = try reg.join(channel: name, alias: "session", sessionId: sessionId)
+        return name
     }
 
     // MARK: - Private helpers (most run on queue)
@@ -381,7 +531,7 @@ public final class MessageRouter {
     }
 
     private func inboxPath(_ sessionId: String) -> URL {
-        inboxDir.appendingPathComponent("\(sessionId).jsonl")
+        inboxDir.appendingPathComponent("\(sessionId).json")
     }
 
     /// 原子写入单条消息到磁盘
@@ -397,29 +547,23 @@ public final class MessageRouter {
         try data.write(to: messagePath(msg), options: .atomic)
     }
 
-    /// 向 inbox jsonl 追加一行（compact JSON）
-    /// 注意：调用方须持 queue 以避免并发追加撕裂
+    /// 把一条消息追加到 inbox 的 JSON 数组里。读-改-写；调用方须持 queue。
+    ///
+    /// 为什么不用 NDJSON append：oh-my-claudecode / Claude Code 原生 Agent
+    /// Teams 的约定是 **JSON 数组文件**，agent 按数组读；我们对齐这个约定。
+    /// 读-改-写的代价对这种低频操作（人发消息 / A2A 小量消息）完全可以接受。
     private func appendToInbox(sessionId: String, message: A2AMessage) throws {
         let path = inboxPath(sessionId)
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(message)
-        guard var line = String(data: data, encoding: .utf8) else { return }
-        // 去掉可能存在的换行，统一以 "\n" 结尾
-        line = line.replacingOccurrences(of: "\n", with: " ")
-        line.append("\n")
-        guard let bytes = line.data(using: .utf8) else { return }
-
-        if fileManager.fileExists(atPath: path.path) {
-            let handle = try FileHandle(forWritingTo: path)
-            defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: bytes)
-        } else {
-            try bytes.write(to: path, options: .atomic)
+        var existing: [A2AMessage] = []
+        if fileManager.fileExists(atPath: path.path),
+           let data = try? Data(contentsOf: path) {
+            existing = (try? jsonArrayDecoder.decode([A2AMessage].self, from: data)) ?? []
         }
+        existing.append(message)
+
+        let data = try jsonArrayEncoder.encode(existing)
+        try data.write(to: path, options: .atomic)
     }
 
     private func parseJsonl(_ content: String) -> [A2AMessage] {

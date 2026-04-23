@@ -155,16 +155,37 @@ textarea {
 .sidebar {
   grid-row: 1;
   grid-column: 2;
-  width: 320px;
+  width: 360px;           /* fallback; Sidebar.tsx 用 inline style 覆盖 */
   background: var(--bg-elevated);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: width 0.15s ease;
+  position: relative;     /* for .sidebar-resizer */
 }
 .sidebar.collapsed {
-  width: 28px;
+  width: 28px !important; /* 覆盖 inline style */
+  transition: width 0.15s ease;
+}
+/* drag handle pinned to the left edge —— rows 1 column 2，侧边在画板右侧，
+   所以"可拖的那条"是这个 aside 的左边 */
+.sidebar-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
+  background: transparent;
+  z-index: 4;
+  transition: background 120ms;
+}
+.sidebar-resizer:hover,
+.sidebar-resizer:active {
+  background: rgba(96, 165, 250, 0.35);
+}
+.sidebar.collapsed .sidebar-resizer {
+  display: none;
 }
 .sidebar-toggle {
   position: absolute;
@@ -733,4 +754,646 @@ textarea {
   50% {
     opacity: 0.35;
   }
+}
+
+/* ─── SessionComposer ──────────────────────────────────────────────────
+   固定在窗口底部的消息 composer，当 session 被选中且用户开始敲键盘/粘贴时
+   从 App.tsx 弹出。Enter 发送，Shift+Enter 换行，Esc 取消。
+*/
+.session-composer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  padding: 12px 16px 16px;
+  animation: session-composer-slide 120ms ease-out;
+}
+
+@keyframes session-composer-slide {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.session-composer__inner {
+  pointer-events: auto;
+  width: min(720px, 100%);
+  background: linear-gradient(180deg, #1f2434 0%, #161a27 100%);
+  border: 1px solid #2F374B;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  padding: 10px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.session-composer__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #8B93A7;
+}
+.session-composer__label {
+  color: #5F6A85;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.session-composer__target {
+  color: #E5E7EB;
+  font-weight: 600;
+  font-size: 12px;
+}
+.session-composer__plugin {
+  color: #6B7280;
+  font-weight: 400;
+}
+.session-composer__hint {
+  margin-left: auto;
+  color: #4B5367;
+  font-size: 10px;
+  letter-spacing: 0.2px;
+}
+
+.session-composer__row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.session-composer__textarea {
+  flex: 1;
+  background: #0F1320;
+  border: 1px solid #2A3244;
+  border-radius: 8px;
+  color: #E5E7EB;
+  padding: 8px 10px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
+  min-height: 44px;
+  max-height: 220px;
+  outline: none;
+  transition: border-color 120ms;
+}
+.session-composer__textarea:focus {
+  border-color: #3B82F6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+.session-composer__textarea:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.session-composer__send {
+  background: #3B82F6;
+  border: none;
+  color: white;
+  padding: 0 18px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms, opacity 120ms;
+}
+.session-composer__send:hover:not(:disabled) {
+  background: #2563EB;
+}
+.session-composer__send:disabled {
+  background: #2A3244;
+  color: #5F6A85;
+  cursor: not-allowed;
+}
+
+.session-composer__error {
+  color: #F87171;
+  font-size: 11px;
+  padding: 2px 4px;
+}
+
+/* ─── TranscriptPanel ─────────────────────────────────────────────────
+   富 transcript 面板：user / assistant / tool_use / tool_result 分别渲染，
+   风格偏"终端 + 聊天流"的混合——mono 字体 + 暗色 + 高密度。
+*/
+.transcript-panel {
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #D4D8E1;
+}
+.transcript-panel.empty,
+.transcript-panel.error {
+  padding: 12px;
+  color: #7F8698;
+  font-style: italic;
+  font-size: 12px;
+}
+.transcript-panel.error { color: #F87171; }
+
+.transcript-section h4 {
+  margin: 0 0 6px;
+}
+
+/* entry wrapper — 不做背景；交给内部 block 自己画 */
+.tx-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ─── text blocks (user / assistant) ──────────────────────────────── */
+/* 设计目标：让"我说的"和"Claude 说的"一眼分得清。
+   用户 → 右对齐气泡卡 (蓝)，Claude → 左边绿竖条 + 无卡背景 (对话流叙述感)。 */
+.tx-text {
+  padding: 8px 12px;
+  background: transparent;
+  border-radius: 8px;
+}
+.tx-text__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* role 角标：小药丸 chip，比老的 10px 灰字显眼得多 */
+.tx-text__role {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-bottom: 6px;
+  text-transform: none;
+  user-select: none;
+}
+.tx-text__role-glyph {
+  font-size: 9px;
+  line-height: 1;
+  opacity: 0.95;
+}
+
+/* USER → 右对齐气泡。 */
+.tx-text--user {
+  align-self: flex-end;
+  max-width: 86%;
+  background: #1B2436;
+  border: 1px solid #2E3F5E;
+  padding: 10px 14px;
+  border-radius: 10px 10px 4px 10px;  /* 右下角小角，暗示"这是我发的" */
+  box-shadow: 0 1px 0 rgba(96, 165, 250, 0.06);
+}
+.tx-text--user .tx-text__role {
+  color: #DBEAFE;
+  background: rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(96, 165, 250, 0.35);
+}
+
+/* ASSISTANT → 左绿竖条 narrative 流。 */
+.tx-text--assistant {
+  background: transparent;
+  border-left: 3px solid #22C55E;
+  padding: 4px 12px 6px 14px;
+  border-radius: 0;
+}
+.tx-text--assistant .tx-text__role {
+  color: #BBF7D0;
+  background: rgba(34, 197, 94, 0.16);
+  border: 1px solid rgba(34, 197, 94, 0.32);
+}
+
+/* 其它 role（system 等）保底 */
+.tx-text--other .tx-text__role {
+  color: #9CA3B3;
+  background: rgba(148, 163, 184, 0.15);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+/* ─── thinking (collapsed) ────────────────────────────────────────── */
+.tx-thinking {
+  border-left: 2px dashed #3A3F52;
+  padding: 2px 10px;
+  color: #7F8698;
+  font-style: italic;
+}
+.tx-thinking__toggle {
+  background: transparent;
+  border: none;
+  color: #7F8698;
+  cursor: pointer;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 2px 0;
+}
+.tx-thinking__toggle:hover { color: #A8AFBE; }
+.tx-thinking__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 4px 0 4px 0;
+  font-size: 11.5px;
+}
+
+/* ─── tool use / result ───────────────────────────────────────────── */
+.tx-tool {
+  background: #10131C;
+  border: 1px solid #1F2432;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+}
+.tx-tool--orphan { opacity: 0.75; }
+.tx-tool__header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: #A8B0C2;
+}
+.tx-tool__icon {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: #9CA3B3;
+  min-width: 14px;
+  text-align: center;
+}
+.tx-tool__name {
+  font-weight: 600;
+  color: #F3F4F6;
+  font-size: 11px;
+}
+.tx-tool__summary {
+  color: #7F8698;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* bash command */
+.tx-tool__code {
+  background: #0B0D14;
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 0;
+  font-size: 11.5px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: #DDE1EA;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+.tx-tool__code--bash { border-left: 2px solid #F59E0B; }
+.tx-tool__code--write { border-left: 2px solid #22C55E; }
+.tx-tool__code--generic { border-left: 2px solid #475569; }
+.tx-tool__prompt { color: #F59E0B; }
+
+/* diff */
+.tx-tool__diff {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+}
+.tx-tool__diff-old,
+.tx-tool__diff-new {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+.tx-tool__diff-old {
+  background: rgba(239, 68, 68, 0.08);
+  color: #FCA5A5;
+  border-left: 2px solid #EF4444;
+}
+.tx-tool__diff-new {
+  background: rgba(34, 197, 94, 0.08);
+  color: #86EFAC;
+  border-left: 2px solid #22C55E;
+}
+
+/* meta rows (Read path, Grep pattern, etc.) */
+.tx-tool__meta {
+  padding: 2px 0;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  color: #C7CCDA;
+  word-break: break-all;
+}
+.tx-tool__meta-flags { color: #6B7281; margin-left: 6px; }
+.tx-tool__pat { color: #60A5FA; }
+
+/* Agent / Task */
+.tx-tool__agent { padding: 2px 0; }
+.tx-tool__agent-desc {
+  font-size: 11.5px;
+  color: #E5E7EB;
+  margin-top: 2px;
+}
+.tx-tool__agent-prompt {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.tx-tool__agent-prompt summary {
+  color: #7F8698;
+  cursor: pointer;
+  outline: none;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-size: 10px;
+}
+.tx-tool__agent-prompt pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: #0B0D14;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: #DDE1EA;
+}
+
+/* TodoWrite list */
+.tx-tool__todos {
+  margin: 0;
+  padding: 0 0 0 0;
+  list-style: none;
+  font-size: 11.5px;
+}
+.tx-tool__todo {
+  padding: 2px 0;
+  color: #C7CCDA;
+}
+.tx-tool__todo--completed {
+  color: #7F8698;
+  text-decoration: line-through;
+}
+.tx-tool__todo--in_progress {
+  color: #60A5FA;
+  font-weight: 600;
+}
+
+/* tool result block */
+.tx-tool__result {
+  margin-top: 6px;
+  border-top: 1px dashed #1F2432;
+  padding-top: 6px;
+}
+.tx-tool__result-toggle {
+  background: transparent;
+  border: none;
+  color: #7F8698;
+  cursor: pointer;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 0 0 4px;
+}
+.tx-tool__result-toggle:hover { color: #A8AFBE; }
+.tx-tool__result-body {
+  margin: 0;
+  padding: 6px 8px;
+  background: #080A10;
+  border-radius: 4px;
+  border-left: 2px solid #2A3244;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: #B8BEC9;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+/* ─── transcript upgrades: search + virtualization wrapper ─────────── */
+.transcript-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.transcript-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.transcript-search input {
+  flex: 1;
+  background: #0F1320;
+  border: 1px solid #2A3244;
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: #E5E7EB;
+  font-size: 11.5px;
+  outline: none;
+}
+.transcript-search input:focus {
+  border-color: #3B82F6;
+}
+.transcript-search__count {
+  font-size: 10.5px;
+  color: #6B7281;
+  white-space: nowrap;
+}
+
+/* "Tool calls" 开关药丸 */
+.transcript-search__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: #9CA3B3;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #11141C;
+  border: 1px solid #26303F;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.transcript-search__toggle input {
+  accent-color: #22C55E;
+  margin: 0;
+  cursor: pointer;
+}
+.transcript-search__toggle:has(input:checked) {
+  color: #BBF7D0;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+/* ─── session detail sticky header ─────────────────────────────────── */
+.session-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.session-detail__sticky {
+  position: sticky;
+  top: -12px;                          /* 覆盖 .sidebar-body 的 12px padding */
+  margin: -12px -12px 0;               /* 撑满到 sidebar-body 边缘 */
+  padding: 10px 12px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 5;
+  backdrop-filter: blur(4px);
+}
+.session-detail__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.session-detail__title {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-detail__open-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #111;
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.12s ease;
+}
+.session-detail__open-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.session-detail__open-btn:active:not(:disabled) {
+  filter: brightness(0.92);
+}
+.session-detail__open-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.session-detail__subtitle {
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+
+/* markdown inside assistant text */
+.tx-text--assistant .tx-text__body p { margin: 0 0 6px; }
+.tx-text--assistant .tx-text__body p:last-child { margin-bottom: 0; }
+.tx-text--assistant .tx-text__body h1,
+.tx-text--assistant .tx-text__body h2,
+.tx-text--assistant .tx-text__body h3,
+.tx-text--assistant .tx-text__body h4 {
+  margin: 8px 0 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.tx-text--assistant .tx-text__body h1 { font-size: 14px; }
+.tx-text--assistant .tx-text__body ul,
+.tx-text--assistant .tx-text__body ol {
+  margin: 0 0 6px;
+  padding-left: 20px;
+}
+.tx-text--assistant .tx-text__body li { margin: 2px 0; }
+.tx-text--assistant .tx-text__body code {
+  background: #0B0D14;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+}
+.tx-text--assistant .tx-text__body pre {
+  background: #0B0D14;
+  padding: 8px 10px;
+  border-radius: 5px;
+  border-left: 2px solid #475569;
+  overflow-x: auto;
+  margin: 4px 0 6px;
+  font-size: 11px;
+}
+.tx-text--assistant .tx-text__body pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 11px;
+}
+.tx-text--assistant .tx-text__body blockquote {
+  border-left: 2px solid #475569;
+  padding: 2px 10px;
+  margin: 4px 0;
+  color: #9CA3B3;
+}
+.tx-text--assistant .tx-text__body table {
+  border-collapse: collapse;
+  margin: 4px 0 6px;
+  font-size: 11px;
+}
+.tx-text--assistant .tx-text__body th,
+.tx-text--assistant .tx-text__body td {
+  border: 1px solid #2A3244;
+  padding: 2px 6px;
+}
+.tx-text--assistant .tx-text__body th { background: #10131C; }
+.tx-text--assistant .tx-text__body a {
+  color: #60A5FA;
+  text-decoration: underline;
+}
+.tx-text--assistant .tx-text__body a:hover { color: #93BBFD; }
+
+/* professional diff wrapper */
+.tx-tool__diff-wrap {
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 2px;
+  font-size: 11px;
+}
+.tx-tool__diff-wrap table { margin: 0; }
+
+.tx-tool__multiedit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tx-tool__multiedit-item {
+  border: 1px solid #1F2432;
+  border-radius: 4px;
+  padding: 4px 4px 0;
+  background: #0B0D14;
+}
+.tx-tool__multiedit-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6B7281;
+  padding: 2px 4px;
+}
+
+/* Session overlay notification dot — 和 Island 的 attention 同逻辑：
+   permissionRequired / pendingPermissionTool / inboxPending>0 时出现。*/
+.session-overlay__dot {
+  animation: sov-dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes sov-dot-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
 }

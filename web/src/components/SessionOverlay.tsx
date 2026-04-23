@@ -21,13 +21,15 @@ import type { BoardState, Session } from '../types'
 import { parseSessionFromElement, RECT_W, RECT_H } from '../scene'
 import { CardHost } from './CardHost'
 import { DEFAULT_TEMPLATE } from '../defaultTemplate'
-import { templateIdForPlugin } from '../cardTemplateStore'
+import { templateIdForSession } from '../cardTemplateStore'
 
 interface Props {
   excalidrawAPI: ExcalidrawImperativeAPI | null
   state: BoardState | null
   templateCache: Record<string, string>
   onNeedTemplate: (pluginId: string) => void
+  /** 未读通知的 session id 集合 */
+  unreadSids: Set<string>
 }
 
 // De-dup log tracker keyed by sid. Only fires when the source length changes
@@ -61,6 +63,7 @@ export function SessionOverlay({
   state,
   templateCache,
   onNeedTemplate,
+  unreadSids,
 }: Props) {
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -107,10 +110,11 @@ export function SessionOverlay({
     const height = (el.height || RECT_H) * zoom
 
     const overrideSource: string | undefined = (el as any).customData?.cardSource
-    const tplId = templateIdForPlugin(session.pluginId)
+    // 每张 card 独立 template（per-session），而不是整个 plugin 共用一份。
+    const tplId = templateIdForSession(session.id)
     const cached = templateCache[tplId]
     if (cached === undefined && !overrideSource) {
-      onNeedTemplate(session.pluginId)
+      onNeedTemplate(session.id)
     }
     const source = overrideSource ?? cached ?? DEFAULT_TEMPLATE
     // Fires once per (sid, len) combo — de-duped to avoid log spam. Useful
@@ -141,37 +145,72 @@ export function SessionOverlay({
         zIndex: 3,
       }}
     >
-      {overlayItems.map((it) => (
-        <div
-          key={it.elementId}
-          className="session-overlay__item"
-          style={{
-            position: 'absolute',
-            left: it.left,
-            top: it.top,
-            width: it.width,
-            height: it.height,
-            pointerEvents: 'none',
-          }}
-        >
-          <div style={{
-            pointerEvents: 'none',
-            // Render card at base 360x260, CSS-scale to match zoom.
-            // Font rendering stays crisp at any zoom level.
-            transform: `scale(${it.width / RECT_W})`,
-            transformOrigin: 'top left',
-            width: RECT_W,
-            height: RECT_H,
-          }}>
-            <CardHost
-              sessionId={it.session.id}
-              session={it.session}
-              board={state}
-              source={it.source}
-            />
+      {overlayItems.map((it) => {
+        // 通知红点条件：
+        //  1. status === 'permissionRequired'（权限阻塞，必须用户点确认）
+        //  2. unreadSids 里有这个 sid（App 层检测到 status 从工作态转到休息态，
+        //     代表 Claude 刚完成一轮回复；用户点 session card 后会清掉）
+        const urgent =
+          it.session.status === 'permissionRequired' ||
+          unreadSids.has(it.session.id)
+        return (
+          <div
+            key={it.elementId}
+            className="session-overlay__item"
+            style={{
+              position: 'absolute',
+              left: it.left,
+              top: it.top,
+              width: it.width,
+              height: it.height,
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{
+              pointerEvents: 'none',
+              // Render card at base 360x260, CSS-scale to match zoom.
+              // Font rendering stays crisp at any zoom level.
+              transform: `scale(${it.width / RECT_W})`,
+              transformOrigin: 'top left',
+              width: RECT_W,
+              height: RECT_H,
+            }}>
+              <CardHost
+                sessionId={it.session.id}
+                session={it.session}
+                board={state}
+                source={it.source}
+              />
+            </div>
+            {urgent && <NotificationDot />}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
+  )
+}
+
+/**
+ * 右上角小红点 —— 和 Island 的橙色 attention 指示灯对齐。
+ * 绝对定位在 card 右上角，尺寸固定（不跟着 canvas zoom 缩放——避免小画
+ * 板时看不见、大画板时又巨大），pulse 动画吸引注意。
+ */
+function NotificationDot() {
+  return (
+    <div
+      className="session-overlay__dot"
+      style={{
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        background: '#EF4444',
+        boxShadow: '0 0 0 2px rgba(239,68,68,0.25), 0 0 6px rgba(239,68,68,0.6)',
+        zIndex: 4,
+        pointerEvents: 'none',
+      }}
+    />
   )
 }

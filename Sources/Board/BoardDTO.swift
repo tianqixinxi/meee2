@@ -129,7 +129,7 @@ struct MessageEnvelope: Encodable { let message: MessageDTO }
 struct MessagesEnvelope: Encodable { let messages: [MessageDTO] }
 struct OkEnvelope: Encodable { let ok: Bool }
 
-struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry }
+struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }
 
 // MARK: - 转换工具
@@ -189,8 +189,13 @@ enum BoardDTOBuilder {
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#808080"
 
         // inbox pending —— 把该 session 作为接收方的 pending/held 消息数量
-        // 遍历所有频道里的消息，过滤出目标是当前 session 的（通过 alias/sessionId 映射）
-        let pending = pendingInboxCount(for: session.id)
+        // 包括两种来源：
+        //  1. A2A channel 消息（遍历该 session 参与的频道里 pending/held 消息）
+        //  2. Operator 直接 inject 的消息（写进 ~/.meee2/inbox/<sid>.jsonl，
+        //     由 HookSocketServer 在 Stop hook 时 drain）
+        let channelPending = pendingInboxCount(for: session.id)
+        let directPending = MessageRouter.shared.peekInbox(sessionId: session.id).count
+        let pending = channelPending + directPending
 
         // 丰富字段：transcript / currentTool / cost —— 都从底层 SessionStore 拿
         let sessionData = SessionStore.shared.get(session.id)
@@ -204,22 +209,15 @@ enum BoardDTOBuilder {
             transcriptEntries = []
         }
 
-        // csm-style live status: combine process liveness + transcript tail
-        // with the hook status. 优先用 detailedStatus（hook 驱动的精细状态，比
-        // raw status "running" 更准——"running" 只表示会话生命周期活着，不是
-        // "Claude 正在干活"）。
-        let hookStatus: String = {
-            if let ds = sessionData?.detailedStatus {
-                return ds.rawValue
+        // Island / TUI / Board 三端同源：用统一 resolver。
+        // 有 SessionData 时直接 resolve(for:)，否则退化到 PluginSession.status。
+        let resolvedStatus: SessionStatus = {
+            if let data = sessionData {
+                return TranscriptStatusResolver.resolve(for: data)
             }
-            return sessionData?.status ?? session.status.rawValue
+            return session.status
         }()
-        let resolvedStatus = TranscriptStatusResolver.resolve(
-            transcriptPath: sessionData?.transcriptPath,
-            hookStatus: hookStatus,
-            pid: sessionData?.pid,
-            ghosttyTerminalId: sessionData?.ghosttyTerminalId
-        )
+        NSLog("[StateTrace][boardDTO] sid=\(session.id.prefix(8)) hook=\(sessionData?.status.rawValue ?? session.status.rawValue) → api.status=\(resolvedStatus.rawValue) (for Web)")
 
         // Tool name: let the resolver override to "thinking" / clear when
         // appropriate; otherwise keep whatever the plugin set.

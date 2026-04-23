@@ -74,8 +74,17 @@ public struct A2AMessage: Codable, Identifiable, Sendable {
     }
 
     /// 投递到接收方时的渲染格式
-    /// 例如: "[a2a from planner via review] <content>"
+    /// A2A 消息：`[a2a from <alias> via <channel>] <content>`
+    /// 人类从 Web/CLI 直接注入的消息：不加任何前缀，原样投递
     public func renderForInbox() -> String {
+        if injectedByHuman && fromAlias == "__human__" {
+            return content
+        }
         return "[a2a from \(fromAlias) via \(channel)] \(content)"
+    }
+
+    /// 这条消息是否是"人类直接注入"的（从 Web UI / CLI `meee2 send` 发）
+    public var isHumanDirect: Bool {
+        injectedByHuman && fromAlias == "__human__"
     }
 }

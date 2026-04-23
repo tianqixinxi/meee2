@@ -1,7 +1,31 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardState, Selection } from '../types'
 import SessionDetail from './SessionDetail'
 import ChannelDetail from './ChannelDetail'
 import TemplateEditor from './TemplateEditor'
+
+const WIDTH_KEY = 'meee2.sidebar.width.v1'
+const WIDTH_MIN = 260
+const WIDTH_MAX = 900
+const WIDTH_DEFAULT = 360
+
+function readStoredWidth(): number {
+  try {
+    const s = localStorage.getItem(WIDTH_KEY)
+    if (!s) return WIDTH_DEFAULT
+    const n = parseInt(s, 10)
+    if (!Number.isFinite(n)) return WIDTH_DEFAULT
+    return Math.min(Math.max(n, WIDTH_MIN), WIDTH_MAX)
+  } catch {
+    return WIDTH_DEFAULT
+  }
+}
+
+function clampToViewport(w: number): number {
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
+  const max = Math.min(WIDTH_MAX, Math.floor(vw * 0.7))
+  return Math.min(Math.max(w, WIDTH_MIN), max)
+}
 
 // 16x16 line icons — Feather-style, match the sidebar's neutral tone.
 function EyeOpenIcon() {
@@ -55,6 +79,50 @@ export default function Sidebar({
   onHideFromCanvas,
   onTemplateSaved,
 }: Props) {
+  const [width, setWidth] = useState<number>(readStoredWidth)
+  const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+
+  const onResizerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragStartRef.current = { x: e.clientX, w: width }
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+  }, [width])
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const s = dragStartRef.current
+      if (!s) return
+      // sidebar 在右侧：鼠标往左移 → width 增大
+      const raw = s.w + (s.x - e.clientX)
+      setWidth(clampToViewport(raw))
+    }
+    function onUp() {
+      if (!dragStartRef.current) return
+      dragStartRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      try {
+        localStorage.setItem(WIDTH_KEY, String(width))
+      } catch { /* localStorage unavailable */ }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [width])
+
+  // 窗口缩小时收紧 sidebar 宽度
+  useEffect(() => {
+    function onResize() {
+      setWidth((w) => clampToViewport(w))
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   if (!open) {
     return (
       <aside className="sidebar collapsed">
@@ -73,7 +141,12 @@ export default function Sidebar({
   const inDetail = selection.kind === 'session' || selection.kind === 'channel'
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" style={{ width }}>
+      <div
+        className="sidebar-resizer"
+        onMouseDown={onResizerMouseDown}
+        title="Drag to resize"
+      />
       <div className="sidebar-header row space">
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           {inDetail && (
@@ -216,7 +289,7 @@ export default function Sidebar({
                   </summary>
                   <div style={{ marginTop: 8 }}>
                     <TemplateEditor
-                      pluginId={s.pluginId}
+                      sessionId={s.id}
                       pluginDisplayName={s.pluginDisplayName}
                       onSaved={onTemplateSaved}
                     />

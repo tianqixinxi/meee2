@@ -31,7 +31,7 @@ public struct SendCommand {
 
         print("Message #\(msgId) queued for session \(session.sessionId)")
         print("  Project: \(session.project)")
-        print("  Status: \(session.detailedStatus.displayName)")
+        print("  Status: \(session.status.displayName)")
     }
 }
 
@@ -63,7 +63,7 @@ public struct JumpCommand {
         // 显示终端信息
         print("Session: \(session.sessionId)")
         print("  Project: \(session.project)")
-        print("  Status: \(session.detailedStatus.displayName)")
+        print("  Status: \(session.status.displayName)")
         print("  TTY: \(session.terminalInfo?.tty ?? "N/A")")
         print("  Terminal: \(session.terminalInfo?.termProgram ?? "N/A")")
         print("")

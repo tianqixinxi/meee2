@@ -255,7 +255,7 @@ class OpenClawPlugin: SessionPlugin {
 
             // 状态判断
             let aborted = sessionData["abortedLastRun"] as? Bool ?? false
-            let status: SessionStatus = aborted ? .idle : .running
+            let status: SessionStatus = aborted ? .idle : .active
 
             let info = OpenClawSessionInfo(
                 sessionId: sessionId,

@@ -6,22 +6,22 @@ public struct StatusMappingConfig: Codable {
     /// 各 plugin 的映射规则
     public var plugins: [String: [String: String]] = [:]
 
-    /// 默认映射规则
+    /// 默认映射规则（目标值是 SessionStatus.rawValue）
     public var defaultMapping: [String: String] = [
-        "active": "running",
+        "active": "active",
         "inactive": "idle",
-        "running": "running",
+        "running": "active",
         "idle": "idle",
-        "waiting": "waitingInput",
+        "waiting": "waitingForUser",
         "completed": "completed",
         "stopped": "completed"
     ]
 
     /// Aime 默认映射
     public static var aimeDefault: [String: String] = [
-        "created": "running",
-        "waiting": "waitingInput",
-        "running": "running",
+        "created": "active",
+        "waiting": "waitingForUser",
+        "running": "active",
         "idle": "idle",
         "stopped": "completed",
         "closed": "completed"
@@ -29,11 +29,11 @@ public struct StatusMappingConfig: Codable {
 
     /// Cursor 默认映射
     public static var cursorDefault: [String: String] = [
-        "active": "running",
+        "active": "active",
         "idle": "idle",
         "thinking": "thinking",
         "tooling": "tooling",
-        "waiting": "waitingInput"
+        "waiting": "waitingForUser"
     ]
 
     /// Traecli 默认映射（与 Cursor 相同）
@@ -106,13 +106,7 @@ public class StatusMappingService {
         let mappedString = pluginMapping[rawStatus.lowercased()] ?? config.defaultMapping[rawStatus.lowercased()] ?? rawStatus
 
         // 转换为 SessionStatus
-        return SessionStatus(rawValue: mappedString) ?? .idle
-    }
-
-    /// 映射到 DetailedStatus
-    public func mapDetailedStatus(pluginId: String, rawStatus: String) -> DetailedStatus {
-        let sessionStatus = mapStatus(pluginId: pluginId, rawStatus: rawStatus)
-        return DetailedStatus.from(sessionStatus: sessionStatus)
+        return SessionStatus.from(rawString: mappedString)
     }
 
     /// 重新加载配置（用于热更新）

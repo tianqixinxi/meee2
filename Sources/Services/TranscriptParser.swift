@@ -30,9 +30,15 @@ public struct TranscriptEntry {
 
 /// 状态覆盖 - transcript 解析后的状态建议
 public struct StatusOverride {
-    public var status: DetailedStatus?
+    public var status: SessionStatus?
     public var currentTool: String?
     public var clearTool: Bool = false
+
+    public init(status: SessionStatus? = nil, currentTool: String? = nil, clearTool: Bool = false) {
+        self.status = status
+        self.currentTool = currentTool
+        self.clearTool = clearTool
+    }
 }
 
 /// Transcript 解析器
@@ -43,7 +49,7 @@ public class TranscriptParser {
 
     /// 检测状态覆盖
     /// 逻辑移植自 csm/transcript.py detect_status
-    public static func detectStatus(transcriptPath: String?, hookStatus: DetailedStatus) -> StatusOverride {
+    public static func detectStatus(transcriptPath: String?, hookStatus: SessionStatus) -> StatusOverride {
         guard let path = transcriptPath,
               let entries = parseTail(path: path, maxSize: 4096),
               !entries.isEmpty else {

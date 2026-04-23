@@ -66,8 +66,49 @@ public actor TerminalJumper {
         let pid: Int? = session.pid > 0 ? session.pid : nil
         NSLog("[TerminalJumper] jumpViaGhostty: cwd=\(cwd) pid=\(pid ?? 0) ghosttyId=\(session.ghosttyTerminalId ?? "nil")")
 
-        // Strategy 0 (preferred): Ghostty native AppleScript —— 如果我们在 SessionStart
-        // hook 里抓到过 terminal id，直接 `focus terminal id "X"`，精确、无 title race。
+        // Strategy 1 (preferred, ground truth): 写一个唯一 marker 到 session 的
+        // TTY，再用 Ghostty 原生 AppleScript 遍历 `every terminal`，按 `name`
+        // 找包含 marker 的 terminal → 这个 id 是**和 session.pid 真实绑定**的，
+        // 不会被 stale / 抓错的 bridge 数据污染。~200ms 代价换正确性。
+        if let pid = pid {
+            let foundId = await findGhosttyTerminalIdByMarker(forPid: pid)
+            if let gtid = foundId {
+                NSLog("[TerminalJumper] Ghostty Strategy 1 (marker) match: terminal id=\(gtid.prefix(8))")
+
+                // 发现"真 id"与 SessionStore 里存的不一致（或 store 里为空）→ 回写
+                // 自愈。下次点 Open terminal，Strategy 0 就能直接走，也是对的。
+                if let sid = nonEmpty(session.id) {
+                    let store = SessionStore.shared
+                    let storeId = store.get(sid)?.ghosttyTerminalId ?? ""
+                    if storeId != gtid {
+                        store.update(sid) { $0.ghosttyTerminalId = gtid }
+                        NSLog("[TerminalJumper] self-heal: sessionStore.ghosttyTerminalId \(storeId.prefix(8).isEmpty ? "(empty)" : String(storeId.prefix(8))) → \(gtid.prefix(8))")
+                    }
+                }
+
+                let escaped = gtid.replacingOccurrences(of: "\"", with: "\\\"")
+                let script = """
+                tell application "Ghostty"
+                    activate
+                    try
+                        focus (terminal id "\(escaped)")
+                        return "success"
+                    on error errMsg
+                        return "err:" & errMsg
+                    end try
+                end tell
+                """
+                let result = await runAppleScript(script)
+                NSLog("[TerminalJumper] Ghostty Strategy 1 focus result: '\(result)'")
+                if result == "success" { return .success }
+            } else {
+                NSLog("[TerminalJumper] Ghostty Strategy 1 failed: marker not visible on any terminal")
+            }
+        }
+
+        // Strategy 0 (fallback, best-effort): 使用 sessionStore 里缓存的 id。
+        // 可能是 stale（bridge 在 UserPromptSubmit 抓到了错的前台 tab id），
+        // 所以只在 Strategy 1 失败时用。即使跳错也好过"Ghostty 没反应"。
         if let gtid = session.ghosttyTerminalId, !gtid.isEmpty {
             let escaped = gtid.replacingOccurrences(of: "\"", with: "\\\"")
             let script = """
@@ -83,43 +124,9 @@ public actor TerminalJumper {
             end tell
             """
             let result = await runAppleScript(script)
-            NSLog("[TerminalJumper] Ghostty Strategy 0 (terminal id) result: '\(result)'")
+            NSLog("[TerminalJumper] Ghostty Strategy 0 (cached id, fallback) result: '\(result)'")
             if result == "success" {
                 return .success
-            }
-            // 失败（terminal id 失效，如 tab 被关过）→ 继续下面的 fallback
-        }
-
-        // Strategy 1: TTY-based tab matching via process tree
-        if let pid = pid {
-            let tabIndex = await findGhosttyTabIndex(forPid: pid)
-            if let tabIndex = tabIndex {
-                NSLog("[TerminalJumper] Ghostty Strategy 1 (marker) match: tab index \(tabIndex)")
-                let script = """
-                tell application "System Events"
-                    if not (exists process "Ghostty") then return "not_running"
-                    tell process "Ghostty"
-                        set frontmost to true
-                        repeat with w in windows
-                            try
-                                set tabGroup to first tab group of w
-                                set tabCount to count of radio buttons of tabGroup
-                                if \(tabIndex) is less than or equal to tabCount then
-                                    click radio button \(tabIndex) of tabGroup
-                                    return "success"
-                                end if
-                            end try
-                        end repeat
-                    end tell
-                end tell
-                tell application "Ghostty" to activate
-                return "activated"
-                """
-                let result = await runAppleScript(script)
-                NSLog("[TerminalJumper] Ghostty Strategy 1 click result: '\(result)'")
-                if result == "success" { return .success }
-            } else {
-                NSLog("[TerminalJumper] Ghostty Strategy 1 failed: marker not visible on any tab")
             }
         }
 
@@ -138,11 +145,15 @@ public actor TerminalJumper {
         return .notFound
     }
 
-    /// Find which Ghostty tab index corresponds to a given PID by writing a unique
-    /// title marker to the session's TTY, then matching it against tab titles via AX API.
-    /// This is reliable regardless of tab reordering.
-    /// Returns 1-based tab index, or nil if not found.
-    private func findGhosttyTabIndex(forPid pid: Int) async -> Int? {
+    private func nonEmpty(_ s: String) -> String? {
+        s.isEmpty ? nil : s
+    }
+
+    /// 通过往 TTY 写一个唯一 marker（ESC]2;…BEL 设窗口 title），然后用 Ghostty
+    /// 原生 AppleScript 遍历 `every terminal`，找 `name` 含 marker 的 terminal，
+    /// 返回它的 id。比走 System Events AX (tab group) 更可靠 —— 这个 Ghostty
+    /// 版本的窗口层级里根本没有 AXTabGroup。
+    private func findGhosttyTerminalIdByMarker(forPid pid: Int) async -> String? {
         // Get session's TTY
         let sessionTTY = await runShellCommand("ps -o tty= -p \(pid) 2>/dev/null")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -154,86 +165,68 @@ public actor TerminalJumper {
 
         let marker = "__MEEE2_JUMP_\(pid)__"
 
-        // 查找脚本：返回含 marker 的 tab 索引，没找到返回 "0"
+        // 找脚本：遍历 Ghostty 原生的 terminal 列表，name 含 marker 就返回它的 id
         let findScript = """
-        tell application "System Events"
-            tell process "Ghostty"
-                repeat with w in windows
+        tell application "Ghostty"
+            try
+                set cands to every terminal
+                repeat with t in cands
                     try
-                        set tabGroup to first tab group of w
-                        set tabList to radio buttons of tabGroup
-                        repeat with i from 1 to count of tabList
-                            set tabTitle to value of attribute "AXTitle" of item i of tabList
-                            if tabTitle contains "\(marker)" then
-                                return i as text
-                            end if
-                        end repeat
+                        if name of t contains "\(marker)" then
+                            return id of t
+                        end if
                     end try
                 end repeat
-            end tell
+            end try
         end tell
-        return "0"
+        return ""
         """
 
-        // 调试脚本：dump 所有 Ghostty tab 的 AXTitle（第一次和 retry 中段各打一次）
+        // 调试脚本：dump 所有 terminal 的 id + name（snippet）
         let dumpScript = """
-        tell application "System Events"
-            if not (exists process "Ghostty") then return "NO_GHOSTTY_PROCESS"
-            tell process "Ghostty"
+        tell application "Ghostty"
+            try
                 set out to ""
-                set wIdx to 0
-                repeat with w in windows
-                    set wIdx to wIdx + 1
+                set i to 0
+                repeat with t in every terminal
+                    set i to i + 1
                     try
-                        set tabGroup to first tab group of w
-                        set tabList to radio buttons of tabGroup
-                        set tCount to count of tabList
-                        set out to out & "win" & wIdx & "(tabs=" & tCount & "):"
-                        repeat with i from 1 to tCount
-                            try
-                                set tTitle to value of attribute "AXTitle" of item i of tabList
-                                set out to out & " [" & i & "]" & tTitle
-                            on error
-                                set out to out & " [" & i & "]<NO_TITLE>"
-                            end try
-                        end repeat
-                    on error errMsg
-                        set out to out & "win" & wIdx & ":ERR(" & errMsg & ")"
+                        set tid to id of t
+                        set tnm to name of t
+                        set out to out & "[" & i & "] " & tid & " | " & tnm & linefeed
                     end try
-                    set out to out & " | "
                 end repeat
-                if out is "" then return "NO_WINDOWS"
+                if out is "" then return "NO_TERMINALS"
                 return out
-            end tell
+            on error errMsg
+                return "ERR:" & errMsg
+            end try
         end tell
         """
 
-        // Attempt 1 前先 dump 一次看 Ghostty 初始有哪些 tab
         let initialDump = await runAppleScript(dumpScript)
-        NSLog("[TerminalJumper] ghostty tabs BEFORE marker: \(initialDump)")
+        NSLog("[TerminalJumper] ghostty terms BEFORE marker:\n\(initialDump)")
 
-        // 与 Claude CLI 的 title 刷新赛跑：重试 10 次、每轮 80ms
         for attempt in 0..<10 {
-            await runShellCommand("printf '\\033]2;\(marker)\\007' > /dev/\(sessionTTY)")
+            _ = await runShellCommand("printf '\\033]2;\(marker)\\007' > /dev/\(sessionTTY)")
             try? await Task.sleep(nanoseconds: 80_000_000) // 80ms to paint
 
             let result = await runAppleScript(findScript)
-            if let index = Int(result), index > 0 {
-                NSLog("[TerminalJumper] marker HIT at tab \(index) on attempt \(attempt + 1)")
-                await runShellCommand("printf '\\033]2;\\007' > /dev/\(sessionTTY)")
-                return index
+            if !result.isEmpty {
+                NSLog("[TerminalJumper] marker HIT: terminal id=\(result.prefix(8)) attempt=\(attempt + 1)")
+                _ = await runShellCommand("printf '\\033]2;\\007' > /dev/\(sessionTTY)")
+                return result
             }
 
-            // attempt 3 和 7 再 dump 一次，看 title 现在被刷成什么
             if attempt == 3 || attempt == 7 {
                 let mid = await runAppleScript(dumpScript)
-                NSLog("[TerminalJumper] ghostty tabs MID attempt=\(attempt): \(mid)")
+                NSLog("[TerminalJumper] ghostty terms MID attempt=\(attempt):\n\(mid)")
             }
         }
 
-        await runShellCommand("printf '\\033]2;\\007' > /dev/\(sessionTTY)")
+        _ = await runShellCommand("printf '\\033]2;\\007' > /dev/\(sessionTTY)")
         let finalDump = await runAppleScript(dumpScript)
-        NSLog("[TerminalJumper] marker NEVER caught after 10 retries for pid=\(pid). Final tabs: \(finalDump)")
+        NSLog("[TerminalJumper] marker NEVER caught after 10 retries for pid=\(pid). Final:\n\(finalDump)")
         return nil
     }
 

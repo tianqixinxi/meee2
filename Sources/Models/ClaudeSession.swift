@@ -30,7 +30,7 @@ public struct AISession: Identifiable, Codable, Hashable {
     // MARK: - 运行时状态 (非持久化，由 hooks 更新)
 
     /// 当前状态
-    public var status: SessionStatus = .running
+    public var status: SessionStatus = .active
 
     /// 当前正在执行的任务描述
     public var currentTask: String?
@@ -126,7 +126,7 @@ public struct AISession: Identifiable, Codable, Hashable {
         type: SessionType = .claude,
         kind: String = "interactive",
         entrypoint: String = "cli",
-        status: SessionStatus = .running,
+        status: SessionStatus = .active,
         currentTask: String? = nil,
         toolName: String? = nil
     ) {

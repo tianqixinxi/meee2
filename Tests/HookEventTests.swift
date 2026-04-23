@@ -115,9 +115,9 @@ final class HookEventTests: XCTestCase {
         let preToolEvent = HookEvent(event: .preToolUse, sessionId: "s", toolName: "Bash")
         XCTAssertEqual(preToolEvent.inferredStatus, .thinking) // event-based fallback
 
-        // permissionRequest with waiting_for_approval status → permissionRequest
+        // permissionRequest with waiting_for_approval status → permissionRequired
         let permEvent = HookEvent(event: .permissionRequest, sessionId: "s", status: "waiting_for_approval")
-        XCTAssertEqual(permEvent.inferredStatus, .permissionRequest)
+        XCTAssertEqual(permEvent.inferredStatus, .permissionRequired)
 
         let compactEvent = HookEvent(event: .preCompact, sessionId: "s")
         XCTAssertEqual(compactEvent.inferredStatus, .compacting)

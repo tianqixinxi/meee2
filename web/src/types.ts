@@ -20,6 +20,14 @@ export interface Session {
   recentMessages: TranscriptEntry[]
   currentTool: string | null
   costUSD: number | null
+  // 可选诊断/通知字段（SessionDTO 里有，但不是所有代码都需要）
+  pendingPermissionTool?: string | null
+  pendingPermissionMessage?: string | null
+  startedAt?: string | null
+  lastActivity?: string | null
+  ghosttyTerminalId?: string | null
+  tty?: string | null
+  termProgram?: string | null
 }
 
 export interface Member {

@@ -18,9 +18,9 @@ export interface TemplatePreset {
 const MINIMAL = `
 export default function MinimalCard({ session }) {
   const color =
-    session.status === 'active' || session.status === 'running' || session.status === 'thinking' || session.status === 'tooling'
+    session.status === 'active' || session.status === 'thinking' || session.status === 'tooling' || session.status === 'compacting'
       ? '#22C55E'
-      : session.status === 'waiting' || session.status === 'permissionRequest' ? '#EAB308'
+      : session.status === 'permissionRequired' ? '#EAB308'
       : session.status === 'dead' ? '#EF4444'
       : '#64748b'
   return (
@@ -184,7 +184,7 @@ export default function ChatCard({ session }) {
 const COMPACT = `
 export default function CompactCard({ session }) {
   const u = session.usageStats || {}
-  const isLive = session.status === 'active' || session.status === 'running' || session.status === 'thinking' || session.status === 'tooling'
+  const isLive = session.status === 'active' || session.status === 'thinking' || session.status === 'tooling' || session.status === 'compacting'
   return (
     <div style={{
       width: '100%', height: '100%',

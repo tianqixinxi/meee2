@@ -10,10 +10,18 @@ import {
 import Board from './components/Board'
 import Sidebar from './components/Sidebar'
 import NewChannelDialog from './components/NewChannelDialog'
+import { SessionComposer } from './components/SessionComposer'
+import { NewSessionDialog } from './components/NewSessionDialog'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
 import { DEFAULT_TEMPLATE } from './defaultTemplate'
-import { getTemplate, templateIdForPlugin } from './cardTemplateStore'
+import { getTemplate, templateIdForSession } from './cardTemplateStore'
+import {
+  loadUnreadSids,
+  saveUnreadSids,
+  WORKING_STATUSES,
+  RESTING_STATUSES,
+} from './notifications'
 
 // -- toast context ---------------------------------------------------------
 
@@ -33,6 +41,12 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newChannelOpen, setNewChannelOpen] = useState(false)
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
+  // 用户点击 session card 时移除。持久化到 localStorage。
+  const [unreadSids, setUnreadSids] = useState<Set<string>>(loadUnreadSids)
+  // 上一次看到的每个 session 的 status，用来检测转换
+  const prevStatusRef = useRef<Record<string, string>>({})
   const [fitSignal, setFitSignal] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [addToCanvasRequest, setAddToCanvasRequest] = useState<
@@ -44,6 +58,11 @@ export default function App() {
   const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
     {},
   )
+  // 选中 session 时，任意键盘/粘贴输入会打开一个底部 composer，按 Enter 把
+  // 消息直接注入该 session 的 inbox（下一轮 Claude 能看到）
+  const [composer, setComposer] = useState<
+    { sessionId: string; seed: string } | null
+  >(null)
   // Template cache: templateId → raw TSX source. Missing keys fall back to
   // DEFAULT_TEMPLATE. Populated lazily as pluginIds show up on screen, and
   // refetched on WS state.changed ticks (Wave 17a backend signals template
@@ -52,6 +71,71 @@ export default function App() {
   // Track in-flight fetches so we don't hammer the backend when many CardHosts
   // ask for the same pluginId at once.
   const pendingTemplatesRef = useRef<Set<string>>(new Set())
+
+  // 检测 status 转换，同步红点：
+  //   工作态 → 休息态 = "Claude 刚回复完"       → 标未读
+  //   休息态 → 非休息态 = "用户已回应（新 prompt / terminal 内手动回复）" → 清未读
+  // 第二条覆盖的场景：用户没点 web 卡片，而是直接在 terminal 里回了一句——
+  //   那一瞬间 session 从 completed/idle/waitingForUser 回到 thinking/tooling，
+  //   数据源本身已经告诉我们"用户已经处理过上一轮"，红点理应自动消失。
+  //
+  // prevStatusRef 只在内存里；页面刷新后 transition 历史丢失是 OK 的——
+  // 已标过红点的 sid 从 localStorage 取回，但不会因此错误地清除：清除只在
+  // 真实观测到 resting → non-resting 转换时发生，首次观测到 session 不算。
+  useEffect(() => {
+    const st = boardState.state
+    if (!st) return
+    const prev = prevStatusRef.current
+    const nextPrev: Record<string, string> = {}
+    let changed = false
+    setUnreadSids((oldSet) => {
+      const newSet = new Set(oldSet)
+      for (const s of st.sessions) {
+        const oldStatus = prev[s.id]
+        const newStatus = s.status
+        nextPrev[s.id] = newStatus
+        // 首次看到这个 session（oldStatus undefined）→ 不触发任何转换，只记录
+        if (!oldStatus) continue
+        if (oldStatus === newStatus) continue
+
+        const wasWorking = WORKING_STATUSES.has(oldStatus)
+        const wasResting = RESTING_STATUSES.has(oldStatus)
+        const nowResting = RESTING_STATUSES.has(newStatus)
+
+        // 加红点：Claude 刚完成一轮
+        if (wasWorking && nowResting) {
+          if (!newSet.has(s.id)) {
+            newSet.add(s.id)
+            changed = true
+          }
+          continue
+        }
+        // 清红点：用户已回应（terminal 手动回复 / 审批通过 permission / 重新提问）
+        if (wasResting && !nowResting) {
+          if (newSet.has(s.id)) {
+            newSet.delete(s.id)
+            changed = true
+          }
+        }
+      }
+      prevStatusRef.current = nextPrev
+      if (changed) saveUnreadSids(newSet)
+      return changed ? newSet : oldSet
+    })
+  }, [boardState.state])
+
+  // 用户选中 session card → 清未读
+  useEffect(() => {
+    if (selection.kind !== 'session') return
+    const sid = selection.sessionId
+    setUnreadSids((oldSet) => {
+      if (!oldSet.has(sid)) return oldSet
+      const next = new Set(oldSet)
+      next.delete(sid)
+      saveUnreadSids(next)
+      return next
+    })
+  }, [selection])
 
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
@@ -85,10 +169,11 @@ export default function App() {
     [],
   )
 
-  // Lazily fetch a template for a given pluginId. Falls back to
-  // DEFAULT_TEMPLATE on 404 and caches the result.
-  const ensureTemplate = useCallback((pluginId: string) => {
-    const id = templateIdForPlugin(pluginId)
+  // Lazily fetch a template for a given sessionId. Per-card storage via
+  // templateIdForSession. Falls back to DEFAULT_TEMPLATE when backend has
+  // no entry for this session.
+  const ensureTemplate = useCallback((sessionId: string) => {
+    const id = templateIdForSession(sessionId)
     if (templateCache[id] !== undefined) return
     if (pendingTemplatesRef.current.has(id)) return
     pendingTemplatesRef.current.add(id)
@@ -98,8 +183,6 @@ export default function App() {
         setTemplateCache((prev) => ({ ...prev, [id]: src }))
       })
       .catch((e) => {
-        // Fall back to the bundled default so cards still render when the
-        // backend is unreachable or not implementing the endpoint yet.
         console.warn('[App] getTemplate failed, using default:', (e as Error).message)
         setTemplateCache((prev) => ({ ...prev, [id]: DEFAULT_TEMPLATE }))
       })
@@ -127,6 +210,94 @@ export default function App() {
     },
     [],
   )
+
+  // Global keyboard/paste hijack: when a session is selected, any printable
+  // keystroke or paste opens the bottom composer seeded with that input.
+  // Inputs/textareas (including the composer itself) keep normal behavior.
+  //
+  // 关键：用 capture 阶段 + stopImmediatePropagation —— Excalidraw 自己在
+  // document 层装了 keydown/paste handler（按字母就造文本元素、粘贴生成
+  // 图片等），如果我们走冒泡会被它抢先。capture 阶段先到、再 preventDefault +
+  // stopImmediatePropagation 把事件彻底吃掉。
+  const selectedSessionId =
+    selection.kind === 'session' ? selection.sessionId : null
+  useEffect(() => {
+    if (!selectedSessionId) return
+
+    const isInputTarget = (t: EventTarget | null) => {
+      if (!(t instanceof HTMLElement)) return false
+      const tag = t.tagName
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        t.isContentEditable
+      )
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const targetTag =
+        e.target instanceof HTMLElement ? e.target.tagName : '(?)'
+      // 所有 keydown 都打，方便用 DevTools Console 诊断
+      console.log(
+        '[Composer] keydown captured key=%s target=%s composer=%s inputTarget=%s',
+        e.key,
+        targetTag,
+        composer ? 'open' : 'null',
+        isInputTarget(e.target),
+      )
+      if (composer) return
+      if (isInputTarget(e.target)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key.length !== 1) return
+      console.log('[Composer] → opening with seed=%s', e.key)
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setComposer({ sessionId: selectedSessionId, seed: e.key })
+    }
+
+    const onPaste = (e: ClipboardEvent) => {
+      const targetTag =
+        e.target instanceof HTMLElement ? e.target.tagName : '(?)'
+      const text = e.clipboardData?.getData('text') ?? ''
+      console.log(
+        '[Composer] paste captured target=%s textLen=%d composer=%s inputTarget=%s',
+        targetTag,
+        text.length,
+        composer ? 'open' : 'null',
+        isInputTarget(e.target),
+      )
+      if (composer) return
+      if (isInputTarget(e.target)) return
+      if (!text) return
+      console.log('[Composer] → opening with pasted text (len=%d)', text.length)
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      setComposer({ sessionId: selectedSessionId, seed: text })
+    }
+
+    // window + capture 是 DOM 事件流最早能 hook 的位置；Excalidraw 不管在
+    // document 还是 canvas 上装 handler，都会晚于这里。
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('paste', onPaste, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('paste', onPaste, true)
+    }
+  }, [selectedSessionId, composer])
+
+  // 选中 session 切换 / 取消选择时，关掉正在输入的 composer
+  useEffect(() => {
+    if (composer && composer.sessionId !== selectedSessionId) {
+      setComposer(null)
+    }
+  }, [selectedSessionId, composer])
+
+  const composerSession =
+    composer && boardState.state
+      ? boardState.state.sessions.find((s) => s.id === composer.sessionId) ??
+        null
+      : null
 
   // Refetch currently-cached templates on every state tick. The backend may
   // emit a single state.changed frame after a template edit; rather than
@@ -177,8 +348,10 @@ export default function App() {
             onCountsChange={handleCountsChange}
             templateCache={templateCache}
             onNeedTemplate={ensureTemplate}
+            unreadSids={unreadSids}
             onRefresh={() => boardState.refresh()}
             onNewChannel={() => setNewChannelOpen(true)}
+            onNewSession={() => setNewSessionOpen(true)}
             onFit={() => setFitSignal((x) => x + 1)}
           />
           {boardState.error && (
@@ -210,6 +383,21 @@ export default function App() {
             }}
           />
         )}
+        {newSessionOpen && (
+          <NewSessionDialog
+            onClose={() => setNewSessionOpen(false)}
+            onSpawned={(cwd) => {
+              setNewSessionOpen(false)
+              pushToast('success', `Spawning Claude in ${cwd}`)
+            }}
+            onError={(msg) => pushToast('error', msg)}
+          />
+        )}
+        <SessionComposer
+          session={composerSession}
+          seedContent={composer?.seed ?? ''}
+          onClose={() => setComposer(null)}
+        />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

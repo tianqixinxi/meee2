@@ -74,6 +74,37 @@ Bridge/         — claude-hook-bridge.sh (hook event forwarder)
 - Ghostty tab jumping uses a TTY title marker approach (writes escape sequence to `/dev/ttyNNN`, matches via Accessibility API).
 - Ad-hoc codesigning (`--sign -`) invalidates macOS accessibility permissions on every rebuild. Use a stable identity for development.
 
+## Debugging the Web Board (browser console)
+
+When debugging the Web UI served at `http://localhost:5173` (Vite dev) or
+`http://localhost:9876` (Swift BoardServer + built WebDist), do NOT ask the
+user to copy-paste console logs. Drive a visible puppeteer Chromium yourself:
+
+```bash
+# One-time setup (already installed at /tmp/meee2-browser-debug/)
+mkdir -p /tmp/meee2-browser-debug && cd /tmp/meee2-browser-debug
+npm init -y && npm i puppeteer
+```
+
+The debug runner at `/tmp/meee2-browser-debug/debug.js` launches a non-headless
+Chromium pointed at `http://localhost:5173`, pipes every `console.*`, `pageerror`,
+and `requestfailed` to stdout. Launch + tail:
+
+```bash
+: > /tmp/browser.log
+cd /tmp/meee2-browser-debug && (node debug.js >> /tmp/browser.log 2>&1 &)
+sleep 3
+tail -f /tmp/browser.log              # live
+grep '\[Composer\]' /tmp/browser.log  # filter
+```
+
+The Chromium window is visible and interactive — the user operates it (clicks
+cards, types, pastes); you read the log. Closing the window exits the node
+process cleanly.
+
+Use this whenever the debug loop is "reproduce in browser → read console". Skip
+it for one-off questions the user already has an answer for.
+
 ## Testing
 
 ```bash

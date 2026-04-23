@@ -154,6 +154,75 @@ export async function dropMessage(id: string): Promise<Message> {
 }
 
 /**
+ * Spawn 一个新 Claude CLI session：按 cwd 打开一个新的 Ghostty 窗口，里面自动
+ * 跑 `claude`（沿用本地 `~/.claude/` 的 OAuth，无需重新登录）。
+ */
+export async function spawnSession(input: {
+  cwd: string
+  command?: string
+  createIfMissing?: boolean
+  termProgram?: string
+}): Promise<{ ok: boolean; cwd: string; command: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+    '/api/sessions/spawn',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+// -- transcript ------------------------------------------------------------
+
+/** 富 transcript block（对应 Swift FullTranscriptBlock） */
+export interface TranscriptBlock {
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result'
+  text?: string
+  toolId?: string
+  toolName?: string
+  toolInputJSON?: string
+  toolUseId?: string
+  toolResultText?: string
+  toolResultTruncated?: boolean
+}
+
+/** 富 transcript entry（对应 Swift FullTranscriptEntry） */
+export interface TranscriptEntryFull {
+  id: string
+  type: 'user' | 'assistant' | 'system'
+  timestamp: string | null
+  blocks: TranscriptBlock[]
+}
+
+export async function fetchTranscript(
+  sessionId: string,
+  opts: { limit?: number } = {},
+): Promise<{ entries: TranscriptEntryFull[]; sessionId: string }> {
+  const qs = opts.limit ? `?limit=${opts.limit}` : ''
+  return jsonRequest<{ entries: TranscriptEntryFull[]; sessionId: string }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/transcript${qs}`,
+  )
+}
+
+/**
+ * 把一条消息直接注入到某个 Claude session 的 inbox。下一个 Stop hook
+ * 到达时会被塞给 Claude 作为 block-decision 输入（= 下一轮的 user message）。
+ */
+export async function injectToSession(
+  id: string,
+  content: string,
+): Promise<Message> {
+  const r = await jsonRequest<{ message: Message }>(
+    `/api/sessions/${encodeURIComponent(id)}/inject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    },
+  )
+  return r.message
+}
+
+/**
  * 触发该 session 的 terminal 跳转（等同于 Island 点击卡片）。
  * 成功返回 true；失败 toast 错误并返回 false。
  */

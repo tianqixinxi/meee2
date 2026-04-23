@@ -38,9 +38,9 @@ class ClaudePlugin: SessionPlugin {
     private var sessionUsage: [String: UsageStats] = [:]
     private let sessionUsageLock = NSLock()
 
-    /// 精细状态缓存 (sessionId -> DetailedStatus)
-    private var detailedStatuses: [String: DetailedStatus] = [:]
-    private let detailedStatusesLock = NSLock()
+    /// hook 驱动的 session 状态缓存 (sessionId -> SessionStatus)
+    private var sessionStatuses: [String: SessionStatus] = [:]
+    private let sessionStatusesLock = NSLock()
 
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
@@ -206,7 +206,7 @@ class ClaudePlugin: SessionPlugin {
                 pid: pid,
                 cwd: sessionData.project,
                 startedAt: sessionData.startedAt,
-                status: SessionStatus(rawValue: sessionData.status) ?? .running
+                status: sessionData.status
             )
             var mutableSession = tempSession
             mutableSession.tty = info?.tty
@@ -285,24 +285,41 @@ class ClaudePlugin: SessionPlugin {
             )
         }
 
-        // 更新精细状态
-        updateDetailedStatus(sessionId: sessionId, event: event)
+        // Ghostty 原生 terminal ID —— 只在 store 还为空时首次写入（通常发生
+        // 在 SessionStart hook，那时 Claude CLI 刚启动、对应 terminal 必然
+        // 是前台 tab、bridge 抓到的 id 是正确的）。后续 UserPromptSubmit 等
+        // 事件的捕获**不要 overwrite**：那时用户焦点可能在别的 tab，bridge
+        // 的 `focused terminal of front window` 拿到的是错的 id，盖掉正确值
+        // 会导致"Open terminal"跳到别的 session 的 terminal。
+        if let gtid = event.ghosttyTerminalId, !gtid.isEmpty {
+            sessionStore.update(sessionId) { data in
+                if (data.ghosttyTerminalId ?? "").isEmpty {
+                    data.ghosttyTerminalId = gtid
+                }
+            }
+        }
 
-        // DEBUG: 记录状态流转。每个 hook 的 event type + 转换前/后 detailedStatus。
-        detailedStatusesLock.lock()
-        let dsBefore = detailedStatuses[sessionId]?.rawValue ?? "nil"
-        detailedStatusesLock.unlock()
+        // 任一 hook 事件到来：立刻让 resolver 的缓存失效，UI 下次读时重算
+        TranscriptStatusResolver.invalidate(sessionId: sessionId)
+
+        // 更新精细状态
+        ensureSessionStatusInitialized(sessionId: sessionId, event: event)
+
+        // [StateTrace] Hook 层：记录每条事件的进入、字段、前后状态
+        sessionStatusesLock.lock()
+        let dsBefore = sessionStatuses[sessionId]?.rawValue ?? "nil"
+        sessionStatusesLock.unlock()
         let eventName = event.event?.rawValue ?? "nil"
-        NSLog("[StatusFlow] sid=\(sessionId.prefix(8)) evt=\(eventName) tool=\(event.toolName ?? "nil") before=\(dsBefore)")
+        NSLog("[StateTrace][hook] sid=\(sessionId.prefix(8)) evt=\(eventName) tool=\(event.toolName ?? "-") hookStatusField=\(event.status ?? "-") before=\(dsBefore)")
 
         // 处理不同类型的事件
         switch event.event {
         case .preToolUse:
             // 工具调用前 - 设置 tooling 状态
             if let toolName = event.toolName {
-                detailedStatusesLock.lock()
-                detailedStatuses[sessionId] = .tooling
-                detailedStatusesLock.unlock()
+                sessionStatusesLock.lock()
+                sessionStatuses[sessionId] = .tooling
+                sessionStatusesLock.unlock()
                 MLog("[ClaudePlugin] Tool started: \(toolName)")
             }
 
@@ -315,9 +332,9 @@ class ClaudePlugin: SessionPlugin {
 
         case .permissionRequest:
             // 权限请求
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .permissionRequired
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .permissionRequired
+            sessionStatusesLock.unlock()
 
             if let toolUseId = event.toolUseId {
                 let pending = ClaudePendingPermission(
@@ -333,9 +350,9 @@ class ClaudePlugin: SessionPlugin {
 
         case .notification:
             // 通知 - 可能需要等待用户
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .waitingForUser
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .waitingForUser
+            sessionStatusesLock.unlock()
 
         case .userPromptSubmit:
             // 用户提交输入 - 清除权限请求，开始思考
@@ -343,9 +360,9 @@ class ClaudePlugin: SessionPlugin {
             pendingPermissions.removeValue(forKey: sessionId)
             pendingPermissionsLock.unlock()
 
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .thinking
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .thinking
+            sessionStatusesLock.unlock()
 
             hookStatesLock.lock()
             hookStates.removeValue(forKey: sessionId)
@@ -353,15 +370,15 @@ class ClaudePlugin: SessionPlugin {
 
         case .preCompact:
             // 压缩前
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .compacting
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .compacting
+            sessionStatusesLock.unlock()
 
         case .stop:
             // 停止 - 回到 idle
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .idle
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .idle
+            sessionStatusesLock.unlock()
 
         case .sessionEnd:
             // 会话结束 - 清理缓存
@@ -373,29 +390,27 @@ class ClaudePlugin: SessionPlugin {
             pendingPermissions.removeValue(forKey: sessionId)
             pendingPermissionsLock.unlock()
 
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .completed
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .completed
+            sessionStatusesLock.unlock()
 
             // 更新使用统计
             updateUsageStats(sessionId: sessionId, event: event)
 
         case .sessionStart:
             // 会话开始
-            detailedStatusesLock.lock()
-            detailedStatuses[sessionId] = .idle
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .idle
+            sessionStatusesLock.unlock()
 
         default:
             break
         }
 
-        detailedStatusesLock.lock()
-        let dsAfter = detailedStatuses[sessionId]?.rawValue ?? "nil"
-        detailedStatusesLock.unlock()
-        if dsAfter != dsBefore {
-            NSLog("[StatusFlow] sid=\(sessionId.prefix(8)) evt=\(eventName) → \(dsBefore) → \(dsAfter)")
-        }
+        sessionStatusesLock.lock()
+        let dsAfter = sessionStatuses[sessionId]?.rawValue ?? "nil"
+        sessionStatusesLock.unlock()
+        NSLog("[StateTrace][hook] sid=\(sessionId.prefix(8)) evt=\(eventName) after=\(dsAfter) (changed=\(dsAfter != dsBefore))")
 
         // 更新 SessionStore (实时性保障)
         updateSessionInStore(sessionId: sessionId)
@@ -427,11 +442,13 @@ class ClaudePlugin: SessionPlugin {
         }
 
         // 更新状态
-        detailedStatusesLock.lock()
-        if let ds = detailedStatuses[sessionId] {
-            data.detailedStatus = ds
+        sessionStatusesLock.lock()
+        if let ds = sessionStatuses[sessionId] {
+            data.status = ds
         }
-        detailedStatusesLock.unlock()
+        let written = data.status
+        sessionStatusesLock.unlock()
+        NSLog("[StateTrace][store] sid=\(sessionId.prefix(8)) wrote SessionData.status=\(written.rawValue)")
 
         // 更新任务
         sessionTasksLock.lock()
@@ -497,14 +514,13 @@ class ClaudePlugin: SessionPlugin {
         sessionStore.upsert(data)
     }
 
-    /// 更新精细状态
-    private func updateDetailedStatus(sessionId: String, event: HookEvent) {
-        detailedStatusesLock.lock()
-        defer { detailedStatusesLock.unlock() }
+    /// 如果该 session 还没有缓存状态，初始化为 idle
+    private func ensureSessionStatusInitialized(sessionId: String, event: HookEvent) {
+        sessionStatusesLock.lock()
+        defer { sessionStatusesLock.unlock() }
 
-        // 如果还没有状态，初始化为 idle
-        if detailedStatuses[sessionId] == nil {
-            detailedStatuses[sessionId] = .idle
+        if sessionStatuses[sessionId] == nil {
+            sessionStatuses[sessionId] = .idle
         }
     }
 
@@ -714,22 +730,49 @@ class ClaudePlugin: SessionPlugin {
             // 检查 hook 状态中是否有真实的 session ID（可能是 --resume 后的新 session）
             // hookStates 中的 session ID 是正确的，而 PID.json 中可能是旧的
             //
-            // 重要：只有当 aiSession.id 不在 hookStates 里时才走 cwd 回退——
-            // 否则同一 cwd 下两个独立 session 会互相吞并。
+            // 两个前提同时满足才做 cwd 回退：
+            //   (1) aiSession.id 不在 hookStates 里
+            //   (2) aiSession.id 没有对应 transcript 文件（证明它确实是 stale，
+            //       而不是刚起来还没发 hook 事件的新 session）
+            // 同时：不允许 remap 到一个"已被别的活着 PID 占用"的 sessionId——
+            // 多个 Claude CLI 跑在同一个 cwd 时，原逻辑会把它们互相吞并。
             var realSessionId = aiSession.id
             hookStatesLock.lock()
             let idIsKnownToHooks = hookStates[aiSession.id] != nil
+            hookStatesLock.unlock()
+
             if !idIsKnownToHooks {
-                // PID.json 的 ID 不在 hook stream 中 —— 可能是 --resume 的陈旧 ID
-                for (hookSessionId, hookEvent) in hookStates {
-                    if let hookCwd = hookEvent.cwd, hookCwd == aiSession.cwd {
-                        realSessionId = hookSessionId
-                        NSLog("[ClaudePlugin] Remapped stale session ID via cwd: \(hookSessionId) (PID.json had \(aiSession.id))")
+                let ownTranscript = getTranscriptPath(for: aiSession.id)
+                let ownTranscriptExists = ownTranscript
+                    .map { FileManager.default.fileExists(atPath: $0) } ?? false
+
+                if !ownTranscriptExists {
+                    // 只有自己的 transcript 不存在才怀疑是 stale ID
+                    hookStatesLock.lock()
+                    let candidates = hookStates.compactMap { (sid, evt) -> String? in
+                        evt.cwd == aiSession.cwd ? sid : nil
+                    }
+                    hookStatesLock.unlock()
+
+                    for candidate in candidates {
+                        // 候选 sid 已经被另一个活着的 PID 占用？那它不是给我的
+                        let claimedByOther = sessionStore.sessions.contains(where: {
+                            $0.sessionId == candidate
+                                && $0.pid != aiSession.pid
+                                && $0.pid.map { SessionStore.processAlive($0) } == true
+                        })
+                        if claimedByOther {
+                            NSLog("[ClaudePlugin] skip cwd-remap to \(candidate.prefix(8)): claimed by another alive PID")
+                            continue
+                        }
+                        realSessionId = candidate
+                        NSLog("[ClaudePlugin] Remapped stale session ID via cwd: \(candidate.prefix(8)) (PID.json had \(aiSession.id.prefix(8)))")
                         break
                     }
+                } else {
+                    NSLog("[ClaudePlugin] keep PID.json sid=\(aiSession.id.prefix(8)): transcript exists, not stale")
                 }
             }
-            hookStatesLock.unlock()
 
             // 如果 store 中已有同 PID 的 session，检查 session ID 是否正确
             if let existingPidMatch = sessionStore.sessions.first(where: { $0.pid == aiSession.pid }) {
@@ -756,11 +799,10 @@ class ClaudePlugin: SessionPlugin {
                         data.project = aiSession.projectName
                         data.startedAt = aiSession.startedAt
                         data.lastActivity = aiSession.lastUpdated
-                        data.status = aiSession.status.rawValue
-                        // 不要碰 detailedStatus：SessionMonitor 每 2s 跑一次这条
-                        // 路径，如果这里硬写 .idle，会把 hook 刚刚设的 .thinking /
-                        // .tooling 冲掉，UI 就出现"回复到一半突然 idle"的抖动。
-                        // detailedStatus 的权威源是 hook 事件（handleHookEvent）。
+                        // 不要碰 data.status：SessionMonitor 每 2s 跑一次这条路径，
+                        // 如果这里硬写，会把 hook 刚刚设的 .thinking / .tooling 冲掉，
+                        // UI 就出现"回复到一半突然 idle"的抖动。
+                        // data.status 的权威源是 hook 事件（handleHookEvent）。
                         data.transcriptPath = transcriptPath
                         data.lastMessage = lastMessage
                     }
@@ -774,13 +816,13 @@ class ClaudePlugin: SessionPlugin {
             hookEvent = hookStates[realSessionId]
             hookStatesLock.unlock()
 
-            // 获取精细状态
-            var detailedStatus: DetailedStatus = .idle
-            detailedStatusesLock.lock()
-            if let ds = detailedStatuses[realSessionId] {
-                detailedStatus = ds
+            // 获取 hook 驱动的 session 状态
+            var hookDrivenStatus: SessionStatus = aiSession.status
+            sessionStatusesLock.lock()
+            if let ds = sessionStatuses[realSessionId] {
+                hookDrivenStatus = ds
             }
-            detailedStatusesLock.unlock()
+            sessionStatusesLock.unlock()
 
             // 获取任务
             var tasks: [SessionTask]? = nil
@@ -824,8 +866,7 @@ class ClaudePlugin: SessionPlugin {
                 transcriptPath: transcriptPath,
                 startedAt: aiSession.startedAt,
                 lastActivity: aiSession.lastUpdated,
-                status: aiSession.status.rawValue,
-                detailedStatus: detailedStatus,
+                status: hookDrivenStatus,
                 currentTool: aiSession.toolName ?? hookEvent?.toolName,
                 description: aiSession.currentTask,
                 tasks: tasks ?? [],

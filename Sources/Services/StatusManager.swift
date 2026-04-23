@@ -146,7 +146,7 @@ public class StatusManager: ObservableObject {
             return
         }
 
-        if sessions.contains(where: { $0.status == .failed }) {
+        if sessions.contains(where: { $0.status == .dead }) {
             systemStatus = .error
             return
         }

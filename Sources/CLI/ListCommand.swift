@@ -33,13 +33,8 @@ public struct ListCommand {
             let shortId = String(session.sessionId.prefix(8))
             let shortProject = truncate(session.project, maxLen: 20)
 
-            // 获取有效状态（当 detailedStatus 为 idle 但 status 为 running 时使用 active）
-            let effectiveStatus: DetailedStatus
-            if session.detailedStatus != .idle {
-                effectiveStatus = session.detailedStatus
-            } else {
-                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
-            }
+            // 三端共用的 resolver 解析结果
+            let effectiveStatus = TranscriptStatusResolver.resolve(for: session)
 
             let statusIcon = effectiveStatus.terminalIcon
             let status = effectiveStatus.displayName
@@ -95,14 +90,7 @@ public struct ListCommand {
         for session in sessions {
             let shortId = String(session.sessionId.prefix(8))
 
-            // 获取有效状态
-            let effectiveStatus: DetailedStatus
-            if session.detailedStatus != .idle {
-                effectiveStatus = session.detailedStatus
-            } else {
-                effectiveStatus = DetailedStatus.from(sessionStatus: SessionStatus(rawValue: session.status) ?? .running)
-            }
-
+            let effectiveStatus = TranscriptStatusResolver.resolve(for: session)
             print("\(shortId) \(session.project) \(effectiveStatus.terminalIcon) \(effectiveStatus.displayName)")
         }
     }

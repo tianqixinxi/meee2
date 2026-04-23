@@ -1,48 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { BoardState, Message, TranscriptEntry } from '../types'
+import type { BoardState, Message } from '../types'
 import { listChannelMessages, activateSession } from '../api'
 import { useToast } from '../App'
-
-const ROLE_PREFIX: Record<string, string> = {
-  user: '▶',
-  assistant: '◀',
-  tool: '⚡',
-}
-const ROLE_COLOR: Record<string, string> = {
-  user: '#7DD3FC',
-  assistant: '#E5E5E5',
-  tool: '#C084FC',
-}
-
-function TranscriptPreview({ entries }: { entries: TranscriptEntry[] }) {
-  if (entries.length === 0) {
-    return <div className="muted">No recent messages.</div>
-  }
-  return (
-    <div className="col" style={{ gap: 6 }}>
-      {entries.map((e, i) => {
-        const prefix = ROLE_PREFIX[e.role] ?? '·'
-        const color = ROLE_COLOR[e.role] ?? '#BBBBBB'
-        return (
-          <div
-            key={i}
-            className="mono"
-            style={{
-              fontSize: 12,
-              color,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              lineHeight: 1.45,
-            }}
-          >
-            <span style={{ opacity: 0.85, marginRight: 6 }}>{prefix}</span>
-            {e.text}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
+import TranscriptPanel from './TranscriptPanel'
 
 interface Props {
   state: BoardState
@@ -53,6 +13,7 @@ export default function SessionDetail({ state, sessionId }: Props) {
   const toast = useToast()
   const session = state.sessions.find((s) => s.id === sessionId)
   const [inbox, setInbox] = useState<Array<{ ch: string; msg: Message }>>([])
+  const [opening, setOpening] = useState(false)
 
   // Membership across channels → used to fetch inbox for the alias list.
   const memberships = state.channels
@@ -100,113 +61,124 @@ export default function SessionDetail({ state, sessionId }: Props) {
 
   const shortId = session.id.slice(0, 8)
 
+  // Open terminal 作为这页最高频的动作，固定在顶部 —— 避免用户每次都要滚到
+  // 页面底部再点（之前的位置在所有 section 后面，长 session 要翻半天；那个
+  // "需要点两下"的体感多半来自第一次"点"其实还在滚动到按钮本身）。
+  async function onOpenTerminal() {
+    if (opening) return
+    setOpening(true)
+    console.group('🪟 [Open terminal] ' + session!.id.slice(0, 8) + ' · ' + session!.title)
+    console.log('session data from state:', {
+      id: session!.id,
+      title: session!.title,
+      pluginId: session!.pluginId,
+      project: session!.project,
+      ghosttyTerminalId: (session as any).ghosttyTerminalId,
+      tty: (session as any).tty,
+      termProgram: (session as any).termProgram,
+      status: session!.status,
+    })
+    const t0 = performance.now()
+    try {
+      const ok = await activateSession(session!.id)
+      const dt = (performance.now() - t0).toFixed(0)
+      console.log(`→ activateSession returned ok=${ok} in ${dt}ms`)
+      console.log(
+        '💡 backend flow is logged to /tmp/meee2-gui.log:\n' +
+        '    grep -E "TerminalManager|TerminalJumper|activateTerminal" /tmp/meee2-gui.log | tail -20',
+      )
+      if (!ok) toast.push('error', 'Failed to open terminal')
+    } finally {
+      console.groupEnd()
+      setOpening(false)
+    }
+  }
+
   return (
-    <div className="col" style={{ gap: 12 }}>
-      <div>
-        <div
-          className="row"
-          style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}
-        >
+    <div className="session-detail">
+      {/* 顶部 sticky header：title + Open terminal。滚 session 内容时一直可见。 */}
+      <div className="session-detail__sticky">
+        <div className="session-detail__title-row">
           <span className="color-dot" style={{ background: session.pluginColor }} />
-          <span>{session.title}</span>
+          <span className="session-detail__title">{session.title}</span>
+          <button
+            className="session-detail__open-btn"
+            onClick={onOpenTerminal}
+            disabled={opening}
+            title="Jump to this session's terminal"
+          >
+            {opening ? 'Opening…' : 'Open terminal ↗'}
+          </button>
         </div>
-        <div className="muted mono" style={{ marginBottom: 2 }}>
+        <div className="muted mono session-detail__subtitle">
           {session.pluginDisplayName} · <code>{shortId}</code>
         </div>
+      </div>
+
+      <div className="col" style={{ gap: 12 }}>
         <div className="muted" style={{ wordBreak: 'break-all' }}>
           {session.project}
         </div>
-      </div>
 
-      <div className="row" style={{ gap: 6 }}>
-        <span className="muted">Status:</span>
-        <span className="badge">{session.status}</span>
-        {session.currentTool && (
-          <span className="badge">⚡ {session.currentTool}</span>
-        )}
-        {session.costUSD != null && (
-          <span className="badge" style={{ color: '#22C55E' }}>
-            ${session.costUSD.toFixed(session.costUSD >= 1 ? 2 : 4)}
-          </span>
-        )}
-      </div>
-
-      <div className="section">
-        <h4>
-          Recent messages{' '}
-          <span className="muted" style={{ fontWeight: 400 }}>
-            (latest 5)
-          </span>
-        </h4>
-        <TranscriptPreview entries={session.recentMessages ?? []} />
-      </div>
-
-      <div className="section">
-        <h4>
-          Inbox{' '}
-          {session.inboxPending > 0 && (
-            <span className="badge warn">📨 {session.inboxPending}</span>
+        <div className="row" style={{ gap: 6 }}>
+          <span className="muted">Status:</span>
+          <span className="badge">{session.status}</span>
+          {session.currentTool && (
+            <span className="badge">⚡ {session.currentTool}</span>
           )}
-        </h4>
-        {inbox.length === 0 && <div className="muted">No pending messages.</div>}
-        {inbox.map(({ ch, msg }) => (
-          <div key={msg.id} className="message-row">
-            <div className="meta">
-              <span>
-                {msg.fromAlias} → {msg.toAlias}
-              </span>
-              <span>{ch}</span>
-            </div>
-            <div className="content">{msg.content}</div>
-            <div className="meta">
-              <span className="badge warn">{msg.status}</span>
-              <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+          {session.costUSD != null && (
+            <span className="badge" style={{ color: '#22C55E' }}>
+              ${session.costUSD.toFixed(session.costUSD >= 1 ? 2 : 4)}
+            </span>
+          )}
+        </div>
 
-      <div className="section">
-        <h4>Memberships</h4>
-        {memberships.length === 0 && (
-          <div className="muted">Not in any channel.</div>
-        )}
-        {memberships.map((m) => (
-          <div key={m.channel} className="row space" style={{ marginBottom: 3 }}>
-            <span>{m.channel}</span>
-            <span className="mono muted">{m.aliases.join(', ')}</span>
-          </div>
-        ))}
-      </div>
+        <div className="section transcript-section">
+          <h4>Terminal Messages</h4>
+          <TranscriptPanel
+            sessionId={session.id}
+            limit={200}
+            refreshTrigger={state}
+          />
+        </div>
 
-      <div>
-        <button
-          onClick={async () => {
-            console.group('🪟 [Open terminal] ' + session.id.slice(0, 8) + ' · ' + session.title)
-            console.log('session data from state:', {
-              id: session.id,
-              title: session.title,
-              pluginId: session.pluginId,
-              project: session.project,
-              ghosttyTerminalId: (session as any).ghosttyTerminalId,
-              tty: (session as any).tty,
-              termProgram: (session as any).termProgram,
-              status: session.status,
-            })
-            const t0 = performance.now()
-            const ok = await activateSession(session.id)
-            const dt = (performance.now() - t0).toFixed(0)
-            console.log(`→ activateSession returned ok=${ok} in ${dt}ms`)
-            console.log(
-              '💡 backend flow is logged to /tmp/meee2-gui.log:\n' +
-              '    grep -E "TerminalManager|TerminalJumper|activateTerminal" /tmp/meee2-gui.log | tail -20',
-            )
-            console.groupEnd()
-            if (!ok) toast.push('error', 'Failed to open terminal')
-          }}
-        >
-          Open terminal
-        </button>
+        <div className="section">
+          <h4>
+            Inbox{' '}
+            {session.inboxPending > 0 && (
+              <span className="badge warn">📨 {session.inboxPending}</span>
+            )}
+          </h4>
+          {inbox.length === 0 && <div className="muted">No pending messages.</div>}
+          {inbox.map(({ ch, msg }) => (
+            <div key={msg.id} className="message-row">
+              <div className="meta">
+                <span>
+                  {msg.fromAlias} → {msg.toAlias}
+                </span>
+                <span>{ch}</span>
+              </div>
+              <div className="content">{msg.content}</div>
+              <div className="meta">
+                <span className="badge warn">{msg.status}</span>
+                <span>{new Date(msg.createdAt).toLocaleTimeString()}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="section">
+          <h4>Memberships</h4>
+          {memberships.length === 0 && (
+            <div className="muted">Not in any channel.</div>
+          )}
+          {memberships.map((m) => (
+            <div key={m.channel} className="row space" style={{ marginBottom: 3 }}>
+              <span>{m.channel}</span>
+              <span className="mono muted">{m.aliases.join(', ')}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
