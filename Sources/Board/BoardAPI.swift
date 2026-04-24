@@ -78,6 +78,12 @@ enum BoardAPI {
             return errorResponse("already_terminal", "message already terminal: \(id)", status: 409)
         case .channelPaused(let c):
             return errorResponse("paused_channel", "channel is paused: \(c)", status: 409)
+        case .emptyRecipients(let c):
+            return errorResponse(
+                "empty_recipients",
+                "broadcast in '\(c)' has no recipients after excluding the sender; add another member or pick a specific toAlias",
+                status: 400
+            )
         }
     }
 

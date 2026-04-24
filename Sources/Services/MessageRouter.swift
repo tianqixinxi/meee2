@@ -11,6 +11,9 @@ public enum MessageRouterError: Error, CustomStringConvertible {
     case alreadyTerminal(String)
     /// deliverPending 被自动调用时遇到 paused 频道（除非显式 deliver(id)）
     case channelPaused(String)
+    /// 广播 `*` 但把发送方排除后没有任何接收方（channel 只有一个成员且
+    /// 正好是发送方 / channel 没有成员）。不再悄悄把消息标成 delivered=[]。
+    case emptyRecipients(channel: String)
 
     public var description: String {
         switch self {
@@ -20,6 +23,8 @@ public enum MessageRouterError: Error, CustomStringConvertible {
         case .messageNotFound(let id): return "message not found: \(id)"
         case .alreadyTerminal(let id): return "message already terminal (delivered/dropped): \(id)"
         case .channelPaused(let c): return "channel is paused: \(c)"
+        case .emptyRecipients(let c):
+            return "broadcast in channel '\(c)' has no recipients (add another member or pick a specific toAlias)"
         }
     }
 }
@@ -139,20 +144,41 @@ public final class MessageRouter {
         guard let ch = ChannelRegistry.shared.get(channel) else {
             throw MessageRouterError.channelNotFound(channel)
         }
-        guard let sender = ch.memberByAlias(fromAlias) else {
-            throw MessageRouterError.unknownSender(alias: fromAlias, channel: channel)
+
+        // "operator" 作为合成发送方：人从 Web UI 往任意 channel 发消息，
+        // operator 不必是 channel 的真 member 也能发。校验条件：必须
+        // injectedByHuman=true（agent 不能伪装成 operator）。这样 channel
+        // 里只有一个 agent 成员时，operator → agent 也不会踩到 "broadcast
+        // 排除自己 → 收件人为空" 的死局。
+        let senderSessionId: String
+        if fromAlias == "operator" && injectedByHuman {
+            senderSessionId = ""  // operator 在 channel member 表外
+        } else {
+            guard let sender = ch.memberByAlias(fromAlias) else {
+                throw MessageRouterError.unknownSender(alias: fromAlias, channel: channel)
+            }
+            senderSessionId = sender.sessionId
         }
+
         // 若指定具体接收者，需验证其存在；"*" 表示广播，延迟到投递时再 fan-out
         if toAlias != "*" {
             guard ch.memberByAlias(toAlias) != nil else {
                 throw MessageRouterError.unknownRecipient(alias: toAlias, channel: channel)
+            }
+        } else {
+            // 广播预检：把发送方排除掉之后必须还有人，否则 deliverPending
+            // 会写一条 status=delivered / deliveredTo=[] 的"死"消息，看起来
+            // 送达了其实谁都没收到。宁可在 send 就拒掉。
+            let recipients = ch.members.filter { $0.alias != fromAlias }
+            if recipients.isEmpty {
+                throw MessageRouterError.emptyRecipients(channel: channel)
             }
         }
 
         let msg = A2AMessage(
             channel: channel,
             fromAlias: fromAlias,
-            fromSessionId: sender.sessionId,
+            fromSessionId: senderSessionId,
             toAlias: toAlias,
             content: content,
             replyTo: replyTo,

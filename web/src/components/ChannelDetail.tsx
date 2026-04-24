@@ -28,7 +28,11 @@ export default function ChannelDetail({ state, channelName }: Props) {
   const [addingMember, setAddingMember] = useState(false)
   const [newAlias, setNewAlias] = useState('')
   const [newSessionId, setNewSessionId] = useState('')
-  const [sendFrom, setSendFrom] = useState<string>('')
+  // 默认发送方 = operator（合成 alias，后端当 injectedByHuman 的人类发送方
+  // 放行）。为什么不是 member 列表第一个：channel 里只有一个成员时，从那
+  // 个成员发广播会把自己排除，结果 0 个接收方、消息被标成 "delivered=[]"
+  // 的死状态——用户以为发出去了其实没人收到。
+  const [sendFrom, setSendFrom] = useState<string>('operator')
   const [sendTo, setSendTo] = useState<string>('*')
   const [sendContent, setSendContent] = useState('')
 
@@ -52,12 +56,29 @@ export default function ChannelDetail({ state, channelName }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelName, state])
 
+  // 默认把 sendTo 压到"第一个真正可达的 member"。当 from=operator 时
+  // operator 不是 member，`*` 会广播给所有 member，单 member channel 也
+  // 不会出现空接收方；当 from 被切成某 member 时，对方 member 才是正确默认。
   useEffect(() => {
     if (!channel) return
-    if (!sendFrom && channel.members.length > 0) {
-      setSendFrom(channel.members[0].alias)
+    if (sendTo === '*') {
+      // 只在当前 from 选择导致 * 会变空时才自动换
+      if (sendFrom !== 'operator') {
+        const others = channel.members.filter((m) => m.alias !== sendFrom)
+        if (others.length === 0 && channel.members.length > 0) {
+          // 让用户 fallback 到唯一的那个 member
+          setSendTo(channel.members[0].alias)
+        }
+      }
     }
-  }, [channel, sendFrom])
+    // 把无效的 sendFrom（channel 里找不到，且不是 operator）降到 operator
+    if (
+      sendFrom !== 'operator' &&
+      !channel.members.some((m) => m.alias === sendFrom)
+    ) {
+      setSendFrom('operator')
+    }
+  }, [channel, sendFrom, sendTo])
 
   const availableSessions = useMemo(() => {
     if (!channel) return []
@@ -274,7 +295,8 @@ export default function ChannelDetail({ state, channelName }: Props) {
             value={sendFrom}
             onChange={(e) => setSendFrom(e.target.value)}
           >
-            {channel.members.length === 0 && <option value="">—</option>}
+            {/* operator 是合成发送方：以人的身份发消息，不必是 member */}
+            <option value="operator">operator (you)</option>
             {channel.members.map((m) => (
               <option key={m.alias} value={m.alias}>
                 {m.alias}
