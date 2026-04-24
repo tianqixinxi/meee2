@@ -244,6 +244,52 @@ export async function injectToSession(
 }
 
 /**
+ * 把一张图片附件上传到 session，得到一个后端落盘后的绝对路径。
+ *
+ * 后端期望的是 base64 JSON 而不是 multipart —— 原因在 `Sources/Board/AttachmentsAPI.swift`
+ * 的顶注里：Swifter multipart 支持烂，base64 的 33% 膨胀对几 MB 图片不是问题。
+ *
+ * 成功时返回 `{path, filename}`；path 可以直接 `@<path>` 前置到下一条 inject
+ * 的 content 里，Claude CLI 会把它当作下一轮 user message 的附件读入。
+ */
+export async function uploadAttachment(
+  sessionId: string,
+  file: File,
+): Promise<{ path: string; filename: string }> {
+  const dataBase64 = await fileToBase64(file)
+  return jsonRequest<{ path: string; filename: string }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/attachments`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: file.name || 'paste',
+        contentType: file.type || 'application/octet-stream',
+        dataBase64,
+      }),
+    },
+  )
+}
+
+/** 读取 File 为不含 data:URL 前缀的 base64 字符串 */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('FileReader error'))
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result !== 'string') {
+        reject(new Error('FileReader did not return a string'))
+        return
+      }
+      // `data:<mime>;base64,<payload>` → payload
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+/**
  * 触发该 session 的 terminal 跳转（等同于 Island 点击卡片）。
  * 成功返回 true；失败 toast 错误并返回 false。
  */

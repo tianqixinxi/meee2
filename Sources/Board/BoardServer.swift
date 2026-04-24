@@ -129,6 +129,7 @@ public final class BoardServer {
         server.GET["/api/state"]   = BoardAPI.getState
         server.POST["/api/sessions/:id/activate"] = BoardAPI.activateSession
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
+        server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/transcript"] = BoardAPI.getTranscript
         server.POST["/api/sessions/spawn"] = BoardAPI.spawnSession
         server.POST["/api/channels"] = BoardAPI.createChannel
