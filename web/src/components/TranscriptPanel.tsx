@@ -71,9 +71,10 @@ export default function TranscriptPanel({
   )
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState<boolean>(initialCache != null)
-  // `fetching` 独立于 `loaded`：命中缓存时 loaded=true 但第一轮 fetch 在飞，
-  // 用它在 header 画一个"refreshing"小灯，让用户知道显示的内容可能是 stale。
-  const [fetching, setFetching] = useState<boolean>(true)
+  // `fetching` 独立于 `loaded`：只有当 fetch 超过 500ms 仍未完成才翻 true，
+  // 正常 poll 的 200-300ms 不会点亮 refreshing 灯。否则用户一直看到 spinner
+  // 在转，以为数据有问题——实际上只是后台定期 poll。
+  const [fetching, setFetching] = useState<boolean>(false)
   const [query, setQuery] = useState('')
   const [showTools, setShowTools] = useState<boolean>(loadShowTools)
 
@@ -121,7 +122,9 @@ export default function TranscriptPanel({
   // 整棵树（ReactMarkdown/ReactDiffViewer/virtualizer re-measure）重算
   const lastSignatureRef = useRef<string>(initialCache?.signature ?? '')
   const load = useCallback(async () => {
-    setFetching(true)
+    // 500ms 内完成不点亮 refreshing 灯 —— 避免 poll 频率 × 正常 fetch 耗时造成的
+    // 持续闪烁感。超 500ms 还没回来才翻 true（说明后端确实慢）。
+    const slowTimer = window.setTimeout(() => setFetching(true), 500)
     try {
       const r = await fetchTranscript(sessionId, { limit })
       // 轻量指纹：entries 数 + 最后一条的 id + 最后一条最后一个 block 的 text/result 长度
@@ -152,6 +155,7 @@ export default function TranscriptPanel({
       setError((e as Error).message || 'Failed to load transcript')
       setLoaded(true)
     } finally {
+      window.clearTimeout(slowTimer)
       setFetching(false)
     }
   }, [sessionId, limit])
@@ -217,6 +221,20 @@ export default function TranscriptPanel({
     }
     return out
   }, [filteredEntries, showTools])
+
+  // 连续同角色合并：tool calls 隐藏后常见 assistant → assistant → assistant，
+  // 每条都画 "◆ Claude" chip 就像盖章，噪声。把连续 run 里除首条外的 role
+  // label 全部隐藏，但保留各自的竖条 / 气泡——视觉上仍是独立段落，只是
+  // 说话人指示归并了一次。按 entry id 做 O(1) lookup，虚拟化时也稳定。
+  const hideRoleChipFor = useMemo(() => {
+    const set = new Set<string>()
+    for (let i = 1; i < visibleEntries.length; i++) {
+      if (visibleEntries[i].type === visibleEntries[i - 1].type) {
+        set.add(visibleEntries[i].id)
+      }
+    }
+    return set
+  }, [visibleEntries])
 
   // 虚拟化
   // useFlushSync: false —— 默认 true 会在 measurement 回调里调 flushSync()，
@@ -440,7 +458,11 @@ export default function TranscriptPanel({
                       transform: `translateY(${v.start}px)`,
                     }}
                   >
-                    <EntryRow entry={e} resultsByToolUseId={resultsByToolUseId} />
+                    <EntryRow
+                      entry={e}
+                      resultsByToolUseId={resultsByToolUseId}
+                      hideRoleChip={hideRoleChipFor.has(e.id)}
+                    />
                   </div>
                 )
               })}
@@ -468,16 +490,31 @@ export default function TranscriptPanel({
 function EntryRow({
   entry,
   resultsByToolUseId,
+  hideRoleChip,
 }: {
   entry: TranscriptEntryFull
   resultsByToolUseId: Map<string, TranscriptBlock>
+  hideRoleChip: boolean
 }) {
+  // 同一 entry 里多个 text block 只有第一条显示 chip —— 同 entry 天然同角色
+  let renderedFirstText = false
   return (
-    <div className={`tx-entry tx-entry--${entry.type}`}>
+    <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}`}>
       {entry.blocks.map((b, i) => {
         switch (b.type) {
-          case 'text':
-            return <TextBlock key={i} role={entry.type} text={b.text ?? ''} />
+          case 'text': {
+            // 跨 entry 合并（hideRoleChip）+ 同 entry 内连续 text 合并
+            const hideLabel = hideRoleChip || renderedFirstText
+            renderedFirstText = true
+            return (
+              <TextBlock
+                key={i}
+                role={entry.type}
+                text={b.text ?? ''}
+                hideLabel={hideLabel}
+              />
+            )
+          }
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} />
           case 'tool_use':
@@ -504,17 +541,28 @@ function EntryRow({
 // 每次 WS tick entries 数组都是新引用，子孙 component 默认会重新 render；但
 // {role, text} 都是 primitive，string 比较走值相等 —— 只要 Claude 的这条文本
 // 没变，memo 就能把整棵 markdown 树从 re-render 路径上摘掉。
-const TextBlock = memo(function TextBlock({ role, text }: { role: string; text: string }) {
+const TextBlock = memo(function TextBlock({
+  role,
+  text,
+  hideLabel,
+}: {
+  role: string
+  text: string
+  /** 同角色连续时抑制 "◆ Claude" / "You" chip，避免每条都盖个章 */
+  hideLabel?: boolean
+}) {
   const isAssistant = role === 'assistant'
   const isUser = role === 'user'
   const roleLabel = isUser ? 'You' : isAssistant ? 'Claude' : role
   const cls = isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
   return (
-    <div className={`tx-text ${cls}`}>
-      <div className="tx-text__role">
-        {isAssistant && <span className="tx-text__role-glyph" aria-hidden>◆</span>}
-        <span className="tx-text__role-name">{roleLabel}</span>
-      </div>
+    <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}`}>
+      {!hideLabel && (
+        <div className="tx-text__role">
+          {isAssistant && <span className="tx-text__role-glyph" aria-hidden>◆</span>}
+          <span className="tx-text__role-name">{roleLabel}</span>
+        </div>
+      )}
       <div className="tx-text__body">
         {isAssistant ? (
           <ReactMarkdown

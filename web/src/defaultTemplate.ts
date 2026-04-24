@@ -29,60 +29,64 @@ const ROLE_LABELS = {
 // 后端 SessionStatus 枚举值：
 //   idle, thinking, tooling, active, waitingForUser, permissionRequired,
 //   compacting, completed, dead
+//
+// Claude 视觉风：色板全部降饱和，暖色调主导，和 styles.css 的 tokens 对齐。
 function statusStyle(status, urgent) {
-  if (urgent) return { color: '#EF4444', pulse: true }
+  if (urgent) return { color: '#C26A6A', pulse: true }    // danger
   switch (status) {
     case 'active':
-      return { color: '#22C55E', pulse: false }
+      return { color: '#7FA982', pulse: false }           // sage green
     case 'thinking':
     case 'compacting':
-      return { color: '#60A5FA', pulse: false }
+      return { color: '#8BA9C2', pulse: false }           // muted info blue
     case 'tooling':
-      return { color: '#F59E0B', pulse: false }
+      return { color: '#CC785C', pulse: false }           // Claude terracotta
     case 'permissionRequired':
-      return { color: '#EAB308', pulse: true }
+      return { color: '#D4A373', pulse: true }            // sand amber
     // waitingForUser 等同 idle → 落到 default 分支
     case 'completed':
-      return { color: '#22C55E', pulse: false }
+      return { color: '#7FA982', pulse: false }
     case 'dead':
-      return { color: '#EF4444', pulse: false }
+      return { color: '#C26A6A', pulse: false }
     case 'idle':
     default:
-      return { color: '#64748B', pulse: false }
+      return { color: '#6B6862', pulse: false }           // text-faint
   }
 }
 
 function statusBarColor(status, urgent) {
-  if (urgent) return '#EF4444'
+  if (urgent) return '#C26A6A'
   switch (status) {
     case 'active':
     case 'thinking':
     case 'tooling':
     case 'compacting':
-      return '#22C55E'
+      return '#CC785C'                                     // 活跃状态统一用 accent
     case 'permissionRequired':
-      return '#EAB308'
+      return '#D4A373'
     case 'completed':
-      return '#22C55E'
+      return '#7FA982'
     case 'dead':
-      return '#EF4444'
+      return '#C26A6A'
     default:
       return null
   }
 }
 
 function classifyLive(status, urgent) {
-  if (urgent) return { halo: 'active', badge: 'ATTN', haloColor: '#EF4444', dim: false }
+  if (urgent) return { halo: 'active', badge: 'ATTN', haloColor: '#C26A6A', dim: false }
   switch (status) {
     case 'active':
     case 'thinking':
     case 'tooling':
     case 'compacting':
-      return { halo: 'active', badge: 'LIVE', haloColor: '#22C55E', dim: false }
+      // Claude 风：LIVE 用 accent terracotta，不再是鲜绿。一张 card 在"活着"
+      // 的时候，它的提示色就是品牌主色。
+      return { halo: 'active', badge: 'LIVE', haloColor: '#CC785C', dim: false }
     case 'permissionRequired':
-      return { halo: 'active', badge: 'WAIT', haloColor: '#EAB308', dim: false }
+      return { halo: 'active', badge: 'WAIT', haloColor: '#D4A373', dim: false }
     case 'dead':
-      return { halo: null, badge: 'DEAD', haloColor: '#EF4444', dim: true }
+      return { halo: null, badge: 'DEAD', haloColor: '#C26A6A', dim: true }
     case 'completed':
       return { halo: null, badge: null, haloColor: null, dim: true }
     case 'idle':
@@ -111,11 +115,38 @@ function fmtTokens(n) {
 
 function tokenText(usage) {
   if (!usage) return ''
-  // 上行 = input + cache_create（cache_read 有单独图标）
-  const up = (usage.inputTokens || 0) + (usage.cacheCreateTokens || 0)
+  // 默认只显示"真正发送 / 真正生成"的 token：
+  //   ↑ = 本轮新发给模型的 prompt tokens（不含从 cache 命中 + 不含 cache-create）
+  //   ↓ = 模型生成的 output tokens
+  // cache create / cache read 归到 hover tooltip 里，避免主视图被 cache 量
+  // 放大得看起来很夸张（典型场景 cache 总量能到几 M，但本轮实际只算几 k）。
+  const up = usage.inputTokens || 0
   const down = usage.outputTokens || 0
   if (up === 0 && down === 0) return ''
   return '↑' + fmtTokens(up) + ' ↓' + fmtTokens(down)
+}
+
+function tokenTooltip(usage) {
+  if (!usage) return ''
+  const input = usage.inputTokens || 0
+  const output = usage.outputTokens || 0
+  const cCreate = usage.cacheCreateTokens || 0
+  const cRead = usage.cacheReadTokens || 0
+  const turns = usage.turns || 0
+  const model = usage.model || '—'
+  // 用换行符连接，原生 title 在 Chrome/Safari/Firefox 里都会正确换行
+  const lines = [
+    'Real tokens (this turn)',
+    '  ↑ Input:  ' + fmtTokens(input),
+    '  ↓ Output: ' + fmtTokens(output),
+    '',
+    'Cache',
+    '  + Create: ' + fmtTokens(cCreate),
+    '  ⟲ Read:   ' + fmtTokens(cRead),
+    '',
+    'Turns: ' + turns + '  ·  Model: ' + model,
+  ]
+  return lines.join('\\n')
 }
 
 function parseToolEntry(text) {
@@ -127,10 +158,10 @@ function parseToolEntry(text) {
 
 function roleBadgeColor(role) {
   switch (role) {
-    case 'user': return '#60A5FA'
-    case 'assistant': return '#22C55E'
-    case 'tool': return '#F59E0B'
-    default: return '#94A3B8'
+    case 'user': return '#F0D5C7'       // 暖米（User 用偏亮的暖调）
+    case 'assistant': return '#E6C9A8'   // 米驼（Claude 自己的色）
+    case 'tool': return '#CC785C'        // 赤陶（tool = action = accent）
+    default: return '#A8A59B'
   }
 }
 
@@ -158,7 +189,7 @@ function MessageRow({ entry, isLatest }) {
   // 能完整显示 ~6 行，超出再 clip。
   const bodyStyle = isLatest
     ? {
-        color: '#cbd5e1',
+        color: '#E8E5DC',
         fontSize: 11,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
@@ -167,7 +198,7 @@ function MessageRow({ entry, isLatest }) {
         minWidth: 0,
       }
     : {
-        color: '#cbd5e1',
+        color: '#E8E5DC',
         fontSize: 11,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -239,25 +270,26 @@ function SessionCard({ session, board, helpers }) {
     ? '✖ dead'
     : '● ' + session.status
 
-  // 休息态（idle / waitingForUser / completed）用中性灰边，不 fallback 到
-  // pluginColor —— Claude 的 pluginColor 是橙色，视觉上像"警告红"，容易让人
-  // 以为 session 一直需要注意。真正要注意的只有 classifyLive 返回 haloColor 时。
-  const borderColor = live.haloColor || '#334155'
+  // Claude 风：休息态用柔和暖褐边，活跃态才用 haloColor。
+  const borderColor = live.haloColor || '#3A3A38'
   const outerStyle = {
     position: 'relative',
     width: '100%',
     height: '100%',
-    background: 'linear-gradient(180deg,#1b2030 0%,#141824 100%)',
+    // 暖褐"纸页"底色渐变 —— 上浅下深一点点，像一张被灯光斜照的信纸
+    background: 'linear-gradient(180deg, #2E2D2B 0%, #262624 100%)',
     border: '1px solid ' + borderColor,
-    borderRadius: 10,
-    padding: '10px 12px 8px',
+    borderRadius: 12,
+    padding: '11px 14px 9px',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    opacity: live.dim ? 0.7 : 1,
-    boxShadow: live.halo === 'active' ? ('0 0 12px ' + live.haloColor + '55') : 'none',
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    color: '#e5e5e5',
+    opacity: live.dim ? 0.78 : 1,
+    boxShadow: live.halo === 'active'
+      ? '0 0 14px ' + live.haloColor + '33, 0 1px 2px rgba(0,0,0,0.25)'
+      : '0 1px 2px rgba(0,0,0,0.22)',
+    fontFamily: "-apple-system, 'Inter', BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    color: '#F5F4EF',
   }
 
   return (
@@ -306,9 +338,12 @@ function SessionCard({ session, board, helpers }) {
           background: dot.color,
           flexShrink: 0,
         }} />
+        {/* session 标题 —— Claude 风：serif + 略大，像章节标题。 */}
         <span style={{
-          fontWeight: 600,
-          fontSize: 12,
+          fontFamily: "ui-serif, 'Iowan Old Style', 'Palatino', 'Charter', Georgia, serif",
+          fontWeight: 500,
+          fontSize: 14,
+          letterSpacing: '-0.01em',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -317,40 +352,45 @@ function SessionCard({ session, board, helpers }) {
         }} title={session.title}>
           {session.title}
         </span>
-        <span style={{ color: '#64748b', fontSize: 10 }}>·</span>
+        <span style={{ color: '#6B6862', fontSize: 10 }}>·</span>
         <span style={{
-          fontSize: 10,
-          color: session.pluginColor || '#94a3b8',
-          fontWeight: 600,
+          fontSize: 9.5,
+          color: '#A8A59B',
+          fontWeight: 500,
           textTransform: 'uppercase',
-          letterSpacing: 0.4,
+          letterSpacing: 0.8,
           flexShrink: 0,
         }}>
           {session.pluginDisplayName}
         </span>
-        {tokens && (
-          <span style={{
-            fontSize: 10,
-            color: '#94a3b8',
-            fontVariantNumeric: 'tabular-nums',
-            fontFamily: "'SF Mono', Consolas, monospace",
-            flexShrink: 0,
-          }} title={session.usageStats
-            ? 'input=' + (session.usageStats.inputTokens||0)
-              + ' output=' + (session.usageStats.outputTokens||0)
-              + ' cacheCreate=' + (session.usageStats.cacheCreateTokens||0)
-              + ' cacheRead=' + (session.usageStats.cacheReadTokens||0)
-              + ' turns=' + (session.usageStats.turns||0)
-              + ' model=' + (session.usageStats.model||'?')
-            : ''}>
-            {tokens}
-          </span>
-        )}
+        {tokens && (() => {
+          const u = session.usageStats || {}
+          const hasCache = (u.cacheCreateTokens || 0) > 0 || (u.cacheReadTokens || 0) > 0
+          return (
+            <span style={{
+              fontSize: 10,
+              color: '#A8A59B',
+              fontVariantNumeric: 'tabular-nums',
+              fontFamily: "'SF Mono', Consolas, monospace",
+              flexShrink: 0,
+              cursor: hasCache ? 'help' : 'default',
+            }} title={tokenTooltip(session.usageStats)}>
+              {tokens}
+              {hasCache && (
+                <span style={{
+                  marginLeft: 4,
+                  opacity: 0.55,
+                  fontSize: 9,
+                }} aria-hidden>⟲</span>
+              )}
+            </span>
+          )
+        })()}
       </div>
 
       <div style={{
         fontSize: 10,
-        color: '#64748b',
+        color: '#7A7670',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
@@ -368,7 +408,7 @@ function SessionCard({ session, board, helpers }) {
         fontSize: 11,
       }}>
         {rows.length === 0 ? (
-          <div style={{ color: '#64748b', fontStyle: 'italic', fontSize: 11 }}>
+          <div style={{ color: '#7A7670', fontStyle: 'italic', fontSize: 11 }}>
             No recent messages
           </div>
         ) : (
@@ -386,7 +426,7 @@ function SessionCard({ session, board, helpers }) {
         paddingTop: 6,
         borderTop: '1px solid rgba(255,255,255,0.06)',
         fontSize: 10,
-        color: '#94a3b8',
+        color: '#A8A59B',
       }}>
         <span style={{ color: dot.color, fontWeight: 600 }}>{footerStatus}</span>
         {/* 后台子 agent / task 胶囊——和主 status 正交，主 idle 时也应该可见 */}
@@ -413,7 +453,7 @@ function SessionCard({ session, board, helpers }) {
         <span style={{
           fontFamily: "'SF Mono', Consolas, monospace",
           fontSize: 9,
-          color: '#475569',
+          color: '#5B5853',
         }}>
           {sidShort}
         </span>

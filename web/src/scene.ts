@@ -209,8 +209,9 @@ export function buildSessionEmbeddable(
     // 解法：填色改成和 --bg（#1a1a1a）完全一致的纯色；solid fillStyle 保留，
     // Excalidraw 的 body hit-test 还是按 bbox 正常走；描边也设成同色，选中 /
     // resize 时 Excalidraw 自己画的蓝框不受影响。
-    strokeColor: '#1a1a1a',
-    backgroundColor: '#1a1a1a',
+    // 填色跟 styles.css 的 --bg 保持一致（Claude warm dark #262624）
+    strokeColor: '#262624',
+    backgroundColor: '#262624',
     fillStyle: 'solid',
     strokeWidth: 1,
     roundness: { type: 3 },

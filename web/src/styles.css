@@ -1,16 +1,46 @@
+/* Claude 风格 design tokens：warm paper / terracotta accent / serif headings。
+   原则：
+   - 背景偏暖褐（#262624 家族），避免冷硬的 #1a 纯灰
+   - accent 用 Claude 赤陶色 #CC785C，饱和度比 #ff9500 低一档
+   - 状态色从霓虹饱和 → 柔和有呼吸感
+   - 加一组字体 token：serif 用于标题 / 标签，sans 用于正文
+*/
 :root {
-  --bg: #1a1a1a;
-  --bg-elevated: #242424;
-  --bg-elevated-2: #2c2c2c;
-  --text: #e5e5e5;
-  --text-dim: #888;
-  --accent: #ff9500;
-  --border: #333;
-  --border-strong: #444;
-  --success: #22c55e;
-  --warning: #eab308;
-  --danger: #ef4444;
-  --mono: 'SF Mono', Consolas, monospace;
+  /* 背景阶梯 —— 暖褐 */
+  --bg: #262624;
+  --bg-elevated: #30302E;
+  --bg-elevated-2: #3A3A38;
+  --bg-paper: #2C2B29;          /* 卡片主体底色（比 bg 略亮，带一点"纸"感）*/
+
+  /* 文字阶梯 —— 暖米白，不要纯白 */
+  --text: #F5F4EF;
+  --text-dim: #A8A59B;
+  --text-faint: #6B6862;
+
+  /* Claude 赤陶色作为主 accent */
+  --accent: #CC785C;
+  --accent-hover: #D6896E;
+  --accent-subtle: rgba(204, 120, 92, 0.14);
+
+  /* 边框 —— 和背景同色系 */
+  --border: #3A3A38;
+  --border-strong: #4B4A47;
+
+  /* 状态色 —— 全部压低饱和度，跟 Claude 整体气质匹配 */
+  --success: #7FA982;           /* 鼠尾草绿 */
+  --warning: #D4A373;           /* 沙棕 */
+  --danger:  #C26A6A;           /* 陶红 */
+  --info:    #8BA9C2;           /* 灰青 */
+
+  /* 字体 token */
+  --serif: ui-serif, 'Iowan Old Style', 'Palatino', 'Charter', Georgia, serif;
+  --sans: -apple-system, 'Inter', BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* 几何 token */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 }
 
 html,
@@ -20,8 +50,10 @@ body,
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--sans);
   font-size: 13px;
+  letter-spacing: 0.005em;       /* 轻微松字距，读起来更像书页 */
+  -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
@@ -34,12 +66,14 @@ button {
   color: inherit;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  padding: 4px 10px;
-  border-radius: 4px;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 button:hover {
   background: var(--bg-elevated-2);
+  border-color: var(--border-strong);
 }
 button:disabled {
   opacity: 0.4;
@@ -47,12 +81,13 @@ button:disabled {
 }
 button.primary {
   background: var(--accent);
-  color: #000;
+  color: #1A1210;
   border-color: var(--accent);
   font-weight: 600;
 }
 button.primary:hover {
-  filter: brightness(1.1);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 button.danger {
   background: var(--danger);
@@ -252,11 +287,13 @@ textarea {
 }
 .section > h4 {
   margin: 0 0 6px;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  font-family: var(--serif);
+  font-size: 12px;
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
   color: var(--text-dim);
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .badge {
@@ -960,40 +997,58 @@ textarea {
   opacity: 0.95;
 }
 
-/* USER → 右对齐气泡。 */
+/* USER → 右对齐气泡。Claude 风：暖米气泡 + 赤陶描边。 */
 .tx-text--user {
   align-self: flex-end;
   max-width: 86%;
-  background: #1B2436;
-  border: 1px solid #2E3F5E;
+  background: #332825;                /* 比 --bg-paper 稍深的暖褐 */
+  border: 1px solid #4A3A35;
   padding: 10px 14px;
-  border-radius: 10px 10px 4px 10px;  /* 右下角小角，暗示"这是我发的" */
-  box-shadow: 0 1px 0 rgba(96, 165, 250, 0.06);
+  border-radius: var(--radius-md) var(--radius-md) 4px var(--radius-md);
+  box-shadow: 0 1px 0 rgba(204, 120, 92, 0.08);
 }
 .tx-text--user .tx-text__role {
-  color: #DBEAFE;
-  background: rgba(96, 165, 250, 0.18);
-  border: 1px solid rgba(96, 165, 250, 0.35);
+  color: #F0D5C7;
+  background: var(--accent-subtle);
+  border: 1px solid rgba(204, 120, 92, 0.38);
 }
 
-/* ASSISTANT → 左绿竖条 narrative 流。 */
+/* ASSISTANT → 左竖条 narrative 流，保持"流式文字"的阅读感。
+   Claude 风：竖条用赤陶色（对话的"说话人指示"），文字用常规 text。 */
 .tx-text--assistant {
   background: transparent;
-  border-left: 3px solid #22C55E;
+  border-left: 3px solid var(--accent);
   padding: 4px 12px 6px 14px;
   border-radius: 0;
 }
 .tx-text--assistant .tx-text__role {
-  color: #BBF7D0;
-  background: rgba(34, 197, 94, 0.16);
-  border: 1px solid rgba(34, 197, 94, 0.32);
+  color: var(--text);
+  background: rgba(245, 244, 239, 0.08);
+  border: 1px solid rgba(245, 244, 239, 0.18);
+  font-family: var(--serif);          /* "Claude" 这个名字用 serif，有名字感 */
+  font-weight: 500;
+  letter-spacing: 0;
 }
 
 /* 其它 role（system 等）保底 */
 .tx-text--other .tx-text__role {
-  color: #9CA3B3;
-  background: rgba(148, 163, 184, 0.15);
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: var(--text-dim);
+  background: rgba(168, 165, 155, 0.12);
+  border: 1px solid rgba(168, 165, 155, 0.28);
+}
+
+/* 连续同角色合并：隐掉了 chip 的后续 entry 往上贴，看起来是同一个人说的多段 */
+.tx-entry--merged {
+  margin-top: -4px;               /* 压住 entry 之间 gap 的视觉断层 */
+}
+.tx-text--merged {
+  padding-top: 2px;               /* 没有 chip 时上边距不需要那么大 */
+}
+.tx-text--assistant.tx-text--merged {
+  padding-top: 0;                 /* 对 assistant 的竖条样式尤其重要 */
+}
+.tx-text--user.tx-text--merged {
+  border-top-right-radius: 4px;   /* 上一段的"右下角小角"视觉对位 */
 }
 
 /* ─── thinking (collapsed) ────────────────────────────────────────── */
@@ -1320,8 +1375,10 @@ textarea {
   gap: 8px;
 }
 .session-detail__title {
-  font-size: 14px;
-  font-weight: 600;
+  font-family: var(--serif);         /* Claude 风：session 名字用 serif，像"章节标题" */
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1331,20 +1388,22 @@ textarea {
 .session-detail__open-btn {
   font-size: 11px;
   font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 6px;
+  padding: 5px 11px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
-  color: #111;
+  color: #1A1210;                    /* 深褐，比 #000 更匹配赤陶 */
   border: 1px solid var(--accent);
   cursor: pointer;
   white-space: nowrap;
-  transition: filter 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .session-detail__open-btn:hover:not(:disabled) {
-  filter: brightness(1.1);
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 .session-detail__open-btn:active:not(:disabled) {
-  filter: brightness(0.92);
+  background: #B56A50;
+  border-color: #B56A50;
 }
 .session-detail__open-btn:disabled {
   opacity: 0.6;
@@ -1459,6 +1518,61 @@ textarea {
   word-break: break-word;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* ─── tokens popover variant —— Claude 风暖色气泡 ──────────────────────── */
+.sd__chip-popover--tokens {
+  min-width: 220px;
+  max-width: 280px;
+  background: #2C2B29;                                 /* --bg-paper */
+  border: 1px solid #3A3A38;                           /* --border */
+  box-shadow:
+    0 1px 2px rgba(0,0,0,0.3),
+    0 8px 24px rgba(0,0,0,0.35),
+    0 0 0 1px rgba(204,120,92,0.08) inset;             /* 赤陶暗光环 */
+  color: #E8E5DC;
+  padding: 10px 12px;
+  gap: 8px;
+}
+.sd__chip-popover--tokens .sd__chip-popover__title {
+  color: #BDB9AD;
+  font-family: var(--serif);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 500;
+  font-style: italic;
+  padding-bottom: 5px;
+  border-bottom: 1px solid #3A3A38;
+}
+.sd__chip-popover__title--sub {
+  margin-top: 2px;                                     /* 二级 title 上方留白 */
+  padding-top: 5px;
+}
+.sd__tokens-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.sd__tokens-label {
+  color: #A8A59B;
+}
+.sd__tokens-value {
+  color: #F5F4EF;
+  text-align: right;
+}
+.sd__tokens-value--cache {
+  color: #BDB9AD;                                      /* cache 降一档亮度，视觉上不抢主数据 */
+}
+.sd__tokens-footer {
+  font-size: 10.5px;
+  color: #7A7670;
+  padding-top: 5px;
+  border-top: 1px solid #3A3A38;
+  margin-top: 2px;
 }
 
 .sd__block {

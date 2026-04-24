@@ -122,8 +122,36 @@ export default function SessionDetail({ state, sessionId }: Props) {
         <span className={`sd__status sd__status--${statusClass(session.status)}`}>{statusLabel}</span>
         {session.currentTool && <span className="sd__chip">{session.currentTool}</span>}
         {tokenLabel && (
-          <span className="sd__chip sd__chip--tokens" title={tokenLabel.title}>
+          <span className="sd__chip sd__chip--tokens sd__chip--popover">
             {tokenLabel.display}
+            <span className="sd__chip-popover sd__chip-popover--tokens" role="tooltip">
+              <span className="sd__chip-popover__title">
+                Real tokens (this session)
+              </span>
+              <span className="sd__tokens-grid">
+                <span className="sd__tokens-label">↑ Input</span>
+                <span className="sd__tokens-value">{tokenLabel.stats.input.toLocaleString()}</span>
+                <span className="sd__tokens-label">↓ Output</span>
+                <span className="sd__tokens-value">{tokenLabel.stats.output.toLocaleString()}</span>
+              </span>
+              <span className="sd__chip-popover__title sd__chip-popover__title--sub">
+                Cache
+              </span>
+              <span className="sd__tokens-grid">
+                <span className="sd__tokens-label">+ Create</span>
+                <span className="sd__tokens-value sd__tokens-value--cache">
+                  {tokenLabel.stats.cacheCreate.toLocaleString()}
+                </span>
+                <span className="sd__tokens-label">⟲ Read</span>
+                <span className="sd__tokens-value sd__tokens-value--cache">
+                  {tokenLabel.stats.cacheRead.toLocaleString()}
+                </span>
+              </span>
+              <span className="sd__tokens-footer">
+                {tokenLabel.stats.turns.toLocaleString()} turns
+                {tokenLabel.stats.model && <> · <span className="mono">{tokenLabel.stats.model}</span></>}
+              </span>
+            </span>
           </span>
         )}
         {bgCount > 0 && <span className="sd__chip sd__chip--bg">{bgCount} background</span>}
@@ -230,25 +258,43 @@ export default function SessionDetail({ state, sessionId }: Props) {
 
 /**
  * 把 usageStats 压成一个紧凑 chip 文本 + tooltip。
- *   上行 = input + cacheCreate + cacheRead（所有送给模型的 token）
- *   下行 = output（模型吐出的 token）
- * 常见范围百万级，用 `1.5M` / `340k` / `820` 三档压缩。
+ *
+ * 默认展示**真正发生的 token**：
+ *   ↑ = inputTokens（本 session 累计的新 prompt tokens，不含 cache create / read）
+ *   ↓ = outputTokens（模型生成的 token）
+ *
+ * 把 cacheCreate / cacheRead 合进 ↑ 会严重放大数字 —— typical long session
+ * 里 cacheRead 常达亿级，但它只是重复读同一份 prompt 的成本折扣，不反映
+ * "这个 session 做了多少事"。cache 信息挪到 hover tooltip 里给需要的人查。
  */
-function formatTokens(u: UsageStats | null): { display: string; title: string } | null {
+interface TokenLabel {
+  display: string
+  stats: {
+    input: number
+    output: number
+    cacheCreate: number
+    cacheRead: number
+    turns: number
+    model: string
+  }
+}
+
+function formatTokens(u: UsageStats | null): TokenLabel | null {
   if (!u) return null
-  const up = u.inputTokens + u.cacheCreateTokens + u.cacheReadTokens
+  const up = u.inputTokens
   const down = u.outputTokens
   if (up === 0 && down === 0) return null
-  const display = `↑${shortNum(up)}  ↓${shortNum(down)}`
-  const title = [
-    `Input:         ${u.inputTokens.toLocaleString()}`,
-    `Cache create:  ${u.cacheCreateTokens.toLocaleString()}`,
-    `Cache read:    ${u.cacheReadTokens.toLocaleString()}`,
-    `Output:        ${u.outputTokens.toLocaleString()}`,
-    `Turns:         ${u.turns.toLocaleString()}`,
-    u.model ? `Model:         ${u.model}` : '',
-  ].filter(Boolean).join('\n')
-  return { display, title }
+  return {
+    display: `↑${shortNum(up)}  ↓${shortNum(down)}`,
+    stats: {
+      input: u.inputTokens,
+      output: u.outputTokens,
+      cacheCreate: u.cacheCreateTokens,
+      cacheRead: u.cacheReadTokens,
+      turns: u.turns,
+      model: u.model || '',
+    },
+  }
 }
 
 function shortNum(n: number): string {
