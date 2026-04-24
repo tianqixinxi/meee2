@@ -246,14 +246,27 @@ enum BoardAPI {
         // Fire-and-forget async spawn; don't block the HTTP response waiting
         // for AppleScript. Client can poll `/api/state` to see the new session
         // appear once the hook bridge fires its SessionStart.
+        //
+        // Swift 5.10 的 concurrency diagnostics 禁止 Task 闭包里"写入"或"读取"
+        // 外层 `var`。这里：
+        //   - `cwd` 是外层 var（~ 展开 / path normalize 会改它），先 snapshot 成
+        //     let 常量再捕获
+        //   - `outcome` 需要双向（Task 写 / 外层读）→ 放进引用型 box，closure
+        //     只改 box 的属性而不是重绑变量，就符合 Sendable 约束
+        final class OutcomeBox: @unchecked Sendable {
+            var value: SpawnResult = .failed(reason: "no outcome")
+        }
+        let cwdSnapshot = cwd
+        let commandSnapshot = command
+        let outcomeBox = OutcomeBox()
         let semaphore = DispatchSemaphore(value: 0)
-        var outcome: SpawnResult = .failed(reason: "no outcome")
         Task {
-            outcome = await spawner.spawn(cwd: cwd, command: command)
+            outcomeBox.value = await spawner.spawn(cwd: cwdSnapshot, command: commandSnapshot)
             semaphore.signal()
         }
         // 等最多 2s；Ghostty 开窗一般 200-500ms
         _ = semaphore.wait(timeout: .now() + 2.0)
+        let outcome = outcomeBox.value
 
         switch outcome {
         case .success:
