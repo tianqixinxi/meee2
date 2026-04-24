@@ -109,6 +109,12 @@ interface Props {
    */
   hideFromCanvasRequest: { sessionId: string; bump: number } | null
   /**
+   * Bulk "show all" / "hide all" sessions at once. Sidebar fires this; Board
+   * handles the batch in a single effect so the requests don't race through
+   * React's setState batching the way per-sid calls would.
+   */
+  bulkVisibilityRequest: { mode: 'show' | 'hide'; bump: number } | null
+  /**
    * Reports how many embeddable instances exist per sessionId on the canvas.
    * Used by the sidebar to show "on canvas / off canvas" indicators.
    */
@@ -140,6 +146,7 @@ export default function Board({
   fitSignal,
   addToCanvasRequest,
   hideFromCanvasRequest,
+  bulkVisibilityRequest,
   onCountsChange,
   templateCache,
   onNeedTemplate,
@@ -186,6 +193,7 @@ export default function Board({
   const prevCountsRef = useRef<Record<string, number>>({})
   const lastAddBumpRef = useRef<number>(-1)
   const lastHideBumpRef = useRef<number>(-1)
+  const lastBulkBumpRef = useRef<number>(-1)
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
   const prevSelSigRef = useRef<string>('')
@@ -336,8 +344,8 @@ export default function Board({
     // 值必须和 scene.ts 里 buildSessionEmbeddable 保持一致。
     const normalizedExisting = existingEmbeddables.map((el: any) => ({
       ...el,
-      strokeColor: '#1a1a1a',
-      backgroundColor: '#1a1a1a',
+      strokeColor: '#262624',
+      backgroundColor: '#262624',
       fillStyle: 'solid',
     }))
 
@@ -481,6 +489,99 @@ export default function Board({
     api.updateScene({ elements: next as any })
     reportCountsRef.current(next)
   }, [api, hideFromCanvasRequest])
+
+  // -- Bulk show/hide from sidebar "Show all" / "Hide all" ------------
+  // Walks every session, hides all rects (mark isDeleted:true) or ensures
+  // each session has a visible rect (undelete existing or create new at the
+  // saved layout position). Dismissed-set is cleaned up on "show" so the
+  // scene-rebuild branch doesn't immediately hide them again.
+  useEffect(() => {
+    if (!api || !state || !bulkVisibilityRequest) return
+    if (bulkVisibilityRequest.bump === lastBulkBumpRef.current) return
+    lastBulkBumpRef.current = bulkVisibilityRequest.bump
+
+    const all = (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements()) as readonly ExcalidrawElement[]
+
+    if (bulkVisibilityRequest.mode === 'hide') {
+      // 全部隐藏：标 isDeleted:true。reportCountsRef 在一次调用里算每个 sid 的
+      // >0→0 transition，把所有 sid 一次性加入 dismissedRef + 持久化。
+      const next = all.map((el) => {
+        if (el.type !== 'rectangle') return el
+        if (parseSessionFromElement(el) == null) return el
+        if ((el as any).isDeleted) return el
+        return { ...el, isDeleted: true }
+      })
+      api.updateScene({ elements: next as any })
+      reportCountsRef.current(next)
+      return
+    }
+
+    // show：对每个 session
+    //   (a) 如果画布上已经有一张非 deleted 的 rect → 什么都不做
+    //   (b) 有 isDeleted:true 的 rect → undelete 它（保留位置 + 连着的 arrow）
+    //   (c) 完全没 rect（dismissedRef 里彻底清过） → buildSessionEmbeddable 新建
+    //       一张到 layoutRef 里记住的位置，没记录就走 ensurePositions 的默认网格
+    const hasVisible = new Set<string>()
+    const firstDeleted = new Map<string, ExcalidrawElement>()
+    for (const el of all) {
+      if (el.type !== 'rectangle') continue
+      const sid = parseSessionFromElement(el)
+      if (!sid) continue
+      if (!(el as any).isDeleted) {
+        hasVisible.add(sid)
+      } else if (!firstDeleted.has(sid)) {
+        firstDeleted.set(sid, el)
+      }
+    }
+
+    // pass 1：undelete 存在的 deleted rect
+    const undeleted = new Set<string>()
+    const next = all.map((el) => {
+      if (el.type !== 'rectangle') return el
+      const sid = parseSessionFromElement(el)
+      if (!sid) return el
+      if (hasVisible.has(sid) || undeleted.has(sid)) return el
+      const dup = firstDeleted.get(sid)
+      if (dup && el === dup && (el as any).isDeleted) {
+        undeleted.add(sid)
+        return { ...el, isDeleted: false }
+      }
+      return el
+    })
+
+    // pass 2：完全没 rect 的新建
+    const needCreate: string[] = []
+    for (const s of state.sessions) {
+      if (!hasVisible.has(s.id) && !undeleted.has(s.id)) {
+        needCreate.push(s.id)
+      }
+    }
+    if (needCreate.length > 0) {
+      layoutRef.current = ensurePositions(state.sessions.map((s) => s.id), layoutRef.current)
+      saveLayoutDebounced(layoutRef.current)
+      const skeletons = needCreate
+        .map((sid) => {
+          const sess = state.sessions.find((x) => x.id === sid)
+          if (!sess) return null
+          const pos = layoutRef.current[sid] ?? { x: 80, y: 80 }
+          const newId = `session-${sid}-${Date.now().toString(36)}`
+          return buildSessionEmbeddable(sess, pos.x, pos.y, newId)
+        })
+        .filter((x): x is NonNullable<typeof x> => x != null)
+      const built = convertToExcalidrawElements(skeletons as any, { regenerateIds: false })
+      next.push(...built)
+    }
+
+    // 清所有 sid 的 dismissed 标记，scene-rebuild 才不会立刻把刚恢复的再藏掉
+    let dismissedChanged = false
+    for (const s of state.sessions) {
+      if (dismissedRef.current.delete(s.id)) dismissedChanged = true
+    }
+    if (dismissedChanged) saveDismissed(dismissedRef.current)
+
+    api.updateScene({ elements: next as any })
+    reportCountsRef.current(next)
+  }, [api, state, bulkVisibilityRequest, saveLayoutDebounced])
 
   // -- Multi-select all cards for the sidebar-selected session --------
   // When sidebar selects a session, highlight every rect on canvas with

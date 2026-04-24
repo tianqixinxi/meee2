@@ -59,6 +59,11 @@ export default function App() {
   const [hideFromCanvasRequest, setHideFromCanvasRequest] = useState<
     { sessionId: string; bump: number } | null
   >(null)
+  // Sidebar 的 "Show all / Hide all" 按钮 —— 一次性处理所有 session，避免
+  // 逐个 setAddToCanvasRequest 被 React setState 批处理吞掉只生效最后一次
+  const [bulkVisibilityRequest, setBulkVisibilityRequest] = useState<
+    { mode: 'show' | 'hide'; bump: number } | null
+  >(null)
   const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
     {},
   )
@@ -157,6 +162,10 @@ export default function App() {
 
   const handleHideFromCanvas = useCallback((sessionId: string) => {
     setHideFromCanvasRequest({ sessionId, bump: Date.now() })
+  }, [])
+
+  const handleBulkVisibility = useCallback((mode: 'show' | 'hide') => {
+    setBulkVisibilityRequest({ mode, bump: Date.now() })
   }, [])
 
   const handleCountsChange = useCallback(
@@ -349,6 +358,7 @@ export default function App() {
             fitSignal={fitSignal}
             addToCanvasRequest={addToCanvasRequest}
             hideFromCanvasRequest={hideFromCanvasRequest}
+            bulkVisibilityRequest={bulkVisibilityRequest}
             onCountsChange={handleCountsChange}
             templateCache={templateCache}
             onNeedTemplate={ensureTemplate}
@@ -376,6 +386,7 @@ export default function App() {
           onCanvasCounts={onCanvasCounts}
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
+          onBulkVisibility={handleBulkVisibility}
           onTemplateSaved={applyTemplateLocally}
         />
         {newChannelOpen && boardState.state && (

@@ -63,6 +63,8 @@ interface Props {
   onAddToCanvas: (sessionId: string) => void
   /** Request to remove all cards for this session from the canvas. */
   onHideFromCanvas: (sessionId: string) => void
+  /** Bulk show / hide all sessions at once (sidebar "Show all" / "Hide all" button). */
+  onBulkVisibility: (mode: 'show' | 'hide') => void
   /** Write-through cache for template source edits (see App.tsx). */
   onTemplateSaved: (templateId: string, source: string) => void
 }
@@ -77,6 +79,7 @@ export default function Sidebar({
   onCanvasCounts,
   onAddToCanvas,
   onHideFromCanvas,
+  onBulkVisibility,
   onTemplateSaved,
 }: Props) {
   const [width, setWidth] = useState<number>(readStoredWidth)
@@ -180,7 +183,37 @@ export default function Sidebar({
               reposition. Use ⊕ to create a channel.
             </div>
             <div className="section">
-              <h4>Sessions ({state.sessions.length})</h4>
+              {/* 顶部 header：标题 + 一个 toggle。当前至少有一张 card 在画布上 → "Hide all"；
+                  全部不在 → "Show all"。按钮走 onBulkVisibility，由 Board 的 effect 一次性处理
+                  所有 sids，避免单个触发跟 WS tick 竞争。 */}
+              <div
+                className="row space"
+                style={{ marginBottom: 6, alignItems: 'baseline' }}
+              >
+                <h4 style={{ margin: 0 }}>Sessions ({state.sessions.length})</h4>
+                {(() => {
+                  const total = state.sessions.length
+                  if (total === 0) return null
+                  const anyOnCanvas = state.sessions.some(
+                    (s) => (onCanvasCounts[s.id] ?? 0) > 0,
+                  )
+                  const mode: 'show' | 'hide' = anyOnCanvas ? 'hide' : 'show'
+                  return (
+                    <button
+                      className="ghost"
+                      style={{ padding: '2px 8px', fontSize: 10 }}
+                      onClick={() => onBulkVisibility(mode)}
+                      title={
+                        mode === 'hide'
+                          ? 'Remove all session cards from the canvas'
+                          : 'Add every session card back to the canvas'
+                      }
+                    >
+                      {mode === 'hide' ? 'Hide all' : 'Show all'}
+                    </button>
+                  )
+                })()}
+              </div>
               {state.sessions.map((s) => {
                 const count = onCanvasCounts[s.id] ?? 0
                 const onCanvas = count > 0
