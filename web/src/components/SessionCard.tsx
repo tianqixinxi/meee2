@@ -173,6 +173,18 @@ export function SessionCard({
 
       <div className="session-card__footer">
         <span className="session-card__footer-status">{footerStatus}</span>
+        {/* 后台子 agent / task：和主 status 正交，单独一个胶囊展示数量 + tooltip 列表。
+            只在 ≥1 时出现，避免 idle 状态卡片被装饰塞满。 */}
+        {session.backgroundAgents && session.backgroundAgents.length > 0 && (
+          <span
+            className="session-card__bg-agents"
+            title={session.backgroundAgents
+              .map((a) => `${bgKindGlyph(a.kind)} ${a.description ?? a.id}`)
+              .join('\n')}
+          >
+            ⚙ {session.backgroundAgents.length} bg
+          </span>
+        )}
         {session.inboxPending > 0 && (
           <span className="session-card__pending">
             📨 {session.inboxPending}
@@ -191,6 +203,13 @@ export function SessionCard({
  *   - haloColor：halo 和 badge 的主色 CSS 变量值
  *   - dim：整卡降饱和（idle/completed 用）
  */
+function bgKindGlyph(kind: string): string {
+  if (kind === 'agent') return '🤖'
+  if (kind === 'monitor') return '👁'
+  if (kind === 'bash') return '$'
+  return '⚙'
+}
+
 function classifyLive(status: string, urgent: boolean): {
   halo: 'active' | null
   badge: string | null

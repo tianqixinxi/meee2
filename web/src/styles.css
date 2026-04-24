@@ -739,6 +739,19 @@ textarea {
   font-weight: 500;
 }
 
+/* 后台子 agent / task 计数胶囊：和主 status 正交，单独一个小淡紫色标签。
+   鼠标 hover 在 title 里能看到每条的 kind + description。 */
+.session-card__bg-agents {
+  color: #A78BFA;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(167, 139, 250, 0.08);
+  border: 1px solid rgba(167, 139, 250, 0.25);
+  font-size: 10.5px;
+  white-space: pre-line;
+}
+
 .session-card__sid {
   color: #4A4A4A;
   margin-left: auto;
@@ -1191,6 +1204,37 @@ textarea {
   flex-direction: column;
   gap: 6px;
 }
+
+/* scroll 容器的外壳 —— relative 定位给 "↓ Latest" 浮按钮锚点用 */
+.transcript-panel-wrap {
+  position: relative;
+}
+
+.transcript-scroll-latest {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(30, 35, 48, 0.92);
+  color: #D4D8E1;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: background 0.12s ease, transform 0.12s ease;
+  opacity: 0;
+  animation: sd-fade-in 0.15s ease-out forwards;
+}
+.transcript-scroll-latest:hover {
+  background: rgba(42, 48, 64, 0.95);
+  transform: translateY(-1px);
+}
+.transcript-scroll-latest:active { transform: translateY(0); }
+@keyframes sd-fade-in { to { opacity: 1; } }
 .transcript-search {
   display: flex;
   align-items: center;
@@ -1214,6 +1258,19 @@ textarea {
   color: #6B7281;
   white-space: nowrap;
 }
+
+/* "refreshing" 指示器：切 session / WS tick 起一轮 fetch 时亮，fetch 落地后熄 */
+.transcript-search__refreshing {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; color: #94A3B8; white-space: nowrap;
+}
+.transcript-search__spinner {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.4px solid rgba(148,163,184,0.25);
+  border-top-color: #94A3B8;
+  animation: sd-spin 0.7s linear infinite;
+}
+@keyframes sd-spin { to { transform: rotate(360deg); } }
 
 /* "Tool calls" 开关药丸 */
 .transcript-search__toggle {
@@ -1297,6 +1354,132 @@ textarea {
   margin-top: 4px;
   font-size: 10.5px;
 }
+
+/* ─── sd (SessionDetail v2) ──────────────────────────────────────────────
+   重写：去掉彩色边框 / emoji 装饰，把 identity / live 状态 / 正文清楚分层。
+   所有 chip、badge 用同一种规格，靠颜色而不是轮廓表达。 */
+.sd { display: flex; flex-direction: column; gap: 10px; }
+
+.sd__sticky {
+  position: sticky;
+  top: -12px;
+  margin: -12px -12px 0;
+  padding: 10px 12px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 5;
+  backdrop-filter: blur(4px);
+}
+.sd__id-row { display: flex; align-items: center; gap: 8px; }
+.sd__title {
+  font-size: 14px; font-weight: 600; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sd__sid {
+  font-size: 10px; color: #5b6478; letter-spacing: 0.4px;
+}
+.sd__cwd {
+  margin-top: 3px; font-size: 11px; color: #6B7280; font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sd__open-btn {
+  font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 5px;
+  background: transparent; color: #C7CBD6; border: 1px solid var(--border);
+  cursor: pointer; white-space: nowrap; transition: background 0.12s ease, border-color 0.12s ease;
+}
+.sd__open-btn:hover:not(:disabled) { background: #1E2330; border-color: #3A4150; }
+.sd__open-btn:disabled { opacity: 0.55; cursor: wait; }
+
+.sd__live-strip {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 0 2px;
+}
+.sd__status {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 10px;
+}
+.sd__status--idle { color: #6B7280; background: rgba(107,114,128,0.12); }
+.sd__status--live { color: #22C55E; background: rgba(34,197,94,0.10); }
+.sd__status--perm { color: #EAB308; background: rgba(234,179,8,0.12); }
+.sd__status--dead { color: #EF4444; background: rgba(239,68,68,0.12); }
+
+.sd__chip {
+  font-size: 10.5px; color: #94A3B8; padding: 2px 8px; border-radius: 10px;
+  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  white-space: nowrap;
+}
+.sd__chip--cost { color: #22C55E; }
+.sd__chip--bg   { color: #A78BFA; }
+.sd__chip--inbox{ color: #FB923C; }
+.sd__chip--subtle { color: #6B7280; }
+
+.sd__block {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sd__block--recap {
+  background: rgba(255,255,255,0.015);
+  border-color: rgba(255,255,255,0.08);
+}
+.sd__block-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px;
+  text-transform: uppercase; color: #7F8698;
+}
+.sd__block-count {
+  font-size: 10px; color: #94A3B8; font-family: var(--mono); font-weight: 500;
+}
+.sd__block-age {
+  font-size: 10px; color: #6B7280; margin-left: auto;
+}
+.sd__block-toggle {
+  margin-left: auto;
+  font-size: 12px; line-height: 1; width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: #94A3B8; cursor: pointer;
+}
+.sd__block-toggle:hover { background: #1E2330; }
+.sd__recap-body {
+  font-size: 12.5px; line-height: 1.55; color: #C7CBD6;
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.sd__list { margin: 0; padding: 0; list-style: none; }
+.sd__list-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; font-size: 12px;
+  border-top: 1px dashed rgba(255,255,255,0.04);
+}
+.sd__list-row:first-child { border-top: none; padding-top: 2px; }
+.sd__bg-kind {
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
+  color: #A78BFA; min-width: 48px; font-family: var(--mono);
+}
+.sd__list-main { flex: 1; min-width: 0; word-break: break-word; color: #C7CBD6; }
+.sd__list-age { font-size: 10px; color: #6B7280; }
+
+.sd__inbox-row {
+  padding: 6px 0; border-top: 1px dashed rgba(255,255,255,0.04);
+}
+.sd__inbox-row:first-child { border-top: none; padding-top: 2px; }
+.sd__inbox-meta {
+  display: flex; gap: 8px; font-size: 10px; color: #6B7280;
+  margin-bottom: 3px;
+}
+.sd__inbox-body {
+  font-size: 12px; color: #D4D8E1; word-break: break-word;
+}
+
+.sd__channels {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 2px 2px 6px;
+  font-size: 11px;
+}
+
 
 /* markdown inside assistant text */
 .tx-text--assistant .tx-text__body p { margin: 0 0 6px; }

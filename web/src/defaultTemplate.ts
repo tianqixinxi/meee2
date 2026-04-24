@@ -389,6 +389,26 @@ function SessionCard({ session, board, helpers }) {
         color: '#94a3b8',
       }}>
         <span style={{ color: dot.color, fontWeight: 600 }}>{footerStatus}</span>
+        {/* 后台子 agent / task 胶囊——和主 status 正交，主 idle 时也应该可见 */}
+        {session.backgroundAgents && session.backgroundAgents.length > 0 && (
+          <span
+            title={session.backgroundAgents.map(a =>
+              (a.kind === 'agent' ? '🤖 ' : a.kind === 'monitor' ? '👁 ' : '$ ') +
+              (a.description || a.id)
+            ).join(' · ')}
+            style={{
+              color: '#A78BFA',
+              fontWeight: 600,
+              padding: '1px 6px',
+              borderRadius: 4,
+              background: 'rgba(167,139,250,0.10)',
+              border: '1px solid rgba(167,139,250,0.30)',
+              fontSize: 9.5,
+            }}
+          >
+            ⚙ {session.backgroundAgents.length} bg
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <span style={{
           fontFamily: "'SF Mono', Consolas, monospace",

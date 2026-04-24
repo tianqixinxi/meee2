@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { spawnSession } from '../api'
+import { loadDefaultSpawnCommand, saveDefaultSpawnCommand } from '../preferences'
 
 interface Props {
   onClose: () => void
@@ -17,7 +18,8 @@ interface Props {
 export function NewSessionDialog({ onClose, onSpawned, onError }: Props) {
   const [cwd, setCwd] = useState('~/')
   const [createIfMissing, setCreateIfMissing] = useState(false)
-  const [command, setCommand] = useState('claude')
+  // 默认 command 从 Preferences 里读；用户改了又改 & 点 Spawn 后顺手存回，下次打开记住
+  const [command, setCommand] = useState<string>(loadDefaultSpawnCommand)
   const [busy, setBusy] = useState(false)
   const [localErr, setLocalErr] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -33,11 +35,14 @@ export function NewSessionDialog({ onClose, onSpawned, onError }: Props) {
     setBusy(true)
     setLocalErr(null)
     try {
+      const finalCmd = command.trim() || 'claude'
       await spawnSession({
         cwd: v,
-        command: command.trim() || 'claude',
+        command: finalCmd,
         createIfMissing,
       })
+      // 成功 spawn 后把当前 command 写回 Preferences —— "最近用的" 就是下次的默认
+      saveDefaultSpawnCommand(finalCmd)
       onSpawned(v)
     } catch (e) {
       const msg = (e as Error).message || 'Spawn failed'

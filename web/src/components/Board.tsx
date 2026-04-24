@@ -123,6 +123,10 @@ interface Props {
   onNewChannel: () => void
   /** Invoked from the <MainMenu> "New Claude session" item. */
   onNewSession: () => void
+  /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
+  onAskAndSpawn: () => void
+  /** Invoked from the <MainMenu> "Preferences…" item. */
+  onPreferences: () => void
   /** Invoked from the <MainMenu> "Fit to content" item. */
   onFit: () => void
   /** 未读通知的 session id 集合（Claude 刚回复完、用户还没点） */
@@ -142,6 +146,8 @@ export default function Board({
   onRefresh,
   onNewChannel,
   onNewSession,
+  onAskAndSpawn,
+  onPreferences,
   onFit,
   unreadSids,
 }: Props) {
@@ -281,13 +287,16 @@ export default function Board({
       if (sid) knownSessionIds.add(sid)
     }
 
-    // 所有 session 都默认在画板上显示一张 card。即使用户之前把它 dismiss
-    // 过（locally 删除过卡片），下一次 scene rebuild 也会自动加回来——和
-    // 用户 "所有 session card 应该默认显示" 的诉求一致。
-    // 保留 dismissedRef 只是为了不影响 onChange 里的计数/清理路径。
+    // 规则：
+    //   - 从没 dismiss 过的 session → 默认给它加一张 card（首次加载 / 新 session 会命中）
+    //   - 用户 hide 过（sid 在 dismissedRef 里）→ 不要自动加回来，尊重隐藏意图
+    //   - 用户重新点 "Add to canvas" → addToCanvas effect 里会把 sid 从 dismissedRef
+    //     删掉，然后 reportCountsRef 的 "appeared" 路径也会兜底清理，下一轮 rebuild
+    //     这里就会再走默认加卡的分支
     const newSessionIds: string[] = []
     for (const sid of ids) {
       if (knownSessionIds.has(sid)) continue
+      if (dismissedRef.current.has(sid)) continue
       newSessionIds.push(sid)
     }
 
@@ -321,9 +330,20 @@ export default function Board({
       { regenerateIds: false },
     )
 
+    // Migration：把旧版本遗留在画板上的 session rect（半透明灰底）强制归一到
+    // 当前配色。Excalidraw 的 element state 是持久化的，旧 rect 如果不刷，
+    // 就会一直从 overlay 四周漏出 rgba(30,30,30,0.4) 这层灰影。
+    // 值必须和 scene.ts 里 buildSessionEmbeddable 保持一致。
+    const normalizedExisting = existingEmbeddables.map((el: any) => ({
+      ...el,
+      strokeColor: '#1a1a1a',
+      backgroundColor: '#1a1a1a',
+      fillStyle: 'solid',
+    }))
+
     const preservedExisting = [
       ...userShapes,
-      ...existingEmbeddables,
+      ...normalizedExisting,
     ]
 
     const finalElements = [...preservedExisting, ...converted]
@@ -384,16 +404,44 @@ export default function Board({
       saveDismissed(dismissedRef.current)
     }
 
-    const appState = api.getAppState()
-    // Drop the new card near the current viewport center (in canvas coords).
-    const viewW = appState.width ?? 800
-    const viewH = appState.height ?? 600
-    const zoom = appState.zoom.value || 1
-    const cx = -appState.scrollX + viewW / zoom / 2
-    const cy = -appState.scrollY + viewH / zoom / 2
-    const jitter = () => Math.round((Math.random() - 0.5) * 60)
-    const x = Math.round(cx - 180) + jitter()
-    const y = Math.round(cy - 130) + jitter()
+    // 优先级 1：如果 hide 留下的 `isDeleted:true` rect 还在（通常都在——
+    // Excalidraw 保留 deleted 元素供 Undo），把它 undelete 回来。这样位置、
+    // 连着的 arrow、element id 全部保持；用户的视觉直觉是"把刚才藏起来的
+    // 那张卡拿回来"，而不是"凭空又多了一张"。
+    const all = (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements()) as readonly ExcalidrawElement[]
+    const prior = all.find(
+      (el) =>
+        el.type === 'rectangle' &&
+        (el as any).isDeleted === true &&
+        parseSessionFromElement(el) === session.id,
+    )
+    if (prior) {
+      const restored = { ...prior, isDeleted: false } as ExcalidrawElement
+      const nextAll = all.map((el) => (el === prior ? restored : el))
+      api.updateScene({ elements: nextAll as any })
+      reportCountsRef.current(nextAll)
+      api.scrollToContent([restored], { fitToContent: false, animate: true })
+      return
+    }
+
+    // 优先级 2：layoutRef 里有上次记录的位置（用户之前移动过 / scene rebuild
+    // 曾给它分过格子）→ 复用那个位置。否则才落到 viewport center + jitter。
+    const saved = layoutRef.current[session.id]
+    let x: number, y: number
+    if (saved) {
+      x = saved.x
+      y = saved.y
+    } else {
+      const appState = api.getAppState()
+      const viewW = appState.width ?? 800
+      const viewH = appState.height ?? 600
+      const zoom = appState.zoom.value || 1
+      const cx = -appState.scrollX + viewW / zoom / 2
+      const cy = -appState.scrollY + viewH / zoom / 2
+      const jitter = () => Math.round((Math.random() - 0.5) * 60)
+      x = Math.round(cx - 180) + jitter()
+      y = Math.round(cy - 130) + jitter()
+    }
 
     // Generate a unique id so this is an independent instance alongside any
     // existing embeddable for the same session.
@@ -716,6 +764,12 @@ export default function Board({
         <MainMenu>
           <MainMenu.Item onSelect={onNewSession} icon={<TerminalIcon />}>
             New Claude session…
+          </MainMenu.Item>
+          <MainMenu.Item onSelect={onAskAndSpawn} icon={<TerminalIcon />}>
+            Ask AI to spawn…
+          </MainMenu.Item>
+          <MainMenu.Item onSelect={onPreferences} icon={<PlusSquareIcon />}>
+            Preferences…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onNewChannel} icon={<PlusSquareIcon />}>
             New channel

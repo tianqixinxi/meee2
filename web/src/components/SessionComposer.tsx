@@ -31,10 +31,14 @@ export function SessionComposer({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const toast = useToast()
 
-  // seedContent 变化（切换 session）时重置内容
+  // seedContent 变化（切换 session）时重置内容。
+  // 同时复位 sending：SessionComposer 挂在 App 顶层，`session=null` 时组件
+  // 不 unmount 只 return null，useState 是粘的；上一次发送成功后忘了关
+  // sending 就会让下一次打开组件时按钮一直卡在 "Sending…"。
   useEffect(() => {
     setValue(seedContent)
     setError(null)
+    setSending(false)
   }, [seedContent, session?.id])
 
   // 挂载后自动聚焦并把光标放到末尾（种子字符之后）
@@ -68,6 +72,10 @@ export function SessionComposer({
     } catch (e) {
       const msg = (e as Error).message || 'Send failed'
       setError(msg)
+    } finally {
+      // 永远关 sending——成功分支以前走 onClose() 就完事了，但 App 里
+      // SessionComposer 是常驻、只是 `session=null` 时 return null，state
+      // 会粘住；下次打开 textarea 会停在 disabled、按钮停在 "Sending…"。
       setSending(false)
     }
   }

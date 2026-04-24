@@ -50,6 +50,27 @@ struct SessionDTO: Encodable {
     let tty: String?
     /// 终端程序名（诊断用）；未知时为 null
     let termProgram: String?
+
+    /// 当前后台在跑的 Claude Code 子 agent / task（Agent run_in_background / Monitor / Bash run_in_background）。
+    /// 主 agent status 和这个字段是正交维度：主可以是 idle 而后台同时有 N 条在跑。
+    let backgroundAgents: [BackgroundAgentDTO]
+
+    /// Claude Code 最新的 "away summary" / `/recap` 内容；无则为 null
+    let latestRecap: RecapDTO?
+}
+
+/// Recap DTO
+struct RecapDTO: Encodable {
+    let content: String
+    let timestamp: String?   // ISO8601
+}
+
+/// 后台子 agent / task DTO
+struct BackgroundAgentDTO: Encodable {
+    let id: String              // Claude 返回的 agentId / taskId
+    let kind: String            // "agent" | "monitor" | "bash"
+    let description: String?
+    let startedAt: String?      // ISO8601
 }
 
 /// Usage 明细 DTO —— 供模板引用 token/turns/cost 等指标
@@ -259,6 +280,31 @@ enum BoardDTOBuilder {
         let tty = terminalInfo?.tty
         let termProgram = terminalInfo?.termProgram
 
+        // 后台 agent / task：扫 transcript tail 找 Agent run_in_background /
+        // Monitor / Bash run_in_background 的 tool_result 启动锚点，减掉已经
+        // 出现在 <task-notification>...<status>completed</status></> 里的。
+        let bgAgents: [BackgroundAgentDTO] = BackgroundAgentResolver
+            .resolve(transcriptPath: sessionData?.transcriptPath)
+            .map {
+                BackgroundAgentDTO(
+                    id: $0.id,
+                    kind: $0.kind,
+                    description: $0.description,
+                    startedAt: $0.startedAt.map { iso($0) } ?? nil
+                )
+            }
+
+        // Recap：Claude CLI 的 away summary / `/recap` 在 transcript 里以
+        // `system subtype=away_summary` 落盘，扫 tail 拿最新一条。
+        let recapDTO: RecapDTO? = RecapResolver
+            .resolve(transcriptPath: sessionData?.transcriptPath)
+            .map {
+                RecapDTO(
+                    content: $0.content,
+                    timestamp: $0.timestamp.map { iso($0) } ?? nil
+                )
+            }
+
         return SessionDTO(
             id: session.id,
             title: session.title,
@@ -280,7 +326,9 @@ enum BoardDTOBuilder {
             pendingPermissionMessage: sessionData?.pendingPermissionMessage,
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,
             tty: tty,
-            termProgram: termProgram
+            termProgram: termProgram,
+            backgroundAgents: bgAgents,
+            latestRecap: recapDTO
         )
     }
 

@@ -8,6 +8,18 @@ export interface TranscriptEntry {
   text: string // already truncated server-side (~200 chars)
 }
 
+export interface BackgroundAgent {
+  id: string          // agentId / taskId
+  kind: 'agent' | 'monitor' | 'bash' | string
+  description: string | null
+  startedAt: string | null  // ISO8601
+}
+
+export interface SessionRecap {
+  content: string
+  timestamp: string | null  // ISO8601
+}
+
 export interface Session {
   id: string
   title: string
@@ -20,6 +32,10 @@ export interface Session {
   recentMessages: TranscriptEntry[]
   currentTool: string | null
   costUSD: number | null
+  // 当前正在后台跑的 Claude Code 子 agent / task，和主 status 是正交维度
+  backgroundAgents: BackgroundAgent[]
+  // Claude CLI 最近一次 /recap 或 away_summary 产生的内容
+  latestRecap: SessionRecap | null
   // 可选诊断/通知字段（SessionDTO 里有，但不是所有代码都需要）
   pendingPermissionTool?: string | null
   pendingPermissionMessage?: string | null

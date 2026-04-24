@@ -438,9 +438,21 @@ public final class MessageRouter {
     /// 推送失败或目标不符合条件 → 留在 inbox，下次 Stop hook 照常 drain。
     private func pushToRestingSessionIfNeeded(sessionId: String, message: A2AMessage) {
         guard let data = SessionStore.shared.get(sessionId) else { return }
+        // 判定"resting"必须走 resolver：SessionData.status 可能被早先某条 hook
+        // 钉死在 thinking/tooling（比如用户 ESC、Claude 崩退），但现实中 transcript
+        // 尾巴早已超过 abandoned-user 阈值，UI 和 Island 已经显示 idle。
+        // 这里若只看 data.status，operator 推送会被"假 thinking"永久挡住，
+        // 消息堆在 inbox 等一个永远不来的 Stop 钩子。三端同源走 resolver。
+        let effectiveStatus = TranscriptStatusResolver.resolve(for: data)
         let restingStatuses: Set<SessionStatus> = [.idle, .waitingForUser, .completed]
-        guard restingStatuses.contains(data.status) else { return }
-        guard let gid = data.ghosttyTerminalId, !gid.isEmpty else { return }
+        guard restingStatuses.contains(effectiveStatus) else {
+            NSLog("[MessageRouter] operator push skipped sid=\(sessionId.prefix(8)) effective=\(effectiveStatus.rawValue) (raw=\(data.status.rawValue)) — not resting")
+            return
+        }
+        guard let gid = data.ghosttyTerminalId, !gid.isEmpty else {
+            NSLog("[MessageRouter] operator push skipped sid=\(sessionId.prefix(8)) — no ghosttyTerminalId")
+            return
+        }
         let msgId = message.id
         let content = message.content
         Task { [weak self] in

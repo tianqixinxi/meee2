@@ -71,6 +71,9 @@ export default function TranscriptPanel({
   )
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState<boolean>(initialCache != null)
+  // `fetching` 独立于 `loaded`：命中缓存时 loaded=true 但第一轮 fetch 在飞，
+  // 用它在 header 画一个"refreshing"小灯，让用户知道显示的内容可能是 stale。
+  const [fetching, setFetching] = useState<boolean>(true)
   const [query, setQuery] = useState('')
   const [showTools, setShowTools] = useState<boolean>(loadShowTools)
 
@@ -118,6 +121,7 @@ export default function TranscriptPanel({
   // 整棵树（ReactMarkdown/ReactDiffViewer/virtualizer re-measure）重算
   const lastSignatureRef = useRef<string>(initialCache?.signature ?? '')
   const load = useCallback(async () => {
+    setFetching(true)
     try {
       const r = await fetchTranscript(sessionId, { limit })
       // 轻量指纹：entries 数 + 最后一条的 id + 最后一条最后一个 block 的 text/result 长度
@@ -147,6 +151,8 @@ export default function TranscriptPanel({
     } catch (e) {
       setError((e as Error).message || 'Failed to load transcript')
       setLoaded(true)
+    } finally {
+      setFetching(false)
     }
   }, [sessionId, limit])
 
@@ -232,13 +238,56 @@ export default function TranscriptPanel({
     useFlushSync: false,
   })
 
-  // scroll 追踪（是否停在底部）
+  // 是否贴底。既存在 ref 里（auto-scroll / cache 都读它，不需要 rerender），
+  // 又存在 state 里（控制 "↓ Latest" 按钮显隐；React 的 setState 对相等值
+  // 自动 bail-out，scroll 事件里 100/s 调也不会触发 rerender）。
+  const [atBottom, setAtBottom] = useState(true)
+
   const handleScroll = () => {
     const el = parentRef.current
     if (!el) return
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-    stickToBottomRef.current = dist < 40
+    const isAtB = dist < 40
+    stickToBottomRef.current = isAtB
+    setAtBottom(isAtB)
   }
+
+  /**
+   * 跳到最新一条消息。跟 auto-scroll effect 一样走 rAF poll + 高度收敛探测
+   * （Markdown/Diff 异步 layout 要好几帧才稳），触达底部后回写 stickToBottom
+   * 让后续新消息继续自动贴底。
+   *
+   * 性能：只在用户点按钮时 run 一次；rAF 循环上限 1.5s 或高度稳定 4 帧收工。
+   */
+  const scrollToBottom = useCallback(() => {
+    if (visibleEntries.length === 0) return
+    const targetIndex = visibleEntries.length - 1
+    let lastHeight = -1
+    let stableFrames = 0
+    let raf = 0
+    let cancelled = false
+    const deadline = performance.now() + 1500
+    const tick = () => {
+      if (cancelled) return
+      const node = parentRef.current
+      if (!node) return
+      node.scrollTop = node.scrollHeight
+      virtualizer.scrollToIndex(targetIndex, { align: 'end' })
+      const h = node.scrollHeight
+      if (h === lastHeight) stableFrames++
+      else { stableFrames = 0; lastHeight = h }
+      if (stableFrames >= 4 || performance.now() >= deadline) {
+        stickToBottomRef.current = true
+        setAtBottom(true)
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    // fire-and-forget；没处理 cancel，因为这个回调只响应一次点击、不在 effect 里
+    void raf
+    void cancelled
+  }, [visibleEntries.length, virtualizer])
 
   // 命中缓存时还原 scrollTop —— 组件重新挂载后 layout 刚出来就跳回上次位置，
   // 不要让用户每次切回来都从底部重新滚。只在 pendingScrollTopRef 非 null 时做
@@ -351,6 +400,11 @@ export default function TranscriptPanel({
             ? `${filteredEntries.length}/${entries.length}`
             : `${entries.length} entries`}
         </span>
+        {fetching && (
+          <span className="transcript-search__refreshing" title="Refreshing…">
+            <span className="transcript-search__spinner" /> refreshing
+          </span>
+        )}
       </div>
 
       {visibleEntries.length === 0 ? (
@@ -358,38 +412,51 @@ export default function TranscriptPanel({
           {query ? 'No matches.' : 'No transcript messages yet.'}
         </div>
       ) : (
-        <div
-          ref={parentRef}
-          className="transcript-panel"
-          onScroll={handleScroll}
-        >
+        <div className="transcript-panel-wrap">
           <div
-            style={{
-              height: totalH,
-              width: '100%',
-              position: 'relative',
-            }}
+            ref={parentRef}
+            className="transcript-panel"
+            onScroll={handleScroll}
           >
-            {vItems.map((v) => {
-              const e = visibleEntries[v.index]
-              return (
-                <div
-                  key={e.id}
-                  data-index={v.index}
-                  ref={virtualizer.measureElement}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    transform: `translateY(${v.start}px)`,
-                  }}
-                >
-                  <EntryRow entry={e} resultsByToolUseId={resultsByToolUseId} />
-                </div>
-              )
-            })}
+            <div
+              style={{
+                height: totalH,
+                width: '100%',
+                position: 'relative',
+              }}
+            >
+              {vItems.map((v) => {
+                const e = visibleEntries[v.index]
+                return (
+                  <div
+                    key={e.id}
+                    data-index={v.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${v.start}px)`,
+                    }}
+                  >
+                    <EntryRow entry={e} resultsByToolUseId={resultsByToolUseId} />
+                  </div>
+                )
+              })}
+            </div>
           </div>
+          {/* 不在底部时显示跳到最新按钮；回到底部自动消失 */}
+          {!atBottom && (
+            <button
+              className="transcript-scroll-latest"
+              onClick={scrollToBottom}
+              aria-label="Scroll to latest message"
+              title="Scroll to latest message"
+            >
+              ↓ Latest
+            </button>
+          )}
         </div>
       )}
     </div>

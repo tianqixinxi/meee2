@@ -12,6 +12,8 @@ import Sidebar from './components/Sidebar'
 import NewChannelDialog from './components/NewChannelDialog'
 import { SessionComposer } from './components/SessionComposer'
 import { NewSessionDialog } from './components/NewSessionDialog'
+import { AssistantChat } from './components/AssistantChat'
+import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
 import { DEFAULT_TEMPLATE } from './defaultTemplate'
@@ -42,6 +44,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [preferencesOpen, setPreferencesOpen] = useState(false)
   // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
   // 用户点击 session card 时移除。持久化到 localStorage。
   const [unreadSids, setUnreadSids] = useState<Set<string>>(loadUnreadSids)
@@ -352,6 +356,8 @@ export default function App() {
             onRefresh={() => boardState.refresh()}
             onNewChannel={() => setNewChannelOpen(true)}
             onNewSession={() => setNewSessionOpen(true)}
+            onAskAndSpawn={() => setAssistantOpen(true)}
+            onPreferences={() => setPreferencesOpen(true)}
             onFit={() => setFitSignal((x) => x + 1)}
           />
           {boardState.error && (
@@ -391,6 +397,22 @@ export default function App() {
               pushToast('success', `Spawning Claude in ${cwd}`)
             }}
             onError={(msg) => pushToast('error', msg)}
+          />
+        )}
+        {assistantOpen && (
+          <AssistantChat
+            onClose={() => setAssistantOpen(false)}
+            onSpawned={(cwd) => {
+              setAssistantOpen(false)
+              pushToast('success', `Spawning Claude in ${cwd}`)
+            }}
+            onError={(msg) => pushToast('error', msg)}
+          />
+        )}
+        {preferencesOpen && (
+          <PreferencesDialog
+            onClose={() => setPreferencesOpen(false)}
+            onSaved={(cmd) => pushToast('success', `Default spawn command: ${cmd}`)}
           />
         )}
         <SessionComposer

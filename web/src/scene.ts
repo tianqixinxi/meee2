@@ -199,8 +199,18 @@ export function buildSessionEmbeddable(
     y,
     width: RECT_W,
     height: RECT_H,
-    strokeColor: 'rgba(120,120,120,0.15)',  // 视觉很淡，overlay 盖住但 hit-test OK
-    backgroundColor: 'rgba(30,30,30,0.4)',
+    // Session rect 只是 Excalidraw 层的 hit-test 载体——click/drag/resize 都
+    // 要能抓到这片区域。但视觉完全交给上层的 <CardHost> DOM overlay。
+    //
+    // 以前用半透明灰（rgba(30,30,30,0.4)）"视觉很淡"，但 overlay 一旦因为
+    // resize / zoom 过渡 / 像素四舍五入没盖严，灰底就会从 card 四周漏出来，
+    // 看上去像卡片后面多了一层灰影。
+    //
+    // 解法：填色改成和 --bg（#1a1a1a）完全一致的纯色；solid fillStyle 保留，
+    // Excalidraw 的 body hit-test 还是按 bbox 正常走；描边也设成同色，选中 /
+    // resize 时 Excalidraw 自己画的蓝框不受影响。
+    strokeColor: '#1a1a1a',
+    backgroundColor: '#1a1a1a',
     fillStyle: 'solid',
     strokeWidth: 1,
     roundness: { type: 3 },

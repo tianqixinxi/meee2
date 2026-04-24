@@ -222,6 +222,18 @@ public enum TranscriptStatusResolver {
             } else if let ts = last.timestamp,
                       Date().timeIntervalSince(ts) > _abandonedUserEntryThreshold {
                 out = .idle; reason = "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)"
+            } else if hookStatus == .thinking,
+                      let ts = last.timestamp,
+                      Date().timeIntervalSince(ts) > _staleThinkingThreshold {
+                // ESC-before-first-token 场景：用户发完 prompt 就按 ESC，
+                // Claude 还没开始 stream → 不写 interrupt marker，也不会再
+                // 触发新 hook，hookStatus 就卡在 thinking 了。
+                // "尾巴是普通 user prompt + hook 说 thinking + 超过 45s 还没
+                //  有任何 assistant entry" 这组合，在真 thinking 里极罕见
+                // （opus 极端复杂提示也基本 < 30s 出第一个 token），更可能是
+                // 用户 ESC 了。降级为 idle 以释放 LIVE 徽章。
+                out = .idle
+                reason = "user-stale-pre-assistant(>\(Int(_staleThinkingThreshold))s+hook=thinking)"
             } else {
                 // Keep the more-specific hook status if any (thinking/tooling
                 // etc). Fall back to .active when the hook is generic idle /
@@ -291,6 +303,11 @@ public enum TranscriptStatusResolver {
                Date().timeIntervalSince(ts) > _abandonedUserEntryThreshold {
                 return .some(nil)
             }
+            // 同 status resolver 的 stale-thinking 兜底：卡住时清 thinking 标签
+            if let ts = last.timestamp,
+               Date().timeIntervalSince(ts) > _staleThinkingThreshold {
+                return .some(nil)
+            }
             return .some("thinking")
         case "system":
             // If stop hook ran and we're forcing idle, clear the tool too.
@@ -314,6 +331,13 @@ private struct LastEntry {
 /// csm 没做这步，但它有 abandoned-session 误报的同样问题；对我们场景这是必要的
 /// 防误报。Claude 真正处理一条用户消息极少超过这个阈值。
 private let _abandonedUserEntryThreshold: TimeInterval = 180.0  // 3 min
+
+/// 针对 hookStatus=thinking + tail 还是 user prompt 的"卡住"场景的阈值。
+/// 正常 thinking 阶段出第一个 token 的延迟绝大多数在 10 秒内，极端长 prompt
+/// 也很少超过 30 秒。超过这个阈值仍没有 assistant entry 出现，大概率是用户
+/// 在 first-token 前按了 ESC（这种情况 Claude 不写 interrupt marker、也不
+/// 触发新 hook）。
+private let _staleThinkingThreshold: TimeInterval = 45.0
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.

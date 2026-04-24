@@ -142,6 +142,9 @@ public final class BoardServer {
         server.POST["/api/messages/:id/deliver"] = BoardAPI.deliverMessage
         server.POST["/api/messages/:id/drop"] = BoardAPI.dropMessage
 
+        // --- Global assistant (claude -p driven "ask & spawn") ---
+        server.POST["/api/assistant/chat"] = AssistantAPI.chat
+
         // --- Card Templates ---
         server.GET["/api/card-templates"]         = BoardAPI.listCardTemplates
         server.GET["/api/card-templates/:id"]     = BoardAPI.getCardTemplate

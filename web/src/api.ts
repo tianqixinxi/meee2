@@ -172,6 +172,27 @@ export async function spawnSession(input: {
   )
 }
 
+// -- assistant (ask & spawn) -----------------------------------------------
+
+/** 一条对话消息（用户 / assistant） */
+export interface AssistantMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/**
+ * 全局 "ask & spawn" assistant：跑本地 `claude -p` 帮你挑 cwd。
+ * 全部历史每次整体 POST；assistant 判断足够了就在回复末尾吐 ```spawn fence。
+ */
+export async function assistantChat(
+  messages: AssistantMessage[],
+): Promise<{ content: string }> {
+  return jsonRequest<{ content: string }>('/api/assistant/chat', {
+    method: 'POST',
+    body: JSON.stringify({ messages }),
+  })
+}
+
 // -- transcript ------------------------------------------------------------
 
 /** 富 transcript block（对应 Swift FullTranscriptBlock） */

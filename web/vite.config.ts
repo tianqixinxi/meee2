@@ -21,7 +21,8 @@ export default defineConfig(({ mode }) => ({
     chunkSizeWarningLimit: 2000,
   },
   server: {
-    port: 5173,
+    port: 5002,
+    strictPort: true,
     proxy: {
       '/api/events': { target: 'ws://localhost:9876', ws: true },
       '/api': { target: 'http://localhost:9876', changeOrigin: true },
