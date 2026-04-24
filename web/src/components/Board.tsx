@@ -49,8 +49,25 @@ import {
   loadUserShapes,
   saveUserShapes,
 } from '../boardPersistence'
-import { activateSession } from '../api'
+import { activateSession, addMember, removeMember } from '../api'
 import { SessionOverlay } from './SessionOverlay'
+
+/**
+ * Derive a deterministic channel alias from a session's title + id so each
+ * session gets a unique, stable alias when a user draws an arrow from the
+ * session to a channel hub. Alias rules (backend): `[a-z0-9_-]{1,64}`.
+ * Shape: `<kebab-title><-6char-shortid>` so two sessions with identical
+ * titles still collide-free.
+ */
+function aliasFromSession(title: string, sid: string): string {
+  const short = sid.replace(/-/g, '').slice(0, 6)
+  const base = (title || 'session')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30)
+  return base ? `${base}-${short}` : `session-${short}`
+}
 
 // Inline feather-style icons used by MainMenu / Footer. 16px, stroke=1.75.
 function RefreshIcon() {
@@ -220,6 +237,11 @@ export default function Board({
   const lastAddBumpRef = useRef<number>(-1)
   const lastHideBumpRef = useRef<number>(-1)
   const lastBulkBumpRef = useRef<number>(-1)
+  // Arrow-bind tracking: user drags an arrow from a session rect to a channel
+  // hub (or vice versa) → we treat it as a new membership and POST addMember.
+  // Deleting that arrow later → DELETE removeMember. Keyed by Excalidraw
+  // arrow id so we can diff per-tick.
+  const knownMemberArrowsRef = useRef<Map<string, { sid: string; channel: string; alias: string }>>(new Map())
   const lastPlaceChannelBumpRef = useRef<number>(-1)
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
@@ -972,6 +994,66 @@ export default function Board({
           saveChannelLayoutDebounced(next)
         }
       }
+      // ── Channel membership via arrows (phase 3.3) ─────────────────────
+      // Any user-drawn arrow whose endpoints bind a session rect to a channel
+      // hub (or vice versa) is treated as a membership claim. We diff vs last
+      // tick so each arrow add/remove fires exactly one REST call.
+      //
+      // Our auto-generated spokes have deterministic ids
+      // (`channel-<name>-spoke-<sid>`); we skip them so rebuild traffic doesn't
+      // create duplicate members.
+      {
+        const nextMember = new Map<string, { sid: string; channel: string; alias: string }>()
+        for (const el of elements) {
+          if (el.type !== 'arrow') continue
+          if ((el as any).isDeleted) continue
+          if (el.id.startsWith('channel-') && el.id.includes('-spoke-')) continue
+          const startId = (el as any).startBinding?.elementId as string | undefined
+          const endId = (el as any).endBinding?.elementId as string | undefined
+          if (!startId || !endId) continue
+          const startEl = elements.find((e) => e.id === startId)
+          const endEl = elements.find((e) => e.id === endId)
+          if (!startEl || !endEl) continue
+          const startSid = startEl.type === 'rectangle' ? parseSessionFromElement(startEl) : null
+          const endSid = endEl.type === 'rectangle' ? parseSessionFromElement(endEl) : null
+          const startCh = startEl.type === 'ellipse' ? parseChannelFromElement(startEl) : null
+          const endCh = endEl.type === 'ellipse' ? parseChannelFromElement(endEl) : null
+          let sid: string | null = null
+          let chName: string | null = null
+          if (startSid && endCh) { sid = startSid; chName = endCh }
+          else if (endSid && startCh) { sid = endSid; chName = startCh }
+          else continue
+          const session = state.sessions.find((s) => s.id === sid)
+          if (!session) continue
+          const alias = aliasFromSession(session.title, session.id)
+          nextMember.set(el.id, { sid, channel: chName, alias })
+        }
+
+        // additions
+        for (const [arrowId, info] of nextMember) {
+          if (knownMemberArrowsRef.current.has(arrowId)) continue
+          const ch = state.channels.find((c) => c.name === info.channel)
+          const already = ch?.members.some((m) => m.sessionId === info.sid && m.alias === info.alias)
+          if (already) continue
+          console.log('[Board.arrow] addMember', info)
+          void addMember(info.channel, info.alias, info.sid).catch((e) => {
+            console.warn('[Board.arrow] addMember failed:', (e as Error).message)
+          })
+        }
+        // removals
+        for (const [arrowId, info] of knownMemberArrowsRef.current) {
+          if (nextMember.has(arrowId)) continue
+          const ch = state.channels.find((c) => c.name === info.channel)
+          const stillMember = ch?.members.some((m) => m.sessionId === info.sid && m.alias === info.alias)
+          if (!stillMember) continue
+          console.log('[Board.arrow] removeMember', info)
+          void removeMember(info.channel, info.alias).catch((e) => {
+            console.warn('[Board.arrow] removeMember failed:', (e as Error).message)
+          })
+        }
+        knownMemberArrowsRef.current = nextMember
+      }
+
       // Report counts on every change so sidebar stays in sync with
       // copy/paste/delete performed natively by Excalidraw.
       reportCountsRef.current(elements)
@@ -1150,6 +1232,39 @@ export default function Board({
         >
           <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
           <span>New channel</span>
+        </button>
+        {/*
+          Channel arrow = Excalidraw 原生 arrow 工具，我们 CSS 藏掉了它自带
+          的入口，改由这个按钮激活，措辞直接点明"只用来连接 session → channel
+          hub"。用户画完的 arrow 会被上面 handleChange 里的 arrow-bind 检测
+          自动变成 addMember 请求。 */}
+        <button
+          onClick={() => {
+            if (!api) return
+            try {
+              ;(api as any).setActiveTool({ type: 'arrow' })
+            } catch (e) {
+              console.warn('[Board] setActiveTool(arrow) failed', e)
+            }
+          }}
+          title="Channel arrow: drag from a session card to a channel hub to add it as a member"
+          style={{
+            background: 'var(--bg-paper, #2C2B29)',
+            color: 'var(--text, #F5F4EF)',
+            border: '1px solid var(--border, #3A3A38)',
+            borderRadius: 8,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontFamily: 'var(--sans)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+          }}
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>→</span>
+          <span>Channel arrow</span>
         </button>
       </div>
       <SessionOverlay

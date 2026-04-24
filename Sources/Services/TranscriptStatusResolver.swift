@@ -253,7 +253,21 @@ public enum TranscriptStatusResolver {
                 out = hookStatus; reason = "assistant+hook=\(hookStatus.rawValue)"
             }
         case "system":
-            if hookStatus == .active {
+            // ESC-during-tool 场景：Bash/tool 跑到一半用户按 ESC，PostToolUse
+            // 和 Stop hook 都没完整到位，hookStatus 被 PreToolUse 锁在
+            // .tooling（或 .thinking）。之后 Claude 写几条 system 条目
+            // (stop_hook_summary / turn_duration / away_summary) 就不动了。
+            // UI 看到 system tail + 具体工作态，照 hookStatus 透出，card 永远绿。
+            //
+            // 判定：system tail 超过 90s 仍没有新的 user/assistant/tool_result
+            // 追加 = Claude 实际上已经不在干活。降级为 .idle。
+            // （活跃工作时 transcript 写入频率远高于 1 分钟/条）
+            if let ts = last.timestamp,
+               Date().timeIntervalSince(ts) > _staleSystemTailThreshold,
+               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
+                out = .idle
+                reason = "system-tail-stale(>\(Int(_staleSystemTailThreshold))s+hook=\(hookStatus.rawValue))"
+            } else if hookStatus == .active {
                 out = .idle; reason = "system+hook=active → force-idle"
             } else {
                 out = hookStatus; reason = "system+hook=\(hookStatus.rawValue)"
@@ -338,6 +352,13 @@ private let _abandonedUserEntryThreshold: TimeInterval = 180.0  // 3 min
 /// 在 first-token 前按了 ESC（这种情况 Claude 不写 interrupt marker、也不
 /// 触发新 hook）。
 private let _staleThinkingThreshold: TimeInterval = 45.0
+
+/// 针对 hookStatus=tooling/thinking + tail 是 system 条目的"ESC-during-tool"
+/// 场景阈值。正常 Claude 在工作态下 transcript 每几秒就有新 user/assistant
+/// 写入；tail 停在 system 条目（stop_hook_summary 之类）说明那一轮已经写完
+/// 收尾，剩下的沉默大概率是用户 ESC 把 tool 打断，后续 PostToolUse/Stop 没
+/// 到位。90s 是个安全阈值 —— 单次正常工具调用绝大多数 < 30s 完成。
+private let _staleSystemTailThreshold: TimeInterval = 90.0
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.
