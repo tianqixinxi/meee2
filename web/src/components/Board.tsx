@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Excalidraw,
   Footer,
@@ -197,6 +198,29 @@ export default function Board({
   unreadSids,
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  // Portal host: Excalidraw's native top-center toolbar container. We render
+  // "+ New channel" / "→ Channel arrow" buttons *inside* it so they sit on
+  // the same horizontal pill as the shape tools, instead of floating in the
+  // corner. Effect polls for the DOM node Excalidraw mounts asynchronously.
+  const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    let raf = 0
+    const tick = () => {
+      if (cancelled) return
+      const host = document.querySelector('.excalidraw .App-toolbar-container')
+      if (host instanceof HTMLElement) {
+        setToolbarHost(host)
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
+  }, [])
   const layoutRef = useRef<LayoutMap>(loadLayout())
   const channelLayoutRef = useRef<LayoutMap>(loadChannelLayout())
   const saveLayoutDebounced = useMemo(
@@ -1194,79 +1218,39 @@ export default function Board({
         </Footer>
       </Excalidraw>
       {/*
-        Floating toolbar (DOM level, not an Excalidraw tool). Parked in the
-        top-right of the board area so it doesn't collide with the left-side
-        Excalidraw tool pill and has breathing room from the upper-right
-        collaboration/help cluster. We keep the MainMenu "New channel" item
-        too — this is phase 1 UX sugar, not a replacement.
+        Channel toolbar island. Portals INTO Excalidraw's native
+        `.App-toolbar-container` so the buttons sit as a sibling pill to the
+        shape-tools island — visually one continuous top toolbar. The
+        `toolbarHost` effect above waits for Excalidraw's async DOM mount.
       */}
-      <div
-        className="board-floating-toolbar"
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 16,
-          display: 'flex',
-          gap: 8,
-          zIndex: 5,
-          pointerEvents: 'auto',
-        }}
-      >
-        <button
-          onClick={onNewChannel}
-          title="Create a new channel"
-          style={{
-            background: 'var(--bg-paper, #2C2B29)',
-            color: 'var(--text, #F5F4EF)',
-            border: '1px solid var(--border, #3A3A38)',
-            borderRadius: 8,
-            padding: '6px 12px',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontFamily: 'var(--sans)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          }}
-        >
-          <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
-          <span>New channel</span>
-        </button>
-        {/*
-          Channel arrow = Excalidraw 原生 arrow 工具，我们 CSS 藏掉了它自带
-          的入口，改由这个按钮激活，措辞直接点明"只用来连接 session → channel
-          hub"。用户画完的 arrow 会被上面 handleChange 里的 arrow-bind 检测
-          自动变成 addMember 请求。 */}
-        <button
-          onClick={() => {
-            if (!api) return
-            try {
-              ;(api as any).setActiveTool({ type: 'arrow' })
-            } catch (e) {
-              console.warn('[Board] setActiveTool(arrow) failed', e)
-            }
-          }}
-          title="Channel arrow: drag from a session card to a channel hub to add it as a member"
-          style={{
-            background: 'var(--bg-paper, #2C2B29)',
-            color: 'var(--text, #F5F4EF)',
-            border: '1px solid var(--border, #3A3A38)',
-            borderRadius: 8,
-            padding: '6px 12px',
-            cursor: 'pointer',
-            fontSize: 12,
-            fontFamily: 'var(--sans)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          }}
-        >
-          <span style={{ fontSize: 13, lineHeight: 1 }}>→</span>
-          <span>Channel arrow</span>
-        </button>
-      </div>
+      {toolbarHost && createPortal(
+        <div className="Island board-channel-toolbar" role="toolbar" aria-label="Channel tools">
+          <button
+            className="board-channel-toolbar__btn"
+            onClick={onNewChannel}
+            title="Create a new channel"
+          >
+            <span className="board-channel-toolbar__glyph">+</span>
+            <span>New channel</span>
+          </button>
+          <button
+            className="board-channel-toolbar__btn"
+            onClick={() => {
+              if (!api) return
+              try {
+                ;(api as any).setActiveTool({ type: 'arrow' })
+              } catch (e) {
+                console.warn('[Board] setActiveTool(arrow) failed', e)
+              }
+            }}
+            title="Channel arrow: drag from a session card to a channel hub to add it as a member"
+          >
+            <span className="board-channel-toolbar__glyph">→</span>
+            <span>Channel arrow</span>
+          </button>
+        </div>,
+        toolbarHost,
+      )}
       <SessionOverlay
         excalidrawAPI={api}
         state={state}

@@ -34,23 +34,21 @@ export default function NewChannelDialog({ state, onClose, onCreated }: Props) {
   const toast = useToast()
   const [name, setName] = useState(randomName())
   const [mode, setMode] = useState<Mode>('auto')
-  const [members, setMembers] = useState<MemberDraft[]>(() => {
-    const first = state.sessions[0]
-    const second = state.sessions[1]
-    return [
-      { sessionId: first?.id ?? '', alias: 'alpha' },
-      { sessionId: second?.id ?? '', alias: 'beta' },
-    ]
-  })
+  // 默认不预选任何成员 —— 用户建 channel 的典型流程现在是：先建好一个 hub，
+  // 回到画布从 session card 拉一条 channel arrow 到 hub 就自动加成员。这里
+  // 留空，上方仍允许"手填"作为老路径兜底（比如想一次建好 + 加两个成员）。
+  const [members, setMembers] = useState<MemberDraft[]>([])
   const [seed, setSeed] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const canSubmit = useMemo(() => {
     if (!name.trim()) return false
+    // 成员可以为空（稍后画 channel arrow 加进来），但如果手填了就必须
+    // 填全 + 别名不重复
     const valid = members.filter((m) => m.sessionId && m.alias.trim())
-    if (valid.length < 2) return false
-    // Unique aliases
+    const filled = members.filter((m) => m.sessionId || m.alias.trim())
+    if (valid.length !== filled.length) return false  // 半填的行拒掉
     const aliases = new Set(valid.map((m) => m.alias.trim()))
     if (aliases.size !== valid.length) return false
     return true
@@ -91,11 +89,9 @@ export default function NewChannelDialog({ state, onClose, onCreated }: Props) {
         throw memberErr
       }
 
-      // Seed message workaround: the spec's ideal would be a pseudo-sender
-      // "__operator__", but since __operator__ isn't a channel member, we
-      // can't POST /messages/send as that alias. For MVP, we send the seed
-      // using the first member as the sender, broadcast (toAlias="*") so
-      // every other member receives it, flagged injectedByHuman:true.
+      // Seed 消息需要至少 2 个成员（1 个发送方 + ≥1 个接收方）；现在支持
+      // "0 成员创建"后，没成员就别硬发了。用户后续通过画 channel arrow 加
+      // 进来成员，再手动发 seed 即可。
       if (seed.trim() && cleanMembers.length >= 2) {
         try {
           await sendMessage({
@@ -154,7 +150,7 @@ export default function NewChannelDialog({ state, onClose, onCreated }: Props) {
             </div>
           </div>
           <div className="field">
-            <label>Members (min 2)</label>
+            <label>Members (optional — add later by drawing a channel arrow)</label>
             {members.map((m, idx) => (
               <div key={idx} className="member-row">
                 <select

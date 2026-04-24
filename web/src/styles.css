@@ -174,6 +174,51 @@ textarea {
   display: none !important;
 }
 
+/* ─── Channel toolbar island ───────────────────────────────────────────────
+   Portaled INTO Excalidraw's `.App-toolbar-container` so it sits as a sibling
+   pill to the native shape tools — visually one continuous top toolbar.
+   Matches Excalidraw's `.Island` aesthetic (same pill radius + padding) with
+   our own paper-tone tokens so the two pills read as coordinated. */
+.excalidraw .App-toolbar-container .board-channel-toolbar {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-elevated, #30302E);
+  box-shadow: var(--ui-island-box-shadow, 0 0 0 1px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.25));
+  align-items: center;
+}
+.excalidraw .App-toolbar-container .board-channel-toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--sans);
+  color: var(--text, #F5F4EF);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  white-space: nowrap;
+}
+.excalidraw .App-toolbar-container .board-channel-toolbar__btn:hover {
+  background: var(--bg-elevated-2, #3A3A38);
+}
+.excalidraw .App-toolbar-container .board-channel-toolbar__btn:active {
+  background: var(--bg-paper, #2C2B29);
+  border-color: var(--border-strong, #4B4A47);
+}
+.excalidraw .App-toolbar-container .board-channel-toolbar__glyph {
+  font-size: 14px;
+  line-height: 1;
+  color: var(--accent, #CC785C);
+  font-weight: 600;
+}
+
 /* -- Wave 18: SessionOverlay ------------------------------------------- */
 /* Outer wrapper is purely positional. pointer-events:none so Excalidraw
  * (below, in DOM order) owns all mouse input: selection, drag, arrow
