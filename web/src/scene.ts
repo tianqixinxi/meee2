@@ -19,7 +19,12 @@ import type { LayoutMap } from './layout'
 // Card size — the embeddable box inside which SessionCard renders at 100%.
 export const RECT_W = 360
 export const RECT_H = 260
-export const MAX_FULL_MESH_MEMBERS = 5
+
+// Channel hub ellipse — sibling constants to RECT_W / RECT_H. Small oval that
+// sits between session cards as a visible "hub" with spokes (arrows) pointing
+// in from each member session.
+export const CHANNEL_W = 100
+export const CHANNEL_H = 56
 
 // Session id 存到 element.customData.sessionId 上。之前用 embeddable.link
 // 是因为要 renderEmbeddable，现在彻底改走 rectangle + 上面叠 overlay 渲染，
@@ -40,17 +45,24 @@ export function parseSessionFromElement(el: any): string | null {
   return el?.customData?.sessionId ?? null
 }
 
+/** Read channelName out of an Excalidraw element's customData. */
+export function parseChannelFromElement(el: any): string | null {
+  return el?.customData?.channelName ?? null
+}
+
 /** Stable id we seed for the first embeddable of a session (pre-placement). */
 export function sessionRectId(sid: string): string {
   return `session-${sid}`
 }
 
-export function channelArrowId(
-  channelName: string,
-  fromSid: string,
-  toSid: string,
-): string {
-  return `channel-${channelName}-${fromSid}-${toSid}`
+/** Stable id of the hub ellipse for a channel. */
+export function channelHubId(channelName: string): string {
+  return `channel-${channelName}`
+}
+
+/** Stable id of a spoke arrow going from `fromSid` into `channelName`'s hub. */
+export function channelSpokeId(channelName: string, fromSid: string): string {
+  return `channel-${channelName}-spoke-${fromSid}`
 }
 
 /** True if this element id is one Excalidraw-native shape prefix we own. */
@@ -122,28 +134,39 @@ export interface SkeletonElement {
   [key: string]: any
 }
 
-function modeStrokeColor(mode: Channel['mode']): string {
+/**
+ * Stroke color keyed by channel mode. Uses the app's muted Claude-warm palette
+ * tokens from styles.css (--success / --warning / --danger) so hub ellipses,
+ * spoke arrows, and any other mode-themed chrome stay visually coherent.
+ */
+export function modeStrokeColor(mode: Channel['mode']): string {
   switch (mode) {
     case 'auto':
-      return '#22C55E'
+      return '#7FA982' // --success (sage green)
     case 'intercept':
-      return '#EAB308'
+      return '#D4A373' // --warning (sand brown)
     case 'paused':
-      return '#EF4444'
+      return '#C26A6A' // --danger  (terracotta red)
   }
 }
 
-function channelStrokeStyle(channel: Channel): string {
+/**
+ * Stroke style keyed by channel mode (+ pending signal). Paused channels are
+ * dotted (faint), channels with queued/held messages are dashed (attention),
+ * everything else is solid.
+ */
+export function modeStrokeStyle(channel: Channel): string {
   if (channel.mode === 'paused') return 'dotted'
   if (channel.pendingCount > 0) return 'dashed'
   return 'solid'
 }
 
-function channelLabel(ch: Channel): string {
-  let s = ch.name
-  if (ch.pendingCount > 0) s += ` ·⏳${ch.pendingCount}`
-  if (ch.mode !== 'auto') s += ` [${ch.mode}]`
-  return s
+/** Two-line hub label: "#<name>" on top, "<MODE>[ ·⏳<pending>]" below. */
+function channelHubLabel(ch: Channel): string {
+  const line1 = `#${ch.name}`
+  let line2 = ch.mode.toUpperCase()
+  if (ch.pendingCount > 0) line2 += ` ·⏳${ch.pendingCount}`
+  return `${line1}\n${line2}`
 }
 
 // -- helpers retained for use by other modules (SessionDetail, SessionCard) -
@@ -223,6 +246,42 @@ export function buildSessionEmbeddable(
 }
 
 /**
+ * Build one ellipse skeleton representing a channel "hub" at (x, y).
+ *
+ * Channels render as hub-and-spoke: one ellipse per channel + one arrow per
+ * member → hub. Replaces the previous pair-wise arrow model, which scaled
+ * as O(members^2) edges and made dense channels visually noisy.
+ */
+export function buildChannelHub(
+  channel: Channel,
+  x: number,
+  y: number,
+): SkeletonElement {
+  return {
+    type: 'ellipse',
+    id: channelHubId(channel.name),
+    x,
+    y,
+    width: CHANNEL_W,
+    height: CHANNEL_H,
+    strokeColor: modeStrokeColor(channel.mode),
+    backgroundColor: '#2C2B29', // --bg-paper
+    fillStyle: 'solid',
+    strokeWidth: 2,
+    strokeStyle: modeStrokeStyle(channel),
+    roundness: null,
+    locked: false,
+    groupIds: [],
+    opacity: 100,
+    customData: { channelName: channel.name },
+    label: {
+      text: channelHubLabel(channel),
+      fontSize: 12,
+    },
+  } as SkeletonElement
+}
+
+/**
  * Build skeleton elements from state.
  *
  * `sessionIdToElementId(sid)` returns the **primary** embeddable id that
@@ -230,24 +289,33 @@ export function buildSessionEmbeddable(
  * arrows touching that session. This is computed in Board.tsx which has
  * access to the current Excalidraw scene.
  *
- * This function only produces:
- *   - NEW embeddables for sessions that aren't yet on the canvas (if the
- *     caller includes them via `newSessionIds`), plus
- *   - channel arrows bound to the primary embeddable ids.
+ * This function produces:
+ *   - NEW session embeddables for sessions that aren't yet on the canvas (via
+ *     `newSessionIds`),
+ *   - NEW channel hub ellipses for channels that aren't yet on the canvas
+ *     (via `newChannelNames`), and
+ *   - spoke arrows session → channel hub for each current membership.
  *
- * The caller is responsible for merging with existing user shapes and
- * existing embeddables — see Board.tsx.
+ * The caller is responsible for merging with existing user shapes, existing
+ * embeddables, and existing hubs — see Board.tsx.
  */
 export function buildScene(
   state: BoardState,
   layout: LayoutMap,
+  channelLayout: LayoutMap,
   opts: {
     /** Sessions that need a fresh embeddable created. */
     newSessionIds: string[]
+    /** Channels that need a fresh hub ellipse created. */
+    newChannelNames: string[]
     /** Primary-element resolver for arrow binding. */
     sessionIdToElementId: (sid: string) => string | null
   },
-): { newEmbeddables: SkeletonElement[]; arrows: SkeletonElement[] } {
+): {
+  newEmbeddables: SkeletonElement[]
+  newChannelHubs: SkeletonElement[]
+  arrows: SkeletonElement[]
+} {
   const sessionById = new Map(state.sessions.map((s) => [s.id, s]))
   const newEmbeddables: SkeletonElement[] = []
 
@@ -258,65 +326,50 @@ export function buildScene(
     newEmbeddables.push(buildSessionEmbeddable(s, pos.x, pos.y))
   }
 
+  const channelByName = new Map(state.channels.map((c) => [c.name, c]))
+  const newChannelHubs: SkeletonElement[] = []
+  for (const name of opts.newChannelNames) {
+    const ch = channelByName.get(name)
+    if (!ch) continue
+    if (ch.name.startsWith('__')) continue // defensive: skip operator channels
+    const pos = channelLayout[name] ?? { x: 80, y: 80 }
+    newChannelHubs.push(buildChannelHub(ch, pos.x, pos.y))
+  }
+
   const arrows: SkeletonElement[] = []
+  const knownSids = new Set(state.sessions.map((s) => s.id))
   for (const ch of state.channels) {
-    const pairs = memberPairs(ch, state.sessions)
-    for (const [fromSid, toSid] of pairs) {
-      const fromId = opts.sessionIdToElementId(fromSid)
-      const toId = opts.sessionIdToElementId(toSid)
-      if (!fromId || !toId) continue
+    if (ch.name.startsWith('__')) continue // defensive
+    const hubId = channelHubId(ch.name)
+    const seenSids = new Set<string>()
+    for (const member of ch.members) {
+      if (!knownSids.has(member.sessionId)) continue
+      if (seenSids.has(member.sessionId)) continue
+      seenSids.add(member.sessionId)
+
+      const fromId = opts.sessionIdToElementId(member.sessionId)
+      if (!fromId) continue
       arrows.push({
         type: 'arrow',
-        id: channelArrowId(ch.name, fromSid, toSid),
+        id: channelSpokeId(ch.name, member.sessionId),
         strokeColor: modeStrokeColor(ch.mode),
         strokeWidth: ch.pendingCount > 0 ? 3 : 2,
-        strokeStyle: channelStrokeStyle(ch),
+        strokeStyle: modeStrokeStyle(ch),
         roundness: null,
-        // NOTE: type is "rectangle" in the skeleton because
+        // NOTE: type is "rectangle"/"ellipse" in the skeleton because
         // convertToExcalidrawElements' type signature excludes "embeddable"
         // from arrow endpoints — but at runtime Excalidraw's
-        // isBindableElement() allows "embeddable", and binding works fine
-        // when we cast to any.
+        // isBindableElement() allows both, and binding works fine when we
+        // cast to any.
         start: { id: fromId, type: 'rectangle' },
-        end: { id: toId, type: 'rectangle' },
+        end: { id: hubId, type: 'ellipse' },
         label: {
-          text: channelLabel(ch),
-          fontSize: 12,
+          text: member.alias,
+          fontSize: 11,
         },
       })
     }
   }
 
-  return { newEmbeddables, arrows }
-}
-
-/**
- * Pick the pairs of member sessionIds to draw arrows for.
- */
-function memberPairs(
-  channel: Channel,
-  sessions: Session[],
-): Array<[string, string]> {
-  const known = new Set(sessions.map((s) => s.id))
-  const sids: string[] = []
-  const seen = new Set<string>()
-  for (const m of channel.members) {
-    if (!known.has(m.sessionId)) continue
-    if (seen.has(m.sessionId)) continue
-    seen.add(m.sessionId)
-    sids.push(m.sessionId)
-  }
-  if (sids.length < 2) return []
-
-  if (sids.length <= MAX_FULL_MESH_MEMBERS) {
-    const out: Array<[string, string]> = []
-    for (let i = 0; i < sids.length; i++) {
-      for (let j = i + 1; j < sids.length; j++) {
-        out.push([sids[i], sids[j]])
-      }
-    }
-    return out
-  }
-  const [hub, ...rest] = sids
-  return rest.map((sid) => [hub, sid] as [string, string])
+  return { newEmbeddables, newChannelHubs, arrows }
 }
