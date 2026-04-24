@@ -310,6 +310,16 @@ export function buildScene(
     newChannelNames: string[]
     /** Primary-element resolver for arrow binding. */
     sessionIdToElementId: (sid: string) => string | null
+    /**
+     * Session↔channel pairs that already have a user-drawn arrow on the
+     * canvas. For each such pair we SKIP generating our own spoke — the
+     * user's arrow is the sole visual of that membership. Without this,
+     * a user who drags session→hub would see two arrows for the same
+     * membership (theirs + ours), and Excalidraw's layout loops between
+     * the two every tick, effectively freezing.
+     * Key format: `<sid>|<channelName>`.
+     */
+    existingConnections?: Set<string>
   },
 ): {
   newEmbeddables: SkeletonElement[]
@@ -347,6 +357,10 @@ export function buildScene(
       if (seenSids.has(member.sessionId)) continue
       seenSids.add(member.sessionId)
 
+      // 用户亲手画过这条 session↔channel 的 arrow → 别再自动画一条重的，
+      // 让用户那条成为这个成员关系的唯一视觉。
+      if (opts.existingConnections?.has(`${member.sessionId}|${ch.name}`)) continue
+
       const fromId = opts.sessionIdToElementId(member.sessionId)
       if (!fromId) continue
       arrows.push({
@@ -356,6 +370,11 @@ export function buildScene(
         strokeWidth: ch.pendingCount > 0 ? 3 : 2,
         strokeStyle: modeStrokeStyle(ch),
         roundness: null,
+        // channel 关系是无方向的——"这个 session 和这个 channel 相连"，不是
+        // "session 把消息发给 channel" 或反之。把两端 arrowhead 都置 null，
+        // 视觉上就是一条中性连线。
+        startArrowhead: null,
+        endArrowhead: null,
         // NOTE: type is "rectangle"/"ellipse" in the skeleton because
         // convertToExcalidrawElements' type signature excludes "embeddable"
         // from arrow endpoints — but at runtime Excalidraw's

@@ -427,6 +427,27 @@ export default function Board({
       (n) => !knownChannelNames.has(n),
     )
 
+    // 扫出用户已经亲手画过的 session↔channel 连接，让 buildScene 知道
+    // 哪些成员关系已经有 arrow 了、别重复画——这是死锁/抖动的核心修正。
+    const existingConnections = new Set<string>()
+    for (const el of existing) {
+      if (el.type !== 'arrow') continue
+      if ((el as any).isDeleted) continue
+      if (el.id.startsWith('channel-') && el.id.includes('-spoke-')) continue
+      const startId = (el as any).startBinding?.elementId as string | undefined
+      const endId = (el as any).endBinding?.elementId as string | undefined
+      if (!startId || !endId) continue
+      const startEl = existing.find((e) => e.id === startId)
+      const endEl = existing.find((e) => e.id === endId)
+      if (!startEl || !endEl) continue
+      const startSid = startEl.type === 'rectangle' ? parseSessionFromElement(startEl) : null
+      const endSid = endEl.type === 'rectangle' ? parseSessionFromElement(endEl) : null
+      const startCh = startEl.type === 'ellipse' ? parseChannelFromElement(startEl) : null
+      const endCh = endEl.type === 'ellipse' ? parseChannelFromElement(endEl) : null
+      if (startSid && endCh) existingConnections.add(`${startSid}|${endCh}`)
+      else if (endSid && startCh) existingConnections.add(`${endSid}|${startCh}`)
+    }
+
     const { newEmbeddables, newChannelHubs, arrows } = buildScene(
       state,
       layoutRef.current,
@@ -435,6 +456,7 @@ export default function Board({
         newSessionIds,
         newChannelNames,
         sessionIdToElementId: (sid) => primaryMap.get(sid) ?? null,
+        existingConnections,
       },
     )
 

@@ -209,75 +209,75 @@ public enum TranscriptStatusResolver {
         let tsStr = last.timestamp.map { ISO8601DateFormatter().string(from: $0) } ?? "?"
         let age: String = last.timestamp.map { String(format: "%.1fs", Date().timeIntervalSince($0)) } ?? "?"
 
-        // Step 2: apply csm-style rules. Keep hook-driven status when it
-        // already carries more information than transcript-based heuristics
-        // (thinking / tooling / waitingForUser / permissionRequired /
-        // compacting). Only override in the specific cases below.
-        let out: SessionStatus
-        let reason: String
-        switch last.type {
-        case "user":
-            if last.isInterrupt {
-                out = .idle; reason = "user-interrupt"
-            } else if let ts = last.timestamp,
-                      Date().timeIntervalSince(ts) > _abandonedUserEntryThreshold {
-                out = .idle; reason = "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)"
-            } else if hookStatus == .thinking,
-                      let ts = last.timestamp,
-                      Date().timeIntervalSince(ts) > _staleThinkingThreshold {
-                // ESC-before-first-token 场景：用户发完 prompt 就按 ESC，
-                // Claude 还没开始 stream → 不写 interrupt marker，也不会再
-                // 触发新 hook，hookStatus 就卡在 thinking 了。
-                // "尾巴是普通 user prompt + hook 说 thinking + 超过 45s 还没
-                //  有任何 assistant entry" 这组合，在真 thinking 里极罕见
-                // （opus 极端复杂提示也基本 < 30s 出第一个 token），更可能是
-                // 用户 ESC 了。降级为 idle 以释放 LIVE 徽章。
-                out = .idle
-                reason = "user-stale-pre-assistant(>\(Int(_staleThinkingThreshold))s+hook=thinking)"
-            } else {
-                // Keep the more-specific hook status if any (thinking/tooling
-                // etc). Fall back to .active when the hook is generic idle /
-                // active / completed.
-                if isSpecific(hookStatus) {
-                    out = hookStatus; reason = "user-recent+hook-specific(\(hookStatus.rawValue))"
-                } else {
-                    out = .active; reason = "user-recent"
-                }
-            }
-        case "assistant":
-            // waitingForUser 在语义上等同 idle（Claude 回完一轮等你回），
-            // transcript 尾巴是 assistant 时应当跟 idle 一样被识别为 mid-turn。
-            if hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
-                out = .active; reason = "assistant+hook=\(hookStatus.rawValue) → mid-turn"
-            } else {
-                out = hookStatus; reason = "assistant+hook=\(hookStatus.rawValue)"
-            }
-        case "system":
-            // ESC-during-tool 场景：Bash/tool 跑到一半用户按 ESC，PostToolUse
-            // 和 Stop hook 都没完整到位，hookStatus 被 PreToolUse 锁在
-            // .tooling（或 .thinking）。之后 Claude 写几条 system 条目
-            // (stop_hook_summary / turn_duration / away_summary) 就不动了。
-            // UI 看到 system tail + 具体工作态，照 hookStatus 透出，card 永远绿。
-            //
-            // 判定：system tail 超过 90s 仍没有新的 user/assistant/tool_result
-            // 追加 = Claude 实际上已经不在干活。降级为 .idle。
-            // （活跃工作时 transcript 写入频率远高于 1 分钟/条）
-            if let ts = last.timestamp,
-               Date().timeIntervalSince(ts) > _staleSystemTailThreshold,
-               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
-                out = .idle
-                reason = "system-tail-stale(>\(Int(_staleSystemTailThreshold))s+hook=\(hookStatus.rawValue))"
-            } else if hookStatus == .active {
-                out = .idle; reason = "system+hook=active → force-idle"
-            } else {
-                out = hookStatus; reason = "system+hook=\(hookStatus.rawValue)"
-            }
-        default:
-            out = hookStatus; reason = "unknown-type(\(last.type))"
-        }
+        // Step 2: apply rule matrix. Extracted to decideFromTail so tests
+        // can hit the decision logic without transcript files or osascript.
+        let (out, reason) = decideFromTail(last: last, hookStatus: hookStatus, now: Date())
 
         NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) last={type=\(last.type) age=\(age) ts=\(tsStr)} → \(out.rawValue) (\(reason))")
         return out
+    }
+
+    /// 纯函数：根据 tail entry + hookStatus + 当前时间，算出展示用 status。
+    /// 不做文件 I/O、不调 AppleScript、不查进程——所有外部依赖都已经在
+    /// `resolveUncached` 里解析好之后才调这里。方便单元测试遍历规则矩阵。
+    ///
+    /// 规则优先级（详见 docs/ARCHITECTURE.md §6）：
+    ///   case user:
+    ///     1. isInterrupt          → .idle    (user-interrupt)
+    ///     2. age > 180s           → .idle    (user-too-old)
+    ///     3. hook=thinking + age > 45s → .idle  (user-stale-pre-assistant)
+    ///     4. isSpecific(hook)     → hookStatus
+    ///     5. fallback             → .active
+    ///   case assistant:
+    ///     1. hook ∈ {idle,completed,waitingForUser} → .active (mid-turn)
+    ///     2. fallback             → hookStatus
+    ///   case system:
+    ///     1. age > 90s + working hook → .idle (system-tail-stale)
+    ///     2. hook == .active       → .idle (force-idle)
+    ///     3. fallback              → hookStatus
+    static func decideFromTail(
+        last: LastEntry,
+        hookStatus: SessionStatus,
+        now: Date
+    ) -> (status: SessionStatus, reason: String) {
+        switch last.type {
+        case "user":
+            if last.isInterrupt {
+                return (.idle, "user-interrupt")
+            }
+            if let ts = last.timestamp, now.timeIntervalSince(ts) > _abandonedUserEntryThreshold {
+                return (.idle, "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)")
+            }
+            if hookStatus == .thinking,
+               let ts = last.timestamp,
+               now.timeIntervalSince(ts) > _staleThinkingThreshold {
+                return (.idle, "user-stale-pre-assistant(>\(Int(_staleThinkingThreshold))s+hook=thinking)")
+            }
+            if isSpecific(hookStatus) {
+                return (hookStatus, "user-recent+hook-specific(\(hookStatus.rawValue))")
+            }
+            return (.active, "user-recent")
+
+        case "assistant":
+            if hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
+                return (.active, "assistant+hook=\(hookStatus.rawValue) → mid-turn")
+            }
+            return (hookStatus, "assistant+hook=\(hookStatus.rawValue)")
+
+        case "system":
+            if let ts = last.timestamp,
+               now.timeIntervalSince(ts) > _staleSystemTailThreshold,
+               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
+                return (.idle, "system-tail-stale(>\(Int(_staleSystemTailThreshold))s+hook=\(hookStatus.rawValue))")
+            }
+            if hookStatus == .active {
+                return (.idle, "system+hook=active → force-idle")
+            }
+            return (hookStatus, "system+hook=\(hookStatus.rawValue)")
+
+        default:
+            return (hookStatus, "unknown-type(\(last.type))")
+        }
     }
 
     /// States that carry more specific info than what the transcript tail can
@@ -334,8 +334,10 @@ public enum TranscriptStatusResolver {
 
 // MARK: - Transcript tail parsing
 
-/// The subset of fields we need from the tail of the transcript.
-private struct LastEntry {
+// The subset of fields we need from the tail of the transcript.
+// 提到模块级可见是为了单元测试能构造 fixture 直接喂给 decideFromTail。
+// 生产代码仍然只由 TranscriptStatusResolver 内部使用。
+struct LastEntry {
     let type: String        // "user" | "assistant" | "system"
     let isInterrupt: Bool
     let timestamp: Date?    // entry's own timestamp (ISO8601) if parseable
@@ -383,7 +385,7 @@ private func readTail(path: String?, bytes: Int) -> String? {
 
 /// Walk the tail from bottom → top, return the first entry we consider
 /// "relevant" (i.e. not a local !bash command / isMeta user entry).
-private func findLastRelevantEntry(tail: String) -> LastEntry? {
+func findLastRelevantEntry(tail: String) -> LastEntry? {
     // Drop the (potentially truncated) first line — it may be mid-JSON.
     let rawLines = tail.split(separator: "\n", omittingEmptySubsequences: true)
     // If there's more than one line and we're likely mid-line at the top,
