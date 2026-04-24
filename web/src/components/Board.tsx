@@ -342,12 +342,25 @@ export default function Board({
     // 当前配色。Excalidraw 的 element state 是持久化的，旧 rect 如果不刷，
     // 就会一直从 overlay 四周漏出 rgba(30,30,30,0.4) 这层灰影。
     // 值必须和 scene.ts 里 buildSessionEmbeddable 保持一致。
-    const normalizedExisting = existingEmbeddables.map((el: any) => ({
-      ...el,
-      strokeColor: '#262624',
-      backgroundColor: '#262624',
-      fillStyle: 'solid',
-    }))
+    //
+    // 同时在这里兜底：如果一个 rect 对应的 sid 已经不在 state.sessions 里
+    //（session 被 kill / 终端关了、ClaudePlugin.syncToStore 删掉了记录），
+    // 上面的 SessionOverlay 会 `if (!session) continue` 跳过渲染 → 画板上
+    // 只剩个没有 CardHost 贴图的白矩形。把它们标 isDeleted:true 收走，
+    // 用户看到的就是"session 关了 → 卡片消失"的预期体感。Undo 仍能恢复。
+    const liveSids = new Set(ids)
+    const normalizedExisting = existingEmbeddables.map((el: any) => {
+      const sid = parseSessionFromElement(el)
+      if (sid && !liveSids.has(sid)) {
+        return { ...el, isDeleted: true }
+      }
+      return {
+        ...el,
+        strokeColor: '#262624',
+        backgroundColor: '#262624',
+        fillStyle: 'solid',
+      }
+    })
 
     const preservedExisting = [
       ...userShapes,
