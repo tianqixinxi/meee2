@@ -60,6 +60,19 @@ export function channelHubId(channelName: string): string {
   return `channel-${channelName}`
 }
 
+/**
+ * Stable id of the text label bound to a channel hub. We give this a
+ * deterministic id (instead of letting Excalidraw auto-generate one from the
+ * skeleton `label: {…}` sugar) so it's treated as managed — otherwise the
+ * label's random id makes it look like a user shape, gets persisted to
+ * localStorage, and on every page refresh the hub gets rebuilt WITH a fresh
+ * label while the old one is also restored from storage. Labels then
+ * accumulate one-per-refresh.
+ */
+export function channelLabelId(channelName: string): string {
+  return `channel-${channelName}-label`
+}
+
 /** Stable id of a spoke arrow going from `fromSid` into `channelName`'s hub. */
 export function channelSpokeId(channelName: string, fromSid: string): string {
   return `channel-${channelName}-spoke-${fromSid}`
@@ -162,12 +175,14 @@ export function modeStrokeStyle(channel: Channel): string {
 }
 
 /** Two-line hub label: "#<name>" on top, "<MODE>[ ·⏳<pending>]" below. */
-function channelHubLabel(ch: Channel): string {
+export function channelHubLabelText(ch: Channel): string {
   const line1 = `#${ch.name}`
   let line2 = ch.mode.toUpperCase()
   if (ch.pendingCount > 0) line2 += ` ·⏳${ch.pendingCount}`
   return `${line1}\n${line2}`
 }
+// Internal alias kept for the skeleton builder below.
+const channelHubLabel = channelHubLabelText
 
 // -- helpers retained for use by other modules (SessionDetail, SessionCard) -
 
@@ -246,20 +261,28 @@ export function buildSessionEmbeddable(
 }
 
 /**
- * Build one ellipse skeleton representing a channel "hub" at (x, y).
+ * Build the skeletons for a channel "hub" — an ellipse container and an
+ * explicitly-bound text label — at (x, y). Returns 2 elements.
  *
- * Channels render as hub-and-spoke: one ellipse per channel + one arrow per
- * member → hub. Replaces the previous pair-wise arrow model, which scaled
- * as O(members^2) edges and made dense channels visually noisy.
+ * Why not use the `label: {text, fontSize}` sugar anymore: that sugar makes
+ * Excalidraw auto-generate a random id for the text. Random ids don't match
+ * `isManagedElementId`, so the text leaks into `userShapes` and survives
+ * page refresh via localStorage. After refresh, the hub is rebuilt (fresh
+ * label id) but the old label is also restored — and labels accumulate
+ * one-per-refresh. Giving the label a deterministic `channelLabelId(name)`
+ * puts it on the managed side of the fence, same rebuild semantics as the
+ * hub itself.
  */
 export function buildChannelHub(
   channel: Channel,
   x: number,
   y: number,
-): SkeletonElement {
-  return {
+): SkeletonElement[] {
+  const hubId = channelHubId(channel.name)
+  const labelId = channelLabelId(channel.name)
+  const hub: SkeletonElement = {
     type: 'ellipse',
-    id: channelHubId(channel.name),
+    id: hubId,
     x,
     y,
     width: CHANNEL_W,
@@ -274,11 +297,29 @@ export function buildChannelHub(
     groupIds: [],
     opacity: 100,
     customData: { channelName: channel.name },
-    label: {
-      text: channelHubLabel(channel),
-      fontSize: 12,
-    },
+    boundElements: [{ id: labelId, type: 'text' }],
   } as SkeletonElement
+  const label: SkeletonElement = {
+    type: 'text',
+    id: labelId,
+    x,
+    y,
+    width: CHANNEL_W,
+    height: CHANNEL_H,
+    text: channelHubLabel(channel),
+    fontSize: 12,
+    textAlign: 'center',
+    verticalAlign: 'middle',
+    containerId: hubId,
+    strokeColor: '#F5F4EF', // --text
+    backgroundColor: 'transparent',
+    fillStyle: 'solid',
+    opacity: 100,
+    groupIds: [],
+    locked: false,
+    customData: { channelLabel: channel.name },
+  } as SkeletonElement
+  return [hub, label]
 }
 
 /**
@@ -343,7 +384,7 @@ export function buildScene(
     if (!ch) continue
     if (ch.name.startsWith('__')) continue // defensive: skip operator channels
     const pos = channelLayout[name] ?? { x: 80, y: 80 }
-    newChannelHubs.push(buildChannelHub(ch, pos.x, pos.y))
+    newChannelHubs.push(...buildChannelHub(ch, pos.x, pos.y))
   }
 
   const arrows: SkeletonElement[] = []

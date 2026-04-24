@@ -18,6 +18,7 @@ import {
   buildScene,
   buildSessionEmbeddable,
   channelHubId,
+  channelHubLabelText,
   modeStrokeColor,
   modeStrokeStyle,
   RECT_W,
@@ -366,7 +367,21 @@ export default function Board({
 
     // Current scene → classify existing elements.
     const existing = api.getSceneElements()
-    const userShapes = existing.filter((e) => !isManagedElementId(e.id))
+    // 清理：随机 id 的 channel label 文本——这些是老版本（用 Excalidraw
+    // `label: {…}` 糖生成的、id 随机）残留的孤儿。它们会被
+    // `!isManagedElementId` 误收进 userShapes 并在每次 refresh 累加一条。
+    // 任何 text 元素如果 containerId 指向 `channel-<name>` 但自己 id 不是
+    // `channel-<name>-label`，一律丢弃。
+    const userShapes = existing.filter((e) => {
+      if (isManagedElementId(e.id)) return false
+      if (e.type === 'text') {
+        const cid = (e as any).containerId as string | undefined
+        if (cid && cid.startsWith('channel-') && !e.id.startsWith('channel-')) {
+          return false
+        }
+      }
+      return true
+    })
     const existingEmbeddables = existing.filter(
       (e) =>
         e.type === 'rectangle' &&
@@ -376,6 +391,13 @@ export default function Board({
       (e) =>
         e.type === 'ellipse' &&
         parseChannelFromElement(e) !== null,
+    )
+    const existingChannelLabels = existing.filter(
+      (e) =>
+        e.type === 'text' &&
+        typeof e.id === 'string' &&
+        e.id.startsWith('channel-') &&
+        e.id.endsWith('-label'),
     )
 
     const knownSessionIds = new Set<string>()
@@ -510,11 +532,25 @@ export default function Board({
         strokeStyle: modeStrokeStyle(ch),
       }
     })
+    // 把已有的 label 文本和最新 channel 状态对齐（mode / pendingCount 变了要刷）；
+    // channel 没了就跟 hub 一起 isDeleted。
+    const normalizedChannelLabels = existingChannelLabels.map((el: any) => {
+      const id: string = el.id
+      const name = id.slice('channel-'.length, id.length - '-label'.length)
+      const ch = liveChannelByName.get(name)
+      if (!ch) {
+        return { ...el, isDeleted: true }
+      }
+      const nextText = channelHubLabelText(ch)
+      if (el.text === nextText) return el
+      return { ...el, text: nextText, originalText: nextText }
+    })
 
     const preservedExisting = [
       ...userShapes,
       ...normalizedExisting,
       ...normalizedChannelHubs,
+      ...normalizedChannelLabels,
     ]
 
     const finalElements = [...preservedExisting, ...converted]
@@ -799,14 +835,14 @@ export default function Board({
       // have; the scene-rebuild effect will normalise it once state updates.
       const ch = state.channels.find((c) => c.name === name)
       if (ch) {
-        const skeleton = buildChannelHub(ch, x, y)
-        const [built] = convertToExcalidrawElements([skeleton] as any, {
+        const skeletons = buildChannelHub(ch, x, y)
+        const built = convertToExcalidrawElements(skeletons as any, {
           regenerateIds: false,
         })
-        if (built) {
-          const next = [...api.getSceneElements(), built]
+        if (built.length > 0) {
+          const next = [...api.getSceneElements(), ...built]
           api.updateScene({ elements: next as any })
-          api.scrollToContent([built], { fitToContent: false, animate: true })
+          api.scrollToContent([built[0]], { fitToContent: false, animate: true })
         }
       }
     }
