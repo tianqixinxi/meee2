@@ -45,6 +45,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 确保 Claude CLI hooks 配置存在
         SettingsConfigManager.shared.ensureHooksConfigured()
 
+        // 自动在 `~/.claude.json` 注册 meee2 MCP server，让每个 Claude session
+        // 原生拿到 send_message / list_channels / read_inbox / list_sessions tool。
+        // 幂等：已注册且路径正确就 noop。
+        MCPConfigManager.shared.ensureRegistered()
+
         // 加载外部 plugins
         PluginManager.shared.loadExternalPlugins()
 

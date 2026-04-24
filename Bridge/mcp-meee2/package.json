@@ -1,0 +1,16 @@
+{
+  "name": "meee2-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing meee2's A2A messaging to any Claude Code session",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "meee2-mcp": "./server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
