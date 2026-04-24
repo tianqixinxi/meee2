@@ -66,7 +66,6 @@ export default function StatsCard({ session }) {
   const input = (u.inputTokens || 0) + (u.cacheCreateTokens || 0)
   const output = u.outputTokens || 0
   const cached = u.cacheReadTokens || 0
-  const cost = session.costUSD
   return (
     <div style={{
       width: '100%', height: '100%',
@@ -94,15 +93,6 @@ export default function StatsCard({ session }) {
         <Stat label="Cache ⟲" value={fmt(cached)} color="#A78BFA" />
         <Stat label="Turns" value={u.turns || 0} color="#F59E0B" />
       </div>
-      {cost != null && (
-        <div style={{
-          marginTop: 10, paddingTop: 10, borderTop: '1px solid #2a3040',
-          fontSize: 11, textAlign: 'center',
-          color: '#22C55E', fontFamily: "'SF Mono', monospace",
-        }}>
-          $ {cost.toFixed(cost >= 1 ? 2 : 4)}
-        </div>
-      )}
     </div>
   )
 }
@@ -232,7 +222,7 @@ export const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: 'stats',
     label: 'Stats',
-    description: 'Token usage grid + cost',
+    description: 'Token usage grid (input / output / cache / turns)',
     source: STATS,
   },
   {

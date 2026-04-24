@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { BoardState, Message, SessionRecap } from '../types'
+import type { BoardState, Message, SessionRecap, UsageStats } from '../types'
 import { listChannelMessages, activateSession } from '../api'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
@@ -87,10 +87,7 @@ export default function SessionDetail({ state, sessionId }: Props) {
   }
 
   const statusLabel = statusText(session.status)
-  const costLabel =
-    session.costUSD != null
-      ? '$' + session.costUSD.toFixed(session.costUSD >= 1 ? 2 : 4)
-      : null
+  const tokenLabel = formatTokens(session.usageStats)
   const bgCount = session.backgroundAgents?.length ?? 0
   // cwd 和 title 经常是同一个 basename，避免两行重复；cwd 更长更信息化，title 只在两者不等时再出现
   const showTitleSeparately =
@@ -124,10 +121,35 @@ export default function SessionDetail({ state, sessionId }: Props) {
       <div className="sd__live-strip">
         <span className={`sd__status sd__status--${statusClass(session.status)}`}>{statusLabel}</span>
         {session.currentTool && <span className="sd__chip">{session.currentTool}</span>}
-        {costLabel && <span className="sd__chip sd__chip--cost">{costLabel}</span>}
+        {tokenLabel && (
+          <span className="sd__chip sd__chip--tokens" title={tokenLabel.title}>
+            {tokenLabel.display}
+          </span>
+        )}
         {bgCount > 0 && <span className="sd__chip sd__chip--bg">{bgCount} background</span>}
         {session.inboxPending > 0 && (
-          <span className="sd__chip sd__chip--inbox">{session.inboxPending} inbox</span>
+          <span className="sd__chip sd__chip--inbox sd__chip--popover">
+            {session.inboxPending} inbox
+            {inbox.length > 0 && (
+              <span className="sd__chip-popover" role="tooltip">
+                <span className="sd__chip-popover__title">
+                  Inbox ({inbox.length})
+                </span>
+                {inbox.map(({ ch, msg }) => (
+                  <span key={msg.id} className="sd__chip-popover__row">
+                    <span className="sd__chip-popover__meta">
+                      <span className="mono">{msg.fromAlias}</span>
+                      <span className="muted">{ch}</span>
+                      <span className="muted">
+                        {new Date(msg.createdAt).toLocaleTimeString()}
+                      </span>
+                    </span>
+                    <span className="sd__chip-popover__body">{msg.content}</span>
+                  </span>
+                ))}
+              </span>
+            )}
+          </span>
         )}
       </div>
 
@@ -205,6 +227,35 @@ export default function SessionDetail({ state, sessionId }: Props) {
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * 把 usageStats 压成一个紧凑 chip 文本 + tooltip。
+ *   上行 = input + cacheCreate + cacheRead（所有送给模型的 token）
+ *   下行 = output（模型吐出的 token）
+ * 常见范围百万级，用 `1.5M` / `340k` / `820` 三档压缩。
+ */
+function formatTokens(u: UsageStats | null): { display: string; title: string } | null {
+  if (!u) return null
+  const up = u.inputTokens + u.cacheCreateTokens + u.cacheReadTokens
+  const down = u.outputTokens
+  if (up === 0 && down === 0) return null
+  const display = `↑${shortNum(up)}  ↓${shortNum(down)}`
+  const title = [
+    `Input:         ${u.inputTokens.toLocaleString()}`,
+    `Cache create:  ${u.cacheCreateTokens.toLocaleString()}`,
+    `Cache read:    ${u.cacheReadTokens.toLocaleString()}`,
+    `Output:        ${u.outputTokens.toLocaleString()}`,
+    `Turns:         ${u.turns.toLocaleString()}`,
+    u.model ? `Model:         ${u.model}` : '',
+  ].filter(Boolean).join('\n')
+  return { display, title }
+}
+
+function shortNum(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'k'
+  return String(n)
+}
 
 function describeAge(at: Date): string {
   const sec = Math.max(0, (Date.now() - at.getTime()) / 1000)

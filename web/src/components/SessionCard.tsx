@@ -25,11 +25,21 @@ const ROLE_COLOR_CLASS: Record<string, string> = {
 //   idle, thinking, tooling, active, waitingForUser, permissionRequired,
 //   compacting, completed, dead
 
-function costText(cost: number | null): string {
-  if (cost == null) return ''
-  if (cost >= 1) return '$' + cost.toFixed(2)
-  if (cost >= 0.01) return '$' + cost.toFixed(3)
-  return '$' + cost.toFixed(4)
+/**
+ * session usage 压成 `↑in ↓out` 一行。cost USD 从数据模型里移掉了
+ * （Claude CLI 的 cost 估算经常不准），token 更诚实。
+ */
+function tokensText(u: import('../types').UsageStats | null): string {
+  if (!u) return ''
+  const up = u.inputTokens + u.cacheCreateTokens + u.cacheReadTokens
+  const down = u.outputTokens
+  if (up === 0 && down === 0) return ''
+  const s = (n: number) => {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M'
+    if (n >= 1_000) return (n / 1_000).toFixed(n >= 10_000 ? 0 : 1) + 'k'
+    return String(n)
+  }
+  return `↑${s(up)} ↓${s(down)}`
 }
 
 // If the backend prefixed a tool message with "🔧 <ToolName>:" strip it and
@@ -85,7 +95,7 @@ export function SessionCard({
     'haloColor=' + (liveKind.haloColor ?? '-'),
     'dim=' + liveKind.dim
   )
-  const cost = costText(session.costUSD)
+  const tokens = tokensText(session.usageStats)
   const messages = session.recentMessages ?? []
   // 新设计更紧凑 → 多容一条消息
   const rows = messages.slice(-5)
@@ -156,7 +166,7 @@ export function SessionCard({
         <span className="session-card__sep">·</span>
         <span className="session-card__plugin">{session.pluginDisplayName}</span>
         <span className="session-card__spacer" />
-        {cost && <span className="session-card__cost">{cost}</span>}
+        {tokens && <span className="session-card__cost">{tokens}</span>}
       </div>
 
       <div className="session-card__subtitle" title={session.project}>

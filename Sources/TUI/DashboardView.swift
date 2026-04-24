@@ -669,7 +669,15 @@ public struct DashboardView {
             NSLog("[StateTrace][tui-dashboard] sid=\(session.sessionId.prefix(8)) resolved=\(effectiveStatus.rawValue) render='\(text)'")
 
         case "cost":
-            text = formatCost(extras.usage?.costUSD ?? 0)
+            // Cost USD 从 UI 里移除了：Claude CLI 给的 costUSD 按 token 粗估经常
+            // 不准（不同模型单价、cache read/write、local OAuth 免费额度都没算），
+            // 误导价值大于信息价值。改用 token 列：input + output 合计。
+            if let u = extras.usage {
+                let total = u.inputTokens + u.outputTokens + u.cacheCreateTokens + u.cacheReadTokens
+                text = "\(total)"
+            } else {
+                text = "-"
+            }
 
         case "last_msg":
             if let last = extras.messages.last {

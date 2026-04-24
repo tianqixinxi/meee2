@@ -20,6 +20,15 @@ export interface SessionRecap {
   timestamp: string | null  // ISO8601
 }
 
+export interface UsageStats {
+  inputTokens: number
+  outputTokens: number
+  cacheCreateTokens: number
+  cacheReadTokens: number
+  turns: number
+  model: string
+}
+
 export interface Session {
   id: string
   title: string
@@ -31,7 +40,10 @@ export interface Session {
   inboxPending: number
   recentMessages: TranscriptEntry[]
   currentTool: string | null
-  costUSD: number | null
+  // 关于 cost：后端曾经把 Claude CLI 的 usage.costUSD 原样透出，但那个数字
+  // 经常不准（不同模型单价 / cache read-write / local OAuth 免费额度都没算进去），
+  // 只会误导，已经从 DTO 里移掉。UI 上展示 usageStats.input/output tokens 就好。
+  usageStats: UsageStats | null
   // 当前正在后台跑的 Claude Code 子 agent / task，和主 status 是正交维度
   backgroundAgents: BackgroundAgent[]
   // Claude CLI 最近一次 /recap 或 away_summary 产生的内容

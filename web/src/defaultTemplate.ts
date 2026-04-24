@@ -14,7 +14,7 @@
 export const DEFAULT_TEMPLATE = `// meee2 — default session card template.
 // Receives props: { session, board, helpers }
 // session:  { id, title, project, pluginId, pluginDisplayName, pluginColor,
-//             status, inboxPending, recentMessages, currentTool, costUSD }
+//             status, inboxPending, recentMessages, currentTool, usageStats }
 // board:    entire BoardState — { sessions, channels } if you need cross-card info.
 // helpers:  { formatCost, timeAgo, truncate, roleColor, shortenProject, statusLabel }
 //

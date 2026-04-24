@@ -25,8 +25,6 @@ struct SessionDTO: Encodable {
     let recentMessages: [TranscriptEntryDTO]
     /// 当前工具名，如 "Bash" / "Edit"；空闲时为 null
     let currentTool: String?
-    /// 累计使用费用（USD），未知时为 null
-    let costUSD: Double?
 
     // MARK: - 扩展字段（custom card 模板可引用）
 
@@ -73,7 +71,10 @@ struct BackgroundAgentDTO: Encodable {
     let startedAt: String?      // ISO8601
 }
 
-/// Usage 明细 DTO —— 供模板引用 token/turns/cost 等指标
+/// Usage 明细 DTO —— 供模板引用 token / turns 等指标。
+/// 历史上还暴露过 `costUSD`，但 Claude CLI 按 token 粗估的 USD 数字经常不准
+/// （不同模型单价、cache read/write 计价、local OAuth 免费额度都不在里面），
+/// 展示只会误导。数据模型里直接不带它，UI 展示上下行 token 即可。
 struct UsageStatsDTO: Encodable {
     let inputTokens: Int
     let outputTokens: Int
@@ -82,7 +83,6 @@ struct UsageStatsDTO: Encodable {
     let turns: Int
     /// 模型名；未知时为 ""
     let model: String
-    let costUSD: Double
 }
 
 /// 任务条目 DTO
@@ -252,8 +252,6 @@ enum BoardDTOBuilder {
             currentTool = sessionData?.currentTool
         }
 
-        let costUSD = sessionData?.usageStats?.costUSD
-
         // 扩展字段：模板可引用的完整 session 信息
         let usageStatsDTO: UsageStatsDTO? = sessionData?.usageStats.map { u in
             UsageStatsDTO(
@@ -262,8 +260,7 @@ enum BoardDTOBuilder {
                 cacheCreateTokens: u.cacheCreateTokens,
                 cacheReadTokens: u.cacheReadTokens,
                 turns: u.turns,
-                model: u.model,
-                costUSD: u.costUSD
+                model: u.model
             )
         }
 
@@ -316,7 +313,6 @@ enum BoardDTOBuilder {
             inboxPending: pending,
             recentMessages: transcriptEntries,
             currentTool: currentTool,
-            costUSD: costUSD,
             startedAt: startedAtISO,
             lastActivity: lastActivityISO,
             usageStats: usageStatsDTO,
