@@ -190,7 +190,7 @@ enum BoardAPI {
         let transcriptPath = data?.transcriptPath
 
         // 可选 limit —— 最新 N 条（tail）
-        var limit: Int? = nil
+        var limit: Int?
         if let q = req.queryParams.first(where: { $0.0 == "limit" })?.1,
            let n = Int(q), n > 0 {
             limit = n
@@ -487,7 +487,7 @@ enum BoardAPI {
         }
 
         // 解析 query params
-        var statusFilter: Set<MessageStatus>? = nil
+        var statusFilter: Set<MessageStatus>?
         var limit = 50
         for (k, v) in req.queryParams {
             switch k {

@@ -171,7 +171,7 @@ enum AssistantAPI {
                 "-p",
                 "--append-system-prompt", systemPrompt,
                 "--no-session-persistence",
-                "--output-format", "text",
+                "--output-format", "text"
             ]
         } else {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -180,7 +180,7 @@ enum AssistantAPI {
                 "-p",
                 "--append-system-prompt", systemPrompt,
                 "--no-session-persistence",
-                "--output-format", "text",
+                "--output-format", "text"
             ]
         }
 
@@ -228,7 +228,7 @@ enum AssistantAPI {
         let candidates = [
             (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin/claude"),
             "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
+            "/usr/local/bin/claude"
         ]
         for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
             return p

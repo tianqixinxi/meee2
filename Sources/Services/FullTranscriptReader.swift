@@ -183,8 +183,7 @@ public enum FullTranscriptReader {
         if let arr = c as? [[String: Any]] {
             var parts: [String] = []
             for b in arr {
-                if let t = b["text"] as? String { parts.append(t) }
-                else if let t = b["content"] as? String { parts.append(t) }
+                if let t = b["text"] as? String { parts.append(t) } else if let t = b["content"] as? String { parts.append(t) }
             }
             return parts.joined(separator: "\n")
         }

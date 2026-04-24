@@ -216,7 +216,7 @@ class CursorPlugin: SessionPlugin {
     }
 
     /// 解析项目路径
-    /// 例如: "Users-bytedance-code-deer-flow" -> "/Users/bytedance/code/deer-flow"
+    /// 例如: "Users-USERNAME-code-deer-flow" 反向还原为绝对路径（/Users/USERNAME/code/deer-flow）
     /// 注意：路径中可能包含短横线，需要特殊处理
     private func parseProjectPath(from dirName: String) -> String? {
         let parts = dirName.split(separator: "-")

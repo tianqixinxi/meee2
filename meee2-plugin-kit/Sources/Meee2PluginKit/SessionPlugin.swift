@@ -57,7 +57,7 @@ open class SessionPlugin: NSObject, ObservableObject {
     @Published open var hasError: Bool = false
 
     /// 最后的错误信息
-    @Published open var lastError: String? = nil
+    @Published open var lastError: String?
 
     // MARK: - 配置
 

@@ -49,10 +49,10 @@ public struct DashboardView {
     private var messageSelectedIndex: Int = 0
 
     // Transient confirmation prompt
-    private var pendingConfirm: ConfirmAction? = nil
+    private var pendingConfirm: ConfirmAction?
 
     // Transient status message (shown for 3s in the help line area)
-    private var statusMessage: String? = nil
+    private var statusMessage: String?
     private var statusMessageSetAt: Date = .distantPast
 
     // Refresh interval (seconds)

@@ -354,7 +354,7 @@ private func readTail(path: String?, bytes: Int) -> String? {
         let tailSize = min(fileSize, UInt64(bytes))
         try handle.seek(toOffset: fileSize - tailSize)
         let data = handle.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+        return String(bytes: data, encoding: .utf8)
     } catch {
         return nil
     }

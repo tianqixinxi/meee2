@@ -786,7 +786,7 @@ class ClaudePlugin: SessionPlugin {
                     // session ID 匹配，正常更新
                     let transcriptPath = getTranscriptPath(for: realSessionId)
 
-                    var lastMessage: String? = nil
+                    var lastMessage: String?
                     if let path = transcriptPath {
                         let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
                         if let last = msgs.last {
@@ -825,13 +825,13 @@ class ClaudePlugin: SessionPlugin {
             sessionStatusesLock.unlock()
 
             // 获取任务
-            var tasks: [SessionTask]? = nil
+            var tasks: [SessionTask]?
             sessionTasksLock.lock()
             tasks = sessionTasks[realSessionId]
             sessionTasksLock.unlock()
 
             // 获取使用统计
-            var usageStats: UsageStats? = nil
+            var usageStats: UsageStats?
             sessionUsageLock.lock()
             usageStats = sessionUsage[realSessionId]
             sessionUsageLock.unlock()
@@ -848,7 +848,7 @@ class ClaudePlugin: SessionPlugin {
             let transcriptPath = getTranscriptPath(for: realSessionId)
 
             // 加载最后消息
-            var lastMessage: String? = nil
+            var lastMessage: String?
             if let path = transcriptPath {
                 let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
                 if let last = msgs.last {
@@ -928,8 +928,8 @@ class ClaudePlugin: SessionPlugin {
         }
 
         // 沿 ppid 链最多向上 8 层，匹配已知终端应用
-        var termProgram: String? = nil
-        var termBundleId: String? = nil
+        var termProgram: String?
+        var termBundleId: String?
         var currentPid = pid
         for _ in 0..<8 {
             guard let ppidStr = runPS(["-o", "ppid=", "-p", "\(currentPid)"])?

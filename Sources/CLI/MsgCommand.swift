@@ -116,7 +116,7 @@ public struct MsgCommand {
     private static func cmdList(_ args: [String]) {
         let parsed = ChannelCommand.parseFlags(args, stringFlags: ["--channel", "--status"])
         let channel = parsed.strings["--channel"]
-        var statuses: Set<MessageStatus>? = nil
+        var statuses: Set<MessageStatus>?
         if let s = parsed.strings["--status"] {
             guard let st = MessageStatus(rawValue: s) else {
                 print("Error: invalid --status '\(s)'. Valid: pending, held, delivered, dropped")
@@ -249,7 +249,7 @@ public struct MsgCommand {
         let msgId = parsed.strings["--msg-id"]
         let actor = parsed.strings["--actor"]
 
-        var since: Date? = nil
+        var since: Date?
         if let s = parsed.strings["--since"] {
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime]

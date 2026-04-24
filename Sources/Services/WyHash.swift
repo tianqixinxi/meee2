@@ -3,7 +3,7 @@ import Foundation
 /// Native Swift implementation of wyhash v4 final.
 /// Matches Bun.hash() output exactly — no Bun dependency needed.
 enum WyHash {
-    private static let secret: [UInt64] = [
+    private static let seeds: [UInt64] = [
         0xa0761d6478bd642f, 0xe7037ed1a0b428db,
         0x8ebc6af09c88c6e3, 0x589965cc75374cc3
     ]
@@ -47,7 +47,7 @@ enum WyHash {
         let len = bytes.count
         return bytes.withUnsafeBufferPointer { buf in
             guard let p = buf.baseAddress else { return 0 }
-            var seed = seed ^ wymix(seed ^ secret[0], secret[1])
+            var seed = seed ^ wymix(seed ^ seeds[0], seeds[1])
             var a: UInt64, b: UInt64
 
             if len <= 16 {
@@ -60,14 +60,14 @@ enum WyHash {
                     a = 0; b = 0
                 }
             } else if len <= 48 {
-                a = wyr8(p) ^ secret[1]; b = wyr8(p + 8) ^ seed
+                a = wyr8(p) ^ seeds[1]; b = wyr8(p + 8) ^ seed
                 seed = wymix(a, b)
                 if len > 16 {
-                    a = wyr8(p + 16) ^ secret[2]; b = wyr8(p + 24) ^ seed
+                    a = wyr8(p + 16) ^ seeds[2]; b = wyr8(p + 24) ^ seed
                     seed = wymix(a, b)
                 }
                 if len > 32 {
-                    a = wyr8(p + 32) ^ secret[3]; b = wyr8(p + 40) ^ seed
+                    a = wyr8(p + 32) ^ seeds[3]; b = wyr8(p + 40) ^ seed
                     seed = wymix(a, b)
                 }
                 a = wyr8(p + len - 16); b = wyr8(p + len - 8)
@@ -77,23 +77,23 @@ enum WyHash {
                 if i > 48 {
                     var see1 = seed, see2 = seed
                     repeat {
-                        seed = wymix(wyr8(pp) ^ secret[1], wyr8(pp + 8) ^ seed)
-                        see1 = wymix(wyr8(pp + 16) ^ secret[2], wyr8(pp + 24) ^ see1)
-                        see2 = wymix(wyr8(pp + 32) ^ secret[3], wyr8(pp + 40) ^ see2)
+                        seed = wymix(wyr8(pp) ^ seeds[1], wyr8(pp + 8) ^ seed)
+                        see1 = wymix(wyr8(pp + 16) ^ seeds[2], wyr8(pp + 24) ^ see1)
+                        see2 = wymix(wyr8(pp + 32) ^ seeds[3], wyr8(pp + 40) ^ see2)
                         pp += 48; i -= 48
                     } while i > 48
                     seed ^= see1 ^ see2
                 }
                 while i > 16 {
-                    seed = wymix(wyr8(pp) ^ secret[1], wyr8(pp + 8) ^ seed)
+                    seed = wymix(wyr8(pp) ^ seeds[1], wyr8(pp + 8) ^ seed)
                     i -= 16; pp += 16
                 }
                 a = wyr8(pp + i - 16); b = wyr8(pp + i - 8)
             }
 
-            a ^= secret[1]; b ^= seed
+            a ^= seeds[1]; b ^= seed
             wymum(&a, &b)
-            return wymix(a ^ secret[0] ^ UInt64(len), b ^ secret[1])
+            return wymix(a ^ seeds[0] ^ UInt64(len), b ^ seeds[1])
         }
     }
 }

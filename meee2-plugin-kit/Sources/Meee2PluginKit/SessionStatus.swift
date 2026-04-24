@@ -152,6 +152,6 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         "unknown": .idle,
         // snake_case 变体
         "waiting_for_user": .waitingForUser,
-        "permission_required": .permissionRequired,
+        "permission_required": .permissionRequired
     ]
 }

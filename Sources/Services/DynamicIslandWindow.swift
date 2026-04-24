@@ -33,7 +33,7 @@ public class DynamicIslandWindow: NSWindow {
             .fullScreenAuxiliary,
             .stationary,
             .canJoinAllSpaces,
-            .ignoresCycle,
+            .ignoresCycle
         ]
 
         // 使用 statusBar + 8 确保在状态栏之上

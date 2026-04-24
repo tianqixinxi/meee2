@@ -175,26 +175,17 @@ public func drawTableHeader(row: Int, widths: [Int], columns: [TableColumn] = de
 /// Format relative time (e.g., "5m ago")
 public func formatRelativeTime(_ date: Date) -> String {
     let diff = Date().timeIntervalSince(date)
-    if diff < 0 { return "just now" }
-    else if diff < 60 { return "just now" }
-    else if diff < 3600 { return "\(Int(diff / 60))m ago" }
-    else if diff < 86400 { return "\(Int(diff / 3600))h ago" }
-    else { return "\(Int(diff / 86400))d ago" }
+    if diff < 0 { return "just now" } else if diff < 60 { return "just now" } else if diff < 3600 { return "\(Int(diff / 60))m ago" } else if diff < 86400 { return "\(Int(diff / 3600))h ago" } else { return "\(Int(diff / 86400))d ago" }
 }
 
 /// Format cost in USD
 public func formatCost(_ usd: Double) -> String {
-    if usd < 0.01 { return "$0" }
-    else if usd < 1 { return String(format: "$%.2f", usd) }
-    else if usd < 10 { return String(format: "$%.1f", usd) }
-    else { return String(format: "$%.0f", usd) }
+    if usd < 0.01 { return "$0" } else if usd < 1 { return String(format: "$%.2f", usd) } else if usd < 10 { return String(format: "$%.1f", usd) } else { return String(format: "$%.0f", usd) }
 }
 
 /// Format token count
 public func formatTokens(_ n: Int) -> String {
-    if n < 1000 { return String(n) }
-    else if n < 1_000_000 { return String(format: "%.1fk", Double(n) / 1000) }
-    else { return String(format: "%.1fM", Double(n) / 1_000_000) }
+    if n < 1000 { return String(n) } else if n < 1_000_000 { return String(format: "%.1fk", Double(n) / 1000) } else { return String(format: "%.1fM", Double(n) / 1_000_000) }
 }
 
 /// Truncate path to show only last component

@@ -10,7 +10,7 @@ struct PluginSessionRowView: View {
     /// 其他活跃 session（用于右键 "Connect to..." 列表）；默认为空以保持旧调用点兼容
     var otherActiveSessions: [PluginSession] = []
     /// 用户点击某个目标 session 时回调 —— 父视图负责打开 A2AConnectSheet
-    var onConnectRequest: ((PluginSession) -> Void)? = nil
+    var onConnectRequest: ((PluginSession) -> Void)?
 
     @State private var isHovered = false
 

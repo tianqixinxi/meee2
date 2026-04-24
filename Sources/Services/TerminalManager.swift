@@ -168,7 +168,7 @@ class TerminalManager {
                     }
 
                     // 提取 tty（如果有）
-                    var tty: String? = nil
+                    var tty: String?
                     if let ttyMatch = lineStr.range(of: "tty=(\\S+)", options: .regularExpression) {
                         tty = String(lineStr[ttyMatch])
                     }

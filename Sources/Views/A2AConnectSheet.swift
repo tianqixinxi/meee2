@@ -23,7 +23,7 @@ struct A2AConnectSheet: View {
     @State private var theirAlias: String = ""
     @State private var mode: ChannelMode = .auto
     @State private var seedMessage: String = ""
-    @State private var errorMessage: String? = nil
+    @State private var errorMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

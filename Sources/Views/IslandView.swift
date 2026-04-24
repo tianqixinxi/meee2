@@ -39,7 +39,7 @@ public struct IslandView: View {
     @State private var isClosing = false  // 正在关闭动画中，保持内容显示
 
     /// 右键 "Connect to..." 发起的 A2A 连接请求 —— 驱动 A2AConnectSheet
-    @State private var connectRequest: ConnectRequest? = nil
+    @State private var connectRequest: ConnectRequest?
     @State private var autoCloseTimer: Timer?
     @State private var carouselTimer: Timer?
     @State private var carouselIndex: Int = 0
@@ -821,11 +821,16 @@ public struct IslandView: View {
     @ViewBuilder
     private func markdownTableOrText(_ message: String) -> some View {
         let lines = message.split(separator: "\n", omittingEmptySubsequences: false)
+        // 注意：`let _` 不是多余——在 @ViewBuilder 里 `_ = NSLog(...)` 会被当成
+        // 一条 void 结果的表达式语句，SwiftUI 期望它是 View 就报 protocol 不符。
+        // `let _` 是声明，ViewBuilder 会忽略它。
+        // swiftlint:disable:next redundant_discardable_let
         let _ = NSLog("[IslandView] Message lines count: \(lines.count), first 3 lines: \(lines.prefix(3))")
         let tableData = parseMarkdownTable(lines: lines)
 
         if let table = tableData {
             // 调试日志 - 在渲染前输出
+            // swiftlint:disable:next redundant_discardable_let
             let _ = NSLog("[IslandView] Table parsed: headers=\(table.headers.count), rows=\(table.rows.count)")
             // 渲染表格
             markdownTableView(table)
@@ -957,7 +962,7 @@ public struct IslandView: View {
         let rowHeight: CGFloat = 22  // 每行固定高度
 
         // 预计算带稳定 id 的行数据，避免编译器超时
-        let rowsWithIds = table.rows.enumerated().map { (index, row) in
+        let rowsWithIds = table.rows.enumerated().map { (_, row) in
             TableRow(id: row.joined(separator: "|"), cells: row)
         }
 

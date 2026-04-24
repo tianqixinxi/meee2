@@ -365,7 +365,7 @@ public final class MessageRouter {
         MInfo("[MessageRouter] delivered \(id) -> [\(msgToDeliver.deliveredTo.joined(separator: ","))]")
 
         // 审计：一个 delivered 事件，fan-out 不拆分成多条
-        var auditDetails: String? = nil
+        var auditDetails: String?
         if msgToDeliver.toAlias == "*" {
             auditDetails = "fanout=[\(msgToDeliver.deliveredTo.joined(separator: ","))]"
         }

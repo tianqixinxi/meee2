@@ -291,8 +291,8 @@ public enum BackgroundAgentResolver {
     //   - Agent bg:  典型 <30min → 120min
     private static let maxAgeByKind: [String: TimeInterval] = [
         "monitor": 30 * 60,
-        "bash":    60 * 60,
-        "agent":   120 * 60,
+        "bash": 60 * 60,
+        "agent": 120 * 60
     ]
 
     private static func isStillYoung(_ agent: BackgroundAgent) -> Bool {
@@ -309,9 +309,9 @@ public enum BackgroundAgentResolver {
     /// monitor 正常都会 1-2 帧/分钟地打点；agent 的 jsonl 每一轮 assistant
     /// think/tool 都会追加，静默 10min 基本没戏。
     private static let maxIdleByKind: [String: TimeInterval] = [
-        "bash":    5 * 60,
+        "bash": 5 * 60,
         "monitor": 5 * 60,
-        "agent":   10 * 60,
+        "agent": 10 * 60
     ]
 
     private static func isOutputFresh(_ agent: BackgroundAgent) -> Bool {
