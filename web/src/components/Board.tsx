@@ -13,11 +13,18 @@ import type { ExcalidrawElement } from '@excalidraw/excalidraw/types/element/typ
 
 import type { BoardState, Selection } from '../types'
 import {
+  buildChannelHub,
   buildScene,
   buildSessionEmbeddable,
+  channelHubId,
+  modeStrokeColor,
+  modeStrokeStyle,
   RECT_W,
   RECT_H,
+  CHANNEL_W,
+  CHANNEL_H,
   isManagedElementId,
+  parseChannelFromElement,
   parseSessionLink,
   parseSessionFromElement,
   resolveChannelFromElementId,
@@ -30,6 +37,11 @@ import {
   saveLayout,
   type LayoutMap,
 } from '../layout'
+import {
+  ensureChannelPositions,
+  loadChannelLayout,
+  saveChannelLayout,
+} from '../channelLayout'
 import { loadDismissed, saveDismissed } from '../dismissed'
 import {
   loadAppState,
@@ -127,6 +139,14 @@ interface Props {
   onRefresh: () => void
   /** Invoked from the <MainMenu> "New channel" item. */
   onNewChannel: () => void
+  /**
+   * Requests placing a newly created channel's hub at the current viewport
+   * center. Bumped once per create; the request is consumed in an effect that
+   * writes the position into `channelLayoutRef` + persists. We can't just
+   * compute the position in App.tsx because viewport math needs the imperative
+   * Excalidraw API, which only Board owns.
+   */
+  placeChannelRequest: { channelName: string; bump: number } | null
   /** Invoked from the <MainMenu> "New Claude session" item. */
   onNewSession: () => void
   /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
@@ -152,6 +172,7 @@ export default function Board({
   onNeedTemplate,
   onRefresh,
   onNewChannel,
+  placeChannelRequest,
   onNewSession,
   onAskAndSpawn,
   onPreferences,
@@ -160,8 +181,13 @@ export default function Board({
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const layoutRef = useRef<LayoutMap>(loadLayout())
+  const channelLayoutRef = useRef<LayoutMap>(loadChannelLayout())
   const saveLayoutDebounced = useMemo(
     () => debounce((m: LayoutMap) => saveLayout(m), 400),
+    [],
+  )
+  const saveChannelLayoutDebounced = useMemo(
+    () => debounce((m: LayoutMap) => saveChannelLayout(m), 400),
     [],
   )
   // Persisted Excalidraw appState + user-drawn shapes.
@@ -194,6 +220,7 @@ export default function Board({
   const lastAddBumpRef = useRef<number>(-1)
   const lastHideBumpRef = useRef<number>(-1)
   const lastBulkBumpRef = useRef<number>(-1)
+  const lastPlaceChannelBumpRef = useRef<number>(-1)
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
   const prevSelSigRef = useRef<string>('')
@@ -280,6 +307,17 @@ export default function Board({
     layoutRef.current = ensurePositions(ids, layoutRef.current)
     saveLayoutDebounced(layoutRef.current)
 
+    // Channel names (filter out operator '__…' defensively; backend already
+    // strips them but guard anyway).
+    const channelNames = state.channels
+      .map((c) => c.name)
+      .filter((n) => !n.startsWith('__'))
+    channelLayoutRef.current = ensureChannelPositions(
+      channelNames,
+      channelLayoutRef.current,
+    )
+    saveChannelLayoutDebounced(channelLayoutRef.current)
+
     // Current scene → classify existing elements.
     const existing = api.getSceneElements()
     const userShapes = existing.filter((e) => !isManagedElementId(e.id))
@@ -288,11 +326,21 @@ export default function Board({
         e.type === 'rectangle' &&
         parseSessionFromElement(e) !== null,
     )
+    const existingChannelHubs = existing.filter(
+      (e) =>
+        e.type === 'ellipse' &&
+        parseChannelFromElement(e) !== null,
+    )
 
     const knownSessionIds = new Set<string>()
     for (const e of existingEmbeddables) {
       const sid = parseSessionFromElement(e)
       if (sid) knownSessionIds.add(sid)
+    }
+    const knownChannelNames = new Set<string>()
+    for (const e of existingChannelHubs) {
+      const name = parseChannelFromElement(e)
+      if (name) knownChannelNames.add(name)
     }
 
     // 规则：
@@ -328,13 +376,24 @@ export default function Board({
       if (!primaryMap.has(sid)) primaryMap.set(sid, sessionRectId(sid))
     }
 
-    const { newEmbeddables, arrows } = buildScene(state, layoutRef.current, {
-      newSessionIds,
-      sessionIdToElementId: (sid) => primaryMap.get(sid) ?? null,
-    })
+    // Channels that are new to this scene (no hub ellipse yet).
+    const newChannelNames = channelNames.filter(
+      (n) => !knownChannelNames.has(n),
+    )
+
+    const { newEmbeddables, newChannelHubs, arrows } = buildScene(
+      state,
+      layoutRef.current,
+      channelLayoutRef.current,
+      {
+        newSessionIds,
+        newChannelNames,
+        sessionIdToElementId: (sid) => primaryMap.get(sid) ?? null,
+      },
+    )
 
     const converted = convertToExcalidrawElements(
-      [...newEmbeddables, ...arrows] as any,
+      [...newEmbeddables, ...newChannelHubs, ...arrows] as any,
       { regenerateIds: false },
     )
 
@@ -362,9 +421,32 @@ export default function Board({
       }
     })
 
+    // Keep existing channel hubs in place (preserve user-positioned x/y), but
+    // re-sync stroke color / stroke style to the current channel mode +
+    // pending count. If a channel has been removed from state (or renamed),
+    // retire its hub via isDeleted so Excalidraw's Undo can still restore it.
+    const liveChannelByName = new Map(
+      state.channels
+        .filter((c) => !c.name.startsWith('__'))
+        .map((c) => [c.name, c]),
+    )
+    const normalizedChannelHubs = existingChannelHubs.map((el: any) => {
+      const name = parseChannelFromElement(el)
+      const ch = name ? liveChannelByName.get(name) : null
+      if (!ch) {
+        return { ...el, isDeleted: true }
+      }
+      return {
+        ...el,
+        strokeColor: modeStrokeColor(ch.mode),
+        strokeStyle: modeStrokeStyle(ch),
+      }
+    })
+
     const preservedExisting = [
       ...userShapes,
       ...normalizedExisting,
+      ...normalizedChannelHubs,
     ]
 
     const finalElements = [...preservedExisting, ...converted]
@@ -373,7 +455,7 @@ export default function Board({
     })
     // Report counts (preserved existing + newly converted embeddables).
     reportCountsRef.current(finalElements)
-  }, [api, state, saveLayoutDebounced])
+  }, [api, state, saveLayoutDebounced, saveChannelLayoutDebounced])
 
   // -- Fit-to-content --------------------------------------------------
   useEffect(() => {
@@ -596,6 +678,72 @@ export default function Board({
     reportCountsRef.current(next)
   }, [api, state, bulkVisibilityRequest, saveLayoutDebounced])
 
+  // -- Place a freshly-created channel hub at the current viewport center --
+  // The dialog calls onCreated(name) in App.tsx, which sets
+  // placeChannelRequest. We consume it here: compute viewport center (same
+  // math as add-to-canvas), write into channelLayoutRef + persist, then
+  // schedule a scene rebuild so the hub materialises at that point. The
+  // scene-rebuild effect above sees a new-channel-name and builds the hub
+  // from channelLayoutRef[name].
+  useEffect(() => {
+    if (!api || !state || !placeChannelRequest) return
+    if (placeChannelRequest.bump === lastPlaceChannelBumpRef.current) return
+    lastPlaceChannelBumpRef.current = placeChannelRequest.bump
+
+    const name = placeChannelRequest.channelName
+    if (!name || name.startsWith('__')) return
+
+    const appState = api.getAppState()
+    const viewW = appState.width ?? 800
+    const viewH = appState.height ?? 600
+    const zoom = appState.zoom.value || 1
+    const cx = -appState.scrollX + viewW / zoom / 2
+    const cy = -appState.scrollY + viewH / zoom / 2
+    // Center the ellipse on viewport center.
+    const x = Math.round(cx - CHANNEL_W / 2)
+    const y = Math.round(cy - CHANNEL_H / 2)
+
+    channelLayoutRef.current = {
+      ...channelLayoutRef.current,
+      [name]: { x, y },
+    }
+    saveChannelLayoutDebounced(channelLayoutRef.current)
+
+    // If the hub hasn't been built yet (state may not have been delivered
+    // over WS on this tick), the scene-rebuild effect will pick up the
+    // saved position the next time it fires with the channel present.
+    // If the hub already exists (e.g. the channel was re-created with the
+    // same name after a short delete), move it and re-scroll into view.
+    const hubEl = api.getSceneElements().find(
+      (el) => el.id === channelHubId(name) && el.type === 'ellipse',
+    ) as any
+    if (hubEl) {
+      const next = api.getSceneElements().map((el) => {
+        if (el.id === channelHubId(name) && el.type === 'ellipse') {
+          return { ...el, x, y } as any
+        }
+        return el
+      })
+      api.updateScene({ elements: next as any })
+      api.scrollToContent([hubEl], { fitToContent: false, animate: true })
+    } else {
+      // Build and insert immediately using whatever channel snapshot we
+      // have; the scene-rebuild effect will normalise it once state updates.
+      const ch = state.channels.find((c) => c.name === name)
+      if (ch) {
+        const skeleton = buildChannelHub(ch, x, y)
+        const [built] = convertToExcalidrawElements([skeleton] as any, {
+          regenerateIds: false,
+        })
+        if (built) {
+          const next = [...api.getSceneElements(), built]
+          api.updateScene({ elements: next as any })
+          api.scrollToContent([built], { fitToContent: false, animate: true })
+        }
+      }
+    }
+  }, [api, state, placeChannelRequest, saveChannelLayoutDebounced])
+
   // -- Multi-select all cards for the sidebar-selected session --------
   // When sidebar selects a session, highlight every rect on canvas with
   // that sessionId. Only runs when selection or state changes (not every
@@ -703,6 +851,13 @@ export default function Board({
               continue
             }
           }
+          if (el.type === 'ellipse') {
+            const name = parseChannelFromElement(el)
+            if (name) {
+              channelName = channelName ?? name
+              continue
+            }
+          }
           if (el.id.startsWith('channel-')) {
             const ch = resolveChannelFromElementId(el.id, state.channels)
             if (ch) {
@@ -795,6 +950,28 @@ export default function Board({
           saveLayoutDebounced(next)
         }
       }
+      // Same diff-and-save pattern for channel hubs (ellipses with
+      // customData.channelName). Keeps hub positions sticky across reloads
+      // just like session cards.
+      {
+        let changed = false
+        const next: LayoutMap = { ...channelLayoutRef.current }
+        for (const el of elements) {
+          if (el.type !== 'ellipse') continue
+          if ((el as any).isDeleted) continue
+          const name = parseChannelFromElement(el)
+          if (!name) continue
+          const prev = next[name]
+          if (!prev || prev.x !== el.x || prev.y !== el.y) {
+            next[name] = { x: el.x, y: el.y }
+            changed = true
+          }
+        }
+        if (changed) {
+          channelLayoutRef.current = next
+          saveChannelLayoutDebounced(next)
+        }
+      }
       // Report counts on every change so sidebar stays in sync with
       // copy/paste/delete performed natively by Excalidraw.
       reportCountsRef.current(elements)
@@ -835,7 +1012,7 @@ export default function Board({
       })
       saveShapesDebounced(elements)
     }
-  }, [state, selection, onSelectionChange, saveLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced])
+  }, [state, selection, onSelectionChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced])
 
   // -- Minimal UI options --------------------------------------------
   const uiOptions = useMemo(
@@ -934,6 +1111,47 @@ export default function Board({
           </button>
         </Footer>
       </Excalidraw>
+      {/*
+        Floating toolbar (DOM level, not an Excalidraw tool). Parked in the
+        top-right of the board area so it doesn't collide with the left-side
+        Excalidraw tool pill and has breathing room from the upper-right
+        collaboration/help cluster. We keep the MainMenu "New channel" item
+        too — this is phase 1 UX sugar, not a replacement.
+      */}
+      <div
+        className="board-floating-toolbar"
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 16,
+          display: 'flex',
+          gap: 8,
+          zIndex: 5,
+          pointerEvents: 'auto',
+        }}
+      >
+        <button
+          onClick={onNewChannel}
+          title="Create a new channel"
+          style={{
+            background: 'var(--bg-paper, #2C2B29)',
+            color: 'var(--text, #F5F4EF)',
+            border: '1px solid var(--border, #3A3A38)',
+            borderRadius: 8,
+            padding: '6px 12px',
+            cursor: 'pointer',
+            fontSize: 12,
+            fontFamily: 'var(--sans)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+          }}
+        >
+          <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+          <span>New channel</span>
+        </button>
+      </div>
       <SessionOverlay
         excalidrawAPI={api}
         state={state}

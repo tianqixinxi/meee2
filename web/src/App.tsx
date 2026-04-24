@@ -64,6 +64,12 @@ export default function App() {
   const [bulkVisibilityRequest, setBulkVisibilityRequest] = useState<
     { mode: 'show' | 'hide'; bump: number } | null
   >(null)
+  // Channel creation → Board places the hub at viewport center. App doesn't
+  // own the Excalidraw imperative API, so we can't compute viewport coords
+  // here — we fire this request and Board consumes it in an effect.
+  const [placeChannelRequest, setPlaceChannelRequest] = useState<
+    { channelName: string; bump: number } | null
+  >(null)
   const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
     {},
   )
@@ -365,6 +371,7 @@ export default function App() {
             unreadSids={unreadSids}
             onRefresh={() => boardState.refresh()}
             onNewChannel={() => setNewChannelOpen(true)}
+            placeChannelRequest={placeChannelRequest}
             onNewSession={() => setNewSessionOpen(true)}
             onAskAndSpawn={() => setAssistantOpen(true)}
             onPreferences={() => setPreferencesOpen(true)}
@@ -396,6 +403,7 @@ export default function App() {
             onCreated={(name) => {
               setNewChannelOpen(false)
               setSelection({ kind: 'channel', channelName: name })
+              setPlaceChannelRequest({ channelName: name, bump: Date.now() })
               pushToast('success', `Channel "${name}" created`)
             }}
           />
