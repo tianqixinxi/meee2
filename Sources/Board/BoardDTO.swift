@@ -153,6 +153,9 @@ struct OkEnvelope: Encodable { let ok: Bool }
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }
 
+/// 响应 `GET /api/board/layout`。
+struct BoardLayoutEnvelope: Encodable { let layout: BoardLayoutStore.Layout }
+
 // MARK: - 转换工具
 
 enum BoardDTOBuilder {

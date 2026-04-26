@@ -1,4 +1,9 @@
-// localStorage-backed position store for session rectangles on the canvas.
+// Position store for session rectangles on the canvas. The authoritative copy
+// lives on the server (~/.meee2/board-layout.json via /api/board/layout);
+// localStorage is a fast boot cache so the UI has something to paint before
+// the first `fetchRemoteLayout()` resolves. See `boardLayoutRemote.ts`.
+
+import { pushSessions } from './boardLayoutRemote'
 
 const STORAGE_KEY = 'meee2.board.layout.v1'
 
@@ -29,6 +34,7 @@ export function saveLayout(map: LayoutMap): void {
   } catch {
     // ignore (quota / private mode)
   }
+  pushSessions(map)
 }
 
 /**

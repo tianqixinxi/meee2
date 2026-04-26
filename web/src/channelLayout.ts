@@ -8,6 +8,7 @@
 //     debugging doesn't nuke the other.
 
 import type { LayoutMap, Point } from './layout'
+import { pushChannels } from './boardLayoutRemote'
 
 const STORAGE_KEY = 'meee2.board.channel-layout.v1'
 
@@ -31,6 +32,7 @@ export function saveChannelLayout(map: LayoutMap): void {
   } catch {
     // ignore (quota / private mode)
   }
+  pushChannels(map)
 }
 
 /**

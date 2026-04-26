@@ -84,6 +84,12 @@ enum BoardAPI {
                 "broadcast in '\(c)' has no recipients after excluding the sender; add another member or pick a specific toAlias",
                 status: 400
             )
+        case .hopLimitExceeded(let c, let h):
+            return errorResponse(
+                "hop_limit_exceeded",
+                "hop limit exceeded in '\(c)' (hopCount=\(h), max=\(MessageRouter.maxHopsHard))",
+                status: 400
+            )
         }
     }
 
@@ -498,8 +504,15 @@ enum BoardAPI {
         for (k, v) in req.queryParams {
             switch k {
             case "status":
+                // Swifter 不会 percent-decode query value，所以 web 端用
+                // URLSearchParams 编码出来的 `pending%2Cheld` 在这里是一整个
+                // token，split(",") 得到 ["pending%2Cheld"] → MessageStatus
+                // rawValue 全 nil → statusFilter 留空 → listMessages 返回
+                // 全部消息（包含 delivered）。SessionDetail 的 inbox section
+                // 因此会把已 delivered 的消息也当 pending 渲染。先 decode 再 split。
+                let decoded = v.removingPercentEncoding ?? v
                 var set = Set<MessageStatus>()
-                for token in v.split(separator: ",") {
+                for token in decoded.split(separator: ",") {
                     if let s = MessageStatus(rawValue: String(token)) {
                         set.insert(s)
                     }
@@ -598,5 +611,57 @@ enum BoardAPI {
         } catch {
             return errorResponse("internal_error", error.localizedDescription, status: 500)
         }
+    }
+
+    // MARK: - Board Layout
+
+    /// GET /api/board/layout
+    /// 200 `{"layout":{"sessions":{sid:{x,y}},"channels":{name:{x,y}},"updatedAt":ISO}}`
+    /// 文件不存在时 `sessions` / `channels` 为空对象。
+    static func getBoardLayout(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        let layout = BoardLayoutStore.shared.load()
+        return jsonResponse(BoardLayoutEnvelope(layout: layout))
+    }
+
+    /// PUT /api/board/layout
+    /// Body: `{"sessions":{sid:{x,y}},"channels":{name:{x,y}}}`
+    /// 200 `{"layout":...}` / 400 invalid_json
+    static func putBoardLayout(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let sessions = parsePointMap(json["sessions"])
+        let channels = parsePointMap(json["channels"])
+        let layout = BoardLayoutStore.Layout(
+            sessions: sessions,
+            channels: channels,
+            updatedAt: Date()
+        )
+        do {
+            let saved = try BoardLayoutStore.shared.save(layout)
+            // 不直接 broadcast：BoardLayoutStore.save 已经 publish .boardLayoutChanged，
+            // BoardServer 订阅会 debounce 200ms 后 broadcastStateChanged。
+            // 之前这里又调一次直接广播，每次 PUT 触发 2 次 WS 推送（一次直接 +
+            // 一次 debounced）。
+            return jsonResponse(BoardLayoutEnvelope(layout: saved))
+        } catch {
+            return errorResponse("internal_error", error.localizedDescription, status: 500)
+        }
+    }
+
+    /// `{key: {x,y}}` → `[key: Point]`，容错解析：未知 shape 视为空。
+    private static func parsePointMap(_ raw: Any?) -> [String: BoardLayoutStore.Point] {
+        guard let dict = raw as? [String: Any] else { return [:] }
+        var out: [String: BoardLayoutStore.Point] = [:]
+        for (k, v) in dict {
+            guard let obj = v as? [String: Any] else { continue }
+            let x = (obj["x"] as? NSNumber)?.doubleValue ?? (obj["x"] as? Double)
+            let y = (obj["y"] as? NSNumber)?.doubleValue ?? (obj["y"] as? Double)
+            if let x = x, let y = y {
+                out[k] = BoardLayoutStore.Point(x: x, y: y)
+            }
+        }
+        return out
     }
 }

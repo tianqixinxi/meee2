@@ -152,6 +152,10 @@ public final class BoardServer {
         server.PUT["/api/card-templates/:id"]     = BoardAPI.putCardTemplate
         server.DELETE["/api/card-templates/:id"]  = BoardAPI.deleteCardTemplate
 
+        // --- Board Layout (session 卡片 + channel hub 坐标) ---
+        server.GET["/api/board/layout"] = BoardAPI.getBoardLayout
+        server.PUT["/api/board/layout"] = BoardAPI.putBoardLayout
+
         // --- 静态文件（SPA） ---
         // `GET /` -> index.html；其他路径尝试 WebDist 内的文件；未匹配时回 404
         server.notFoundHandler = { [weak self] request in
