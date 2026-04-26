@@ -52,13 +52,27 @@ export function loadUserShapes(): any[] {
 
 export function saveUserShapes(elements: readonly any[]): void {
   try {
-    // 只留"非 session rect"的元素；channel 箭头（id 以 channel- 开头）也
-    // 由 Board 的 scene 副作用生成，排除。
+    // 只留"非 managed"的元素。Managed = 由 scene 副作用从 state 重建的。
+    // 排除规则：
+    //   1. session rect (type=rectangle + customData.sessionId)
+    //   2. id 以 `channel-` 开头的（hub ellipse、hub label `channel-X-label`、
+    //      spoke arrow `channel-X-spoke-Y`）
+    //   3. **text 元素 containerId 指向 managed 元素**（`channel-` / `session-`
+    //      开头）：spoke arrow 用 `label:{...}` skeleton sugar 时 Excalidraw 给
+    //      label 分配随机 id，不带 `channel-` 前缀，老规则漏过它们 → 进了
+    //      localStorage → 下次刷新 spoke arrow 不在 storage（已被前缀排除），
+    //      `existingSpokeIds` 空 → buildScene 又生成一份新 label → 画布累积。
     const keep = elements.filter((el: any) => {
       if (!el) return false
-      if ((el as any).isDeleted) return false
+      if (el.isDeleted) return false
       if (el.type === 'rectangle' && parseSessionFromElement(el)) return false
       if (typeof el.id === 'string' && el.id.startsWith('channel-')) return false
+      if (el.type === 'text') {
+        const cid = el.containerId
+        if (typeof cid === 'string' && (cid.startsWith('channel-') || cid.startsWith('session-'))) {
+          return false
+        }
+      }
       return true
     })
     localStorage.setItem(SHAPES_KEY, JSON.stringify(keep))

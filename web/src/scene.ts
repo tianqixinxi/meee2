@@ -78,6 +78,17 @@ export function channelSpokeId(channelName: string, fromSid: string): string {
   return `channel-${channelName}-spoke-${fromSid}`
 }
 
+/**
+ * Stable id of the text label bound to a spoke arrow. 同 channelLabelId 的
+ * 理由：用 `label:{text,fontSize}` skeleton 糖会让 Excalidraw 给 label 分配
+ * 随机 id，落进 user-shapes localStorage 后下次刷新时，spoke arrow 已经被
+ * `channel-` 前缀过滤掉，buildScene 重新生成新 spoke + 新 label，旧 label
+ * 还残留在画布上 → 累积。给 label 一个 deterministic id 走 managed 通道。
+ */
+export function channelSpokeLabelId(channelName: string, fromSid: string): string {
+  return `channel-${channelName}-spoke-${fromSid}-label`
+}
+
 /** True if this element id is one Excalidraw-native shape prefix we own. */
 export function isManagedElementId(id: string): boolean {
   return id.startsWith('session-') || id.startsWith('channel-')
@@ -361,6 +372,16 @@ export function buildScene(
      * Key format: `<sid>|<channelName>`.
      */
     existingConnections?: Set<string>
+    /**
+     * Spoke ids (`channelSpokeId(name, sid)`) already present on the canvas.
+     * For these we SKIP regeneration — the existing arrow gets style-normalized
+     * by the caller and merged into `preservedExisting`. Without this, every
+     * WebSocket tick replaces the arrow with a fresh object, which kills
+     * an in-progress drag of a bound session card (Excalidraw's drag
+     * coordinator references the now-replaced element → card freezes
+     * mid-drag in the gray "preview" state).
+     */
+    existingSpokeIds?: Set<string>
   },
 ): {
   newEmbeddables: SkeletonElement[]
@@ -402,11 +423,41 @@ export function buildScene(
       // 让用户那条成为这个成员关系的唯一视觉。
       if (opts.existingConnections?.has(`${member.sessionId}|${ch.name}`)) continue
 
+      // 这条 spoke 已经在场景里 → 让现有 arrow 继续存在（caller 会做 style
+      // 归一化），不再生成新对象。否则每 tick 替换会打断用户拖动 bound rect。
+      const spokeId = channelSpokeId(ch.name, member.sessionId)
+      if (opts.existingSpokeIds?.has(spokeId)) continue
+
       const fromId = opts.sessionIdToElementId(member.sessionId)
       if (!fromId) continue
+      // 计算 spoke 几何：rect 右边中点 → hub 左边中点。
+      // convertToExcalidrawElements 行为坑：
+      //   - 给 `start/end` skeleton sugar：会算出 elementId+focus 但 gap 留 null,
+      //     并强行覆盖我们的 x/y/points（arrow 退化成 (0,0) 处的 100px 段）；
+      //   - 直接给 `startBinding/endBinding` PointBinding：被 strip，反而变 null。
+      // 所以这里 spoke 不走 skeleton 路径，直接由 caller (Board.tsx scene
+      // useEffect) 在 convert 之后手动 patch 进 startBinding/endBinding +
+      // 写入 rect/hub 的 boundElements。
+      // 此处仍保留 start/end skeleton（让 conversion 自动初始化 PointBinding
+      // 容器），caller 再覆盖 gap。
+      const fromPos = layout[member.sessionId]
+      const hubPos = channelLayout[ch.name]
+      const ax = (fromPos?.x ?? 80) + RECT_W
+      const ay = (fromPos?.y ?? 80) + RECT_H / 2
+      const bx = (hubPos?.x ?? 80)
+      const by = (hubPos?.y ?? 80) + CHANNEL_H / 2
+      const spokeLabelId = channelSpokeLabelId(ch.name, member.sessionId)
       arrows.push({
         type: 'arrow',
-        id: channelSpokeId(ch.name, member.sessionId),
+        id: spokeId,
+        x: ax,
+        y: ay,
+        width: bx - ax,
+        height: by - ay,
+        points: [
+          [0, 0],
+          [bx - ax, by - ay],
+        ],
         strokeColor: modeStrokeColor(ch.mode),
         strokeWidth: ch.pendingCount > 0 ? 3 : 2,
         strokeStyle: modeStrokeStyle(ch),
@@ -416,18 +467,32 @@ export function buildScene(
         // 视觉上就是一条中性连线。
         startArrowhead: null,
         endArrowhead: null,
-        // NOTE: type is "rectangle"/"ellipse" in the skeleton because
-        // convertToExcalidrawElements' type signature excludes "embeddable"
-        // from arrow endpoints — but at runtime Excalidraw's
-        // isBindableElement() allows both, and binding works fine when we
-        // cast to any.
-        start: { id: fromId, type: 'rectangle' },
-        end: { id: hubId, type: 'ellipse' },
-        label: {
-          text: member.alias,
-          fontSize: 11,
-        },
+        start: { id: fromId },
+        end: { id: hubId },
+        boundElements: [{ id: spokeLabelId, type: 'text' }],
       })
+      // Label 走 deterministic id (channel-<name>-spoke-<sid>-label)，跟 hub
+      // label 同样的 managed 模式：不用 `label:{...}` skeleton 糖（那个会让
+      // Excalidraw 分配随机 id，落进 user-shapes localStorage 累积成幽灵）。
+      arrows.push({
+        type: 'text',
+        id: spokeLabelId,
+        x: ax,
+        y: ay,
+        width: bx - ax,
+        height: by - ay,
+        text: member.alias,
+        fontSize: 11,
+        textAlign: 'center',
+        verticalAlign: 'middle',
+        containerId: spokeId,
+        strokeColor: '#A8A59B',
+        backgroundColor: 'transparent',
+        fillStyle: 'solid',
+        opacity: 100,
+        groupIds: [],
+        locked: false,
+      } as SkeletonElement)
     }
   }
 

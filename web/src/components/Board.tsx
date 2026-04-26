@@ -19,6 +19,7 @@ import {
   buildSessionEmbeddable,
   channelHubId,
   channelHubLabelText,
+  channelLabelId,
   modeStrokeColor,
   modeStrokeStyle,
   RECT_W,
@@ -45,6 +46,7 @@ import {
   saveChannelLayout,
 } from '../channelLayout'
 import { loadDismissed, saveDismissed } from '../dismissed'
+import { fetchRemoteLayout, seedRemoteShadow } from '../boardLayoutRemote'
 import {
   loadAppState,
   saveAppState,
@@ -232,6 +234,31 @@ export default function Board({
     () => debounce((m: LayoutMap) => saveChannelLayout(m), 400),
     [],
   )
+
+  // Bumps when the async fetch of server-side layout resolves. We add this to
+  // the scene-rebuild useEffect's deps so the canvas repaints with authoritative
+  // positions once the GET completes. Without this the first paint would stick
+  // at whatever localStorage had (empty on a fresh browser).
+  const [remoteLayoutVersion, setRemoteLayoutVersion] = useState(0)
+  useEffect(() => {
+    // Seed the remote shadow with whatever localStorage gave us — until the
+    // GET resolves this is the best we know, and we don't want an early
+    // drag-triggered PUT to wipe the other map on the server.
+    seedRemoteShadow(layoutRef.current, channelLayoutRef.current)
+    let cancelled = false
+    fetchRemoteLayout().then((res) => {
+      if (cancelled || !res) return
+      // Server is authoritative — remote keys overwrite local. Unknown local
+      // keys are preserved in case the user dragged something offline before
+      // server was reachable.
+      layoutRef.current = { ...layoutRef.current, ...res.sessions }
+      channelLayoutRef.current = { ...channelLayoutRef.current, ...res.channels }
+      setRemoteLayoutVersion((v) => v + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   // Persisted Excalidraw appState + user-drawn shapes.
   // 只读一次 —— Excalidraw 的 initialData 只在首次挂载生效。
   const initialDataRef = useRef<{ elements: any[]; appState: any }>({
@@ -372,7 +399,7 @@ export default function Board({
     // `!isManagedElementId` 误收进 userShapes 并在每次 refresh 累加一条。
     // 任何 text 元素如果 containerId 指向 `channel-<name>` 但自己 id 不是
     // `channel-<name>-label`，一律丢弃。
-    const userShapes = existing.filter((e) => {
+    const userShapesRaw = existing.filter((e) => {
       if (isManagedElementId(e.id)) return false
       if (e.type === 'text') {
         const cid = (e as any).containerId as string | undefined
@@ -382,23 +409,70 @@ export default function Board({
       }
       return true
     })
+    // Patch user-drawn arrows that have binding.elementId but gap=null —
+    // those were created by Excalidraw via convertToExcalidrawElements (or
+    // an older code path) that never filled gap. Without gap, Excalidraw's
+    // binding-update treats the arrow as unbound and drag-of-rect won't
+    // move the arrow → user sees "spoke disconnects after refresh".
+    const userShapes = userShapesRaw.map((el: any) => {
+      if (el.type !== 'arrow') return el
+      const sb = el.startBinding ? { ...el.startBinding } : null
+      const eb = el.endBinding ? { ...el.endBinding } : null
+      let touched = false
+      if (sb && sb.elementId && sb.gap == null) { sb.gap = 1; touched = true }
+      if (sb && sb.elementId && sb.focus == null) { sb.focus = 0; touched = true }
+      if (eb && eb.elementId && eb.gap == null) { eb.gap = 1; touched = true }
+      if (eb && eb.elementId && eb.focus == null) { eb.focus = 0; touched = true }
+      if (!touched) return el
+      return { ...el, startBinding: sb, endBinding: eb }
+    })
+    // 所有 filter 都显式排除 isDeleted —— 不同 Excalidraw 版本 getSceneElements()
+    // 可能会返回 tombstoned 元素（用户删除但保留到 undo 栈）。如果 deleted hub
+    // 被算进 knownChannelNames，对应 channel 就永远不会被自动重建，表现就是
+    // "椭圆消失了但 channel 还在"——正好对应用户报告的 bug。
     const existingEmbeddables = existing.filter(
       (e) =>
         e.type === 'rectangle' &&
+        !(e as any).isDeleted &&
         parseSessionFromElement(e) !== null,
     )
     const existingChannelHubs = existing.filter(
       (e) =>
         e.type === 'ellipse' &&
+        !(e as any).isDeleted &&
         parseChannelFromElement(e) !== null,
     )
     const existingChannelLabels = existing.filter(
       (e) =>
         e.type === 'text' &&
+        !(e as any).isDeleted &&
         typeof e.id === 'string' &&
         e.id.startsWith('channel-') &&
         e.id.endsWith('-label'),
     )
+    // 现有的自动 spoke arrows——id 形如 `channel-<name>-spoke-<sid>`。
+    // 单独分桶后续做 style 归一化，并跳过 buildScene 的重新生成（关键：避免
+    // 每 tick 替换正在拖动的 bound arrow 让 drag 卡死）。
+    const existingSpokes = existing.filter(
+      (e) =>
+        e.type === 'arrow' &&
+        !(e as any).isDeleted &&
+        typeof e.id === 'string' &&
+        e.id.startsWith('channel-') &&
+        e.id.includes('-spoke-'),
+    )
+    const existingSpokeIds = new Set(existingSpokes.map((e) => e.id))
+    // Spoke labels — Excalidraw `label: {…}` sugar generates a text element
+    // whose containerId points back at the spoke arrow. Filter them in their
+    // own bucket so they survive the rebuild (they'd otherwise be excluded
+    // from userShapes by the channel-text guard).
+    const existingSpokeLabels = existing.filter((e) => {
+      if (e.type !== 'text') return false
+      if ((e as any).isDeleted) return true // still preserve so we tombstone
+      const cid = (e as any).containerId as string | undefined
+      if (!cid) return false
+      return cid.startsWith('channel-') && cid.includes('-spoke-')
+    })
 
     const knownSessionIds = new Set<string>()
     for (const e of existingEmbeddables) {
@@ -448,9 +522,43 @@ export default function Board({
     const newChannelNames = channelNames.filter(
       (n) => !knownChannelNames.has(n),
     )
+    if (newChannelNames.length > 0) {
+      console.log(
+        '[Board] rebuilding missing channel hubs:',
+        newChannelNames,
+        '(known:',
+        Array.from(knownChannelNames),
+        ')',
+      )
+    }
 
     // 扫出用户已经亲手画过的 session↔channel 连接，让 buildScene 知道
     // 哪些成员关系已经有 arrow 了、别重复画——这是死锁/抖动的核心修正。
+    //
+    // 关键：detection 不能靠"两端 element 在不在 existing"。刷新后第一次
+    // rebuild 时 rect / hub 都还没创建（buildScene 这一轮才会建），但 user
+    // arrow 已经从 localStorage 恢复进来了。等 element 在 existing 里找不到
+    // 就 continue，会让 existingConnections 空集 → buildScene 生成 auto-spoke
+    // → 用户看到的是绿色覆盖在白色上，几何位置也对不上。
+    //
+    // 改成按 deterministic id 模式 + 在线 session/channel 集合识别：
+    //   session-<sid>            → 配 sidsLive
+    //   channel-<name>           → 配 channelsLive（hub），排除 -spoke- / -label
+    const sidsLive = new Set(ids)
+    const channelsLive = new Set(channelNames)
+    const classifyBinding = (id: string): { sid?: string; channel?: string } => {
+      if (id.startsWith('session-')) {
+        const sid = id.slice('session-'.length)
+        if (sidsLive.has(sid)) return { sid }
+      }
+      if (id.startsWith('channel-')) {
+        const rest = id.slice('channel-'.length)
+        if (rest.includes('-spoke-')) return {}
+        if (rest.endsWith('-label')) return {}
+        if (channelsLive.has(rest)) return { channel: rest }
+      }
+      return {}
+    }
     const existingConnections = new Set<string>()
     for (const el of existing) {
       if (el.type !== 'arrow') continue
@@ -459,15 +567,10 @@ export default function Board({
       const startId = (el as any).startBinding?.elementId as string | undefined
       const endId = (el as any).endBinding?.elementId as string | undefined
       if (!startId || !endId) continue
-      const startEl = existing.find((e) => e.id === startId)
-      const endEl = existing.find((e) => e.id === endId)
-      if (!startEl || !endEl) continue
-      const startSid = startEl.type === 'rectangle' ? parseSessionFromElement(startEl) : null
-      const endSid = endEl.type === 'rectangle' ? parseSessionFromElement(endEl) : null
-      const startCh = startEl.type === 'ellipse' ? parseChannelFromElement(startEl) : null
-      const endCh = endEl.type === 'ellipse' ? parseChannelFromElement(endEl) : null
-      if (startSid && endCh) existingConnections.add(`${startSid}|${endCh}`)
-      else if (endSid && startCh) existingConnections.add(`${endSid}|${startCh}`)
+      const s = classifyBinding(startId)
+      const e2 = classifyBinding(endId)
+      if (s.sid && e2.channel) existingConnections.add(`${s.sid}|${e2.channel}`)
+      else if (e2.sid && s.channel) existingConnections.add(`${e2.sid}|${s.channel}`)
     }
 
     const { newEmbeddables, newChannelHubs, arrows } = buildScene(
@@ -479,6 +582,7 @@ export default function Board({
         newChannelNames,
         sessionIdToElementId: (sid) => primaryMap.get(sid) ?? null,
         existingConnections,
+        existingSpokeIds,
       },
     )
 
@@ -486,6 +590,77 @@ export default function Board({
       [...newEmbeddables, ...newChannelHubs, ...arrows] as any,
       { regenerateIds: false },
     )
+
+    // ── Patch spoke arrow bindings + reverse boundElements ────────────
+    // convertToExcalidrawElements 处理 arrow 的 start/end skeleton sugar 时只
+    // 设了 elementId + focus，gap 留 null。null gap 会让 Excalidraw 后续的
+    // binding-update 路径把 arrow 当成"未真正 bound"，drag rect 不跟随，看
+    // 起来像断开。这里手动把每个 spoke 的 startBinding/endBinding 补成完整
+    // PointBinding（gap=1），并维护 rect/hub 的 boundElements 反向链。
+    // boundElements 是 Excalidraw drag 路径找跟随 arrow 的依据，缺失就拖不动。
+    const spokeBindingsByOwner = new Map<string, Set<string>>() // elementId → spoke ids
+    const ensureBound = (ownerId: string, spokeId: string) => {
+      let set = spokeBindingsByOwner.get(ownerId)
+      if (!set) { set = new Set(); spokeBindingsByOwner.set(ownerId, set) }
+      set.add(spokeId)
+    }
+    for (const el of converted as any[]) {
+      if (el.type !== 'arrow') continue
+      const id: string = el.id
+      if (!id.startsWith('channel-') || !id.includes('-spoke-')) continue
+      if (el.startBinding && el.startBinding.elementId) {
+        if (el.startBinding.gap == null) el.startBinding.gap = 1
+        if (el.startBinding.focus == null) el.startBinding.focus = 0
+        ensureBound(el.startBinding.elementId, id)
+      }
+      if (el.endBinding && el.endBinding.elementId) {
+        if (el.endBinding.gap == null) el.endBinding.gap = 1
+        if (el.endBinding.focus == null) el.endBinding.focus = 0
+        ensureBound(el.endBinding.elementId, id)
+      }
+    }
+    // Also collect for spokes we PRESERVED (didn't regenerate) so the bound
+    // rect/hub still lists them — handled below where normalizedSpokes is
+    // computed; the loop just needs the merged set.
+    const recordPreservedSpoke = (spokeEl: any) => {
+      const id: string = spokeEl.id
+      if (!id?.startsWith('channel-') || !id.includes('-spoke-')) return
+      if (spokeEl.isDeleted) return
+      if (spokeEl.startBinding?.elementId) ensureBound(spokeEl.startBinding.elementId, id)
+      if (spokeEl.endBinding?.elementId) ensureBound(spokeEl.endBinding.elementId, id)
+    }
+    // existingSpokes were classified earlier; their bindings should already be
+    // valid (we set them on first creation), so just register their owner refs.
+    for (const sp of existingSpokes as any[]) recordPreservedSpoke(sp)
+    // 同样为 user-drawn arrows（不是 channel- 前缀的 spoke）注册反向 boundElements。
+    // 不然用户手画的 session→channel arrow 在 refresh 后即便 binding 修好了，
+    // 也因为 rect.boundElements 不含它而不跟随 drag —— 看起来还是"断开"。
+    for (const sh of userShapes as any[]) {
+      if (sh.type !== 'arrow') continue
+      if (sh.isDeleted) continue
+      const sid = sh.startBinding?.elementId
+      const eid = sh.endBinding?.elementId
+      if (sid) ensureBound(sid, sh.id)
+      if (eid) ensureBound(eid, sh.id)
+    }
+    // Helper that merges into an element's existing boundElements without
+    // disturbing user-drawn arrow refs / text container refs.
+    const mergeBoundElements = (el: any): any => {
+      const want = spokeBindingsByOwner.get(el.id)
+      if (!want || want.size === 0) return el
+      const existing: { id: string; type: string }[] = (el.boundElements as any) ?? []
+      const merged = [...existing]
+      const seen = new Set(existing.map((b) => b.id))
+      for (const spokeId of want) {
+        if (!seen.has(spokeId)) merged.push({ id: spokeId, type: 'arrow' })
+      }
+      return { ...el, boundElements: merged }
+    }
+    // Apply to converted elements (newly created rects/hubs)
+    const convertedWithBindings = (converted as any[]).map((el) => {
+      if (el.type === 'rectangle' || el.type === 'ellipse') return mergeBoundElements(el)
+      return el
+    })
 
     // Migration：把旧版本遗留在画板上的 session rect（半透明灰底）强制归一到
     // 当前配色。Excalidraw 的 element state 是持久化的，旧 rect 如果不刷，
@@ -503,12 +678,12 @@ export default function Board({
       if (sid && !liveSids.has(sid)) {
         return { ...el, isDeleted: true }
       }
-      return {
+      return mergeBoundElements({
         ...el,
         strokeColor: '#262624',
         backgroundColor: '#262624',
         fillStyle: 'solid',
-      }
+      })
     })
 
     // Keep existing channel hubs in place (preserve user-positioned x/y), but
@@ -520,20 +695,109 @@ export default function Board({
         .filter((c) => !c.name.startsWith('__'))
         .map((c) => [c.name, c]),
     )
+    // Channel hubs are 100% managed — every visual field is derived from
+    // channel state. Preserve ONLY identity (id, x, y) + bookkeeping Excalidraw
+    // needs to keep (version, versionNonce, seed, updated, index, frameId,
+    // groupIds). Everything the user could have accidentally edited
+    // (backgroundColor / opacity / roundness / width / height / strokeWidth /
+    // fillStyle / boundElements / customData) is reset from the builder.
+    // Reason: these ellipses were getting "dirty" — a partial state snapshot
+    // or user stroke-color edit would stick across ticks.
     const normalizedChannelHubs = existingChannelHubs.map((el: any) => {
       const name = parseChannelFromElement(el)
       const ch = name ? liveChannelByName.get(name) : null
       if (!ch) {
         return { ...el, isDeleted: true }
       }
+      // boundElements 既要保留 label 也要保留连进来的 spokes —— 缺 spokes 就
+      // 没有反向链，hub 移动时 arrow 不跟随。先建 label 项，mergeBoundElements
+      // 再把所有 ensureBound 注册的 spoke 合进来。
+      return mergeBoundElements({
+        ...el,
+        type: 'ellipse',
+        width: CHANNEL_W,
+        height: CHANNEL_H,
+        strokeColor: modeStrokeColor(ch.mode),
+        backgroundColor: '#2C2B29',
+        fillStyle: 'solid',
+        strokeWidth: 2,
+        strokeStyle: modeStrokeStyle(ch),
+        roundness: null,
+        opacity: 100,
+        locked: false,
+        customData: { channelName: ch.name },
+        boundElements: [{ id: channelLabelId(ch.name), type: 'text' }],
+      })
+    })
+    // Spoke arrows: keep the existing arrow object (don't replace each tick —
+    // that breaks an in-progress drag of a bound rect, which is the root of
+    // the "card connected to channel turns gray and freezes" bug). Re-sync
+    // stroke color / strokeStyle / strokeWidth from current channel state so
+    // mode changes / pendingCount blinks still apply. If the membership has
+    // disappeared (or the channel was deleted), tombstone the spoke so Undo
+    // can still restore it.
+    const liveSpokeMembership = new Map<string, string>() // spokeId → channelName
+    for (const ch of state.channels) {
+      if (ch.name.startsWith('__')) continue
+      for (const m of ch.members) {
+        // user-drawn arrows for a membership take precedence — if one exists
+        // we WON'T have a spoke for that member anyway (buildScene skipped),
+        // so this map only tracks where an auto-spoke is the visual.
+        if (existingConnections.has(`${m.sessionId}|${ch.name}`)) continue
+        liveSpokeMembership.set(`channel-${ch.name}-spoke-${m.sessionId}`, ch.name)
+      }
+    }
+    const normalizedSpokes = existingSpokes.map((el: any) => {
+      const id = el.id as string
+      const chName = liveSpokeMembership.get(id)
+      const ch = chName ? liveChannelByName.get(chName) : null
+      if (!ch) {
+        return { ...el, isDeleted: true }
+      }
+      // 修复历史遗留 spoke 的 gap=null 问题（旧版本里 conversion 没填 gap，
+      // drag rect 时 arrow 不跟随）。新创建的 spoke 已经在 convertedWithBindings
+      // 那条路径补好了 gap=1，但 user reload / 老 scene 持久化下来的 spoke
+      // 仍可能是 null。
+      const sb = el.startBinding ? { ...el.startBinding } : null
+      const eb = el.endBinding ? { ...el.endBinding } : null
+      if (sb && sb.gap == null) sb.gap = 1
+      if (sb && sb.focus == null) sb.focus = 0
+      if (eb && eb.gap == null) eb.gap = 1
+      if (eb && eb.focus == null) eb.focus = 0
       return {
         ...el,
         strokeColor: modeStrokeColor(ch.mode),
+        strokeWidth: ch.pendingCount > 0 ? 3 : 2,
         strokeStyle: modeStrokeStyle(ch),
+        startArrowhead: null,
+        endArrowhead: null,
+        startBinding: sb,
+        endBinding: eb,
       }
     })
-    // 把已有的 label 文本和最新 channel 状态对齐（mode / pendingCount 变了要刷）；
-    // channel 没了就跟 hub 一起 isDeleted。
+    // Tombstone spoke labels whose parent spoke is gone; also tombstone any
+    // legacy label whose id is NOT the deterministic `channel-…-spoke-…-label`
+    // form. Old behavior used `label:{...}` skeleton sugar → random ids leaked
+    // into user-shapes localStorage → after page reload, the bad label coexists
+    // with the new managed label, two stacked labels per arrow.
+    const liveSpokeIds = new Set(
+      normalizedSpokes.filter((el: any) => !el.isDeleted).map((el: any) => el.id as string),
+    )
+    const normalizedSpokeLabels = existingSpokeLabels.map((el: any) => {
+      const cid = (el as any).containerId as string
+      if (!liveSpokeIds.has(cid)) {
+        return { ...el, isDeleted: true }
+      }
+      const id = (el as any).id as string
+      const expectedId = `${cid}-label` // channel-X-spoke-Y → channel-X-spoke-Y-label
+      if (id !== expectedId) {
+        return { ...el, isDeleted: true }
+      }
+      return el
+    })
+
+    // Same aggressive normalization for the label: user edits to fontSize /
+    // textAlign / strokeColor shouldn't stick either.
     const normalizedChannelLabels = existingChannelLabels.map((el: any) => {
       const id: string = el.id
       const name = id.slice('channel-'.length, id.length - '-label'.length)
@@ -542,8 +806,22 @@ export default function Board({
         return { ...el, isDeleted: true }
       }
       const nextText = channelHubLabelText(ch)
-      if (el.text === nextText) return el
-      return { ...el, text: nextText, originalText: nextText }
+      return {
+        ...el,
+        type: 'text',
+        text: nextText,
+        originalText: nextText,
+        fontSize: 12,
+        textAlign: 'center',
+        verticalAlign: 'middle',
+        strokeColor: '#F5F4EF',
+        backgroundColor: 'transparent',
+        fillStyle: 'solid',
+        opacity: 100,
+        locked: false,
+        containerId: channelHubId(ch.name),
+        customData: { channelLabel: ch.name },
+      }
     })
 
     const preservedExisting = [
@@ -551,15 +829,17 @@ export default function Board({
       ...normalizedExisting,
       ...normalizedChannelHubs,
       ...normalizedChannelLabels,
+      ...normalizedSpokes,
+      ...normalizedSpokeLabels,
     ]
 
-    const finalElements = [...preservedExisting, ...converted]
+    const finalElements = [...preservedExisting, ...convertedWithBindings]
     api.updateScene({
       elements: finalElements as any,
     })
     // Report counts (preserved existing + newly converted embeddables).
     reportCountsRef.current(finalElements)
-  }, [api, state, saveLayoutDebounced, saveChannelLayoutDebounced])
+  }, [api, state, saveLayoutDebounced, saveChannelLayoutDebounced, remoteLayoutVersion])
 
   // -- Fit-to-content --------------------------------------------------
   useEffect(() => {

@@ -6,7 +6,7 @@ import Foundation
 /// 送给前端，让 sidebar 能做富渲染。
 public struct FullTranscriptEntry: Encodable {
     public let id: String           // uuid；缺失时用 index
-    public let type: String         // "user" | "assistant" | "system"
+    public let type: String         // "user" | "assistant" | "system" | "injected"
     public let timestamp: String?   // ISO8601
     public let blocks: [FullTranscriptBlock]
 }
@@ -78,10 +78,15 @@ public enum FullTranscriptReader {
         let uuid = (json["uuid"] as? String) ?? "idx-\(fallbackIndex)"
         let ts = json["timestamp"] as? String
 
-        // Skip isMeta user entries (Claude CLI local !bash commands)
-        if type == "user", let meta = json["isMeta"] as? Bool, meta {
-            return nil
-        }
+        // 判定 isMeta user 的来源：
+        //   - <bash-input>/<bash-stdout>/<local-command-caveat> → Claude CLI
+        //     的本地 ! 命令回显，对终端用户没意义，丢
+        //   - 否则就是 Stop hook 的 block reason 注入（operator/A2A 消息）。
+        //     原版本一刀切丢了所有 isMeta=true，导致这些注入完全不出现在
+        //     transcript 里，UI 上看到 Claude 凭空回复——保留下来标为
+        //     "injected" 类型，让前端渲染成区别于普通 user 的气泡。
+        let isMetaUser = type == "user" && ((json["isMeta"] as? Bool) ?? false)
+        var entryType = type
 
         var blocks: [FullTranscriptBlock] = []
 
@@ -89,10 +94,12 @@ public enum FullTranscriptReader {
         if let msg = message as? [String: Any] {
             let content = msg["content"]
             if let str = content as? String, !str.isEmpty {
-                // Skip local-command echoes
-                if str.contains("<bash-input>") ||
-                   str.contains("<bash-stdout>") ||
-                   str.contains("<local-command-caveat>") {
+                // Claude CLI 本地命令回显（! 命令）只会以 type=user + content=string
+                // 形式出现，且整段以 <bash-*> / <local-command-caveat> 这些标签开头。
+                // 以前用 contains 一刀切，会误丢 assistant 在正文里讨论这些标志名
+                // 的合法消息（比如 "...含 `<bash-input>` 标志，丢"）。改成只在 user
+                // 路径上 hasPrefix 检查。
+                if type == "user" && Self.isLocalCommandEcho(str) {
                     return nil
                 }
                 blocks.append(FullTranscriptBlock(
@@ -120,9 +127,17 @@ public enum FullTranscriptReader {
         // 没有任何 block 的条目（比如纯 meta）跳过
         guard !blocks.isEmpty else { return nil }
 
+        // isMeta=true 的 user 一概标 injected。原版本只在 string content 分支
+        // 标，但 Claude Code 未来如果把 Stop hook block reason 包成 block-form
+        // (tool_result 之类)，老逻辑会漏判 → 又退回"凭空回复"那个老 bug。
+        // 真正的本地 ! 命令回显在上面 isLocalCommandEcho 处已经 return nil 丢掉了。
+        if isMetaUser {
+            entryType = "injected"
+        }
+
         return FullTranscriptEntry(
             id: uuid,
-            type: type,
+            type: entryType,
             timestamp: ts,
             blocks: blocks
         )
@@ -134,12 +149,10 @@ public enum FullTranscriptReader {
         case "text":
             let text = b["text"] as? String ?? ""
             if text.isEmpty { return nil }
-            // 过滤 Claude CLI 本地命令的 echo
-            if text.contains("<bash-input>") ||
-               text.contains("<bash-stdout>") ||
-               text.contains("<local-command-caveat>") {
-                return nil
-            }
+            // 故意不在这里过滤 <bash-input> 等 marker：本地命令回显只会以
+            // type=user + content=string 的形式出现（30 天历史样本 0 条 array
+            // 形式），过滤集中到 parseLine 的 string 分支。assistant 文本里
+            // 提到这些字面量是合法内容，不能丢。
             return FullTranscriptBlock(
                 type: "text", text: text,
                 toolId: nil, toolName: nil, toolInputJSON: nil,
@@ -196,6 +209,15 @@ public enum FullTranscriptReader {
             return (true, String(cut) + "\n…(truncated)")
         }
         return (false, s)
+    }
+
+    /// 判断一段 string content 是否是 Claude CLI 的本地命令回显。
+    /// 关键约束：必须以 marker 开头，不是 contains —— 否则正文里讨论这些
+    /// 标志名的 assistant 文本会被误丢。
+    static func isLocalCommandEcho(_ s: String) -> Bool {
+        return s.hasPrefix("<bash-input>")
+            || s.hasPrefix("<bash-stdout>")
+            || s.hasPrefix("<local-command-caveat>")
     }
 
     private static func jsonString(_ obj: Any) -> String? {

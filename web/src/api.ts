@@ -210,7 +210,7 @@ export interface TranscriptBlock {
 /** 富 transcript entry（对应 Swift FullTranscriptEntry） */
 export interface TranscriptEntryFull {
   id: string
-  type: 'user' | 'assistant' | 'system'
+  type: 'user' | 'assistant' | 'system' | 'injected'
   timestamp: string | null
   blocks: TranscriptBlock[]
 }

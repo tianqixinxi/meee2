@@ -61,7 +61,7 @@ function statusBarColor(status, urgent) {
     case 'thinking':
     case 'tooling':
     case 'compacting':
-      return '#CC785C'                                     // 活跃状态统一用 accent
+      return '#22C55E'                                     // LIVE 顶条与 halo 同色
     case 'permissionRequired':
       return '#D4A373'
     case 'completed':
@@ -80,9 +80,9 @@ function classifyLive(status, urgent) {
     case 'thinking':
     case 'tooling':
     case 'compacting':
-      // Claude 风：LIVE 用 accent terracotta，不再是鲜绿。一张 card 在"活着"
-      // 的时候，它的提示色就是品牌主色。
-      return { halo: 'active', badge: 'LIVE', haloColor: '#CC785C', dim: false }
+      // LIVE 用饱和绿 —— 赤陶 accent 在画板一片暖褐里反而不够跳，需要跟主
+      // 色形成对比才能"一眼看见 card 在跑"。
+      return { halo: 'active', badge: 'LIVE', haloColor: '#22C55E', dim: false }
     case 'permissionRequired':
       return { halo: 'active', badge: 'WAIT', haloColor: '#D4A373', dim: false }
     case 'dead':

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -86,8 +86,13 @@ export default function TranscriptPanel({
     initialCache ? initialCache.scrollTop : null,
   )
 
-  // session 切换：保存当前 session 到 cache（通过 effect cleanup，老 sessionId 在闭包里），
-  // 进入新 session 时 setState 成新 session 的缓存值
+  // session 切换：复用 cache 里的 entries（避免重新 fetch 期间空窗），但
+  // **强制滚底**——用户期望每次打开右侧面板都看到最新消息，不要把上次离开
+  // 时的 scrollTop "贴心地"恢复掉（那让人怀疑面板坏了）。
+  // 保留：entries / signature 不动（节省 fetch + render）；
+  // 重置：lastEntryIdRef → null 让 auto-scroll effect 当成首次加载触发滚底；
+  //       stickToBottomRef → true 让滚底跑通后续 sticky 自动跟随；
+  //       pendingScrollTopRef → null 不再恢复历史位置。
   useEffect(() => {
     const id = sessionId
     const seeded = txCache.get(id)
@@ -95,13 +100,14 @@ export default function TranscriptPanel({
     setError(null)
     setLoaded(seeded != null)
     setQuery('')
-    lastEntryIdRef.current = seeded?.lastSeenEntryId ?? null
-    stickToBottomRef.current = seeded?.stickyBottom ?? true
-    pendingScrollTopRef.current = seeded ? seeded.scrollTop : null
+    lastEntryIdRef.current = null
+    stickToBottomRef.current = true
+    pendingScrollTopRef.current = null
     lastSignatureRef.current = seeded?.signature ?? ''
 
     return () => {
-      // 离开当前 session 时记录 scrollTop / stickyBottom，entries 由 fetch 路径持续写回
+      // 离开当前 session 时只刷新 cache 里的 entries-related 字段；scrollTop /
+      // stickyBottom 不再回写（下次进来都强制滚底，存了也用不上）。
       const el = parentRef.current
       const cur = txCache.get(id)
       if (!cur) return
@@ -261,6 +267,35 @@ export default function TranscriptPanel({
   // 自动 bail-out，scroll 事件里 100/s 调也不会触发 rerender）。
   const [atBottom, setAtBottom] = useState(true)
 
+  // 当前"正在浏览范围"的 user 消息 —— 它已经滚出视口上沿，后续的 Claude
+  // 回复都是在回应它。渲染成顶部 sticky bar 让用户始终知道语境。
+  // null = 没滚过任何 user 消息（在顶部或处在第一条 user 消息上方）
+  const [stickyUser, setStickyUser] = useState<{ index: number; text: string } | null>(null)
+
+  // 缓存所有"见过"的 user entry 的底部 Y 坐标（id → end px）。
+  // 虚拟化器只渲染 visible + overscan 窗口内的 entry，getVirtualItems() 里拿
+  // 不到远离 viewport 的 user entry。没这个缓存的话，向上滚动的一开始（viewport
+  // 在底部、最近一条 user 消息还远在上面 overscan 之外）就找不到任何 user，
+  // sticky 永远不会出现。
+  const userEndCacheRef = useRef<Map<string, number>>(new Map())
+
+  // Session 切换 / entries 全量替换时清缓存，避免位置错位
+  useEffect(() => {
+    userEndCacheRef.current = new Map()
+  }, [sessionId])
+
+  // entries 变化后 warm 一次 cache —— 初始挂载 + 新消息到达时，handleScroll
+  // 可能还没触发（用户没手动滚），但 virtualizer 刚渲染完一批 user entries
+  // 的位置已经可用，塞进 cache 让后续第一次 scroll 就能立刻算出 sticky。
+  useEffect(() => {
+    for (const item of virtualizer.getVirtualItems()) {
+      const entry = visibleEntries[item.index]
+      if (entry?.type === 'user') {
+        userEndCacheRef.current.set(entry.id, item.end)
+      }
+    }
+  })
+
   const handleScroll = () => {
     const el = parentRef.current
     if (!el) return
@@ -268,7 +303,67 @@ export default function TranscriptPanel({
     const isAtB = dist < 40
     stickToBottomRef.current = isAtB
     setAtBottom(isAtB)
+
+    // Sticky user 计算：两步
+    //   1) 先把当前渲染窗口里 user entry 的 end 位置 merge 进 cache
+    //   2) 反向扫描 visibleEntries 找"latest user 其 end ≤ scrollTop"
+    //      —— 用 cache 里的 end，不依赖此刻是否在 render window
+    //   3) 把结果 normalize 到"连续 user run 的起点"：连续两条 user 消息
+    //      （比如用户分两段问）chip 已经被 merge 成一个，sticky 也要合并
+    //      成一份 —— 显示第一条（chip visible 的那条）
+    const top = el.scrollTop
+    for (const item of virtualizer.getVirtualItems()) {
+      const entry = visibleEntries[item.index]
+      if (entry?.type === 'user') {
+        userEndCacheRef.current.set(entry.id, item.end)
+      }
+    }
+
+    let stickyIdx: number | null = null
+    for (let i = visibleEntries.length - 1; i >= 0; i--) {
+      const entry = visibleEntries[i]
+      if (entry.type !== 'user') continue
+      const end = userEndCacheRef.current.get(entry.id)
+      if (end == null) continue        // 还没被测量过，跳过
+      if (end <= top + 2) {
+        stickyIdx = i
+        break
+      }
+    }
+
+    let sticky: { index: number; text: string } | null = null
+    if (stickyIdx != null) {
+      // 向上回退找到连续 user run 的起点（第一条 chip visible 的那条）
+      let start = stickyIdx
+      while (start > 0 && visibleEntries[start - 1].type === 'user') {
+        start--
+      }
+      const anchor = visibleEntries[start]
+      const textBlock = anchor.blocks.find(
+        (b) => b.type === 'text' && (b.text ?? '').trim(),
+      )
+      const preview = (textBlock?.text ?? '').trim()
+      if (preview) {
+        sticky = { index: start, text: preview }
+      }
+    }
+
+    setStickyUser((prev) => {
+      if (prev?.index === sticky?.index && prev?.text === sticky?.text) return prev
+      return sticky
+    })
   }
+
+  /** 点 sticky 跳回对应 user 消息 */
+  const scrollToStickyUser = useCallback(() => {
+    if (stickyUser == null) return
+    virtualizer.scrollToIndex(stickyUser.index, { align: 'start' })
+    // 给一小点上 padding，让 user 气泡完整露出来不被 sticky 再次覆盖
+    requestAnimationFrame(() => {
+      const node = parentRef.current
+      if (node) node.scrollTop = Math.max(0, node.scrollTop - 8)
+    })
+  }, [stickyUser, virtualizer])
 
   /**
    * 跳到最新一条消息。跟 auto-scroll effect 一样走 rAF poll + 高度收敛探测
@@ -431,6 +526,21 @@ export default function TranscriptPanel({
         </div>
       ) : (
         <div className="transcript-panel-wrap">
+          {/* Sticky user bar —— 滚动浏览历史时，当前 user 消息滚出上沿后
+              以紧凑横条形式粘在顶部，点击回跳。挂在 scroll 容器外层，
+              position:absolute 贴容器顶部。 */}
+          {stickyUser && (
+            <button
+              type="button"
+              className="tx-sticky-user"
+              onClick={scrollToStickyUser}
+              title="Click to jump back to this message"
+            >
+              <span className="tx-sticky-user__chip">You</span>
+              <span className="tx-sticky-user__text">{stickyUser.text}</span>
+              <span className="tx-sticky-user__hint" aria-hidden>↑</span>
+            </button>
+          )}
           <div
             ref={parentRef}
             className="transcript-panel"
@@ -553,8 +663,15 @@ const TextBlock = memo(function TextBlock({
 }) {
   const isAssistant = role === 'assistant'
   const isUser = role === 'user'
-  const roleLabel = isUser ? 'You' : isAssistant ? 'Claude' : role
-  const cls = isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
+  // injected = Stop hook block reason 注入（operator/A2A 推过来的消息）。
+  // Claude Code 把它写成 type=user+isMeta=true，Reader 转成 'injected' 类型。
+  // 视觉上独立成一种气泡："📨 Operator/Agent 注入"，用户能区分这条不是
+  // 自己手动发的、也不是 Claude 自己说的。
+  const isInjected = role === 'injected'
+  const roleLabel = isInjected ? '📨 Injected' : isUser ? 'You' : isAssistant ? 'Claude' : role
+  const cls = isInjected
+    ? 'tx-text--injected'
+    : isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
   return (
     <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}`}>
       {!hideLabel && (
@@ -571,6 +688,13 @@ const TextBlock = memo(function TextBlock({
             components={{
               a: ({ node: _node, ...props }) => (
                 <a {...props} target="_blank" rel="noopener noreferrer" />
+              ),
+              // Claude 写的长 code fence 默认折叠到 6 行。CollapsibleCode
+              // 通过 DOM 测量判断是否真的超行，短片段不会出现 toggle。
+              pre: ({ node: _node, children, ...props }) => (
+                <CollapsibleCode>
+                  <pre {...props}>{children}</pre>
+                </CollapsibleCode>
               ),
             }}
           >
@@ -645,10 +769,12 @@ function ToolInputBody({
     const cmd = typeof input.command === 'string' ? input.command : ''
     if (!cmd) return null
     return (
-      <pre className="tx-tool__code tx-tool__code--bash">
-        <span className="tx-tool__prompt">$ </span>
-        {cmd}
-      </pre>
+      <CollapsibleCode>
+        <pre className="tx-tool__code tx-tool__code--bash">
+          <span className="tx-tool__prompt">$ </span>
+          {cmd}
+        </pre>
+      </CollapsibleCode>
     )
   }
   if (name === 'Edit') {
@@ -675,9 +801,11 @@ function ToolInputBody({
     const content = (input.content as string) ?? ''
     if (!content) return null
     return (
-      <pre className="tx-tool__code tx-tool__code--write">
-        {truncateForPreview(content, 2000)}
-      </pre>
+      <CollapsibleCode>
+        <pre className="tx-tool__code tx-tool__code--write">
+          {truncateForPreview(content, 2000)}
+        </pre>
+      </CollapsibleCode>
     )
   }
   if (name === 'Read') {
@@ -749,25 +877,94 @@ function ToolInputBody({
   }
 
   return (
-    <pre className="tx-tool__code tx-tool__code--generic">
-      {truncateForPreview(JSON.stringify(input, null, 2), 1500)}
-    </pre>
+    <CollapsibleCode>
+      <pre className="tx-tool__code tx-tool__code--generic">
+        {truncateForPreview(JSON.stringify(input, null, 2), 1500)}
+      </pre>
+    </CollapsibleCode>
   )
 }
 
 function ToolResultBody({ block }: { block: TranscriptBlock }) {
   const text = block.toolResultText ?? ''
-  const [open, setOpen] = useState(text.length < 600)
   if (!text) return null
+  // 统一走 CollapsibleCode —— 小结果直接显示，超 6 行才有 Show all。
+  // 以前的"总结果"/"总 <600 字符默认展开"两段逻辑合一。
   return (
     <div className="tx-tool__result">
-      <button
-        className="tx-tool__result-toggle"
-        onClick={() => setOpen(!open)}
-      >
-        {open ? '▾' : '▸'} result{block.toolResultTruncated ? ' (truncated)' : ''}
-      </button>
-      {open && <pre className="tx-tool__result-body">{text}</pre>}
+      <div className="tx-tool__result-label">
+        result{block.toolResultTruncated ? ' (truncated)' : ''}
+      </div>
+      <CollapsibleCode>
+        <pre className="tx-tool__result-body">{text}</pre>
+      </CollapsibleCode>
+    </div>
+  )
+}
+
+// ─── CollapsibleCode —— 长代码/输出默认折叠到 N 行 ────────────────────
+//
+// 用在三处：tool input（Bash/Write/generic）/ tool result / assistant
+// markdown code fence。默认只显示 6 行，内容超过才显露 "Show all (N lines)"
+// 的 toggle。折叠态底部有一条从 pre 背景色过渡的 fade，暗示"还有更多内容"。
+//
+// 实现：max-height: calc(N * 1.5em) 按 em 计算，自动跟着 pre 的字号走。
+// 行数统计用 measureRef.scrollHeight 和 maxHeight 比对（比按 "\n" 数更准，
+// 适用于高亮后 <span> 会换行的情况）。
+const COLLAPSIBLE_DEFAULT_LINES = 6
+
+function CollapsibleCode({
+  children,
+  maxLines = COLLAPSIBLE_DEFAULT_LINES,
+  className,
+}: {
+  children: React.ReactNode
+  maxLines?: number
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [overflows, setOverflows] = useState(false)
+  const [totalLines, setTotalLines] = useState<number | null>(null)
+  const innerRef = useRef<HTMLDivElement | null>(null)
+
+  useLayoutEffect(() => {
+    const el = innerRef.current
+    if (!el) return
+    const pre = el.querySelector('pre, code') as HTMLElement | null
+    const target = pre ?? el
+    const cs = getComputedStyle(target)
+    const lineHeight = parseFloat(cs.lineHeight)
+    if (!isFinite(lineHeight) || lineHeight <= 0) {
+      setOverflows(false); setTotalLines(null); return
+    }
+    const maxH = lineHeight * maxLines
+    setOverflows(target.scrollHeight > maxH + 2)
+    setTotalLines(Math.max(1, Math.round(target.scrollHeight / lineHeight)))
+  }, [children, maxLines])
+
+  return (
+    <div
+      ref={innerRef}
+      className={
+        'tx-collapsible' +
+        (open ? ' tx-collapsible--open' : '') +
+        (overflows ? ' tx-collapsible--overflows' : '') +
+        (className ? ' ' + className : '')
+      }
+      style={{ ['--tx-col-max-lines' as any]: String(maxLines) }}
+    >
+      {children}
+      {overflows && (
+        <button
+          type="button"
+          className="tx-collapsible__toggle"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open
+            ? '▾ Show less'
+            : `▸ Show all${totalLines ? ` (${totalLines} lines)` : ''}`}
+        </button>
+      )}
     </div>
   )
 }

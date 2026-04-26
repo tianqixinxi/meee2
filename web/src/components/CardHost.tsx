@@ -13,6 +13,7 @@ import { Component as ReactComponent, useMemo } from 'react'
 import * as React from 'react'
 import type { BoardState, Session } from '../types'
 import { compileCardSource } from '../cardCompile'
+import { getAnimationsFor } from '../cardAnimations'
 
 // ── helpers (暴露给 user code 的小工具集) ─────────────────────────
 
@@ -195,10 +196,19 @@ export function CardHost({ session, board, source, onError }: CardHostProps) {
 
   const safeBoard: BoardState = board ?? { sessions: [], channels: [] }
 
+  // 把动效 config 注入到 session 上，模板通过 session._animations 读。
+  // 模板可以完全忽略继续写死 —— 向后兼容。新模板 / 改过的 default 才会去
+  // 读这个字段，做 color / speed / glow 的覆盖。
+  const animations = useMemo(() => getAnimationsFor(session.id), [session.id])
+  const sessionWithAnim = useMemo(
+    () => ({ ...session, _animations: animations }),
+    [session, animations],
+  )
+
   return (
     <CardErrorBoundary onError={(msg) => onError?.(msg)}>
       <Component
-        session={session}
+        session={sessionWithAnim}
         board={safeBoard}
         helpers={helpers}
         React={React}

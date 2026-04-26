@@ -20,6 +20,9 @@ import {
   putTemplate,
   templateIdForSession,
 } from '../cardTemplateStore'
+import { TemplateGallery } from './TemplateGallery'
+import { CustomCardModal } from './CustomCardModal'
+import { loadUserPresets } from '../userPresets'
 
 interface Props {
   sessionId: string
@@ -41,6 +44,9 @@ export default function TemplateEditor({
   const [loaded, setLoaded] = useState<string>(DEFAULT_TEMPLATE) // last persisted value
   const [status, setStatus] = useState<Status>('loading')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  // Custom-card 模态框可见性 + 用户自建 preset 列表（localStorage）
+  const [customModalOpen, setCustomModalOpen] = useState(false)
+  const [userPresets, setUserPresets] = useState(() => loadUserPresets())
 
   // Compile locally so we can surface parse errors next to the textarea
   // before the iframe ever sees the code.
@@ -233,57 +239,46 @@ export default function TemplateEditor({
         </button>
       </div>
 
-      {/* Preset picker — click to load preset source into the editor */}
-      <div className="col" style={{ gap: 4 }}>
+      {/* Preset 预览网格 —— 点任意 tile 把源码灌进 editor + 直接应用。
+          以前是一排文字按钮，看不到每个 preset 长什么样；现在每个 tile 是
+          活渲染的 mini card（同一份 fake session 喂数据，风格对比直观）。 */}
+      <div className="col" style={{ gap: 6 }}>
         <div className="muted" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.6 }}>
           Presets
         </div>
-        <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
-          {TEMPLATE_PRESETS.map((preset) => (
-            <button
-              key={preset.id}
-              onClick={() => {
-                console.log(
-                  '[TemplateEditor] preset click id=%s templateId=%s srcLen=%d firstLine=%s',
-                  preset.id,
-                  templateId,
-                  preset.source.length,
-                  preset.source.split('\n', 1)[0]?.slice(0, 60),
-                )
-                setSource(preset.source)
-                setStatus('saving')
-                setErrorMsg(null)
-                // 立即推给 App.templateCache → Board → SessionOverlay → CardHost
-                onSaved(templateId, preset.source)
-                if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-                void putTemplate(templateId, preset.source)
-                  .then(() => {
-                    console.log('[TemplateEditor] putTemplate OK', templateId)
-                    setLoaded(preset.source)
-                    setStatus('saved')
-                    window.setTimeout(() => {
-                      setStatus((cur) => (cur === 'saved' ? 'idle' : cur))
-                    }, 1200)
-                  })
-                  .catch((e) => {
-                    console.warn('[TemplateEditor] putTemplate FAIL', templateId, e)
-                    setStatus('error')
-                    setErrorMsg((e as Error).message)
-                  })
-              }}
-              title={preset.description}
-              style={{
-                fontSize: 11,
-                padding: '3px 8px',
-                background: source === preset.source ? 'var(--accent)' : 'var(--bg-elevated-2)',
-                color: source === preset.source ? '#000' : undefined,
-                fontWeight: source === preset.source ? 600 : 400,
-              }}
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
+        <TemplateGallery
+          presets={[...TEMPLATE_PRESETS, ...userPresets]}
+          selectedId={
+            [...TEMPLATE_PRESETS, ...userPresets].find((p) => p.source === source)?.id ?? null
+          }
+          onRequestCustom={() => setCustomModalOpen(true)}
+          onSelect={(preset) => {
+            console.log(
+              '[TemplateEditor] preset click id=%s templateId=%s srcLen=%d',
+              preset.id,
+              templateId,
+              preset.source.length,
+            )
+            setSource(preset.source)
+            setStatus('saving')
+            setErrorMsg(null)
+            onSaved(templateId, preset.source)
+            if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+            void putTemplate(templateId, preset.source)
+              .then(() => {
+                setLoaded(preset.source)
+                setStatus('saved')
+                window.setTimeout(() => {
+                  setStatus((cur) => (cur === 'saved' ? 'idle' : cur))
+                }, 1200)
+              })
+              .catch((e) => {
+                console.warn('[TemplateEditor] putTemplate FAIL', templateId, e)
+                setStatus('error')
+                setErrorMsg((e as Error).message)
+              })
+          }}
+        />
       </div>
 
       <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
@@ -291,6 +286,33 @@ export default function TemplateEditor({
         in a sandboxed iframe (no access to the parent DOM). Props:{' '}
         <code className="mono">{'{ session, board, helpers }'}</code>.
       </div>
+
+      {customModalOpen && (
+        <CustomCardModal
+          onClose={() => setCustomModalOpen(false)}
+          onSaved={(preset) => {
+            // 刷新 user preset 列表（localStorage 已经更新过了）
+            setUserPresets(loadUserPresets())
+            // 立即 apply 新 preset 到当前 session —— 用户刚写完八成就想试
+            setSource(preset.source)
+            onSaved(templateId, preset.source)
+            if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+            setStatus('saving')
+            void putTemplate(templateId, preset.source)
+              .then(() => {
+                setLoaded(preset.source)
+                setStatus('saved')
+                window.setTimeout(() => {
+                  setStatus((cur) => (cur === 'saved' ? 'idle' : cur))
+                }, 1200)
+              })
+              .catch((e) => {
+                setStatus('error')
+                setErrorMsg((e as Error).message)
+              })
+          }}
+        />
+      )}
     </div>
   )
 }

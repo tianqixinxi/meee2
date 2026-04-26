@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { BoardState, Message, SessionRecap, UsageStats } from '../types'
-import { listChannelMessages, activateSession } from '../api'
+import { listChannelMessages, activateSession, spawnSession } from '../api'
+import { loadDefaultSpawnCommand } from '../preferences'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
 
@@ -27,6 +28,7 @@ export default function SessionDetail({ state, sessionId }: Props) {
   const session = state.sessions.find((s) => s.id === sessionId)
   const [inbox, setInbox] = useState<Array<{ ch: string; msg: Message }>>([])
   const [opening, setOpening] = useState(false)
+  const [spawning, setSpawning] = useState(false)
 
   const memberships = useMemo(
     () =>
@@ -86,6 +88,26 @@ export default function SessionDetail({ state, sessionId }: Props) {
     }
   }
 
+  /**
+   * 在当前选中 session 的 cwd 下起一个新 Claude 会话——独立 sid、独立 PID、
+   * 独立 Ghostty 窗口。不是 card 复制（card 只是同 session 的多个视图）。
+   * 命令沿用 Preferences 里上次成功的 spawn command（默认 `claude`），用户
+   * 想改可走 New Session dialog。
+   */
+  async function onSpawnHere() {
+    if (spawning || !session) return
+    setSpawning(true)
+    try {
+      const cmd = loadDefaultSpawnCommand() || 'claude'
+      await spawnSession({ cwd: session.project, command: cmd, createIfMissing: false })
+      toast.push('success', `Spawned new agent in ${prettyCwd(session.project)}`)
+    } catch (e) {
+      toast.push('error', `Spawn failed: ${(e as Error).message}`)
+    } finally {
+      setSpawning(false)
+    }
+  }
+
   const statusLabel = statusText(session.status)
   const tokenLabel = formatTokens(session.usageStats)
   const bgCount = session.backgroundAgents?.length ?? 0
@@ -110,6 +132,14 @@ export default function SessionDetail({ state, sessionId }: Props) {
             title="Jump to this session's terminal"
           >
             {opening ? 'Opening…' : 'Open terminal'}
+          </button>
+          <button
+            className="sd__open-btn"
+            onClick={onSpawnHere}
+            disabled={spawning}
+            title={`Spawn a new independent Claude session in ${session.project}`}
+          >
+            {spawning ? 'Spawning…' : '+ Agent here'}
           </button>
         </div>
         {showTitleSeparately && (
