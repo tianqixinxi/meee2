@@ -358,7 +358,7 @@ public final class Meee360Pusher: @unchecked Sendable {
             return
         }
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        URLSession.shared.dataTask(with: request) { _, response, error in
             if let error = error {
                 completion(.failure(error))
                 return

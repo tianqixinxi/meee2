@@ -505,3 +505,4 @@ private func extractUserText(_ entry: [String: Any]) -> String {
     }
     return ""
 }
+
