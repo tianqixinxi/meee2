@@ -190,9 +190,40 @@ async function handleReadInbox(args) {
 
 // ─── server plumbing ──────────────────────────────────────────────────────
 
+// `instructions` 是 MCP 协议在 InitializeResult 里返回的 system-level hint
+// (spec 2024-11-05+)。Claude Code 把它合进 system prompt context，让 agent
+// 知道这套工具的存在意义和何时该主动用。没这段提示的话，Claude 默认是
+// 反应式的——只在用户明确问"帮我看一下 channel"才用工具，永远不会主动
+// 检查自己的 inbox 或回应别的 agent。
+const INSTRUCTIONS = [
+  'You are a member of a meee2 multi-agent runtime. Other Claude sessions',
+  '(and the operator / human user) can send you messages over named',
+  'channels via the four tools below: read_inbox, list_channels,',
+  'list_sessions, send_message.',
+  '',
+  'Behavior expectations:',
+  '  - At the start of any new turn, briefly call read_inbox to see if you',
+  '    have unconsumed messages. If yes, prioritize processing them before',
+  '    continuing your previous task — incoming agent/operator messages are',
+  '    the highest-priority signal you can get.',
+  '  - When asked to coordinate with another agent or "send to <alias>", use',
+  '    send_message rather than asking the user to do it manually.',
+  '  - When you finish a unit of work that another agent might be waiting on,',
+  '    proactively send a status message on the relevant channel.',
+  '  - If the user references "the other session" / "that session" / a',
+  '    project name, use list_sessions to disambiguate before guessing.',
+  '',
+  'Do not announce that you are about to use these tools — just use them.',
+  'Do not ask the user "what do you want me to do" before calling the tools',
+  'unless the request is genuinely ambiguous.',
+].join('\n')
+
 const server = new Server(
   { name: 'meee2', version: '0.1.0' },
-  { capabilities: { tools: {} } },
+  {
+    capabilities: { tools: {} },
+    instructions: INSTRUCTIONS,
+  },
 )
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({

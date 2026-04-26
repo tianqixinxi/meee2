@@ -1,4 +1,6 @@
 import XCTest
+@testable import Meee2Core
+@testable import ClaudeCLIAdapter
 @testable import meee2Kit
 import Meee2PluginKit
 
@@ -37,9 +39,10 @@ final class TranscriptStatusResolverTests: XCTestCase {
         XCTAssertTrue(reason.contains("interrupt"), "reason='\(reason)'")
     }
 
-    /// priority 2: age > 180s (abandoned) 无论 hookStatus 都降 idle
-    func testUser_tooOld_abandoned() {
-        for hook in [SessionStatus.thinking, .tooling, .active, .idle] {
+    /// priority 2: age > 180s + hook 是 resting（idle / waitingForUser /
+    /// completed）→ 降 idle（user-too-old）。这是"用户打字后走了没等"场景。
+    func testUser_tooOld_abandoned_whenHookResting() {
+        for hook in [SessionStatus.idle, .waitingForUser, .completed] {
             let (status, reason) = TranscriptStatusResolver.decideFromTail(
                 last: entry(type: "user", ageSeconds: 200),
                 hookStatus: hook,
@@ -50,39 +53,40 @@ final class TranscriptStatusResolverTests: XCTestCase {
         }
     }
 
-    /// priority 3: hook=thinking + age > 45s = ESC-before-first-token，降 idle
-    func testUser_staleThinking_escBeforeFirstToken() {
-        let (status, reason) = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "user", ageSeconds: 60),  // >45s, <180s
-            hookStatus: .thinking,
-            now: now
-        )
-        XCTAssertEqual(status, .idle)
-        XCTAssertTrue(reason.contains("user-stale-pre-assistant"), "reason='\(reason)'")
+    /// priority 2 守卫：age > 180s 但 hook 报 working（thinking / tooling /
+    /// active / compacting）→ trust hook，**不**误降 idle。
+    /// 真实场景：Claude 跑长工具链 / extended thinking，user 在尾巴 N 分钟前，
+    /// 但 PreToolUse 还在喷——这是真活，必须保留 working state。
+    func testUser_tooOld_butHookWorking_trustsHook() {
+        for hook in [SessionStatus.thinking, .tooling, .active, .compacting] {
+            let (status, reason) = TranscriptStatusResolver.decideFromTail(
+                last: entry(type: "user", ageSeconds: 246),
+                hookStatus: hook,
+                now: now
+            )
+            XCTAssertEqual(status, hook, "hook=\(hook) working 时应 trust hook，不降 idle, got reason='\(reason)'")
+            XCTAssertTrue(reason.contains("hook-working"), "reason='\(reason)'")
+        }
     }
 
-    /// priority 3 边界：age = 45s 时不触发（严格 >）；== 45.1s 触发
-    func testUser_staleThinking_boundary() {
-        // 刚好 45s —— 不触发（条件是严格 >）
-        let borderline = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "user", ageSeconds: 45),
-            hookStatus: .thinking,
-            now: now
-        )
-        XCTAssertEqual(borderline.status, .thinking, "45s 边界不应触发降级")
-
-        // 45.5s → 触发
-        let over = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "user", ageSeconds: 45.5),
-            hookStatus: .thinking,
-            now: now
-        )
-        XCTAssertEqual(over.status, .idle, "45.5s 应触发降级")
+    /// 历史 stale-thinking 规则（hook=thinking + age>45s → idle）已删除。
+    /// 现在只要在 abandoned 阈值（180s）以内 + hook=thinking，永远报 thinking——
+    /// 防止 Opus extended thinking / 长 context 等 60-180s 才 first token 的
+    /// 场景被错翻 idle 显示成"等用户输入"。
+    func testUser_thinking_stayThinkingUntilAbandoned() {
+        // 60s, 120s, 170s 都应该返回 thinking，不再降级 idle
+        for age in [60.0, 120.0, 170.0] {
+            let (status, reason) = TranscriptStatusResolver.decideFromTail(
+                last: entry(type: "user", ageSeconds: age),
+                hookStatus: .thinking,
+                now: now
+            )
+            XCTAssertEqual(status, .thinking, "age=\(age)s + hook=thinking 应保留 thinking, got reason='\(reason)'")
+        }
     }
 
-    /// priority 3 仅在 hook=.thinking 时生效；.tooling 不走这条兜底
-    func testUser_staleThinking_onlyAppliesToThinking() {
-        // hook=tooling + user tail 60s 老 → 应该保留 tooling (走 priority 4)
+    /// hook=tooling + user tail 60s 老 → 保留 tooling (priority 3 / hook-specific)
+    func testUser_recent_tooling() {
         let (status, reason) = TranscriptStatusResolver.decideFromTail(
             last: entry(type: "user", ageSeconds: 60),
             hookStatus: .tooling,
@@ -129,7 +133,7 @@ final class TranscriptStatusResolverTests: XCTestCase {
 
     // MARK: - case "assistant"
 
-    /// priority 1: hook ∈ {idle, completed, waitingForUser} + assistant tail → .active (mid-turn override)
+    /// priority 1: hook ∈ {idle, completed, waitingForUser} + FRESH assistant tail → .active (mid-turn override)
     func testAssistant_midTurn_overridesRestingHook() {
         for hook in [SessionStatus.idle, .completed, .waitingForUser] {
             let (status, reason) = TranscriptStatusResolver.decideFromTail(
@@ -137,9 +141,53 @@ final class TranscriptStatusResolverTests: XCTestCase {
                 hookStatus: hook,
                 now: now
             )
-            XCTAssertEqual(status, .active, "hook=\(hook) + assistant tail 应升到 active")
+            XCTAssertEqual(status, .active, "hook=\(hook) + fresh assistant tail 应升到 active")
             XCTAssertTrue(reason.contains("mid-turn"), "reason='\(reason)'")
         }
+    }
+
+    /// 回归：stale assistant tail（远超 mid-turn freshness 窗）+ resting hook
+    /// 必须保留 hookStatus，不能误升 active。
+    /// 旧 bug：1.3 hours 前的 assistant tail + hook=waitingForUser 被错升 active
+    /// → UI 上显示 "live" 绿条，用户以为 session 还在跑。
+    func testAssistant_staleMidTurn_doesNotOverrideRestingHook() {
+        for hook in [SessionStatus.idle, .completed, .waitingForUser] {
+            let (status, _) = TranscriptStatusResolver.decideFromTail(
+                last: entry(type: "assistant", ageSeconds: 60),  // >30s freshness window
+                hookStatus: hook,
+                now: now
+            )
+            XCTAssertEqual(status, hook, "stale assistant tail 不应升级 hook=\(hook) → active")
+        }
+    }
+
+    /// mid-turn freshness 窗的 30s 边界
+    func testAssistant_midTurn_freshnessBoundary() {
+        // 29s 内仍算 fresh → 升 active
+        let fresh = TranscriptStatusResolver.decideFromTail(
+            last: entry(type: "assistant", ageSeconds: 29),
+            hookStatus: .waitingForUser,
+            now: now
+        )
+        XCTAssertEqual(fresh.status, .active, "29s 仍在 freshness 窗内")
+
+        // 31s 已过窗 → 保留 hook
+        let stale = TranscriptStatusResolver.decideFromTail(
+            last: entry(type: "assistant", ageSeconds: 31),
+            hookStatus: .waitingForUser,
+            now: now
+        )
+        XCTAssertEqual(stale.status, .waitingForUser, "31s 已过 freshness 窗")
+    }
+
+    /// 无 timestamp 的 assistant tail 保守视为 fresh（不知道多老就当还活着）
+    func testAssistant_midTurn_noTimestampFallsBackToFresh() {
+        let (status, _) = TranscriptStatusResolver.decideFromTail(
+            last: entry(type: "assistant", ageSeconds: nil),
+            hookStatus: .waitingForUser,
+            now: now
+        )
+        XCTAssertEqual(status, .active, "无 ts 应保守视为 fresh，仍触发 mid-turn")
     }
 
     /// priority 2: hook 是工作态 → 保留 hookStatus（只要 tail 还新鲜）
@@ -198,34 +246,49 @@ final class TranscriptStatusResolverTests: XCTestCase {
 
     // MARK: - case "system"
 
-    /// priority 1: system tail 老于 90s + 工作态 hookStatus → .idle (ESC-during-tool 兜底)
+    /// priority 1: system tail 老于 600s + 工作态 hookStatus → .idle
+    /// 阈值从 90s 提到 600s—— 90s 误降太多合法长 Bash / extended thinking。
+    /// 真挂的 session 一般 10 分钟没人耐心等了。
     func testSystem_stale_escDuringTool() {
         for hook in [SessionStatus.thinking, .tooling, .active, .compacting] {
             let (status, reason) = TranscriptStatusResolver.decideFromTail(
-                last: entry(type: "system", ageSeconds: 120),  // >90s
+                last: entry(type: "system", ageSeconds: 700),  // >600s
                 hookStatus: hook,
                 now: now
             )
-            XCTAssertEqual(status, .idle, "hook=\(hook) + system tail >90s 应降 idle")
+            XCTAssertEqual(status, .idle, "hook=\(hook) + system tail >600s 应降 idle")
             XCTAssertTrue(reason.contains("system-tail-stale"), "reason='\(reason)'")
         }
     }
 
-    /// priority 1 边界：90s 不触发，91s 触发
+    /// priority 1 边界：600s 不触发，601s 触发
     func testSystem_stale_boundary() {
         let borderline = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "system", ageSeconds: 90),
+            last: entry(type: "system", ageSeconds: 600),
             hookStatus: .tooling,
             now: now
         )
-        XCTAssertEqual(borderline.status, .tooling, "90s 不应触发")
+        XCTAssertEqual(borderline.status, .tooling, "600s 不应触发")
 
         let over = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "system", ageSeconds: 91),
+            last: entry(type: "system", ageSeconds: 601),
             hookStatus: .tooling,
             now: now
         )
-        XCTAssertEqual(over.status, .idle, "91s 应触发")
+        XCTAssertEqual(over.status, .idle, "601s 应触发")
+    }
+
+    /// 回归：90-600s 之间的 system tail + hook=tooling 必须保留 tooling
+    /// （之前 90s 阈值时 100s 也降级，长 Bash 命令被误判 idle）。
+    func testSystem_longRunningTool_notDowngraded() {
+        for age in [100.0, 200.0, 400.0, 599.0] {
+            let (status, _) = TranscriptStatusResolver.decideFromTail(
+                last: entry(type: "system", ageSeconds: age),
+                hookStatus: .tooling,
+                now: now
+            )
+            XCTAssertEqual(status, .tooling, "age=\(age)s + hook=tooling 不应降级")
+        }
     }
 
     /// priority 2: hook=.active + system tail（即使 <90s）→ .idle

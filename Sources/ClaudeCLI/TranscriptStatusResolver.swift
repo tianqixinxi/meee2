@@ -1,4 +1,5 @@
 import Foundation
+import Meee2Core
 import Meee2PluginKit
 
 // MARK: - Terminal reachability cache
@@ -224,12 +225,12 @@ public enum TranscriptStatusResolver {
     /// 规则优先级（详见 docs/ARCHITECTURE.md §6）：
     ///   case user:
     ///     1. isInterrupt          → .idle    (user-interrupt)
-    ///     2. age > 180s           → .idle    (user-too-old)
-    ///     3. hook=thinking + age > 45s → .idle  (user-stale-pre-assistant)
-    ///     4. isSpecific(hook)     → hookStatus
-    ///     5. fallback             → .active
+    ///     2. age > 180s + hook ∉ working → .idle (user-too-old)
+    ///                               working hook trumps age — agent 还在跑就别误降
+    ///     3. isSpecific(hook)     → hookStatus
+    ///     4. fallback             → .active
     ///   case assistant:
-    ///     1. hook ∈ {idle,completed,waitingForUser} → .active (mid-turn)
+    ///     1. fresh (<30s) + hook ∈ {idle,completed,waitingForUser} → .active (mid-turn)
     ///     2. fallback             → hookStatus
     ///   case system:
     ///     1. age > 90s + working hook → .idle (system-tail-stale)
@@ -246,20 +247,42 @@ public enum TranscriptStatusResolver {
                 return (.idle, "user-interrupt")
             }
             if let ts = last.timestamp, now.timeIntervalSince(ts) > _abandonedUserEntryThreshold {
+                // 关键守卫：hook 明确报"还在干活"（thinking / tooling / active /
+                // compacting），就 trust hook，**不**因为 transcript 尾部 user 久了
+                // 就降级。场景：用户打了一句话之后 Claude 长时间走工具链 / extended
+                // thinking，transcript 尾巴一直是那条原 user prompt（4-30 分钟），
+                // 但 PreToolUse 钩子在持续喷——这是真活，不能误判 abandoned。
+                // "user-too-old"原本是兜"用户打字后走人没等回复"，那种情况下 hook
+                // 早归 idle / waitingForUser 了，不会满足下面这条 guard。
+                let workingHooks: Set<SessionStatus> = [.thinking, .tooling, .active, .compacting]
+                if workingHooks.contains(hookStatus) {
+                    return (hookStatus, "user-too-old-but-hook-working(\(hookStatus.rawValue))")
+                }
                 return (.idle, "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)")
             }
-            if hookStatus == .thinking,
-               let ts = last.timestamp,
-               now.timeIntervalSince(ts) > _staleThinkingThreshold {
-                return (.idle, "user-stale-pre-assistant(>\(Int(_staleThinkingThreshold))s+hook=thinking)")
-            }
+            // (历史规则：hook=thinking + age>45s → idle，理由 ESC-pre-first-token)
+            // 已删除——当 user 实际等 60-180s 才出 first token 时（Opus extended
+            // thinking / 长 context），UI 会错翻 idle 看起来"在等用户输入"。
+            // ESC-pre-first-token 用 abandoned-session 的 180s 阈值兜底。
             if isSpecific(hookStatus) {
                 return (hookStatus, "user-recent+hook-specific(\(hookStatus.rawValue))")
             }
             return (.active, "user-recent")
 
         case "assistant":
-            if hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
+            // 只有 fresh assistant tail（< _midTurnFreshnessWindow）才算"刚 stream
+            // 完还没等到 Stop hook"的 mid-turn。Claude 流式输出时 transcript 每秒
+            // 追写，turn 结束后 1-2s 内 Stop hook 必到——所以这个窗口很小。
+            //
+            // 旧 bug：没 age 守卫，1.3 hours 前的 assistant tail + hook=waitingForUser
+            // 也被强升 active，UI 上"已经停留在等用户介入"的会话错显示成"live"
+            // （比如 Claude 弹了 permission 后用户离开几小时没点）。
+            let assistantIsFresh: Bool = {
+                guard let ts = last.timestamp else { return true } // 无 ts 保守视为 fresh
+                return now.timeIntervalSince(ts) < _midTurnFreshnessWindow
+            }()
+            if assistantIsFresh,
+               hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
                 return (.active, "assistant+hook=\(hookStatus.rawValue) → mid-turn")
             }
             // ESC-mid-stream 兜底：Claude 开始 stream 了（assistant entry 已写
@@ -326,11 +349,6 @@ public enum TranscriptStatusResolver {
                Date().timeIntervalSince(ts) > _abandonedUserEntryThreshold {
                 return .some(nil)
             }
-            // 同 status resolver 的 stale-thinking 兜底：卡住时清 thinking 标签
-            if let ts = last.timestamp,
-               Date().timeIntervalSince(ts) > _staleThinkingThreshold {
-                return .some(nil)
-            }
             return .some("thinking")
         case "system":
             // If stop hook ran and we're forcing idle, clear the tool too.
@@ -357,19 +375,18 @@ struct LastEntry {
 /// 防误报。Claude 真正处理一条用户消息极少超过这个阈值。
 private let _abandonedUserEntryThreshold: TimeInterval = 180.0  // 3 min
 
-/// 针对 hookStatus=thinking + tail 还是 user prompt 的"卡住"场景的阈值。
-/// 正常 thinking 阶段出第一个 token 的延迟绝大多数在 10 秒内，极端长 prompt
-/// 也很少超过 30 秒。超过这个阈值仍没有 assistant entry 出现，大概率是用户
-/// 在 first-token 前按了 ESC（这种情况 Claude 不写 interrupt marker、也不
-/// 触发新 hook）。
-private let _staleThinkingThreshold: TimeInterval = 45.0
-
 /// 针对 hookStatus=tooling/thinking + tail 是 system 条目的"ESC-during-tool"
 /// 场景阈值。正常 Claude 在工作态下 transcript 每几秒就有新 user/assistant
 /// 写入；tail 停在 system 条目（stop_hook_summary 之类）说明那一轮已经写完
 /// 收尾，剩下的沉默大概率是用户 ESC 把 tool 打断，后续 PostToolUse/Stop 没
 /// 到位。90s 是个安全阈值 —— 单次正常工具调用绝大多数 < 30s 完成。
-private let _staleSystemTailThreshold: TimeInterval = 90.0
+// 之前是 90s，但 90s 内发生的"system 尾巴静默 + hook 仍报 tooling"绝大多数
+// 是长 Bash / Read 大文件 / extended thinking 这种合法工作，不是 crash。
+// 90s 误降会让用户看着真在跑的 session 显示 idle。提到 600s（10 分钟）——
+// 真挂的 session 一般 10 分钟也不会有人耐心等了。
+// 长期方案：plumb SessionData.lastActivity（最近一次 hook 时间）进 resolver，
+// 用 "lastActivity 也很久没更新" 而不是只看 transcript 尾巴年龄做判断。
+private let _staleSystemTailThreshold: TimeInterval = 600.0
 
 /// 针对 hookStatus=working + tail 是 assistant 条目的"ESC-mid-stream"场景。
 /// Claude 在 stream 文字时 transcript 每秒都在追写；tail 停在同一条 assistant
@@ -377,6 +394,13 @@ private let _staleSystemTailThreshold: TimeInterval = 90.0
 /// 60s 比 system 的 90s 紧，因为 assistant 活跃 streaming 的节奏远高于
 /// tool 执行（后者可以合法跑几分钟）。
 private let _staleAssistantTailThreshold: TimeInterval = 60.0
+
+/// "Mid-turn"（hook 是 idle/waitingForUser/completed 但 tail 是 assistant）的
+/// freshness 窗。assistant entry 距 now 在这个窗内才认为"还没等到 Stop hook"
+/// 的真 mid-turn；超过这个窗 hookStatus 是真相，不再升级 active。
+/// 30s 比 stream-stale 60s 紧——Claude 写完最后一个 token 到 Stop hook 触发
+/// 的延迟极少超过几秒，30s 给足缓冲又不至于把"真已 idle 的会话"误标 live。
+private let _midTurnFreshnessWindow: TimeInterval = 30.0
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.
