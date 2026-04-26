@@ -374,11 +374,11 @@ struct LastEntry {
 /// 防误报。Claude 真正处理一条用户消息极少超过这个阈值。
 private let _abandonedUserEntryThreshold: TimeInterval = 180.0  // 3 min
 
-/// 针对 hookStatus=tooling/thinking + tail 是 system 条目的"ESC-during-tool"
-/// 场景阈值。正常 Claude 在工作态下 transcript 每几秒就有新 user/assistant
-/// 写入；tail 停在 system 条目（stop_hook_summary 之类）说明那一轮已经写完
-/// 收尾，剩下的沉默大概率是用户 ESC 把 tool 打断，后续 PostToolUse/Stop 没
-/// 到位。90s 是个安全阈值 —— 单次正常工具调用绝大多数 < 30s 完成。
+// 针对 hookStatus=tooling/thinking + tail 是 system 条目的"ESC-during-tool"
+// 场景阈值。正常 Claude 在工作态下 transcript 每几秒就有新 user/assistant
+// 写入；tail 停在 system 条目（stop_hook_summary 之类）说明那一轮已经写完
+// 收尾，剩下的沉默大概率是用户 ESC 把 tool 打断，后续 PostToolUse/Stop 没
+// 到位。90s 是个安全阈值 —— 单次正常工具调用绝大多数 < 30s 完成。
 // 之前是 90s，但 90s 内发生的"system 尾巴静默 + hook 仍报 tooling"绝大多数
 // 是长 Bash / Read 大文件 / extended thinking 这种合法工作，不是 crash。
 // 90s 误降会让用户看着真在跑的 session 显示 idle。提到 600s（10 分钟）——
@@ -505,4 +505,3 @@ private func extractUserText(_ entry: [String: Any]) -> String {
     }
     return ""
 }
-
