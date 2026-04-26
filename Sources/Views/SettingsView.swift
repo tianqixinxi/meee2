@@ -20,6 +20,45 @@ public struct SettingsView: View {
     /// 轮播时长 (秒)
     @AppStorage("carouselInterval") private var carouselInterval: Double = 10
 
+    // MARK: - meee360 Settings
+
+    /// meee360 是否已连接
+    @AppStorage("meee360Connected") private var meee360Connected: Bool = false
+
+    /// meee360 是否在线（同步到云端）
+    @AppStorage("meee360Online") private var meee360Online: Bool = false
+
+    /// Team ID
+    @AppStorage("meee360TeamId") private var meee360TeamId: String = ""
+
+    /// Team Name
+    @AppStorage("meee360TeamName") private var meee360TeamName: String = ""
+
+    /// User ID
+    @AppStorage("meee360UserId") private var meee360UserId: String = ""
+
+    /// Supabase URL
+    @AppStorage("meee360SupabaseUrl") private var meee360SupabaseUrl: String = ""
+
+    /// Supabase Key
+    @AppStorage("meee360SupabaseKey") private var meee360SupabaseKey: String = ""
+
+    /// Machine ID (auto-generated)
+    private var meee360MachineId: String {
+        Host.current().name ?? "unknown"
+    }
+
+    /// Session Key (per session, not stored)
+    private var meee360SessionKey: String {
+        "claude-\(UUID().uuidString.prefix(8))"
+    }
+
+    /// 连接码输入
+    @State private var connectionCode: String = ""
+
+    /// 正在验证连接码
+    @State private var verifyingCode: Bool = false
+
     // MARK: - Init
 
     public init() {}
@@ -46,6 +85,11 @@ public struct SettingsView: View {
                     Label("General", systemImage: "gearshape")
                 }
 
+            userSettings
+                .tabItem {
+                    Label("User", systemImage: "person")
+                }
+
             pluginsSettings
                 .tabItem {
                     Label("Plugins", systemImage: "puzzlepiece.extension")
@@ -56,8 +100,14 @@ public struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 520, height: 450)
+        .frame(width: 520, height: 520)
         .padding()
+        .onChange(of: meee360Connected) { _ in writeMeee360Settings() }
+        .onChange(of: meee360Online) { _ in writeMeee360Settings() }
+        .onChange(of: meee360SupabaseUrl) { _ in writeMeee360Settings() }
+        .onChange(of: meee360SupabaseKey) { _ in writeMeee360Settings() }
+        .onChange(of: meee360TeamId) { _ in writeMeee360Settings() }
+        .onChange(of: meee360UserId) { _ in writeMeee360Settings() }
     }
 
     // MARK: - General Settings (合并 Display + Behavior)
@@ -199,6 +249,218 @@ public struct SettingsView: View {
 
     private var behaviorSettings: some View {
         generalSettings
+    }
+
+    // MARK: - User Settings (meee360)
+
+    private var userSettings: some View {
+        Form {
+            Section("meee360 Cloud Sync") {
+                if meee360Connected {
+                    // Connected state
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        VStack(alignment: .leading) {
+                            Text("Connected to \(meee360TeamName)")
+                                .font(.headline)
+                            Text("Team: \(meee360TeamId)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+
+                    Toggle("Online (sync sessions)", isOn: $meee360Online)
+
+                    HStack {
+                        Button("Open Dashboard") {
+                            NSWorkspace.shared.open(URL(string: "http://localhost:3000/dashboard")!)
+                        }
+                        Spacer()
+                        Button("Disconnect") {
+                            disconnectMeee360()
+                        }
+                    }
+                } else {
+                    // Not connected state
+                    HStack {
+                        Image(systemName: "cloud.slash")
+                            .foregroundColor(.secondary)
+                        Text("Not connected")
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+
+                    // Single connect button - opens browser with callback
+                    Button("Connect to meee360") {
+                        let callbackUrl = "http://localhost:9876/meee360/callback"
+                        let connectUrl = "http://localhost:3000/connect?callback=\(callbackUrl)"
+                        NSWorkspace.shared.open(URL(string: connectUrl)!)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Text("Click to open browser, login to meee360, and automatically connect.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Text("When connected and online, your Claude sessions will sync to meee360 dashboard for team visibility.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("meee360.connected"))) { notification in
+            // Handle callback from browser
+            if let userInfo = notification.userInfo {
+                meee360Connected = true
+                meee360TeamId = userInfo["teamId"] as? String ?? ""
+                meee360TeamName = userInfo["teamName"] as? String ?? ""
+                meee360UserId = userInfo["userId"] as? String ?? ""
+                meee360SupabaseUrl = userInfo["supabaseUrl"] as? String ?? ""
+                meee360SupabaseKey = userInfo["supabaseKey"] as? String ?? ""
+                meee360Online = true
+            }
+        }
+    }
+
+    private func verifyConnectionCode() {
+        guard connectionCode.count == 6 else { return }
+
+        verifyingCode = true
+
+        Task {
+            do {
+                let result = try await verifyCode(code: connectionCode)
+
+                // Store configuration
+                meee360Connected = true
+                meee360TeamId = result.team.id
+                meee360TeamName = result.team.name
+                meee360UserId = result.user.id
+                meee360SupabaseUrl = result.supabase_url
+                meee360SupabaseKey = result.supabase_key
+
+                connectionCode = ""
+                showAlert(title: "Connected!", message: "Successfully connected to \(result.team.name)")
+            } catch {
+                showAlert(title: "Connection Failed", message: error.localizedDescription)
+            }
+
+            verifyingCode = false
+        }
+    }
+
+    private func verifyCode(code: String) async throws -> Meee360ConnectResult {
+        let endpoint = URL(string: "http://localhost:3000/api/v1/connect")!
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(["code": code])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        return try JSONDecoder().decode(Meee360ConnectResult.self, from: data)
+    }
+
+    private func disconnectMeee360() {
+        meee360Connected = false
+        meee360Online = false
+        meee360TeamId = ""
+        meee360TeamName = ""
+        meee360UserId = ""
+        meee360SupabaseUrl = ""
+        meee360SupabaseKey = ""
+    }
+
+    private var meee360DashboardUrl: URL? {
+        guard !meee360SupabaseUrl.isEmpty else { return nil }
+        // Extract project ref from Supabase URL for dashboard link
+        // URL format: https://xxx.supabase.co -> dashboard at meee360 app
+        return URL(string: "http://localhost:3000/dashboard")
+    }
+
+    private func testMeee360Connection() {
+        guard !meee360SupabaseUrl.isEmpty,
+              !meee360SupabaseKey.isEmpty,
+              !meee360TeamId.isEmpty,
+              !meee360UserId.isEmpty else {
+            showAlert(title: "Missing Configuration", message: "Please fill in all required fields.")
+            return
+        }
+
+        let url = meee360SupabaseUrl
+        let key = meee360SupabaseKey
+        let teamId = meee360TeamId
+        let userId = meee360UserId
+
+        Task {
+            do {
+                _ = try await testSupabaseConnection(url: url, key: key, teamId: teamId, userId: userId)
+                showAlert(title: "Connection OK", message: "Successfully connected to meee360.")
+            } catch {
+                showAlert(title: "Connection Failed", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func testSupabaseConnection(url: String, key: String, teamId: String, userId: String) async throws -> Bool {
+        let endpoint = URL(string: "\(url)/rest/v1/meee360_team_sessions?team_id=eq.\(teamId)&user_id=eq.\(userId)&limit=1")!
+        var request = URLRequest(url: endpoint)
+        request.setValue(key, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+        return true
+    }
+
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func writeMeee360Settings() {
+        guard meee360Connected else { return }
+
+        let settings: [String: Any] = [
+            "meee360": [
+                "enabled": meee360Connected,
+                "online": meee360Online,
+                "supabaseUrl": meee360SupabaseUrl,
+                "supabaseKey": meee360SupabaseKey,
+                "teamId": meee360TeamId,
+                "userId": meee360UserId,
+                "machineId": Host.current().name ?? "unknown",
+                "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
+            ]
+        ]
+
+        let home = NSHomeDirectory()
+        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
+        let file = dir.appendingPathComponent("settings.json")
+
+        // Ensure directory exists
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Write JSON
+        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: file, options: .atomic)
+            NSLog("[Settings] Wrote meee360 settings to \(file.path)")
+        }
     }
 
     // MARK: - Plugins Settings
@@ -867,6 +1129,24 @@ struct TraecliPluginSettings: View {
                 .fill(Color.secondary.opacity(0.1))
         )
     }
+}
+
+// MARK: - Meee360 Connection Result
+
+struct Meee360ConnectResult: Codable {
+    let team: Meee360Team
+    let user: Meee360User
+    let supabase_url: String
+    let supabase_key: String
+}
+
+struct Meee360Team: Codable {
+    let id: String
+    let name: String
+}
+
+struct Meee360User: Codable {
+    let id: String
 }
 
 // MARK: - Notification Name
