@@ -34,6 +34,11 @@ public struct IslandView: View {
     /// 轮播时长 (秒)
     @AppStorage("carouselInterval") private var carouselInterval: Double = 10
 
+    /// urgent / needsAttention 时是否自动展开灵动岛。
+    /// false → 用户必须手动点开才看到详情；红色 dot / 状态色仍然在 compact
+    /// 上提示，只是不再"弹窗"。设置在 SettingsView 的 "Auto Expand & Close"。
+    @AppStorage("autoExpandEnabled") private var autoExpandEnabled: Bool = true
+
     @State private var isExpanded = false
     @State private var expandMode: ExpandMode = .manual
     @State private var isClosing = false  // 正在关闭动画中，保持内容显示
@@ -253,9 +258,14 @@ public struct IslandView: View {
         .onAppear { startCarousel() }
         .onDisappear { stopCarousel() }
         .onChange(of: statusManager.hasUrgentSession) { needsAttention in
-            NSLog("[IslandView] hasUrgentSession changed to: \(needsAttention), isExpanded: \(isExpanded)")
+            NSLog("[IslandView] hasUrgentSession changed to: \(needsAttention), isExpanded: \(isExpanded), autoExpand=\(autoExpandEnabled)")
             if needsAttention && !isExpanded {
-                // 需要用户介入时自动展开
+                // urgent 自动展开必须尊重用户设置（"Auto expand when needs attention"）。
+                // 关闭时仅在 compact 上做被动指示（颜色 / dot），不主动弹窗。
+                guard autoExpandEnabled else {
+                    NSLog("[IslandView] Auto expand suppressed by user setting")
+                    return
+                }
                 NSLog("[IslandView] Auto expanding due to urgent session")
                 openExpanded()
             } else if !needsAttention && isExpanded && expandMode == .auto {
@@ -265,8 +275,12 @@ public struct IslandView: View {
             }
         }
         .onChange(of: statusManager.systemStatus) { newStatus in
-            NSLog("[IslandView] systemStatus changed to: \(newStatus)")
+            NSLog("[IslandView] systemStatus changed to: \(newStatus), autoExpand=\(autoExpandEnabled)")
             if newStatus == .needsAttention && !isExpanded {
+                guard autoExpandEnabled else {
+                    NSLog("[IslandView] Auto expand suppressed by user setting (systemStatus path)")
+                    return
+                }
                 openExpanded()
             }
         }

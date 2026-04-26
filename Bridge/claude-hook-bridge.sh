@@ -53,24 +53,49 @@ if [ -n "$CMUX_SOCKET_VAL" ]; then
     TERM_BUNDLE_VAL="cmux"
 fi
 
-# Ghostty 原生终端 ID（只在 Ghostty 且 hook 时我们的 tab 大概率仍 focus 时捕获）。
-# 参考 csm 的做法：在 SessionStart/UserPromptSubmit 等"用户刚触发"事件时调用
-# osascript 抓一次 `id of (focused terminal of (selected tab of (front window)))`。
-# 这个 ID 后续可用 `tell application "Ghostty" to focus (terminal id "X")` 精确跳转。
+# Ghostty 原生终端 ID。
+#
+# 优先策略：tty 反查（Ghostty PR #11922, merged 2026-04-20，进入 tip nightly）。
+# AppleScript `tty of (terminal id "X")` 现在返回 `/dev/ttysNNN`，用我们 hook
+# 子进程持有的 tty 直接匹配，**完全 deterministic** —— 不依赖 user focus、
+# 不依赖事件类型、不会撞 id。需要 Ghostty >= tip。
+#
+# Fallback：旧版 Ghostty（如 1.3.1 stable）AppleScript terminal class 没有
+# tty 字段，反查会全部空串。这时退到老的"focused terminal of front window"
+# 启发式（只在 SessionStart/UserPromptSubmit 触发，因为这两个事件 user 焦点
+# 大概率还在对的 tab）。装上 tip 后 deterministic 路径自动生效。
 GHOSTTY_TERMINAL_ID_VAL=""
 # 从 JSON stdin 里回落取 event 名（新版 Claude 不再塞 env）
 _HOOK_EVENT_FOR_CAPTURE="$HOOK_EVENT"
 if [ -z "$_HOOK_EVENT_FOR_CAPTURE" ] && command -v jq &> /dev/null && [ -n "$INPUT" ]; then
     _HOOK_EVENT_FOR_CAPTURE=$(echo "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null)
 fi
-case "$_HOOK_EVENT_FOR_CAPTURE" in
-    SessionStart|UserPromptSubmit)
-        # 不做 TERM_PROGRAM 门禁：hook 子进程 env 里 $TERM_PROGRAM 经常丢，
-        # 卡在这里会让 Ghostty 的 session 永远拿不到 terminal id。
-        # 只跳过 cmux（cmux 用自己的 surface id 路径）。osascript 在 Ghostty
-        # 不运行/不在前台时返回空串，bridge 会把空值当 no-op。
-        if [ -z "$CMUX_SOCKET_VAL" ]; then
-            GHOSTTY_TERMINAL_ID_VAL=$(/usr/bin/osascript -e '
+
+if [ -z "$CMUX_SOCKET_VAL" ] && [ -n "$TTY_VAL" ]; then
+    # Step 1：tty 反查（需要 Ghostty tip 的 tty 属性）
+    # tty 属性来自 PR #11922；老版本会让 osascript 整段抛错回空串。
+    # 注意：TTY_VAL 是 "ttys003"（无 /dev/ 前缀），Ghostty 返回 "/dev/ttys003"。
+    _MY_TTY_PATH="/dev/$TTY_VAL"
+    GHOSTTY_TERMINAL_ID_VAL=$(/usr/bin/osascript <<EOF 2>/dev/null
+tell application "Ghostty"
+  try
+    repeat with t in terminals
+      try
+        if (tty of t as string) is "$_MY_TTY_PATH" then return id of t
+      end try
+    end repeat
+  end try
+  return ""
+end tell
+EOF
+)
+    _GHOSTTY_STRATEGY="tty"
+    # Step 2：tty 路径没拿到 → 退回 focused-terminal 启发式（只对启动级事件）
+    # + cwd validation 兜底，防 focus race。
+    if [ -z "$GHOSTTY_TERMINAL_ID_VAL" ]; then
+        case "$_HOOK_EVENT_FOR_CAPTURE" in
+            SessionStart|UserPromptSubmit)
+                _CANDIDATE=$(/usr/bin/osascript -e '
 tell application "Ghostty"
   try
     set t to focused terminal of (selected tab of (front window))
@@ -79,11 +104,47 @@ tell application "Ghostty"
     return ""
   end try
 end tell' 2>/dev/null)
-            # 落一行调试日志到 /tmp，方便验证 bridge 是否确实抓到
-            echo "$(date +%H:%M:%S) event=$_HOOK_EVENT_FOR_CAPTURE sid=${CLAUDE_SESSION_ID:-?} term=${TERM_PROGRAM:-?} ghosttyId=$GHOSTTY_TERMINAL_ID_VAL" >> /tmp/meee2-bridge-debug.log
-        fi
-        ;;
-esac
+                if [ -n "$_CANDIDATE" ]; then
+                    # cwd validation：拿候选 terminal 的 working directory，跟
+                    # 我们 hook 进程的 $PWD 比对。一致才采纳——focus race 抓到
+                    # 的是别的 tab，cwd 大概率不一样，就会被拒掉。
+                    _MY_CWD="${CLAUDE_CWD:-$PWD}"
+                    _CAND_CWD=$(/usr/bin/osascript <<EOF 2>/dev/null
+tell application "Ghostty"
+  try
+    return working directory of (terminal id "$_CANDIDATE")
+  on error
+    return ""
+  end try
+end tell
+EOF
+)
+                    # 路径规范化：去掉尾部 / 再比
+                    _MY_CWD="${_MY_CWD%/}"
+                    _CAND_CWD="${_CAND_CWD%/}"
+                    if [ -n "$_CAND_CWD" ] && [ "$_CAND_CWD" = "$_MY_CWD" ]; then
+                        GHOSTTY_TERMINAL_ID_VAL="$_CANDIDATE"
+                        _GHOSTTY_STRATEGY="focused+cwd"
+                    else
+                        echo "$(date +%H:%M:%S) GHOSTTY_REJECT sid=${CLAUDE_SESSION_ID:-?} candidate=$_CANDIDATE cwd_mine='$_MY_CWD' cwd_cand='$_CAND_CWD' (focus race)" >> /tmp/meee2-bridge-debug.log
+                    fi
+                fi
+                ;;
+        esac
+    fi
+    # 落一行调试日志（带 strategy 标签便于看哪条路径成功）
+    if [ -n "$GHOSTTY_TERMINAL_ID_VAL" ]; then
+        echo "$(date +%H:%M:%S) event=$_HOOK_EVENT_FOR_CAPTURE sid=${CLAUDE_SESSION_ID:-?} tty=$TTY_VAL ghosttyId=$GHOSTTY_TERMINAL_ID_VAL strategy=$_GHOSTTY_STRATEGY" >> /tmp/meee2-bridge-debug.log
+    fi
+fi
+
+# iTerm2：每 tab 自带 ITERM_SESSION_ID 环境变量（UUID），native deterministic。
+# AppleScript 端可用 `tell session id "X" to write text "..."` 直推，不需要焦点。
+ITERM_SESSION_ID_VAL="${ITERM_SESSION_ID:-}"
+
+# Apple Terminal：每 tab 自带 TERM_SESSION_ID。Apple Terminal 的 AppleScript
+# 模型按 tty 寻址 tab 更稳，所以这里只把 session id 作为辅助 capture。
+APPLE_TERM_SESSION_ID_VAL="${TERM_SESSION_ID:-}"
 
 # 构建 JSON 数据
 if [ -z "$INPUT" ] || [ "$INPUT" = "" ]; then
@@ -99,6 +160,8 @@ if [ -z "$INPUT" ] || [ "$INPUT" = "" ]; then
   "cmuxSocketPath": "$CMUX_SOCKET_VAL",
   "cmuxSurfaceId": "$CMUX_SURFACE_VAL",
   "ghosttyTerminalId": "$GHOSTTY_TERMINAL_ID_VAL",
+  "iTermSessionId": "$ITERM_SESSION_ID_VAL",
+  "appleTerminalSessionId": "$APPLE_TERM_SESSION_ID_VAL",
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -113,13 +176,18 @@ else
             --arg cmuxSocket "$CMUX_SOCKET_VAL" \
             --arg cmuxSurface "$CMUX_SURFACE_VAL" \
             --arg ghosttyId "$GHOSTTY_TERMINAL_ID_VAL" \
+            --arg iTermId "$ITERM_SESSION_ID_VAL" \
+            --arg appleTermId "$APPLE_TERM_SESSION_ID_VAL" \
             '. + {
                 tty: (if .tty then .tty else $tty end),
                 termProgram: (if .termProgram then .termProgram else $term end),
                 termBundleId: (if .termBundleId then .termBundleId else $bundle end),
                 cmuxSocketPath: (if .cmuxSocketPath then .cmuxSocketPath else $cmuxSocket end),
                 cmuxSurfaceId: (if .cmuxSurfaceId then .cmuxSurfaceId else $cmuxSurface end)
-            } + (if $ghosttyId != "" then {ghosttyTerminalId: $ghosttyId} else {} end)')
+            }
+            + (if $ghosttyId != "" then {ghosttyTerminalId: $ghosttyId} else {} end)
+            + (if $iTermId != "" then {iTermSessionId: $iTermId} else {} end)
+            + (if $appleTermId != "" then {appleTerminalSessionId: $appleTermId} else {} end)')
     else
         # 无 jq 时，在 JSON 结尾添加字段
         if [ -n "$TTY_VAL" ] || [ -n "$TERM_PROGRAM_VAL" ] || [ -n "$CMUX_SOCKET_VAL" ]; then

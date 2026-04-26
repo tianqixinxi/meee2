@@ -164,6 +164,14 @@ public struct HookEvent: Decodable, Sendable {
     /// 只在 SessionStart/UserPromptSubmit 这类用户刚触发的事件里由 bridge 捕获。
     public let ghosttyTerminalId: String?
 
+    /// iTerm2 native per-tab session UUID（来自 `$ITERM_SESSION_ID` env），
+    /// 直接用 `tell session id "X"` 精确寻址 + 注入文字，无需焦点 / 无 race。
+    public let iTermSessionId: String?
+
+    /// Apple Terminal 自动生成的 per-tab UUID（来自 `$TERM_SESSION_ID` env）。
+    /// 主用作 capture-phase 锚定；运行时 AppleScript 寻址 Apple Terminal 用 tty 更稳。
+    public let appleTerminalSessionId: String?
+
     /// 时间戳
     public let timestamp: Date?
 
@@ -351,6 +359,8 @@ public struct HookEvent: Decodable, Sendable {
         case cmuxSocketPath
         case cmuxSurfaceId
         case ghosttyTerminalId
+        case iTermSessionId
+        case appleTerminalSessionId
         case timestamp
     }
 
@@ -376,6 +386,8 @@ public struct HookEvent: Decodable, Sendable {
         cmuxSocketPath: String? = nil,
         cmuxSurfaceId: String? = nil,
         ghosttyTerminalId: String? = nil,
+        iTermSessionId: String? = nil,
+        appleTerminalSessionId: String? = nil,
         timestamp: Date? = nil,
         rawData: String? = nil
     ) {
@@ -397,6 +409,8 @@ public struct HookEvent: Decodable, Sendable {
         self.cmuxSocketPath = cmuxSocketPath
         self.cmuxSurfaceId = cmuxSurfaceId
         self.ghosttyTerminalId = ghosttyTerminalId
+        self.iTermSessionId = iTermSessionId
+        self.appleTerminalSessionId = appleTerminalSessionId
         self.timestamp = timestamp
         self.rawData = rawData
     }
@@ -435,6 +449,8 @@ public struct HookEvent: Decodable, Sendable {
         cmuxSocketPath = try container.decodeIfPresent(String.self, forKey: .cmuxSocketPath)
         cmuxSurfaceId = try container.decodeIfPresent(String.self, forKey: .cmuxSurfaceId)
         ghosttyTerminalId = try container.decodeIfPresent(String.self, forKey: .ghosttyTerminalId)
+        iTermSessionId = try container.decodeIfPresent(String.self, forKey: .iTermSessionId)
+        appleTerminalSessionId = try container.decodeIfPresent(String.self, forKey: .appleTerminalSessionId)
         timestamp = try container.decodeIfPresent(Date.self, forKey: .timestamp)
     }
 }

@@ -21,9 +21,16 @@ public struct SessionData: Codable, Identifiable {
     // MARK: - 基本信息
 
     public let sessionId: String
-    public var project: String              // 工作目录
+    public var project: String              // 项目"显示名"——通常 = cwd 的 basename
+    /// 完整的工作目录路径（hook 的 `cwd` 字段 / `aiSession.cwd`）。`project` 历史
+    /// 上只是 basename，会丢路径信息——spawn / open-in-editor 这种需要全路径的
+    /// 操作必须用这个字段。`nil` 表示老 session 还没收到带 cwd 的 hook，调用方
+    /// 应该回落到 `project` 或拒绝操作。
+    public var cwd: String?
     public var pid: Int?                    // Claude Code 进程 ID
     public var ghosttyTerminalId: String?   // Ghostty 终端 ID
+    public var iTermSessionId: String?      // iTerm2 native per-tab UUID（$ITERM_SESSION_ID）
+    public var appleTerminalSessionId: String?  // Apple Terminal per-tab UUID（$TERM_SESSION_ID）
     public var transcriptPath: String?      // Transcript JSONL 文件路径
 
     // MARK: - 时间信息
@@ -69,8 +76,11 @@ public struct SessionData: Codable, Identifiable {
     public init(
         sessionId: String,
         project: String,
+        cwd: String? = nil,
         pid: Int? = nil,
         ghosttyTerminalId: String? = nil,
+        iTermSessionId: String? = nil,
+        appleTerminalSessionId: String? = nil,
         transcriptPath: String? = nil,
         startedAt: Date = Date(),
         lastActivity: Date = Date(),
@@ -85,8 +95,11 @@ public struct SessionData: Codable, Identifiable {
     ) {
         self.sessionId = sessionId
         self.project = project
+        self.cwd = cwd
         self.pid = pid
         self.ghosttyTerminalId = ghosttyTerminalId
+        self.iTermSessionId = iTermSessionId
+        self.appleTerminalSessionId = appleTerminalSessionId
         self.transcriptPath = transcriptPath
         self.startedAt = startedAt
         self.lastActivity = lastActivity
@@ -106,8 +119,11 @@ public struct SessionData: Codable, Identifiable {
         case schemaVersion = "schema_version"
         case sessionId = "session_id"
         case project
+        case cwd
         case pid
         case ghosttyTerminalId = "ghostty_terminal_id"
+        case iTermSessionId = "iterm_session_id"
+        case appleTerminalSessionId = "apple_terminal_session_id"
         case transcriptPath = "transcript_path"
         case startedAt = "started_at"
         case lastActivity = "last_activity"
@@ -133,8 +149,11 @@ public struct SessionData: Codable, Identifiable {
 
         sessionId = try container.decode(String.self, forKey: .sessionId)
         project = try container.decode(String.self, forKey: .project)
+        cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         pid = try container.decodeIfPresent(Int.self, forKey: .pid)
         ghosttyTerminalId = try container.decodeIfPresent(String.self, forKey: .ghosttyTerminalId)
+        iTermSessionId = try container.decodeIfPresent(String.self, forKey: .iTermSessionId)
+        appleTerminalSessionId = try container.decodeIfPresent(String.self, forKey: .appleTerminalSessionId)
         transcriptPath = try container.decodeIfPresent(String.self, forKey: .transcriptPath)
 
         // 时间解析
@@ -171,8 +190,11 @@ public struct SessionData: Codable, Identifiable {
         try container.encode(schemaVersion, forKey: .schemaVersion)
         try container.encode(sessionId, forKey: .sessionId)
         try container.encode(project, forKey: .project)
+        try container.encodeIfPresent(cwd, forKey: .cwd)
         try container.encodeIfPresent(pid, forKey: .pid)
         try container.encodeIfPresent(ghosttyTerminalId, forKey: .ghosttyTerminalId)
+        try container.encodeIfPresent(iTermSessionId, forKey: .iTermSessionId)
+        try container.encodeIfPresent(appleTerminalSessionId, forKey: .appleTerminalSessionId)
         try container.encodeIfPresent(transcriptPath, forKey: .transcriptPath)
 
         let formatter = ISO8601DateFormatter()
@@ -302,10 +324,24 @@ public class SessionStore: ObservableObject {
         var merged = session
         let existing = sessions.first(where: { $0.sessionId == session.sessionId })
         if let ex = existing {
+            // 全 cwd：hook event 不一定每次都带，merge 时也要 sticky
+            if (merged.cwd ?? "").isEmpty,
+               let prev = ex.cwd, !prev.isEmpty {
+                merged.cwd = prev
+            }
             // Ghostty 原生 terminal id：只在 hook 里主动捕获过一次就该粘着
             if (merged.ghosttyTerminalId ?? "").isEmpty,
                let prev = ex.ghosttyTerminalId, !prev.isEmpty {
                 merged.ghosttyTerminalId = prev
+            }
+            // 同样的 sticky-empty 语义给 iTerm2 / Apple Terminal 的 native id
+            if (merged.iTermSessionId ?? "").isEmpty,
+               let prev = ex.iTermSessionId, !prev.isEmpty {
+                merged.iTermSessionId = prev
+            }
+            if (merged.appleTerminalSessionId ?? "").isEmpty,
+               let prev = ex.appleTerminalSessionId, !prev.isEmpty {
+                merged.appleTerminalSessionId = prev
             }
             // terminalInfo：若 incoming 完全没有 tty/termProgram/cmuxSocket 就沿用旧的
             let ti = merged.terminalInfo
@@ -558,7 +594,7 @@ extension SessionData {
             subtitle: currentTask,
             lastUpdated: lastActivity,
             toolName: currentTool,
-            cwd: project,
+            cwd: cwd ?? project,
             terminalInfo: terminalInfo,
             tasks: tasks,
             usageStats: usageStats,

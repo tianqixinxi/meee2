@@ -42,6 +42,15 @@ class ClaudePlugin: SessionPlugin {
     private var sessionStatuses: [String: SessionStatus] = [:]
     private let sessionStatusesLock = NSLock()
 
+    /// Hook 带来的 Ghostty terminal id 暂存。
+    /// 适用于 SessionStart hook 抢在 PID-scan 创建 SessionData 之前到达的竞态：
+    /// 那时 `sessionStore.update(sid)` 是 no-op，ghosttyId 会丢；这里先 buffer，
+    /// 等 PID-scan 在 `syncSessions` 里建 record 时再 drain 进 SessionData。
+    /// "set-once" 语义同 line ~294：先到先得，避免后续 UserPromptSubmit hook
+    /// 在用户已切换焦点时拿到错误 id 把正确值盖掉。
+    private var pendingGhosttyTerminalIds: [String: String] = [:]
+    private let pendingGhosttyTerminalIdsLock = NSLock()
+
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
 
@@ -291,10 +300,62 @@ class ClaudePlugin: SessionPlugin {
         // 事件的捕获**不要 overwrite**：那时用户焦点可能在别的 tab，bridge
         // 的 `focused terminal of front window` 拿到的是错的 id，盖掉正确值
         // 会导致"Open terminal"跳到别的 session 的 terminal。
+        //
+        // 竞态：SessionStart hook 经常抢在 `syncSessions` 的 PID-scan 之前到达，
+        // 那时 SessionStore 里还没有这个 sid 的 record，下面的 `update` 直接 no-op。
+        // 此时把 gtid 暂存到 `pendingGhosttyTerminalIds`，PID-scan 建 record 时
+        // 在 syncSessions 末尾 drain 进 SessionData。
         if let gtid = event.ghosttyTerminalId, !gtid.isEmpty {
+            // Collision rejection（默认补丁）：bridge 端的 cwd validation 拦不住
+            // "两个 session 同 cwd 同 focused-terminal"这种残留情况，所以再加一道
+            // SessionStore 端的检查——已经有别的"活的、不同 tty"的 session 占着
+            // 这个 gtid，就拒绝写入，宁可空着走 inbox drain 也不要错配到别的终端。
+            let myTty = event.tty ?? ""
+            let conflict = sessionStore.sessions.first(where: { other in
+                other.sessionId != sessionId
+                    && (other.ghosttyTerminalId ?? "") == gtid
+                    && (other.terminalInfo?.tty ?? "") != myTty
+                    && other.status != .dead && other.status != .completed
+            })
+            if let conflict = conflict {
+                NSLog("[ClaudePlugin] reject ghosttyId=\(gtid.prefix(8)) for sid=\(sessionId.prefix(8)) tty=\(myTty): collision with sid=\(conflict.sessionId.prefix(8)) tty=\(conflict.terminalInfo?.tty ?? "?")")
+            } else if sessionStore.exists(sessionId) {
+                sessionStore.update(sessionId) { data in
+                    if (data.ghosttyTerminalId ?? "").isEmpty {
+                        data.ghosttyTerminalId = gtid
+                    }
+                }
+            } else {
+                pendingGhosttyTerminalIdsLock.lock()
+                if pendingGhosttyTerminalIds[sessionId] == nil {
+                    pendingGhosttyTerminalIds[sessionId] = gtid
+                }
+                pendingGhosttyTerminalIdsLock.unlock()
+            }
+        }
+        // 全 cwd 路径——hook 每次都带 cwd，sticky-empty 写入：第一次有就锁住，
+        // 防止后续 hook 在用户 `cd` 后把存的"项目根"改成子目录（aiSession.cwd
+        // 来自 transcript 里 SessionStart 的 cwd，更稳定）。
+        if let evCwd = event.cwd, !evCwd.isEmpty, sessionStore.exists(sessionId) {
             sessionStore.update(sessionId) { data in
-                if (data.ghosttyTerminalId ?? "").isEmpty {
-                    data.ghosttyTerminalId = gtid
+                if (data.cwd ?? "").isEmpty {
+                    data.cwd = evCwd
+                }
+            }
+        }
+        // iTerm2 native session id：env 里 deterministic，没 race，直接 set-once。
+        if let iid = event.iTermSessionId, !iid.isEmpty, sessionStore.exists(sessionId) {
+            sessionStore.update(sessionId) { data in
+                if (data.iTermSessionId ?? "").isEmpty {
+                    data.iTermSessionId = iid
+                }
+            }
+        }
+        // Apple Terminal native session id：同上，纯 env 来源
+        if let aid = event.appleTerminalSessionId, !aid.isEmpty, sessionStore.exists(sessionId) {
+            sessionStore.update(sessionId) { data in
+                if (data.appleTerminalSessionId ?? "").isEmpty {
+                    data.appleTerminalSessionId = aid
                 }
             }
         }
@@ -780,6 +841,17 @@ class ClaudePlugin: SessionPlugin {
                 // 需要删除旧记录，用真实的 session ID 创建新记录
                 if existingPidMatch.sessionId != realSessionId {
                     NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Deleting old and creating new.")
+                    // 旧 record 上的 ghosttyTerminalId（如果有）属于同一个物理 Ghostty
+                    // terminal（同一 PID = 同一 Claude CLI 实例 = 同一 tty）。
+                    // 删旧之前先把它 buffer 到 realSessionId 上，避免新 record 失去
+                    // 跳转/消息注入能力。
+                    if let prevGtid = existingPidMatch.ghosttyTerminalId, !prevGtid.isEmpty {
+                        pendingGhosttyTerminalIdsLock.lock()
+                        if pendingGhosttyTerminalIds[realSessionId] == nil {
+                            pendingGhosttyTerminalIds[realSessionId] = prevGtid
+                        }
+                        pendingGhosttyTerminalIdsLock.unlock()
+                    }
                     sessionStore.delete(existingPidMatch.sessionId)
                     // 继续创建新记录（不 continue）
                 } else {
@@ -797,6 +869,11 @@ class ClaudePlugin: SessionPlugin {
 
                     sessionStore.update(existingPidMatch.sessionId) { data in
                         data.project = aiSession.projectName
+                        // 全 cwd 路径——spawn / open-in-editor 等需要完整路径的操作走 data.cwd。
+                        // aiSession.cwd 拿不到时不要清掉旧值（基本不会发生，aiSession 总是带 cwd）。
+                        if !aiSession.cwd.isEmpty {
+                            data.cwd = aiSession.cwd
+                        }
                         data.startedAt = aiSession.startedAt
                         data.lastActivity = aiSession.lastUpdated
                         // 不要碰 data.status：SessionMonitor 每 2s 跑一次这条路径，
@@ -858,11 +935,20 @@ class ClaudePlugin: SessionPlugin {
                 }
             }
 
+            // Drain any buffered ghosttyTerminalId from earlier hook events that
+            // arrived before this PID-scan got a chance to materialize the record.
+            // Falls back to the latest hookEvent if the buffer is empty.
+            pendingGhosttyTerminalIdsLock.lock()
+            let bufferedGtid = pendingGhosttyTerminalIds.removeValue(forKey: realSessionId)
+            pendingGhosttyTerminalIdsLock.unlock()
+            let resolvedGhosttyTerminalId = bufferedGtid ?? hookEvent?.ghosttyTerminalId
+
             let data = SessionData(
                 sessionId: realSessionId,
                 project: aiSession.projectName,
+                cwd: aiSession.cwd.isEmpty ? nil : aiSession.cwd,
                 pid: aiSession.pid,
-                ghosttyTerminalId: nil,
+                ghosttyTerminalId: resolvedGhosttyTerminalId,
                 transcriptPath: transcriptPath,
                 startedAt: aiSession.startedAt,
                 lastActivity: aiSession.lastUpdated,
