@@ -49,10 +49,47 @@ public enum FullTranscriptReader {
             return []
         }
 
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
+
+        // ── Pass 1：收集所有 type=user 里 content=string 的真实 prompt 文本。
+        // 这一步是为 `last-prompt` 去重做准备。新 schema 里：
+        //   - 用户每打一条 prompt → 一个 type=user，message.content 是 string
+        //   - Claude CLI 还会**周期性**在每个 turn 前 emit 一条 type=last-prompt，
+        //     里面 lastPrompt = 同一段文本，作为"最近一次 prompt"的 context 快照
+        //   - 一段 prompt 通常在 last-prompt 里复现 N 次（按 turn 数），如果照单
+        //     全收，Web UI 上一句话能被渲染几十次——就是用户报的那个 bug
+        // 所以：last-prompt 文本只在「不出现于 type=user.string」时才保留，且
+        // 自身也要去重。
+        // Pass 1：收集所有 type=user 里 content=string 的 dedupe key。
+        // dedupe key = whitespace-collapsed + trimmed。Claude CLI 拷贝 prompt 到
+        // last-prompt 时会做 `\n` → space 的 normalize；不做 collapse 的话 exact
+        // match 漏判。
+        var seenUserStringKeys = Set<String>()
+        for line in lines {
+            guard let d = line.data(using: .utf8),
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  (j["type"] as? String) == "user",
+                  let msg = j["message"] as? [String: Any],
+                  let str = msg["content"] as? String,
+                  !str.isEmpty else { continue }
+            seenUserStringKeys.insert(Self.dedupeKey(str))
+        }
+        // 同时把 user.string keys 排序拿一份长度递减的快照——last-prompt 可能
+        // 把长 prompt 截断到末尾 `…`，需要 prefix 命中才算重复。
+        let userKeyPrefixes = seenUserStringKeys.sorted { $0.count > $1.count }
+
+        // ── Pass 2：实际 parse + 输出
+        var emittedLastPromptKeys = Set<String>()
         var out: [FullTranscriptEntry] = []
         var index = 0
-        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
-            if let entry = parseLine(String(line), fallbackIndex: index) {
+        for line in lines {
+            if let entry = parseLine(
+                String(line),
+                fallbackIndex: index,
+                seenUserStringKeys: seenUserStringKeys,
+                userKeyPrefixes: userKeyPrefixes,
+                emittedLastPromptKeys: &emittedLastPromptKeys
+            ) {
                 out.append(entry)
             }
             index += 1
@@ -65,18 +102,69 @@ public enum FullTranscriptReader {
         return out
     }
 
-    private static func parseLine(_ line: String, fallbackIndex: Int) -> FullTranscriptEntry? {
+    /// Dedupe key: 把所有空白（含 \n / \t / 多空格）压成单个空格，首尾 trim。
+    /// 用于跨 type=user.string 和 type=last-prompt 的内容比对，因为 Claude CLI
+    /// 把前者复制到后者时会做 newline → space 的 normalize。
+    private static func dedupeKey(_ s: String) -> String {
+        let collapsed = s.replacingOccurrences(
+            of: "\\s+", with: " ", options: .regularExpression
+        )
+        return collapsed.trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func parseLine(
+        _ line: String,
+        fallbackIndex: Int,
+        seenUserStringKeys: Set<String>,
+        userKeyPrefixes: [String],
+        emittedLastPromptKeys: inout Set<String>
+    ) -> FullTranscriptEntry? {
         guard let data = line.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
         guard let type = json["type"] as? String,
-              ["user", "assistant", "system"].contains(type) else {
+              ["user", "assistant", "system", "last-prompt"].contains(type) else {
             return nil
         }
 
         let uuid = (json["uuid"] as? String) ?? "idx-\(fallbackIndex)"
         let ts = json["timestamp"] as? String
+
+        // 新版 Claude CLI schema：用户的真实 prompt 原话现在写在 type=last-prompt
+        // 里（含 lastPrompt 字段），普通 type=user 几乎全是 tool_result 的载体。
+        // 但实测：大多数 last-prompt 文本同时也存在于某条 type=user 的 string
+        // content 里——它只是 context 快照，**不是**唯一来源。少部分 prompt（比如
+        // 长 prompt 被 truncate）只出现在 last-prompt。所以策略：
+        //   1. 如果文本已在 type=user.string 里出现过 → 别重复 emit
+        //   2. 如果同一段文本之前已经 emit 过 last-prompt → 别再 emit
+        //   3. 否则 emit 成 user entry，并记入 emittedLastPromptContents
+        // 注意：last-prompt 无 timestamp，前端必须按 file 顺序展示（不能再按 ts 排序）。
+        if type == "last-prompt" {
+            guard let prompt = json["lastPrompt"] as? String, !prompt.isEmpty else {
+                return nil
+            }
+            let key = Self.dedupeKey(prompt)
+            if seenUserStringKeys.contains(key) { return nil }
+            // Truncated 命中：last-prompt 长 prompt 会被截断到末尾 `…`，
+            // 拿剥掉 `…` 后的 prefix 跟任何 user.string key 比；命中即视为重复。
+            let trimmed = key.trimmingCharacters(in: CharacterSet(charactersIn: "…"))
+            if !trimmed.isEmpty && trimmed.count < key.count {
+                if userKeyPrefixes.contains(where: { $0.hasPrefix(trimmed) }) { return nil }
+            }
+            if emittedLastPromptKeys.contains(key) { return nil }
+            emittedLastPromptKeys.insert(key)
+            return FullTranscriptEntry(
+                id: uuid,
+                type: "user",
+                timestamp: ts,
+                blocks: [FullTranscriptBlock(
+                    type: "text", text: prompt,
+                    toolId: nil, toolName: nil, toolInputJSON: nil,
+                    toolUseId: nil, toolResultText: nil, toolResultTruncated: nil
+                )]
+            )
+        }
 
         // 判定 isMeta user 的来源：
         //   - <bash-input>/<bash-stdout>/<local-command-caveat> → Claude CLI

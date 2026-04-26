@@ -94,6 +94,41 @@ final class FullTranscriptReaderTests: XCTestCase {
         XCTAssertEqual(entries.count, 0, "empty thinking block produces no entry (no useful content to render)")
     }
 
+    // MARK: - last-prompt schema：用户真实 prompt 必须被识别成 user entry
+    //
+    // 新版 Claude CLI 把用户原话写在 type=last-prompt 的 lastPrompt 字段里，
+    // 普通 type=user 几乎只承载 tool_result。如果不识别 last-prompt，Web UI
+    // 永远看不到用户说了什么——比 <bash-input> 误丢更严重的回归。
+    func testLastPromptBecomesUserEntry() {
+        let line = """
+        {"type":"last-prompt","sessionId":"s1","lastPrompt":"帮我把这个 bug 修了"}
+        """
+        let entries = FullTranscriptReader.read(transcriptPath: writeFixture([line]))
+        XCTAssertEqual(entries.count, 1, "last-prompt entries must surface as user entries")
+        XCTAssertEqual(entries.first?.type, "user")
+        XCTAssertEqual(entries.first?.blocks.count, 1)
+        XCTAssertEqual(entries.first?.blocks.first?.type, "text")
+        XCTAssertEqual(entries.first?.blocks.first?.text, "帮我把这个 bug 修了")
+    }
+
+    func testEmptyLastPromptIsDropped() {
+        let line = """
+        {"type":"last-prompt","sessionId":"s1","lastPrompt":""}
+        """
+        let entries = FullTranscriptReader.read(transcriptPath: writeFixture([line]))
+        XCTAssertEqual(entries.count, 0, "empty lastPrompt produces no entry (no useful content)")
+    }
+
+    // last-prompt 没有 timestamp，但 reader 不能因此 reject——它是没有 ts 的合法 entry
+    func testLastPromptWithoutTimestamp() {
+        let line = """
+        {"type":"last-prompt","sessionId":"s1","lastPrompt":"hi"}
+        """
+        let entries = FullTranscriptReader.read(transcriptPath: writeFixture([line]))
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertNil(entries.first?.timestamp, "last-prompt entries have no timestamp; UI must not sort by ts")
+    }
+
     // MARK: - isLocalCommandEcho helper 单独测试边界
     func testIsLocalCommandEchoBoundaries() {
         XCTAssertTrue(FullTranscriptReader.isLocalCommandEcho("<bash-input>ls</bash-input>"))
