@@ -51,6 +51,11 @@ open class SessionPlugin: NSObject, ObservableObject {
     /// 帮助文档链接 (Plugin 作者配置)
     open var helpUrl: String? { nil }
 
+    /// 入站消息呈现给 agent 时用的策略。Host 的 AgentInboxShell 在 push 前查
+    /// 这里——返回 nil 用默认 `PassthroughPolicy`（纯透传 content）。Plugin 想
+    /// 给 payload 加前缀、做 dedup、过滤短回复，重写这个就行。
+    open var inboxShellPolicy: InboxShellPolicy? { nil }
+
     // MARK: - 错误状态
 
     /// 是否有错误

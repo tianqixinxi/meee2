@@ -1,5 +1,6 @@
 import SwiftUI
 import meee2Kit
+import Meee2PluginKit
 
 /// AppDelegate - 管理 macOS 特有的窗口和状态栏
 public class AppDelegate: NSObject, NSApplicationDelegate {
@@ -50,8 +51,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 幂等：已注册且路径正确就 noop。
         MCPConfigManager.shared.ensureRegistered()
 
+        // 把 host 实现注入 plugin-kit 的 A2AContext，**必须**在 plugin 加载之前。
+        // Plugin 的 init/start 阶段（甚至 SessionPlugin 构造期间）就可能调
+        // A2AContext.shared.* —— 如果 register 在 plugin 加载之后，那时 provider
+        // 还是 nil，所有查询返回 fallback（空数组 / nil），plugin 自治逻辑被静默废掉。
+        Meee2PluginKit.A2AContext.shared.register(A2AContextHostProvider())
+
         // 加载外部 plugins
         PluginManager.shared.loadExternalPlugins()
+
+        // SessionStore 已经从 disk 载入。用 Ghostty PR #11922 提供的
+        // tty AppleScript 属性反查每个 session 真正所在的 Ghostty terminal id，
+        // 修正历史上 "focused terminal" 启发式造成的撞车 / 错配。
+        // 在后台跑：osascript 可能 100-200ms，不阻塞 UI。
+        DispatchQueue.global(qos: .utility).async {
+            _ = GhosttyTerminalRegistry.reconcileSessionStore()
+        }
 
         // 启动状态监控
         statusManager.start()

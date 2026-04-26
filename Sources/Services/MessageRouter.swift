@@ -14,6 +14,9 @@ public enum MessageRouterError: Error, CustomStringConvertible {
     /// 广播 `*` 但把发送方排除后没有任何接收方（channel 只有一个成员且
     /// 正好是发送方 / channel 没有成员）。不再悄悄把消息标成 delivered=[]。
     case emptyRecipients(channel: String)
+    /// 一段对话 hop count 超过 MessageRouter.maxHopsHard——传输层级联放大兜底。
+    /// 类比 IP TTL：到这里就强制断路，不让 agent 互相递归把磁盘和 Ghostty 打爆。
+    case hopLimitExceeded(channel: String, hopCount: Int)
 
     public var description: String {
         switch self {
@@ -25,6 +28,8 @@ public enum MessageRouterError: Error, CustomStringConvertible {
         case .channelPaused(let c): return "channel is paused: \(c)"
         case .emptyRecipients(let c):
             return "broadcast in channel '\(c)' has no recipients (add another member or pick a specific toAlias)"
+        case .hopLimitExceeded(let c, let h):
+            return "hop limit exceeded in channel '\(c)' (hopCount=\(h), max=\(MessageRouter.maxHopsHard))"
         }
     }
 }
@@ -39,6 +44,11 @@ public enum MessageRouterError: Error, CustomStringConvertible {
 /// 线程安全：所有公开方法通过串行 DispatchQueue 同步。
 public final class MessageRouter {
     public static let shared = MessageRouter()
+
+    /// 一段对话允许的最大 hop count。超过 → send() throw hopLimitExceeded。
+    /// 类比 IP TTL：50 大到不会误伤任何合理工作流（plan-verify-fix 一般 < 20 跳），
+    /// 但小到不会让两个 agent 互相递归打爆磁盘 / Ghostty。
+    public static let maxHopsHard: Int = 50
 
     private let fileManager = FileManager.default
     private let baseDir: URL
@@ -70,6 +80,22 @@ public final class MessageRouter {
 
         migrateLegacyInboxes()
         loadAll()
+        // Push / flush / SessionEventBus 订阅由 AgentInboxShell（Layer 2）负责。
+        // 这里 reference 一下确保它的 init 跑过，订阅生效。
+        _ = AgentInboxShell.shared
+    }
+
+    /// 列出所有有 inbox 文件的 sessionId（给 AgentInboxShell.flushAllInboxes 用）
+    public func allInboxSessionIds() -> [String] {
+        queue.sync {
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: inboxDir,
+                includingPropertiesForKeys: nil
+            ) else { return [] }
+            return entries
+                .filter { $0.pathExtension == "json" }
+                .map { $0.deletingPathExtension().lastPathComponent }
+        }
     }
 
     /// 一次性把 ~/.meee2/inbox/<sid>.jsonl 转成 ~/.claude/teams/meee2/inboxes/<sid>.json
@@ -175,13 +201,38 @@ public final class MessageRouter {
             }
         }
 
+        // ── traceId / hopCount 计算（envelope 协议字段）──
+        // 有 replyTo → 继承 parent 的 traceId，hopCount = parent.hopCount + 1
+        // 没 replyTo → 新对话根，traceId = 自己的 id（init 默认会处理），hopCount = 0
+        let parentMsg: A2AMessage? = replyTo.flatMap { id in
+            queue.sync { cache[id] }
+        }
+        let derivedTraceId: String? = parentMsg?.traceId
+        let derivedHopCount: Int = (parentMsg?.hopCount ?? -1) + 1
+        if derivedHopCount > Self.maxHopsHard {
+            // 不持久化、不进 cache、不写 inbox。直接 throw + 写一条 dropped
+            // audit 让 forensics 能看到曾经有人撞这堵墙。
+            AuditLogger.shared.log(AuditEvent(
+                event: .dropped,
+                msgId: "rejected-hop-overflow",
+                channel: channel,
+                fromAlias: fromAlias,
+                toAlias: toAlias,
+                actor: injectedByHuman ? "human" : "agent:\(fromAlias)",
+                details: "hop \(derivedHopCount) > max \(Self.maxHopsHard) (replyTo=\(replyTo ?? "?"))"
+            ))
+            throw MessageRouterError.hopLimitExceeded(channel: channel, hopCount: derivedHopCount)
+        }
+
         let msg = A2AMessage(
+            traceId: derivedTraceId,
             channel: channel,
             fromAlias: fromAlias,
             fromSessionId: senderSessionId,
             toAlias: toAlias,
             content: content,
             replyTo: replyTo,
+            hopCount: derivedHopCount,
             status: .pending,
             injectedByHuman: injectedByHuman
         )
@@ -376,16 +427,11 @@ public final class MessageRouter {
             }
         }
 
-        // 3) Resting session 推送钩子：operator channel 的消息、接收者
-        //    status 是 idle/waitingForUser/completed 且有 ghosttyTerminalId →
-        //    立刻 Ghostty input text 推过去（绕开 Stop hook 依赖）。非 operator
-        //    频道不做这事——A2A 之间走正常 Stop hook drain 逻辑。
-        //    推送成功后从 inbox 里移除这条消息，避免 Stop hook 再 drain 一次
-        //    导致 Claude 看到两遍。
-        if msgToDeliver.channel.hasPrefix("__ops-") {
-            for member in recipientMembers where !member.sessionId.isEmpty {
-                pushToRestingSessionIfNeeded(sessionId: member.sessionId, message: msgToDeliver)
-            }
+        // 3) 交给 Layer 2 (AgentInboxShell) 决定推送时机 / 方式 / 策略。
+        //    Shell 看 resolver 状态 + ghosttyTerminalId + InboxShellPolicy，
+        //    busy 的就跳过等 SessionEventBus 兜底。
+        for member in recipientMembers where !member.sessionId.isEmpty {
+            AgentInboxShell.shared.tryDeliver(sessionId: member.sessionId, message: msgToDeliver)
         }
 
         MInfo("[MessageRouter] delivered \(id) -> [\(msgToDeliver.deliveredTo.joined(separator: ","))]")
@@ -458,42 +504,14 @@ public final class MessageRouter {
         return message
     }
 
-    /// 查 SessionStore 判断接收者是不是 resting 态，如果是就调 Ghostty
-    /// `input text` + `send key "enter"` 立刻推送。
-    /// 推送成功 → 从 inbox 移除该条，避免下一次 Stop hook 重复 drain。
-    /// 推送失败或目标不符合条件 → 留在 inbox，下次 Stop hook 照常 drain。
-    private func pushToRestingSessionIfNeeded(sessionId: String, message: A2AMessage) {
-        guard let data = SessionStore.shared.get(sessionId) else { return }
-        // 判定"resting"必须走 resolver：SessionData.status 可能被早先某条 hook
-        // 钉死在 thinking/tooling（比如用户 ESC、Claude 崩退），但现实中 transcript
-        // 尾巴早已超过 abandoned-user 阈值，UI 和 Island 已经显示 idle。
-        // 这里若只看 data.status，operator 推送会被"假 thinking"永久挡住，
-        // 消息堆在 inbox 等一个永远不来的 Stop 钩子。三端同源走 resolver。
-        let effectiveStatus = TranscriptStatusResolver.resolve(for: data)
-        let restingStatuses: Set<SessionStatus> = [.idle, .waitingForUser, .completed]
-        guard restingStatuses.contains(effectiveStatus) else {
-            NSLog("[MessageRouter] operator push skipped sid=\(sessionId.prefix(8)) effective=\(effectiveStatus.rawValue) (raw=\(data.status.rawValue)) — not resting")
-            return
-        }
-        guard let gid = data.ghosttyTerminalId, !gid.isEmpty else {
-            NSLog("[MessageRouter] operator push skipped sid=\(sessionId.prefix(8)) — no ghosttyTerminalId")
-            return
-        }
-        let msgId = message.id
-        let content = message.content
-        Task { [weak self] in
-            let ok = await GhosttyInputStream().sendText(terminalId: gid, text: content)
-            NSLog("[MessageRouter] operator direct-push sid=\(sessionId.prefix(8)) ok=\(ok) (Ghostty input)")
-            if ok {
-                self?.queue.async {
-                    self?.removeFromInbox(sessionId: sessionId, messageId: msgId)
-                }
-            }
-        }
+    /// 从 inbox JSON 数组中移除指定 id 的消息，原子写回。
+    /// 给 AgentInboxShell push 成功后调用。线程安全（内部走 queue.sync）。
+    public func removeFromInbox(sessionId: String, messageId: String) {
+        queue.sync { removeFromInboxLocked(sessionId: sessionId, messageId: messageId) }
     }
 
-    /// 从 inbox JSON 数组中移除指定 id 的消息，原子写回。调用方须持 queue。
-    private func removeFromInbox(sessionId: String, messageId: String) {
+    /// 实际执行 remove。调用方须持 queue。
+    private func removeFromInboxLocked(sessionId: String, messageId: String) {
         let path = inboxPath(sessionId)
         guard fileManager.fileExists(atPath: path.path),
               let data = try? Data(contentsOf: path),

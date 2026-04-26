@@ -506,4 +506,126 @@ final class A2ATests: XCTestCase {
         XCTAssertTrue(details.contains("b"))
         XCTAssertTrue(details.contains("c"))
     }
+
+    // MARK: - Envelope (traceId / hopCount) — Phase 1.1
+
+    func testEnvelope_newMessageHasSelfTraceIdAndZeroHop() throws {
+        let name = uniqueChannelName("env-root")
+        let aSid = fakeSessionId("a")
+        let bSid = fakeSessionId("b")
+        defer {
+            _ = MessageRouter.shared.drainInbox(sessionId: aSid)
+            _ = MessageRouter.shared.drainInbox(sessionId: bSid)
+            try? ChannelRegistry.shared.delete(name)
+        }
+        _ = try ChannelRegistry.shared.create(name: name, mode: .auto)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "a", sessionId: aSid)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "b", sessionId: bSid)
+
+        let root = try MessageRouter.shared.send(
+            channel: name, fromAlias: "a", toAlias: "b", content: "first"
+        )
+        XCTAssertEqual(root.traceId, root.id, "对话根的 traceId 应等于自己 id")
+        XCTAssertEqual(root.hopCount, 0)
+    }
+
+    func testEnvelope_replyInheritsTraceAndIncrementsHop() throws {
+        let name = uniqueChannelName("env-reply")
+        let aSid = fakeSessionId("a")
+        let bSid = fakeSessionId("b")
+        defer {
+            _ = MessageRouter.shared.drainInbox(sessionId: aSid)
+            _ = MessageRouter.shared.drainInbox(sessionId: bSid)
+            try? ChannelRegistry.shared.delete(name)
+        }
+        _ = try ChannelRegistry.shared.create(name: name, mode: .auto)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "a", sessionId: aSid)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "b", sessionId: bSid)
+
+        let root = try MessageRouter.shared.send(
+            channel: name, fromAlias: "a", toAlias: "b", content: "q"
+        )
+        let reply = try MessageRouter.shared.send(
+            channel: name, fromAlias: "b", toAlias: "a", content: "r", replyTo: root.id
+        )
+        XCTAssertEqual(reply.traceId, root.traceId, "reply 应继承 parent 的 traceId")
+        XCTAssertEqual(reply.hopCount, 1, "reply hopCount = parent.hopCount + 1")
+
+        let reply2 = try MessageRouter.shared.send(
+            channel: name, fromAlias: "a", toAlias: "b", content: "r2", replyTo: reply.id
+        )
+        XCTAssertEqual(reply2.traceId, root.traceId)
+        XCTAssertEqual(reply2.hopCount, 2)
+    }
+
+    // MARK: - Hop limit — Phase 2.1
+
+    func testHopLimit_throwsWhenExceeded() throws {
+        let name = uniqueChannelName("hop-limit")
+        let aSid = fakeSessionId("a")
+        let bSid = fakeSessionId("b")
+        defer {
+            _ = MessageRouter.shared.drainInbox(sessionId: aSid)
+            _ = MessageRouter.shared.drainInbox(sessionId: bSid)
+            try? ChannelRegistry.shared.delete(name)
+        }
+        _ = try ChannelRegistry.shared.create(name: name, mode: .auto)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "a", sessionId: aSid)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "b", sessionId: bSid)
+
+        // 制造一个 hop=maxHops 的消息，再 reply 一次就该爆
+        var current = try MessageRouter.shared.send(
+            channel: name, fromAlias: "a", toAlias: "b", content: "root"
+        )
+        // Walk up to (but not over) maxHopsHard
+        for i in 1...MessageRouter.maxHopsHard {
+            current = try MessageRouter.shared.send(
+                channel: name,
+                fromAlias: i.isMultiple(of: 2) ? "a" : "b",
+                toAlias: i.isMultiple(of: 2) ? "b" : "a",
+                content: "hop \(i)",
+                replyTo: current.id
+            )
+        }
+        XCTAssertEqual(current.hopCount, MessageRouter.maxHopsHard)
+
+        // 再走一跳就该 throw
+        XCTAssertThrowsError(try MessageRouter.shared.send(
+            channel: name, fromAlias: "a", toAlias: "b", content: "over", replyTo: current.id
+        )) { error in
+            guard let e = error as? MessageRouterError, case .hopLimitExceeded(let c, let h) = e else {
+                XCTFail("expected hopLimitExceeded, got \(error)")
+                return
+            }
+            XCTAssertEqual(c, name)
+            XCTAssertGreaterThan(h, MessageRouter.maxHopsHard)
+        }
+    }
+
+    // MARK: - Backward-compat decode — Phase 1.1
+
+    func testEnvelope_decodeOldJSONWithoutTraceIdOrHop() throws {
+        // 模拟老 inbox/messages 文件：没有 traceId / hopCount 字段
+        let oldJSON = """
+        {
+          "id": "m-deadbeef",
+          "channel": "old",
+          "fromAlias": "alice",
+          "fromSessionId": "sid-old",
+          "toAlias": "bob",
+          "content": "from the old days",
+          "createdAt": "2026-01-01T00:00:00Z",
+          "status": "delivered",
+          "deliveredTo": ["bob"],
+          "injectedByHuman": false
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let msg = try decoder.decode(A2AMessage.self, from: Data(oldJSON.utf8))
+        XCTAssertEqual(msg.id, "m-deadbeef")
+        XCTAssertEqual(msg.traceId, "m-deadbeef", "缺 traceId 时默认 = id")
+        XCTAssertEqual(msg.hopCount, 0, "缺 hopCount 时默认 = 0")
+        XCTAssertEqual(msg.content, "from the old days")
+    }
 }

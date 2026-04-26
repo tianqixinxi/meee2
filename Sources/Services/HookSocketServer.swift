@@ -279,55 +279,19 @@ public class HookSocketServer {
             cleanupCache(sessionId: sessionId)
         }
 
-        // A2A: Stop 事件到达时，排空会话的 inbox 消息
-        // 如果有消息，返回 {decision:"block", reason:...} 强迫 Claude 继续处理
-        // 如果无消息，按原逻辑关闭 socket（下游 Stop 处理仍会触发）
+        // A2A: Stop 事件不再做 inline drainInbox + block-decision 注入。
+        // 之前的设计：把 inbox 拼成一个 reason 字符串 → return decision=block →
+        // Claude 把这段当作下一轮 user prompt 内联消化。代价：transcript 里
+        // 写成 `type=user, isMeta=true`，Web UI 看不到（被当 !bash 回显丢掉）；
+        // 即便保留也是个"📨 Injected"特殊气泡，跟用户手打的真消息割裂。
+        //
+        // 现在统一走 Ghostty input 路径：让 Stop 自然关闭 → Claude 完整收尾
+        // 当前回合 → ClaudePlugin 处理 Stop 把 SessionStore 状态翻到 resting →
+        // SessionEventBus.sessionMetadataChanged → MessageRouter 订阅触发
+        // flushInboxIfResting → Ghostty `input text` + send key enter → Claude
+        // 看到一条**正常的** user prompt → transcript 写普通 `type=user`，Web
+        // UI 自然显示为 user 气泡。所有消息只有一条入口、一种渲染。
         NSLog("[StateTrace][hook-ingress][socket] sid=\(event.sessionId?.prefix(8) ?? "-") evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferred=\(event.inferredStatus.rawValue)")
-        if event.event == .stop, let sessionId = event.sessionId {
-            let messages = MessageRouter.shared.drainInbox(sessionId: sessionId)
-            NSLog("[HookSocketServer] Stop event: drainInbox for \(sessionId.prefix(8)) returned \(messages.count) messages")
-            if !messages.isEmpty {
-                // 根据 inbox 里消息的来源调整 header 文案：
-                //  - 纯 A2A：保留原有 "📨 ... from other agents" 文案
-                //  - 纯 human（Web/CLI 直接注入）：用 "💬 operator message(s)"
-                //  - 混合：通用 "📨 incoming messages"
-                let humanCount = messages.filter { $0.isHumanDirect }.count
-                let a2aCount = messages.count - humanCount
-                let header: String
-                if a2aCount == 0 {
-                    header = humanCount == 1
-                        ? "💬 Operator sent you a message:\n\n"
-                        : "💬 Operator sent you \(humanCount) messages:\n\n"
-                } else if humanCount == 0 {
-                    header = "📨 You have \(messages.count) A2A message(s) from other agents:\n\n"
-                } else {
-                    header = "📨 Incoming messages (\(humanCount) from operator, \(a2aCount) from agents):\n\n"
-                }
-                let combined = header + messages.map { $0.renderForInbox() }.joined(separator: "\n\n")
-
-                NSLog("[HookSocketServer] A2A: writing block-decision response (\(combined.count) chars) to \(sessionId.prefix(8))")
-
-                let response = PermissionResponse(decision: "block", reason: combined)
-                if let data = try? JSONEncoder().encode(response) {
-                    data.withUnsafeBytes { bytes in
-                        guard let baseAddress = bytes.baseAddress else {
-                            logger.error("Failed to get A2A response buffer address")
-                            return
-                        }
-                        let result = write(clientSocket, baseAddress, data.count)
-                        if result < 0 {
-                            logger.error("A2A write failed with errno: \(errno)")
-                        }
-                    }
-                } else {
-                    logger.error("Failed to encode A2A PermissionResponse")
-                }
-                close(clientSocket)
-                eventHandler?(event)
-                return
-            }
-            // 空 inbox：fall through 到下面的 else 分支关闭 socket
-        }
 
         // Handle permission requests
         if event.expectsResponse {

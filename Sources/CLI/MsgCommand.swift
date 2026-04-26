@@ -56,7 +56,11 @@ public struct MsgCommand {
             print("Error: content required (pass as positional argument)")
             return
         }
-        let replyTo = parsed.strings["--reply-to"]
+        // --reply-to: 显式传入优先；没传时尝试从 ConversationContext 拿这条
+        // session 在该 channel 上最近一条 inbound message 的 id 当 reply parent。
+        // 这样让 hopCount + traceId 自然继承下去，agent 不需要管。
+        // 注意：channel 还没确定，先占位，等 channel 算完后再 resolve。
+        let explicitReplyTo = parsed.strings["--reply-to"]
 
         // --channel: 未显式传入时，尝试从当前会话的唯一频道成员身份推断
         let explicitChannel = parsed.strings["--channel"]
@@ -86,10 +90,20 @@ public struct MsgCommand {
             return
         }
 
-        if channelAutoResolved || fromAutoResolved {
+        // Resolve replyTo: explicit > ConversationContext lookup > nil
+        var replyToAutoResolved = false
+        let replyTo: String? = explicitReplyTo ?? {
+            guard let sid = A2AIdentity.currentSessionId() else { return nil }
+            guard let prev = ConversationContext.shared.lastInbound(sessionId: sid, channel: channel) else { return nil }
+            replyToAutoResolved = true
+            return prev.id
+        }()
+
+        if channelAutoResolved || fromAutoResolved || replyToAutoResolved {
             var parts: [String] = []
             if channelAutoResolved { parts.append("channel=\(channel)") }
             if fromAutoResolved { parts.append("from=\(from)") }
+            if replyToAutoResolved, let r = replyTo { parts.append("reply-to=\(r)") }
             print("(auto-resolved: \(parts.joined(separator: " ")))")
         }
 
