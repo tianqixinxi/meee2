@@ -1,5 +1,4 @@
 import Foundation
-import Meee2Core
 import Meee2PluginKit
 
 // MARK: - Terminal reachability cache
