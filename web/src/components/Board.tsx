@@ -392,6 +392,30 @@ export default function Board({
     )
     saveChannelLayoutDebounced(channelLayoutRef.current)
 
+    // 提前构建：按 deterministic id 模式 + live 集合识别 binding 端点；
+    // 给 userShapes 重描色（你画的白线绑了 channel 就该统一成 spoke 绿）和
+    // 后面的 existingConnections detection 共用。
+    const sidsLive = new Set(ids)
+    const channelsLive = new Set(channelNames)
+    const liveChannelByName = new Map(
+      state.channels
+        .filter((c) => !c.name.startsWith('__'))
+        .map((c) => [c.name, c]),
+    )
+    const classifyBinding = (id: string): { sid?: string; channel?: string } => {
+      if (id.startsWith('session-')) {
+        const sid = id.slice('session-'.length)
+        if (sidsLive.has(sid)) return { sid }
+      }
+      if (id.startsWith('channel-')) {
+        const rest = id.slice('channel-'.length)
+        if (rest.includes('-spoke-')) return {}
+        if (rest.endsWith('-label')) return {}
+        if (channelsLive.has(rest)) return { channel: rest }
+      }
+      return {}
+    }
+
     // Current scene → classify existing elements.
     const existing = api.getSceneElements()
     // 清理：随机 id 的 channel label 文本——这些是老版本（用 Excalidraw
@@ -409,11 +433,11 @@ export default function Board({
       }
       return true
     })
-    // Patch user-drawn arrows that have binding.elementId but gap=null —
-    // those were created by Excalidraw via convertToExcalidrawElements (or
-    // an older code path) that never filled gap. Without gap, Excalidraw's
-    // binding-update treats the arrow as unbound and drag-of-rect won't
-    // move the arrow → user sees "spoke disconnects after refresh".
+    // user shape arrows 两件事:
+    // 1. gap=null/focus=null → 补成 1/0（drag 跟随的前提）
+    // 2. 如果 binding 是 session↔channel → restyle 成 spoke 视觉（绿色 / dashed
+    //    /…由 channel mode 决定），跟 auto-spoke 保持一致；不再"白线 + 绿线"
+    //    同时存在或刷新后变颜色的 surprise。
     const userShapes = userShapesRaw.map((el: any) => {
       if (el.type !== 'arrow') return el
       const sb = el.startBinding ? { ...el.startBinding } : null
@@ -423,6 +447,28 @@ export default function Board({
       if (sb && sb.elementId && sb.focus == null) { sb.focus = 0; touched = true }
       if (eb && eb.elementId && eb.gap == null) { eb.gap = 1; touched = true }
       if (eb && eb.elementId && eb.focus == null) { eb.focus = 0; touched = true }
+
+      // Channel-bound arrow → 应用 spoke styling
+      let chBound: string | undefined
+      if (sb?.elementId && eb?.elementId) {
+        const s = classifyBinding(sb.elementId)
+        const e2 = classifyBinding(eb.elementId)
+        if (s.sid && e2.channel) chBound = e2.channel
+        else if (e2.sid && s.channel) chBound = s.channel
+      }
+      const ch = chBound ? liveChannelByName.get(chBound) : null
+      if (ch) {
+        return {
+          ...el,
+          startBinding: sb,
+          endBinding: eb,
+          strokeColor: modeStrokeColor(ch.mode),
+          strokeWidth: ch.pendingCount > 0 ? 3 : 2,
+          strokeStyle: modeStrokeStyle(ch),
+          startArrowhead: null,
+          endArrowhead: null,
+        }
+      }
       if (!touched) return el
       return { ...el, startBinding: sb, endBinding: eb }
     })
@@ -533,32 +579,11 @@ export default function Board({
     }
 
     // 扫出用户已经亲手画过的 session↔channel 连接，让 buildScene 知道
-    // 哪些成员关系已经有 arrow 了、别重复画——这是死锁/抖动的核心修正。
-    //
-    // 关键：detection 不能靠"两端 element 在不在 existing"。刷新后第一次
-    // rebuild 时 rect / hub 都还没创建（buildScene 这一轮才会建），但 user
-    // arrow 已经从 localStorage 恢复进来了。等 element 在 existing 里找不到
-    // 就 continue，会让 existingConnections 空集 → buildScene 生成 auto-spoke
-    // → 用户看到的是绿色覆盖在白色上，几何位置也对不上。
-    //
-    // 改成按 deterministic id 模式 + 在线 session/channel 集合识别：
-    //   session-<sid>            → 配 sidsLive
-    //   channel-<name>           → 配 channelsLive（hub），排除 -spoke- / -label
-    const sidsLive = new Set(ids)
-    const channelsLive = new Set(channelNames)
-    const classifyBinding = (id: string): { sid?: string; channel?: string } => {
-      if (id.startsWith('session-')) {
-        const sid = id.slice('session-'.length)
-        if (sidsLive.has(sid)) return { sid }
-      }
-      if (id.startsWith('channel-')) {
-        const rest = id.slice('channel-'.length)
-        if (rest.includes('-spoke-')) return {}
-        if (rest.endsWith('-label')) return {}
-        if (channelsLive.has(rest)) return { channel: rest }
-      }
-      return {}
-    }
+    // 哪些成员关系已经有 arrow 了、别重复画——避免"白线 + 绿线"双图。
+    // 双重 source：
+    //   (1) 现有 arrow 的 binding.elementId 走 deterministic id 模式
+    //   (2) handleChange 实时记录的 knownMemberArrowsRef —— 即便 Excalidraw
+    //       binding 后来变 null / 半绑也能识别
     const existingConnections = new Set<string>()
     for (const el of existing) {
       if (el.type !== 'arrow') continue
@@ -566,11 +591,14 @@ export default function Board({
       if (el.id.startsWith('channel-') && el.id.includes('-spoke-')) continue
       const startId = (el as any).startBinding?.elementId as string | undefined
       const endId = (el as any).endBinding?.elementId as string | undefined
-      if (!startId || !endId) continue
-      const s = classifyBinding(startId)
-      const e2 = classifyBinding(endId)
+      const s = startId ? classifyBinding(startId) : {}
+      const e2 = endId ? classifyBinding(endId) : {}
       if (s.sid && e2.channel) existingConnections.add(`${s.sid}|${e2.channel}`)
       else if (e2.sid && s.channel) existingConnections.add(`${e2.sid}|${s.channel}`)
+    }
+    // 兜底 (2)：handleChange 已经识别过的 user arrow → 直接信任它的 sid+channel
+    for (const info of knownMemberArrowsRef.current.values()) {
+      existingConnections.add(`${info.sid}|${info.channel}`)
     }
 
     const { newEmbeddables, newChannelHubs, arrows } = buildScene(
@@ -690,11 +718,7 @@ export default function Board({
     // re-sync stroke color / stroke style to the current channel mode +
     // pending count. If a channel has been removed from state (or renamed),
     // retire its hub via isDeleted so Excalidraw's Undo can still restore it.
-    const liveChannelByName = new Map(
-      state.channels
-        .filter((c) => !c.name.startsWith('__'))
-        .map((c) => [c.name, c]),
-    )
+    // (liveChannelByName 在文件上方已 hoist。)
     // Channel hubs are 100% managed — every visual field is derived from
     // channel state. Preserve ONLY identity (id, x, y) + bookkeeping Excalidraw
     // needs to keep (version, versionNonce, seed, updated, index, frameId,
@@ -1365,6 +1389,26 @@ export default function Board({
       // (`channel-<name>-spoke-<sid>`); we skip them so rebuild traffic doesn't
       // create duplicate members.
       {
+        // 同 rebuild 路径的 classifyBinding：靠 deterministic id 模式识别，
+        // 不依赖 startEl/endEl 是否在当前 elements 中（rect/hub 可能刚被
+        // updateScene 覆盖、还没在 onChange 回调的 elements 数组里）。
+        const sidsLiveLocal = new Set(state.sessions.map((s) => s.id))
+        const channelsLiveLocal = new Set(
+          state.channels.map((c) => c.name).filter((n) => !n.startsWith('__')),
+        )
+        const classifyBindingLocal = (id: string): { sid?: string; channel?: string } => {
+          if (id.startsWith('session-')) {
+            const sid = id.slice('session-'.length)
+            if (sidsLiveLocal.has(sid)) return { sid }
+          }
+          if (id.startsWith('channel-')) {
+            const rest = id.slice('channel-'.length)
+            if (rest.includes('-spoke-')) return {}
+            if (rest.endsWith('-label')) return {}
+            if (channelsLiveLocal.has(rest)) return { channel: rest }
+          }
+          return {}
+        }
         const nextMember = new Map<string, { sid: string; channel: string; alias: string }>()
         for (const el of elements) {
           if (el.type !== 'arrow') continue
@@ -1373,17 +1417,12 @@ export default function Board({
           const startId = (el as any).startBinding?.elementId as string | undefined
           const endId = (el as any).endBinding?.elementId as string | undefined
           if (!startId || !endId) continue
-          const startEl = elements.find((e) => e.id === startId)
-          const endEl = elements.find((e) => e.id === endId)
-          if (!startEl || !endEl) continue
-          const startSid = startEl.type === 'rectangle' ? parseSessionFromElement(startEl) : null
-          const endSid = endEl.type === 'rectangle' ? parseSessionFromElement(endEl) : null
-          const startCh = startEl.type === 'ellipse' ? parseChannelFromElement(startEl) : null
-          const endCh = endEl.type === 'ellipse' ? parseChannelFromElement(endEl) : null
+          const s = classifyBindingLocal(startId)
+          const e2 = classifyBindingLocal(endId)
           let sid: string | null = null
           let chName: string | null = null
-          if (startSid && endCh) { sid = startSid; chName = endCh }
-          else if (endSid && startCh) { sid = endSid; chName = startCh }
+          if (s.sid && e2.channel) { sid = s.sid; chName = e2.channel }
+          else if (e2.sid && s.channel) { sid = e2.sid; chName = s.channel }
           else continue
           const session = state.sessions.find((s) => s.id === sid)
           if (!session) continue

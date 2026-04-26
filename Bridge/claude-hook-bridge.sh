@@ -213,6 +213,13 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
     # PermissionRequest: 长超时，等待用户决定
     # Stop: 短超时，等待 A2A inbox drain 响应 (可能返回 {decision:"block",reason:...})
     # 其他: 不等待响应
+    # DEBUG opt-in: 设 MEEE2_BRIDGE_DEBUG_PAYLOAD=1 把 Stop / UserPromptSubmit
+    # 的完整 stdin dump 到 /tmp，排查 JSON decode 失败用。默认不写盘。
+    if [ "${MEEE2_BRIDGE_DEBUG_PAYLOAD:-}" = "1" ] && \
+       { [ "$HOOK_EVENT" = "Stop" ] || [ "$HOOK_EVENT" = "UserPromptSubmit" ]; }; then
+        echo "$INPUT" > "/tmp/meee2-bridge-${HOOK_EVENT}-latest.json"
+    fi
+
     case "$HOOK_EVENT" in
         PermissionRequest)
             RESPONSE=$(echo "$INPUT" | nc -U -w 60 "$PEER_ISLAND_SOCKET" 2>/dev/null)

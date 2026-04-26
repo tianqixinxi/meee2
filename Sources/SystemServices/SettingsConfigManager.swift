@@ -16,15 +16,24 @@ public class SettingsConfigManager {
     private let bridgeScriptName = "claude-hook-bridge.sh"
 
     /// 需要配置的 hook 事件类型
+    /// 新增条目（P0/P1）：
+    ///   - PostCompact          - .compacting 状态及时复位
+    ///   - StopFailure          - turn API 错误时打破 thinking/tooling 卡死
+    ///   - PostToolUseFailure   - 区分 tool 失败 vs 成功
+    ///   - CwdChanged           - user `cd` 后 SessionData.cwd 同步
     private let hookEventTypes: [String] = [
         "Notification",
         "PermissionRequest",
         "PostToolUse",
+        "PostToolUseFailure",
         "PreToolUse",
         "PreCompact",
+        "PostCompact",
         "SessionStart",
         "SessionEnd",
         "Stop",
+        "StopFailure",
+        "CwdChanged",
         "SubagentStart",
         "SubagentStop",
         "UserPromptSubmit"

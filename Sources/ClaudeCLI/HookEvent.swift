@@ -43,11 +43,15 @@ public enum HookEventType: String, Codable, Sendable {
     case notification = "Notification"
     case permissionRequest = "PermissionRequest"
     case postToolUse = "PostToolUse"
+    case postToolUseFailure = "PostToolUseFailure"  // P1: tool 错误，区别于 PostToolUse
     case preToolUse = "PreToolUse"
     case preCompact = "PreCompact"
+    case postCompact = "PostCompact"                 // P0: 否则 .compacting 永不复位
     case sessionStart = "SessionStart"
     case sessionEnd = "SessionEnd"
     case stop = "Stop"
+    case stopFailure = "StopFailure"                 // P0: turn API 错误时不发 Stop
+    case cwdChanged = "CwdChanged"                   // P1: user `cd` 后 SessionData.cwd 同步
     case subagentStart = "SubagentStart"
     case subagentStop = "SubagentStop"
     case userPromptSubmit = "UserPromptSubmit"
@@ -71,7 +75,8 @@ public enum HookEventType: String, Codable, Sendable {
             return .postToolUse
         case .userPromptSubmit:
             return .userPromptSubmit
-        case .preCompact, .subagentStart, .subagentStop:
+        case .preCompact, .postCompact, .subagentStart, .subagentStop,
+             .postToolUseFailure, .stopFailure, .cwdChanged:
             return nil
         }
     }
@@ -221,11 +226,27 @@ public struct HookEvent: Decodable, Sendable {
         case .preCompact:
             return .compacting
 
+        case .postCompact:
+            // 压缩完，回到 idle/active
+            return .idle
+
         case .sessionStart:
             return .active
 
         case .sessionEnd, .stop:
             return .completed
+
+        case .stopFailure:
+            // turn 因 API error 收尾——视作完成（错误版）
+            return .completed
+
+        case .postToolUseFailure:
+            // 同 PostToolUse 视作 tool 已经回过来了（虽然失败）
+            return .tooling
+
+        case .cwdChanged:
+            // 纯 metadata 变更，不影响活跃度
+            return .active
 
         case .subagentStart, .subagentStop:
             return .active
@@ -311,6 +332,9 @@ public struct HookEvent: Decodable, Sendable {
         case .preCompact:
             return "压缩上下文..."
 
+        case .postCompact:
+            return "压缩完成"
+
         case .sessionStart:
             return "Session 开始"
 
@@ -320,6 +344,18 @@ public struct HookEvent: Decodable, Sendable {
         case .stop:
             // 显示完整的任务摘要
             return lastAssistantMessage ?? "任务完成"
+
+        case .stopFailure:
+            return "任务失败"
+
+        case .postToolUseFailure:
+            if let tool = toolName {
+                return "工具失败: \(tool)"
+            }
+            return "工具失败"
+
+        case .cwdChanged:
+            return cwd.map { "cd → \($0)" }
 
         case .subagentStart:
             return "子任务开始"

@@ -9,7 +9,7 @@ Deeper references: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (+ §6 for hoo
 ```bash
 swift build                 # Debug (fastest iteration)
 swift build -c release      # Release
-swift test                  # Full test suite (currently 54 tests)
+swift test                  # Full test suite (currently 100 tests)
 ./scripts/validate.sh       # Pre-commit gate: build + test + swiftlint + hardcoded-path/print scans
 ./build.sh                  # Release + codesign + dylib install to ~/.meee2/lib
 ```

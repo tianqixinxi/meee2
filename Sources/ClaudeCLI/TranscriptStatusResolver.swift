@@ -246,15 +246,14 @@ public enum TranscriptStatusResolver {
                 return (.idle, "user-interrupt")
             }
             if let ts = last.timestamp, now.timeIntervalSince(ts) > _abandonedUserEntryThreshold {
-                // 关键守卫：hook 明确报"还在干活"（thinking / tooling / active /
-                // compacting），就 trust hook，**不**因为 transcript 尾部 user 久了
-                // 就降级。场景：用户打了一句话之后 Claude 长时间走工具链 / extended
-                // thinking，transcript 尾巴一直是那条原 user prompt（4-30 分钟），
-                // 但 PreToolUse 钩子在持续喷——这是真活，不能误判 abandoned。
-                // "user-too-old"原本是兜"用户打字后走人没等回复"，那种情况下 hook
-                // 早归 idle / waitingForUser 了，不会满足下面这条 guard。
-                let workingHooks: Set<SessionStatus> = [.thinking, .tooling, .active, .compacting]
-                if workingHooks.contains(hookStatus) {
+                // 关键守卫：hook 明确报"还在干活"就 trust hook，**不**因为
+                // transcript 尾部 user 久了就降级。场景：用户打了一句话之后
+                // Claude 长时间走工具链 / extended thinking，transcript 尾巴
+                // 一直是那条原 user prompt（4-30 分钟），但 PreToolUse 钩子
+                // 在持续喷——这是真活，不能误判 abandoned。
+                // "user-too-old"原本是兜"用户打字后走人没等回复"，那种情况下
+                // hook 早归 idle / waitingForUser 了，不会满足这条 guard。
+                if _workingHooks.contains(hookStatus) {
                     return (hookStatus, "user-too-old-but-hook-working(\(hookStatus.rawValue))")
                 }
                 return (.idle, "user-too-old(>\(Int(_abandonedUserEntryThreshold))s)")
@@ -288,17 +287,30 @@ public enum TranscriptStatusResolver {
             // 入）但没用工具就被用户 ESC，后续 Stop / 新 assistant 写入都没
             // 来。正常 streaming 时 transcript 每秒都有写入，tail 停在同一条
             // assistant 超过阈值 = 这一轮已断。降级 idle。
+            //
+            // 注意：跟 user case 不对称——user case 加了 "hook-working 守卫"
+            // 是因为 user prompt 落盘后到 first token 之间可以合法地空 N 分钟
+            // (extended thinking)。assistant entry 不一样：thinking 块是内嵌
+            // 在 assistant message 中的，整条 entry 写完才落盘——assistant 写
+            // 完后下一个动作（Stop 或 PreToolUse）几乎立即触发 hook 翻转。
+            // 所以"assistant tail 60s 没动 + hook 还在 working"基本只能是
+            // ESC-mid-stream 这一种解释，保留原降级。
             if let ts = last.timestamp,
                now.timeIntervalSince(ts) > _staleAssistantTailThreshold,
-               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
+               _workingHooks.contains(hookStatus) {
                 return (.idle, "assistant-tail-stale(>\(Int(_staleAssistantTailThreshold))s+hook=\(hookStatus.rawValue))")
             }
             return (hookStatus, "assistant+hook=\(hookStatus.rawValue)")
 
         case "system":
+            // ESC-during-tool 兜底：tool_result 落盘后 hook 还在 tooling/
+            // thinking 但 transcript 90s 不动 = 用户 ESC 把后续打断。同
+            // assistant 推理：system entry 落盘后下一动作（Stop/Pre/Post
+            // ToolUse）几乎立刻触发 hook 翻转，所以这条降级也不需要 user
+            // case 的 hook-working 守卫。
             if let ts = last.timestamp,
                now.timeIntervalSince(ts) > _staleSystemTailThreshold,
-               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
+               _workingHooks.contains(hookStatus) {
                 return (.idle, "system-tail-stale(>\(Int(_staleSystemTailThreshold))s+hook=\(hookStatus.rawValue))")
             }
             if hookStatus == .active {
@@ -400,6 +412,13 @@ private let _staleAssistantTailThreshold: TimeInterval = 60.0
 /// 30s 比 stream-stale 60s 紧——Claude 写完最后一个 token 到 Stop hook 触发
 /// 的延迟极少超过几秒，30s 给足缓冲又不至于把"真已 idle 的会话"误标 live。
 private let _midTurnFreshnessWindow: TimeInterval = 30.0
+
+/// "Hook 显式说还在干活" 的状态集合。三处规则共用：
+/// - user case：tail 久了但 hook working → trust hook (覆盖 extended thinking
+///   场景，user prompt 落盘后到 first token 之间可以合法空 N 分钟)
+/// - assistant / system case：tail 久了 + hook working → 仍降级 idle（这两种
+///   tail 类型下 hook 翻转几乎是即时的，stale 几乎只能解释为 ESC）
+private let _workingHooks: Set<SessionStatus> = [.thinking, .tooling, .active, .compacting]
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.

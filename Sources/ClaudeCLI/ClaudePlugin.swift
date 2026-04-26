@@ -391,6 +391,15 @@ class ClaudePlugin: SessionPlugin {
             // 更新使用统计（每次工具调用后 transcript 会更新）
             updateUsageStats(sessionId: sessionId, event: event)
 
+        case .postToolUseFailure:
+            // 工具调用失败：跟 PostToolUse 一样跑 task sync + usage，但额外 log
+            // 一行 error 标记便于后续 forensics。状态不强制改——hook chain
+            // 通常会继续走（Claude 决定重试 or 放弃），下一个 hook 会更新 status。
+            handleTaskSync(sessionId: sessionId, event: event)
+            updateUsageStats(sessionId: sessionId, event: event)
+            let errSnippet = (event.rawData?.prefix(200)).map(String.init) ?? "?"
+            NSLog("[ClaudePlugin] PostToolUseFailure sid=\(sessionId.prefix(8)) tool=\(event.toolName ?? "?") raw=\(errSnippet)")
+
         case .permissionRequest:
             // 权限请求
             sessionStatusesLock.lock()
@@ -435,11 +444,48 @@ class ClaudePlugin: SessionPlugin {
             sessionStatuses[sessionId] = .compacting
             sessionStatusesLock.unlock()
 
+        case .postCompact:
+            // 压缩后 - 复位回 idle。否则 .compacting 一直挂着等下一个 user
+            // prompt 才被 .thinking 覆盖，UI 上"正在压缩"会持续 N 分钟。
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .idle
+            sessionStatusesLock.unlock()
+
         case .stop:
             // 停止 - 回到 idle
             sessionStatusesLock.lock()
             sessionStatuses[sessionId] = .idle
             sessionStatusesLock.unlock()
+
+        case .stopFailure:
+            // turn 因 API error 收尾——不发 Stop，发 StopFailure。如果不接，
+            // 状态会卡在 thinking/tooling 等到 abandoned-session 180s 兜底
+            // (assistant tail 的 60s 兜底也只在 transcript 有 assistant entry
+            // 时触发，error 出在 first token 前的话连这都没有)。
+            sessionStatusesLock.lock()
+            sessionStatuses[sessionId] = .idle
+            sessionStatusesLock.unlock()
+            NSLog("[ClaudePlugin] StopFailure sid=\(sessionId.prefix(8)) — turn ended with API error, → idle")
+
+        case .cwdChanged:
+            // user 在终端 `cd` 之后 hook 带新的 cwd 来 — 直接覆盖（不走
+            // sticky-empty）。否则 spawn / open-terminal / project DTO 字段
+            // 都用旧 cwd，跟终端实际 pwd 错位。
+            if let newCwd = event.cwd, !newCwd.isEmpty {
+                sessionStore.update(sessionId) { data in
+                    data.cwd = newCwd
+                }
+                NSLog("[ClaudePlugin] CwdChanged sid=\(sessionId.prefix(8)) → \(newCwd)")
+            }
+
+        case .subagentStart:
+            // 暂不改 status —— 主 session 仍在跑，subagent 是子进程。日后可能
+            // 加 visual indicator (eg. "+1 subagent" badge)；先 log 出来便于
+            // debug，避免静默吞。
+            NSLog("[ClaudePlugin] SubagentStart sid=\(sessionId.prefix(8))")
+
+        case .subagentStop:
+            NSLog("[ClaudePlugin] SubagentStop sid=\(sessionId.prefix(8))")
 
         case .sessionEnd:
             // 会话结束 - 清理缓存
