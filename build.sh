@@ -6,6 +6,13 @@ cd "$(dirname "$0")"
 
 # Build the app
 echo "Building meee2..."
+
+# Build web frontend if npm is available
+if command -v npm &>/dev/null && [ -d "web" ]; then
+    echo "Building web frontend..."
+    (cd web && npm ci && npm run build)
+fi
+
 swift build -c release
 
 # Find the built executable
@@ -35,6 +42,25 @@ if [ -f "$BUILTIN_CURSOR" ]; then
     mkdir -p "$PLUGIN_DIR"
     cp "$BUILTIN_CURSOR" "$PLUGIN_DIR/CursorPlugin.dylib"
     echo "Installed CursorPlugin to $PLUGIN_DIR/"
+fi
+
+# Install OpenClaw plugin
+BUILTIN_OPENCLAW=".build/release/libOpenClawPlugin.dylib"
+if [ -f "$BUILTIN_OPENCLAW" ]; then
+    PLUGIN_DIR="$HOME/.meee2/plugins/openclaw"
+    mkdir -p "$PLUGIN_DIR"
+    cp "$BUILTIN_OPENCLAW" "$PLUGIN_DIR/OpenClawPlugin.dylib"
+    if [ ! -f "$PLUGIN_DIR/plugin.json" ]; then
+        cat > "$PLUGIN_DIR/plugin.json" << 'EOF'
+{
+    "id": "com.meee2.plugin.openclaw",
+    "name": "OpenClaw",
+    "version": "0.2.0",
+    "dylib": "OpenClawPlugin.dylib"
+}
+EOF
+    fi
+    echo "Installed OpenClawPlugin to $PLUGIN_DIR/"
 fi
 
 # Apply entitlements to disable sandbox

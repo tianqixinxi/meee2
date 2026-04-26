@@ -14,7 +14,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
-VERSION="${VERSION:-0.1.2}"
+VERSION="${VERSION:-0.2.0}"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
@@ -23,6 +23,16 @@ VOLUME_NAME="${APP_NAME}"
 echo "Packaging version: $VERSION"
 
 echo "=== Building ${APP_NAME} ==="
+
+# Build web frontend so WebDist is populated before swift build
+echo "=== Building Web Board ==="
+if command -v npm &>/dev/null; then
+    (cd web && npm ci && npm run build)
+    echo "Web Board built → Sources/Board/WebDist/"
+else
+    echo "Warning: npm not found; using existing WebDist (may be stale)"
+fi
+
 ./build.sh
 
 echo ""
@@ -49,17 +59,34 @@ else
     echo "Warning: libMeee2PluginKit.dylib not found at $DYLIB_SRC"
 fi
 
+# Copy SwiftPM resource bundle (contains WebDist etc.)
+RESOURCE_BUNDLE=".build/arm64-apple-macosx/release/meee2_meee2Kit.bundle"
+if [ -d "$RESOURCE_BUNDLE" ]; then
+    cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/"
+    echo "Copied meee2_meee2Kit.bundle"
+else
+    echo "Warning: meee2_meee2Kit.bundle not found at $RESOURCE_BUNDLE"
+fi
+
 # Copy app icon
 if [ -f "Resources/AppIcon.icns" ]; then
     cp "Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/"
     echo "Copied AppIcon.icns"
 fi
 
-# Copy Bridge scripts
+# Copy Bridge scripts and install MCP server dependencies
 if [ -d "Bridge" ]; then
+    if command -v npm &>/dev/null; then
+        echo "Installing MCP server dependencies..."
+        (cd Bridge/mcp-meee2 && npm ci --omit=dev)
+    else
+        echo "Warning: npm not found; MCP server will lack node_modules"
+    fi
     cp -R Bridge "$APP_DIR/Contents/Resources/"
     chmod +x "$APP_DIR/Contents/Resources/Bridge/claude-hook-bridge.sh"
-    echo "Copied Bridge scripts"
+    echo "Copied Bridge scripts (with node_modules if available)"
+    # Clean up node_modules from worktree (gitignored, not needed in repo)
+    rm -rf Bridge/mcp-meee2/node_modules
 fi
 
 # Create Info.plist
@@ -83,7 +110,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>__VERSION__</string>
+<string>__VERSION__</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -138,7 +165,7 @@ if [ -f "$CURSOR_DYLIB" ]; then
 {
     "id": "com.meee2.plugin.cursor",
     "name": "Cursor",
-    "version": "${VERSION}",
+"version": "${VERSION}",
     "dylib": "CursorPlugin.dylib",
     "helpUrl": "https://docs.cursor.com"
 }
@@ -146,6 +173,24 @@ CURSOR_EOF
     echo "Installed Cursor plugin"
 else
     echo "Warning: CursorPlugin.dylib not found"
+fi
+
+# OpenClaw Plugin
+OPENCLAW_DYLIB=".build/release/libOpenClawPlugin.dylib"
+if [ -f "$OPENCLAW_DYLIB" ]; then
+    mkdir -p "$APP_DIR/Contents/Resources/Plugins/openclaw"
+    cp "$OPENCLAW_DYLIB" "$APP_DIR/Contents/Resources/Plugins/openclaw/OpenClawPlugin.dylib"
+    cat > "$APP_DIR/Contents/Resources/Plugins/openclaw/plugin.json" << 'OPENCLAW_EOF'
+{
+    "id": "com.meee2.plugin.openclaw",
+    "name": "OpenClaw",
+    "version": "0.2.0",
+    "dylib": "OpenClawPlugin.dylib"
+}
+OPENCLAW_EOF
+    echo "Installed OpenClaw plugin"
+else
+    echo "Warning: OpenClawPlugin.dylib not found"
 fi
 
 # Sign the app bundle again after adding plugins
@@ -166,7 +211,7 @@ rm -rf "/Volumes/$VOLUME_NAME" 2>/dev/null || true
 mkdir -p dist
 
 # Create temporary DMG (larger size for background)
-hdiutil create -size 200m -volname "${VOLUME_NAME}" -fs HFS+ -fsargs "-c c=64,a=16,e=16" "$DMG_TEMP"
+hdiutil create -size 500m -volname "${VOLUME_NAME}" -fs HFS+ -fsargs "-c c=64,a=16,e=16" "$DMG_TEMP"
 
 # Mount the DMG
 hdiutil attach "$DMG_TEMP" -readwrite -noverify -noautoopen

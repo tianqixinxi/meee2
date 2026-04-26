@@ -26,6 +26,22 @@ public final class MCPConfigManager {
     /// 应用启动时调；无论现在是啥状态都收敛到"已注册，命令指向当前的 server.js
     /// 绝对路径"。
     public func ensureRegistered() {
+        // 检查 Node.js 是否可用
+        let whichNode = Process()
+        whichNode.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        whichNode.arguments = ["which", "node"]
+        whichNode.standardOutput = Pipe()
+        whichNode.standardError = Pipe()
+        do {
+            try whichNode.run()
+            whichNode.waitUntilExit()
+            if whichNode.terminationStatus != 0 {
+                NSLog("[MCPConfigManager] WARNING: Node.js not found in PATH. MCP server will be registered but cannot run until Node.js >= 18 is installed.")
+            }
+        } catch {
+            NSLog("[MCPConfigManager] WARNING: Cannot check for Node.js availability.")
+        }
+
         let expectedServerPath = resolveServerScriptPath()
         NSLog("[MCPConfigManager] expected server.js path: \(expectedServerPath)")
 
