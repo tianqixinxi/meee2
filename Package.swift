@@ -10,6 +10,7 @@ let package = Package(
         // Builtin plugins
         .library(name: "CursorPlugin", type: .dynamic, targets: ["CursorPlugin"]),
         .library(name: "OpenClawPlugin", type: .dynamic, targets: ["OpenClawPlugin"]),
+        .library(name: "CodexPlugin", type: .dynamic, targets: ["CodexPlugin"]),
     ],
     dependencies: [
         .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
@@ -48,15 +49,22 @@ let package = Package(
             name: "CursorPlugin",
             dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "plugins-builtin/Sources/Plugins/Builtin",
-            exclude: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift"],
+            exclude: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift", "CodexPlugin.swift", "CodexPluginExport.swift"],
             sources: ["CursorPlugin.swift", "CursorPluginExport.swift"]
         ),
         .target(
             name: "OpenClawPlugin",
             dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "plugins-builtin/Sources/Plugins/Builtin",
-            exclude: ["CursorPlugin.swift", "CursorPluginExport.swift"],
+            exclude: ["CursorPlugin.swift", "CursorPluginExport.swift", "CodexPlugin.swift", "CodexPluginExport.swift"],
             sources: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift"]
+        ),
+        .target(
+            name: "CodexPlugin",
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
+            path: "plugins-builtin/Sources/Plugins/Builtin",
+            exclude: ["CursorPlugin.swift", "CursorPluginExport.swift", "OpenClawPlugin.swift", "OpenClawPluginExport.swift"],
+            sources: ["CodexPlugin.swift", "CodexPluginExport.swift"]
         ),
     ]
 )
