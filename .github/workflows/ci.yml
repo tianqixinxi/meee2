@@ -54,8 +54,13 @@ jobs:
 
       - name: Hardcoded path scan
         run: |
+          # WebDist 是 vite 打包 web/ 目录的产物，里面会内联 demo session 用的
+          # 字面量路径（templatePresets.ts 里的预览卡片）。bundle 是 build artifact，
+          # 跟 .build/ 一样不该被扫描。
           HARDCODED=$(grep -rn '"/Users/[a-zA-Z]' Sources/ App/ plugins-builtin/ 2>/dev/null \
-            | grep -v '\.build/' | grep -v 'CLAUDE.md' | grep -v 'Preview' \
+            | grep -v '\.build/' \
+            | grep -v 'Sources/Board/WebDist/' \
+            | grep -v 'CLAUDE.md' | grep -v 'Preview' \
             | grep -v '/// ' | grep -v '// ' | grep -v '/Users/test/' || true)
           if [ -n "$HARDCODED" ]; then
             echo "::error::Hardcoded user paths found:"
