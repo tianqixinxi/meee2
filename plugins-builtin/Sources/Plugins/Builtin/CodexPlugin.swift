@@ -9,7 +9,7 @@ class CodexPlugin: SessionPlugin {
     override var displayName: String { "Codex" }
     override var icon: String { "cpu.fill" }
     override var themeColor: Color { .purple }
-    override var version: String { "0.1.0" }
+    override var version: String { "0.2.0" }
     override var helpUrl: String? { "https://github.com/openai/codex" }
 
     // MARK: - Private
@@ -23,26 +23,6 @@ class CodexPlugin: SessionPlugin {
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("codexRefreshInterval") private var refreshInterval: Double = 10.0
 
-    // Codex 数据库路径（可配置）
-    @AppStorage("codexDatabasePath") private var databasePathString: String = ""
-
-    // 默认路径
-    private var defaultDatabasePath: URL {
-        let home = NSHomeDirectory()
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent(".codex")
-            .appendingPathComponent("sqlite")
-            .appendingPathComponent("codex-dev.db")
-    }
-
-    // 实际使用的路径
-    private var codexDatabasePath: URL {
-        if databasePathString.isEmpty {
-            return defaultDatabasePath
-        }
-        return URL(fileURLWithPath: databasePathString)
-    }
-
     // 活跃时间阈值（秒）- session 更新时间在此阈值内视为活跃
     private let activeThreshold: TimeInterval = 3600  // 1小时
 
@@ -50,11 +30,12 @@ class CodexPlugin: SessionPlugin {
 
     override func initialize() -> Bool {
         // 检查数据库文件是否存在
-        guard FileManager.default.fileExists(atPath: codexDatabasePath.path) else {
-            NSLog("[CodexPlugin] Database not found: \(codexDatabasePath.path)")
+        let stateDbPath = stateDatabasePath
+        guard FileManager.default.fileExists(atPath: stateDbPath.path) else {
+            NSLog("[CodexPlugin] State database not found: \(stateDbPath.path)")
             hasError = true
-            lastError = "Codex database not found at ~/.codex/sqlite/codex-dev.db"
-            return true  // 仍然返回 true，让用户可以配置路径
+            lastError = "Codex state database not found"
+            return true  // 仍然返回 true，让 plugin 可以加载
         }
         hasError = false
         lastError = nil
@@ -78,7 +59,7 @@ class CodexPlugin: SessionPlugin {
         // 启动定时器
         startTimer()
 
-        NSLog("[CodexPlugin] Started, watching: \(codexDatabasePath.path), interval: \(refreshInterval)s")
+        NSLog("[CodexPlugin] Started, watching: \(stateDatabasePath.path), interval: \(refreshInterval)s")
         return true
     }
 
@@ -103,7 +84,7 @@ class CodexPlugin: SessionPlugin {
     // MARK: - Session Management
 
     override func getSessions() -> [PluginSession] {
-        scanCodexDatabase()
+        scanCodexThreads()
     }
 
     override func refresh() {
@@ -130,36 +111,34 @@ class CodexPlugin: SessionPlugin {
     // MARK: - Terminal
 
     override func activateTerminal(for session: PluginSession) {
-        // 打开 Codex TUI 或者终端中的 codex 会话
-        // Codex 通常在终端中运行，尝试打开终端并运行 codex
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "codex"
-        end tell
-        """
+        // 打开 Codex Desktop app 或 Terminal
+        // 检查是否有 Codex.app
+        if let codexUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
+            NSWorkspace.shared.openApplication(at: codexUrl, configuration: NSWorkspace.OpenConfiguration())
+            NSLog("[CodexPlugin] Opening Codex.app")
+        } else {
+            // 回退到打开 Terminal
+            let script = """
+            tell application "Terminal"
+                activate
+            end tell
+            """
 
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                NSLog("[CodexPlugin] Terminal launch error: \(error)")
-                // 尝试直接打开终端
+            if let appleScript = NSAppleScript(source: script) {
+                var error: NSDictionary?
+                appleScript.executeAndReturnError(&error)
+                if let error = error {
+                    NSLog("[CodexPlugin] Terminal launch error: \(error)")
+                }
+            }
+
+            // 打开 cwd 目录
+            if let cwd = session.cwd {
                 let task = Process()
                 task.launchPath = "/usr/bin/open"
-                task.arguments = ["-a", "Terminal"]
+                task.arguments = [cwd]
                 try? task.run()
-            } else {
-                NSLog("[CodexPlugin] Launched Codex in Terminal")
             }
-        }
-
-        // 或者如果 cwd 存在，打开那个目录
-        if let cwd = session.cwd {
-            let task = Process()
-            task.launchPath = "/usr/bin/open"
-            task.arguments = [cwd]
-            try? task.run()
         }
     }
 
@@ -172,44 +151,67 @@ class CodexPlugin: SessionPlugin {
 
     // MARK: - Private
 
-    /// 扫描 Codex SQLite 数据库
-    private func scanCodexDatabase() -> [PluginSession] {
-        guard FileManager.default.fileExists(atPath: codexDatabasePath.path) else {
-            NSLog("[CodexPlugin] Database not found: \(codexDatabasePath.path)")
+    /// Codex state database 路径 (state_5.sqlite 或更高版本)
+    private var stateDatabasePath: URL {
+        let home = NSHomeDirectory()
+        let codexDir = URL(fileURLWithPath: home).appendingPathComponent(".codex")
+
+        // 查找最新的 state_*.sqlite 文件
+        if let files = try? FileManager.default.contentsOfDirectory(at: codexDir, includingPropertiesForKeys: nil) {
+            let stateFiles = files.filter { $0.lastPathComponent.hasPrefix("state_") && $0.pathExtension == "sqlite" }
+            if let latest = stateFiles.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }).first {
+                return latest
+            }
+        }
+
+        // 默认路径
+        return codexDir.appendingPathComponent("state_5.sqlite")
+    }
+
+    /// 扫描 Codex threads 表
+    private func scanCodexThreads() -> [PluginSession] {
+        let dbPath = stateDatabasePath
+        guard FileManager.default.fileExists(atPath: dbPath.path) else {
+            NSLog("[CodexPlugin] Database not found: \(dbPath.path)")
             return []
         }
 
         var sessions: [PluginSession] = []
 
-        // 查询 automation_runs 表
+        // 查询 threads 表 - 未归档的活跃 thread
+        // 检查进程是否在运行来判断状态
+        let codexRunning = isCodexProcessRunning()
+
         let query = """
-        SELECT thread_id, automation_id, status, thread_title, source_cwd, inbox_title, inbox_summary, updated_at
-        FROM automation_runs
-        WHERE status != 'ARCHIVED'
+        SELECT id, title, cwd, archived, updated_at, first_user_message, model
+        FROM threads
+        WHERE archived = 0
         ORDER BY updated_at DESC
+        LIMIT 20
         """
 
-        if let results = executeQuery(query) {
+        if let results = executeQuery(dbPath: dbPath, query: query) {
             for row in results {
-                let threadId = row["thread_id"] as? String ?? ""
-                let automationId = row["automation_id"] as? String ?? ""
-                let statusStr = row["status"] as? String ?? "idle"
-                let threadTitle = row["thread_title"] as? String
-                let sourceCwd = row["source_cwd"] as? String
-                let inboxTitle = row["inbox_title"] as? String
-                let inboxSummary = row["inbox_summary"] as? String
+                let threadId = row["id"] as? String ?? ""
+                let title = row["title"] as? String ?? "Untitled"
+                let cwd = row["cwd"] as? String
                 let updatedAt = row["updated_at"] as? Int ?? 0
+                let firstUserMessage = row["first_user_message"] as? String
+                let model = row["model"] as? String
 
                 let lastUpdate = Date(timeIntervalSince1970: TimeInterval(updatedAt))
                 let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
 
-                // 只显示最近活跃的 session
+                // 只显示最近活跃的 session (1小时内)
                 if timeSinceUpdate < activeThreshold {
-                    let title = threadTitle ?? inboxTitle ?? automationId
-                    let lastMessage = inboxSummary
+                    // 状态判断：如果 Codex 进程在运行且这个 thread 最近更新，认为是 active
+                    let status: SessionStatus = codexRunning && timeSinceUpdate < 60 ? .active : .idle
 
-                    // 状态映射
-                    let status: SessionStatus = mapCodexStatus(statusStr)
+                    // lastMessage: 如果最近活跃，显示 model 或 first_user_message
+                    var lastMessage: String? = nil
+                    if timeSinceUpdate < 300 {
+                        lastMessage = model ?? firstUserMessage?.prefix(100).description
+                    }
 
                     let session = PluginSession(
                         id: "\(pluginId)-\(threadId)",
@@ -217,7 +219,7 @@ class CodexPlugin: SessionPlugin {
                         title: title,
                         status: status,
                         startedAt: lastUpdate,
-                        cwd: sourceCwd,
+                        cwd: cwd,
                         icon: "cpu.fill",
                         accentColor: .purple,
                         lastMessage: lastMessage
@@ -227,66 +229,46 @@ class CodexPlugin: SessionPlugin {
             }
         }
 
-        // 查询 automations 表获取活跃的 automation
-        let automationQuery = """
-        SELECT id, name, status, last_run_at, cwds
-        FROM automations
-        WHERE status = 'ACTIVE'
-        ORDER BY last_run_at DESC
-        """
-
-        if let results = executeQuery(automationQuery) {
-            for row in results {
-                let automationId = row["id"] as? String ?? ""
-                let name = row["name"] as? String ?? automationId
-                let lastRunAt = row["last_run_at"] as? Int ?? 0
-                let cwdsStr = row["cwds"] as? String ?? "[]"
-
-                // 解析 cwds JSON array
-                var cwd: String? = nil
-                if let cwdsData = cwdsStr.data(using: .utf8),
-                   let cwds = try? JSONSerialization.jsonObject(with: cwdsData) as? [String],
-                   let firstCwd = cwds.first {
-                    cwd = firstCwd
-                }
-
-                let lastUpdate = Date(timeIntervalSince1970: TimeInterval(lastRunAt))
-                let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
-
-                // 只显示最近运行的 automation
-                if timeSinceUpdate < activeThreshold && lastRunAt > 0 {
-                    let session = PluginSession(
-                        id: "\(pluginId)-automation-\(automationId)",
-                        pluginId: pluginId,
-                        title: name,
-                        status: .active,
-                        startedAt: lastUpdate,
-                        cwd: cwd,
-                        icon: "cpu.fill",
-                        accentColor: .purple,
-                        lastMessage: "Automation running"
-                    )
-                    sessions.append(session)
-                }
-            }
-        }
-
         // 按更新时间排序
         sessions.sort { $0.startedAt > $1.startedAt }
 
-        NSLog("[CodexPlugin] Found \(sessions.count) active sessions/automations")
+        NSLog("[CodexPlugin] Found \(sessions.count) active threads from \(dbPath.lastPathComponent)")
         return sessions
     }
 
-    /// 执行 SQLite 查询
-    private func executeQuery(_ query: String) -> [[String: Any]]? {
-        let process = Process()
-        process.launchPath = "/usr/bin/sqlite3"
-        process.arguments = [codexDatabasePath.path, "-json", query]
+    /// 检查 Codex 进程是否在运行
+    private func isCodexProcessRunning() -> Bool {
+        // 使用 pgrep 更简单更快，避免 ps aux 管道问题
+        let task = Process()
+        task.launchPath = "/usr/bin/pgrep"
+        task.arguments = ["-x", "codex"]
 
         let outPipe = Pipe()
+        task.standardOutput = outPipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            // pgrep 返回 0 表示找到进程
+            return task.terminationStatus == 0
+        } catch {
+            NSLog("[CodexPlugin] pgrep error: \(error)")
+            return false
+        }
+    }
+
+    /// 执行 SQLite 查询
+    private func executeQuery(dbPath: URL, query: String) -> [[String: Any]]? {
+        let process = Process()
+        process.launchPath = "/usr/bin/sqlite3"
+        process.arguments = [dbPath.path, "-json", query]
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = Pipe()
+        process.standardError = errPipe
 
         do {
             try process.run()
@@ -309,25 +291,5 @@ class CodexPlugin: SessionPlugin {
         }
 
         return nil
-    }
-
-    /// 映射 Codex 状态到 SessionStatus
-    private func mapCodexStatus(_ status: String) -> SessionStatus {
-        switch status.lowercased() {
-        case "running", "active":
-            return .active
-        case "waiting", "pending":
-            return .waitingForUser
-        case "permission_required", "permission":
-            return .permissionRequired
-        case "completed", "done":
-            return .completed
-        case "failed", "error":
-            return .idle
-        case "archived":
-            return .completed
-        default:
-            return .idle
-        }
     }
 }

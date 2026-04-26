@@ -59,6 +59,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 加载外部 plugins
         PluginManager.shared.loadExternalPlugins()
+        PluginManager.shared.startAll()
 
         // SessionStore 已经从 disk 载入。用 Ghostty PR #11922 提供的
         // tty AppleScript 属性反查每个 session 真正所在的 Ghostty terminal id，
