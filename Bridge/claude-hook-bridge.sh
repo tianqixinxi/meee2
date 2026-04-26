@@ -228,5 +228,16 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
     esac
 fi
 
+# ─── meee360 上报 ─────────────────────────────────────────────────────────
+# 找到 meee360-reporter.sh 脚本路径（和本脚本同目录）
+BRIDGE_DIR="$(dirname "$0")"
+MEEE360_REPORTER="$BRIDGE_DIR/meee360-reporter.sh"
+
+# 如果脚本存在，异步调用（不阻塞 Claude hook）
+# 通过 stdin 传递事件数据给 reporter
+if [[ -x "$MEEE360_REPORTER" ]]; then
+    echo "$INPUT" | "$MEEE360_REPORTER" &
+fi
+
 # 返回成功 (不影响 Claude CLI 执行)
 exit 0

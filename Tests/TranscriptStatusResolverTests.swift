@@ -1,6 +1,4 @@
 import XCTest
-@testable import Meee2Core
-@testable import ClaudeCLIAdapter
 @testable import meee2Kit
 import Meee2PluginKit
 

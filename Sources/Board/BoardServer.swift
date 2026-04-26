@@ -156,6 +156,9 @@ public final class BoardServer {
         server.GET["/api/board/layout"] = BoardAPI.getBoardLayout
         server.PUT["/api/board/layout"] = BoardAPI.putBoardLayout
 
+        // --- meee360 callback (OAuth-style auto-connect) ---
+        server.GET["/meee360/callback"] = Meee360CallbackAPI.handleCallback
+
         // --- 静态文件（SPA） ---
         // `GET /` -> index.html；其他路径尝试 WebDist 内的文件；未匹配时回 404
         server.notFoundHandler = { [weak self] request in

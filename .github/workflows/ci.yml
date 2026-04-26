@@ -60,6 +60,7 @@ jobs:
           HARDCODED=$(grep -rn '"/Users/[a-zA-Z]' Sources/ App/ plugins-builtin/ 2>/dev/null \
             | grep -v '\.build/' \
             | grep -v 'Sources/Board/WebDist/' \
+            | grep -v 'Sources//Board/WebDist/' \
             | grep -v 'CLAUDE.md' | grep -v 'Preview' \
             | grep -v '/// ' | grep -v '// ' | grep -v '/Users/test/' || true)
           if [ -n "$HARDCODED" ]; then
