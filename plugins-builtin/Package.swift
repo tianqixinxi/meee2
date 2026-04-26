@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "CursorPlugin", type: .dynamic, targets: ["CursorPlugin"]),
         .library(name: "OpenClawPlugin", type: .dynamic, targets: ["OpenClawPlugin"]),
+        .library(name: "CodexPlugin", type: .dynamic, targets: ["CodexPlugin"]),
     ],
     dependencies: [
         .package(name: "Meee2PluginKit", path: "../meee2-plugin-kit"),
@@ -23,6 +24,12 @@ let package = Package(
             dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
             path: "Sources/Plugins/Builtin",
             sources: ["OpenClawPlugin.swift", "OpenClawPluginExport.swift"]
+        ),
+        .target(
+            name: "CodexPlugin",
+            dependencies: [.product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
+            path: "Sources/Plugins/Builtin",
+            sources: ["CodexPlugin.swift", "CodexPluginExport.swift"]
         ),
     ]
 )
