@@ -262,6 +262,15 @@ public enum TranscriptStatusResolver {
             if hookStatus == .idle || hookStatus == .completed || hookStatus == .waitingForUser {
                 return (.active, "assistant+hook=\(hookStatus.rawValue) → mid-turn")
             }
+            // ESC-mid-stream 兜底：Claude 开始 stream 了（assistant entry 已写
+            // 入）但没用工具就被用户 ESC，后续 Stop / 新 assistant 写入都没
+            // 来。正常 streaming 时 transcript 每秒都有写入，tail 停在同一条
+            // assistant 超过阈值 = 这一轮已断。降级 idle。
+            if let ts = last.timestamp,
+               now.timeIntervalSince(ts) > _staleAssistantTailThreshold,
+               hookStatus == .thinking || hookStatus == .tooling || hookStatus == .active || hookStatus == .compacting {
+                return (.idle, "assistant-tail-stale(>\(Int(_staleAssistantTailThreshold))s+hook=\(hookStatus.rawValue))")
+            }
             return (hookStatus, "assistant+hook=\(hookStatus.rawValue)")
 
         case "system":
@@ -361,6 +370,13 @@ private let _staleThinkingThreshold: TimeInterval = 45.0
 /// 收尾，剩下的沉默大概率是用户 ESC 把 tool 打断，后续 PostToolUse/Stop 没
 /// 到位。90s 是个安全阈值 —— 单次正常工具调用绝大多数 < 30s 完成。
 private let _staleSystemTailThreshold: TimeInterval = 90.0
+
+/// 针对 hookStatus=working + tail 是 assistant 条目的"ESC-mid-stream"场景。
+/// Claude 在 stream 文字时 transcript 每秒都在追写；tail 停在同一条 assistant
+/// 超过 60s + hook 还是工作态 = 用户 ESC 把 streaming 打断，后续 Stop 没来。
+/// 60s 比 system 的 90s 紧，因为 assistant 活跃 streaming 的节奏远高于
+/// tool 执行（后者可以合法跑几分钟）。
+private let _staleAssistantTailThreshold: TimeInterval = 60.0
 
 /// Read the last `bytes` bytes of a file as UTF-8 (replacement on invalid
 /// bytes). Returns nil if the path is missing or unreadable.

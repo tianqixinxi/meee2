@@ -86,19 +86,7 @@ public actor TerminalJumper {
                     }
                 }
 
-                let escaped = gtid.replacingOccurrences(of: "\"", with: "\\\"")
-                let script = """
-                tell application "Ghostty"
-                    activate
-                    try
-                        focus (terminal id "\(escaped)")
-                        return "success"
-                    on error errMsg
-                        return "err:" & errMsg
-                    end try
-                end tell
-                """
-                let result = await runAppleScript(script)
+                let result = await focusGhosttyTerminal(id: gtid)
                 NSLog("[TerminalJumper] Ghostty Strategy 1 focus result: '\(result)'")
                 if result == "success" { return .success }
             } else {
@@ -110,20 +98,7 @@ public actor TerminalJumper {
         // 可能是 stale（bridge 在 UserPromptSubmit 抓到了错的前台 tab id），
         // 所以只在 Strategy 1 失败时用。即使跳错也好过"Ghostty 没反应"。
         if let gtid = session.ghosttyTerminalId, !gtid.isEmpty {
-            let escaped = gtid.replacingOccurrences(of: "\"", with: "\\\"")
-            let script = """
-            tell application "Ghostty"
-                activate
-                try
-                    set t to terminal id "\(escaped)"
-                    focus t
-                    return "success"
-                on error errMsg
-                    return "err:" & errMsg
-                end try
-            end tell
-            """
-            let result = await runAppleScript(script)
+            let result = await focusGhosttyTerminal(id: gtid)
             NSLog("[TerminalJumper] Ghostty Strategy 0 (cached id, fallback) result: '\(result)'")
             if result == "success" {
                 return .success
@@ -147,6 +122,65 @@ public actor TerminalJumper {
 
     private func nonEmpty(_ s: String) -> String? {
         s.isEmpty ? nil : s
+    }
+
+    /// 真正把目标 terminal 搞到前台。
+    ///
+    /// 关键：Ghostty 的 `focus (terminal id X)` 按官方 sdef 描述只是
+    /// "bring its window to the front" —— 窗口抬到前台，**不切 tab**。
+    /// 当多个 session 共用同一个 Ghostty 窗口的不同 tab 时，点哪个 session
+    /// 的 Open terminal 都会显示当前 selected 的那个 tab，这就是"全都跳到
+    /// 同一个 terminal"的 bug 现象。
+    ///
+    /// 正确做法：走 `windows → tabs → terminals` 层级，先找到目标 terminal
+    /// 所在的 tab，`select tab` 切 tab，再 `focus` 把窗口抬到前台。两步缺一
+    /// 不可：只 `select tab` 窗口可能还在后台；只 `focus` tab 不切。
+    private func focusGhosttyTerminal(id: String) async -> String {
+        let escaped = id.replacingOccurrences(of: "\"", with: "\\\"")
+        // 关键：`focus t` 用的是嵌套引用（terminal of tab of window）→ 只在
+        // 窗口内部 focus，**不会**把父窗口抬到前台。验证方式：单 tab 的不同
+        // 窗口之间切，select tab + focus t 返回 ok 但 front window 没变。
+        // `focus tgt`（flat 的 `terminal id "..."` 引用）能把窗口抬前。
+        // 所以序列改成：loop 找到目标 tab → select tab → focus tgt（flat）。
+        let script = """
+        tell application "Ghostty"
+            activate
+            try
+                set tgt to terminal id "\(escaped)"
+            on error
+                return "err:terminal-id-not-found"
+            end try
+            try
+                repeat with w in windows
+                    repeat with tb in tabs of w
+                        repeat with t in terminals of tb
+                            if id of t is "\(escaped)" then
+                                select tab tb
+                                focus tgt
+                                return "success"
+                            end if
+                        end repeat
+                    end repeat
+                end repeat
+            on error errMsg
+                -- 层级遍历失败时，fallback 到直接 focus（至少抬窗口）
+                try
+                    focus tgt
+                    return "success-fallback"
+                on error e2
+                    return "err:" & e2
+                end try
+            end try
+            -- 没在任何 tab 里找到（terminal 可能独立在窗口根层级）→ 直 focus
+            try
+                focus tgt
+                return "success-direct"
+            on error e3
+                return "err:" & e3
+            end try
+        end tell
+        """
+        return await runAppleScript(script)
     }
 
     /// 通过往 TTY 写一个唯一 marker（ESC]2;…BEL 设窗口 title），然后用 Ghostty

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// 审计事件类型 - 对应 A2A 消息状态转换
 public enum AuditEventType: String, Codable, Sendable {
@@ -100,13 +101,24 @@ public final class AuditLogger {
                     return
                 }
 
-                if fileManager.fileExists(atPath: logPath.path) {
-                    let handle = try FileHandle(forWritingTo: logPath)
-                    defer { try? handle.close() }
-                    try handle.seekToEnd()
-                    try handle.write(contentsOf: bytes)
-                } else {
-                    try bytes.write(to: logPath, options: .atomic)
+                // 必须始终以 append 方式写。早期版本对"文件不存在"走
+                // `Data.write(to:options:.atomic)`：原子写本质是写到 .tmp 再
+                // rename 覆盖原文件——多个并发 logger（同进程多线程或 swift
+                // test --parallel 多进程）会先后 atomic-overwrite，先写的整
+                // 个被吞。退一步用 `FileManager.createFile` + `FileHandle` 也
+                // 不行：createFile 会截断已存在文件，仍是覆写竞态。
+                // 唯一可靠的是直接 POSIX open 带 O_CREAT|O_APPEND：内核
+                // 保证 append 写入是原子化追加（PIPE_BUF 以下，对 JSONL 单
+                // 行远小于此），多 writer 之间不会互相截断。
+                let fd = Darwin.open(logPath.path, O_WRONLY | O_CREAT | O_APPEND, 0o644)
+                if fd < 0 {
+                    MWarn("[AuditLogger] open failed for \(logPath.path): errno=\(errno)")
+                    return
+                }
+                defer { Darwin.close(fd) }
+                _ = bytes.withUnsafeBytes { buf -> Int in
+                    guard let base = buf.baseAddress else { return -1 }
+                    return Darwin.write(fd, base, buf.count)
                 }
             } catch {
                 MWarn("[AuditLogger] write failed for \(event.msgId): \(error)")
