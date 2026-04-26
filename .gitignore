@@ -35,6 +35,9 @@ dist/
 # under Sources/Board/WebDist IS committed as a shippable asset.
 web/node_modules/
 web/dist/
+
+# Claude Code 本地配置 + 子 agent worktree
+.claude/
 web/.vite/
 web/tsconfig.tsbuildinfo
 Bridge/mcp-meee2/node_modules/

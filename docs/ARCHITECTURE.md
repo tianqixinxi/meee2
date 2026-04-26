@@ -1,6 +1,6 @@
 # meee2 Architecture
 
-This doc is for contributors who need to understand how the pieces fit together. For API / data-type reference see [SCHEMAS.md](SCHEMAS.md). For writing plugins see [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md).
+This doc is for contributors who need to understand how the pieces fit together. For API / data-type reference see [SCHEMAS.md](SCHEMAS.md). For writing plugins see [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md). Hook → state → UI flow + ESC handling is in §6 below.
 
 ---
 
@@ -163,14 +163,71 @@ The event handler lives in `ClaudePlugin` (a built-in `SessionPlugin`). It:
 
 ## 6. State Resolution
 
-`HookEvent.inferredStatus` is a coarse guess. The authoritative status comes from `TranscriptStatusResolver.resolve(for: SessionData)`, which:
+The full `hook → SessionStatus → UI` pipeline is a flat chain of `switch`es — no explicit state machine, no transition table. There are four stages; this section documents the stage boundaries, the "why" behind them, and where each decision is made. **Concrete rules at each stage live in code** (listed below); don't mirror them here.
 
-1. Reads the last N lines of the transcript JSONL at `SessionData.transcriptPath`.
-2. Parses the tail via `TranscriptStatusParser` (shared between meee2Kit and plugin-kit).
-3. Decides `thinking` vs `tooling` vs `waitingForUser` vs `completed` vs etc.
-4. `resolveCurrentTool` can similarly override the currently-running tool name.
+```
+Stage 1            Stage 2              Stage 3                      Stage 4
+HookEvent          ClaudePlugin         TranscriptStatusResolver     UI template
+.inferredStatus →  writes             → .resolve(for: data)        → classifyLive
+                   SessionData.status   (+ tail inspection,            (+ statusBar-
+                   (= hookStatus)        stale-detection rules)         Color, dot)
+```
 
-All three display surfaces (Island, TUI, Board) use `TranscriptStatusResolver.resolve` rather than consuming `SessionData.status` directly — this keeps them in sync even when a hook arrives late or out of order. `BoardDTOBuilder.sessionDTO` and `SessionData.toPluginSession()` are the two places this happens.
+| Stage | Source of truth | What it decides |
+|---|---|---|
+| 1 | `Sources/Models/HookEvent.swift` — `inferredStatus` | How a raw hook JSON maps to a `SessionStatus`. Two layered switches: `status` field wins over event type. |
+| 2 | `Sources/Services/ClaudePlugin.swift` | Persists stage-1 output into `SessionData.status` (*hookStatus*). No business logic. |
+| 3 | `Sources/Services/TranscriptStatusResolver.swift` — `resolveUncached` | Refines hookStatus against transcript tail + process/terminal liveness. **Every ESC/abandon/stale heuristic lives here.** Tail-type switch (`user` / `assistant` / `system`) with priority-ordered rules inside each branch. |
+| 4 | `web/src/defaultTemplate.ts` — `classifyLive` / `statusBarColor` / `statusStyle` | Display status → visual triple (halo, badge, color, dim). Mirrored in SwiftUI surfaces via `SessionStatus.color` / `.icon`. |
+
+**Invariant**: Island / TUI / Board all call `TranscriptStatusResolver.resolve(for: SessionData)`, never read `SessionData.status` directly. That's the only reason three surfaces stay in sync when hooks arrive late or out of order. `BoardDTOBuilder.sessionDTO` and `SessionData.toPluginSession()` are the two call sites.
+
+### ESC — the only "signal" we never receive
+
+ESC is a Claude CLI internal interrupt — it doesn't fire a hook event, doesn't reach `/tmp/meee2.sock`, doesn't touch meee2 at all. What we observe is **silence**: after ESC, the next hook that "should" fire (PostToolUse, Stop, etc.) doesn't. **All four ESC-detection heuristics are in Stage 3**, ordered from strongest to weakest signal:
+
+| Signal | Condition (in `resolveUncached`) | Catches |
+|---|---|---|
+| Strong — transcript marker | `last.isInterrupt` (tail user text starts with `[Request interrupted by user`) | ESC during streaming (Claude wrote the marker) |
+| Medium — pre-token ESC | hook=`.thinking` + user tail + age > `_staleThinkingThreshold` (45s) | ESC before first streamed token; no marker, no new hook |
+| Medium — mid-tool ESC | hook working + **system** tail + age > `_staleSystemTailThreshold` (90s) | ESC during tool; PostToolUse/Stop never fired, Claude wrote a `stop_hook_summary` and went quiet |
+| Weak — catch-all | user tail + age > `_abandonedUserEntryThreshold` (180s) | session quietly abandoned |
+
+One ESC-adjacent case that does NOT flow through Stage 3:
+
+- **ESC while a permission dialog is pending** — the CLI client socket was kept open waiting for user's response. `HookSocketServer.permissionTimeoutSeconds` (default 300s) fires a timer after which `permissionTimeoutDecision` (default `"deny"`) auto-responds. See §10.2.
+
+### Debugging a wrong card state
+
+Grep `/tmp/meee2.log` by log tag to see which stage decided:
+
+| Tag | Stage | Example |
+|---|---|---|
+| `[StateTrace][hook-ingress][socket]` | 0 | `sid=abc evt=PreToolUse tool=Bash inferred=thinking` |
+| `[StateTrace][hook]` | 2 | `sid=abc evt=PreToolUse before=thinking after=tooling` |
+| `[StateTrace][resolver]` | 3 | `sid=abc hook=tooling last={type=system age=378s} → idle (system-tail-stale(>90s+hook=tooling))` |
+| `[StateTrace][pluginSession]` | 3→Island | what StatusManager received |
+| `[StateTrace][boardDTO]` | 3→Web | what `/api/state` returns |
+
+The `reason=…` suffix on `[resolver]` lines names which rule in `resolveUncached` won — grep that to find the exact branch without stepping through code.
+
+### Adding a new `SessionStatus` case — checklist
+
+New case touches four places. Do them together or the UI will silently fall back to defaults:
+
+1. **Enum** — `meee2-plugin-kit/.../SessionStatus.swift`: add the case, its `icon` / `color` / `displayName` / `animation` / `needsUserAction`. Add legacy name aliases to `legacyMap` if renaming an existing case.
+2. **Ingress** — `HookEvent.inferredStatus`: decide which hook event / payload `status` field should map to it. Add a fixture test in `Tests/HookEventTests.swift`.
+3. **Resolver** — does a tail-type branch need a new rule? Usually no — the new status just rides on the existing `isSpecific()` guard. If yes, insert a priority-ordered rule in `resolveUncached` and document the reason.
+4. **UI** — `classifyLive` / `statusBarColor` / `statusStyle` in `defaultTemplate.ts`, plus `IslandView` if visible there.
+
+If you're adding **detection heuristics** (an ESC-like inference), only stages 3 and 4 change. Stage 3 gets the new rule; Stage 4 usually doesn't (new heuristic collapses to an existing status).
+
+### Known limitations
+
+- Rules are scattered across the 4 stages above; adding a status requires synchronized edits. There's no single "owner" file.
+- Stage 3 thresholds (`_staleThinkingThreshold` etc.) are module-level `let`s — no per-plugin or per-model tuning.
+- `resolveCurrentTool` duplicates Stage 3's tail-type switch with slightly different rules (kept separate for historical reasons).
+- No declared FSM. Transitions depend on external event order (Claude CLI internals, user timing, transcript write cadence), so log replay, not a predeclared diagram, is the source of truth. If Stage 3 grows past ~10 rules total, consider factoring into a `[(predicate, output, reason)]` table inside `resolveUncached`.
 
 ---
 

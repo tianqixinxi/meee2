@@ -196,6 +196,7 @@ swift build -c release
 | [`docs/SCHEMAS.md`](docs/SCHEMAS.md) | 所有公共/共享类型的字段参考：Models、`SessionData`、`meee2-plugin-kit` 公共 SDK、Board HTTP DTO |
 | [`docs/PLUGIN_DEVELOPMENT.md`](docs/PLUGIN_DEVELOPMENT.md) | 如何编写、打包、安装第三方插件 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地构建、测试、提交 PR 的完整流程 |
+| [`RELEASING.md`](RELEASING.md) | 打 tag → 自动构建 DMG → GitHub Release 的完整流程 |
 | [`SECURITY.md`](SECURITY.md) | 漏洞报告流程与信任边界说明 |
 
 下文的「系统架构」「核心模块」小节是快速入门摘要；完整的内容请看 `docs/` 下的专门文档。

@@ -70,3 +70,7 @@ A few things that will bite you if you don't know:
 ## Reporting Bugs / Suggesting Features
 
 Use the issue templates. For anything security-related, see [`SECURITY.md`](SECURITY.md) — please do not file a public issue.
+
+## Cutting a Release
+
+See [`RELEASING.md`](RELEASING.md). Short version: push a `v<semver>` tag to `main` and the release workflow builds + publishes the DMG automatically.

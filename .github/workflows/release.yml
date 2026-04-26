@@ -1,0 +1,134 @@
+name: Release
+
+# 发布流程：
+#   * 在 main 上打 tag `v<semver>` (例如 v0.2.0) 并 push
+#   * workflow 起 macos runner 构建 release binary + .app bundle + .dmg
+#   * 把 dmg + sha256 上传到 GitHub Release，正文用 git log 自动生成
+#
+# 不做的事：
+#   - 不用正式 Apple Developer ID 签名 / notarization（项目还没 enroll；ad-hoc
+#     签名足够开发者用户使用，Gatekeeper 第一次打开要右键 Open）。需要正式
+#     签名时再加 `APPLE_CERTIFICATE_P12` / `AC_API_KEY_*` 等 secrets + 一个
+#     签名 step。
+#   - 不 touch main branch。版本号来源于 tag 名，代码里没有版本号字段可变动
+#     （Info.plist 在 create-dmg.sh 里按 env VERSION 模板化生成）。
+#
+# 手动触发：`workflow_dispatch` 允许不打 tag 也能跑一次（产物会标记为 prerelease）。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string to bake into the artifact (without leading v)'
+        required: true
+        default: '0.0.0-dev'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # 必需：gh release create 要写 Release assets
+
+jobs:
+  build-and-release:
+    name: Build DMG · Attach to Release
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0    # 用于 gh release 的 release-notes 生成
+
+      - name: Compute VERSION
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # tag 名形如 v0.2.0；strip 前缀
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - name: Show toolchain
+        run: |
+          swift --version
+          xcodebuild -version || true
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-release-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-release-
+            ${{ runner.os }}-spm-
+
+      # 先跑一次 test 作 sanity —— 挂掉的 tag 不该 release
+      - name: Sanity test
+        run: swift test --parallel
+
+      - name: Build release + package DMG
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          SKIP_FINDER_UI: '1'      # 跳过 Finder AppleScript styling，headless runner 无 Finder
+        run: |
+          ./create-dmg.sh
+          ls -lh dist/
+
+      - name: Compute SHA256
+        run: |
+          DMG="dist/meee2-v${VERSION}.dmg"
+          shasum -a 256 "$DMG" | tee "${DMG}.sha256"
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # workflow_dispatch 场景下没有对应 tag，造一个临时 tag 名并标为 prerelease
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="dev-v${VERSION}-$(date -u +%Y%m%d%H%M)"
+            PRERELEASE_FLAG="--prerelease"
+            TITLE="meee2 v${VERSION} (dev build)"
+          else
+            PRERELEASE_FLAG=""
+            TITLE="meee2 v${VERSION}"
+          fi
+
+          DMG="dist/meee2-v${VERSION}.dmg"
+          SHA="dist/meee2-v${VERSION}.dmg.sha256"
+
+          # 已存在同名 release → 覆盖 asset；否则新建 + 自动 release notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; re-uploading assets"
+            gh release upload "$TAG" "$DMG" "$SHA" --clobber
+          else
+            echo "Creating release $TAG"
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              $PRERELEASE_FLAG \
+              --generate-notes \
+              "$DMG" "$SHA"
+          fi
+
+      - name: Upload DMG as workflow artifact (fallback)
+        uses: actions/upload-artifact@v4
+        with:
+          name: meee2-v${{ steps.ver.outputs.version }}-dmg
+          path: |
+            dist/meee2-v*.dmg
+            dist/meee2-v*.dmg.sha256
+          retention-days: 14

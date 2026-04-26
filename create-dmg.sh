@@ -1,17 +1,26 @@
 #!/bin/bash
 
 # Create DMG for meee2
+#
+# Env overrides:
+#   VERSION          — package version; defaults to 0.1.2. CI sets this from the
+#                      git tag (strip leading "v").
+#   SKIP_FINDER_UI=1 — skip the osascript Finder-window styling (useful in
+#                      headless CI where Finder isn't available). The DMG still
+#                      gets created, just without custom icon positioning.
 
 set -e
 
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
-VERSION="0.1.2"
+VERSION="${VERSION:-0.1.2}"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"
 VOLUME_NAME="${APP_NAME}"
+
+echo "Packaging version: $VERSION"
 
 echo "=== Building ${APP_NAME} ==="
 ./build.sh
@@ -74,7 +83,7 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.2</string>
+    <string>__VERSION__</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
@@ -88,6 +97,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
 </dict>
 </plist>
 EOF
+
+# Substitute runtime version into Info.plist (heredoc had __VERSION__ placeholder)
+sed -i '' "s/__VERSION__/${VERSION}/" "$APP_DIR/Contents/Info.plist"
 
 # Create PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
@@ -122,11 +134,11 @@ if [ -f "$CURSOR_DYLIB" ]; then
     mkdir -p "$APP_DIR/Contents/Resources/Plugins/cursor"
     cp "$CURSOR_DYLIB" "$APP_DIR/Contents/Resources/Plugins/cursor/CursorPlugin.dylib"
     # Create plugin.json
-    cat > "$APP_DIR/Contents/Resources/Plugins/cursor/plugin.json" << 'CURSOR_EOF'
+    cat > "$APP_DIR/Contents/Resources/Plugins/cursor/plugin.json" << CURSOR_EOF
 {
     "id": "com.meee2.plugin.cursor",
     "name": "Cursor",
-    "version": "0.1.2",
+    "version": "${VERSION}",
     "dylib": "CursorPlugin.dylib",
     "helpUrl": "https://docs.cursor.com"
 }
@@ -179,10 +191,15 @@ echo "  meee2 --help   - Show help"
 EOF
 chmod +x "/Volumes/$VOLUME_NAME/install-cli.sh"
 
-# Set DMG window appearance using AppleScript
-echo ""
-echo "=== Configuring DMG Window ==="
-osascript << APPLESCRIPT
+# Set DMG window appearance using AppleScript. Needs a running Finder — skipped
+# in CI (SKIP_FINDER_UI=1) where Finder isn't reachable from headless runners.
+if [ "${SKIP_FINDER_UI:-0}" = "1" ]; then
+    echo ""
+    echo "=== SKIP_FINDER_UI=1 → skipping DMG window styling ==="
+else
+    echo ""
+    echo "=== Configuring DMG Window ==="
+    osascript <<APPLESCRIPT || echo "(osascript failed; DMG still usable without custom layout)"
 tell application "Finder"
     tell disk "$VOLUME_NAME"
         open
@@ -203,6 +220,7 @@ tell application "Finder"
     end tell
 end tell
 APPLESCRIPT
+fi
 
 # Make sure it's not busy
 sync
