@@ -235,6 +235,49 @@ function MessageRow({ entry, isLatest }) {
   )
 }
 
+// 卡片 body 在没有 recentMessages 时的占位。原版本只渲染斜体 "No recent
+// messages"，body 整片留白——一张刚启动还没发过 prompt 的 session 卡看
+// 上去就跟坏掉了一样。这里给三类有用信息：
+//   1. latestRecap.content 如果有（任务完成时 Claude 自己生成的总结）
+//   2. 否则展示 "Started <duration> ago" + 友好的 cta 文案
+//   3. 实在没数据兜底回原文案
+function EmptyState({ session }) {
+  if (session.latestRecap && session.latestRecap.content) {
+    return (
+      <div style={{ color: '#A8A59B', fontSize: 11, lineHeight: 1.45 }}>
+        <div style={{ color: '#7A7670', textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.5, marginBottom: 3 }}>
+          Recap
+        </div>
+        <div style={{ display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {session.latestRecap.content}
+        </div>
+      </div>
+    )
+  }
+  // duration 文本：从 startedAt 到现在多长
+  let agoText = ''
+  if (session.startedAt) {
+    const elapsedMs = Date.now() - new Date(session.startedAt).getTime()
+    const minutes = Math.floor(elapsedMs / 60000)
+    if (minutes < 1) agoText = 'just now'
+    else if (minutes < 60) agoText = minutes + 'm ago'
+    else if (minutes < 60 * 24) agoText = Math.floor(minutes / 60) + 'h ago'
+    else agoText = Math.floor(minutes / (60 * 24)) + 'd ago'
+  }
+  return (
+    <div style={{ color: '#7A7670', fontSize: 11, lineHeight: 1.5 }}>
+      <div style={{ fontStyle: 'italic', marginBottom: 4 }}>
+        Session ready, no activity yet
+      </div>
+      {agoText && (
+        <div style={{ color: '#5B5853', fontSize: 10 }}>
+          Started {agoText}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SessionCard({ session, board, helpers }) {
   // 卡片的"需要注意"只看权限阻塞；inbox 的信号由 SessionOverlay 的
   // 小红点负责（见 App.tsx 的 unreadSids 检测 status 转换）。
@@ -408,9 +451,7 @@ function SessionCard({ session, board, helpers }) {
         fontSize: 11,
       }}>
         {rows.length === 0 ? (
-          <div style={{ color: '#7A7670', fontStyle: 'italic', fontSize: 11 }}>
-            No recent messages
-          </div>
+          <EmptyState session={session} />
         ) : (
           rows.map((entry, i) => (
             <MessageRow key={i} entry={entry} isLatest={i === rows.length - 1} />
