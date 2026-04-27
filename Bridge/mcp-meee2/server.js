@@ -86,6 +86,84 @@ const TOOLS = [
       required: ['sessionId'],
     },
   },
+  {
+    name: 'create_channel',
+    description:
+      'Create a new A2A channel for ad-hoc multi-agent collaboration. Names ' +
+      'must match [a-z0-9_-]{1,64}. Channel starts empty — call add_member ' +
+      'next to bring sessions in. Use this when you need a fresh coordination ' +
+      'space (e.g. "the four of us reviewing PR #42") rather than reusing an ' +
+      'existing topic-mismatched channel. ' +
+      'NOTE: there is no delete_channel from MCP — channel cleanup is human-only.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Channel name (lowercase, digits, _ -, ≤ 64 chars).',
+        },
+        mode: {
+          type: 'string',
+          enum: ['auto', 'intercept', 'paused'],
+          description:
+            'auto: deliver immediately (default). intercept: hold for human ' +
+            'approval. paused: hold indefinitely.',
+        },
+        description: {
+          type: 'string',
+          description:
+            'Short explanation of what this channel is for. Visible in UI + ' +
+            'list_channels; helps other agents decide whether to join.',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'add_member',
+    description:
+      'Add a session as a member of an existing channel. The added session ' +
+      'will receive an orientation message (synthetic operator → session) ' +
+      'announcing membership + teammates + how to use send_message; existing ' +
+      'members get a "<alias> joined" heads-up. So this IS visible to ' +
+      'everyone — use it when you actually want the session aware of the ' +
+      'collaboration. Pick an alias that disambiguates the session within ' +
+      'this channel (e.g. project basename + sid prefix).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Existing channel name.' },
+        alias: {
+          type: 'string',
+          description:
+            'Alias for the joining session within this channel ([a-z0-9_-]{1,64}). ' +
+            'Must be unique within the channel.',
+        },
+        sessionId: {
+          type: 'string',
+          description:
+            'Full session id, or a unique prefix (resolve via list_sessions).',
+        },
+      },
+      required: ['channel', 'alias', 'sessionId'],
+    },
+  },
+  {
+    name: 'leave_channel',
+    description:
+      'Voluntarily leave a channel under your alias. Remaining members will ' +
+      'be notified ("<alias> left"). Use this when the collaboration is done ' +
+      'or no longer relevant to your task. NOTE: you can only remove ' +
+      'YOURSELF — there is no kick-other-agent operation from MCP.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel name.' },
+        alias: { type: 'string', description: 'Your own alias on this channel.' },
+      },
+      required: ['channel', 'alias'],
+    },
+  },
 ]
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
@@ -159,6 +237,53 @@ async function handleListSessions() {
   }))
 }
 
+async function handleCreateChannel(args) {
+  const { name, mode, description } = args
+  const r = await callApi('POST', '/api/channels', {
+    name,
+    ...(mode ? { mode } : {}),
+    ...(description ? { description } : {}),
+  })
+  return r.channel || r
+}
+
+async function handleAddMember(args) {
+  const { channel, alias, sessionId } = args
+  // Resolve sessionId prefix if needed (orientation push needs the full sid
+  // to reach the right inbox).
+  let fullSid = sessionId
+  if (sessionId && sessionId.length < 36) {
+    const state = await callApi('GET', '/api/state')
+    const matches = (state.sessions || []).filter((s) =>
+      s.id.startsWith(sessionId),
+    )
+    if (matches.length === 0) {
+      throw new Error(`session not found: ${sessionId}`)
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `ambiguous session prefix '${sessionId}' — matched ${matches.length}`,
+      )
+    }
+    fullSid = matches[0].id
+  }
+  const r = await callApi(
+    'POST',
+    `/api/channels/${encodeURIComponent(channel)}/members`,
+    { alias, sessionId: fullSid },
+  )
+  return r.channel || r
+}
+
+async function handleLeaveChannel(args) {
+  const { channel, alias } = args
+  const r = await callApi(
+    'DELETE',
+    `/api/channels/${encodeURIComponent(channel)}/members/${encodeURIComponent(alias)}`,
+  )
+  return r.channel || r
+}
+
 async function handleReadInbox(args) {
   const { sessionId } = args
   const state = await callApi('GET', '/api/state')
@@ -198,8 +323,22 @@ async function handleReadInbox(args) {
 const INSTRUCTIONS = [
   'You are a member of a meee2 multi-agent runtime. Other Claude sessions',
   '(and the operator / human user) can send you messages over named',
-  'channels via the four tools below: read_inbox, list_channels,',
-  'list_sessions, send_message.',
+  'channels via the seven tools below.',
+  '',
+  'READ / OBSERVE:',
+  '  - read_inbox     — pending messages addressed to you',
+  '  - list_channels  — all channels + members + your alias in each',
+  '  - list_sessions  — all live Claude sessions',
+  '',
+  'SEND:',
+  '  - send_message   — message a teammate (or "*" broadcast) on a channel',
+  '',
+  'BUILD COLLABORATION (constructive only — by design there is NO',
+  'delete_channel and NO remove_member; channel cleanup and kicking are',
+  'human-only operations):',
+  '  - create_channel — open a fresh coordination space',
+  '  - add_member     — pull a session in (they get a system orientation msg)',
+  '  - leave_channel  — voluntarily exit (only your own alias)',
   '',
   'Behavior expectations:',
   '  - At the start of any new turn, briefly call read_inbox to see if you',
@@ -212,6 +351,12 @@ const INSTRUCTIONS = [
   '    proactively send a status message on the relevant channel.',
   '  - If the user references "the other session" / "that session" / a',
   '    project name, use list_sessions to disambiguate before guessing.',
+  '  - When you spin up a new collaboration (e.g. "let me get session X to',
+  '    review this"), prefer create_channel + add_member over hand-waving',
+  '    "please tell session X". Adding a session triggers an orientation',
+  '    message so they immediately know about the channel + you.',
+  '  - When a collaboration ends or you no longer need to be in a channel,',
+  '    leave_channel keeps the noise down for everyone else.',
   '',
   'Do not announce that you are about to use these tools — just use them.',
   'Do not ask the user "what do you want me to do" before calling the tools',
@@ -246,6 +391,15 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break
       case 'read_inbox':
         result = await handleReadInbox(args)
+        break
+      case 'create_channel':
+        result = await handleCreateChannel(args)
+        break
+      case 'add_member':
+        result = await handleAddMember(args)
+        break
+      case 'leave_channel':
+        result = await handleLeaveChannel(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)
