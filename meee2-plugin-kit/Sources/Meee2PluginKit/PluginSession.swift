@@ -79,6 +79,10 @@ public struct PluginSession: Identifiable, Hashable {
     /// 工作目录
     public var cwd: String?
 
+    /// Transcript / rollout JSONL path used by plugins that do not sync through
+    /// the host SessionStore (for example Codex Desktop).
+    public var transcriptPath: String?
+
     // MARK: - 终端跳转
 
     public var terminalInfo: PluginTerminalInfo?
@@ -129,6 +133,7 @@ public struct PluginSession: Identifiable, Hashable {
         errorMessage: String? = nil,
         toolName: String? = nil,
         cwd: String? = nil,
+        transcriptPath: String? = nil,
         terminalInfo: PluginTerminalInfo? = nil,
         icon: String? = nil,
         accentColor: Color? = nil,
@@ -148,6 +153,7 @@ public struct PluginSession: Identifiable, Hashable {
         self.errorMessage = errorMessage
         self.toolName = toolName
         self.cwd = cwd
+        self.transcriptPath = transcriptPath
         self.terminalInfo = terminalInfo
         self.icon = icon
         self.accentColor = accentColor
@@ -167,6 +173,7 @@ public struct PluginSession: Identifiable, Hashable {
         hasher.combine(startedAt)
         hasher.combine(subtitle)
         hasher.combine(cwd)
+        hasher.combine(transcriptPath)
         hasher.combine(urgentEvent?.id)  // 添加 urgentEvent
     }
 
@@ -177,6 +184,7 @@ public struct PluginSession: Identifiable, Hashable {
         lhs.status == rhs.status &&
         lhs.subtitle == rhs.subtitle &&
         lhs.cwd == rhs.cwd &&
+        lhs.transcriptPath == rhs.transcriptPath &&
         lhs.urgentEvent?.id == rhs.urgentEvent?.id  // 添加 urgentEvent 比较
     }
 

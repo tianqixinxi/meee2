@@ -217,18 +217,23 @@ enum BoardDTOBuilder {
         //  1. A2A channel 消息（遍历该 session 参与的频道里 pending/held 消息）
         //  2. Operator 直接 inject 的消息（写进 ~/.meee2/inbox/<sid>.jsonl，
         //     由 HookSocketServer 在 Stop hook 时 drain）
+        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
         let channelPending = pendingInboxCount(for: session.id)
+            + (realSessionId == session.id ? 0 : pendingInboxCount(for: realSessionId))
         let directPending = MessageRouter.shared.peekInbox(sessionId: session.id).count
+            + (realSessionId == session.id ? 0 : MessageRouter.shared.peekInbox(sessionId: realSessionId).count)
         let pending = channelPending + directPending
 
         // 丰富字段：transcript / currentTool / cost —— 都从底层 SessionStore 拿
-        let sessionData = SessionStore.shared.get(session.id)
+        let sessionData = SessionStore.shared.get(session.id) ?? SessionStore.shared.get(realSessionId)
+        let transcriptPath = sessionData?.transcriptPath ?? session.transcriptPath
         let transcriptEntries: [TranscriptEntryDTO]
         if let path = sessionData?.transcriptPath {
-            let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 5)
-            transcriptEntries = msgs.map {
-                TranscriptEntryDTO(role: $0.role, text: String($0.text.prefix(1000)))
-            }
+            transcriptEntries = transcriptPreviewFromClaude(path: path)
+        } else if let path = transcriptPath {
+            transcriptEntries = transcriptPreviewFromFullReader(path: path)
         } else {
             transcriptEntries = []
         }
@@ -329,6 +334,33 @@ enum BoardDTOBuilder {
             backgroundAgents: bgAgents,
             latestRecap: recapDTO
         )
+    }
+
+    private static func transcriptPreviewFromClaude(path: String) -> [TranscriptEntryDTO] {
+        let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 5)
+        return msgs.map {
+            TranscriptEntryDTO(role: $0.role, text: String($0.text.prefix(1000)))
+        }
+    }
+
+    private static func transcriptPreviewFromFullReader(path: String) -> [TranscriptEntryDTO] {
+        FullTranscriptReader.read(transcriptPath: path, limit: 5).compactMap { entry in
+            let parts = entry.blocks.compactMap { block -> String? in
+                switch block.type {
+                case "text", "thinking":
+                    return block.text
+                case "tool_use":
+                    return block.toolName.map { "tool: \($0)" }
+                case "tool_result":
+                    return block.toolResultText
+                default:
+                    return nil
+                }
+            }
+            let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return TranscriptEntryDTO(role: entry.type, text: String(text.prefix(1000)))
+        }
     }
 
     /// 计算一个 sessionId 的待投递消息数（对其名下所有 alias 的 pending/held 合计）

@@ -132,6 +132,24 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         self == .permissionRequired
     }
 
+    public var isWorking: Bool {
+        switch self {
+        case .thinking, .tooling, .active, .compacting:
+            return true
+        case .idle, .waitingForUser, .permissionRequired, .completed, .dead:
+            return false
+        }
+    }
+
+    public var isResting: Bool {
+        switch self {
+        case .idle, .waitingForUser, .completed:
+            return true
+        case .thinking, .tooling, .active, .permissionRequired, .compacting, .dead:
+            return false
+        }
+    }
+
     /// 从任意字符串反序列化（处理旧 case 名）
     public static func from(rawString: String) -> SessionStatus {
         if let v = SessionStatus(rawValue: rawString) { return v }

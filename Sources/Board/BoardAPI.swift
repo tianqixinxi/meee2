@@ -194,12 +194,11 @@ enum BoardAPI {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
 
-        // SessionStore 拿 transcriptPath
         let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
             ? String(session.id.dropFirst("\(session.pluginId)-".count))
             : session.id
-        let data = SessionStore.shared.get(realSessionId)
-        let transcriptPath = data?.transcriptPath
+        let data = SessionStore.shared.get(realSessionId) ?? SessionStore.shared.get(session.id)
+        let transcriptPath = data?.transcriptPath ?? session.transcriptPath
 
         // 可选 limit —— 最新 N 条（tail）
         var limit: Int?

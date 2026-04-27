@@ -28,7 +28,7 @@ const SCALE = THUMB_W / REAL_W
 const FAKE_SESSION: Session = {
   id: 'preview-00000000',
   title: 'meee2',
-  project: '/Users/qc/projects/meee1_code/meee2',
+  project: 'projects/meee2',
   pluginId: 'com.meee2.plugin.claude',
   pluginDisplayName: 'Claude Code',
   pluginColor: '#FF9230',

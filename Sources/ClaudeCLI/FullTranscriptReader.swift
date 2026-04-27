@@ -123,6 +123,16 @@ public enum FullTranscriptReader {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
         }
+
+        if json["type"] as? String == "response_item",
+           let payload = json["payload"] as? [String: Any] {
+            return parseCodexResponseItem(
+                payload,
+                timestamp: json["timestamp"] as? String,
+                fallbackIndex: fallbackIndex
+            )
+        }
+
         guard let type = json["type"] as? String,
               ["user", "assistant", "system", "last-prompt"].contains(type) else {
             return nil
@@ -229,6 +239,93 @@ public enum FullTranscriptReader {
             timestamp: ts,
             blocks: blocks
         )
+    }
+
+    /// Codex Desktop rollout JSONL stores messages under:
+    /// `{"type":"response_item","payload":{"type":"message",...}}`.
+    /// Parse it into the same DTO used by the Web transcript panel.
+    private static func parseCodexResponseItem(
+        _ payload: [String: Any],
+        timestamp: String?,
+        fallbackIndex: Int
+    ) -> FullTranscriptEntry? {
+        guard let itemType = payload["type"] as? String else { return nil }
+        let id = (payload["id"] as? String)
+            ?? (payload["call_id"] as? String)
+            ?? "codex-\(fallbackIndex)"
+
+        switch itemType {
+        case "message":
+            guard let role = payload["role"] as? String,
+                  ["user", "assistant"].contains(role),
+                  let text = codexText(from: payload["content"]),
+                  !text.isEmpty else {
+                return nil
+            }
+            return FullTranscriptEntry(
+                id: id,
+                type: role,
+                timestamp: timestamp,
+                blocks: [FullTranscriptBlock(
+                    type: "text", text: text,
+                    toolId: nil, toolName: nil, toolInputJSON: nil,
+                    toolUseId: nil, toolResultText: nil, toolResultTruncated: nil
+                )]
+            )
+
+        case "function_call":
+            let name = payload["name"] as? String
+            let inputJSON = codexArgumentsJSON(payload["arguments"])
+            return FullTranscriptEntry(
+                id: id,
+                type: "assistant",
+                timestamp: timestamp,
+                blocks: [FullTranscriptBlock(
+                    type: "tool_use", text: nil,
+                    toolId: id, toolName: name, toolInputJSON: inputJSON,
+                    toolUseId: nil, toolResultText: nil, toolResultTruncated: nil
+                )]
+            )
+
+        case "function_call_output":
+            let output = payload["output"] as? String ?? ""
+            if output.isEmpty { return nil }
+            let (truncated, capped) = cap(output)
+            return FullTranscriptEntry(
+                id: id,
+                type: "tool",
+                timestamp: timestamp,
+                blocks: [FullTranscriptBlock(
+                    type: "tool_result", text: nil,
+                    toolId: nil, toolName: nil, toolInputJSON: nil,
+                    toolUseId: payload["call_id"] as? String,
+                    toolResultText: capped, toolResultTruncated: truncated
+                )]
+            )
+
+        default:
+            return nil
+        }
+    }
+
+    private static func codexText(from value: Any?) -> String? {
+        if let text = value as? String { return text }
+        guard let blocks = value as? [[String: Any]] else { return nil }
+        let parts = blocks.compactMap { block -> String? in
+            if let text = block["text"] as? String { return text }
+            if let text = block["input_text"] as? String { return text }
+            if let text = block["output_text"] as? String { return text }
+            return nil
+        }
+        let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private static func codexArgumentsJSON(_ value: Any?) -> String {
+        if let string = value as? String, !string.isEmpty {
+            return string
+        }
+        return jsonString(value ?? [:]) ?? "{}"
     }
 
     private static func parseBlock(_ b: [String: Any]) -> FullTranscriptBlock? {

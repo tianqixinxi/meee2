@@ -63,16 +63,36 @@ EOF
     echo "Installed OpenClawPlugin to $PLUGIN_DIR/"
 fi
 
-# Apply entitlements to disable sandbox
+# Install Codex plugin
+BUILTIN_CODEX=".build/release/libCodexPlugin.dylib"
+if [ -f "$BUILTIN_CODEX" ]; then
+    PLUGIN_DIR="$HOME/.meee2/plugins/codex"
+    mkdir -p "$PLUGIN_DIR"
+    cp "$BUILTIN_CODEX" "$PLUGIN_DIR/CodexPlugin.dylib"
+    if [ ! -f "$PLUGIN_DIR/plugin.json" ]; then
+        cat > "$PLUGIN_DIR/plugin.json" << 'EOF'
+{
+    "id": "com.meee2.plugin.codex",
+    "name": "Codex",
+    "version": "0.2.0",
+    "dylib": "CodexPlugin.dylib"
+}
+EOF
+    fi
+    echo "Installed CodexPlugin to $PLUGIN_DIR/"
+fi
+
+# Set rpath on the executable to find the dylib at runtime
+echo "Setting rpath on executable..."
+install_name_tool -add_rpath "@executable_path/../.build/release" "$EXECUTABLE" 2>/dev/null || true
+
+# Apply entitlements to disable sandbox. This must run after install_name_tool
+# because changing load commands invalidates the Mach-O code signature.
 echo "Applying entitlements..."
 codesign --force --sign - --entitlements meee2.entitlements "$EXECUTABLE"
 
 # Sign the dylib as well
 codesign --force --sign - "$INSTALL_DIR/libMeee2PluginKit.dylib"
-
-# Set rpath on the executable to find the dylib at runtime
-echo "Setting rpath on executable..."
-install_name_tool -add_rpath "@executable_path/../.build/release" "$EXECUTABLE" 2>/dev/null || true
 
 echo ""
 echo "Build complete!"

@@ -16,9 +16,12 @@ class CursorPlugin: SessionPlugin {
 
     private var isRunning = false
     private var refreshTimer: Timer?
+    private var refreshInFlight = false
+    private let refreshQueue = DispatchQueue(label: "com.meee2.plugin.cursor.refresh", qos: .utility)
 
     // 追踪上次的消息，用于检测新消息
     private var lastMessages: [String: String] = [:]  // sessionId -> lastMessageHash
+    private var lastStatuses: [String: SessionStatus] = [:]
 
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("cursorRefreshInterval") private var refreshInterval: Double = 10.0
@@ -57,18 +60,9 @@ class CursorPlugin: SessionPlugin {
 
         isRunning = true
 
-        // 初始加载（不触发 urgent）
-        let sessions = getSessions()
-        // 初始化 lastMessages
-        for session in sessions {
-            if let subtitle = session.subtitle {
-                lastMessages[session.id] = subtitle
-            }
-        }
-        onSessionsUpdated?(sessions)
-
         // 启动定时器
         startTimer()
+        refresh()
 
         NSLog("[CursorPlugin] Started, watching: \(cursorProjectsPath.path), interval: \(refreshInterval)s")
         return true
@@ -83,6 +77,7 @@ class CursorPlugin: SessionPlugin {
 
     override func stop() {
         isRunning = false
+        refreshInFlight = false
         refreshTimer?.invalidate()
         refreshTimer = nil
         NSLog("[CursorPlugin] Stopped")
@@ -99,22 +94,41 @@ class CursorPlugin: SessionPlugin {
     }
 
     override func refresh() {
-        let sessions = getSessions()
+        guard isRunning, !refreshInFlight else { return }
+        refreshInFlight = true
 
+        refreshQueue.async { [weak self] in
+            guard let self = self else { return }
+            let sessions = self.getSessions()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.refreshInFlight = false
+                guard self.isRunning else { return }
+                self.handleRefreshResult(sessions)
+            }
+        }
+    }
+
+    private func handleRefreshResult(_ sessions: [PluginSession]) {
         // 检测新消息
         for session in sessions {
-            guard let newMessage = session.subtitle else { continue }
+            guard let newMessage = session.lastMessage ?? session.subtitle else {
+                lastStatuses[session.id] = session.status
+                continue
+            }
 
             let previousMessage = lastMessages[session.id]
+            let previousStatus = lastStatuses[session.id]
             if previousMessage != newMessage {
-                // 检测到新消息
-                if previousMessage != nil {
-                    // 不是首次加载，触发 urgent event
+                if previousMessage != nil,
+                   shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: newMessage) {
                     NSLog("[CursorPlugin] New message detected for \(session.title): \(newMessage.prefix(50))...")
                     onUrgentEvent?(session, newMessage, nil)
                 }
                 lastMessages[session.id] = newMessage
             }
+            lastStatuses[session.id] = session.status
         }
 
         onSessionsUpdated?(sessions)
@@ -136,6 +150,7 @@ class CursorPlugin: SessionPlugin {
     override func clearUrgentEvent(sessionId: String) {
         // 清除消息缓存，防止下次刷新时重复触发
         lastMessages.removeValue(forKey: sessionId)
+        lastStatuses.removeValue(forKey: sessionId)
         PluginLog("[CursorPlugin] Cleared urgent event for session: \(sessionId)")
     }
 
@@ -201,6 +216,26 @@ class CursorPlugin: SessionPlugin {
 
         NSLog("[CursorPlugin] Found \(sessions.count) active projects")
         return sessions
+    }
+
+    private func shouldTriggerUrgentEvent(
+        session: PluginSession,
+        previousStatus: SessionStatus?,
+        message: String
+    ) -> Bool {
+        if session.status.needsUserAction {
+            return previousStatus != session.status
+        }
+
+        guard session.status.isResting, previousStatus?.isWorking == true else {
+            return false
+        }
+
+        return !isProgressMessage(message)
+    }
+
+    private func isProgressMessage(_ message: String) -> Bool {
+        message.hasPrefix("tool:") || message.hasPrefix("🔧")
     }
 
     /// 解析项目名称
@@ -309,14 +344,8 @@ class CursorPlugin: SessionPlugin {
 
     /// 解析 transcript 文件中最后一条 assistant 消息
     private func parseLastAssistantMessage(from file: URL) -> String? {
-        guard let content = try? String(contentsOf: file, encoding: .utf8) else {
-            return nil
-        }
-
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-
         // 从后往前找最后一条 assistant 消息
-        for line in lines.reversed() {
+        for line in Self.tailLines(file: file, maxBytes: 128 * 1024).reversed() {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   json["role"] as? String == "assistant" else {
@@ -339,6 +368,26 @@ class CursorPlugin: SessionPlugin {
         }
 
         return nil
+    }
+
+    private static func tailLines(file: URL, maxBytes: UInt64) -> [Substring] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+
+        let fileSize = handle.seekToEndOfFile()
+        let tailSize = min(fileSize, maxBytes)
+        let offset = fileSize - tailSize
+        handle.seek(toFileOffset: offset)
+
+        guard let content = String(data: handle.readDataToEndOfFile(), encoding: .utf8) else {
+            return []
+        }
+
+        var lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+        if offset > 0, !content.hasPrefix("\n"), !lines.isEmpty {
+            lines.removeFirst()
+        }
+        return lines
     }
 
     private func openCursor(at path: String) {

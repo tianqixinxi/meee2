@@ -16,12 +16,16 @@ class OpenClawPlugin: SessionPlugin {
 
     private var isRunning = false
     private var refreshTimer: Timer?
+    private var refreshInFlight = false
+    private let refreshQueue = DispatchQueue(label: "com.meee2.plugin.openclaw.refresh", qos: .utility)
 
     // 追踪上次的消息，用于检测新消息
     private var lastMessages: [String: String] = [:]  // sessionId -> lastMessageHash
+    private var lastStatuses: [String: SessionStatus] = [:]
 
     // 保存 session.id -> sessionKey 的映射，用于构建 URL
     private var sessionKeyMap: [String: String] = [:]
+    private let sessionKeyMapLock = NSLock()
 
     // 刷新间隔（秒）
     @AppStorage("openclawRefreshInterval") private var refreshInterval: Double = 10.0
@@ -59,17 +63,9 @@ class OpenClawPlugin: SessionPlugin {
 
         isRunning = true
 
-        // 初始加载 - 使用 lastMessage 初始化
-        let sessions = getSessions()
-        for session in sessions {
-            if let lastMessage = session.lastMessage {
-                lastMessages[session.id] = lastMessage
-            }
-        }
-        onSessionsUpdated?(sessions)
-
         // 启动定时器
         startTimer()
+        refresh()
 
         NSLog("[OpenClawPlugin] Started, watching: \(openclawAgentsPath.path), interval: \(refreshInterval)s")
         return true
@@ -84,6 +80,7 @@ class OpenClawPlugin: SessionPlugin {
 
     override func stop() {
         isRunning = false
+        refreshInFlight = false
         refreshTimer?.invalidate()
         refreshTimer = nil
         NSLog("[OpenClawPlugin] Stopped")
@@ -100,18 +97,34 @@ class OpenClawPlugin: SessionPlugin {
     }
 
     override func refresh() {
-        let sessions = getSessions()
+        guard isRunning, !refreshInFlight else { return }
+        refreshInFlight = true
+
+        refreshQueue.async { [weak self] in
+            guard let self = self else { return }
+            let sessions = self.getSessions()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.refreshInFlight = false
+                guard self.isRunning else { return }
+                self.handleRefreshResult(sessions)
+            }
+        }
+    }
+
+    private func handleRefreshResult(_ sessions: [PluginSession]) {
         NSLog("[OpenClawPlugin] Refresh: found \(sessions.count) sessions")
 
         // 检测新消息 - 使用 lastMessage 而不是 subtitle
         for session in sessions {
             let newMessage = session.lastMessage
             let previousMessage = lastMessages[session.id]
-
-            NSLog("[OpenClawPlugin] Session \(session.title): newMessage=\(newMessage?.prefix(30) ?? "nil"), previousMessage=\(previousMessage?.prefix(30) ?? "nil")")
+            let previousStatus = lastStatuses[session.id]
 
             if let msg = newMessage, previousMessage != msg {
-                if previousMessage != nil {
+                if previousMessage != nil,
+                   shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: msg) {
                     NSLog("[OpenClawPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
                     onUrgentEvent?(session, msg, nil)
                 } else {
@@ -119,6 +132,7 @@ class OpenClawPlugin: SessionPlugin {
                 }
                 lastMessages[session.id] = msg
             }
+            lastStatuses[session.id] = session.status
         }
 
         onSessionsUpdated?(sessions)
@@ -128,7 +142,10 @@ class OpenClawPlugin: SessionPlugin {
 
     override func activateTerminal(for session: PluginSession) {
         // 打开 OpenClaw web UI
-        let sessionKey = sessionKeyMap[session.id] ?? "agent:\(session.title):main"
+        sessionKeyMapLock.lock()
+        let mappedSessionKey = sessionKeyMap[session.id]
+        sessionKeyMapLock.unlock()
+        let sessionKey = mappedSessionKey ?? "agent:\(session.title):main"
         let urlString = "http://127.0.0.1:18789/chat?session=" + sessionKey
 
         if let url = URL(string: urlString) {
@@ -141,6 +158,7 @@ class OpenClawPlugin: SessionPlugin {
 
     override func clearUrgentEvent(sessionId: String) {
         lastMessages.removeValue(forKey: sessionId)
+        lastStatuses.removeValue(forKey: sessionId)
         PluginLog("[OpenClawPlugin] Cleared urgent event for session: \(sessionId)")
     }
 
@@ -192,7 +210,9 @@ class OpenClawPlugin: SessionPlugin {
                     let fullSessionId = "\(pluginId)-\(agentName)-\(sessionInfo.sessionId)"
 
                     // 保存 sessionKey 映射，用于构建 URL
+                    sessionKeyMapLock.lock()
                     sessionKeyMap[fullSessionId] = sessionInfo.sessionKey
+                    sessionKeyMapLock.unlock()
 
                     let session = PluginSession(
                         id: fullSessionId,
@@ -216,6 +236,26 @@ class OpenClawPlugin: SessionPlugin {
 
         NSLog("[OpenClawPlugin] Found \(sessions.count) active agents")
         return sessions
+    }
+
+    private func shouldTriggerUrgentEvent(
+        session: PluginSession,
+        previousStatus: SessionStatus?,
+        message: String
+    ) -> Bool {
+        if session.status.needsUserAction {
+            return previousStatus != session.status
+        }
+
+        guard session.status.isResting, previousStatus?.isWorking == true else {
+            return false
+        }
+
+        return !isProgressMessage(message)
+    }
+
+    private func isProgressMessage(_ message: String) -> Bool {
+        message.hasPrefix("tool:") || message.hasPrefix("🔧")
     }
 
     /// 解析 sessions.json
@@ -305,15 +345,12 @@ class OpenClawPlugin: SessionPlugin {
 
     /// 从 transcript 文件解析最后消息
     private func parseLastMessageFromTranscript(sessionFile: URL?) -> String? {
-        guard let file = sessionFile,
-              let content = try? String(contentsOf: file, encoding: .utf8) else {
+        guard let file = sessionFile else {
             return nil
         }
 
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-
         // 从后往前找最后一条 assistant 消息
-        for line in lines.reversed() {
+        for line in Self.tailLines(file: file, maxBytes: 128 * 1024).reversed() {
             guard let data = line.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   json["type"] as? String == "message" else {
@@ -340,6 +377,26 @@ class OpenClawPlugin: SessionPlugin {
         }
 
         return nil
+    }
+
+    private static func tailLines(file: URL, maxBytes: UInt64) -> [Substring] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+
+        let fileSize = handle.seekToEndOfFile()
+        let tailSize = min(fileSize, maxBytes)
+        let offset = fileSize - tailSize
+        handle.seek(toFileOffset: offset)
+
+        guard let content = String(data: handle.readDataToEndOfFile(), encoding: .utf8) else {
+            return []
+        }
+
+        var lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+        if offset > 0, !content.hasPrefix("\n"), !lines.isEmpty {
+            lines.removeFirst()
+        }
+        return lines
     }
 
     // MARK: - Models

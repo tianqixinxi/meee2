@@ -35,6 +35,53 @@ public class DynamicPluginLoader {
     /// Plugin 目录
     private let pluginDirectory: URL
 
+    private struct BuiltinPluginInstallSpec {
+        let directoryName: String
+        let dylibName: String
+        let metadata: String
+    }
+
+    private static let builtinPluginSpecs: [BuiltinPluginInstallSpec] = [
+        BuiltinPluginInstallSpec(
+            directoryName: "cursor",
+            dylibName: "CursorPlugin.dylib",
+            metadata: """
+            {
+                "id": "com.meee2.plugin.cursor",
+                "name": "Cursor",
+                "version": "0.2.0",
+                "dylib": "CursorPlugin.dylib",
+                "helpUrl": "https://docs.cursor.com/meee2-plugin"
+            }
+            """
+        ),
+        BuiltinPluginInstallSpec(
+            directoryName: "openclaw",
+            dylibName: "OpenClawPlugin.dylib",
+            metadata: """
+            {
+                "id": "com.meee2.plugin.openclaw",
+                "name": "OpenClaw",
+                "version": "0.2.0",
+                "dylib": "OpenClawPlugin.dylib"
+            }
+            """
+        ),
+        BuiltinPluginInstallSpec(
+            directoryName: "codex",
+            dylibName: "CodexPlugin.dylib",
+            metadata: """
+            {
+                "id": "com.meee2.plugin.codex",
+                "name": "Codex",
+                "version": "0.2.0",
+                "dylib": "CodexPlugin.dylib",
+                "helpUrl": "https://github.com/openai/codex"
+            }
+            """
+        )
+    ]
+
     // MARK: - Init
 
     init() {
@@ -56,7 +103,7 @@ public class DynamicPluginLoader {
         // 预加载 Meee2PluginKit，确保所有 plugins 使用同一个类定义
         preloadMeee2PluginKit()
 
-        // 安装内置插件（从 app bundle 复制到 ~/.meee2/plugins/）
+        // 安装内置插件（从 app bundle / SwiftPM build products 复制到 ~/.meee2/plugins/）
         installBuiltinPlugins()
 
         // 确保目录存在
@@ -87,46 +134,79 @@ public class DynamicPluginLoader {
 
     /// 安装内置插件（从 app bundle 复制）
     private func installBuiltinPlugins() {
-        guard let bundlePluginsDir = Bundle.main.resourceURL?.appendingPathComponent("Plugins") else {
-            return
-        }
+        installBundlePlugins()
+        installSwiftPMBuiltins()
+    }
 
-        guard FileManager.default.fileExists(atPath: bundlePluginsDir.path) else {
-            return
-        }
-
-        // 遍历 app bundle 中的插件目录
-        guard let pluginDirs = try? FileManager.default.contentsOfDirectory(
-            at: bundlePluginsDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+    private func installBundlePlugins() {
+        guard let bundlePluginsDir = Bundle.main.resourceURL?.appendingPathComponent("Plugins"),
+              FileManager.default.fileExists(atPath: bundlePluginsDir.path),
+              let pluginDirs = try? FileManager.default.contentsOfDirectory(
+                  at: bundlePluginsDir,
+                  includingPropertiesForKeys: [.isDirectoryKey],
+                  options: [.skipsHiddenFiles]
+              ) else {
             return
         }
 
         for pluginDir in pluginDirs where pluginDir.hasDirectoryPath {
             let pluginName = pluginDir.lastPathComponent
             let destDir = pluginDirectory.appendingPathComponent(pluginName)
-
-            // 确保目标目录存在
             try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
 
-            // 复制插件目录中的所有文件（覆盖已存在的）
-            if let files = try? FileManager.default.contentsOfDirectory(
+            guard let files = try? FileManager.default.contentsOfDirectory(
                 at: pluginDir,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
-            ) {
-                for file in files {
-                    let destFile = destDir.appendingPathComponent(file.lastPathComponent)
-                    // 先删除已存在的文件
-                    try? FileManager.default.removeItem(at: destFile)
-                    // 复制新文件
-                    try? FileManager.default.copyItem(at: file, to: destFile)
+            ) else {
+                continue
+            }
+
+            for file in files {
+                copyIfNewer(source: file, destination: destDir.appendingPathComponent(file.lastPathComponent))
+            }
+            MLog("[DynamicPluginLoader] Installed builtin plugin: \(pluginName)")
+        }
+    }
+
+    /// SwiftPM runs from `.build/.../{debug,release}` and has no bundled
+    /// `Plugins/` resource directory. Keep the installed builtin plugin dylibs
+    /// in sync so `swift run` does not load stale copies from `~/.meee2/plugins`.
+    private func installSwiftPMBuiltins() {
+        guard let productsDir = Bundle.main.executableURL?.deletingLastPathComponent() else {
+            return
+        }
+
+        for spec in Self.builtinPluginSpecs {
+            let source = productsDir.appendingPathComponent("lib\(spec.dylibName)")
+            guard FileManager.default.fileExists(atPath: source.path) else {
+                continue
+            }
+
+            let destDir = pluginDirectory.appendingPathComponent(spec.directoryName)
+            let destDylib = destDir.appendingPathComponent(spec.dylibName)
+            let metadataFile = destDir.appendingPathComponent("plugin.json")
+
+            do {
+                try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
+                copyIfNewer(source: source, destination: destDylib)
+                if !FileManager.default.fileExists(atPath: metadataFile.path) {
+                    try spec.metadata.write(to: metadataFile, atomically: true, encoding: .utf8)
                 }
-                MLog("[DynamicPluginLoader] Installed builtin plugin: \(pluginName)")
+                MLog("[DynamicPluginLoader] Synced SwiftPM builtin plugin: \(spec.directoryName)")
+            } catch {
+                MWarn("[DynamicPluginLoader] Failed to sync SwiftPM builtin plugin \(spec.directoryName): \(error)")
             }
         }
+    }
+
+    private func copyIfNewer(source: URL, destination: URL) {
+        let needsCopy = !FileManager.default.fileExists(atPath: destination.path) ||
+            shouldUpdateLibrary(bundlePath: source, installedPath: destination)
+
+        guard needsCopy else { return }
+        try? FileManager.default.removeItem(at: destination)
+        try? FileManager.default.copyItem(at: source, to: destination)
     }
 
     /// 卸载所有 Plugin
@@ -145,9 +225,8 @@ public class DynamicPluginLoader {
     private func preloadMeee2PluginKit() {
         // 先检查 SessionPlugin 符号是否已存在（说明库已加载）
         // nil 表示搜索所有已加载的库
-        let symbolName = "_$s14Meee2PluginKit13SessionPluginCMm"  // Swift mangled name for SessionPlugin class metadata
-        if dlsym(nil, symbolName) != nil {
-            MInfo("[DynamicPluginLoader] Meee2PluginKit already loaded (SessionPlugin symbol found), skip dlopen")
+        if NSClassFromString("Meee2PluginKit.SessionPlugin") != nil {
+            MInfo("[DynamicPluginLoader] Meee2PluginKit already loaded (SessionPlugin class found), skip dlopen")
             return
         }
 

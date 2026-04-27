@@ -129,6 +129,29 @@ final class FullTranscriptReaderTests: XCTestCase {
         XCTAssertNil(entries.first?.timestamp, "last-prompt entries have no timestamp; UI must not sort by ts")
     }
 
+    // MARK: - Codex Desktop rollout schema
+    func testCodexResponseItemsBecomeTranscriptEntries() {
+        let user = """
+        {"timestamp":"2026-04-27T16:05:00.268Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"修一下 Codex 插件"}]}}
+        """
+        let tool = """
+        {"timestamp":"2026-04-27T16:05:07.464Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call_1","arguments":"{\\"cmd\\":\\"rg Codex\\"}"}}
+        """
+        let output = """
+        {"timestamp":"2026-04-27T16:05:08.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"CodexPlugin.swift:1"}}
+        """
+        let assistant = """
+        {"timestamp":"2026-04-27T16:05:09.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已经同步到对应 session。"}]}}
+        """
+
+        let entries = FullTranscriptReader.read(transcriptPath: writeFixture([user, tool, output, assistant]))
+        XCTAssertEqual(entries.map { $0.type }, ["user", "assistant", "tool", "assistant"])
+        XCTAssertEqual(entries[0].blocks.first?.text, "修一下 Codex 插件")
+        XCTAssertEqual(entries[1].blocks.first?.toolName, "exec_command")
+        XCTAssertEqual(entries[2].blocks.first?.toolUseId, "call_1")
+        XCTAssertEqual(entries[3].blocks.first?.text, "已经同步到对应 session。")
+    }
+
     // MARK: - isLocalCommandEcho helper 单独测试边界
     func testIsLocalCommandEchoBoundaries() {
         XCTAssertTrue(FullTranscriptReader.isLocalCommandEcho("<bash-input>ls</bash-input>"))
