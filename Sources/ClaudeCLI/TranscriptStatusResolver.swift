@@ -70,6 +70,12 @@ private func probeGhosttyTerminal(_ terminalId: String) -> Bool {
     let errPipe = Pipe()
     process.standardOutput = outPipe
     process.standardError = errPipe
+    defer {
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForWriting.close()
+    }
 
     do {
         try process.run()
@@ -265,6 +271,20 @@ public enum TranscriptStatusResolver {
             if isSpecific(hookStatus) {
                 return (hookStatus, "user-recent+hook-specific(\(hookStatus.rawValue))")
             }
+            // hook 是 resting (idle / waitingForUser / completed) 且 user
+            // tail 已经稳定超过 _userRestingHandoffWindow → 信任 hook，
+            // 别再升 active。场景：
+            //   - 用户提交后 Notification hook 把 hook 翻 waitingForUser，
+            //     transcript 短期内还没新 entry 但 hook 是权威——这时候 UI
+            //     该报 resting，AgentInboxShell 也才能给这条 session 推
+            //     orientation / inbox 消息。
+            //   - "user-recent" 这条 fallback 只在很短的 mid-turn 窗口
+            //     ( first-token 延迟 ) 内合理；超出就该认 hook。
+            if let ts = last.timestamp,
+               now.timeIntervalSince(ts) > _userRestingHandoffWindow,
+               hookStatus == .idle || hookStatus == .waitingForUser || hookStatus == .completed {
+                return (hookStatus, "user-stable+hook-resting(\(hookStatus.rawValue))")
+            }
             return (.active, "user-recent")
 
         case "assistant":
@@ -412,6 +432,12 @@ private let _staleAssistantTailThreshold: TimeInterval = 60.0
 /// 30s 比 stream-stale 60s 紧——Claude 写完最后一个 token 到 Stop hook 触发
 /// 的延迟极少超过几秒，30s 给足缓冲又不至于把"真已 idle 的会话"误标 live。
 private let _midTurnFreshnessWindow: TimeInterval = 30.0
+
+/// User-tail "已经稳定" 的窗口阈值。超过这个窗口 + hook 报 resting
+/// (idle/waitingForUser/completed) → resolver 信任 hook 报 resting，
+/// 不再 fallback 到 .active。30s 跟 mid-turn 窗对齐 —— first-token 一般
+/// 都在这之内，超过就该当 hook 是真相。
+private let _userRestingHandoffWindow: TimeInterval = 30.0
 
 /// "Hook 显式说还在干活" 的状态集合。三处规则共用：
 /// - user case：tail 久了但 hook working → trust hook (覆盖 extended thinking

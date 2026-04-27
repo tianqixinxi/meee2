@@ -109,6 +109,13 @@ private func runOSAScript(_ script: String) async -> String {
             process.arguments = ["-e", script]
             process.standardOutput = pipe
             process.standardError = FileHandle.nullDevice
+            // Explicit fd close — Pipe()'s file handles are otherwise held
+            // until ARC, which under high-frequency osascript calls (每条
+            // direct-push 一个) 会累积到 EBADF "Bad file descriptor"。
+            defer {
+                try? pipe.fileHandleForReading.close()
+                try? pipe.fileHandleForWriting.close()
+            }
             do {
                 try process.run()
                 process.waitUntilExit()

@@ -110,6 +110,10 @@ public struct GhosttySpawner: TerminalSpawner {
                 process.arguments = ["-e", script]
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
+                defer {
+                    try? pipe.fileHandleForReading.close()
+                    try? pipe.fileHandleForWriting.close()
+                }
                 do {
                     try process.run()
                     process.waitUntilExit()
@@ -151,12 +155,20 @@ public struct GhosttyInputStream: TerminalInputStream {
             .replacingOccurrences(of: "\"", with: "\\\"")
         let escapedTid = terminalId.replacingOccurrences(of: "\"", with: "\\\"")
 
+        // Ink-based TUI (Claude CLI 用) 在 paste mode 下偶尔丢首条 Enter
+        // —— 表现为 paste 文本停留在输入框里、不提交。原因还在调研，但
+        // 实测两次 Enter 中间留 0.15s 缓冲能稳定触发提交且不会变成"双发"
+        // (第二次 Enter 落空时光标已经离开输入框，无副作用)。
+        // delay 0.2→0.4：让 bracketed paste 的 close-bracket 序列被 TUI
+        // 完全吞下，再发 Enter，避免 Enter 被当 paste 内的 \n 处理。
         let script = """
         tell application "Ghostty"
             try
                 set t to terminal id "\(escapedTid)"
                 input text "\(escapedText)" to t
-                delay 0.2
+                delay 0.4
+                send key "enter" to t
+                delay 0.15
                 send key "enter" to t
                 return "ok"
             on error errMsg
@@ -179,6 +191,10 @@ public struct GhosttyInputStream: TerminalInputStream {
                 process.arguments = ["-e", script]
                 process.standardOutput = pipe
                 process.standardError = FileHandle.nullDevice
+                defer {
+                    try? pipe.fileHandleForReading.close()
+                    try? pipe.fileHandleForWriting.close()
+                }
                 do {
                     try process.run()
                     process.waitUntilExit()

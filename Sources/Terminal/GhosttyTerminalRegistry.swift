@@ -35,6 +35,12 @@ public enum GhosttyTerminalRegistry {
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+        defer {
+            try? outPipe.fileHandleForReading.close()
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForReading.close()
+            try? errPipe.fileHandleForWriting.close()
+        }
 
         do {
             try process.run()

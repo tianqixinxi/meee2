@@ -24,7 +24,13 @@ public final class AgentInboxShell {
     /// 正在 Ghostty 推送的 (sessionId|msgId) 集合。访问须持 queue。
     private var inFlightPushes: Set<String> = []
 
-    /// 串行化 inFlight 集合的访问 + Ghostty Task 启停
+    /// 上次"push skipped — not resting"日志时刻 + 当时的 effective status，
+    /// 避免每 2s sessionMetadataChanged → flush → skip 都 log 一条。规则：
+    /// 同 (sid,msgId) 在 effectiveStatus 没变时只 log 第一次；状态翻转或
+    /// 60s 时间窗过期再 log。访问须持 queue。
+    private var lastSkipLog: [String: (status: SessionStatus, at: Date)] = [:]
+
+    /// 串行化 inFlight 集合 / lastSkipLog 的访问 + Ghostty Task 启停
     private let queue = DispatchQueue(label: "com.meee2.AgentInboxShell", qos: .userInitiated)
 
     /// SessionEventBus 订阅（resting 翻转时主动 flush）
@@ -87,8 +93,30 @@ public final class AgentInboxShell {
         let effectiveStatus = TranscriptStatusResolver.resolve(for: data)
         let restingStatuses: Set<SessionStatus> = [.idle, .waitingForUser, .completed]
         guard restingStatuses.contains(effectiveStatus) else {
-            NSLog("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) effective=\(effectiveStatus.rawValue) (raw=\(data.status.rawValue)) — not resting")
+            // Throttle: every 2s sessionMetadataChanged → flushInboxIfResting →
+            // 进来都 hit 同样的 skip。只在状态翻转（真有信息）或者 60s 时间窗
+            // 过期时打日志，否则就静默。
+            let key = "\(sessionId)|\(message.id)"
+            let shouldLog: Bool = queue.sync {
+                let now = Date()
+                if let prev = lastSkipLog[key],
+                   prev.status == effectiveStatus,
+                   now.timeIntervalSince(prev.at) < 60 {
+                    return false
+                }
+                lastSkipLog[key] = (effectiveStatus, now)
+                return true
+            }
+            if shouldLog {
+                NSLog("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) msg=\(message.id) effective=\(effectiveStatus.rawValue) (raw=\(data.status.rawValue)) — not resting")
+            }
             return
+        }
+        // 真的 push 出去时把 lastSkipLog 清理掉，下次再 skip 算"新的一段"。
+        queue.sync {
+            for k in lastSkipLog.keys where k.hasPrefix("\(sessionId)|") {
+                lastSkipLog.removeValue(forKey: k)
+            }
         }
 
         let msgId = message.id

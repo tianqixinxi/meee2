@@ -106,7 +106,7 @@ final class TranscriptStatusResolverTests: XCTestCase {
         }
     }
 
-    /// priority 5 (fallback): 非 specific hook + recent user → .active
+    /// priority 5 (fallback): 非 specific hook + recent user (≤30s) → .active
     func testUser_recent_fallsToActiveForGenericHook() {
         for hook in [SessionStatus.idle, .completed, .waitingForUser, .active] {
             let (status, reason) = TranscriptStatusResolver.decideFromTail(
@@ -117,6 +117,46 @@ final class TranscriptStatusResolverTests: XCTestCase {
             XCTAssertEqual(status, .active, "hook=\(hook) 应该 fallback active")
             XCTAssertTrue(reason.contains("user-recent"), "reason='\(reason)'")
         }
+    }
+
+    /// user tail 已稳定 (>30s) + hook 是 resting → trust hook，不再升 active。
+    /// 修 AgentInboxShell 老是 "push skipped — not resting" 的 bug：之前
+    /// hook=waitingForUser + user tail 60s 老仍然报 active，inbox 永远没机会
+    /// 直推到终端。
+    func testUser_stable_handsBackToRestingHook() {
+        for (hook, ageSec) in [
+            (SessionStatus.waitingForUser, 31.0),
+            (SessionStatus.waitingForUser, 90.0),
+            (SessionStatus.idle,           60.0),
+            (SessionStatus.completed,      45.0),
+        ] {
+            let (status, reason) = TranscriptStatusResolver.decideFromTail(
+                last: entry(type: "user", ageSeconds: ageSec),
+                hookStatus: hook,
+                now: now
+            )
+            XCTAssertEqual(status, hook,
+                "hook=\(hook) age=\(ageSec)s 应保留 hook (resting), got reason='\(reason)'")
+            XCTAssertTrue(reason.contains("user-stable+hook-resting"),
+                "reason='\(reason)'")
+        }
+    }
+
+    /// 30s 边界：刚好 30s 时仍 fallback active；30.5s 起 trust hook
+    func testUser_stableHandoff_boundary() {
+        let at30 = TranscriptStatusResolver.decideFromTail(
+            last: entry(type: "user", ageSeconds: 30),
+            hookStatus: .waitingForUser,
+            now: now
+        )
+        XCTAssertEqual(at30.status, .active, "30s 边界仍走 user-recent")
+
+        let at30_5 = TranscriptStatusResolver.decideFromTail(
+            last: entry(type: "user", ageSeconds: 30.5),
+            hookStatus: .waitingForUser,
+            now: now
+        )
+        XCTAssertEqual(at30_5.status, .waitingForUser, "30.5s 翻到 hook-resting")
     }
 
     /// user tail 无时间戳：走 priority 4/5（timestamp 缺失的 age 判断跳过）
