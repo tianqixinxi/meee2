@@ -61,6 +61,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         PluginManager.shared.loadExternalPlugins()
         PluginManager.shared.startAll()
 
+        // 启用 channel join/leave 的 orientation 推送：当 session 加入 channel
+        // 时往该 session 的 inbox 推一条 synthetic 系统消息（teammates / 用法
+        // 提示），其他成员也会收到 "X joined" 通知。走现有 operator → session
+        // 路径 + Stop-hook drain，零新基础设施。**production-only**：tests 不
+        // 调这条，确保单测的 inbox 计数不被 orientation 污染。
+        MessageRouter.shared.bindChannelOrientationHook()
+
         // SessionStore 已经从 disk 载入。用 Ghostty PR #11922 提供的
         // tty AppleScript 属性反查每个 session 真正所在的 Ghostty terminal id，
         // 修正历史上 "focused terminal" 启发式造成的撞车 / 错配。

@@ -85,6 +85,31 @@ public final class MessageRouter {
         _ = AgentInboxShell.shared
     }
 
+    /// 显式绑定 ChannelRegistry orientation 推送（join/leave 后通知相关
+    /// session）。**只在 production 启动路径调用**，由 AppDelegate 在
+    /// applicationDidFinishLaunching 触发。
+    /// 不放 init() 里：MessageRouter 是 singleton，单测一旦访问 .shared 就
+    /// 隐式启用 orientation，会让所有 join 测试的 inbox 多出一条 "you joined"
+    /// 消息，破坏既有计数断言。Test 走默认 no-op（ChannelRegistry.pushOrientation
+    /// 默认是 `{ _, _ in }`）。
+    public func bindChannelOrientationHook() {
+        ChannelRegistry.pushOrientation = { [weak self] sessionId, content in
+            guard let self = self else { return }
+            do {
+                let opChannel = try self.ensureOperatorChannel(sessionId: sessionId)
+                _ = try self.send(
+                    channel: opChannel,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: content,
+                    injectedByHuman: true
+                )
+            } catch {
+                MWarn("[MessageRouter] orientation push to \(sessionId.prefix(8)) failed: \(error)")
+            }
+        }
+    }
+
     /// 列出所有有 inbox 文件的 sessionId（给 AgentInboxShell.flushAllInboxes 用）
     public func allInboxSessionIds() -> [String] {
         queue.sync {
