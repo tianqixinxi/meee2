@@ -54,6 +54,14 @@ class ClaudePlugin: SessionPlugin {
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
 
+    /// 已 start 标记 — start() 必须 idempotent。AppDelegate 现在按"加载外部
+    /// plugin → startAll → register ClaudePlugin → 再 startAll"的顺序跑，会
+    /// 把 ClaudePlugin.start() 暴露给二次调用；不守卫的话 sessionMonitor
+    /// 的 .sink {}.store(in: &cancellables) 会**追加一份订阅**，导致
+    /// syncToStore + notifySessionsUpdated 每次 session 变化触发两次。
+    /// 跟 CodexPlugin 的 isRunning 守卫对齐。
+    private var isRunning = false
+
     // MARK: - 生命周期
 
     override func initialize() -> Bool {
@@ -61,6 +69,12 @@ class ClaudePlugin: SessionPlugin {
     }
 
     override func start() -> Bool {
+        guard !isRunning else {
+            NSLog("[ClaudePlugin] start() ignored — already running")
+            return true
+        }
+        isRunning = true
+
         // 启动 session 文件监控
         sessionMonitor.startMonitoring()
 
@@ -88,6 +102,8 @@ class ClaudePlugin: SessionPlugin {
     }
 
     override func stop() {
+        guard isRunning else { return }
+        isRunning = false
         cancellables.removeAll()
         sessionMonitor.stopMonitoring()
         hookServer.stop()
