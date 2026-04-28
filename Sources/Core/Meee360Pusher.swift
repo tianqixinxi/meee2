@@ -17,11 +17,14 @@ public final class Meee360Pusher: @unchecked Sendable {
     private var pluginSessionsSubscription: AnyCancellable?
     private var heartbeatTimer: Timer?
     private let syncQueue = DispatchQueue(label: "com.meee2.meee360-pusher", qos: .utility)
+    private let heartbeatInterval: TimeInterval = 60.0
+    private let metadataDebounceInterval: TimeInterval = 0.5
 
     // Settings from AppStorage (read on activation)
     private var isConnected: Bool { UserDefaults.standard.bool(forKey: "meee360Connected") }
     private var isOnline: Bool { UserDefaults.standard.bool(forKey: "meee360Online") }
     private var disabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360DisabledSessionIds") }
+    private var sessionTeamIds: [String: String] { Self.sessionIdMap(forKey: "meee360SessionTeamIds") }
     private var teamId: String { UserDefaults.standard.string(forKey: "meee360TeamId") ?? "" }
     private var userId: String { UserDefaults.standard.string(forKey: "meee360UserId") ?? "" }
     private var supabaseUrl: String { UserDefaults.standard.string(forKey: "meee360SupabaseUrl") ?? "" }
@@ -37,6 +40,9 @@ public final class Meee360Pusher: @unchecked Sendable {
     private var lastPushedCount: [String: Int] = [:]
     private var pushedPluginMessageKeys = Set<String>()
     private var inFlightPluginMessageKeys = Set<String>()
+    private var pendingSessionUpdateWorkItems: [String: DispatchWorkItem] = [:]
+    private var lastSessionUpsertSignatures: [String: String] = [:]
+    private var lastPluginUpsertSignatures: [String: String] = [:]
 
     // MARK: - Activation
 
@@ -61,14 +67,14 @@ public final class Meee360Pusher: @unchecked Sendable {
                 }
             }
 
-        // Start heartbeat timer (30s interval)
-        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+        // Start heartbeat timer (60s interval)
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
             self?.syncQueue.async {
                 self?.sendHeartbeatForActiveSessions()
             }
         }
 
-        MLog("[Meee360Pusher] Activated - listening to events, heartbeat every 30s")
+        MLog("[Meee360Pusher] Activated - listening to events, heartbeat every 60s")
     }
 
     public func deactivate() {
@@ -78,6 +84,10 @@ public final class Meee360Pusher: @unchecked Sendable {
         pluginSessionsSubscription = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        syncQueue.async { [weak self] in
+            self?.pendingSessionUpdateWorkItems.values.forEach { $0.cancel() }
+            self?.pendingSessionUpdateWorkItems.removeAll()
+        }
         MLog("[Meee360Pusher] Deactivated")
     }
 
@@ -94,9 +104,7 @@ public final class Meee360Pusher: @unchecked Sendable {
             }
         case .sessionMetadataChanged(sessionId: let sid):
             guard shouldSyncSessionId(sid) else { return }
-            syncQueue.async { [weak self] in
-                self?.pushSessionUpdate(sessionId: sid)
-            }
+            scheduleSessionUpdate(sessionId: sid)
         case .sessionAdded(sessionId: let sid):
             guard shouldSyncSessionId(sid) else { return }
             syncQueue.async { [weak self] in
@@ -104,6 +112,19 @@ public final class Meee360Pusher: @unchecked Sendable {
             }
         default:
             break
+        }
+    }
+
+    private func scheduleSessionUpdate(sessionId: String) {
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.pendingSessionUpdateWorkItems[sessionId]?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.pendingSessionUpdateWorkItems.removeValue(forKey: sessionId)
+                self?.pushSessionUpdate(sessionId: sessionId)
+            }
+            self.pendingSessionUpdateWorkItems[sessionId] = workItem
+            self.syncQueue.asyncAfter(deadline: .now() + self.metadataDebounceInterval, execute: workItem)
         }
     }
 
@@ -149,19 +170,19 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     private func pushSessionCreate(sessionId: String) {
         guard let session = SessionStore.shared.get(sessionId) else { return }
-        pushSessionUpsert(session: session)
+        pushSessionUpsert(session: session, force: true)
     }
 
     private func sendHeartbeatForActiveSessions() {
         let activeSessions = SessionStore.shared.listActive()
         for session in activeSessions where shouldSyncSessionId(session.sessionId) {
-            pushSessionUpsert(session: session)
+            pushSessionUpsert(session: session, force: true)
         }
 
-        pushPluginSessions(PluginManager.shared.sessions)
+        pushPluginSessions(PluginManager.shared.sessions, force: true)
     }
 
-    private func pushSessionUpsert(session: SessionData) {
+    private func pushSessionUpsert(session: SessionData, force: Bool = false) {
         // Build payload with full summary data for meee360 dashboard
         let status = mapStatus(session.status)
 
@@ -242,12 +263,15 @@ public final class Meee360Pusher: @unchecked Sendable {
             let bgAgents = BackgroundAgentResolver.resolve(transcriptPath: transcriptPath)
             if !bgAgents.isEmpty {
                 summary["backgroundAgents"] = bgAgents.map { a in
-                    [
+                    var agent: [String: Any] = [
                         "id": a.id,
                         "kind": a.kind,
-                        "description": a.description ?? "",
-                        "startedAt": a.startedAt != nil ? iso8601String(a.startedAt!) : nil
-                    ] as [String: Any?]
+                        "description": a.description ?? ""
+                    ]
+                    if let startedAt = a.startedAt {
+                        agent["startedAt"] = iso8601String(startedAt)
+                    }
+                    return agent
                 }
             }
         }
@@ -286,18 +310,28 @@ public final class Meee360Pusher: @unchecked Sendable {
         // Add summary to payload
         payload["summary"] = summary
 
+        let signature = upsertSignature(status: status, summary: summary)
+        if !force, lastSessionUpsertSignatures[session.sessionId] == signature {
+            return
+        }
+
         post(endpoint: "/api/v1/sessions/upsert", payload: payload) { result in
-            if case .failure(let err) = result {
+            switch result {
+            case .success:
+                self.syncQueue.async {
+                    self.lastSessionUpsertSignatures[session.sessionId] = signature
+                }
+            case .failure(let err):
                 MLog("[Meee360Pusher] upsert failed for \(session.sessionId.prefix(8)): \(err)")
             }
         }
     }
 
-    private func pushPluginSessions(_ sessions: [PluginSession]) {
+    private func pushPluginSessions(_ sessions: [PluginSession], force: Bool = false) {
         guard isConnected && isOnline else { return }
 
         for session in sessions where shouldSyncPluginSession(session) {
-            pushPluginSessionUpsert(session: session) { [weak self] in
+            pushPluginSessionUpsert(session: session, force: force) { [weak self] in
                 self?.pushLatestPluginMessageIfNeeded(session: session)
             }
         }
@@ -318,6 +352,16 @@ public final class Meee360Pusher: @unchecked Sendable {
 
         let aliases = Self.sessionIdAliases(sessionId)
         return aliases.isDisjoint(with: disabled)
+    }
+
+    private func teamIdForSession(_ sessionId: String) -> String {
+        let map = sessionTeamIds
+        for alias in Self.sessionIdAliases(sessionId) {
+            if let mapped = map[alias], !mapped.isEmpty {
+                return mapped
+            }
+        }
+        return teamId
     }
 
     private func pushLatestPluginMessageIfNeeded(session: PluginSession) {
@@ -398,6 +442,14 @@ public final class Meee360Pusher: @unchecked Sendable {
         UserDefaults.standard.set(data, forKey: key)
     }
 
+    public static func sessionIdMap(forKey key: String) -> [String: String] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let map = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return map
+    }
+
     public static func sessionIdAliases(_ sessionId: String) -> Set<String> {
         var aliases: Set<String> = [sessionId]
         let knownPrefixes = [
@@ -410,7 +462,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         return aliases
     }
 
-    private func pushPluginSessionUpsert(session: PluginSession, completion: (() -> Void)? = nil) {
+    private func pushPluginSessionUpsert(session: PluginSession, force: Bool = false, completion: (() -> Void)? = nil) {
         let dto = BoardDTOBuilder.sessionDTO(session)
 
         var summary: [String: Any] = [
@@ -490,10 +542,19 @@ public final class Meee360Pusher: @unchecked Sendable {
             "summary": summary
         ]
 
+        let signature = upsertSignature(status: dto.status, summary: summary)
+        if !force, lastPluginUpsertSignatures[session.id] == signature {
+            completion?()
+            return
+        }
+
         post(endpoint: "/api/v1/sessions/upsert", payload: payload) { result in
             switch result {
             case .success:
-                completion?()
+                self.syncQueue.async {
+                    self.lastPluginUpsertSignatures[session.id] = signature
+                    completion?()
+                }
             case .failure(let err):
                 MLog("[Meee360Pusher] plugin upsert failed for \(session.id.prefix(8)): \(err)")
             }
@@ -551,6 +612,35 @@ public final class Meee360Pusher: @unchecked Sendable {
         return String(format: "#%02X%02X%02X", r, g, b)
     }
 
+    private func upsertSignature(status: String, summary: [String: Any]) -> String {
+        let normalizedSummary = normalizedForSignature(summary, droppingKeys: ["lastActivity"])
+        let object: [String: Any] = [
+            "status": status,
+            "summary": normalizedSummary
+        ]
+        if JSONSerialization.isValidJSONObject(object),
+           let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+           let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+        return "\(status)|\(normalizedSummary)"
+    }
+
+    private func normalizedForSignature(_ value: Any, droppingKeys: Set<String>) -> Any {
+        if let dict = value as? [String: Any] {
+            var normalized: [String: Any] = [:]
+            for key in dict.keys.sorted() where !droppingKeys.contains(key) {
+                guard let item = dict[key] else { continue }
+                normalized[key] = normalizedForSignature(item, droppingKeys: droppingKeys)
+            }
+            return normalized
+        }
+        if let array = value as? [Any] {
+            return array.map { normalizedForSignature($0, droppingKeys: droppingKeys) }
+        }
+        return value
+    }
+
     // MARK: - HTTP helper
 
     private func post(endpoint: String, payload: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
@@ -592,19 +682,20 @@ public final class Meee360Pusher: @unchecked Sendable {
     private func supabaseRPCRequest(endpoint: String, payload: [String: Any]) -> (name: String, payload: [String: Any])? {
         guard !normalizedSupabaseUrl.isEmpty,
               !supabaseKey.isEmpty,
-              !teamId.isEmpty,
               !userId.isEmpty,
               let machineId = payload["machine_id"] as? String,
               let sessionKey = payload["session_key"] as? String else {
             return nil
         }
+        let targetTeamId = teamIdForSession(sessionKey)
+        guard !targetTeamId.isEmpty else { return nil }
 
         switch endpoint {
         case "/api/v1/sessions/upsert":
             return (
                 "meee360_upsert_session",
                 [
-                    "p_team_id": teamId,
+                    "p_team_id": targetTeamId,
                     "p_user_id": userId,
                     "p_machine_id": machineId,
                     "p_session_key": sessionKey,
@@ -623,7 +714,7 @@ public final class Meee360Pusher: @unchecked Sendable {
                 return (
                     "meee360_append_recent_message_v2",
                     [
-                        "p_team_id": teamId,
+                        "p_team_id": targetTeamId,
                         "p_user_id": userId,
                         "p_machine_id": machineId,
                         "p_session_key": sessionKey,
@@ -636,7 +727,7 @@ public final class Meee360Pusher: @unchecked Sendable {
             return (
                 "meee360_append_recent_message",
                 [
-                    "p_team_id": teamId,
+                    "p_team_id": targetTeamId,
                     "p_user_id": userId,
                     "p_machine_id": machineId,
                     "p_session_key": sessionKey,

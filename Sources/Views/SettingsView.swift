@@ -3,6 +3,8 @@ import Meee2PluginKit
 
 /// 设置面板视图
 public struct SettingsView: View {
+    private static let meee360NoSyncTarget = "__meee360_no_sync__"
+
     // MARK: - AppStorage
 
     /// 用户选择的屏幕 ID
@@ -33,6 +35,12 @@ public struct SettingsView: View {
 
     /// Team Name
     @AppStorage("meee360TeamName") private var meee360TeamName: String = ""
+
+    /// Teams available for per-session routing
+    @AppStorage("meee360Teams") private var meee360TeamsData: Data = Data()
+
+    /// Per-session team routing. Empty/default means use the first connected team.
+    @AppStorage("meee360SessionTeamIds") private var meee360SessionTeamIdsData: Data = Data()
 
     /// User ID
     @AppStorage("meee360UserId") private var meee360UserId: String = ""
@@ -288,11 +296,19 @@ public struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         } else {
                             ForEach(meee360SyncSessions) { session in
-                                Toggle(isOn: Binding(
-                                    get: { isMeee360SessionEnabled(session.id) },
-                                    set: { setMeee360Session(session.id, enabled: $0) }
-                                )) {
+                                HStack(alignment: .center, spacing: 12) {
                                     meee360SessionSyncRow(session)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Picker("Sync target", selection: meee360SyncTargetBinding(for: session.id)) {
+                                        Text("No sync").tag(Self.meee360NoSyncTarget)
+                                        ForEach(meee360Teams) { team in
+                                            Text(team.name).tag(team.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .pickerStyle(.menu)
+                                    .frame(width: 180, alignment: .trailing)
                                 }
                             }
                         }
@@ -300,7 +316,7 @@ public struct SettingsView: View {
 
                     HStack {
                         Button("Open Dashboard") {
-                            NSWorkspace.shared.open(URL(string: "http://localhost:3000/dashboard")!)
+                            NSWorkspace.shared.open(Meee360Config.appURL(path: "dashboard"))
                         }
                         Spacer()
                         Button("Disconnect") {
@@ -319,7 +335,7 @@ public struct SettingsView: View {
 
                     // Single connect button - opens browser with callback
                     Button("Connect to meee360") {
-                        var components = URLComponents(string: "http://localhost:3000/connect")!
+                        var components = URLComponents(url: Meee360Config.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
                         components.queryItems = [
                             URLQueryItem(name: "callback", value: "http://localhost:9876/meee360/callback")
                         ]
@@ -352,6 +368,9 @@ public struct SettingsView: View {
                 meee360UserAvatarUrl = userInfo["userAvatarUrl"] as? String ?? ""
                 meee360SupabaseUrl = normalizedMeee360SupabaseUrl(userInfo["supabaseUrl"] as? String ?? "")
                 meee360SupabaseKey = userInfo["supabaseKey"] as? String ?? ""
+                if let teamsData = userInfo["teamsData"] as? Data {
+                    meee360TeamsData = teamsData
+                }
                 meee360Online = true
             }
         }
@@ -376,6 +395,7 @@ public struct SettingsView: View {
                 meee360UserAvatarUrl = result.user.avatar_url ?? ""
                 meee360SupabaseUrl = normalizedMeee360SupabaseUrl(result.supabase_url)
                 meee360SupabaseKey = result.supabase_key
+                storeMeee360Teams(result.teams ?? [result.team])
 
                 connectionCode = ""
                 showAlert(title: "Connected!", message: "Successfully connected to \(result.team.name)")
@@ -388,7 +408,7 @@ public struct SettingsView: View {
     }
 
     private func verifyCode(code: String) async throws -> Meee360ConnectResult {
-        let endpoint = URL(string: "http://localhost:3000/api/v1/connect")!
+        let endpoint = Meee360Config.appURL(path: "api/v1/connect")
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -415,13 +435,15 @@ public struct SettingsView: View {
         meee360UserAvatarUrl = ""
         meee360SupabaseUrl = ""
         meee360SupabaseKey = ""
+        meee360TeamsData = Data()
+        meee360SessionTeamIdsData = Data()
     }
 
     private var meee360DashboardUrl: URL? {
         guard !meee360SupabaseUrl.isEmpty else { return nil }
         // Extract project ref from Supabase URL for dashboard link
         // URL format: https://xxx.supabase.co -> dashboard at meee360 app
-        return URL(string: "http://localhost:3000/dashboard")
+        return Meee360Config.appURL(path: "dashboard")
     }
 
     private func testMeee360Connection() {
@@ -486,6 +508,14 @@ public struct SettingsView: View {
                 "userName": meee360UserName,
                 "userEmail": meee360UserEmail,
                 "userAvatarUrl": meee360UserAvatarUrl,
+                "teams": meee360Teams.map { team in
+                    [
+                        "id": team.id,
+                        "name": team.name,
+                        "role": team.role ?? ""
+                    ]
+                },
+                "sessionTeamIds": meee360SessionTeamMap(),
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
@@ -573,6 +603,75 @@ public struct SettingsView: View {
 
         Meee360Pusher.storeSessionIdSet(disabled, forKey: "meee360DisabledSessionIds")
         meee360DisabledSessionIdsData = UserDefaults.standard.data(forKey: "meee360DisabledSessionIds") ?? Data()
+    }
+
+    private var meee360Teams: [Meee360Team] {
+        if let teams = try? JSONDecoder().decode([Meee360Team].self, from: meee360TeamsData),
+           !teams.isEmpty {
+            return teams
+        }
+        if !meee360TeamId.isEmpty {
+            return [Meee360Team(id: meee360TeamId, name: meee360TeamName.isEmpty ? "Default team" : meee360TeamName, role: nil)]
+        }
+        return []
+    }
+
+    private func storeMeee360Teams(_ teams: [Meee360Team]) {
+        guard let data = try? JSONEncoder().encode(teams) else { return }
+        meee360TeamsData = data
+        UserDefaults.standard.set(data, forKey: "meee360Teams")
+        writeMeee360Settings()
+    }
+
+    private func meee360SessionTeamMap() -> [String: String] {
+        (try? JSONDecoder().decode([String: String].self, from: meee360SessionTeamIdsData)) ?? [:]
+    }
+
+    private func selectedMeee360TeamId(for sessionId: String) -> String {
+        let teams = meee360Teams
+        let fallback = teams.first?.id ?? meee360TeamId
+        let map = meee360SessionTeamMap()
+        for alias in Meee360Pusher.sessionIdAliases(sessionId) {
+            if let teamId = map[alias], teams.contains(where: { $0.id == teamId }) {
+                return teamId
+            }
+        }
+        return fallback
+    }
+
+    private func setMeee360Team(_ teamId: String, for sessionId: String) {
+        var map = meee360SessionTeamMap()
+        for alias in Meee360Pusher.sessionIdAliases(sessionId) {
+            map[alias] = teamId
+        }
+        guard let data = try? JSONEncoder().encode(map) else { return }
+        meee360SessionTeamIdsData = data
+        UserDefaults.standard.set(data, forKey: "meee360SessionTeamIds")
+        writeMeee360Settings()
+    }
+
+    private func selectedMeee360SyncTarget(for sessionId: String) -> String {
+        guard isMeee360SessionEnabled(sessionId) else {
+            return Self.meee360NoSyncTarget
+        }
+        return selectedMeee360TeamId(for: sessionId)
+    }
+
+    private func setMeee360SyncTarget(_ target: String, for sessionId: String) {
+        if target == Self.meee360NoSyncTarget {
+            setMeee360Session(sessionId, enabled: false)
+            return
+        }
+
+        setMeee360Session(sessionId, enabled: true)
+        setMeee360Team(target, for: sessionId)
+    }
+
+    private func meee360SyncTargetBinding(for sessionId: String) -> Binding<String> {
+        Binding(
+            get: { selectedMeee360SyncTarget(for: sessionId) },
+            set: { setMeee360SyncTarget($0, for: sessionId) }
+        )
     }
 
     @ViewBuilder
@@ -1278,14 +1377,16 @@ struct TraecliPluginSettings: View {
 
 struct Meee360ConnectResult: Codable {
     let team: Meee360Team
+    let teams: [Meee360Team]?
     let user: Meee360User
     let supabase_url: String
     let supabase_key: String
 }
 
-struct Meee360Team: Codable {
+struct Meee360Team: Codable, Identifiable {
     let id: String
     let name: String
+    let role: String?
 }
 
 struct Meee360User: Codable {
