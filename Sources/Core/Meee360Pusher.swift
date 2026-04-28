@@ -52,6 +52,14 @@ public final class Meee360Pusher: @unchecked Sendable {
             MLog("[Meee360Pusher] Not connected or offline, skipping activation")
             return
         }
+        guard subscription == nil,
+              pluginSessionsSubscription == nil,
+              heartbeatTimer == nil else {
+            syncQueue.async { [weak self] in
+                self?.sendHeartbeatForActiveSessions()
+            }
+            return
+        }
 
         // Subscribe to events
         subscription = SessionEventBus.shared.publisher
@@ -68,13 +76,18 @@ public final class Meee360Pusher: @unchecked Sendable {
             }
 
         // Start heartbeat timer (60s interval)
-        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: heartbeatInterval, repeats: true) { [weak self] _ in
             self?.syncQueue.async {
                 self?.sendHeartbeatForActiveSessions()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        heartbeatTimer = timer
 
         MLog("[Meee360Pusher] Activated - listening to events, heartbeat every 60s")
+        syncQueue.async { [weak self] in
+            self?.sendHeartbeatForActiveSessions()
+        }
     }
 
     public func deactivate() {
@@ -89,6 +102,14 @@ public final class Meee360Pusher: @unchecked Sendable {
             self?.pendingSessionUpdateWorkItems.removeAll()
         }
         MLog("[Meee360Pusher] Deactivated")
+    }
+
+    public func refreshActivation() {
+        if isConnected && isOnline {
+            activate()
+        } else {
+            deactivate()
+        }
     }
 
     // MARK: - Event handling
@@ -366,11 +387,13 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     private func pushLatestPluginMessageIfNeeded(session: PluginSession) {
         guard let transcriptPath = session.transcriptPath else { return }
+        let targetTeamId = teamIdForSession(session.id)
+        guard !targetTeamId.isEmpty else { return }
 
         let entries = FullTranscriptReader.read(transcriptPath: transcriptPath, limit: 20)
         for entry in entries {
             for exported in pluginTranscriptExports(from: entry) {
-                let key = "\(session.id):\(exported.sourceId)"
+                let key = "\(targetTeamId):\(session.id):\(exported.sourceId)"
                 if pushedPluginMessageKeys.contains(key) || inFlightPluginMessageKeys.contains(key) {
                     continue
                 }

@@ -74,6 +74,7 @@ public struct Meee360CallbackAPI {
                 object: nil,
                 userInfo: userInfo
             )
+            Meee360Pusher.shared.refreshActivation()
 
             return successResponse(teamName: teamName)
         } else {

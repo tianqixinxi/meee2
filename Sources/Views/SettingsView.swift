@@ -118,8 +118,8 @@ public struct SettingsView: View {
         }
         .frame(width: 520, height: 520)
         .padding()
-        .onChange(of: meee360Connected) { _ in writeMeee360Settings() }
-        .onChange(of: meee360Online) { _ in writeMeee360Settings() }
+        .onChange(of: meee360Connected) { _ in updateMeee360SyncActivation() }
+        .onChange(of: meee360Online) { _ in updateMeee360SyncActivation() }
         .onChange(of: meee360SupabaseUrl) { _ in writeMeee360Settings() }
         .onChange(of: meee360SupabaseKey) { _ in writeMeee360Settings() }
         .onChange(of: meee360TeamId) { _ in writeMeee360Settings() }
@@ -396,6 +396,8 @@ public struct SettingsView: View {
                 meee360SupabaseUrl = normalizedMeee360SupabaseUrl(result.supabase_url)
                 meee360SupabaseKey = result.supabase_key
                 storeMeee360Teams(result.teams ?? [result.team])
+                meee360Online = true
+                updateMeee360SyncActivation()
 
                 connectionCode = ""
                 showAlert(title: "Connected!", message: "Successfully connected to \(result.team.name)")
@@ -437,6 +439,7 @@ public struct SettingsView: View {
         meee360SupabaseKey = ""
         meee360TeamsData = Data()
         meee360SessionTeamIdsData = Data()
+        updateMeee360SyncActivation()
     }
 
     private var meee360DashboardUrl: URL? {
@@ -533,6 +536,11 @@ public struct SettingsView: View {
             try? data.write(to: file, options: .atomic)
             NSLog("[Settings] Wrote meee360 settings to \(file.path)")
         }
+    }
+
+    private func updateMeee360SyncActivation() {
+        writeMeee360Settings()
+        Meee360Pusher.shared.refreshActivation()
     }
 
     private func normalizedMeee360SupabaseUrl(_ value: String) -> String {
@@ -648,6 +656,7 @@ public struct SettingsView: View {
         meee360SessionTeamIdsData = data
         UserDefaults.standard.set(data, forKey: "meee360SessionTeamIds")
         writeMeee360Settings()
+        Meee360Pusher.shared.refreshActivation()
     }
 
     private func selectedMeee360SyncTarget(for sessionId: String) -> String {
