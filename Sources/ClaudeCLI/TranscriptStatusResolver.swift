@@ -253,7 +253,7 @@ public enum TranscriptStatusResolver {
         // 可查 → resolver 一直返回 hookStatus=active → UI 显示 live + 没法跳。
         // 用 tty 反查 Ghostty，找不到 host 该 tty 的 terminal 即视为孤儿。
         let sid = data.sessionId
-        if (data.ghosttyTerminalId?.isEmpty ?? true),
+        if data.ghosttyTerminalId?.isEmpty ?? true,
            let info = data.terminalInfo,
            info.termProgram == "ghostty",
            let tty = info.tty, !tty.isEmpty {
