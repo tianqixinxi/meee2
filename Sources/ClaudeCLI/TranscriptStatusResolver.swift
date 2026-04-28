@@ -17,6 +17,81 @@ private let _terminalCacheLock = NSLock()
 private var _terminalCache: [String: TerminalCacheEntry] = [:]
 private let _terminalCacheTTL: TimeInterval = 10.0
 
+// Per-tty cache for "does Ghostty host this tty?" lookups (orphan detection).
+// Keyed by tty (e.g. "ttys000"). Same TTL as terminal cache.
+private let _ghosttyTtyCacheLock = NSLock()
+private var _ghosttyTtyCache: [String: TerminalCacheEntry] = [:]
+
+/// Probe Ghostty for any live terminal hosting `tty`. Cached for 10s.
+/// On AppleScript error returns true (don't kill on transient failure).
+internal func ghosttyHasTty(_ tty: String) -> Bool {
+    let now = Date()
+    _ghosttyTtyCacheLock.lock()
+    if let cached = _ghosttyTtyCache[tty],
+       now.timeIntervalSince(cached.checkedAt) < _terminalCacheTTL {
+        _ghosttyTtyCacheLock.unlock()
+        return cached.alive
+    }
+    _ghosttyTtyCacheLock.unlock()
+
+    // tty 形如 "ttys000"；Ghostty 返回 "/dev/ttys000"
+    let ttyPath = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
+    let escaped = ttyPath.replacingOccurrences(of: "\"", with: "\\\"")
+    let script = """
+    tell application "Ghostty"
+        try
+            repeat with t in terminals
+                try
+                    if (tty of t as string) is "\(escaped)" then return "ok"
+                end try
+            end repeat
+            return ""
+        on error
+            return "transient"
+        end try
+    end tell
+    """
+
+    let process = Process()
+    process.launchPath = "/usr/bin/osascript"
+    process.arguments = ["-e", script]
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    process.standardOutput = outPipe
+    process.standardError = errPipe
+    defer {
+        try? outPipe.fileHandleForReading.close()
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForWriting.close()
+    }
+
+    do { try process.run() } catch {
+        MWarn("[TranscriptStatusResolver] failed to launch osascript for tty probe: \(error)")
+        return true // 启动失败按 alive 处理，不误杀
+    }
+
+    let deadline = Date().addingTimeInterval(_terminalProbeTimeout)
+    while process.isRunning {
+        if Date() >= deadline {
+            process.terminate()
+            MWarn("[TranscriptStatusResolver] osascript tty probe timed out for tty=\(tty); assuming alive")
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+
+    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    // "ok" → 找到；"" → 没找到（孤儿）；"transient" → AppleScript 出错（保守 alive）
+    let alive = (output != "")
+    _ghosttyTtyCacheLock.lock()
+    _ghosttyTtyCache[tty] = TerminalCacheEntry(checkedAt: now, alive: alive)
+    _ghosttyTtyCacheLock.unlock()
+    return alive
+}
+
 // Hard budget: if osascript ever takes longer than this, we give up and
 // treat the terminal as reachable. Better to miss a dead-session mark than
 // to stall the /api/state response.
@@ -170,8 +245,28 @@ public enum TranscriptStatusResolver {
     /// `data.status` 是 hook 事件直接写入的权威状态；resolver 基于 transcript
     /// 尾部 + 进程存活 + 终端可达性做二次校准，输出展示用的 status。
     public static func resolve(for data: SessionData) -> SessionStatus {
+        // Step 0.6: Ghostty 孤儿检测。SessionData 没有 ghosttyTerminalId 但
+        // terminalInfo 显示 termProgram=ghostty 且有 tty —— 通常发生在 meee2
+        // 重启 / SessionData 重建后 ghostty id 丢失，原 Ghostty tab 也已经被
+        // 用户关掉，但 claude 进程被 launchd reparent 还活着（ttys000 不再属
+        // 于任何 Ghostty terminal）。Step 0 / 0.5 都覆盖不到：pid 活、没 id
+        // 可查 → resolver 一直返回 hookStatus=active → UI 显示 live + 没法跳。
+        // 用 tty 反查 Ghostty，找不到 host 该 tty 的 terminal 即视为孤儿。
+        let sid = data.sessionId
+        if (data.ghosttyTerminalId?.isEmpty ?? true),
+           let info = data.terminalInfo,
+           info.termProgram == "ghostty",
+           let tty = info.tty, !tty.isEmpty {
+            if !ghosttyHasTty(tty) {
+                NSLog("[StateTrace][resolver] sid=\(sid.prefix(8)) hook=\(data.status.rawValue) → DEAD (Ghostty orphan: tty=\(tty) has no live terminal)")
+                _resolvedCacheLock.lock()
+                _resolvedCache[sid] = ResolvedCacheEntry(at: Date(), status: .dead)
+                _resolvedCacheLock.unlock()
+                return .dead
+            }
+        }
         return resolve(
-            sessionId: data.sessionId,
+            sessionId: sid,
             transcriptPath: data.transcriptPath,
             hookStatus: data.status,
             pid: data.pid,

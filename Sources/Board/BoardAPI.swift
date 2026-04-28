@@ -96,7 +96,13 @@ enum BoardAPI {
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
-        let sessions = PluginManager.shared.sessions.map { BoardDTOBuilder.sessionDTO($0) }
+        // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
+        // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
+        // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
+        // PluginManager 的全集。
+        let sessions = PluginManager.shared.sessions
+            .filter { $0.status != .dead }
+            .map { BoardDTOBuilder.sessionDTO($0) }
         // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
         // 不在 UI 里显示，保持 channel 列表干净
         let channels = ChannelRegistry.shared.list()
