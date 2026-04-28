@@ -22,6 +22,9 @@ public struct Meee360CallbackAPI {
         let teamId = decode("team_id")
         let teamName = decode("team_name")
         let userId = decode("user_id")
+        let userName = decode("user_name")
+        let userEmail = decode("user_email")
+        let userAvatarUrl = decode("user_avatar_url")
         let supabaseUrl = decode("supabase_url")
         let supabaseKey = decode("supabase_key")
 
@@ -35,6 +38,9 @@ public struct Meee360CallbackAPI {
             teamId: teamId,
             teamName: teamName,
             userId: userId,
+            userName: userName,
+            userEmail: userEmail,
+            userAvatarUrl: userAvatarUrl,
             supabaseUrl: supabaseUrl,
             supabaseKey: supabaseKey
         )
@@ -48,6 +54,9 @@ public struct Meee360CallbackAPI {
                     "teamId": teamId,
                     "teamName": teamName,
                     "userId": userId,
+                    "userName": userName,
+                    "userEmail": userEmail,
+                    "userAvatarUrl": userAvatarUrl,
                     "supabaseUrl": supabaseUrl,
                     "supabaseKey": supabaseKey
                 ]
@@ -63,9 +72,24 @@ public struct Meee360CallbackAPI {
         teamId: String,
         teamName: String,
         userId: String,
+        userName: String,
+        userEmail: String,
+        userAvatarUrl: String,
         supabaseUrl: String,
         supabaseKey: String
     ) -> Bool {
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "meee360Connected")
+        defaults.set(true, forKey: "meee360Online")
+        defaults.set(teamId, forKey: "meee360TeamId")
+        defaults.set(teamName, forKey: "meee360TeamName")
+        defaults.set(userId, forKey: "meee360UserId")
+        defaults.set(userName, forKey: "meee360UserName")
+        defaults.set(userEmail, forKey: "meee360UserEmail")
+        defaults.set(userAvatarUrl, forKey: "meee360UserAvatarUrl")
+        defaults.set(supabaseUrl, forKey: "meee360SupabaseUrl")
+        defaults.set(supabaseKey, forKey: "meee360SupabaseKey")
+
         let settings: [String: Any] = [
             "meee360": [
                 "enabled": true,
@@ -73,6 +97,9 @@ public struct Meee360CallbackAPI {
                 "teamId": teamId,
                 "teamName": teamName,
                 "userId": userId,
+                "userName": userName,
+                "userEmail": userEmail,
+                "userAvatarUrl": userAvatarUrl,
                 "supabaseUrl": supabaseUrl,
                 "supabaseKey": supabaseKey,
                 "machineId": Host.current().name ?? "unknown",

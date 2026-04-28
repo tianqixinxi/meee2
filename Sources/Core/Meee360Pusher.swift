@@ -14,19 +14,29 @@ public final class Meee360Pusher: @unchecked Sendable {
     private init() {}
 
     private var subscription: AnyCancellable?
+    private var pluginSessionsSubscription: AnyCancellable?
     private var heartbeatTimer: Timer?
+    private let syncQueue = DispatchQueue(label: "com.meee2.meee360-pusher", qos: .utility)
 
     // Settings from AppStorage (read on activation)
     private var isConnected: Bool { UserDefaults.standard.bool(forKey: "meee360Connected") }
     private var isOnline: Bool { UserDefaults.standard.bool(forKey: "meee360Online") }
+    private var disabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360DisabledSessionIds") }
     private var teamId: String { UserDefaults.standard.string(forKey: "meee360TeamId") ?? "" }
     private var userId: String { UserDefaults.standard.string(forKey: "meee360UserId") ?? "" }
     private var supabaseUrl: String { UserDefaults.standard.string(forKey: "meee360SupabaseUrl") ?? "" }
+    private var normalizedSupabaseUrl: String {
+        let raw = supabaseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let decoded = raw.removingPercentEncoding ?? raw
+        return decoded.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
     private var supabaseKey: String { UserDefaults.standard.string(forKey: "meee360SupabaseKey") ?? "" }
     private var machineId: String { UserDefaults.standard.string(forKey: "meee360MachineId") ?? "unknown" }
 
     // Track last pushed message count per session to avoid duplicate pushes
     private var lastPushedCount: [String: Int] = [:]
+    private var pushedPluginMessageKeys = Set<String>()
+    private var inFlightPluginMessageKeys = Set<String>()
 
     // MARK: - Activation
 
@@ -43,9 +53,19 @@ public final class Meee360Pusher: @unchecked Sendable {
                 self?.handleEvent(event)
             }
 
+        pluginSessionsSubscription = PluginManager.shared.$sessions
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak self] sessions in
+                self?.syncQueue.async {
+                    self?.pushPluginSessions(sessions)
+                }
+            }
+
         // Start heartbeat timer (30s interval)
         heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-            self?.sendHeartbeatForActiveSessions()
+            self?.syncQueue.async {
+                self?.sendHeartbeatForActiveSessions()
+            }
         }
 
         MLog("[Meee360Pusher] Activated - listening to events, heartbeat every 30s")
@@ -54,6 +74,8 @@ public final class Meee360Pusher: @unchecked Sendable {
     public func deactivate() {
         subscription?.cancel()
         subscription = nil
+        pluginSessionsSubscription?.cancel()
+        pluginSessionsSubscription = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
         MLog("[Meee360Pusher] Deactivated")
@@ -66,11 +88,20 @@ public final class Meee360Pusher: @unchecked Sendable {
 
         switch event {
         case .transcriptAppended(sessionId: let sid):
-            pushNewMessage(sessionId: sid)
+            guard shouldSyncSessionId(sid) else { return }
+            syncQueue.async { [weak self] in
+                self?.pushNewMessage(sessionId: sid)
+            }
         case .sessionMetadataChanged(sessionId: let sid):
-            pushSessionUpdate(sessionId: sid)
+            guard shouldSyncSessionId(sid) else { return }
+            syncQueue.async { [weak self] in
+                self?.pushSessionUpdate(sessionId: sid)
+            }
         case .sessionAdded(sessionId: let sid):
-            pushSessionCreate(sessionId: sid)
+            guard shouldSyncSessionId(sid) else { return }
+            syncQueue.async { [weak self] in
+                self?.pushSessionCreate(sessionId: sid)
+            }
         default:
             break
         }
@@ -123,9 +154,11 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     private func sendHeartbeatForActiveSessions() {
         let activeSessions = SessionStore.shared.listActive()
-        for session in activeSessions {
+        for session in activeSessions where shouldSyncSessionId(session.sessionId) {
             pushSessionUpsert(session: session)
         }
+
+        pushPluginSessions(PluginManager.shared.sessions)
     }
 
     private func pushSessionUpsert(session: SessionData) {
@@ -233,19 +266,6 @@ public final class Meee360Pusher: @unchecked Sendable {
         summary["startedAt"] = iso8601String(session.startedAt)
         summary["lastActivity"] = iso8601String(session.lastActivity)
 
-        // Recent messages (last 5)
-        if let transcriptPath = session.transcriptPath {
-            let messages = TranscriptParser.loadMessages(transcriptPath: transcriptPath, count: 5)
-            if !messages.isEmpty {
-                summary["recentMessages"] = messages.map { m in
-                    [
-                        "role": m.role,
-                        "text": String(m.text.prefix(1000))
-                    ]
-                }
-            }
-        }
-
         // Plugin info (from Claude plugin)
         let pluginInfo = PluginManager.shared.getPluginInfo(for: "com.meee2.plugin.claude")
         summary["pluginDisplayName"] = pluginInfo?.displayName ?? "Claude Code"
@@ -269,6 +289,213 @@ public final class Meee360Pusher: @unchecked Sendable {
         post(endpoint: "/api/v1/sessions/upsert", payload: payload) { result in
             if case .failure(let err) = result {
                 MLog("[Meee360Pusher] upsert failed for \(session.sessionId.prefix(8)): \(err)")
+            }
+        }
+    }
+
+    private func pushPluginSessions(_ sessions: [PluginSession]) {
+        guard isConnected && isOnline else { return }
+
+        for session in sessions where shouldSyncPluginSession(session) {
+            pushPluginSessionUpsert(session: session) { [weak self] in
+                self?.pushLatestPluginMessageIfNeeded(session: session)
+            }
+        }
+    }
+
+    private func shouldSyncPluginSession(_ session: PluginSession) -> Bool {
+        if session.pluginId == "com.meee2.plugin.claude" {
+            return false
+        }
+        return shouldSyncSessionId(session.id)
+    }
+
+    private func shouldSyncSessionId(_ sessionId: String) -> Bool {
+        let disabled = disabledSessionIds
+        if disabled.contains(sessionId) {
+            return false
+        }
+
+        let aliases = Self.sessionIdAliases(sessionId)
+        return aliases.isDisjoint(with: disabled)
+    }
+
+    private func pushLatestPluginMessageIfNeeded(session: PluginSession) {
+        guard let transcriptPath = session.transcriptPath else { return }
+
+        let entries = FullTranscriptReader.read(transcriptPath: transcriptPath, limit: 20)
+        for entry in entries {
+            for exported in pluginTranscriptExports(from: entry) {
+                let key = "\(session.id):\(exported.sourceId)"
+                if pushedPluginMessageKeys.contains(key) || inFlightPluginMessageKeys.contains(key) {
+                    continue
+                }
+
+                inFlightPluginMessageKeys.insert(key)
+                let payload: [String: Any] = [
+                    "machine_id": machineId,
+                    "session_key": session.id,
+                    "message": [
+                        "role": exported.role,
+                        "text": exported.text,
+                        "source_id": exported.sourceId,
+                        "content": ["text": exported.text, "sourceId": exported.sourceId]
+                    ]
+                ]
+
+                post(endpoint: "/api/v1/sessions/append-message", payload: payload) { result in
+                    self.syncQueue.async {
+                        self.inFlightPluginMessageKeys.remove(key)
+                        switch result {
+                        case .success:
+                            self.pushedPluginMessageKeys.insert(key)
+                        case .failure(let err):
+                            MLog("[Meee360Pusher] plugin append-message failed for \(session.id.prefix(8)): \(err)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func pluginTranscriptExports(from entry: FullTranscriptEntry) -> [(sourceId: String, role: String, text: String)] {
+        guard entry.type == "user" || entry.type == "assistant" || entry.type == "injected" else {
+            return []
+        }
+
+        return entry.blocks.enumerated().compactMap { index, block in
+            guard block.type == "text",
+                  let text = readableTranscriptText(block.text, limit: 4_000) else {
+                return nil
+            }
+            return (
+                sourceId: "\(entry.id)#text-\(index)",
+                role: entry.type == "injected" ? "user" : entry.type,
+                text: text
+            )
+        }
+    }
+
+    private func readableTranscriptText(_ text: String?, limit: Int) -> String? {
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            return nil
+        }
+        return String(text.prefix(limit))
+    }
+
+    public static func sessionIdSet(forKey key: String) -> Set<String> {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let ids = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return Set(ids)
+    }
+
+    public static func storeSessionIdSet(_ ids: Set<String>, forKey key: String) {
+        let sorted = ids.sorted()
+        guard let data = try? JSONEncoder().encode(sorted) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    public static func sessionIdAliases(_ sessionId: String) -> Set<String> {
+        var aliases: Set<String> = [sessionId]
+        let knownPrefixes = [
+            "com.meee2.plugin.claude-",
+            "com.meee2.plugin.codex-"
+        ]
+        for prefix in knownPrefixes where sessionId.hasPrefix(prefix) {
+            aliases.insert(String(sessionId.dropFirst(prefix.count)))
+        }
+        return aliases
+    }
+
+    private func pushPluginSessionUpsert(session: PluginSession, completion: (() -> Void)? = nil) {
+        let dto = BoardDTOBuilder.sessionDTO(session)
+
+        var summary: [String: Any] = [
+            "title": dto.title,
+            "project": dto.project,
+            "pluginId": dto.pluginId,
+            "pluginDisplayName": dto.pluginDisplayName,
+            "pluginColor": dto.pluginColor,
+            "inboxPending": dto.inboxPending
+        ]
+
+        if let startedAt = dto.startedAt {
+            summary["startedAt"] = startedAt
+        }
+        if let lastActivity = dto.lastActivity {
+            summary["lastActivity"] = lastActivity
+        }
+        if let currentTool = dto.currentTool {
+            summary["currentTool"] = currentTool
+        }
+        if let usage = dto.usageStats {
+            summary["usageStats"] = [
+                "inputTokens": usage.inputTokens,
+                "outputTokens": usage.outputTokens,
+                "cacheCreateTokens": usage.cacheCreateTokens,
+                "cacheReadTokens": usage.cacheReadTokens,
+                "turns": usage.turns,
+                "model": usage.model
+            ]
+        }
+        if !dto.tasks.isEmpty {
+            summary["tasks"] = dto.tasks.map {
+                ["id": $0.id, "name": $0.name, "status": $0.status]
+            }
+        }
+        if let currentTask = dto.currentTask {
+            summary["currentTask"] = currentTask
+        }
+        if let pendingPermissionTool = dto.pendingPermissionTool {
+            summary["pendingPermissionTool"] = pendingPermissionTool
+        }
+        if let pendingPermissionMessage = dto.pendingPermissionMessage {
+            summary["pendingPermissionMessage"] = pendingPermissionMessage
+        }
+        if let tty = dto.tty {
+            summary["tty"] = tty
+        }
+        if let termProgram = dto.termProgram {
+            summary["termProgram"] = termProgram
+        }
+        if !dto.backgroundAgents.isEmpty {
+            summary["backgroundAgents"] = dto.backgroundAgents.map {
+                var agent: [String: Any] = [
+                    "id": $0.id,
+                    "kind": $0.kind,
+                    "description": $0.description ?? ""
+                ]
+                if let startedAt = $0.startedAt {
+                    agent["startedAt"] = startedAt
+                }
+                return agent
+            }
+        }
+        if let recap = dto.latestRecap {
+            var latestRecap: [String: Any] = ["content": recap.content]
+            if let timestamp = recap.timestamp {
+                latestRecap["timestamp"] = timestamp
+            }
+            summary["latestRecap"] = latestRecap
+        }
+
+        let payload: [String: Any] = [
+            "machine_id": machineId,
+            "session_key": session.id,
+            "session_type": "other",
+            "status": dto.status,
+            "summary": summary
+        ]
+
+        post(endpoint: "/api/v1/sessions/upsert", payload: payload) { result in
+            switch result {
+            case .success:
+                completion?()
+            case .failure(let err):
+                MLog("[Meee360Pusher] plugin upsert failed for \(session.id.prefix(8)): \(err)")
             }
         }
     }
@@ -327,17 +554,10 @@ public final class Meee360Pusher: @unchecked Sendable {
     // MARK: - HTTP helper
 
     private func post(endpoint: String, payload: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
-        // Determine base URL from Supabase URL or default localhost
-        let baseUrl: String
-        if !supabaseUrl.isEmpty {
-            // Extract project ref from Supabase URL for dashboard
-            // e.g. https://xxx.supabase.co -> use localhost:3000 for API
-            baseUrl = "http://localhost:3000"
-        } else {
-            baseUrl = "http://localhost:3000"
-        }
-
-        guard let url = URL(string: baseUrl + endpoint) else {
+        let baseUrl = normalizedSupabaseUrl
+        guard let rpc = supabaseRPCRequest(endpoint: endpoint, payload: payload),
+              !baseUrl.isEmpty,
+              let url = URL(string: "\(baseUrl)/rest/v1/rpc/\(rpc.name)") else {
             completion(.failure(URLError(.badURL)))
             return
         }
@@ -345,14 +565,11 @@ public final class Meee360Pusher: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // Auth: Bearer token from Supabase anon key (for now, use service role for agent access)
-        if !supabaseKey.isEmpty {
-            request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
-        }
+        request.setValue(supabaseKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            request.httpBody = try JSONSerialization.data(withJSONObject: rpc.payload)
         } catch {
             completion(.failure(error))
             return
@@ -370,6 +587,66 @@ public final class Meee360Pusher: @unchecked Sendable {
             }
             completion(.success(()))
         }.resume()
+    }
+
+    private func supabaseRPCRequest(endpoint: String, payload: [String: Any]) -> (name: String, payload: [String: Any])? {
+        guard !normalizedSupabaseUrl.isEmpty,
+              !supabaseKey.isEmpty,
+              !teamId.isEmpty,
+              !userId.isEmpty,
+              let machineId = payload["machine_id"] as? String,
+              let sessionKey = payload["session_key"] as? String else {
+            return nil
+        }
+
+        switch endpoint {
+        case "/api/v1/sessions/upsert":
+            return (
+                "meee360_upsert_session",
+                [
+                    "p_team_id": teamId,
+                    "p_user_id": userId,
+                    "p_machine_id": machineId,
+                    "p_session_key": sessionKey,
+                    "p_session_type": payload["session_type"] as? String ?? "claude",
+                    "p_status": payload["status"] as? String ?? "active",
+                    "p_summary": payload["summary"] as? [String: Any] ?? [:]
+                ]
+            )
+        case "/api/v1/sessions/append-message":
+            guard let message = payload["message"] as? [String: Any],
+                  let role = message["role"] as? String,
+                  let text = message["text"] as? String else {
+                return nil
+            }
+            if let sourceId = message["source_id"] as? String, !sourceId.isEmpty {
+                return (
+                    "meee360_append_recent_message_v2",
+                    [
+                        "p_team_id": teamId,
+                        "p_user_id": userId,
+                        "p_machine_id": machineId,
+                        "p_session_key": sessionKey,
+                        "p_role": role,
+                        "p_text": text,
+                        "p_source_id": sourceId
+                    ]
+                )
+            }
+            return (
+                "meee360_append_recent_message",
+                [
+                    "p_team_id": teamId,
+                    "p_user_id": userId,
+                    "p_machine_id": machineId,
+                    "p_session_key": sessionKey,
+                    "p_role": role,
+                    "p_text": text
+                ]
+            )
+        default:
+            return nil
+        }
     }
 
     // MARK: - Status mapping
