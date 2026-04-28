@@ -246,7 +246,9 @@ enum BoardDTOBuilder {
             }
             return session.status
         }()
-        NSLog("[StateTrace][boardDTO] sid=\(session.id.prefix(8)) hook=\(sessionData?.status.rawValue ?? session.status.rawValue) → api.status=\(resolvedStatus.rawValue) (for Web)")
+        if UserDefaults.standard.bool(forKey: "stateTraceLoggingEnabled") {
+            NSLog("[StateTrace][boardDTO] sid=\(session.id.prefix(8)) hook=\(sessionData?.status.rawValue ?? session.status.rawValue) → api.status=\(resolvedStatus.rawValue) (for Web)")
+        }
 
         // Tool name: let the resolver override to "thinking" / clear when
         // appropriate; otherwise keep whatever the plugin set.

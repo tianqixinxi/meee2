@@ -22,36 +22,59 @@ public struct Meee360CallbackAPI {
         let teamId = decode("team_id")
         let teamName = decode("team_name")
         let userId = decode("user_id")
+        let userName = decode("user_name")
+        let userEmail = decode("user_email")
+        let userAvatarUrl = decode("user_avatar_url")
         let supabaseUrl = decode("supabase_url")
         let supabaseKey = decode("supabase_key")
+        let teamsJSON = decode("teams")
 
         // 验证必要参数
         if teamId.isEmpty || userId.isEmpty || supabaseUrl.isEmpty || supabaseKey.isEmpty {
             return errorResponse(message: "Missing required parameters")
         }
+        let teams = parseTeams(
+            teamsJSON: teamsJSON,
+            fallbackTeamId: teamId,
+            fallbackTeamName: teamName
+        )
+        let teamsData = jsonData(for: teams)
 
         // 保存配置
         let success = saveConfig(
             teamId: teamId,
             teamName: teamName,
             userId: userId,
+            userName: userName,
+            userEmail: userEmail,
+            userAvatarUrl: userAvatarUrl,
             supabaseUrl: supabaseUrl,
-            supabaseKey: supabaseKey
+            supabaseKey: supabaseKey,
+            teams: teams,
+            teamsData: teamsData
         )
 
         if success {
             // 发送通知让 SettingsView 刷新
+            var userInfo: [String: Any] = [
+                "teamId": teamId,
+                "teamName": teamName,
+                "userId": userId,
+                "userName": userName,
+                "userEmail": userEmail,
+                "userAvatarUrl": userAvatarUrl,
+                "supabaseUrl": supabaseUrl,
+                "supabaseKey": supabaseKey
+            ]
+            if let teamsData {
+                userInfo["teamsData"] = teamsData
+            }
             NotificationCenter.default.post(
                 name: Notification.Name("meee360.connected"),
                 object: nil,
-                userInfo: [
-                    "teamId": teamId,
-                    "teamName": teamName,
-                    "userId": userId,
-                    "supabaseUrl": supabaseUrl,
-                    "supabaseKey": supabaseKey
-                ]
+                userInfo: userInfo
             )
+            Meee360Pusher.shared.refreshActivation()
 
             return successResponse(teamName: teamName)
         } else {
@@ -63,9 +86,29 @@ public struct Meee360CallbackAPI {
         teamId: String,
         teamName: String,
         userId: String,
+        userName: String,
+        userEmail: String,
+        userAvatarUrl: String,
         supabaseUrl: String,
-        supabaseKey: String
+        supabaseKey: String,
+        teams: [[String: String]],
+        teamsData: Data?
     ) -> Bool {
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "meee360Connected")
+        defaults.set(true, forKey: "meee360Online")
+        defaults.set(teamId, forKey: "meee360TeamId")
+        defaults.set(teamName, forKey: "meee360TeamName")
+        defaults.set(userId, forKey: "meee360UserId")
+        defaults.set(userName, forKey: "meee360UserName")
+        defaults.set(userEmail, forKey: "meee360UserEmail")
+        defaults.set(userAvatarUrl, forKey: "meee360UserAvatarUrl")
+        defaults.set(supabaseUrl, forKey: "meee360SupabaseUrl")
+        defaults.set(supabaseKey, forKey: "meee360SupabaseKey")
+        if let teamsData {
+            defaults.set(teamsData, forKey: "meee360Teams")
+        }
+
         let settings: [String: Any] = [
             "meee360": [
                 "enabled": true,
@@ -73,8 +116,12 @@ public struct Meee360CallbackAPI {
                 "teamId": teamId,
                 "teamName": teamName,
                 "userId": userId,
+                "userName": userName,
+                "userEmail": userEmail,
+                "userAvatarUrl": userAvatarUrl,
                 "supabaseUrl": supabaseUrl,
                 "supabaseKey": supabaseKey,
+                "teams": teams,
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
@@ -99,6 +146,34 @@ public struct Meee360CallbackAPI {
             }
         }
         return false
+    }
+
+    private static func parseTeams(
+        teamsJSON: String,
+        fallbackTeamId: String,
+        fallbackTeamName: String
+    ) -> [[String: String]] {
+        let fallback = [
+            "id": fallbackTeamId,
+            "name": fallbackTeamName.isEmpty ? "Default team" : fallbackTeamName,
+            "role": ""
+        ]
+        guard let data = teamsJSON.data(using: .utf8),
+              let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return [fallback]
+        }
+
+        let teams = rows.compactMap { row -> [String: String]? in
+            guard let id = row["id"] as? String, !id.isEmpty else { return nil }
+            let name = (row["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? id
+            let role = row["role"] as? String ?? ""
+            return ["id": id, "name": name, "role": role]
+        }
+        return teams.isEmpty ? [fallback] : teams
+    }
+
+    private static func jsonData(for teams: [[String: String]]) -> Data? {
+        try? JSONSerialization.data(withJSONObject: teams, options: [.sortedKeys])
     }
 
     private static func successResponse(teamName: String) -> HttpResponse {
