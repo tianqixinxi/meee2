@@ -100,9 +100,47 @@ enum BoardAPI {
         // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
         // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
         // PluginManager 的全集。
-        let sessions = PluginManager.shared.sessions
+        // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
+        // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
+        let archivedDesktopSids: Set<String> = {
+            var set = Set<String>()
+            for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
+                if let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: sid),
+                   m.isArchived {
+                    set.insert(sid)
+                }
+            }
+            return set
+        }()
+        let realSessions = PluginManager.shared.sessions
             .filter { $0.status != .dead }
+            .filter { session in
+                let realSid = session.id.hasPrefix("\(session.pluginId)-")
+                    ? String(session.id.dropFirst("\(session.pluginId)-".count))
+                    : session.id
+                return !archivedDesktopSids.contains(realSid)
+            }
             .map { BoardDTOBuilder.sessionDTO($0) }
+
+        // ─── Desktop session 持久化合成 ───
+        // Desktop 的 session 生命周期是"请求级"——内嵌 claude 子进程只在用户
+        // 发消息时活几秒，结束后退出。ClaudePlugin（hook + PID 文件驱动）会
+        // 在子进程退出后把 session 标完成 / 移除，导致 desktop session 在 Web UI
+        // 上一闪而过。
+        //
+        // 解决：用 metadata 文件作为持久化 session 源，对 PluginManager 不知道
+        // 的 desktop cliSessionId 合成 SessionDTO。已经在 PluginManager 里活着
+        // 的 desktop session（用户刚发消息那几秒）走真实分支不被合成覆盖。
+        let realSids: Set<String> = Set(realSessions.map { $0.id })
+        let syntheticDesktopSessions: [SessionDTO] = ClaudeDesktopMetadataReader.shared
+            .allCliSessionIds()
+            .compactMap { cliSid -> SessionDTO? in
+                guard let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: cliSid),
+                      !m.isArchived,
+                      !realSids.contains(cliSid) else { return nil }
+                return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
+            }
+        let sessions = realSessions + syntheticDesktopSessions
         // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
         // 不在 UI 里显示，保持 channel 列表干净
         let channels = ChannelRegistry.shared.list()
@@ -121,6 +159,14 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
+        // 先看是不是 desktop / cowork synthetic session（PluginManager 不知道
+        // 它，因为它的子进程已经退出 / 根本没起过——但 metadata 文件仍在）。
+        // 命中即直接 activate Claude.app，不走 PluginManager。
+        if let metadataSid = resolveDesktopMetadataSid(sid) {
+            _ = metadataSid
+            activateClaudeDesktop()
+            return jsonResponse(OkEnvelope(ok: true))
+        }
         // 在 PluginManager 的 session 列表中用前缀匹配，兼容 short-id
         let sessions = PluginManager.shared.sessions
         let match = sessions.first(where: { $0.id == sid })
@@ -128,8 +174,39 @@ enum BoardAPI {
         guard let session = match else {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
-        PluginManager.shared.activateTerminal(for: session)
+
+        // 真实 session 也可能是 desktop 起的（hook 刚到、子进程还活着的几秒钟
+        // 窗口期），同样用 metadata 命中决定走 desktop activate。
+        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
+        if ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId) != nil {
+            activateClaudeDesktop()
+        } else {
+            PluginManager.shared.activateTerminal(for: session)
+        }
         return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    /// short-id / full-id 匹配 Claude Desktop / Cowork metadata 索引。命中即说明
+    /// 该 sid 是 desktop / cowork 起的 session（不一定在 PluginManager 里）。
+    /// 返回完整 cliSessionId（前端可能传 short-id）。
+    private static func resolveDesktopMetadataSid(_ sid: String) -> String? {
+        let all = ClaudeDesktopMetadataReader.shared.allCliSessionIds()
+        if all.contains(sid) { return sid }
+        return all.first(where: { $0.hasPrefix(sid) })
+    }
+
+    /// 激活 Claude.app（无 deep-link 协议，先做基础 activate；将来 desktop
+    /// 暴露 per-session 跳转 URL 再补）。
+    private static func activateClaudeDesktop() {
+        let script = "tell application \"Claude\" to activate"
+        let process = Process()
+        process.launchPath = "/usr/bin/osascript"
+        process.arguments = ["-e", script]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
     }
 
     /// POST /api/sessions/:id/inject
@@ -145,6 +222,17 @@ enum BoardAPI {
         }
         guard let content = json["content"] as? String, !content.isEmpty else {
             return errorResponse("bad_request", "missing or empty 'content'", status: 400)
+        }
+
+        // Desktop / Cowork synthetic session 没有可注入的 inbox（其子进程不
+        // 长跑，inject 时间点 Stop hook 不会再来），明确告诉前端不支持。
+        if resolveDesktopMetadataSid(sid) != nil
+            && PluginManager.shared.sessions.first(where: { $0.id == sid || $0.id.hasPrefix(sid) }) == nil {
+            return errorResponse(
+                "unsupported_for_desktop",
+                "inject is only supported for live CLI / hook-driven sessions; Desktop & Cowork sessions don't keep a long-running process to deliver to",
+                status: 400
+            )
         }
 
         // 在 PluginManager 的 session 列表中做 short-id 匹配，拿回真实的 sessionId
@@ -192,10 +280,32 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
 
-        // short-id 匹配
+        // 优先 PluginManager 匹配（CLI 和"刚活过的 desktop"都在这里）
         let sessions = PluginManager.shared.sessions
         let match = sessions.first(where: { $0.id == sid })
             ?? sessions.first(where: { $0.id.hasPrefix(sid) })
+
+        // PluginManager 没找到就 fallback 到 desktop / cowork metadata：
+        // synthetic session 的 transcript 也在 ~/.claude/projects/ 下，可以直接读
+        if match == nil, let metadataSid = resolveDesktopMetadataSid(sid),
+           let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: metadataSid) {
+            // cowork 的 cwd 是 VM 沙箱路径（host 上不会有 transcript），
+            // desktop-code 的 cwd 是 host 真实路径，可以拼出 transcript path。
+            guard let cwd = m.cwd else {
+                return jsonResponse(FullTranscriptEnvelope(entries: [], sessionId: metadataSid))
+            }
+            let home = NSHomeDirectory()
+            let encoded = cwd.replacingOccurrences(of: "/", with: "-")
+            let path = "\(home)/.claude/projects/\(encoded)/\(metadataSid).jsonl"
+            var limit: Int?
+            if let q = req.queryParams.first(where: { $0.0 == "limit" })?.1,
+               let n = Int(q), n > 0 {
+                limit = n
+            }
+            let entries = FullTranscriptReader.read(transcriptPath: path, limit: limit)
+            return jsonResponse(FullTranscriptEnvelope(entries: entries, sessionId: metadataSid))
+        }
+
         guard let session = match else {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
@@ -271,19 +381,31 @@ enum BoardAPI {
         //   - `outcome` 需要双向（Task 写 / 外层读）→ 放进引用型 box，closure
         //     只改 box 的属性而不是重绑变量，就符合 Sendable 约束
         final class OutcomeBox: @unchecked Sendable {
-            var value: SpawnResult = .failed(reason: "no outcome")
+            var value: SpawnResult? = nil  // nil = pending; non-nil = spawner returned
         }
         let cwdSnapshot = cwd
         let commandSnapshot = command
         let outcomeBox = OutcomeBox()
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            outcomeBox.value = await spawner.spawn(cwd: cwdSnapshot, command: commandSnapshot)
+            let r = await spawner.spawn(cwd: cwdSnapshot, command: commandSnapshot)
+            outcomeBox.value = r
             semaphore.signal()
         }
-        // 等最多 2s；Ghostty 开窗一般 200-500ms
-        _ = semaphore.wait(timeout: .now() + 2.0)
-        let outcome = outcomeBox.value
+        // Ghostty 开窗 + sleep 400ms + input text 通常 1-2s；长 cmd 经过
+        // AppleScript 转义会再慢一点。老的 2s 阈值容易超时返回 "no outcome"
+        // 假报错（实际窗口已经开成功）。给 5s。timeout 不算失败：spawner 真
+        // 出错会立刻 .failed 并 signal；timeout 时通常 AppleScript 还在跑，
+        // SessionStart hook 后续会照常触发，client 通过 /api/state 能看到。
+        let waitResult = semaphore.wait(timeout: .now() + 5.0)
+        let outcome: SpawnResult
+        switch waitResult {
+        case .success:
+            outcome = outcomeBox.value ?? .success
+        case .timedOut:
+            NSLog("[BoardAPI] spawnSession: 5s elapsed, outcome unknown — assuming async success")
+            outcome = .success
+        }
 
         switch outcome {
         case .success:

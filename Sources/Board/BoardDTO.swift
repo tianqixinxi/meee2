@@ -55,6 +55,13 @@ struct SessionDTO: Encodable {
 
     /// Claude Code 最新的 "away summary" / `/recap` 内容；无则为 null
     let latestRecap: RecapDTO?
+
+    /// session 来源客户端：cli (`claude` CLI) / desktop (Claude.app embedded
+    /// runtime) / nil (未知 / 非 Claude plugin session)。CLI 和 desktop 共用
+    /// 同一个 ClaudePlugin，但 desktop 的 metadata 写在
+    /// `~/Library/Application Support/Claude/claude-code-sessions/` 下，
+    /// 这个字段供前端区分卡片图标 / 跳转目标。
+    let clientKind: String?
 }
 
 /// Recap DTO
@@ -312,9 +319,37 @@ enum BoardDTOBuilder {
                 )
             }
 
+        // ─── Claude Desktop / Cowork 集成 ───
+        // 查一下 ClaudeDesktopMetadataReader：命中即说明这是 Claude.app 起的
+        // session（claude-code-sessions 或 local-agent-mode-sessions）。
+        // 覆盖 title / 标 clientKind / 用 metadata 的 model。
+        let desktopMeta = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId)
+        let clientKind: String = desktopMeta?.source.rawValue ?? "cli"
+
+        // title 优先用 desktop 的 user-friendly 标题（"AI Product Twitter
+        // Marketing Strategy" 这种），fallback 到 PluginSession.title（cwd basename）
+        let displayTitle = desktopMeta?.title ?? session.title
+
+        // model 优先用 desktop metadata（"claude-opus-4-7[1m]"），fallback 到
+        // transcript 推断（usageStats.model 可能是 "claude-opus-4-6"）
+        let usageStatsDTOFinal: UsageStatsDTO? = {
+            guard var u = usageStatsDTO else { return nil }
+            if let m = desktopMeta?.model, !m.isEmpty {
+                u = UsageStatsDTO(
+                    inputTokens: u.inputTokens,
+                    outputTokens: u.outputTokens,
+                    cacheCreateTokens: u.cacheCreateTokens,
+                    cacheReadTokens: u.cacheReadTokens,
+                    turns: u.turns,
+                    model: m
+                )
+            }
+            return u
+        }()
+
         return SessionDTO(
             id: session.id,
-            title: session.title,
+            title: displayTitle,
             project: session.cwd ?? session.title,
             pluginId: session.pluginId,
             pluginDisplayName: displayName,
@@ -325,7 +360,7 @@ enum BoardDTOBuilder {
             currentTool: currentTool,
             startedAt: startedAtISO,
             lastActivity: lastActivityISO,
-            usageStats: usageStatsDTO,
+            usageStats: usageStatsDTOFinal,
             tasks: tasksDTO,
             currentTask: sessionData?.currentTask ?? session.subtitle,
             pendingPermissionTool: sessionData?.pendingPermissionTool,
@@ -334,7 +369,72 @@ enum BoardDTOBuilder {
             tty: tty,
             termProgram: termProgram,
             backgroundAgents: bgAgents,
-            latestRecap: recapDTO
+            latestRecap: recapDTO,
+            clientKind: clientKind
+        )
+    }
+
+    /// 合成 Claude Desktop / Cowork session DTO —— 当 PluginManager 不知道这个
+    /// session 时（desktop / cowork 子进程已经退了，没 PID 文件，hook 不会再来），
+    /// 直接从 metadata 文件 + 历史 transcript 还原一份给 Web UI。
+    /// transcript 路径推导：~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl
+    /// （Claude CLI 用的同一规则：path → '-Users-qc-projects-foo' 这种 dash-flat 编码）
+    /// Cowork 的 cwd 是 VM 沙箱路径（`/sessions/serene-epic-hopper`），不会有
+    /// host transcript，所以 recent messages 只能拿到 desktop-code 的。
+    static func syntheticDesktopSessionDTO(metadata m: ClaudeDesktopMetadata) -> SessionDTO {
+        let info = PluginManager.shared.getPluginInfo(for: "com.meee2.plugin.claude")
+        let displayName = info?.displayName ?? "Claude Code"
+        let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#FF9230"
+
+        // transcript path = ~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl
+        // encode 规则：把 cwd 里所有 '/' 替换成 '-'。Cowork session 的 cwd 是
+        // VM 内路径（不在 host 上），所以 file existence 检查会落空 → recent 空。
+        let transcriptPath: String? = {
+            guard let cwd = m.cwd else { return nil }
+            let home = NSHomeDirectory()
+            let encoded = cwd.replacingOccurrences(of: "/", with: "-")
+            let path = "\(home)/.claude/projects/\(encoded)/\(m.cliSessionId).jsonl"
+            return FileManager.default.fileExists(atPath: path) ? path : nil
+        }()
+
+        let recent: [TranscriptEntryDTO] = transcriptPath.map(transcriptPreviewFromFullReader) ?? []
+
+        // 状态：desktop 子进程不长跑，metadata-only 默认 idle。Web UI 卡片
+        // 用 lastActivity 时间显示 "X 分钟前"。
+        let status: SessionStatus = .idle
+
+        let usageDTO: UsageStatsDTO? = m.model.map { model in
+            UsageStatsDTO(
+                inputTokens: 0, outputTokens: 0,
+                cacheCreateTokens: 0, cacheReadTokens: 0,
+                turns: 0, model: model
+            )
+        }
+
+        return SessionDTO(
+            id: m.cliSessionId,
+            title: m.title,
+            project: m.cwd ?? m.title,
+            pluginId: "com.meee2.plugin.claude",
+            pluginDisplayName: displayName,
+            pluginColor: colorHex,
+            status: status.rawValue,
+            inboxPending: 0,
+            recentMessages: recent,
+            currentTool: nil,
+            startedAt: nil,
+            lastActivity: m.lastActivityAt.map { iso($0) } ?? nil,
+            usageStats: usageDTO,
+            tasks: [],
+            currentTask: nil,
+            pendingPermissionTool: nil,
+            pendingPermissionMessage: nil,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: nil,
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: m.source.rawValue   // "desktop" 或 "cowork"
         )
     }
 

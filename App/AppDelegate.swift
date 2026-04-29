@@ -61,6 +61,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         PluginManager.shared.loadExternalPlugins()
         PluginManager.shared.startAll()
 
+        // Claude Desktop session metadata 索引器：扫
+        // ~/Library/Application Support/Claude/claude-code-sessions/
+        // 把 desktop 起的 session（cliSessionId / title / model / isArchived）
+        // 装饰到现有 ClaudePlugin session 上。Hook 已经把 desktop session 钩
+        // 进来了，这一步只是补 metadata。Claude.app 没装的机器是 noop。
+        ClaudeDesktopMetadataReader.shared.start()
+
         // 启用 channel join/leave 的 orientation 推送：当 session 加入 channel
         // 时往该 session 的 inbox 推一条 synthetic 系统消息（teammates / 用法
         // 提示），其他成员也会收到 "X joined" 通知。走现有 operator → session

@@ -56,7 +56,12 @@ export interface Session {
   ghosttyTerminalId?: string | null
   tty?: string | null
   termProgram?: string | null
+  /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
+   *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
+  clientKind?: ClientKind | null
 }
+
+export type ClientKind = 'cli' | 'desktop' | 'cowork'
 
 export interface Member {
   alias: string
