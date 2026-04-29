@@ -31,6 +31,13 @@ public struct ClaudeDesktopMetadata: Sendable {
     public let lastActivityAt: Date?
     public let source: ClaudeDesktopSource
 
+    /// transcript 文件在 host 上的路径（如果存在）。
+    /// - desktop-code session：transcript 跟 CLI 共用 `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`
+    /// - cowork session：transcript 在 metadata 文件旁边的 `local_<desktopSid>/.claude/projects/<encoded-vm-cwd>/<sid>.jsonl`
+    ///   （VM 把它内部的 .claude 目录映射到 host 上这个位置）
+    /// 文件不存在时为 nil。
+    public let transcriptPath: String?
+
     public init(
         cliSessionId: String,
         title: String,
@@ -39,7 +46,8 @@ public struct ClaudeDesktopMetadata: Sendable {
         isArchived: Bool,
         desktopSessionId: String,
         lastActivityAt: Date?,
-        source: ClaudeDesktopSource
+        source: ClaudeDesktopSource,
+        transcriptPath: String?
     ) {
         self.cliSessionId = cliSessionId
         self.title = title
@@ -49,6 +57,7 @@ public struct ClaudeDesktopMetadata: Sendable {
         self.desktopSessionId = desktopSessionId
         self.lastActivityAt = lastActivityAt
         self.source = source
+        self.transcriptPath = transcriptPath
     }
 }
 
@@ -161,6 +170,35 @@ public final class ClaudeDesktopMetadataReader {
         return out
     }
 
+    /// 推导 transcript path。两种 source 路径不同：
+    ///   - desktop-code: ~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl
+    ///   - cowork:       <metadata-dir>/local_<desktopSid>/.claude/projects/<encoded-vm-cwd>/<sid>.jsonl
+    /// 文件不存在返回 nil（cowork session 还没进 VM 跑过 / 路径不是预期形态）。
+    private func resolveTranscriptPath(
+        metadataURL: URL,
+        cliSessionId: String,
+        cwd: String?,
+        desktopSessionId: String,
+        source: ClaudeDesktopSource
+    ) -> String? {
+        guard let cwd = cwd, !cwd.isEmpty else { return nil }
+        let encoded = cwd.replacingOccurrences(of: "/", with: "-")
+        let candidate: String
+        switch source {
+        case .desktopCode:
+            // host-truth：和 CLI 共用 ~/.claude/projects/
+            let home = NSHomeDirectory()
+            candidate = "\(home)/.claude/projects/\(encoded)/\(cliSessionId).jsonl"
+        case .cowork:
+            // VM 把 .claude 映射到 metadata 文件旁边
+            // metadata file: .../local_<sid>.json
+            // session home : .../local_<sid>/   （同名无 .json）
+            let metaDir = metadataURL.deletingPathExtension().path
+            candidate = "\(metaDir)/.claude/projects/\(encoded)/\(cliSessionId).jsonl"
+        }
+        return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
+    }
+
     private func parseMetadata(at url: URL, source: ClaudeDesktopSource) -> ClaudeDesktopMetadata? {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -181,6 +219,13 @@ public final class ClaudeDesktopMetadataReader {
             }
             return nil
         }()
+        let transcriptPath = resolveTranscriptPath(
+            metadataURL: url,
+            cliSessionId: cliSid,
+            cwd: cwd,
+            desktopSessionId: desktopSid,
+            source: source
+        )
         return ClaudeDesktopMetadata(
             cliSessionId: cliSid,
             title: title,
@@ -189,7 +234,8 @@ public final class ClaudeDesktopMetadataReader {
             isArchived: isArchived,
             desktopSessionId: desktopSid,
             lastActivityAt: lastActivityAt,
-            source: source
+            source: source,
+            transcriptPath: transcriptPath
         )
     }
 }

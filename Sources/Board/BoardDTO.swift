@@ -386,18 +386,11 @@ enum BoardDTOBuilder {
         let displayName = info?.displayName ?? "Claude Code"
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#FF9230"
 
-        // transcript path = ~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl
-        // encode 规则：把 cwd 里所有 '/' 替换成 '-'。Cowork session 的 cwd 是
-        // VM 内路径（不在 host 上），所以 file existence 检查会落空 → recent 空。
-        let transcriptPath: String? = {
-            guard let cwd = m.cwd else { return nil }
-            let home = NSHomeDirectory()
-            let encoded = cwd.replacingOccurrences(of: "/", with: "-")
-            let path = "\(home)/.claude/projects/\(encoded)/\(m.cliSessionId).jsonl"
-            return FileManager.default.fileExists(atPath: path) ? path : nil
-        }()
-
-        let recent: [TranscriptEntryDTO] = transcriptPath.map(transcriptPreviewFromFullReader) ?? []
+        // transcript path 已经由 ClaudeDesktopMetadataReader 解析好（按 source
+        // 走不同 base：desktop-code → ~/.claude/projects/<encoded-host-cwd>/...，
+        // cowork → metadata 文件旁边的 local_<sid>/.claude/projects/<encoded-vm-cwd>/...
+        // VM 内挂载 .claude 的路径）。文件不存在时为 nil → recent 空。
+        let recent: [TranscriptEntryDTO] = m.transcriptPath.map(transcriptPreviewFromFullReader) ?? []
 
         // 状态：desktop 子进程不长跑，metadata-only 默认 idle。Web UI 卡片
         // 用 lastActivity 时间显示 "X 分钟前"。

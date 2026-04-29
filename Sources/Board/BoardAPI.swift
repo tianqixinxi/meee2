@@ -285,24 +285,21 @@ enum BoardAPI {
         let match = sessions.first(where: { $0.id == sid })
             ?? sessions.first(where: { $0.id.hasPrefix(sid) })
 
-        // PluginManager 没找到就 fallback 到 desktop / cowork metadata：
-        // synthetic session 的 transcript 也在 ~/.claude/projects/ 下，可以直接读
+        // PluginManager 没找到就 fallback 到 desktop / cowork metadata。
+        // metadata.transcriptPath 已经按 source 解析好了：
+        //   - desktop-code: ~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl
+        //   - cowork:       metadata 旁边的 local_<sid>/.claude/projects/...
+        // 不再需要在这里二次拼路径。
         if match == nil, let metadataSid = resolveDesktopMetadataSid(sid),
            let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: metadataSid) {
-            // cowork 的 cwd 是 VM 沙箱路径（host 上不会有 transcript），
-            // desktop-code 的 cwd 是 host 真实路径，可以拼出 transcript path。
-            guard let cwd = m.cwd else {
-                return jsonResponse(FullTranscriptEnvelope(entries: [], sessionId: metadataSid))
-            }
-            let home = NSHomeDirectory()
-            let encoded = cwd.replacingOccurrences(of: "/", with: "-")
-            let path = "\(home)/.claude/projects/\(encoded)/\(metadataSid).jsonl"
             var limit: Int?
             if let q = req.queryParams.first(where: { $0.0 == "limit" })?.1,
                let n = Int(q), n > 0 {
                 limit = n
             }
-            let entries = FullTranscriptReader.read(transcriptPath: path, limit: limit)
+            let entries = m.transcriptPath.map {
+                FullTranscriptReader.read(transcriptPath: $0, limit: limit)
+            } ?? []
             return jsonResponse(FullTranscriptEnvelope(entries: entries, sessionId: metadataSid))
         }
 
