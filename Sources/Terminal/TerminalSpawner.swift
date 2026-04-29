@@ -72,9 +72,16 @@ public struct GhosttySpawner: TerminalSpawner {
         }
 
         // Step 2: 如果要跑命令，等 shell prompt 出现（~400ms 稳妥）再 input
+        // **注意 paste 语义**：Ghostty `input text` 是 bracketed paste（sdef:
+        // "as if it was pasted"）。Modern zsh / bash 默认带 bracketed-paste-magic,
+        // paste 里的 `\n` 只是字面换行**不会触发执行**——结果 shell 看到 "claude"
+        // 字面字符停在 prompt 上等用户按回车。所以正确做法跟 GhosttyInputStream
+        // 一致：先 input text 把正文粘进去（不带尾部 \n），再 send key "enter"
+        // 发一次真正的 keypress，shell 才把 paste 收尾并执行。
         if let cmd = command, !cmd.isEmpty {
             try? await Task.sleep(nanoseconds: 400_000_000)
-            let payload = cmd.hasSuffix("\n") ? cmd : (cmd + "\n")
+            // 去掉 trailing newline——交给 send key "enter" 来触发执行
+            let payload = cmd.hasSuffix("\n") ? String(cmd.dropLast()) : cmd
             let escapedCmd = payload
                 .replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
@@ -84,6 +91,7 @@ public struct GhosttySpawner: TerminalSpawner {
                 try
                     set t to terminal id "\(escapedTid)"
                     input text "\(escapedCmd)" to t
+                    send key "enter" to t
                     return "ok"
                 on error errMsg
                     return "err:" & errMsg
@@ -91,7 +99,7 @@ public struct GhosttySpawner: TerminalSpawner {
             end tell
             """
             let inputResult = await runAppleScript(inputScript)
-            NSLog("[GhosttySpawner] input-text result: '\(inputResult)' (cmd=\(cmd))")
+            NSLog("[GhosttySpawner] input-text+enter result: '\(inputResult)' (cmd=\(cmd))")
             if inputResult.hasPrefix("err:") {
                 return .failed(reason: "window opened but command failed: \(inputResult.dropFirst(4))")
             }
