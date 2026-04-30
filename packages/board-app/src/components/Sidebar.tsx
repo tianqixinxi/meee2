@@ -5,6 +5,7 @@ import ChannelDetail from './ChannelDetail'
 import TemplateEditor from './TemplateEditor'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
+const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
 
 /// Session 分类 key —— 动态从 session 列表里推导。规则：
 /// - `com.meee2.plugin.claude` 这种"伞 plugin"内部按 clientKind 拆 (CLI/Desktop/Cowork)
@@ -64,6 +65,17 @@ function readStoredCategoryFilter(): CategoryKey | 'all' {
 
 function persistCategoryFilter(f: CategoryKey | 'all') {
   try { localStorage.setItem(CATEGORY_FILTER_KEY, f) } catch {}
+}
+
+function readOlderExpanded(): boolean {
+  try {
+    return localStorage.getItem(OLDER_SESSIONS_KEY) === '1'
+  } catch {}
+  return false
+}
+
+function persistOlderExpanded(v: boolean) {
+  try { localStorage.setItem(OLDER_SESSIONS_KEY, v ? '1' : '0') } catch {}
 }
 
 const WIDTH_KEY = 'meee2.sidebar.width.v1'
@@ -148,10 +160,11 @@ export default function Sidebar({
 }: Props) {
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
+  const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
 
   /// 按当前 sessions 推导出 category 列表（带计数）+ pluginId → displayName 索引。
-  const { categoryDescriptors, pluginDisplayNames } = useMemo(() => {
+  const categoryDescriptors = useMemo(() => {
     const names: Record<string, string> = {}
     const counts: Record<CategoryKey, number> = {}
     if (state) {
@@ -172,7 +185,7 @@ export default function Sidebar({
       ...describeCategory(k, names),
       count: counts[k],
     }))
-    return { categoryDescriptors: descs, pluginDisplayNames: names }
+    return descs
   }, [state])
 
   /// 当前 filter 对应的 session 列表
@@ -418,94 +431,137 @@ export default function Sidebar({
                   })}
                 </div>
               )}
-              {filterByCategory(state.sessions).length === 0 && (
-                <div className="muted" style={{ padding: '8px 0', fontSize: 11 }}>
-                  No sessions for this filter.
-                </div>
-              )}
-              {filterByCategory(state.sessions).map((s) => {
-                const count = onCanvasCounts[s.id] ?? 0
-                const onCanvas = count > 0
-                const sidShort = s.id.replace(/-/g, '').slice(0, 8)
-                return (
-                  <div
-                    key={s.id}
-                    className="row space"
-                    style={{ marginBottom: 6, cursor: 'pointer' }}
-                  >
+              {(() => {
+                const filtered = filterByCategory(state.sessions)
+                const primary = filtered.filter((s) => s.displayGroup !== 'older')
+                const older = filtered.filter((s) => s.displayGroup === 'older')
+                const renderSessionRow = (s: Session) => {
+                  const count = onCanvasCounts[s.id] ?? 0
+                  const onCanvas = count > 0
+                  const sidShort = s.id.replace(/-/g, '').slice(0, 8)
+                  return (
                     <div
-                      className="row"
-                      style={{ flex: 1, minWidth: 0 }}
-                      onClick={() =>
-                        onSelectionChange({ kind: 'session', sessionId: s.id })
-                      }
+                      key={s.id}
+                      className="row space"
+                      style={{ marginBottom: 6, cursor: 'pointer' }}
                     >
-                      <span
-                        className="color-dot"
-                        style={{ background: s.pluginColor }}
-                      />
-                      {(() => {
-                        // Claude session 多 source（CLI/Desktop/Cowork）共用一个
-                        // pluginColor，加 source icon 才能视觉上分清。其他 plugin
-                        // 自己有独立 pluginColor 不需要补。
-                        if (s.pluginId !== CLAUDE_PLUGIN_ID) return null
-                        const k = normalizeKind(s.clientKind)
-                        if (k === 'cli') return null   // CLI 是 Claude 的默认，不加角标
-                        return (
-                          <span
-                            style={{ fontSize: 10, opacity: 0.7, marginRight: 2 }}
-                            title={k === 'desktop' ? 'Desktop' : 'Cowork'}
-                          >
-                            {KIND_ICON[k]}
-                          </span>
-                        )
-                      })()}
-                      <span
-                        style={{
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {s.title}
-                      </span>
-                      {s.inboxPending > 0 && (
-                        <span className="badge warn">📨 {s.inboxPending}</span>
-                      )}
-                    </div>
-                    <div className="row" style={{ gap: 4, flexShrink: 0 }}>
-                      <button
-                        className="ghost"
-                        style={{
-                          padding: '2px 6px',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          opacity: onCanvas ? 1 : 0.55,
-                        }}
-                        title={
-                          onCanvas
-                            ? `Hide from canvas (${count} card${count === 1 ? '' : 's'})`
-                            : 'Show on canvas'
+                      <div
+                        className="row"
+                        style={{ flex: 1, minWidth: 0 }}
+                        onClick={() =>
+                          onSelectionChange({ kind: 'session', sessionId: s.id })
                         }
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (onCanvas) onHideFromCanvas(s.id)
-                          else onAddToCanvas(s.id)
-                        }}
                       >
-                        {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
-                      </button>
-                      <span
-                        className="mono muted"
-                        style={{ fontSize: 10 }}
-                        title={s.id}
-                      >
-                        {sidShort}
-                      </span>
+                        <span
+                          className="color-dot"
+                          style={{ background: s.pluginColor }}
+                        />
+                        {(() => {
+                          // Claude session 多 source（CLI/Desktop/Cowork）共用一个
+                          // pluginColor，加 source icon 才能视觉上分清。其他 plugin
+                          // 自己有独立 pluginColor 不需要补。
+                          if (s.pluginId !== CLAUDE_PLUGIN_ID) return null
+                          const k = normalizeKind(s.clientKind)
+                          if (k === 'cli') return null
+                          return (
+                            <span
+                              style={{ fontSize: 10, opacity: 0.7, marginRight: 2 }}
+                              title={k === 'desktop' ? 'Desktop' : 'Cowork'}
+                            >
+                              {KIND_ICON[k]}
+                            </span>
+                          )
+                        })()}
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {s.title}
+                        </span>
+                        {s.inboxPending > 0 && (
+                          <span className="badge warn">📨 {s.inboxPending}</span>
+                        )}
+                      </div>
+                      <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+                        <button
+                          className="ghost"
+                          style={{
+                            padding: '2px 6px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            opacity: onCanvas ? 1 : 0.55,
+                          }}
+                          title={
+                            onCanvas
+                              ? `Hide from canvas (${count} card${count === 1 ? '' : 's'})`
+                              : 'Show on canvas'
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (onCanvas) onHideFromCanvas(s.id)
+                            else onAddToCanvas(s.id)
+                          }}
+                        >
+                          {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                        </button>
+                        <span
+                          className="mono muted"
+                          style={{ fontSize: 10 }}
+                          title={s.id}
+                        >
+                          {sidShort}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  )
+                }
+                if (filtered.length === 0) {
+                  return (
+                    <div className="muted" style={{ padding: '8px 0', fontSize: 11 }}>
+                      No sessions for this filter.
+                    </div>
+                  )
+                }
+                return (
+                  <>
+                    {primary.map(renderSessionRow)}
+                    {older.length > 0 && (
+                      <div style={{ marginTop: primary.length > 0 ? 8 : 0 }}>
+                        <button
+                          className="ghost"
+                          style={{
+                            width: '100%',
+                            padding: '4px 2px',
+                            justifyContent: 'space-between',
+                            display: 'flex',
+                            alignItems: 'center',
+                            fontSize: 11,
+                            color: 'var(--text-dim)',
+                          }}
+                          onClick={() => {
+                            setOlderExpanded((v) => {
+                              persistOlderExpanded(!v)
+                              return !v
+                            })
+                          }}
+                          title="Sessions idle for more than 1 hour"
+                        >
+                          <span>{olderExpanded ? '⌄' : '›'} Older ({older.length})</span>
+                          <span className="mono muted">1h-24h</span>
+                        </button>
+                        {olderExpanded && (
+                          <div style={{ marginTop: 4 }}>
+                            {older.map(renderSessionRow)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )
-              })}
+              })()}
             </div>
             <div className="section">
               <h4>Channels ({state.channels.length})</h4>

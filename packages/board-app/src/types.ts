@@ -59,6 +59,9 @@ export interface Session {
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
+  /** Optional presentation bucket. `older` sessions are shown collapsed and
+   * skipped by automatic canvas placement. */
+  displayGroup?: 'older' | string | null
 }
 
 export type ClientKind = 'cli' | 'desktop' | 'cowork'

@@ -14,7 +14,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_NAME="meee2"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.3.0}"
 APP_DIR=".build/${APP_NAME}.app"
 DMG_NAME="${APP_NAME}-v${VERSION}.dmg"
 DMG_TEMP="/tmp/${APP_NAME}-temp.dmg"

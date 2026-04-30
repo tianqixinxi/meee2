@@ -53,6 +53,9 @@ public struct SettingsView: View {
     /// Per-session sync controls. Empty means no sessions have been disabled.
     @AppStorage("meee360DisabledSessionIds") private var meee360DisabledSessionIdsData: Data = Data()
 
+    /// Per-session opt-in controls used when default meee360 sync is off.
+    @AppStorage("meee360EnabledSessionIds") private var meee360EnabledSessionIdsData: Data = Data()
+
     /// Supabase URL
     @AppStorage("meee360SupabaseUrl") private var meee360SupabaseUrl: String = ""
 
@@ -124,6 +127,8 @@ public struct SettingsView: View {
         .onChange(of: meee360SupabaseKey) { _ in writeMeee360Settings() }
         .onChange(of: meee360TeamId) { _ in writeMeee360Settings() }
         .onChange(of: meee360UserId) { _ in writeMeee360Settings() }
+        .onChange(of: meee360EnabledSessionIdsData) { _ in updateMeee360SyncActivation() }
+        .onChange(of: meee360DisabledSessionIdsData) { _ in updateMeee360SyncActivation() }
     }
 
     // MARK: - General Settings (合并 Display + Behavior)
@@ -287,33 +292,6 @@ public struct SettingsView: View {
                             .foregroundColor(.green)
                     }
 
-                    Toggle("Sync to meee360", isOn: $meee360Online)
-
-                    if meee360Online {
-                        if meee360SyncSessions.isEmpty {
-                            Text("No local sessions")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        } else {
-                            ForEach(meee360SyncSessions) { session in
-                                HStack(alignment: .center, spacing: 12) {
-                                    meee360SessionSyncRow(session)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                                    Picker("Sync target", selection: meee360SyncTargetBinding(for: session.id)) {
-                                        Text("No sync").tag(Self.meee360NoSyncTarget)
-                                        ForEach(meee360Teams) { team in
-                                            Text(team.name).tag(team.id)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                    .pickerStyle(.menu)
-                                    .frame(width: 180, alignment: .trailing)
-                                }
-                            }
-                        }
-                    }
-
                     HStack {
                         Button("Open Dashboard") {
                             NSWorkspace.shared.open(Meee360Config.appURL(path: "dashboard"))
@@ -321,6 +299,44 @@ public struct SettingsView: View {
                         Spacer()
                         Button("Disconnect") {
                             disconnectMeee360()
+                        }
+                    }
+
+                    Toggle("Sync to meee360 by default", isOn: $meee360Online)
+
+                    Text(meee360Online
+                         ? "New sessions sync to the default team unless you set a row to No sync."
+                         : "Default is No sync. Pick a team on any row to sync only that session.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if meee360SyncSessions.isEmpty {
+                        Text("No local sessions")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(meee360SyncSessions) { session in
+                            HStack(alignment: .center, spacing: 12) {
+                                meee360SessionSyncRow(session)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                Picker("Sync target", selection: meee360SyncTargetBinding(for: session.id)) {
+                                    Text("No sync").tag(Self.meee360NoSyncTarget)
+                                    ForEach(meee360Teams) { team in
+                                        Text(team.name).tag(team.id)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(width: 180, alignment: .trailing)
+                            }
+                            .padding(8)
+                            .background(meee360SessionRowBackground(session))
+                            .overlay(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(isMeee360SessionEnabled(session.id) ? Color.green : Color.secondary.opacity(0.45))
+                                    .frame(width: 3)
+                            }
                         }
                     }
                 } else {
@@ -439,6 +455,8 @@ public struct SettingsView: View {
         meee360SupabaseKey = ""
         meee360TeamsData = Data()
         meee360SessionTeamIdsData = Data()
+        meee360EnabledSessionIdsData = Data()
+        meee360DisabledSessionIdsData = Data()
         updateMeee360SyncActivation()
     }
 
@@ -519,6 +537,9 @@ public struct SettingsView: View {
                     ]
                 },
                 "sessionTeamIds": meee360SessionTeamMap(),
+                "defaultSyncEnabled": meee360Online,
+                "enabledSessionIds": Array(Meee360Pusher.sessionIdSet(forKey: "meee360EnabledSessionIds")),
+                "disabledSessionIds": Array(Meee360Pusher.sessionIdSet(forKey: "meee360DisabledSessionIds")),
                 "machineId": Host.current().name ?? "unknown",
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
@@ -592,25 +613,39 @@ public struct SettingsView: View {
     }
 
     private func isMeee360SessionEnabled(_ sessionId: String) -> Bool {
+        let aliases = Meee360Pusher.sessionIdAliases(sessionId)
         let disabled = Meee360Pusher.sessionIdSet(forKey: "meee360DisabledSessionIds")
-        if disabled.contains(sessionId) {
+        if !aliases.isDisjoint(with: disabled) {
             return false
         }
-        return Meee360Pusher.sessionIdAliases(sessionId).isDisjoint(with: disabled)
+
+        if meee360Online {
+            return true
+        }
+
+        let enabled = Meee360Pusher.sessionIdSet(forKey: "meee360EnabledSessionIds")
+        return !aliases.isDisjoint(with: enabled)
     }
 
     private func setMeee360Session(_ sessionId: String, enabled: Bool) {
         var disabled = Meee360Pusher.sessionIdSet(forKey: "meee360DisabledSessionIds")
+        var explicitlyEnabled = Meee360Pusher.sessionIdSet(forKey: "meee360EnabledSessionIds")
         let aliases = Meee360Pusher.sessionIdAliases(sessionId)
 
         if enabled {
             disabled.subtract(aliases)
+            explicitlyEnabled.formUnion(aliases)
         } else {
             disabled.formUnion(aliases)
+            explicitlyEnabled.subtract(aliases)
         }
 
         Meee360Pusher.storeSessionIdSet(disabled, forKey: "meee360DisabledSessionIds")
+        Meee360Pusher.storeSessionIdSet(explicitlyEnabled, forKey: "meee360EnabledSessionIds")
         meee360DisabledSessionIdsData = UserDefaults.standard.data(forKey: "meee360DisabledSessionIds") ?? Data()
+        meee360EnabledSessionIdsData = UserDefaults.standard.data(forKey: "meee360EnabledSessionIds") ?? Data()
+        writeMeee360Settings()
+        Meee360Pusher.shared.refreshActivation()
     }
 
     private var meee360Teams: [Meee360Team] {
@@ -686,6 +721,7 @@ public struct SettingsView: View {
     @ViewBuilder
     private func meee360SessionSyncRow(_ session: PluginSession) -> some View {
         let plugin = pluginManager.getPluginInfo(for: session.pluginId)
+        let syncing = isMeee360SessionEnabled(session.id)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(session.title)
@@ -695,13 +731,27 @@ public struct SettingsView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
+                Text(syncing ? "Syncing" : "No sync")
+                    .font(.caption2.bold())
+                    .foregroundColor(syncing ? .green : .secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(syncing ? Color.green.opacity(0.15) : Color.secondary.opacity(0.12))
+                    )
             }
 
             Text(meee360SessionSubtitle(session))
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(syncing ? .secondary : .secondary.opacity(0.7))
                 .lineLimit(1)
         }
+    }
+
+    private func meee360SessionRowBackground(_ session: PluginSession) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(isMeee360SessionEnabled(session.id) ? Color.green.opacity(0.08) : Color.secondary.opacity(0.06))
     }
 
     private func meee360SessionSubtitle(_ session: PluginSession) -> String {

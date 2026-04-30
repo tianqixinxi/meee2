@@ -62,6 +62,10 @@ struct SessionDTO: Encodable {
     /// `~/Library/Application Support/Claude/claude-code-sessions/` 下，
     /// 这个字段供前端区分卡片图标 / 跳转目标。
     let clientKind: String?
+
+    /// 前端展示分组。nil/default 表示主列表；"older" 表示仍可打开但默认折叠、
+    /// 不自动铺到画布上的历史 session。
+    let displayGroup: String?
 }
 
 /// Recap DTO
@@ -367,6 +371,14 @@ enum BoardDTOBuilder {
             default: return "cli"
             }
         }()
+        let displayGroup: String? = {
+            guard session.pluginId == "com.meee2.plugin.codex",
+                  let lastUpdated = session.lastUpdated,
+                  Date().timeIntervalSince(lastUpdated) >= 3600 else {
+                return nil
+            }
+            return "older"
+        }()
 
         // title 优先用 desktop 的 user-friendly 标题（"AI Product Twitter
         // Marketing Strategy" 这种），fallback 到 PluginSession.title（cwd basename）
@@ -412,7 +424,8 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
-            clientKind: clientKind
+            clientKind: clientKind,
+            displayGroup: displayGroup
         )
     }
 
@@ -469,7 +482,8 @@ enum BoardDTOBuilder {
             termProgram: nil,
             backgroundAgents: [],
             latestRecap: nil,
-            clientKind: m.source.rawValue   // "desktop" 或 "cowork"
+            clientKind: m.source.rawValue,   // "desktop" 或 "cowork"
+            displayGroup: nil
         )
     }
 

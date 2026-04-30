@@ -73,7 +73,7 @@ export function useBoardState(): BoardStateHook {
  * 计算 BoardState 的内容指纹。故意排除"churny" 字段（lastActivity、
  * startedAt —— 这些每个 WS tick 都在刷新但 UI 不直接渲染它们）。
  * 只对"真变了用户才关心"的字段做比对：sessions 的 id/status/title/project/
- * currentTool/inboxPending/pendingPermissionTool/recentMessages、channels。
+ * currentTool/inboxPending/pendingPermissionTool/displayGroup/recentMessages、channels。
  */
 function signatureFor(s: BoardState): string {
   const slim = {
@@ -85,6 +85,7 @@ function signatureFor(s: BoardState): string {
       currentTool: x.currentTool,
       inboxPending: x.inboxPending,
       pendingPermissionTool: x.pendingPermissionTool,
+      displayGroup: x.displayGroup,
       // recentMessages 里每条 text 是最后 200 字，内容变了才代表"有新消息"
       recent: x.recentMessages?.map((m) => `${m.role}:${m.text}`).join('|'),
     })),
