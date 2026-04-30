@@ -1,0 +1,15 @@
+{
+  "name": "meee2-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' build",
+    "build:web": "pnpm -F @tianqixinxi/board-app build",
+    "dev:web": "pnpm -F @tianqixinxi/board-app dev",
+    "typecheck": "pnpm -r --filter './packages/*' typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

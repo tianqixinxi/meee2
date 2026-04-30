@@ -1,0 +1,55 @@
+{
+  "name": "@tianqixinxi/board-core",
+  "version": "0.1.0",
+  "description": "Pure logic for the meee2 / meee360 Excalidraw board: scene mapping, layout, channel layout, persistence interface.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./scene": {
+      "types": "./dist/scene.d.ts",
+      "default": "./dist/scene.js"
+    },
+    "./layout": {
+      "types": "./dist/layout.d.ts",
+      "default": "./dist/layout.js"
+    },
+    "./channel-layout": {
+      "types": "./dist/channel-layout.d.ts",
+      "default": "./dist/channel-layout.js"
+    },
+    "./persistence": {
+      "types": "./dist/persistence.d.ts",
+      "default": "./dist/persistence.js"
+    },
+    "./inspector": {
+      "types": "./dist/inspector.d.ts",
+      "default": "./dist/inspector.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}
