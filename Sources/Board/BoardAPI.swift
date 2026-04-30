@@ -495,7 +495,7 @@ enum BoardAPI {
         //   - `outcome` 需要双向（Task 写 / 外层读）→ 放进引用型 box，closure
         //     只改 box 的属性而不是重绑变量，就符合 Sendable 约束
         final class OutcomeBox: @unchecked Sendable {
-            var value: SpawnResult? = nil  // nil = pending; non-nil = spawner returned
+            var value: SpawnResult?  // nil = pending; non-nil = spawner returned
         }
         let cwdSnapshot = cwd
         let commandSnapshot = command
