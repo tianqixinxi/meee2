@@ -3,7 +3,7 @@
 // owns search / tool-toggle / virtualization / sticky user / auto-scroll
 // / Markdown / diff / collapsible code etc.
 //
-// Style: import '@tianqixinxi/board-ui/TranscriptView.css' once at app boot
+// Style: import '@meee1/board-ui/TranscriptView.css' once at app boot
 // (sibling to SessionInspector.css).
 
 import {
@@ -25,7 +25,7 @@ import 'highlight.js/styles/github-dark.css'
 import type {
   TranscriptBlockForView,
   TranscriptEntryForView,
-} from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
 
 export interface TranscriptViewProps {
   /** Pre-fetched entries — caller (app) owns loading + polling. */

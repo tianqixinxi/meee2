@@ -14,15 +14,15 @@
 //
 // Compared to the previous separate boardLayoutRemote.ts / boardPersistence.ts
 // / dismissed.ts modules: same wire behaviour, repackaged behind the
-// CanvasPersistence interface from @tianqixinxi/board-core so the same Board UI can
+// CanvasPersistence interface from @meee1/board-core so the same Board UI can
 // also accept e.g. a SupabaseCanvasPersistence (meee360).
 
 import type {
   CanvasPersistence,
   LayoutMap,
   PersistedViewport,
-} from '@tianqixinxi/board-core'
-import { parseSessionFromElement } from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
+import { parseSessionFromElement } from '@meee1/board-core'
 
 const ENDPOINT = '/api/board/layout'
 

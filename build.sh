@@ -11,7 +11,7 @@ echo "Building meee2..."
 if [ "${SKIP_WEB_BUILD:-0}" != "1" ] && command -v pnpm &>/dev/null && [ -d "packages/board-app" ]; then
     echo "Building web frontend..."
     pnpm install --frozen-lockfile=false
-    pnpm -F @tianqixinxi/board-app build
+    pnpm -F @meee1/board-app build
 fi
 
 swift build -c release

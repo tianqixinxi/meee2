@@ -5,8 +5,8 @@ import App from './App'
 // 否则 toolbar / icons / 选中框等所有 Excalidraw UI 全部失去样式。0.17 升 0.18
 // 时漏了这步会看到工具图标巨大、卡片错位的画面。
 import '@excalidraw/excalidraw/index.css'
-import '@tianqixinxi/board-ui/SessionInspector.css'
-import '@tianqixinxi/board-ui/TranscriptView.css'
+import '@meee1/board-ui/SessionInspector.css'
+import '@meee1/board-ui/TranscriptView.css'
 import './styles.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -18,9 +18,9 @@ import { sceneCoordsToViewportCoords } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 
 import type { BoardState, Session } from '../types'
-import { parseSessionFromElement, RECT_W, RECT_H } from '@tianqixinxi/board-core'
-import { CardHost } from '@tianqixinxi/board-ui'
-import { DEFAULT_TEMPLATE, templateIdForSession } from '@tianqixinxi/board-cards'
+import { parseSessionFromElement, RECT_W, RECT_H } from '@meee1/board-core'
+import { CardHost } from '@meee1/board-ui'
+import { DEFAULT_TEMPLATE, templateIdForSession } from '@meee1/board-cards'
 
 interface Props {
   excalidrawAPI: ExcalidrawImperativeAPI | null

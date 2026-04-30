@@ -9,7 +9,7 @@
 
 import { Component as ReactComponent, useMemo } from 'react'
 import * as React from 'react'
-import { compileCardSource, getAnimationsFor } from '@tianqixinxi/board-cards'
+import { compileCardSource, getAnimationsFor } from '@meee1/board-cards'
 
 // ── helpers exposed to user code ────────────────────────────────────────
 

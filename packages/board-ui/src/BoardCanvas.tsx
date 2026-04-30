@@ -35,7 +35,7 @@ import {
   type LayoutMap,
   type PersistedViewport,
   type SessionForScene,
-} from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
 
 export type Selection =
   | { kind: 'none' }
@@ -56,7 +56,7 @@ export interface BoardCanvasProps {
    *  ChannelForScene[]) and structural typing handles the rest. */
   state: BoardStateForScene
   /** Async storage interface — implementations live in
-   *  @tianqixinxi/board-persistence-http (meee2) / a Supabase impl (meee360). */
+   *  @meee1/board-persistence-http (meee2) / a Supabase impl (meee360). */
   persistence: CanvasPersistence
   /** Hydrated initial values for every persisted slot. */
   initial: BoardCanvasInitial

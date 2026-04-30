@@ -28,7 +28,7 @@ echo "=== Building ${APP_NAME} ==="
 echo "=== Building Web Board ==="
 if command -v pnpm &>/dev/null; then
     pnpm install --frozen-lockfile=false
-    pnpm -F @tianqixinxi/board-app build
+    pnpm -F @meee1/board-app build
     echo "Web Board built → Sources/Board/WebDist/"
 else
     echo "Warning: pnpm not found; using existing WebDist (may be stale)"
