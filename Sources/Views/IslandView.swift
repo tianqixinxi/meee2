@@ -501,7 +501,7 @@ public struct IslandView: View {
 
                 // 右侧：Board 快捷按钮 + 菜单
                 HStack(spacing: 8) {
-                    // 专门的 Board 入口 —— 点一下打开浏览器里的 board
+                    // 专门的 Board 入口 —— 点一下打开 meee2 内置 Board shell。
                     Button(action: {
                         NotificationCenter.default.post(name: NSNotification.Name("openBoard"), object: nil)
                     }) {
@@ -510,7 +510,7 @@ public struct IslandView: View {
                             .foregroundColor(.white.opacity(0.8))
                     }
                     .buttonStyle(.plain)
-                    .help("Open Board in browser")
+                    .help("Open Board")
 
                     Menu {
                         Button("Open Board") {

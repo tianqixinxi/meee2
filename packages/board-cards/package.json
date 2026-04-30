@@ -1,0 +1,39 @@
+{
+  "name": "@tianqixinxi/board-cards",
+  "version": "0.1.0",
+  "description": "Session card template engine for the meee2 board: JS template compilation, presets, user-saved templates, animations.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "peerDependencies": {
+    "@babel/standalone": "^7.25.0",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@babel/standalone": "^7.25.6",
+    "@types/babel__standalone": "^7.1.9",
+    "@types/react": "^19",
+    "react": "19.2.4",
+    "typescript": "^5"
+  }
+}

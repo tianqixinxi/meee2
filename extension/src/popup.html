@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>meee2 web chat bridge</title>
+    <style>
+      :root {
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+        font-size: 13px;
+        color: #f5f4ef;
+        background: #1a1a1a;
+      }
+      body { margin: 0; padding: 14px 16px; min-width: 280px; }
+      h1 {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 12px;
+        letter-spacing: 0.3px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0;
+      }
+      .label { color: rgba(245, 244, 239, 0.7); }
+      .value { font-family: "JetBrains Mono", "SF Mono", monospace; font-size: 12px; }
+      .ok { color: #7FA982; }
+      .bad { color: #C26A6A; }
+      .muted { color: rgba(245, 244, 239, 0.45); font-size: 11px; }
+      hr {
+        border: none;
+        border-top: 1px solid #333;
+        margin: 10px 0;
+      }
+      .links {
+        display: flex;
+        gap: 12px;
+        margin-top: 8px;
+        font-size: 11px;
+      }
+      .links a { color: #5C82C7; text-decoration: none; }
+      .links a:hover { text-decoration: underline; }
+      .footer {
+        margin-top: 10px;
+        font-size: 11px;
+        color: rgba(245, 244, 239, 0.5);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>meee2 web chat bridge</h1>
+    <div class="row">
+      <span class="label">Local meee2</span>
+      <span class="value" id="conn">…</span>
+    </div>
+    <div class="row">
+      <span class="label">Queued</span>
+      <span class="value" id="queue">…</span>
+    </div>
+    <hr />
+    <div class="muted" id="hint">
+      Open chatgpt.com — conversations sync automatically.
+    </div>
+    <div class="links">
+      <a id="board-link" href="http://127.0.0.1:9876" target="_blank">Open meee2 board</a>
+    </div>
+    <div class="footer">v0.1.0</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

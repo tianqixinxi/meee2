@@ -7,10 +7,11 @@ cd "$(dirname "$0")"
 # Build the app
 echo "Building meee2..."
 
-# Build web frontend if npm is available
-if command -v npm &>/dev/null && [ -d "web" ]; then
+# Build web frontend if pnpm is available
+if [ "${SKIP_WEB_BUILD:-0}" != "1" ] && command -v pnpm &>/dev/null && [ -d "packages/board-app" ]; then
     echo "Building web frontend..."
-    (cd web && npm ci && npm run build)
+    pnpm install --frozen-lockfile=false
+    pnpm -F @tianqixinxi/board-app build
 fi
 
 swift build -c release

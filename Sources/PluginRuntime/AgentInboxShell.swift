@@ -75,24 +75,32 @@ public final class AgentInboxShell {
 
     // MARK: - Private — core push logic
 
+    private struct DeliveryTarget {
+        let rawStatus: SessionStatus
+        let effectiveStatus: SessionStatus
+        let terminalInfo: PluginTerminalInfo?
+        let ghosttyTerminalId: String?
+        let iTermSessionId: String?
+    }
+
     /// 真正决定要不要把这条消息推到 agent terminal。
     ///
     /// 规则：
     ///   1. session 必须 resting（resolver 维度）—— busy 时跳过，等 Stop 后重试
     ///   2. session 必须有 ghosttyTerminalId —— 没终端没法推
     ///   3. (sessionId, msgId) 已在 push 中 → 跳过（幂等）
-    ///   4. 通过 InboxShellPolicy 拿展示文本（默认 PassthroughPolicy = envelope.content）
+    ///   4. 通过 InboxShellPolicy 拿展示文本（默认 LabeledSenderPolicy = 前缀 + envelope.content）
     ///      返回 nil → 丢弃（policy 决定不投）
     ///   5. Ghostty input + send key enter
     ///   6. 成功 → ConversationContext 记一笔 + removeFromInbox + 释放 in-flight
     ///   7. 失败 → 留在 inbox 等下次 flush
     private func deliverIfResting(sessionId: String, message: A2AMessage) {
-        guard let data = SessionStore.shared.get(sessionId) else { return }
-        // resolver 而不是 data.status：避免被早先某条 hook 钉死的 thinking/tooling
-        // 永久挡住推送（尽管现实 transcript 尾巴早过 abandoned 阈值）。
-        let effectiveStatus = TranscriptStatusResolver.resolve(for: data)
+        guard let target = Self.deliveryTarget(for: sessionId) else {
+            MDebug("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) msg=\(message.id) — no session target")
+            return
+        }
         let restingStatuses: Set<SessionStatus> = [.idle, .waitingForUser, .completed]
-        guard restingStatuses.contains(effectiveStatus) else {
+        guard restingStatuses.contains(target.effectiveStatus) else {
             // Throttle: every 2s sessionMetadataChanged → flushInboxIfResting →
             // 进来都 hit 同样的 skip。只在状态翻转（真有信息）或者 60s 时间窗
             // 过期时打日志，否则就静默。
@@ -100,15 +108,15 @@ public final class AgentInboxShell {
             let shouldLog: Bool = queue.sync {
                 let now = Date()
                 if let prev = lastSkipLog[key],
-                   prev.status == effectiveStatus,
+                   prev.status == target.effectiveStatus,
                    now.timeIntervalSince(prev.at) < 60 {
                     return false
                 }
-                lastSkipLog[key] = (effectiveStatus, now)
+                lastSkipLog[key] = (target.effectiveStatus, now)
                 return true
             }
             if shouldLog {
-                NSLog("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) msg=\(message.id) effective=\(effectiveStatus.rawValue) (raw=\(data.status.rawValue)) — not resting")
+                NSLog("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) msg=\(message.id) effective=\(target.effectiveStatus.rawValue) (raw=\(target.rawStatus.rawValue)) — not resting")
             }
             return
         }
@@ -132,7 +140,8 @@ public final class AgentInboxShell {
         }
 
         // 走 policy 决定展示文本。优先看接收方所在 plugin 自己的 policy，
-        // plugin 没装就回落到默认 PassthroughPolicy（纯透传 content）。
+        // plugin 没装就回落到默认 LabeledSenderPolicy（带 [meee2 a2a] 前缀，
+        // 让 Claude 区分用户输入 vs A2A 路由进来的消息）。
         // PluginManager.sessions / loadedPlugins 是 main-thread 写入的
         // @Published 集合；从 background queue 读它们 == data race。snapshot
         // 一次到 local var 再走逻辑。
@@ -151,14 +160,14 @@ public final class AgentInboxShell {
         // 选 terminal dispatcher：按 termProgram + 已捕获的 native session id 选路径。
         // Ghostty (gtid) / iTerm2 (iTermSessionId) / Apple Terminal (tty)。三个都不
         // 满足就放弃直推，留 inbox 让下次 flush 再试或等 Stop hook drain。
-        let term = (data.terminalInfo?.termProgram ?? "").lowercased()
-        let bareTty = data.terminalInfo?.tty ?? ""
+        let term = (target.terminalInfo?.termProgram ?? "").lowercased()
+        let bareTty = target.terminalInfo?.tty ?? ""
         let dispatch: (() async -> Bool)?
         let pathLabel: String
-        if let gid = data.ghosttyTerminalId, !gid.isEmpty {
+        if let gid = target.ghosttyTerminalId, !gid.isEmpty {
             dispatch = { await GhosttyInputStream().sendText(terminalId: gid, text: payload) }
             pathLabel = "ghostty"
-        } else if let iid = data.iTermSessionId, !iid.isEmpty {
+        } else if let iid = target.iTermSessionId, !iid.isEmpty {
             dispatch = { await ITerm2InputStream().sendText(terminalId: iid, text: payload) }
             pathLabel = "iterm2"
         } else if term.contains("apple_terminal") || term.contains("apple terminal") || term == "terminal" {
@@ -191,8 +200,33 @@ public final class AgentInboxShell {
 
     // MARK: - Plugin policy lookup
 
+    private static func deliveryTarget(for sessionId: String) -> DeliveryTarget? {
+        if let data = SessionStore.shared.get(sessionId) {
+            // resolver 而不是 data.status：避免被早先某条 hook 钉死的 thinking/tooling
+            // 永久挡住推送（尽管现实 transcript 尾巴早过 abandoned 阈值）。
+            return DeliveryTarget(
+                rawStatus: data.status,
+                effectiveStatus: TranscriptStatusResolver.resolve(for: data),
+                terminalInfo: data.terminalInfo,
+                ghosttyTerminalId: data.ghosttyTerminalId,
+                iTermSessionId: data.iTermSessionId
+            )
+        }
+        guard let session = snapshotPluginSession(for: sessionId) else {
+            return nil
+        }
+        return DeliveryTarget(
+            rawStatus: session.status,
+            effectiveStatus: session.status,
+            terminalInfo: session.terminalInfo,
+            ghosttyTerminalId: nil,
+            iTermSessionId: nil
+        )
+    }
+
     /// 找接收方 session 对应的 plugin，返回它自定义的 InboxShellPolicy；
-    /// 没有就回落到默认 PassthroughPolicy。
+    /// 没有就回落到默认 LabeledSenderPolicy（带来源前缀，让 Claude 区分
+    /// 用户输入 vs A2A 路由进来的消息——见 InboxShellPolicy.swift）。
     ///
     /// 必须 main-sync：PluginManager 的 `@Published var sessions` 和
     /// `loadedPlugins: [String: SessionPlugin]` 都是 main-thread 上写入和
@@ -207,11 +241,10 @@ public final class AgentInboxShell {
     /// 走 main）。所以加 isMainThread 分支：在 main 上直接读，否则 main.sync。
     private static func snapshotPolicy(for sessionId: String) -> InboxShellPolicy {
         let read: () -> InboxShellPolicy = {
-            guard let session = PluginManager.shared.sessions.first(where: { $0.id == sessionId })
-                ?? PluginManager.shared.sessions.first(where: { $0.id.hasPrefix(sessionId) }),
+            guard let session = pluginSessionSnapshotLocked(for: sessionId),
                   let plugin = PluginManager.shared.loadedPlugins[session.pluginId],
                   let custom = plugin.inboxShellPolicy else {
-                return PassthroughPolicy()
+                return LabeledSenderPolicy()
             }
             return custom
         }
@@ -219,6 +252,35 @@ public final class AgentInboxShell {
             return read()
         }
         return DispatchQueue.main.sync(execute: read)
+    }
+
+    private static func snapshotPluginSession(for sessionId: String) -> PluginSession? {
+        let read = { pluginSessionSnapshotLocked(for: sessionId) }
+        if Thread.isMainThread {
+            return read()
+        }
+        return DispatchQueue.main.sync(execute: read)
+    }
+
+    private static func pluginSessionSnapshotLocked(for sessionId: String) -> PluginSession? {
+        PluginManager.shared.sessions.first { pluginSession($0, matches: sessionId, allowPrefix: false) }
+            ?? PluginManager.shared.sessions.first { pluginSession($0, matches: sessionId, allowPrefix: true) }
+    }
+
+    private static func pluginSession(_ session: PluginSession, matches sessionId: String, allowPrefix: Bool) -> Bool {
+        let ids = pluginSessionIds(session)
+        if ids.contains(sessionId) { return true }
+        guard allowPrefix else { return false }
+        return ids.contains { $0.hasPrefix(sessionId) }
+    }
+
+    private static func pluginSessionIds(_ session: PluginSession) -> [String] {
+        var ids = [session.id]
+        let prefix = "\(session.pluginId)-"
+        if session.id.hasPrefix(prefix) {
+            ids.append(String(session.id.dropFirst(prefix.count)))
+        }
+        return ids
     }
 
     /// A2AMessage（host 类型）→ A2AInboundView（plugin-kit DTO）。

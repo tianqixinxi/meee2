@@ -58,9 +58,14 @@ struct PluginSessionRowView: View {
     }
 
     /// A2A inbox 待取消息数（0 时不显示徽章）
-    /// session.id 对 Claude plugin 而言即 sessionId；其他 plugin 不在 A2A 中，peekInbox 会返回空
     private var inboxCount: Int {
-        MessageRouter.shared.peekInbox(sessionId: session.id).count
+        let direct = MessageRouter.shared.peekInbox(sessionId: session.id).count
+        let prefix = "\(session.pluginId)-"
+        if session.id.hasPrefix(prefix) {
+            let raw = String(session.id.dropFirst(prefix.count))
+            return direct + MessageRouter.shared.peekInbox(sessionId: raw).count
+        }
+        return direct
     }
 
     var body: some View {

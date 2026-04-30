@@ -33,11 +33,11 @@ dist/
 
 # Web frontend (Wave 10b) — only node_modules is ignored; the built bundle
 # under Sources/Board/WebDist IS committed as a shippable asset.
-web/node_modules/
-web/dist/
+node_modules/
+packages/*/dist/
+packages/*/.vite/
+packages/*/tsconfig.tsbuildinfo
 
 # Claude Code 本地配置 + 子 agent worktree
 .claude/
-web/.vite/
-web/tsconfig.tsbuildinfo
 Bridge/mcp-meee2/node_modules/

@@ -13,7 +13,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 设置窗口
     private var settingsWindow: NSWindow?
 
-    /// Board 窗口控制器 (static 强引用，防止被释放)
+    /// Board WebUI shell window controller (strong ref, otherwise NSWindowController is released).
+    private var boardWindowController: BoardWebWindowController?
 
     /// 状态管理器
     private let statusManager = StatusManager()
@@ -57,6 +58,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 还是 nil，所有查询返回 fallback（空数组 / nil），plugin 自治逻辑被静默废掉。
         Meee2PluginKit.A2AContext.shared.register(A2AContextHostProvider())
 
+        // Register builtin in-process plugins. ExternalChatPlugin receives
+        // browser-extension pushed sessions (ChatGPT / Claude.ai web chats)
+        // via /api/external-sessions/* — must register *before* startAll so
+        // PluginManager wires up onSessionsUpdated callbacks.
+        PluginManager.shared.register(ExternalChatPlugin.shared)
+
         // 加载外部 plugins
         PluginManager.shared.loadExternalPlugins()
         PluginManager.shared.startAll()
@@ -86,14 +93,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动状态监控
         statusManager.start()
 
-        // 自动启动 Board HTTP/WS 服务器 —— 开发工具，一直监听 9876。
-        // 之前只在点击菜单 Open Board 时启动，导致浏览器直接访问 localhost:9876
-        // 连不上。
+        // 自动启动 Board HTTP/WS 服务器。9876 是首选端口；如果被占用，
+        // BoardServer 会选择后续空闲端口并在本进程内保持稳定。
         do {
             try BoardServer.shared.start()
             NSLog("[AppDelegate] BoardServer listening on \(BoardServer.shared.url)")
         } catch {
             NSLog("[AppDelegate] BoardServer failed to start: \(error)")
+        }
+
+        if BoardCommand.shouldShowOnLaunch {
+            DispatchQueue.main.async { [weak self] in
+                self?.openBoardMenu()
+            }
         }
 
         // 发送使用统计（异步，不阻塞启动）
@@ -121,8 +133,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationWillTerminate(_ notification: Notification) {
         statusManager.stop()
+        BoardServer.shared.stop()
         Meee360Pusher.shared.deactivate()
         NotificationCenter.default.removeObserver(self)
+    }
+
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let boardWindowController {
+            boardWindowController.show()
+            return false
+        }
+        return true
     }
 
     // MARK: - Status Bar
@@ -141,6 +162,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
+        #if DEBUG
+        let boardDevItem = NSMenuItem(title: "Open Board Dev (Vite)", action: #selector(openBoardDevMenu), keyEquivalent: "")
+        boardDevItem.target = self
+        menu.addItem(boardDevItem)
+        #endif
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -242,11 +268,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
         }
-        _ = try? Process.run(
-            URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: [BoardServer.shared.url]
-        )
+        let fallbackURL = URL(string: BoardServer.shared.url)!
+        if boardWindowController == nil {
+            boardWindowController = BoardWebWindowController(boardURL: fallbackURL)
+            boardWindowController?.onClose = { [weak self] in
+                self?.boardWindowController = nil
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
+        NSApp.setActivationPolicy(.regular)
+        boardWindowController?.show()
     }
+
+    #if DEBUG
+    @objc private func openBoardDevMenu() {
+        guard let url = URL(string: "http://127.0.0.1:5002") else { return }
+        NSWorkspace.shared.open(url)
+    }
+    #endif
 
     @objc private func openTUI() {
         NSLog("[AppDelegate] openTUI called")

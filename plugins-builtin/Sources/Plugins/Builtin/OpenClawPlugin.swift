@@ -49,8 +49,8 @@ class OpenClawPlugin: SessionPlugin {
         return URL(fileURLWithPath: agentsPathString)
     }
 
-    // 活跃时间阈值（秒）- session 更新时间在此阈值内视为活跃
-    private let activeThreshold: TimeInterval = 3600  // 1小时
+    // OpenClaw 上游不暴露归档概念，本插件展示所有可见的 session；
+    // 不再做时间窗口过滤——和其它 AI 客户端插件的语义保持一致。
 
     // MARK: - Lifecycle
 
@@ -191,43 +191,39 @@ class OpenClawPlugin: SessionPlugin {
                 continue
             }
 
-            // 解析 sessions.json 获取活跃 session
+            // 解析 sessions.json 获取 session
             if let sessionInfo = parseSessionsJson(sessionsDir: sessionsDir, agentName: agentName) {
-                // 检查是否在活跃时间阈值内
-                let timeSinceUpdate = Date().timeIntervalSince(sessionInfo.lastUpdate)
-                if timeSinceUpdate < activeThreshold {
-                    // 获取 cwd 和 lastMessage
-                    let cwd = sessionInfo.cwd ?? getCwdFromAgent(agentName: agentName)
-                    let lastMessage = parseLastMessageFromTranscript(sessionFile: sessionInfo.sessionFile)
+                // 获取 cwd 和 lastMessage
+                let cwd = sessionInfo.cwd ?? getCwdFromAgent(agentName: agentName)
+                let lastMessage = parseLastMessageFromTranscript(sessionFile: sessionInfo.sessionFile)
 
-                    // 使用 TranscriptStatusParser 检测状态
-                    var detectedStatus: SessionStatus = sessionInfo.status
-                    if let sessionFile = sessionInfo.sessionFile {
-                        let result = TranscriptStatusParser.detectStatus(file: sessionFile)
-                        detectedStatus = result.status
-                    }
-
-                    let fullSessionId = "\(pluginId)-\(agentName)-\(sessionInfo.sessionId)"
-
-                    // 保存 sessionKey 映射，用于构建 URL
-                    sessionKeyMapLock.lock()
-                    sessionKeyMap[fullSessionId] = sessionInfo.sessionKey
-                    sessionKeyMapLock.unlock()
-
-                    let session = PluginSession(
-                        id: fullSessionId,
-                        pluginId: pluginId,
-                        title: agentName,
-                        status: detectedStatus,
-                        startedAt: sessionInfo.lastUpdate,
-                        // 不设置 subtitle！这会导致右侧重复显示 lastMessage
-                        cwd: cwd,
-                        icon: "house.fill",
-                        accentColor: .red,
-                        lastMessage: lastMessage
-                    )
-                    sessions.append(session)
+                // 使用 TranscriptStatusParser 检测状态
+                var detectedStatus: SessionStatus = sessionInfo.status
+                if let sessionFile = sessionInfo.sessionFile {
+                    let result = TranscriptStatusParser.detectStatus(file: sessionFile)
+                    detectedStatus = result.status
                 }
+
+                let fullSessionId = "\(pluginId)-\(agentName)-\(sessionInfo.sessionId)"
+
+                // 保存 sessionKey 映射，用于构建 URL
+                sessionKeyMapLock.lock()
+                sessionKeyMap[fullSessionId] = sessionInfo.sessionKey
+                sessionKeyMapLock.unlock()
+
+                let session = PluginSession(
+                    id: fullSessionId,
+                    pluginId: pluginId,
+                    title: agentName,
+                    status: detectedStatus,
+                    startedAt: sessionInfo.lastUpdate,
+                    // 不设置 subtitle！这会导致右侧重复显示 lastMessage
+                    cwd: cwd,
+                    icon: "house.fill",
+                    accentColor: .red,
+                    lastMessage: lastMessage
+                )
+                sessions.append(session)
             }
         }
 

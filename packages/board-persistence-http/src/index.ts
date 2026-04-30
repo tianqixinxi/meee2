@@ -1,0 +1,1 @@
+export { HttpCanvasPersistence } from './HttpCanvasPersistence'

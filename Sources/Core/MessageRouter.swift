@@ -565,13 +565,17 @@ public final class MessageRouter {
     /// 一个特殊接口，就是 A2A channel.send 的普通调用——send() → audit →
     /// deliverPending → inbox 路径完整复用。
     ///
-    /// Channel 名：`__ops-<sessionId>`（双下划线前缀，BoardDTO 会把这类
-    /// 自动创建的 channel 从公开列表里过滤掉，不污染 UI）。
+    /// Channel 名：默认 `__ops-<sessionId>`。Plugin session id 可能带 `.`
+    /// 或超过 64 字符，不能直接当 channel name；这种情况会压成稳定的
+    /// `__ops-<slug>-<hash>`，member 里的 sessionId 仍保留完整原值。
     @discardableResult
     public func ensureOperatorChannel(sessionId: String) throws -> String {
-        let name = "__ops-\(sessionId)"
+        let name = Self.operatorChannelName(for: sessionId)
         let reg = ChannelRegistry.shared
         if let existing = reg.get(name) {
+            if let member = existing.memberByAlias("session"), member.sessionId != sessionId {
+                throw ChannelRegistryError.aliasTaken("session")
+            }
             if existing.memberByAlias("operator") == nil {
                 _ = try reg.join(channel: name, alias: "operator", sessionId: "")
             }
@@ -584,6 +588,38 @@ public final class MessageRouter {
         _ = try reg.join(channel: name, alias: "operator", sessionId: "")
         _ = try reg.join(channel: name, alias: "session", sessionId: sessionId)
         return name
+    }
+
+    private static func operatorChannelName(for sessionId: String) -> String {
+        let prefix = "__ops-"
+        let direct = "\(prefix)\(sessionId)"
+        if isValidChannelName(direct) {
+            return direct
+        }
+
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-_")
+        var slug = ""
+        for scalar in sessionId.lowercased().unicodeScalars {
+            slug += allowed.contains(scalar) ? String(scalar) : "-"
+        }
+        let trimmed = String(slug.prefix(32)).trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
+        let base = trimmed.isEmpty ? "session" : trimmed
+        return "\(prefix)\(base)-\(stableHashHex(sessionId))"
+    }
+
+    private static func isValidChannelName(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 64 else { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-_")
+        return !name.unicodeScalars.contains { !allowed.contains($0) }
+    }
+
+    private static func stableHashHex(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", CUnsignedLongLong(hash))
     }
 
     // MARK: - Private helpers (most run on queue)

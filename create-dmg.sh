@@ -26,14 +26,15 @@ echo "=== Building ${APP_NAME} ==="
 
 # Build web frontend so WebDist is populated before swift build
 echo "=== Building Web Board ==="
-if command -v npm &>/dev/null; then
-    (cd web && npm ci && npm run build)
+if command -v pnpm &>/dev/null; then
+    pnpm install --frozen-lockfile=false
+    pnpm -F @tianqixinxi/board-app build
     echo "Web Board built → Sources/Board/WebDist/"
 else
-    echo "Warning: npm not found; using existing WebDist (may be stale)"
+    echo "Warning: pnpm not found; using existing WebDist (may be stale)"
 fi
 
-./build.sh
+SKIP_WEB_BUILD=1 ./build.sh
 
 echo ""
 echo "=== Creating App Bundle ==="
@@ -117,6 +118,13 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
+    </dict>
     <key>LSUIElement</key>
     <true/>
     <key>NSPrincipalClass</key>

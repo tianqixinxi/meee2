@@ -337,7 +337,7 @@ public struct SettingsView: View {
                     Button("Connect to meee360") {
                         var components = URLComponents(url: Meee360Config.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
                         components.queryItems = [
-                            URLQueryItem(name: "callback", value: "http://localhost:9876/meee360/callback")
+                            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee360/callback")
                         ]
                         if let connectUrl = components.url {
                             NSWorkspace.shared.open(connectUrl)

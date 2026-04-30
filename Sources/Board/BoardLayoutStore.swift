@@ -1,12 +1,77 @@
 import Foundation
 
-/// BoardLayoutStore —— 看板上 session 卡片 + channel hub 椭圆的画布坐标
+public enum BoardJSONValue: Codable, Equatable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([BoardJSONValue])
+    case object([String: BoardJSONValue])
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([BoardJSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: BoardJSONValue].self))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null:
+            try container.encodeNil()
+        case .bool(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        }
+    }
+
+    static func fromAny(_ raw: Any) -> BoardJSONValue? {
+        if raw is NSNull { return .null }
+        if let value = raw as? Bool { return .bool(value) }
+        if let value = raw as? NSNumber { return .number(value.doubleValue) }
+        if let value = raw as? String { return .string(value) }
+        if let values = raw as? [Any] {
+            return .array(values.compactMap(fromAny))
+        }
+        if let values = raw as? [String: Any] {
+            var out: [String: BoardJSONValue] = [:]
+            for (key, value) in values {
+                if let converted = fromAny(value) {
+                    out[key] = converted
+                }
+            }
+            return .object(out)
+        }
+        return nil
+    }
+}
+
+/// BoardLayoutStore —— 看板上的 canvas 持久化状态
 ///
 /// 布局：`~/.meee2/board-layout.json`（单文件，原子覆写）
 ///
 /// 搬到服务端的动机：之前只在浏览器 localStorage，换浏览器 / 清 storage 都丢；
 /// 也没法在多个 tab 之间同步。现在：
-///   - 所有 web 客户端 `GET /api/board/layout` 拿到同一份坐标
+///   - 所有 web 客户端 `GET /api/board/layout` 拿到同一份坐标、viewport、
+///     用户自绘元素、dismissed/unread 集合
 ///   - 任一 tab `PUT` 后，server 存盘 + 通过 WS `state.changed` 广播，其他 tab
 ///     下一次拉 state 时顺便刷新画布（或单独重新 GET layout）
 ///
@@ -23,18 +88,67 @@ public final class BoardLayoutStore {
         }
     }
 
+    public struct Viewport: Codable, Equatable {
+        public let scrollX: Double
+        public let scrollY: Double
+        public let zoom: Double
+
+        public init(scrollX: Double, scrollY: Double, zoom: Double) {
+            self.scrollX = scrollX
+            self.scrollY = scrollY
+            self.zoom = zoom
+        }
+    }
+
     public struct Layout: Codable, Equatable {
         public var sessions: [String: Point]
         public var channels: [String: Point]
+        public var viewport: Viewport?
+        public var userElements: [BoardJSONValue]
+        public var dismissedSids: [String]
+        public var unreadSids: [String]
         public var updatedAt: Date
 
-        public init(sessions: [String: Point], channels: [String: Point], updatedAt: Date) {
+        public init(
+            sessions: [String: Point],
+            channels: [String: Point],
+            viewport: Viewport? = nil,
+            userElements: [BoardJSONValue] = [],
+            dismissedSids: [String] = [],
+            unreadSids: [String] = [],
+            updatedAt: Date
+        ) {
             self.sessions = sessions
             self.channels = channels
+            self.viewport = viewport
+            self.userElements = userElements
+            self.dismissedSids = dismissedSids
+            self.unreadSids = unreadSids
             self.updatedAt = updatedAt
         }
 
         public static let empty = Layout(sessions: [:], channels: [:], updatedAt: Date(timeIntervalSince1970: 0))
+
+        private enum CodingKeys: String, CodingKey {
+            case sessions
+            case channels
+            case viewport
+            case userElements
+            case dismissedSids
+            case unreadSids
+            case updatedAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            sessions = try container.decodeIfPresent([String: Point].self, forKey: .sessions) ?? [:]
+            channels = try container.decodeIfPresent([String: Point].self, forKey: .channels) ?? [:]
+            viewport = try container.decodeIfPresent(Viewport.self, forKey: .viewport)
+            userElements = try container.decodeIfPresent([BoardJSONValue].self, forKey: .userElements) ?? []
+            dismissedSids = try container.decodeIfPresent([String].self, forKey: .dismissedSids) ?? []
+            unreadSids = try container.decodeIfPresent([String].self, forKey: .unreadSids) ?? []
+            updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
+        }
     }
 
     private let fileManager = FileManager.default
@@ -72,6 +186,10 @@ public final class BoardLayoutStore {
         let stamped = Layout(
             sessions: layout.sessions,
             channels: layout.channels,
+            viewport: layout.viewport,
+            userElements: layout.userElements,
+            dismissedSids: layout.dismissedSids,
+            unreadSids: layout.unreadSids,
             updatedAt: Date()
         )
         try queue.sync {
@@ -96,7 +214,15 @@ public final class BoardLayoutStore {
             if let c = channels {
                 for (k, v) in c { nextChannels[k] = v }
             }
-            let next = Layout(sessions: nextSessions, channels: nextChannels, updatedAt: Date())
+            let next = Layout(
+                sessions: nextSessions,
+                channels: nextChannels,
+                viewport: current.viewport,
+                userElements: current.userElements,
+                dismissedSids: current.dismissedSids,
+                unreadSids: current.unreadSids,
+                updatedAt: Date()
+            )
             try writeToDiskLocked(next)
             cached = next
             return next

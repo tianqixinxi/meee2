@@ -29,8 +29,8 @@ class CodexPlugin: SessionPlugin {
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("codexRefreshInterval") private var refreshInterval: Double = 10.0
 
-    // 活跃时间阈值（秒）- session 更新时间在此阈值内视为活跃
-    private let activeThreshold: TimeInterval = 3600  // 1小时
+    // 活跃判定：仅依赖 SQL 里的 `archived = 0`，不再做时间窗口过滤——
+    // 与 Claude Desktop / Cowork 的"用户归档 flag 即唯一过滤"保持一致。
 
     // MARK: - Lifecycle
 
@@ -256,37 +256,34 @@ class CodexPlugin: SessionPlugin {
                 let lastUpdate = Self.date(seconds: updatedAt, milliseconds: updatedAtMs)
                 let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
 
-                // 只显示最近活跃的 session (1小时内)
-                if timeSinceUpdate < activeThreshold {
-                    let transcript = parseCodexTranscript(path: rolloutPath)
+                let transcript = parseCodexTranscript(path: rolloutPath)
 
-                    // 状态优先使用 rollout tail 推断；如果最近还在写且进程存在，
-                    // 空闲态提升为 active，避免长推理期间只显示 idle。
-                    var status = transcript.status ?? .idle
-                    if codexRunning && timeSinceUpdate < 60 && status == .idle && !transcript.isFinalResult {
-                        status = .active
-                    }
-
-                    let lastMessage = transcript.lastMessage
-                        ?? firstUserMessage.map { String($0.prefix(100)) }
-                        ?? model
-
-                    let session = PluginSession(
-                        id: "\(pluginId)-\(threadId)",
-                        pluginId: pluginId,
-                        title: title,
-                        status: status,
-                        startedAt: lastUpdate,
-                        lastUpdated: lastUpdate,
-                        toolName: transcript.currentTool,
-                        cwd: cwd,
-                        transcriptPath: rolloutPath,
-                        icon: "cpu.fill",
-                        accentColor: .purple,
-                        lastMessage: lastMessage
-                    )
-                    sessions.append(session)
+                // 状态优先使用 rollout tail 推断；如果最近还在写且进程存在，
+                // 空闲态提升为 active，避免长推理期间只显示 idle。
+                var status = transcript.status ?? .idle
+                if codexRunning && timeSinceUpdate < 60 && status == .idle && !transcript.isFinalResult {
+                    status = .active
                 }
+
+                let lastMessage = transcript.lastMessage
+                    ?? firstUserMessage.map { String($0.prefix(100)) }
+                    ?? model
+
+                let session = PluginSession(
+                    id: "\(pluginId)-\(threadId)",
+                    pluginId: pluginId,
+                    title: title,
+                    status: status,
+                    startedAt: lastUpdate,
+                    lastUpdated: lastUpdate,
+                    toolName: transcript.currentTool,
+                    cwd: cwd,
+                    transcriptPath: rolloutPath,
+                    icon: "cpu.fill",
+                    accentColor: .purple,
+                    lastMessage: lastMessage
+                )
+                sessions.append(session)
             }
         }
 

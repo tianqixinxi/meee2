@@ -321,6 +321,30 @@ final class A2ATests: XCTestCase {
         XCTAssertEqual(MessageRouter.shared.drainInbox(sessionId: bSid).count, 0)
     }
 
+    func testOperatorChannelSupportsPluginSessionIds() throws {
+        let sid = "com.meee2.plugin.codex-\(UUID().uuidString.lowercased())"
+        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sid)
+        defer {
+            _ = MessageRouter.shared.drainInbox(sessionId: sid)
+            try? ChannelRegistry.shared.delete(channelName)
+        }
+
+        XCTAssertTrue(channelName.hasPrefix("__ops-"))
+        XCTAssertLessThanOrEqual(channelName.count, 64)
+        XCTAssertNotNil(ChannelRegistry.shared.get(channelName))
+        XCTAssertEqual(ChannelRegistry.shared.get(channelName)?.memberByAlias("session")?.sessionId, sid)
+
+        let sent = try MessageRouter.shared.send(
+            channel: channelName,
+            fromAlias: "operator",
+            toAlias: "session",
+            content: "hello codex",
+            injectedByHuman: true
+        )
+        XCTAssertEqual(sent.status, .delivered)
+        XCTAssertEqual(MessageRouter.shared.peekInbox(sessionId: sid).count, 1)
+    }
+
     // MARK: - A2AIdentity (Wave 4)
 
     func testAliasInChannelResolvesMember() throws {
@@ -386,6 +410,32 @@ final class A2ATests: XCTestCase {
         // After unsetting, we don't over-constrain: either nil or a cwd-derived sid.
         unsetenv("CLAUDE_SESSION_ID")
         _ = A2AIdentity.currentSessionId()  // just exercise the path
+    }
+
+    func testCurrentSessionIdFromCodexThreadEnv() throws {
+        let name = uniqueChannelName("id-codex")
+        let rawThreadId = UUID().uuidString.lowercased()
+        let sid = "com.meee2.plugin.codex-\(rawThreadId)"
+        let oldCodex = getenv("CODEX_THREAD_ID").map { String(cString: $0) }
+        defer {
+            unsetenv("CLAUDE_SESSION_ID")
+            if let oldCodex {
+                setenv("CODEX_THREAD_ID", oldCodex, 1)
+            } else {
+                unsetenv("CODEX_THREAD_ID")
+            }
+            try? ChannelRegistry.shared.delete(name)
+        }
+
+        unsetenv("CLAUDE_SESSION_ID")
+        setenv("CODEX_THREAD_ID", rawThreadId, 1)
+        _ = try ChannelRegistry.shared.create(name: name, mode: .auto)
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "codex", sessionId: sid)
+
+        XCTAssertEqual(A2AIdentity.currentSessionId(), sid)
+        XCTAssertEqual(A2AIdentity.aliasInChannel(name), "codex")
+        XCTAssertEqual(A2AIdentity.soleChannel(), name)
+        XCTAssertTrue(A2AIdentity.currentSessionIdCandidates().contains(rawThreadId))
     }
 
     // MARK: - AuditLogger

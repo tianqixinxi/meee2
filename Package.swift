@@ -41,7 +41,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Foundation"),
                 .linkedFramework("AppKit"),
-                .linkedFramework("SwiftUI")
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("WebKit")
             ]
         ),
         // Builtin plugins

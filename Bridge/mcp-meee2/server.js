@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// meee2 MCP server — exposes A2A messaging to any Claude Code session as
-// native tools. Transport is stdio (Claude CLI spawns us as a subprocess and
+// meee2 MCP server — exposes A2A messaging to Claude/Codex sessions as
+// native tools. Transport is stdio (the host app spawns us as a subprocess and
 // speaks JSON-RPC over stdin/stdout).
 //
 // All tools are thin HTTP shims over the local BoardServer (127.0.0.1:9876
@@ -8,6 +8,9 @@
 // running — meee2 app not launched — every tool returns an instructive
 // error instead of crashing the MCP runtime.
 
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
@@ -15,7 +18,9 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 
-const API = process.env.MEEE2_API_URL || 'http://localhost:9876'
+const DEFAULT_PORT = 9876
+const MAX_PORT = 9976
+let cachedAPI = null
 
 // ─── tool schemas ─────────────────────────────────────────────────────────
 // Descriptions are the first thing the model sees when deciding whether to
@@ -62,7 +67,7 @@ const TOOLS = [
   {
     name: 'list_sessions',
     description:
-      'List every Claude session meee2 currently tracks — id, title, ' +
+      'List every agent session meee2 currently tracks — id, title, ' +
       'project cwd, status. Useful to find a target session before asking ' +
       'to add it to a channel.',
     inputSchema: { type: 'object', properties: {} },
@@ -71,19 +76,25 @@ const TOOLS = [
     name: 'read_inbox',
     description:
       'Read pending A2A messages addressed to a given session (i.e. the ' +
-      'union of channel-pending messages where the session is a member ' +
-      'and the sender is someone else). Does NOT drain the inbox — the ' +
-      'Claude CLI Stop hook still owns drainage.',
+      'union of delivered direct-inbox messages plus channel-pending messages ' +
+      'where the session is a member and the sender is someone else). If ' +
+      'sessionId is omitted, meee2 resolves the current Claude/Codex session ' +
+      'from environment variables. For Codex current sessions, direct inbox ' +
+      'messages are consumed by default because Codex has no Claude Stop hook.',
     inputSchema: {
       type: 'object',
       properties: {
         sessionId: {
           type: 'string',
           description:
-            'Full session id, or a prefix meee2 can resolve uniquely.',
+            'Optional full session id, or a prefix meee2 can resolve uniquely.',
+        },
+        consume: {
+          type: 'boolean',
+          description:
+            'When true, delivered direct-inbox messages are drained after reading. Defaults to true for the current Codex thread, false otherwise.',
         },
       },
-      required: ['sessionId'],
     },
   },
   {
@@ -168,19 +179,79 @@ const TOOLS = [
 
 // ─── HTTP shim ────────────────────────────────────────────────────────────
 
+function runtimeInfoPath() {
+  return path.join(os.homedir(), 'Library', 'Application Support', 'meee2', 'board-server.json')
+}
+
+async function isMeee2API(api) {
+  try {
+    const res = await fetch(`${api}/api/health`, { signal: AbortSignal.timeout(1200) })
+    if (!res.ok) return false
+    const json = await res.json().catch(() => null)
+    return json?.name === 'meee2'
+  } catch {
+    return false
+  }
+}
+
+async function apiFromRuntimeInfo() {
+  try {
+    const raw = await fs.readFile(runtimeInfoPath(), 'utf8')
+    const json = JSON.parse(raw)
+    return typeof json?.url === 'string' ? json.url : null
+  } catch {
+    return null
+  }
+}
+
+async function discoverAPI(force = false) {
+  if (process.env.MEEE2_API_URL) return process.env.MEEE2_API_URL
+
+  if (!force && cachedAPI && await isMeee2API(cachedAPI)) {
+    return cachedAPI
+  }
+
+  const runtimeAPI = await apiFromRuntimeInfo()
+  if (runtimeAPI && await isMeee2API(runtimeAPI)) {
+    cachedAPI = runtimeAPI
+    return runtimeAPI
+  }
+
+  for (let port = DEFAULT_PORT; port <= MAX_PORT; port += 1) {
+    const api = `http://127.0.0.1:${port}`
+    if (await isMeee2API(api)) {
+      cachedAPI = api
+      return api
+    }
+  }
+
+  return `http://127.0.0.1:${DEFAULT_PORT}`
+}
+
 async function callApi(method, path, body) {
   let res
+  let api = await discoverAPI()
   try {
-    res = await fetch(`${API}${path}`, {
+    res = await fetch(`${api}${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     })
   } catch (e) {
-    throw new Error(
-      `meee2 BoardServer unreachable at ${API} — is the meee2 app running? ` +
-        `(${e.message || e})`,
-    )
+    cachedAPI = null
+    api = await discoverAPI(true)
+    try {
+      res = await fetch(`${api}${path}`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      })
+    } catch (retryError) {
+      throw new Error(
+        `meee2 BoardServer unreachable at ${api} — is the meee2 app running? ` +
+          `(${retryError.message || retryError})`,
+      )
+    }
   }
   const text = await res.text()
   let json = null
@@ -198,6 +269,75 @@ async function callApi(method, path, body) {
     throw new Error(`${res.status} ${msg}`)
   }
   return json
+}
+
+const CODEX_PREFIX = 'com.meee2.plugin.codex-'
+const CLAUDE_PREFIX = 'com.meee2.plugin.claude-'
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))]
+}
+
+function rawPluginId(session) {
+  const prefix = `${session.pluginId}-`
+  return session.id?.startsWith(prefix) ? session.id.slice(prefix.length) : null
+}
+
+function sessionIdCandidates(session) {
+  return unique([session.id, rawPluginId(session)])
+}
+
+function envSessionCandidates() {
+  const claudeSid = process.env.CLAUDE_SESSION_ID
+  if (claudeSid) return unique([claudeSid, `${CLAUDE_PREFIX}${claudeSid}`])
+
+  const codexThreadId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID
+  if (codexThreadId) {
+    return unique([`${CODEX_PREFIX}${codexThreadId}`, codexThreadId])
+  }
+  return []
+}
+
+function sessionMatches(session, input) {
+  return sessionIdCandidates(session).some(
+    (id) => id === input || id.startsWith(input),
+  )
+}
+
+function resolveSession(state, input) {
+  const inputs = input ? [input] : envSessionCandidates()
+  if (inputs.length === 0) {
+    throw new Error(
+      'sessionId required (or set CLAUDE_SESSION_ID / CODEX_THREAD_ID)',
+    )
+  }
+
+  const exact = (state.sessions || []).filter((s) =>
+    inputs.some((candidate) => sessionIdCandidates(s).includes(candidate)),
+  )
+  if (exact.length === 1) return exact[0]
+  if (exact.length > 1) {
+    throw new Error(`ambiguous session id '${inputs[0]}' — matched ${exact.length}`)
+  }
+
+  const matches = (state.sessions || []).filter((s) =>
+    inputs.some((candidate) => sessionMatches(s, candidate)),
+  )
+  if (matches.length === 0) {
+    throw new Error(`session not found: ${inputs[0]}`)
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `ambiguous session prefix '${inputs[0]}' — matched ${matches.length}`,
+    )
+  }
+  return matches[0]
+}
+
+function isCurrentCodexSession(session) {
+  const codexThreadId = process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID
+  if (!codexThreadId) return false
+  return sessionIdCandidates(session).includes(codexThreadId)
 }
 
 // ─── tool handlers ────────────────────────────────────────────────────────
@@ -251,22 +391,8 @@ async function handleAddMember(args) {
   const { channel, alias, sessionId } = args
   // Resolve sessionId prefix if needed (orientation push needs the full sid
   // to reach the right inbox).
-  let fullSid = sessionId
-  if (sessionId && sessionId.length < 36) {
-    const state = await callApi('GET', '/api/state')
-    const matches = (state.sessions || []).filter((s) =>
-      s.id.startsWith(sessionId),
-    )
-    if (matches.length === 0) {
-      throw new Error(`session not found: ${sessionId}`)
-    }
-    if (matches.length > 1) {
-      throw new Error(
-        `ambiguous session prefix '${sessionId}' — matched ${matches.length}`,
-      )
-    }
-    fullSid = matches[0].id
-  }
+  const state = await callApi('GET', '/api/state')
+  const fullSid = resolveSession(state, sessionId).id
   const r = await callApi(
     'POST',
     `/api/channels/${encodeURIComponent(channel)}/members`,
@@ -287,15 +413,24 @@ async function handleLeaveChannel(args) {
 async function handleReadInbox(args) {
   const { sessionId } = args
   const state = await callApi('GET', '/api/state')
-  const sess =
-    state.sessions.find((s) => s.id === sessionId) ||
-    state.sessions.find((s) => s.id.startsWith(sessionId))
-  if (!sess) throw new Error(`session not found: ${sessionId}`)
+  const sess = resolveSession(state, sessionId)
+  const consume = args.consume ?? isCurrentCodexSession(sess)
+  const mySessionIds = new Set(sessionIdCandidates(sess))
 
   const out = []
+  const inbox = await callApi(
+    'GET',
+    `/api/sessions/${encodeURIComponent(sess.id)}/inbox?drain=${
+      consume ? 'true' : 'false'
+    }`,
+  )
+  for (const msg of inbox.messages || []) {
+    out.push({ channel: msg.channel, source: 'inbox', consumed: consume, message: msg })
+  }
+
   for (const ch of state.channels || []) {
     const myAliases = ch.members
-      .filter((m) => m.sessionId === sess.id)
+      .filter((m) => mySessionIds.has(m.sessionId))
       .map((m) => m.alias)
     if (myAliases.length === 0) continue
     const q = 'status=pending,held&limit=20'
@@ -306,7 +441,7 @@ async function handleReadInbox(args) {
     for (const msg of r.messages || []) {
       if (msg.fromAlias && myAliases.includes(msg.fromAlias)) continue // my own
       if (msg.toAlias === '*' || myAliases.includes(msg.toAlias)) {
-        out.push({ channel: ch.name, message: msg })
+        out.push({ channel: ch.name, source: 'channel-pending', message: msg })
       }
     }
   }
@@ -321,7 +456,7 @@ async function handleReadInbox(args) {
 // 反应式的——只在用户明确问"帮我看一下 channel"才用工具，永远不会主动
 // 检查自己的 inbox 或回应别的 agent。
 const INSTRUCTIONS = [
-  'You are a member of a meee2 multi-agent runtime. Other Claude sessions',
+  'You are a member of a meee2 multi-agent runtime. Other Claude/Codex sessions',
   '(and the operator / human user) can send you messages over named',
   'channels via the seven tools below.',
   '',
@@ -341,10 +476,10 @@ const INSTRUCTIONS = [
   '  - leave_channel  — voluntarily exit (only your own alias)',
   '',
   'Behavior expectations:',
-  '  - At the start of any new turn, briefly call read_inbox to see if you',
-  '    have unconsumed messages. If yes, prioritize processing them before',
-  '    continuing your previous task — incoming agent/operator messages are',
-  '    the highest-priority signal you can get.',
+  '  - At the start of any new turn, briefly call read_inbox with no sessionId',
+  '    to see if you have unconsumed messages. If yes, prioritize processing',
+  '    them before continuing your previous task — incoming agent/operator',
+  '    messages are the highest-priority signal you can get.',
   '  - When asked to coordinate with another agent or "send to <alias>", use',
   '    send_message rather than asking the user to do it manually.',
   '  - When you finish a unit of work that another agent might be waiting on,',

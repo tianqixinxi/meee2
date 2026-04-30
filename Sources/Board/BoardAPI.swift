@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Swifter
 import Meee2PluginKit
 
@@ -163,25 +164,29 @@ enum BoardAPI {
         // 它，因为它的子进程已经退出 / 根本没起过——但 metadata 文件仍在）。
         // 命中即直接 activate Claude.app，不走 PluginManager。
         if let metadataSid = resolveDesktopMetadataSid(sid) {
-            _ = metadataSid
-            activateClaudeDesktop()
+            activateClaudeDesktop(sid: metadataSid)
             return jsonResponse(OkEnvelope(ok: true))
         }
-        // 在 PluginManager 的 session 列表中用前缀匹配，兼容 short-id
-        let sessions = PluginManager.shared.sessions
-        let match = sessions.first(where: { $0.id == sid })
-            ?? sessions.first(where: { $0.id.hasPrefix(sid) })
-        guard let session = match else {
+        guard let session = resolvePluginSession(sid) else {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
 
         // 真实 session 也可能是 desktop 起的（hook 刚到、子进程还活着的几秒钟
-        // 窗口期），同样用 metadata 命中决定走 desktop activate。
-        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
-            ? String(session.id.dropFirst("\(session.pluginId)-".count))
-            : session.id
-        if ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId) != nil {
-            activateClaudeDesktop()
+        // 窗口期），用 metadata + entrypoint 双信号决定走 desktop activate。
+        // metadata reader 30s 才扫一次，所以新建 desktop session 第一个扫描
+        // 周期内会漏；entrypoint 写在 transcript 顶部，hook 一来就能读到。
+        let realSessionId = pluginSessionIds(session).last ?? session.id
+        let isDesktopBacked: Bool = {
+            if ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId) != nil {
+                return true
+            }
+            let path = SessionStore.shared.get(realSessionId)?.transcriptPath
+                ?? session.transcriptPath
+            return ClaudeEntrypointReader.read(transcriptPath: path)
+                == ClaudeEntrypointReader.knownDesktop
+        }()
+        if isDesktopBacked {
+            activateClaudeDesktop(sid: realSessionId)
         } else {
             PluginManager.shared.activateTerminal(for: session)
         }
@@ -197,9 +202,102 @@ enum BoardAPI {
         return all.first(where: { $0.hasPrefix(sid) })
     }
 
-    /// 激活 Claude.app（无 deep-link 协议，先做基础 activate；将来 desktop
-    /// 暴露 per-session 跳转 URL 再补）。
-    private static func activateClaudeDesktop() {
+    /// Plugin sessions may expose a host-facing id (`com.meee2.plugin.codex-...`)
+    /// while the underlying runtime exposes a raw id (`CODEX_THREAD_ID`). Match
+    /// both forms so local APIs work with either Board ids or raw runtime ids.
+    private static func resolvePluginSession(_ sid: String) -> PluginSession? {
+        let sessions = PluginManager.shared.sessions
+        return sessions.first(where: { pluginSession($0, matches: sid, allowPrefix: false) })
+            ?? sessions.first(where: { pluginSession($0, matches: sid, allowPrefix: true) })
+    }
+
+    private static func pluginSession(_ session: PluginSession, matches sid: String, allowPrefix: Bool) -> Bool {
+        let ids = pluginSessionIds(session)
+        if ids.contains(sid) { return true }
+        guard allowPrefix else { return false }
+        return ids.contains { $0.hasPrefix(sid) }
+    }
+
+    private static func pluginSessionIds(_ session: PluginSession) -> [String] {
+        var ids = [session.id]
+        let prefix = "\(session.pluginId)-"
+        if session.id.hasPrefix(prefix) {
+            ids.append(String(session.id.dropFirst(prefix.count)))
+        }
+        var seen = Set<String>()
+        return ids.filter { id in
+            guard !seen.contains(id) else { return false }
+            seen.insert(id)
+            return true
+        }
+    }
+
+    /// Inbox keys follow the visible PluginSession id for non-Claude plugins
+    /// (notably Codex). Claude's historical inbox key is the raw CLI session id.
+    private static func inboxSessionId(for session: PluginSession) -> String {
+        let claudePluginId = "com.meee2.plugin.claude"
+        let prefix = "\(session.pluginId)-"
+        if session.pluginId == claudePluginId, session.id.hasPrefix(prefix) {
+            return String(session.id.dropFirst(prefix.count))
+        }
+        return session.id
+    }
+
+    private static func inboxSessionIds(for session: PluginSession) -> [String] {
+        var ids = [inboxSessionId(for: session)]
+        ids.append(contentsOf: pluginSessionIds(session))
+        var seen = Set<String>()
+        return ids.filter { id in
+            guard !seen.contains(id) else { return false }
+            seen.insert(id)
+            return true
+        }
+    }
+
+    private static func resolveInboxSessionIds(_ sid: String) -> [String]? {
+        if let session = resolvePluginSession(sid) {
+            return inboxSessionIds(for: session)
+        }
+        if SessionStore.shared.get(sid) != nil {
+            return [sid]
+        }
+        let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+        if matches.count == 1 {
+            return [matches[0].sessionId]
+        }
+        if MessageRouter.shared.allInboxSessionIds().contains(sid) {
+            return [sid]
+        }
+        return nil
+    }
+
+    /// 激活 Claude.app 并跳转到对应 session 的 tab。
+    ///
+    /// Claude.app（com.anthropic.claudefordesktop）注册了 `claude://` URL
+    /// scheme，asar 反编译里 Resume handler 实现：
+    ///
+    ///   case _E.Resume: {
+    ///     const s = t.searchParams.get("session");
+    ///     if (s && UUIDRegex.test(s)) {
+    ///       Ys.importCliSession(s).then(o => dispatchNavigate(getSessionRoute(o)))
+    ///     }
+    ///   }
+    ///
+    /// `importCliSession` 是幂等的 get-or-create：cliSessionId 已经有 desktop
+    /// local session 就返回已有的，否则新建一条。所以**只能**对已经识别为
+    /// desktop 的 session 用这条 URL；对纯 CLI session 调用会把它"导入"成
+    /// desktop session，跟用户预期相反。调用方必须先用 metadata reader 或
+    /// entrypoint 确认是 desktop 起的。
+    ///
+    /// 同时 raise app 到前台，避免 NSWorkspace.open 在 app 未运行时只起进程
+    /// 不抢焦点的边缘 case。
+    private static func activateClaudeDesktop(sid: String? = nil) {
+        if let sid = sid,
+           let url = URL(string: "claude://claude.ai/resume?session=\(sid)") {
+            NSWorkspace.shared.open(url)
+            MLog("[BoardAPI] activateClaudeDesktop sid=\(sid.prefix(8)) → resume?session=...")
+        }
+
         let script = "tell application \"Claude\" to activate"
         let process = Process()
         process.launchPath = "/usr/bin/osascript"
@@ -227,7 +325,7 @@ enum BoardAPI {
         // Desktop / Cowork synthetic session 没有可注入的 inbox（其子进程不
         // 长跑，inject 时间点 Stop hook 不会再来），明确告诉前端不支持。
         if resolveDesktopMetadataSid(sid) != nil
-            && PluginManager.shared.sessions.first(where: { $0.id == sid || $0.id.hasPrefix(sid) }) == nil {
+            && resolvePluginSession(sid) == nil {
             return errorResponse(
                 "unsupported_for_desktop",
                 "inject is only supported for live CLI / hook-driven sessions; Desktop & Cowork sessions don't keep a long-running process to deliver to",
@@ -235,26 +333,18 @@ enum BoardAPI {
             )
         }
 
-        // 在 PluginManager 的 session 列表中做 short-id 匹配，拿回真实的 sessionId
-        let sessions = PluginManager.shared.sessions
-        let match = sessions.first(where: { $0.id == sid })
-            ?? sessions.first(where: { $0.id.hasPrefix(sid) })
-        guard let session = match else {
+        guard let session = resolvePluginSession(sid) else {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
 
-        // Claude plugin 把 sessionId 前缀成 "com.meee2.plugin.claude-xxxx"，
-        // inbox 文件以原始 sessionId 为 key
-        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
-            ? String(session.id.dropFirst("\(session.pluginId)-".count))
-            : session.id
+        let targetSessionId = inboxSessionId(for: session)
 
         // 统一路径（方案 B 全量）：operator 被看作 per-session 的一个
         // 普通 channel member，走 MessageRouter.send() → audit → deliverPending
         // → inbox 写入；resting session 的 Ghostty push 由 deliverPending
         // 的钩子自动触发（见 MessageRouter.pushToRestingSessionIfNeeded）。
         do {
-            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: realSessionId)
+            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
             let written = try MessageRouter.shared.send(
                 channel: channelName,
                 fromAlias: "operator",
@@ -262,8 +352,8 @@ enum BoardAPI {
                 content: content,
                 injectedByHuman: true
             )
-            let status = SessionStore.shared.get(realSessionId)?.status.rawValue ?? "?"
-            NSLog("[inject] via channel=\(channelName) msg=\(written.id) sid=\(realSessionId.prefix(8)) status=\(status)")
+            let status = SessionStore.shared.get(targetSessionId)?.status.rawValue ?? session.status.rawValue
+            NSLog("[inject] via channel=\(channelName) msg=\(written.id) sid=\(targetSessionId.prefix(8)) status=\(status)")
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(MessageEnvelope(message: BoardDTOBuilder.messageDTO(written)),
                                 status: 201, reason: "Created")
@@ -281,9 +371,7 @@ enum BoardAPI {
         }
 
         // 优先 PluginManager 匹配（CLI 和"刚活过的 desktop"都在这里）
-        let sessions = PluginManager.shared.sessions
-        let match = sessions.first(where: { $0.id == sid })
-            ?? sessions.first(where: { $0.id.hasPrefix(sid) })
+        let match = resolvePluginSession(sid)
 
         // PluginManager 没找到就 fallback 到 desktop / cowork metadata。
         // metadata.transcriptPath 已经按 source 解析好了：
@@ -307,9 +395,7 @@ enum BoardAPI {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
 
-        let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
-            ? String(session.id.dropFirst("\(session.pluginId)-".count))
-            : session.id
+        let realSessionId = pluginSessionIds(session).last ?? session.id
         let data = SessionStore.shared.get(realSessionId) ?? SessionStore.shared.get(session.id)
         let transcriptPath = data?.transcriptPath ?? session.transcriptPath
 
@@ -322,6 +408,37 @@ enum BoardAPI {
 
         let entries = FullTranscriptReader.read(transcriptPath: transcriptPath, limit: limit)
         return jsonResponse(FullTranscriptEnvelope(entries: entries, sessionId: realSessionId))
+    }
+
+    /// GET /api/sessions/:id/inbox?drain=true
+    /// Reads the delivered direct inbox file for a session. `drain=true`
+    /// consumes the messages after returning them; Codex needs this because it
+    /// has no Claude Stop hook to consume the JSON inbox file for it.
+    static func getSessionInbox(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let inboxSids = resolveInboxSessionIds(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+
+        let drain = req.queryParams.contains { key, value in
+            key == "drain" && ["1", "true", "yes"].contains((value.removingPercentEncoding ?? value).lowercased())
+        }
+        let messages = inboxSids
+            .flatMap { drain
+                ? MessageRouter.shared.drainInbox(sessionId: $0)
+                : MessageRouter.shared.peekInbox(sessionId: $0)
+            }
+            .reduce(into: [A2AMessage]()) { out, msg in
+                guard !out.contains(where: { $0.id == msg.id }) else { return }
+                out.append(msg)
+            }
+            .sorted { $0.createdAt < $1.createdAt }
+        if drain, !messages.isEmpty {
+            BoardServer.shared.broadcastStateChanged()
+        }
+        return jsonResponse(MessagesEnvelope(messages: messages.map { BoardDTOBuilder.messageDTO($0) }))
     }
 
     /// POST /api/sessions/spawn
@@ -755,11 +872,16 @@ enum BoardAPI {
         guard let json = parseJSONBody(req) else {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
         }
+        let current = BoardLayoutStore.shared.load()
         let sessions = parsePointMap(json["sessions"])
         let channels = parsePointMap(json["channels"])
         let layout = BoardLayoutStore.Layout(
-            sessions: sessions,
-            channels: channels,
+            sessions: json.keys.contains("sessions") ? sessions : current.sessions,
+            channels: json.keys.contains("channels") ? channels : current.channels,
+            viewport: json.keys.contains("viewport") ? parseViewport(json["viewport"]) : current.viewport,
+            userElements: json.keys.contains("userElements") ? parseJSONValueArray(json["userElements"]) : current.userElements,
+            dismissedSids: json.keys.contains("dismissedSids") ? parseStringArray(json["dismissedSids"]) : current.dismissedSids,
+            unreadSids: json.keys.contains("unreadSids") ? parseStringArray(json["unreadSids"]) : current.unreadSids,
             updatedAt: Date()
         )
         do {
@@ -772,6 +894,93 @@ enum BoardAPI {
         } catch {
             return errorResponse("internal_error", error.localizedDescription, status: 500)
         }
+    }
+
+    // MARK: - External Chat Sessions (browser extension push)
+
+    /// POST /api/external-sessions/upsert
+    /// Body: {
+    ///   source: "chatgpt-web" | "claude-web" | "external",
+    ///   externalId: string (browser-side conversation id),
+    ///   title: string,
+    ///   url?: string,
+    ///   status: "idle" | "thinking" | "active" | ...,
+    ///   recentMessages?: [{role, text, timestamp?}]
+    /// }
+    /// → { sid, isNew }
+    static func upsertExternalSession(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let source = json["source"] as? String, !source.isEmpty,
+              let externalId = json["externalId"] as? String, !externalId.isEmpty else {
+            return errorResponse("bad_request", "missing source / externalId", status: 400)
+        }
+        let title = (json["title"] as? String) ?? ""
+        let url = json["url"] as? String
+        let status = (json["status"] as? String) ?? "idle"
+
+        var msgs: [(role: String, text: String, timestamp: Date?)] = []
+        if let rawMsgs = json["recentMessages"] as? [[String: Any]] {
+            for m in rawMsgs {
+                guard let role = m["role"] as? String,
+                      let text = m["text"] as? String else { continue }
+                let ts = (m["timestamp"] as? String).flatMap(ISO8601DateFormatter().date(from:))
+                msgs.append((role: role, text: text, timestamp: ts))
+            }
+        }
+
+        let result = ExternalChatPlugin.shared.upsert(
+            source: source,
+            externalId: externalId,
+            title: title,
+            url: url,
+            status: status,
+            recentMessages: msgs
+        )
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(ExternalSessionUpsertEnvelope(sid: result.sid, isNew: result.isNew))
+    }
+
+    /// POST /api/external-sessions/:sid/append-message
+    /// Body: { role, text, timestamp? }
+    static func appendExternalMessage(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":sid"] else {
+            return errorResponse("bad_request", "missing sid", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let role = json["role"] as? String,
+              let text = json["text"] as? String else {
+            return errorResponse("bad_request", "missing role / text", status: 400)
+        }
+        let ts = (json["timestamp"] as? String).flatMap(ISO8601DateFormatter().date(from:))
+        let ok = ExternalChatPlugin.shared.appendMessage(sid: sid, role: role, text: text, timestamp: ts)
+        if !ok {
+            return errorResponse("not_found", "external session not found: \(sid)", status: 404)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    /// DELETE /api/external-sessions/:sid
+    /// Browser tab closed → drop the session card.
+    static func deleteExternalSession(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":sid"] else {
+            return errorResponse("bad_request", "missing sid", status: 400)
+        }
+        let removed = ExternalChatPlugin.shared.remove(sid: sid)
+        if !removed {
+            return errorResponse("not_found", "external session not found: \(sid)", status: 404)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private struct ExternalSessionUpsertEnvelope: Encodable {
+        let sid: String
+        let isNew: Bool
     }
 
     /// `{key: {x,y}}` → `[key: Point]`，容错解析：未知 shape 视为空。
@@ -787,5 +996,24 @@ enum BoardAPI {
             }
         }
         return out
+    }
+
+    private static func parseViewport(_ raw: Any?) -> BoardLayoutStore.Viewport? {
+        guard let obj = raw as? [String: Any] else { return nil }
+        let scrollX = (obj["scrollX"] as? NSNumber)?.doubleValue ?? (obj["scrollX"] as? Double)
+        let scrollY = (obj["scrollY"] as? NSNumber)?.doubleValue ?? (obj["scrollY"] as? Double)
+        let zoom = (obj["zoom"] as? NSNumber)?.doubleValue ?? (obj["zoom"] as? Double)
+        guard let scrollX = scrollX, let scrollY = scrollY, let zoom = zoom else { return nil }
+        return BoardLayoutStore.Viewport(scrollX: scrollX, scrollY: scrollY, zoom: zoom)
+    }
+
+    private static func parseJSONValueArray(_ raw: Any?) -> [BoardJSONValue] {
+        guard let arr = raw as? [Any] else { return [] }
+        return arr.compactMap(BoardJSONValue.fromAny)
+    }
+
+    private static func parseStringArray(_ raw: Any?) -> [String] {
+        guard let arr = raw as? [Any] else { return [] }
+        return arr.compactMap { $0 as? String }
     }
 }

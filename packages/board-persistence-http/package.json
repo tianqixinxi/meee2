@@ -1,0 +1,34 @@
+{
+  "name": "@tianqixinxi/board-persistence-http",
+  "version": "0.1.0",
+  "description": "HTTP + localStorage backed CanvasPersistence implementation for the meee2 Swift board backend.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist tsconfig.tsbuildinfo"
+  },
+  "publishConfig": {
+    "access": "restricted",
+    "registry": "https://npm.pkg.github.com"
+  },
+  "dependencies": {
+    "@tianqixinxi/board-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5"
+  }
+}

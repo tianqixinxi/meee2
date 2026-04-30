@@ -22,6 +22,57 @@ private let _terminalCacheTTL: TimeInterval = 10.0
 private let _ghosttyTtyCacheLock = NSLock()
 private var _ghosttyTtyCache: [String: TerminalCacheEntry] = [:]
 
+private struct GhosttyReachabilitySnapshot {
+    let checkedAt: Date
+    let terminalIds: Set<String>
+    let ttyPaths: Set<String>
+}
+
+private let _ghosttySnapshotLock = NSLock()
+private var _ghosttySnapshot: GhosttyReachabilitySnapshot?
+private var _ghosttySnapshotRefreshInFlight = false
+
+private func ghosttyReachabilitySnapshot() -> GhosttyReachabilitySnapshot {
+    let now = Date()
+    var shouldRefresh = false
+    var snapshotToReturn: GhosttyReachabilitySnapshot?
+
+    _ghosttySnapshotLock.lock()
+    if let cached = _ghosttySnapshot,
+       now.timeIntervalSince(cached.checkedAt) < _terminalCacheTTL {
+        _ghosttySnapshotLock.unlock()
+        return cached
+    }
+    snapshotToReturn = _ghosttySnapshot
+    if !_ghosttySnapshotRefreshInFlight {
+        _ghosttySnapshotRefreshInFlight = true
+        shouldRefresh = true
+    }
+    _ghosttySnapshotLock.unlock()
+
+    if shouldRefresh {
+        DispatchQueue.global(qos: .utility).async {
+            let snap = GhosttyTerminalRegistry.snapshot()
+            let next = GhosttyReachabilitySnapshot(
+                checkedAt: Date(),
+                terminalIds: Set(snap.map { $0.id }),
+                ttyPaths: Set(snap.map { $0.tty })
+            )
+
+            _ghosttySnapshotLock.lock()
+            _ghosttySnapshot = next
+            _ghosttySnapshotRefreshInFlight = false
+            _ghosttySnapshotLock.unlock()
+        }
+    }
+
+    return snapshotToReturn ?? GhosttyReachabilitySnapshot(
+        checkedAt: .distantPast,
+        terminalIds: [],
+        ttyPaths: []
+    )
+}
+
 /// Probe Ghostty for any live terminal hosting `tty`. Cached for 10s.
 /// On AppleScript error returns true (don't kill on transient failure).
 internal func ghosttyHasTty(_ tty: String) -> Bool {
@@ -36,66 +87,26 @@ internal func ghosttyHasTty(_ tty: String) -> Bool {
 
     // tty 形如 "ttys000"；Ghostty 返回 "/dev/ttys000"
     let ttyPath = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
-    let escaped = ttyPath.replacingOccurrences(of: "\"", with: "\\\"")
-    let script = """
-    tell application "Ghostty"
-        try
-            repeat with t in terminals
-                try
-                    if (tty of t as string) is "\(escaped)" then return "ok"
-                end try
-            end repeat
-            return ""
-        on error
-            return "transient"
-        end try
-    end tell
-    """
-
-    let process = Process()
-    process.launchPath = "/usr/bin/osascript"
-    process.arguments = ["-e", script]
-    let outPipe = Pipe()
-    let errPipe = Pipe()
-    process.standardOutput = outPipe
-    process.standardError = errPipe
-    defer {
-        try? outPipe.fileHandleForReading.close()
-        try? outPipe.fileHandleForWriting.close()
-        try? errPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForWriting.close()
-    }
-
-    do { try process.run() } catch {
-        MWarn("[TranscriptStatusResolver] failed to launch osascript for tty probe: \(error)")
-        return true // 启动失败按 alive 处理，不误杀
-    }
-
-    let deadline = Date().addingTimeInterval(_terminalProbeTimeout)
-    while process.isRunning {
-        if Date() >= deadline {
-            process.terminate()
-            MWarn("[TranscriptStatusResolver] osascript tty probe timed out for tty=\(tty); assuming alive")
-            return true
+    let snap = ghosttyReachabilitySnapshot()
+    if !snap.ttyPaths.isEmpty {
+        let alive = snap.ttyPaths.contains(ttyPath)
+        if now.timeIntervalSince(snap.checkedAt) < _terminalCacheTTL {
+            _ghosttyTtyCacheLock.lock()
+            _ghosttyTtyCache[tty] = TerminalCacheEntry(checkedAt: now, alive: alive)
+            _ghosttyTtyCacheLock.unlock()
         }
-        Thread.sleep(forTimeInterval: 0.02)
+        return alive
     }
 
-    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-    let output = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    // "ok" → 找到；"" → 没找到（孤儿）；"transient" → AppleScript 出错（保守 alive）
-    let alive = (output != "")
+    // Empty snapshot means Ghostty is not running, does not expose tty yet, or
+    // AppleScript failed. Be conservative: do not mark sessions dead from a
+    // possibly-incomplete probe.
     _ghosttyTtyCacheLock.lock()
-    _ghosttyTtyCache[tty] = TerminalCacheEntry(checkedAt: now, alive: alive)
+    _ghosttyTtyCache[tty] = TerminalCacheEntry(checkedAt: now, alive: true)
     _ghosttyTtyCacheLock.unlock()
-    return alive
-}
+    return true
 
-// Hard budget: if osascript ever takes longer than this, we give up and
-// treat the terminal as reachable. Better to miss a dead-session mark than
-// to stall the /api/state response.
-private let _terminalProbeTimeout: TimeInterval = 0.5
+}
 
 /// Check if a Ghostty terminal id is still reachable. Cached for 10s per id.
 /// On timeout or AppleScript failure returns `true` (don't mark dead on
@@ -111,69 +122,16 @@ private func terminalAlive(_ terminalId: String) -> Bool {
     }
     _terminalCacheLock.unlock()
 
-    let alive = probeGhosttyTerminal(terminalId)
+    let snap = ghosttyReachabilitySnapshot()
+    let alive: Bool = snap.terminalIds.isEmpty ? true : snap.terminalIds.contains(terminalId)
 
-    _terminalCacheLock.lock()
-    _terminalCache[terminalId] = TerminalCacheEntry(checkedAt: now, alive: alive)
-    _terminalCacheLock.unlock()
+    if now.timeIntervalSince(snap.checkedAt) < _terminalCacheTTL {
+        _terminalCacheLock.lock()
+        _terminalCache[terminalId] = TerminalCacheEntry(checkedAt: now, alive: alive)
+        _terminalCacheLock.unlock()
+    }
 
     return alive
-}
-
-/// Synchronously probe Ghostty for a terminal id. Returns false only if the
-/// AppleScript explicitly reports the terminal doesn't exist. Any other
-/// condition (timeout, script failure, Ghostty not running) returns true so
-/// we don't mark the session dead on a transient glitch.
-private func probeGhosttyTerminal(_ terminalId: String) -> Bool {
-    let escaped = terminalId.replacingOccurrences(of: "\"", with: "\\\"")
-    let script = """
-    tell application "Ghostty"
-        try
-            set t to terminal id "\(escaped)"
-            return "ok"
-        on error
-            return ""
-        end try
-    end tell
-    """
-
-    let process = Process()
-    process.launchPath = "/usr/bin/osascript"
-    process.arguments = ["-e", script]
-
-    let outPipe = Pipe()
-    let errPipe = Pipe()
-    process.standardOutput = outPipe
-    process.standardError = errPipe
-    defer {
-        try? outPipe.fileHandleForReading.close()
-        try? outPipe.fileHandleForWriting.close()
-        try? errPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForWriting.close()
-    }
-
-    do {
-        try process.run()
-    } catch {
-        MWarn("[TranscriptStatusResolver] failed to launch osascript: \(error)")
-        return true
-    }
-
-    // Poll for completion with a hard deadline.
-    let deadline = Date().addingTimeInterval(_terminalProbeTimeout)
-    while process.isRunning {
-        if Date() >= deadline {
-            process.terminate()
-            MWarn("[TranscriptStatusResolver] osascript probe timed out for terminal=\(terminalId.prefix(8)); assuming alive")
-            return true
-        }
-        Thread.sleep(forTimeInterval: 0.02)
-    }
-
-    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-    let output = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    return output == "ok"
 }
 
 // MARK: - Resolved-status cache

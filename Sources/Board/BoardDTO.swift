@@ -173,6 +173,23 @@ enum BoardDTOBuilder {
         return f
     }()
 
+    private struct TranscriptPreviewCacheKey: Hashable {
+        let parser: String
+        let path: String
+    }
+
+    private struct TranscriptPreviewCacheEntry {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+        let cachedAt: Date
+        let entries: [TranscriptEntryDTO]
+    }
+
+    private static let transcriptPreviewCacheLock = NSLock()
+    private static var transcriptPreviewCache: [TranscriptPreviewCacheKey: TranscriptPreviewCacheEntry] = [:]
+    private static let transcriptPreviewCacheMaxEntries = 256
+    private static let transcriptPreviewCacheFreshSeconds: TimeInterval = 1.0
+
     static func iso(_ date: Date) -> String { iso8601.string(from: date) }
     static func iso(_ date: Date?) -> String? {
         guard let d = date else { return nil }
@@ -293,38 +310,63 @@ enum BoardDTOBuilder {
         let terminalInfo = sessionData?.terminalInfo ?? session.terminalInfo
         let tty = terminalInfo?.tty
         let termProgram = terminalInfo?.termProgram
+        let hydrateHeavyTranscriptFields = shouldHydrateHeavyTranscriptFields(
+            transcriptPath: sessionData?.transcriptPath,
+            status: resolvedStatus
+        )
 
         // 后台 agent / task：扫 transcript tail 找 Agent run_in_background /
         // Monitor / Bash run_in_background 的 tool_result 启动锚点，减掉已经
         // 出现在 <task-notification>...<status>completed</status></> 里的。
-        let bgAgents: [BackgroundAgentDTO] = BackgroundAgentResolver
-            .resolve(transcriptPath: sessionData?.transcriptPath)
-            .map {
-                BackgroundAgentDTO(
-                    id: $0.id,
-                    kind: $0.kind,
-                    description: $0.description,
-                    startedAt: $0.startedAt.map { iso($0) } ?? nil
-                )
-            }
+        let bgAgents: [BackgroundAgentDTO] = hydrateHeavyTranscriptFields
+            ? BackgroundAgentResolver
+                .resolve(transcriptPath: sessionData?.transcriptPath)
+                .map {
+                    BackgroundAgentDTO(
+                        id: $0.id,
+                        kind: $0.kind,
+                        description: $0.description,
+                        startedAt: $0.startedAt.map { iso($0) } ?? nil
+                    )
+                }
+            : []
 
         // Recap：Claude CLI 的 away summary / `/recap` 在 transcript 里以
         // `system subtype=away_summary` 落盘，扫 tail 拿最新一条。
-        let recapDTO: RecapDTO? = RecapResolver
-            .resolve(transcriptPath: sessionData?.transcriptPath)
-            .map {
-                RecapDTO(
-                    content: $0.content,
-                    timestamp: $0.timestamp.map { iso($0) } ?? nil
-                )
-            }
+        let recapDTO: RecapDTO? = hydrateHeavyTranscriptFields
+            ? RecapResolver
+                .resolve(transcriptPath: sessionData?.transcriptPath)
+                .map {
+                    RecapDTO(
+                        content: $0.content,
+                        timestamp: $0.timestamp.map { iso($0) } ?? nil
+                    )
+                }
+            : nil
 
         // ─── Claude Desktop / Cowork 集成 ───
         // 查一下 ClaudeDesktopMetadataReader：命中即说明这是 Claude.app 起的
         // session（claude-code-sessions 或 local-agent-mode-sessions）。
         // 覆盖 title / 标 clientKind / 用 metadata 的 model。
         let desktopMeta = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId)
-        let clientKind: String = desktopMeta?.source.rawValue ?? "cli"
+        // metadata reader 30s 才扫一次，新建 desktop session 在第一个扫描周期内
+        // 会被错判成 CLI。entrypoint 写在 transcript 顶部，hook 一进来就能读。
+        // 命中规则：
+        //   - desktopMeta 优先（带 friendly title / model 装饰，能区分 desktop vs cowork）
+        //   - 否则按 entrypoint 推断："claude-desktop" → "desktop"，sdk-* → 透传
+        //   - 都没有 → "cli"
+        let entrypoint = ClaudeEntrypointReader.read(
+            transcriptPath: sessionData?.transcriptPath ?? session.transcriptPath
+        )
+        let clientKind: String = {
+            if let src = desktopMeta?.source.rawValue { return src }
+            switch entrypoint {
+            case ClaudeEntrypointReader.knownDesktop: return "desktop"
+            case ClaudeEntrypointReader.knownSDKPy:   return "sdk-py"
+            case ClaudeEntrypointReader.knownSDKTs:   return "sdk-ts"
+            default: return "cli"
+            }
+        }()
 
         // title 优先用 desktop 的 user-friendly 标题（"AI Product Twitter
         // Marketing Strategy" 这种），fallback 到 PluginSession.title（cwd basename）
@@ -432,30 +474,104 @@ enum BoardDTOBuilder {
     }
 
     private static func transcriptPreviewFromClaude(path: String) -> [TranscriptEntryDTO] {
-        let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 5)
-        return msgs.map {
-            TranscriptEntryDTO(role: $0.role, text: String($0.text.prefix(1000)))
+        cachedTranscriptPreview(path: path, parser: "claude") {
+            let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 5)
+            return msgs.map {
+                TranscriptEntryDTO(role: $0.role, text: String($0.text.prefix(1000)))
+            }
         }
     }
 
     private static func transcriptPreviewFromFullReader(path: String) -> [TranscriptEntryDTO] {
-        FullTranscriptReader.read(transcriptPath: path, limit: 5).compactMap { entry in
-            let parts = entry.blocks.compactMap { block -> String? in
-                switch block.type {
-                case "text", "thinking":
-                    return block.text
-                case "tool_use":
-                    return block.toolName.map { "tool: \($0)" }
-                case "tool_result":
-                    return block.toolResultText
-                default:
-                    return nil
+        cachedTranscriptPreview(path: path, parser: "full-reader") {
+            FullTranscriptReader.readTail(
+                transcriptPath: path,
+                limit: 5,
+                maxBytes: 512 * 1024
+            ).compactMap { entry in
+                let parts = entry.blocks.compactMap { block -> String? in
+                    switch block.type {
+                    case "text", "thinking":
+                        return block.text
+                    case "tool_use":
+                        return block.toolName.map { "tool: \($0)" }
+                    case "tool_result":
+                        return block.toolResultText
+                    default:
+                        return nil
+                    }
                 }
+                let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { return nil }
+                return TranscriptEntryDTO(role: entry.type, text: String(text.prefix(1000)))
             }
-            let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
-            return TranscriptEntryDTO(role: entry.type, text: String(text.prefix(1000)))
         }
+    }
+
+    private static func cachedTranscriptPreview(
+        path: String,
+        parser: String,
+        load: () -> [TranscriptEntryDTO]
+    ) -> [TranscriptEntryDTO] {
+        let key = TranscriptPreviewCacheKey(parser: parser, path: path)
+        let now = Date()
+
+        transcriptPreviewCacheLock.lock()
+        if let cached = transcriptPreviewCache[key],
+           now.timeIntervalSince(cached.cachedAt) < transcriptPreviewCacheFreshSeconds {
+            let entries = cached.entries
+            transcriptPreviewCacheLock.unlock()
+            return entries
+        }
+        transcriptPreviewCacheLock.unlock()
+
+        guard let fingerprint = transcriptPreviewFingerprint(path: path) else {
+            return load()
+        }
+
+        transcriptPreviewCacheLock.lock()
+        if let cached = transcriptPreviewCache[key] {
+            if now.timeIntervalSince(cached.cachedAt) < transcriptPreviewCacheFreshSeconds ||
+                (cached.fileSize == fingerprint.fileSize && cached.modifiedAt == fingerprint.modifiedAt) {
+                let entries = cached.entries
+                transcriptPreviewCacheLock.unlock()
+                return entries
+            }
+        }
+
+        let entries = load()
+        transcriptPreviewCache[key] = TranscriptPreviewCacheEntry(
+            fileSize: fingerprint.fileSize,
+            modifiedAt: fingerprint.modifiedAt,
+            cachedAt: now,
+            entries: entries
+        )
+        if transcriptPreviewCache.count > transcriptPreviewCacheMaxEntries,
+           let oldest = transcriptPreviewCache.min(by: { $0.value.cachedAt < $1.value.cachedAt })?.key {
+            transcriptPreviewCache.removeValue(forKey: oldest)
+        }
+        transcriptPreviewCacheLock.unlock()
+        return entries
+    }
+
+    private static func transcriptPreviewFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return nil
+        }
+        let fileSize = (attrs[.size] as? NSNumber)?.uint64Value
+        let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970
+        guard let fileSize = fileSize, let modifiedAt = modifiedAt else {
+            return nil
+        }
+        return (fileSize, modifiedAt)
+    }
+
+    private static func shouldHydrateHeavyTranscriptFields(
+        transcriptPath: String?,
+        status: SessionStatus
+    ) -> Bool {
+        guard transcriptPath != nil else { return false }
+        return status.isWorking || status.needsUserAction
     }
 
     /// 计算一个 sessionId 的待投递消息数（对其名下所有 alias 的 pending/held 合计）

@@ -45,8 +45,8 @@ class CursorPlugin: SessionPlugin {
         return URL(fileURLWithPath: projectsPathString)
     }
 
-    // 活跃时间阈值（秒）- 文件修改时间在此阈值内视为活跃
-    private let activeThreshold: TimeInterval = 300  // 5分钟
+    // Cursor 上游不暴露归档概念，因此本插件展示所有有 transcript 活动的项目；
+    // 不再做时间窗口过滤——和其它 AI 客户端插件的语义保持一致。
 
     // MARK: - Lifecycle
 
@@ -189,25 +189,21 @@ class CursorPlugin: SessionPlugin {
 
             // 获取最近的 transcript 活动时间、最后消息和状态
             if let (lastActivity, lastMessage, detectedStatus) = getLastTranscriptActivityAndMessage(transcriptsDir: transcriptsDir) {
-                let timeSinceActivity = Date().timeIntervalSince(lastActivity)
                 // 使用 TranscriptStatusParser 检测的状态，而非简单的时间判断
                 let status: SessionStatus = detectedStatus
 
-                // 只显示最近活跃的 session (1小时内)
-                if timeSinceActivity < 3600 {
-                    let session = PluginSession(
-                        id: "\(pluginId)-\(projectDir.lastPathComponent)",
-                        pluginId: pluginId,
-                        title: projectName,
-                        status: status,
-                        startedAt: lastActivity,
-                        cwd: projectPath,
-                        icon: "cursorarrow",
-                        accentColor: .blue,
-                        lastMessage: lastMessage
-                    )
-                    sessions.append(session)
-                }
+                let session = PluginSession(
+                    id: "\(pluginId)-\(projectDir.lastPathComponent)",
+                    pluginId: pluginId,
+                    title: projectName,
+                    status: status,
+                    startedAt: lastActivity,
+                    cwd: projectPath,
+                    icon: "cursorarrow",
+                    accentColor: .blue,
+                    lastMessage: lastMessage
+                )
+                sessions.append(session)
             }
         }
 

@@ -4,7 +4,7 @@ import Foundation
 ///
 /// 流程：
 ///   1. 启动 BoardServer（Swifter HTTP + WebSocket）
-///   2. 用 `/usr/bin/open <url>` 打开默认浏览器
+///   2. 标记 GUI launch 后打开原生 Board Web shell
 ///   3. 返回 `true`，让 GUI main loop 保持进程存活，服务器随之长期运行
 public enum BoardCommand {
     /// 环境变量名 —— 让 GUI 启动后也识别「是从 board 命令进入的」（AppDelegate 可选读）
@@ -20,14 +20,7 @@ public enum BoardCommand {
             return false
         }
 
-        let url = BoardServer.shared.url
-        print("Board running at \(url)")
-
-        // 打开默认浏览器（不阻塞）
-        _ = try? Process.run(
-            URL(fileURLWithPath: "/usr/bin/open"),
-            arguments: [url]
-        )
+        print("Board shell starting at \(BoardServer.shared.url)")
 
         // 继续启动 GUI —— GUI main loop 保证进程存活，服务器随之长期运行
         return true

@@ -329,19 +329,51 @@ public struct MsgCommand {
 
     private static func resolveSessionPrefix(_ prefix: String) -> String? {
         let sessions = SessionStore.shared.listAll()
-        let matches = sessions.filter { $0.sessionId.hasPrefix(prefix) }
+        var candidates = sessions.map { $0.sessionId }
+        candidates.append(contentsOf: MessageRouter.shared.allInboxSessionIds())
+        for ch in ChannelRegistry.shared.list() {
+            candidates.append(contentsOf: ch.members.map { $0.sessionId })
+        }
+        candidates.append(contentsOf: A2AIdentity.currentSessionIdCandidates())
+
+        var seen = Set<String>()
+        candidates = candidates.filter { sid in
+            guard !sid.isEmpty, !seen.contains(sid) else { return false }
+            seen.insert(sid)
+            return true
+        }
+
+        let matches = candidates.filter { sessionIdMatches($0, prefix: prefix) }
         if matches.isEmpty {
             print("Error: no session matches prefix '\(prefix)'")
             return nil
         }
         if matches.count > 1 {
             print("Error: multiple sessions match prefix '\(prefix)':")
-            for s in matches {
-                print("  \(s.sessionId) - \(s.project)")
+            for sid in matches {
+                let project = sessions.first(where: { $0.sessionId == sid })?.project ?? "-"
+                print("  \(sid) - \(project)")
             }
             return nil
         }
-        return matches[0].sessionId
+        return matches[0]
+    }
+
+    private static func sessionIdMatches(_ sessionId: String, prefix: String) -> Bool {
+        if sessionId.hasPrefix(prefix) { return true }
+        if let raw = pluginRawId(sessionId), raw.hasPrefix(prefix) { return true }
+        return false
+    }
+
+    private static func pluginRawId(_ sessionId: String) -> String? {
+        let knownPrefixes = [
+            "com.meee2.plugin.claude-",
+            "com.meee2.plugin.codex-"
+        ]
+        for knownPrefix in knownPrefixes where sessionId.hasPrefix(knownPrefix) {
+            return String(sessionId.dropFirst(knownPrefix.count))
+        }
+        return nil
     }
 
     private static func truncate(_ s: String, _ n: Int) -> String {
@@ -353,9 +385,11 @@ public struct MsgCommand {
     private static func printSendResolutionError(missing: String, channel: String? = nil) {
         let (sid, source) = A2AIdentity.resolve()
         let envPresent = ProcessInfo.processInfo.environment["CLAUDE_SESSION_ID"]?.isEmpty == false
+        let codexEnvPresent = ProcessInfo.processInfo.environment["CODEX_THREAD_ID"]?.isEmpty == false
         let sidLabel: String
         switch source {
         case .envVar:      sidLabel = "from CLAUDE_SESSION_ID env var"
+        case .codexEnv:    sidLabel = "from CODEX_THREAD_ID env var"
         case .cwdMatch:    sidLabel = "from cwd match"
         case .unresolved:  sidLabel = "unresolved"
         }
@@ -366,6 +400,7 @@ public struct MsgCommand {
             print("Error: could not auto-resolve --channel.")
             print("  session: \(sidStr)  [\(sidLabel)]")
             print("  CLAUDE_SESSION_ID=\(envPresent ? "set" : "missing")")
+            print("  CODEX_THREAD_ID=\(codexEnvPresent ? "set" : "missing")")
             let memberships = A2AIdentity.currentMemberships()
             if memberships.isEmpty {
                 print("  This session is not a member of any channel.")
@@ -381,6 +416,7 @@ public struct MsgCommand {
             print("Error: could not resolve sender alias for channel '\(chName)': this session is not a member.")
             print("  session: \(sidStr)  [\(sidLabel)]")
             print("  CLAUDE_SESSION_ID=\(envPresent ? "set" : "missing")")
+            print("  CODEX_THREAD_ID=\(codexEnvPresent ? "set" : "missing")")
             print("  Run 'meee2 whoami' to see your memberships.")
         default:
             print("Error: missing \(missing)")
@@ -405,8 +441,8 @@ public struct MsgCommand {
           meee2 msg whoami
 
         For `send`: when --channel or --from is omitted, the current session is
-        auto-resolved via $CLAUDE_SESSION_ID (set by the Claude CLI) or by matching
-        the process cwd to a known session's project. Run 'meee2 whoami' to inspect.
+        auto-resolved via $CLAUDE_SESSION_ID, $CODEX_THREAD_ID, or by matching the
+        process cwd to a known session's project. Run 'meee2 whoami' to inspect.
         """)
     }
 }
@@ -416,6 +452,7 @@ public struct WhoAmICommand {
     public static func run() {
         let (sid, source) = A2AIdentity.resolve()
         let envPresent = ProcessInfo.processInfo.environment["CLAUDE_SESSION_ID"]?.isEmpty == false
+        let codexEnvPresent = ProcessInfo.processInfo.environment["CODEX_THREAD_ID"]?.isEmpty == false
         let cwd = FileManager.default.currentDirectoryPath
 
         guard let sid = sid else {
@@ -425,6 +462,9 @@ public struct WhoAmICommand {
                 print("  - CLAUDE_SESSION_ID not set")
             } else {
                 print("  - CLAUDE_SESSION_ID set but empty")
+            }
+            if !codexEnvPresent {
+                print("  - CODEX_THREAD_ID not set")
             }
             let cwdMatches = SessionStore.shared.listAll().filter { $0.project == cwd }
             print("  - cwd \(cwd) matched \(cwdMatches.count) active sessions")
@@ -445,6 +485,7 @@ public struct WhoAmICommand {
         let sourceLabel: String
         switch source {
         case .envVar:     sourceLabel = "CLAUDE_SESSION_ID env var"
+        case .codexEnv:   sourceLabel = "CODEX_THREAD_ID env var"
         case .cwdMatch:   sourceLabel = "cwd match"
         case .unresolved: sourceLabel = "unresolved"
         }

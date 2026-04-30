@@ -35,6 +35,9 @@ public struct FullTranscriptBlock: Encodable {
 public enum FullTranscriptReader {
     /// 单条 tool_result 的最大字符数。Read 工具返回整个文件内容，不截会爆。
     private static let _toolResultCap = 8_000
+    private static let _limitedReadMinTailBytes: UInt64 = 512 * 1024
+    private static let _limitedReadMaxTailBytes: UInt64 = 8 * 1024 * 1024
+    private static let _limitedReadBytesPerEntry: UInt64 = 64 * 1024
 
     public static func read(
         transcriptPath: String?,
@@ -44,13 +47,71 @@ public enum FullTranscriptReader {
               FileManager.default.fileExists(atPath: path) else {
             return []
         }
+        if let limit {
+            return readTail(
+                transcriptPath: path,
+                limit: limit,
+                maxBytes: tailBytesForLimitedRead(limit: limit)
+            )
+        }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let raw = String(data: data, encoding: .utf8) else {
             return []
         }
 
-        let lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
+        return parseLines(raw.split(separator: "\n", omittingEmptySubsequences: true), limit: nil)
+    }
 
+    /// Read only the transcript tail and parse the newest entries. This is the
+    /// fast path for board previews and `?limit=N` transcript requests; callers
+    /// that truly need a complete transcript should call `read(..., limit: nil)`.
+    public static func readTail(
+        transcriptPath: String?,
+        limit: Int,
+        maxBytes: UInt64 = 512 * 1024
+    ) -> [FullTranscriptEntry] {
+        guard limit > 0,
+              let path = transcriptPath,
+              FileManager.default.fileExists(atPath: path),
+              let lines = tailLines(path: path, maxBytes: maxBytes) else {
+            return []
+        }
+        return parseLines(lines, limit: limit)
+    }
+
+    private static func tailBytesForLimitedRead(limit: Int) -> UInt64 {
+        let requested = UInt64(max(limit, 1)) * _limitedReadBytesPerEntry
+        return min(_limitedReadMaxTailBytes, max(_limitedReadMinTailBytes, requested))
+    }
+
+    private static func tailLines(path: String, maxBytes: UInt64) -> [Substring]? {
+        let url = URL(fileURLWithPath: path)
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        guard let fileSize = try? handle.seekToEnd() else { return nil }
+        let tailSize = min(fileSize, maxBytes)
+        let offset = fileSize - tailSize
+        do {
+            try handle.seek(toOffset: offset)
+            guard let data = try handle.readToEnd(),
+                  let raw = String(data: data, encoding: .utf8) else {
+                return nil
+            }
+            var lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
+            if offset > 0, !raw.hasPrefix("\n"), !lines.isEmpty {
+                lines.removeFirst()
+            }
+            return lines
+        } catch {
+            return nil
+        }
+    }
+
+    private static func parseLines(
+        _ lines: [Substring],
+        limit: Int?
+    ) -> [FullTranscriptEntry] {
         // ── Pass 1：收集所有 type=user 里 content=string 的真实 prompt 文本。
         // 这一步是为 `last-prompt` 去重做准备。新 schema 里：
         //   - 用户每打一条 prompt → 一个 type=user，message.content 是 string
@@ -389,7 +450,7 @@ public enum FullTranscriptReader {
     }
 
     private static func cap(_ s: String) -> (truncated: Bool, text: String) {
-        if s.count > _toolResultCap {
+        if s.utf8.count > _toolResultCap {
             let cut = s.prefix(_toolResultCap)
             return (true, String(cut) + "\n…(truncated)")
         }

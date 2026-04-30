@@ -1,8 +1,8 @@
 import Foundation
 
-/// 幂等地把 meee2 的 MCP server 写进 `~/.claude.json` 的 `mcpServers.meee2`
-/// 条目里，让任何 Claude Code session 都能原生调 `send_message` /
-/// `list_channels` 等 tool。应用启动时调一次，无变化就是个 noop。
+/// 幂等地把 meee2 的 MCP server 写进 Claude 和 Codex 的全局 MCP 配置，
+/// 让任何 Claude Code / Codex session 都能原生调 `send_message` /
+/// `read_inbox` 等 tool。应用启动时调一次，无变化就是个 noop。
 ///
 /// 为什么不另外写一个 `~/.claude/mcp.json`：Claude Code 目前的 user-wide
 /// MCP 配置就是 `~/.claude.json` 里那个 `mcpServers` 顶级字段；单独的
@@ -43,6 +43,13 @@ public final class MCPConfigManager {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".claude")
             .appendingPathComponent("settings.json")
+    }
+
+    /// Codex CLI / Desktop 读取的全局配置。
+    private var codexConfigPath: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".codex")
+            .appendingPathComponent("config.toml")
     }
 
     private init() {}
@@ -93,6 +100,7 @@ public final class MCPConfigManager {
         if existingCmd == nodeBin, existingArgsFirst == expectedServerPath {
             NSLog("[MCPConfigManager] already registered with correct path, noop")
             ensurePermissionsAllowlist()
+            ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
 
@@ -107,6 +115,7 @@ public final class MCPConfigManager {
 
         guard writeConfigAtomic(rootObject) else {
             NSLog("[MCPConfigManager] failed to write ~/.claude.json; leaving it alone")
+            ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
 
@@ -120,6 +129,7 @@ public final class MCPConfigManager {
         // agent 调用就不再被 PermissionRequest 弹框拦住。幂等：已经全部都在
         // 就静默退出。
         ensurePermissionsAllowlist()
+        ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
     }
 
     /// 确保 meee2 的 MCP tool 全部在 `~/.claude/settings.json` 的
@@ -148,6 +158,88 @@ public final class MCPConfigManager {
         }
         let names = missing.joined(separator: ", ")
         NSLog("[MCPConfigManager] permissions.allow added \(missing.count) meee2 MCP tool(s): \(names)")
+    }
+
+    /// Codex 的 MCP 配置是 TOML：
+    ///
+    ///     [mcp_servers.meee2]
+    ///     command = "node"
+    ///     args = ["/abs/path/to/server.js"]
+    ///
+    /// Foundation 没有内建 TOML parser；这里做一个窄用途的 table block upsert，
+    /// 只替换我们自己的 `[mcp_servers.meee2]` 段，保留其他用户配置原样。
+    private func ensureCodexMCPServer(nodeBin: String, serverPath: String) {
+        let block = """
+        [mcp_servers.\(serverName)]
+        command = \(tomlString(nodeBin))
+        args = [\(tomlString(serverPath))]
+        """
+
+        let original = (try? String(contentsOf: codexConfigPath, encoding: .utf8)) ?? ""
+        let next = upsertTomlTableBlock(
+            in: original,
+            tableHeader: "[mcp_servers.\(serverName)]",
+            block: block
+        )
+        guard next != original else { return }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: codexConfigPath.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try next.write(to: codexConfigPath, atomically: true, encoding: .utf8)
+            NSLog("[MCPConfigManager] registered Codex MCP server → \(serverPath)")
+        } catch {
+            NSLog("[MCPConfigManager] failed to write ~/.codex/config.toml: \(error)")
+        }
+    }
+
+    private func upsertTomlTableBlock(in content: String, tableHeader: String, block: String) -> String {
+        let normalizedBlock = block.hasSuffix("\n") ? block : block + "\n"
+        var lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == tableHeader }) else {
+            var out = content
+            if !out.isEmpty && !out.hasSuffix("\n") { out.append("\n") }
+            if !out.isEmpty { out.append("\n") }
+            out.append(normalizedBlock)
+            return out
+        }
+
+        var end = start + 1
+        while end < lines.count {
+            let trimmed = lines[end].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                break
+            }
+            end += 1
+        }
+
+        let replacement = normalizedBlock.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        lines.replaceSubrange(start..<end, with: replacement)
+        return lines.joined(separator: "\n")
+    }
+
+    private func tomlString(_ value: String) -> String {
+        var escaped = ""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\":
+                escaped += "\\\\"
+            case "\"":
+                escaped += "\\\""
+            case "\n":
+                escaped += "\\n"
+            case "\r":
+                escaped += "\\r"
+            case "\t":
+                escaped += "\\t"
+            default:
+                escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return "\"\(escaped)\""
     }
 
     // MARK: - Path resolution (mirror SettingsConfigManager.getBridgeScriptPath)
