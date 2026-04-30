@@ -1,0 +1,157 @@
+name: Publish Board Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to publish'
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - core
+          - cards
+          - persistence-http
+          - ui
+      version:
+        description: 'Version to publish, e.g. 0.1.1'
+        required: true
+        type: string
+      dist-tag:
+        description: 'npm dist-tag'
+        required: true
+        type: string
+        default: latest
+      dry-run:
+        description: 'Run publish checks without uploading packages'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-board-packages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.package }} @ ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+      PUBLISH_VERSION: ${{ inputs.version }}
+      PACKAGE_SELECTION: ${{ inputs.package }}
+      DIST_TAG: ${{ inputs['dist-tag'] }}
+      DRY_RUN: ${{ inputs['dry-run'] }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: '@tianqixinxi'
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+          pnpm --version
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set package versions for this publish
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+
+          const version = process.env.PUBLISH_VERSION
+          const selection = process.env.PACKAGE_SELECTION
+          const semverish = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+          if (!semverish.test(version)) {
+            throw new Error(`Invalid publish version: ${version}`)
+          }
+
+          const packages = {
+            core: 'packages/board-core/package.json',
+            cards: 'packages/board-cards/package.json',
+            'persistence-http': 'packages/board-persistence-http/package.json',
+            ui: 'packages/board-ui/package.json',
+          }
+          const order = ['core', 'cards', 'persistence-http', 'ui']
+          const selected = selection === 'all' ? order : [selection]
+
+          for (const key of selected) {
+            const file = packages[key]
+            if (!file) throw new Error(`Unknown package selection: ${selection}`)
+            const pkg = JSON.parse(fs.readFileSync(file, 'utf8'))
+            pkg.version = version
+            fs.writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`)
+            console.log(`${pkg.name} -> ${version}`)
+          }
+          NODE
+
+      - name: Build publishable packages
+        run: |
+          pnpm --filter @tianqixinxi/board-core build
+          pnpm --filter @tianqixinxi/board-cards build
+          pnpm --filter @tianqixinxi/board-persistence-http build
+          pnpm --filter @tianqixinxi/board-ui build
+
+      - name: Typecheck publishable packages
+        run: |
+          pnpm --filter @tianqixinxi/board-core typecheck
+          pnpm --filter @tianqixinxi/board-cards typecheck
+          pnpm --filter @tianqixinxi/board-persistence-http typecheck
+          pnpm --filter @tianqixinxi/board-ui typecheck
+
+      - name: Publish selected packages
+        run: |
+          set -euo pipefail
+
+          case "$PACKAGE_SELECTION" in
+            all)
+              PACKAGES=(
+                "@tianqixinxi/board-core"
+                "@tianqixinxi/board-cards"
+                "@tianqixinxi/board-persistence-http"
+                "@tianqixinxi/board-ui"
+              )
+              ;;
+            core)
+              PACKAGES=("@tianqixinxi/board-core")
+              ;;
+            cards)
+              PACKAGES=("@tianqixinxi/board-cards")
+              ;;
+            persistence-http)
+              PACKAGES=("@tianqixinxi/board-persistence-http")
+              ;;
+            ui)
+              PACKAGES=("@tianqixinxi/board-ui")
+              ;;
+            *)
+              echo "::error::Unknown package selection: $PACKAGE_SELECTION"
+              exit 1
+              ;;
+          esac
+
+          for pkg in "${PACKAGES[@]}"; do
+            echo "Publishing $pkg@$PUBLISH_VERSION tag=$DIST_TAG dry_run=$DRY_RUN"
+            if [ "$DRY_RUN" = "true" ]; then
+              pnpm --filter "$pkg" publish --dry-run --no-git-checks --access restricted --tag "$DIST_TAG"
+            else
+              pnpm --filter "$pkg" publish --no-git-checks --access restricted --tag "$DIST_TAG"
+            fi
+          done
