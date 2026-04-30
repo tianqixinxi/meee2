@@ -37,7 +37,7 @@ import {
   ensureChannelPositions,
   type LayoutMap,
   type CanvasPersistence,
-} from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
 import { activateSession, addMember, removeMember } from '../api'
 import { SessionOverlay } from './SessionOverlay'
 
@@ -1530,7 +1530,7 @@ export default function Board({
   // -- Pan board to the channel hub when sidebar selects a channel ----
   // The hub element may not exist on the very first state delivery; depending
   // on `state` re-runs the effect after the scene-rebuild adds the ellipse.
-  // The helper itself is in @tianqixinxi/board-core so meee360 can wire the
+  // The helper itself is in @meee1/board-core so meee360 can wire the
   // identical effect against its own Sidebar selection.
   useEffect(() => {
     if (!api) return

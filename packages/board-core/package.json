@@ -1,5 +1,5 @@
 {
-  "name": "@tianqixinxi/board-core",
+  "name": "@meee1/board-core",
   "version": "0.1.0",
   "description": "Pure logic for the meee2 / meee360 Excalidraw board: scene mapping, layout, channel layout, persistence interface.",
   "type": "module",
@@ -46,8 +46,8 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "publishConfig": {
-    "access": "restricted",
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "devDependencies": {
     "typescript": "^5"

@@ -10,7 +10,7 @@
 //  - Grid responsive: 容器 < 520px 单列，≥ 520px 双列
 
 import { memo, useMemo } from 'react'
-import { CardHost } from '@tianqixinxi/board-ui'
+import { CardHost } from '@meee1/board-ui'
 import type { Session, BoardState } from '../types'
 
 // 缩略图尺寸（显示尺寸），和真实 card 的 360×260 等比

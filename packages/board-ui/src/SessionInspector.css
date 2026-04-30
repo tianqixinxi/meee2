@@ -1,6 +1,6 @@
 /* SessionInspector styles — extracted from meee2/web styles.css.
    Apps import this file via:
-     import '@tianqixinxi/board-ui/SessionInspector.css'
+     import '@meee1/board-ui/SessionInspector.css'
 
    Design tokens (--bg/--border/--accent/--mono/etc.) are scoped to
    .meee2-session-inspector so they don't leak into host page styles
