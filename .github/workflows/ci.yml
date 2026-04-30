@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -29,8 +28,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: '@tianqixinxi'
 
       - name: Enable pnpm
         run: |
@@ -39,18 +36,12 @@ jobs:
           pnpm --version
 
       - name: Install workspace dependencies
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || secrets.GITHUB_TOKEN }}
         run: pnpm install --frozen-lockfile
 
       - name: Build board packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || secrets.GITHUB_TOKEN }}
         run: pnpm build
 
       - name: Typecheck board packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || secrets.GITHUB_TOKEN }}
         run: pnpm typecheck
 
   validate:

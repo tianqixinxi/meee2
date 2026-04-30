@@ -31,7 +31,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: publish-board-packages-${{ github.ref }}
@@ -44,7 +43,7 @@ jobs:
     timeout-minutes: 20
 
     env:
-      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || secrets.GITHUB_TOKEN }}
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       PUBLISH_VERSION: ${{ inputs.version }}
       PACKAGE_SELECTION: ${{ inputs.package }}
       DIST_TAG: ${{ inputs['dist-tag'] }}
@@ -59,8 +58,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: '@tianqixinxi'
+          registry-url: https://registry.npmjs.org
+          scope: '@meee1'
 
       - name: Enable pnpm
         run: |
@@ -70,6 +69,14 @@ jobs:
 
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Require NPM_TOKEN for real publish
+        if: ${{ inputs['dry-run'] == false }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::Missing NPM_TOKEN secret. Add an npm automation token with publish rights before running with dry-run=false."
+            exit 1
+          fi
 
       - name: Set package versions for this publish
         run: |
@@ -104,17 +111,17 @@ jobs:
 
       - name: Build publishable packages
         run: |
-          pnpm --filter @tianqixinxi/board-core build
-          pnpm --filter @tianqixinxi/board-cards build
-          pnpm --filter @tianqixinxi/board-persistence-http build
-          pnpm --filter @tianqixinxi/board-ui build
+          pnpm --filter @meee1/board-core build
+          pnpm --filter @meee1/board-cards build
+          pnpm --filter @meee1/board-persistence-http build
+          pnpm --filter @meee1/board-ui build
 
       - name: Typecheck publishable packages
         run: |
-          pnpm --filter @tianqixinxi/board-core typecheck
-          pnpm --filter @tianqixinxi/board-cards typecheck
-          pnpm --filter @tianqixinxi/board-persistence-http typecheck
-          pnpm --filter @tianqixinxi/board-ui typecheck
+          pnpm --filter @meee1/board-core typecheck
+          pnpm --filter @meee1/board-cards typecheck
+          pnpm --filter @meee1/board-persistence-http typecheck
+          pnpm --filter @meee1/board-ui typecheck
 
       - name: Publish selected packages
         run: |
@@ -123,23 +130,23 @@ jobs:
           case "$PACKAGE_SELECTION" in
             all)
               PACKAGES=(
-                "@tianqixinxi/board-core"
-                "@tianqixinxi/board-cards"
-                "@tianqixinxi/board-persistence-http"
-                "@tianqixinxi/board-ui"
+                "@meee1/board-core"
+                "@meee1/board-cards"
+                "@meee1/board-persistence-http"
+                "@meee1/board-ui"
               )
               ;;
             core)
-              PACKAGES=("@tianqixinxi/board-core")
+              PACKAGES=("@meee1/board-core")
               ;;
             cards)
-              PACKAGES=("@tianqixinxi/board-cards")
+              PACKAGES=("@meee1/board-cards")
               ;;
             persistence-http)
-              PACKAGES=("@tianqixinxi/board-persistence-http")
+              PACKAGES=("@meee1/board-persistence-http")
               ;;
             ui)
-              PACKAGES=("@tianqixinxi/board-ui")
+              PACKAGES=("@meee1/board-ui")
               ;;
             *)
               echo "::error::Unknown package selection: $PACKAGE_SELECTION"
@@ -150,8 +157,8 @@ jobs:
           for pkg in "${PACKAGES[@]}"; do
             echo "Publishing $pkg@$PUBLISH_VERSION tag=$DIST_TAG dry_run=$DRY_RUN"
             if [ "$DRY_RUN" = "true" ]; then
-              pnpm --filter "$pkg" publish --dry-run --no-git-checks --access restricted --tag "$DIST_TAG"
+              pnpm --filter "$pkg" publish --dry-run --no-git-checks --access public --tag "$DIST_TAG"
             else
-              pnpm --filter "$pkg" publish --no-git-checks --access restricted --tag "$DIST_TAG"
+              pnpm --filter "$pkg" publish --no-git-checks --access public --tag "$DIST_TAG"
             fi
           done
