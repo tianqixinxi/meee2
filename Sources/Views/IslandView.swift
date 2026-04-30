@@ -39,6 +39,10 @@ public struct IslandView: View {
     /// 上提示，只是不再"弹窗"。设置在 SettingsView 的 "Auto Expand & Close"。
     @AppStorage("autoExpandEnabled") private var autoExpandEnabled: Bool = true
 
+    /// Codex 超过 1 小时未更新的 session 默认折叠；24 小时以上由 CodexPlugin
+    /// 不再返回。这里持久化用户是否展开 1h-24h 分组。
+    @AppStorage("islandOlderCodexExpanded") private var olderCodexExpanded: Bool = false
+
     @State private var isExpanded = false
     @State private var expandMode: ExpandMode = .manual
     @State private var isClosing = false  // 正在关闭动画中，保持内容显示
@@ -80,6 +84,23 @@ public struct IslandView: View {
             return statusManager.sessions
         }
         return statusManager.sessions.filter { $0.pluginId == selectedPluginTab }
+    }
+
+    private func isOlderCodexSession(_ session: PluginSession) -> Bool {
+        session.pluginId == "com.meee2.plugin.codex"
+            && Date().timeIntervalSince(session.lastUpdated ?? session.startedAt) >= 3600
+    }
+
+    private var primaryFilteredSessions: [PluginSession] {
+        filteredSessions.filter { !isOlderCodexSession($0) }
+    }
+
+    private var olderCodexSessions: [PluginSession] {
+        filteredSessions.filter(isOlderCodexSession)
+    }
+
+    private var visibleFilteredSessions: [PluginSession] {
+        olderCodexExpanded ? primaryFilteredSessions + olderCodexSessions : primaryFilteredSessions
     }
 
     // MARK: - Hover State
@@ -177,7 +198,9 @@ public struct IslandView: View {
         if expandMode != .auto {
             height += spacing  // divider
 
-            let totalSessions = statusManager.sessions.count
+            let totalSessions = primaryFilteredSessions.count
+                + (olderCodexSessions.isEmpty ? 0 : 1)
+                + (olderCodexExpanded ? olderCodexSessions.count : 0)
             if totalSessions > 0 {
                 // 每个 session 行约 56
                 height += min(CGFloat(totalSessions) * 56, 250)
@@ -585,22 +608,66 @@ public struct IslandView: View {
                             } else {
                                 LazyVStack(spacing: 6) {
                                     // 统一的 session 列表（已过滤）
-                                    ForEach(filteredSessions) { session in
+                                    ForEach(primaryFilteredSessions) { session in
                                         PluginSessionRowView(
                                             session: session,
                                             pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
                                             onOpenTerminal: { statusManager.activateTerminal(for: session) },
-                                            otherActiveSessions: filteredSessions.filter { $0.id != session.id },
+                                            otherActiveSessions: visibleFilteredSessions.filter { $0.id != session.id },
                                             onConnectRequest: { target in
                                                 connectRequest = ConnectRequest(fromSession: session, toSession: target)
                                             }
                                         )
                                     }
+
+                                    if !olderCodexSessions.isEmpty {
+                                        Button(action: {
+                                            withAnimation(.easeInOut(duration: 0.15)) {
+                                                olderCodexExpanded.toggle()
+                                            }
+                                        }) {
+                                            HStack {
+                                                Image(systemName: olderCodexExpanded ? "chevron.down" : "chevron.right")
+                                                    .font(.system(size: 9, weight: .semibold))
+                                                Text("Older")
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                Text("(\(olderCodexSessions.count))")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(.white.opacity(0.45))
+                                                Spacer()
+                                                Text("1h-24h")
+                                                    .font(.system(size: 10))
+                                                    .foregroundColor(.white.opacity(0.35))
+                                            }
+                                            .foregroundColor(.white.opacity(0.65))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 7)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(Color.white.opacity(0.06))
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+
+                                        if olderCodexExpanded {
+                                            ForEach(olderCodexSessions) { session in
+                                                PluginSessionRowView(
+                                                    session: session,
+                                                    pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
+                                                    onOpenTerminal: { statusManager.activateTerminal(for: session) },
+                                                    otherActiveSessions: visibleFilteredSessions.filter { $0.id != session.id },
+                                                    onConnectRequest: { target in
+                                                        connectRequest = ConnectRequest(fromSession: session, toSession: target)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // Buddy 在底部右下角显示（session 数量 <= 4 时）
                                 if showBuddy, let buddy = buddyReader.buddy,
-                                   filteredSessions.count <= 4 {
+                                   visibleFilteredSessions.count <= 4 {
                                     HStack {
                                         Spacer()
                                         BuddyASCIIView(buddy: buddy)

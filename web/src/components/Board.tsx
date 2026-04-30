@@ -538,10 +538,11 @@ export default function Board({
     //     删掉，然后 reportCountsRef 的 "appeared" 路径也会兜底清理，下一轮 rebuild
     //     这里就会再走默认加卡的分支
     const newSessionIds: string[] = []
-    for (const sid of ids) {
-      if (knownSessionIds.has(sid)) continue
-      if (dismissedRef.current.has(sid)) continue
-      newSessionIds.push(sid)
+    for (const s of state.sessions) {
+      if (s.displayGroup === 'older') continue
+      if (knownSessionIds.has(s.id)) continue
+      if (dismissedRef.current.has(s.id)) continue
+      newSessionIds.push(s.id)
     }
 
     // Only log when something interesting happens (new rects / dismissed

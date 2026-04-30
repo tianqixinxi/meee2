@@ -1,7 +1,8 @@
 // Meee360Pusher - 推送 session 状态和 transcript 消息到 meee360 cloud dashboard
 //
 // 监听 SessionEventBus，当 transcriptAppended / sessionMetadataChanged 时，
-// 调用 meee360 REST API 同步数据。只在 meee360Online=true 时激活。
+// 调用 meee360 REST API 同步数据。默认同步打开，或至少一个 session 被
+// 单独 opt-in 时激活。
 
 import Foundation
 import Combine
@@ -22,8 +23,9 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     // Settings from AppStorage (read on activation)
     private var isConnected: Bool { UserDefaults.standard.bool(forKey: "meee360Connected") }
-    private var isOnline: Bool { UserDefaults.standard.bool(forKey: "meee360Online") }
+    private var defaultSyncEnabled: Bool { UserDefaults.standard.bool(forKey: "meee360Online") }
     private var disabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360DisabledSessionIds") }
+    private var enabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360EnabledSessionIds") }
     private var sessionTeamIds: [String: String] { Self.sessionIdMap(forKey: "meee360SessionTeamIds") }
     private var teamId: String { UserDefaults.standard.string(forKey: "meee360TeamId") ?? "" }
     private var userId: String { UserDefaults.standard.string(forKey: "meee360UserId") ?? "" }
@@ -48,8 +50,8 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     /// Start listening to SessionEventBus and periodic heartbeat
     public func activate() {
-        guard isConnected && isOnline else {
-            MLog("[Meee360Pusher] Not connected or offline, skipping activation")
+        guard shouldStayActive else {
+            MLog("[Meee360Pusher] Not connected or no sync targets, skipping activation")
             return
         }
         guard subscription == nil,
@@ -105,17 +107,21 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     public func refreshActivation() {
-        if isConnected && isOnline {
+        if shouldStayActive {
             activate()
         } else {
             deactivate()
         }
     }
 
+    private var shouldStayActive: Bool {
+        isConnected && (defaultSyncEnabled || !enabledSessionIds.isEmpty)
+    }
+
     // MARK: - Event handling
 
     private func handleEvent(_ event: SessionEvent) {
-        guard isConnected && isOnline else { return }
+        guard shouldStayActive else { return }
 
         switch event {
         case .transcriptAppended(sessionId: let sid):
@@ -349,7 +355,7 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     private func pushPluginSessions(_ sessions: [PluginSession], force: Bool = false) {
-        guard isConnected && isOnline else { return }
+        guard shouldStayActive else { return }
 
         for session in sessions where shouldSyncPluginSession(session) {
             pushPluginSessionUpsert(session: session, force: force) { [weak self] in
@@ -366,13 +372,16 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {
-        let disabled = disabledSessionIds
-        if disabled.contains(sessionId) {
+        let aliases = Self.sessionIdAliases(sessionId)
+        if !aliases.isDisjoint(with: disabledSessionIds) {
             return false
         }
 
-        let aliases = Self.sessionIdAliases(sessionId)
-        return aliases.isDisjoint(with: disabled)
+        if defaultSyncEnabled {
+            return true
+        }
+
+        return !aliases.isDisjoint(with: enabledSessionIds)
     }
 
     private func teamIdForSession(_ sessionId: String) -> String {

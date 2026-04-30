@@ -29,8 +29,9 @@ class CodexPlugin: SessionPlugin {
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("codexRefreshInterval") private var refreshInterval: Double = 10.0
 
-    // 活跃时间阈值（秒）- session 更新时间在此阈值内视为活跃
-    private let activeThreshold: TimeInterval = 3600  // 1小时
+    // 1 小时内算主列表；1 小时到 24 小时仍返回给 Board，但前端折叠显示。
+    private let activeThreshold: TimeInterval = 3600
+    private let retentionThreshold: TimeInterval = 24 * 3600
 
     // MARK: - Lifecycle
 
@@ -256,14 +257,17 @@ class CodexPlugin: SessionPlugin {
                 let lastUpdate = Self.date(seconds: updatedAt, milliseconds: updatedAtMs)
                 let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
 
-                // 只显示最近活跃的 session (1小时内)
-                if timeSinceUpdate < activeThreshold {
+                // 24 小时内的 thread 都保留给 Board；超过 1 小时的由前端折叠，
+                // 避免 idle 一会儿就消失，同时不把历史 thread 无限堆上来。
+                if timeSinceUpdate < retentionThreshold {
                     let transcript = parseCodexTranscript(path: rolloutPath)
 
                     // 状态优先使用 rollout tail 推断；如果最近还在写且进程存在，
                     // 空闲态提升为 active，避免长推理期间只显示 idle。
                     var status = transcript.status ?? .idle
-                    if codexRunning && timeSinceUpdate < 60 && status == .idle && !transcript.isFinalResult {
+                    if timeSinceUpdate >= activeThreshold {
+                        status = .idle
+                    } else if codexRunning && timeSinceUpdate < 60 && status == .idle && !transcript.isFinalResult {
                         status = .active
                     }
 
