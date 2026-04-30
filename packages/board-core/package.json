@@ -46,8 +46,8 @@
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "publishConfig": {
-    "access": "restricted",
-    "registry": "https://npm.pkg.github.com"
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "devDependencies": {
     "typescript": "^5"
