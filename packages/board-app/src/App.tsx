@@ -14,6 +14,7 @@ import { SessionComposer } from './components/SessionComposer'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { AssistantChat } from './components/AssistantChat'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { CommandBar } from './components/CommandBar'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@tianqixinxi/board-cards'
@@ -459,6 +460,16 @@ export default function App() {
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}
           onTemplateSaved={applyTemplateLocally}
+        />
+        <CommandBar
+          state={boardState.state}
+          selection={selection}
+          connected={boardState.connected}
+          unreadCount={unreadSids.size}
+          onNewSession={() => setNewSessionOpen(true)}
+          onAskAndSpawn={() => setAssistantOpen(true)}
+          onPreferences={() => setPreferencesOpen(true)}
+          onNewChannel={() => setNewChannelOpen(true)}
         />
         {newChannelOpen && boardState.state && (
           <NewChannelDialog

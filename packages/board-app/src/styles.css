@@ -119,13 +119,23 @@ textarea {
   min-height: 60px;
 }
 
-/* -- app layout -- */
+/* -- app layout --
+   2 行 × 2 列：
+     row 1 — board (col 1) | sidebar (col 2)
+     row 2 — command bar (col 1) | sidebar 一直延伸到底
+   sidebar 跨两行（grid-row: 1 / span 2），command bar 只占 col 1。
+*/
 
 .app {
   display: grid;
-  grid-template-rows: 1fr;
+  grid-template-rows: 1fr auto;
   grid-template-columns: 1fr auto;
   height: 100%;
+  /* 顶 28px 是 macOS titlebar 的 drag region —— DragRegionWebView 的 hitTest
+     对那条返 nil 让 titlebar 拿事件。所以 web 端任何"真·可点击 UI"都得在
+     这条之下，不然按钮的上半截会被 drag region 抢走点击。
+     视觉上空白条颜色 = body 背景 = #262624 = titlebar 透出色，无缝。 */
+  padding-top: 28px;
 }
 
 .board-area {
@@ -259,7 +269,7 @@ textarea {
 
 /* Sidebar */
 .sidebar {
-  grid-row: 1;
+  grid-row: 1 / span 2;   /* 跨 board + command bar 两行，视觉上贯穿全屏高度 */
   grid-column: 2;
   width: 360px;           /* fallback; Sidebar.tsx 用 inline style 覆盖 */
   background: var(--bg-elevated);
@@ -323,6 +333,100 @@ textarea {
   flex: 1;
   overflow: auto;
   padding: 12px;
+}
+
+/* ─── Sidebar: project-grouped session list ──────────────────────────────
+   借鉴 Claude Code app 的 sidebar：每个 project (cwd basename) 一个 section，
+   header 是淡色小字 + count，session 行紧凑。点击 session 行 → select；
+   header 可折叠该 project。
+*/
+.sidebar-project-group {
+  margin: 0 -4px 6px;
+}
+.sidebar-project-group.is-dimmed {
+  opacity: 0.78;
+}
+.sidebar-project-group__header {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: lowercase;
+  transition: color 0.12s ease;
+}
+.sidebar-project-group__header:hover {
+  color: var(--text-dim);
+  background: transparent;
+}
+.sidebar-project-group__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.sidebar-project-group__count {
+  font-size: 10px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.sidebar-project-group__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.sidebar-session-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.08s ease;
+  min-width: 0;
+}
+.sidebar-session-row:hover {
+  background: var(--bg-paper);
+}
+.sidebar-session-row.is-selected {
+  background: var(--bg-elevated-2);
+}
+.sidebar-session-row__main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-session-row__kind {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.sidebar-session-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.sidebar-session-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sidebar-session-row__sid {
+  font-size: 10px;
+  opacity: 0.6;
 }
 
 .row {
@@ -875,6 +979,193 @@ textarea {
   50% {
     opacity: 0.35;
   }
+}
+
+/* ─── CommandBar ───────────────────────────────────────────────────────
+   底栏：永远可见。展示连接 / sessions 计数 / inbox / cwd / 模型 等 chips +
+   一个 input + 一组操作按钮。借鉴 Claude Code app 底部 chatbox：
+   功能在视觉上一眼可见，不需要去开菜单找。
+*/
+.command-bar {
+  grid-row: 2;
+  grid-column: 1;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  padding: 10px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text);
+  z-index: 6;
+}
+
+.command-bar__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-chip__glyph {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.8;
+}
+.cb-chip--accent {
+  border-color: rgba(204, 120, 92, 0.45);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.cb-chip--warn {
+  border-color: rgba(212, 163, 115, 0.45);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  color: var(--warning);
+}
+.cb-chip--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+
+.cb-chip--status {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.cb-chip--status .cb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.cb-chip--status.is-on {
+  color: var(--success);
+  border-color: rgba(127, 169, 130, 0.5);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.cb-chip--status.is-on .cb-dot {
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 60%, transparent);
+}
+.cb-chip--status.is-off {
+  color: var(--danger);
+  border-color: rgba(194, 106, 106, 0.5);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.cb-chip--status.is-off .cb-dot {
+  background: var(--danger);
+}
+
+.cb-spacer {
+  flex: 1;
+}
+
+.command-bar__input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.command-bar__textarea {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 9px 12px;
+  font: inherit;
+  font-family: var(--sans);
+  font-size: 13px;
+  resize: none;
+  min-height: 38px;
+  max-height: 160px;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.command-bar__textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+.command-bar__textarea:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.command-bar__send {
+  background: var(--accent);
+  color: #1A1210;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 0 18px;
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.command-bar__send:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.command-bar__send:disabled {
+  background: var(--bg-elevated-2);
+  color: var(--text-faint);
+  border-color: var(--border);
+  cursor: not-allowed;
+}
+
+.command-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cb-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+}
+.cb-action:hover {
+  background: var(--bg-elevated-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.cb-action__glyph {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1;
+}
+.cb-action--ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.cb-action--ghost:hover {
+  background: var(--bg);
+  border-color: var(--border);
 }
 
 /* ─── SessionComposer ──────────────────────────────────────────────────
