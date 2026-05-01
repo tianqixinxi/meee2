@@ -348,22 +348,21 @@ enum BoardDTOBuilder {
                 }
             : nil
 
-        // ─── Claude Desktop / Cowork 集成 ───
+        // ─── Claude Desktop 集成 ───
         // 查一下 ClaudeDesktopMetadataReader：命中即说明这是 Claude.app 起的
-        // session（claude-code-sessions 或 local-agent-mode-sessions）。
-        // 覆盖 title / 标 clientKind / 用 metadata 的 model。
+        // session（claude-code-sessions 下面那种），用 metadata 装饰 title / model。
         let desktopMeta = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId)
         // metadata reader 30s 才扫一次，新建 desktop session 在第一个扫描周期内
         // 会被错判成 CLI。entrypoint 写在 transcript 顶部，hook 一进来就能读。
-        // 命中规则：
-        //   - desktopMeta 优先（带 friendly title / model 装饰，能区分 desktop vs cowork）
+        // clientKind 决策：
+        //   - desktopMeta 命中 → "desktop"
         //   - 否则按 entrypoint 推断："claude-desktop" → "desktop"，sdk-* → 透传
         //   - 都没有 → "cli"
         let entrypoint = ClaudeEntrypointReader.read(
             transcriptPath: sessionData?.transcriptPath ?? session.transcriptPath
         )
         let clientKind: String = {
-            if let src = desktopMeta?.source.rawValue { return src }
+            if desktopMeta != nil { return "desktop" }
             switch entrypoint {
             case ClaudeEntrypointReader.knownDesktop: return "desktop"
             case ClaudeEntrypointReader.knownSDKPy:   return "sdk-py"
@@ -429,22 +428,18 @@ enum BoardDTOBuilder {
         )
     }
 
-    /// 合成 Claude Desktop / Cowork session DTO —— 当 PluginManager 不知道这个
-    /// session 时（desktop / cowork 子进程已经退了，没 PID 文件，hook 不会再来），
-    /// 直接从 metadata 文件 + 历史 transcript 还原一份给 Web UI。
+    /// 合成 Claude Desktop session DTO —— 当 PluginManager 不知道这个 session
+    /// 时（desktop 子进程已经退了，没 PID 文件，hook 不会再来），直接从 metadata
+    /// 文件 + 历史 transcript 还原一份给 Web UI。
     /// transcript 路径推导：~/.claude/projects/<encoded-cwd>/<cliSessionId>.jsonl
-    /// （Claude CLI 用的同一规则：path → '-Users-qc-projects-foo' 这种 dash-flat 编码）
-    /// Cowork 的 cwd 是 VM 沙箱路径（`/sessions/serene-epic-hopper`），不会有
-    /// host transcript，所以 recent messages 只能拿到 desktop-code 的。
+    /// （Claude CLI 用的同一规则：path → '-Users-qc-projects-foo' 这种 dash-flat 编码）。
     static func syntheticDesktopSessionDTO(metadata m: ClaudeDesktopMetadata) -> SessionDTO {
         let info = PluginManager.shared.getPluginInfo(for: "com.meee2.plugin.claude")
         let displayName = info?.displayName ?? "Claude Code"
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#FF9230"
 
-        // transcript path 已经由 ClaudeDesktopMetadataReader 解析好（按 source
-        // 走不同 base：desktop-code → ~/.claude/projects/<encoded-host-cwd>/...，
-        // cowork → metadata 文件旁边的 local_<sid>/.claude/projects/<encoded-vm-cwd>/...
-        // VM 内挂载 .claude 的路径）。文件不存在时为 nil → recent 空。
+        // transcript path 已经由 ClaudeDesktopMetadataReader 解析好
+        // （~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl）。文件不存在时为 nil → recent 空。
         let recent: [TranscriptEntryDTO] = m.transcriptPath.map(transcriptPreviewFromFullReader) ?? []
 
         // 状态：desktop 子进程不长跑，metadata-only 默认 idle。Web UI 卡片
@@ -482,7 +477,7 @@ enum BoardDTOBuilder {
             termProgram: nil,
             backgroundAgents: [],
             latestRecap: nil,
-            clientKind: m.source.rawValue,   // "desktop" 或 "cowork"
+            clientKind: "desktop",
             displayGroup: nil
         )
     }

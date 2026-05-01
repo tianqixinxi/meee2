@@ -28,6 +28,11 @@ final class HookSocketServerDesktopDrainTests: XCTestCase {
             project: "test-desktop-drain",
             transcriptPath: transcriptPath
         ))
+        // SessionStore.upsert 会持久化到 ~/.meee2/sessions/<sid>.json，必须挂
+        // teardown 兜底删除——否则跑完 test 在生产 dashboard 里会留一堆 ghost session。
+        addTeardownBlock {
+            SessionStore.shared.delete(sid)
+        }
     }
 
     private func sendMessage(channel: String, target: String, content: String) throws {

@@ -38,6 +38,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 
+        // 先建好主菜单栏——.accessory 时不显示，Board 窗口切 .regular 后自动出现
+        setupMainMenu()
+
         // 创建状态栏图标
         setupStatusBar()
 
@@ -356,7 +359,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         case "com.apple.Terminal":
             launchTUIInTerminal()
         default:
-            launchTUIInTerminal()
+            // frontmost 不是已识别的终端（菜单栏点击常见就是这种）。按已安装
+            // 优先级回落：Ghostty > iTerm2 > Terminal。每条 launch 函数自己
+            // 内部还会检测 app 是否安装、不在就再降一级。
+            if FileManager.default.fileExists(atPath: "/Applications/Ghostty.app") {
+                launchTUIInGhostty()
+            } else if FileManager.default.fileExists(atPath: "/Applications/iTerm.app")
+                    || FileManager.default.fileExists(atPath: "/Applications/iTerm2.app") {
+                launchTUIIniTerm2()
+            } else {
+                launchTUIInTerminal()
+            }
         }
     }
 
@@ -461,16 +474,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             var error: NSDictionary?
             appleScript.executeAndReturnError(&error)
             if let error = error {
-                NSLog("[AppDelegate] Terminal launch error: \(error)")
-                // 显示错误提示
-                DispatchQueue.main.async {
-                    let alert = NSAlert()
-                    alert.messageText = "Failed to Launch TUI"
-                    alert.informativeText = "Could not open Terminal. Error: \(error[NSAppleScript.errorMessage] ?? "Unknown error")"
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
-                }
+                // 只 log，不弹 modal alert：meee2 是 .accessory activation policy
+                // （菜单栏 app，无 Dock icon），这种 app 弹 NSAlert.runModal()
+                // 时 alert 窗口经常无法被正确带到前台，但主线程已经进了 modal
+                // event loop，结果是整个 UI 卡死且没有任何可见提示。
+                NSLog("[AppDelegate] Terminal launch error: \(error[NSAppleScript.errorMessage] ?? "Unknown error")")
             } else {
                 NSLog("[AppDelegate] TUI launched in Terminal")
             }
@@ -497,6 +505,150 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Main Menu Bar
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // ── App menu (meee2) ──
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About meee2",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let settingsItem = appMenu.addItem(withTitle: "Settings...",
+                                           action: #selector(openSettings),
+                                           keyEquivalent: ",")
+        settingsItem.target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide meee2",
+                        action: #selector(NSApplication.hide(_:)),
+                        keyEquivalent: "h")
+        let hideOthersItem = appMenu.addItem(withTitle: "Hide Others",
+                                             action: #selector(NSApplication.hideOtherApplications(_:)),
+                                             keyEquivalent: "h")
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "Show All",
+                        action: #selector(NSApplication.unhideAllApplications(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit meee2",
+                        action: #selector(NSApplication.terminate(_:)),
+                        keyEquivalent: "q")
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // ── File ──
+        let fileMenu = NSMenu(title: "File")
+        let boardItem = fileMenu.addItem(withTitle: "Open Board",
+                                         action: #selector(openBoardMenu),
+                                         keyEquivalent: "b")
+        boardItem.target = self
+        let tuiItem2 = fileMenu.addItem(withTitle: "TUI",
+                                        action: #selector(openTUI),
+                                        keyEquivalent: "t")
+        tuiItem2.target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Close Window",
+                         action: #selector(NSWindow.performClose(_:)),
+                         keyEquivalent: "w")
+        let fileMenuItem = NSMenuItem()
+        fileMenuItem.submenu = fileMenu
+        mainMenu.addItem(fileMenuItem)
+
+        // ── Edit ──
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo",
+                         action: Selector(("undo:")),
+                         keyEquivalent: "z")
+        let redoItem = editMenu.addItem(withTitle: "Redo",
+                                        action: Selector(("redo:")),
+                                        keyEquivalent: "z")
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut",
+                         action: #selector(NSText.cut(_:)),
+                         keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy",
+                         action: #selector(NSText.copy(_:)),
+                         keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste",
+                         action: #selector(NSText.paste(_:)),
+                         keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All",
+                         action: #selector(NSText.selectAll(_:)),
+                         keyEquivalent: "a")
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        // ── View ──
+        let viewMenu = NSMenu(title: "View")
+        viewMenu.addItem(withTitle: "Toggle Sidebar",
+                         action: #selector(BoardWebWindowController.toggleSidebarFromMenu(_:)),
+                         keyEquivalent: "s")
+        viewMenu.items.last?.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Reload",
+                         action: #selector(BoardWebWindowController.reloadFromMenu(_:)),
+                         keyEquivalent: "r")
+        let browserItem = viewMenu.addItem(
+            withTitle: "Open in Browser",
+            action: #selector(BoardWebWindowController.openInBrowserFromMenu(_:)),
+            keyEquivalent: "b")
+        browserItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Actual Size",
+                         action: #selector(BoardWebWindowController.actualSizeFromMenu(_:)),
+                         keyEquivalent: "0")
+        viewMenu.addItem(withTitle: "Zoom In",
+                         action: #selector(BoardWebWindowController.zoomInFromMenu(_:)),
+                         keyEquivalent: "+")
+        viewMenu.addItem(withTitle: "Zoom Out",
+                         action: #selector(BoardWebWindowController.zoomOutFromMenu(_:)),
+                         keyEquivalent: "-")
+        let viewMenuItem = NSMenuItem()
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
+
+        // ── Window ──
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize",
+                           action: #selector(NSWindow.performMiniaturize(_:)),
+                           keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "Zoom",
+                           action: #selector(NSWindow.performZoom(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "Bring All to Front",
+                           action: #selector(NSApplication.arrangeInFront(_:)),
+                           keyEquivalent: "")
+        let windowMenuItem = NSMenuItem()
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApp.windowsMenu = windowMenu
+
+        // ── Help ──
+        let helpMenu = NSMenu(title: "Help")
+        let githubItem = helpMenu.addItem(withTitle: "meee2 on GitHub",
+                                          action: #selector(openGitHubHelp(_:)),
+                                          keyEquivalent: "")
+        githubItem.target = self
+        let helpMenuItem = NSMenuItem()
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+        NSApp.helpMenu = helpMenu
+
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func openGitHubHelp(_ sender: Any?) {
+        if let url = URL(string: "https://github.com/tianqixinxi/meee2") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: - Screen Selection
