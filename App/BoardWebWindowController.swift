@@ -2,8 +2,33 @@ import AppKit
 import WebKit
 import meee2Kit
 
+/// WKWebView 在 `.fullSizeContentView` 下会贪心地吃掉所有 NSEvent，包括
+/// 本来该让 NSWindow 的 titlebar 层处理的拖动事件。社区标准修复（Craft、
+/// 早期 GitHub Desktop、Linear 等都用过）：subclass，重写 hitTest，对顶部
+/// 那条 drag region 返回 nil —— 让事件穿透到 titlebar。
+///
+/// 参考：https://www.craft.do/blog/thinking-outside-of-the-wkwebview
+final class DragRegionWebView: WKWebView {
+    /// titlebar 高度。macOS 标准 titled window 是 28pt，要和 webui 那边的
+    /// 任何 padding-top（如果有）保持一致。
+    var dragRegionHeight: CGFloat = 28
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // `point` 在 superview 坐标系。把它换到 window 坐标（bottom-left
+        // 原点），看 y 是不是在最顶 dragRegionHeight 那条里。
+        // 在那条里 → 返回 nil → 事件落到 NSTitlebarContainerView，原生处理拖动 / 双击放大 / 等等。
+        guard let window else { return super.hitTest(point) }
+        let inWindow = superview?.convert(point, to: nil) ?? point
+        let fromTop = window.frame.height - inWindow.y
+        if fromTop >= 0 && fromTop < dragRegionHeight {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+}
+
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
-    private let webView: WKWebView
+    private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
     private var isShowingLoadError = false
@@ -16,16 +41,32 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "meee2-board-shell"
 
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = DragRegionWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [
+                .titled,
+                .closable,
+                .miniaturizable,
+                .resizable,
+                .fullSizeContentView
+            ],
             backing: .buffered,
             defer: false
         )
+        // 透明 titlebar + webview 顶到 0,0 + drag 由 DragRegionWebView 兜底：
+        //   - .fullSizeContentView —— contentView 占满整个窗口，webview 内容
+        //     延伸到 y=0
+        //   - titlebarAppearsTransparent + titleVisibility = .hidden —— titlebar
+        //     不画自己的背景、不显示文字。底下 webview 画啥就显示啥。
+        //   - DragRegionWebView.hitTest 对顶 28pt 返 nil → titlebar 拿事件，
+        //     macOS 原生处理拖窗口 / 双击放大。
+        // 不设 backgroundColor / appearance —— 让系统按 webview 实际像素显示。
         window.title = "meee2 Board"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.minSize = NSSize(width: 900, height: 620)
         window.center()
 
@@ -34,7 +75,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         window.delegate = self
         window.contentView = webView
         webView.navigationDelegate = self
-        window.toolbar = makeToolbar()
+        // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
+        // 入口（或菜单栏 / 上下文菜单），title bar 干净一片。
     }
 
     @available(*, unavailable)
@@ -87,13 +129,6 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             retryWorkItem?.cancel()
             retryWorkItem = nil
         }
-    }
-
-    private func makeToolbar() -> NSToolbar {
-        let toolbar = NSToolbar(identifier: "meee2.board.toolbar")
-        toolbar.displayMode = .iconOnly
-        toolbar.delegate = self
-        return toolbar
     }
 
     private func showLoadError(_ error: Error) {
@@ -171,56 +206,4 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
     }
-}
-
-extension BoardWebWindowController: NSToolbarDelegate {
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.reloadBoard, .openBoardInBrowser, .flexibleSpace]
-    }
-
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.reloadBoard, .openBoardInBrowser, .flexibleSpace]
-    }
-
-    func toolbar(
-        _ toolbar: NSToolbar,
-        itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-        willBeInsertedIntoToolbar flag: Bool
-    ) -> NSToolbarItem? {
-        switch itemIdentifier {
-        case .reloadBoard:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Reload"
-            item.paletteLabel = "Reload"
-            item.toolTip = "Reload Board"
-            item.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Reload")
-            item.target = self
-            item.action = #selector(reloadToolbarItem)
-            return item
-        case .openBoardInBrowser:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Open in Browser"
-            item.paletteLabel = "Open in Browser"
-            item.toolTip = "Open Board in browser"
-            item.image = NSImage(systemSymbolName: "safari", accessibilityDescription: "Open in Browser")
-            item.target = self
-            item.action = #selector(openInBrowserToolbarItem)
-            return item
-        default:
-            return nil
-        }
-    }
-
-    @objc private func reloadToolbarItem() {
-        reload()
-    }
-
-    @objc private func openInBrowserToolbarItem() {
-        openInBrowser()
-    }
-}
-
-private extension NSToolbarItem.Identifier {
-    static let reloadBoard = NSToolbarItem.Identifier("meee2.board.reload")
-    static let openBoardInBrowser = NSToolbarItem.Identifier("meee2.board.openInBrowser")
 }
