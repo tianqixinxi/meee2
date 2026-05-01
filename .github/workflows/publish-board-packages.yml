@@ -59,6 +59,7 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          scope: '@meee1'
 
       - name: Enable pnpm
         run: |
@@ -110,17 +111,17 @@ jobs:
 
       - name: Build publishable packages
         run: |
-          pnpm --filter @tianqixinxi/board-core build
-          pnpm --filter @tianqixinxi/board-cards build
-          pnpm --filter @tianqixinxi/board-persistence-http build
-          pnpm --filter @tianqixinxi/board-ui build
+          pnpm --filter @meee1/board-core build
+          pnpm --filter @meee1/board-cards build
+          pnpm --filter @meee1/board-persistence-http build
+          pnpm --filter @meee1/board-ui build
 
       - name: Typecheck publishable packages
         run: |
-          pnpm --filter @tianqixinxi/board-core typecheck
-          pnpm --filter @tianqixinxi/board-cards typecheck
-          pnpm --filter @tianqixinxi/board-persistence-http typecheck
-          pnpm --filter @tianqixinxi/board-ui typecheck
+          pnpm --filter @meee1/board-core typecheck
+          pnpm --filter @meee1/board-cards typecheck
+          pnpm --filter @meee1/board-persistence-http typecheck
+          pnpm --filter @meee1/board-ui typecheck
 
       - name: Publish selected packages
         run: |
@@ -129,23 +130,23 @@ jobs:
           case "$PACKAGE_SELECTION" in
             all)
               PACKAGES=(
-                "@tianqixinxi/board-core"
-                "@tianqixinxi/board-cards"
-                "@tianqixinxi/board-persistence-http"
-                "@tianqixinxi/board-ui"
+                "@meee1/board-core"
+                "@meee1/board-cards"
+                "@meee1/board-persistence-http"
+                "@meee1/board-ui"
               )
               ;;
             core)
-              PACKAGES=("@tianqixinxi/board-core")
+              PACKAGES=("@meee1/board-core")
               ;;
             cards)
-              PACKAGES=("@tianqixinxi/board-cards")
+              PACKAGES=("@meee1/board-cards")
               ;;
             persistence-http)
-              PACKAGES=("@tianqixinxi/board-persistence-http")
+              PACKAGES=("@meee1/board-persistence-http")
               ;;
             ui)
-              PACKAGES=("@tianqixinxi/board-ui")
+              PACKAGES=("@meee1/board-ui")
               ;;
             *)
               echo "::error::Unknown package selection: $PACKAGE_SELECTION"

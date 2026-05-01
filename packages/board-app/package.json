@@ -1,21 +1,31 @@
 {
-  "name": "@tianqixinxi/board-app",
-  "private": true,
+  "name": "@meee1/board-app",
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "dist",
+    "src",
+    "index.html",
+    "vite.config.ts",
+    "tsconfig.json"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "dependencies": {
     "@babel/standalone": "^7.25.6",
     "@excalidraw/excalidraw": "^0.18.1",
-    "@tianqixinxi/board-cards": "workspace:*",
-    "@tianqixinxi/board-core": "workspace:*",
-    "@tianqixinxi/board-persistence-http": "workspace:*",
-    "@tianqixinxi/board-ui": "workspace:*",
+    "@meee1/board-cards": "workspace:*",
+    "@meee1/board-core": "workspace:*",
+    "@meee1/board-persistence-http": "workspace:*",
+    "@meee1/board-ui": "workspace:*",
     "@tanstack/react-virtual": "^3.13.24",
     "highlight.js": "^11.11.1",
     "react": "19.2.4",

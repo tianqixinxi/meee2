@@ -1,11 +1,11 @@
 // Thin meee2 wrapper around board-ui's <TranscriptView>. Owns the
 // fetch / poll / WS-trigger logic; the rendering (search, virtualization,
 // markdown, diff, sticky user, scroll-to-latest, tool blocks) all lives
-// in @tianqixinxi/board-ui.
+// in @meee1/board-ui.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { TranscriptView } from '@tianqixinxi/board-ui'
-import type { TranscriptEntryForView } from '@tianqixinxi/board-core'
+import { TranscriptView } from '@meee1/board-ui'
+import type { TranscriptEntryForView } from '@meee1/board-core'
 import { fetchTranscript } from '../api'
 
 interface Props {

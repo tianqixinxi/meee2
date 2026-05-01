@@ -16,8 +16,8 @@ import {
   compileCardSource,
   addUserPreset,
   userPresetIdFromLabel,
-} from '@tianqixinxi/board-cards'
-import type { TemplatePreset } from '@tianqixinxi/board-cards'
+} from '@meee1/board-cards'
+import type { TemplatePreset } from '@meee1/board-cards'
 
 // 贴给 Claude Code 的 instruction：既告诉数据形状（session / board /
 // helpers），也给出 runtime 约束（no imports, 360×260, 自包含），再给一个

@@ -1,5 +1,5 @@
 {
-  "name": "@tianqixinxi/board-ui",
+  "name": "@meee1/board-ui",
   "version": "0.1.0",
   "description": "Headless React board canvas — Excalidraw shell + persistence wiring + scene sync, with render slots for app-specific UI.",
   "type": "module",
@@ -41,11 +41,11 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@tianqixinxi/board-core": "workspace:*",
-    "@tianqixinxi/board-cards": "workspace:*"
+    "@meee1/board-core": "workspace:*",
+    "@meee1/board-cards": "workspace:*"
   },
   "peerDependencies": {
     "@excalidraw/excalidraw": "^0.18.0",

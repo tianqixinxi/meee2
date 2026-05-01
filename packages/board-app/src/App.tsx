@@ -17,14 +17,14 @@ import { PreferencesDialog } from './components/PreferencesDialog'
 import { CommandBar } from './components/CommandBar'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
-import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@tianqixinxi/board-cards'
+import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
   CanvasPersistence,
   LayoutMap,
   PersistedViewport,
-} from '@tianqixinxi/board-core'
-import { HttpCanvasPersistence } from '@tianqixinxi/board-persistence-http'
+} from '@meee1/board-core'
+import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 
 interface HydratedState {
   sessionLayout: LayoutMap
@@ -49,7 +49,7 @@ const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
 
 export default function App() {
-  // 整个应用的持久化层。CanvasPersistence interface 来自 @tianqixinxi/board-core；
+  // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
   // meee2 走 HTTP / localStorage 双层实现，meee360 改用 SupabaseCanvasPersistence。
   const persistence = useMemo<CanvasPersistence>(() => new HttpCanvasPersistence(), [])
   // 启动时一次性把所有 storage slot 拉好再 mount Board。

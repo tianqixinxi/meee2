@@ -19,16 +19,16 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.24
         version: 3.13.24(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tianqixinxi/board-cards':
+      '@meee1/board-cards':
         specifier: workspace:*
         version: link:../board-cards
-      '@tianqixinxi/board-core':
+      '@meee1/board-core':
         specifier: workspace:*
         version: link:../board-core
-      '@tianqixinxi/board-persistence-http':
+      '@meee1/board-persistence-http':
         specifier: workspace:*
         version: link:../board-persistence-http
-      '@tianqixinxi/board-ui':
+      '@meee1/board-ui':
         specifier: workspace:*
         version: link:../board-ui
       highlight.js:
@@ -98,7 +98,7 @@ importers:
 
   packages/board-persistence-http:
     dependencies:
-      '@tianqixinxi/board-core':
+      '@meee1/board-core':
         specifier: workspace:*
         version: link:../board-core
     devDependencies:
@@ -108,10 +108,10 @@ importers:
 
   packages/board-ui:
     dependencies:
-      '@tianqixinxi/board-cards':
+      '@meee1/board-cards':
         specifier: workspace:*
         version: link:../board-cards
-      '@tianqixinxi/board-core':
+      '@meee1/board-core':
         specifier: workspace:*
         version: link:../board-core
     devDependencies:

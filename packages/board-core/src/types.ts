@@ -1,4 +1,4 @@
-// Convenience re-exports so consumers can `import { LayoutMap, ... } from '@tianqixinxi/board-core'`.
+// Convenience re-exports so consumers can `import { LayoutMap, ... } from '@meee1/board-core'`.
 
 export type { Point, LayoutMap } from './layout'
 export type {

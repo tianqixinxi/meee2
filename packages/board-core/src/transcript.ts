@@ -1,4 +1,4 @@
-// Structural types consumed by @tianqixinxi/board-ui's <TranscriptView>.
+// Structural types consumed by @meee1/board-ui's <TranscriptView>.
 //
 // Mirrors meee2's `FullTranscriptEntry` / `FullTranscriptBlock` from the
 // Swift backend, since that is the richer of the two app schemas. meee360
