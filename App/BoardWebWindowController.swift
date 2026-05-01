@@ -51,7 +51,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 .closable,
                 .miniaturizable,
                 .resizable,
-                .fullSizeContentView,
+                .fullSizeContentView
             ],
             backing: .buffered,
             defer: false
@@ -207,4 +207,3 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
-
