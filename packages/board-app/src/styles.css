@@ -131,11 +131,6 @@ textarea {
   grid-template-rows: 1fr auto;
   grid-template-columns: 1fr auto;
   height: 100%;
-  /* 顶 28px 是 macOS titlebar 的 drag region —— DragRegionWebView 的 hitTest
-     对那条返 nil 让 titlebar 拿事件。所以 web 端任何"真·可点击 UI"都得在
-     这条之下，不然按钮的上半截会被 drag region 抢走点击。
-     视觉上空白条颜色 = body 背景 = #262624 = titlebar 透出色，无缝。 */
-  padding-top: 28px;
 }
 
 .board-area {
@@ -191,7 +186,8 @@ textarea {
 .board-channel-actions {
   position: absolute;
   z-index: 5;
-  top: 12px;
+  /* 28px(macOS titlebar drag zone) + 12px(原来的间距) */
+  top: 40px;
   left: calc(50% + 126px);
   display: flex;
   gap: 8px;
@@ -321,7 +317,10 @@ textarea {
   right: 28px;
 }
 .sidebar-header {
-  padding: 10px 12px;
+  /* 上 padding 38px = 28px(macOS titlebar drag zone) + 10px(原本视觉上下间距)。
+     sidebar 自己的背景从 y=0 开始铺，但 header 里的按钮（» 折叠键）
+     必须挪到 28px 之下才不会被 DragRegionWebView 的 hitTest 抢走点击。 */
+  padding: 38px 12px 10px;
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   text-transform: uppercase;

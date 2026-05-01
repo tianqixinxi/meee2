@@ -43,11 +43,6 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        // WKWebView 默认会画一层不透明白底，加载阶段 / 滚动 / titlebar 透出
-        // 时都会闪一下白。`drawsBackground = false` 让 webview 不画自己的背景，
-        // 露出 NSWindow.backgroundColor —— 跟我们设的 #262624 一致。
-        // 这是 setValue(forKey:) 的隐藏 API，但是 Apple 自己 docs 也写过的标准做法。
-        webView.setValue(false, forKey: "drawsBackground")
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
@@ -61,29 +56,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             backing: .buffered,
             defer: false
         )
-        // 真·无缝 titlebar：
-        //   1. .fullSizeContentView —— contentView 顶到 0,0，webview 内容延伸到
-        //      titlebar 区域之下
-        //   2. titlebarAppearsTransparent + titleVisibility = .hidden —— titlebar
-        //      不画自己的背景、不显示文字
-        //   3. WKWebView drawsBackground = false + window.backgroundColor = #262624
-        //      —— titlebar 那 28px 透出来的就是 #262624，和 webui 完全一致，没有
-        //      Aqua vibrancy 蒙的灰色
-        //   4. window.appearance = .darkAqua —— 强制走暗调色板，避免亮模式下把
-        //      title bar 染灰
-        //   5. isMovableByWindowBackground = true —— 防御性的，确保 titlebar 不
-        //      响应拖动时还能从空白处拖
-        // 注意：webui 那边 *不要* 给 .app 加 padding-top —— titlebar 是 macOS
-        // 原生层、永远在 contentView 上方 hit-test，不会被 webview 抢点击。
+        // 透明 titlebar + webview 顶到 0,0 + drag 由 DragRegionWebView 兜底：
+        //   - .fullSizeContentView —— contentView 占满整个窗口，webview 内容
+        //     延伸到 y=0
+        //   - titlebarAppearsTransparent + titleVisibility = .hidden —— titlebar
+        //     不画自己的背景、不显示文字。底下 webview 画啥就显示啥。
+        //   - DragRegionWebView.hitTest 对顶 28pt 返 nil → titlebar 拿事件，
+        //     macOS 原生处理拖窗口 / 双击放大。
+        // 不设 backgroundColor / appearance —— 让系统按 webview 实际像素显示。
         window.title = "meee2 Board"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.backgroundColor = NSColor(srgbRed: 0x26 / 255.0,
-                                         green: 0x26 / 255.0,
-                                         blue: 0x24 / 255.0,
-                                         alpha: 1.0)
-        window.appearance = NSAppearance(named: .darkAqua)
-        window.isMovableByWindowBackground = true
         window.minSize = NSSize(width: 900, height: 620)
         window.center()
 
