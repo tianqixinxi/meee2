@@ -160,8 +160,8 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        // 先看是不是 desktop / cowork synthetic session（PluginManager 不知道
-        // 它，因为它的子进程已经退出 / 根本没起过——但 metadata 文件仍在）。
+        // 先看是不是 desktop synthetic session（PluginManager 不知道它，
+        // 因为它的子进程已经退出——但 metadata 文件仍在）。
         // 命中即直接 activate Claude.app，不走 PluginManager。
         if let metadataSid = resolveDesktopMetadataSid(sid) {
             activateClaudeDesktop(sid: metadataSid)
@@ -193,8 +193,8 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
-    /// short-id / full-id 匹配 Claude Desktop / Cowork metadata 索引。命中即说明
-    /// 该 sid 是 desktop / cowork 起的 session（不一定在 PluginManager 里）。
+    /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明
+    /// 该 sid 是 desktop 起的 session（不一定在 PluginManager 里）。
     /// 返回完整 cliSessionId（前端可能传 short-id）。
     private static func resolveDesktopMetadataSid(_ sid: String) -> String? {
         let all = ClaudeDesktopMetadataReader.shared.allCliSessionIds()
@@ -322,13 +322,13 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing or empty 'content'", status: 400)
         }
 
-        // Desktop / Cowork synthetic session 没有可注入的 inbox（其子进程不
-        // 长跑，inject 时间点 Stop hook 不会再来），明确告诉前端不支持。
+        // Desktop synthetic session（PluginManager 不知道、只剩 metadata）没法
+        // 立刻 deliver——子进程已退，没 Stop hook 可以触发 inline drain。明确报错。
         if resolveDesktopMetadataSid(sid) != nil
             && resolvePluginSession(sid) == nil {
             return errorResponse(
                 "unsupported_for_desktop",
-                "inject is only supported for live CLI / hook-driven sessions; Desktop & Cowork sessions don't keep a long-running process to deliver to",
+                "inject is only supported for live CLI / hook-driven sessions; this Desktop session has no running subprocess to deliver to",
                 status: 400
             )
         }
@@ -373,11 +373,9 @@ enum BoardAPI {
         // 优先 PluginManager 匹配（CLI 和"刚活过的 desktop"都在这里）
         let match = resolvePluginSession(sid)
 
-        // PluginManager 没找到就 fallback 到 desktop / cowork metadata。
-        // metadata.transcriptPath 已经按 source 解析好了：
-        //   - desktop-code: ~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl
-        //   - cowork:       metadata 旁边的 local_<sid>/.claude/projects/...
-        // 不再需要在这里二次拼路径。
+        // PluginManager 没找到就 fallback 到 desktop metadata。
+        // metadata.transcriptPath 已经解析好了
+        // （~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl）。
         if match == nil, let metadataSid = resolveDesktopMetadataSid(sid),
            let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: metadataSid) {
             var limit: Int?

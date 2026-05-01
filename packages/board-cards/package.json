@@ -1,5 +1,5 @@
 {
-  "name": "@tianqixinxi/board-cards",
+  "name": "@meee1/board-cards",
   "version": "0.1.0",
   "description": "Session card template engine for the meee2 board: JS template compilation, presets, user-saved templates, animations.",
   "type": "module",
@@ -23,7 +23,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "registry": "https://registry.npmjs.org/"
   },
   "peerDependencies": {
     "@babel/standalone": "^7.25.0",

@@ -1,5 +1,5 @@
 {
-  "name": "@tianqixinxi/board-persistence-http",
+  "name": "@meee1/board-persistence-http",
   "version": "0.1.0",
   "description": "HTTP + localStorage backed CanvasPersistence implementation for the meee2 Swift board backend.",
   "type": "module",
@@ -23,10 +23,10 @@
   },
   "publishConfig": {
     "access": "public",
-    "registry": "https://registry.npmjs.org"
+    "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@tianqixinxi/board-core": "workspace:*"
+    "@meee1/board-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5"

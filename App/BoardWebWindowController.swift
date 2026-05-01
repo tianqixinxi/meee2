@@ -173,6 +173,40 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
 }
 
+// MARK: - Menu Bar Actions (responder chain — active only when board window is key)
+
+extension BoardWebWindowController {
+    @objc func reloadFromMenu(_ sender: Any?) {
+        reload()
+    }
+
+    @objc func openInBrowserFromMenu(_ sender: Any?) {
+        openInBrowser()
+    }
+
+    @objc func toggleSidebarFromMenu(_ sender: Any?) {
+        webView.evaluateJavaScript("""
+            (function() {
+                var btn = document.querySelector('button[title="Expand sidebar"]') ||
+                          document.querySelector('button[title="Collapse"]');
+                if (btn) btn.click();
+            })()
+            """)
+    }
+
+    @objc func zoomInFromMenu(_ sender: Any?) {
+        webView.pageZoom = min(webView.pageZoom + 0.1, 3.0)
+    }
+
+    @objc func zoomOutFromMenu(_ sender: Any?) {
+        webView.pageZoom = max(webView.pageZoom - 0.1, 0.5)
+    }
+
+    @objc func actualSizeFromMenu(_ sender: Any?) {
+        webView.pageZoom = 1.0
+    }
+}
+
 extension BoardWebWindowController: NSToolbarDelegate {
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.reloadBoard, .openBoardInBrowser, .flexibleSpace]

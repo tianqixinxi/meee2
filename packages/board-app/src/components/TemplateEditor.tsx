@@ -20,7 +20,7 @@ import {
   putTemplate,
   templateIdForSession,
   loadUserPresets,
-} from '@tianqixinxi/board-cards'
+} from '@meee1/board-cards'
 import { TemplateGallery } from './TemplateGallery'
 import { CustomCardModal } from './CustomCardModal'
 

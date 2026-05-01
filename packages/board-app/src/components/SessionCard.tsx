@@ -1,5 +1,5 @@
 import type { Session, TranscriptEntry } from '../types'
-import { shortenProject } from '@tianqixinxi/board-core'
+import { shortenProject } from '@meee1/board-core'
 
 interface SessionCardProps {
   session: Session

@@ -4,12 +4,12 @@
 // transcript slot.
 
 import { useEffect, useMemo, useState } from 'react'
-import { SessionInspector } from '@tianqixinxi/board-ui'
+import { SessionInspector } from '@meee1/board-ui'
 import type {
   ChannelMembershipForInspector,
   InboxItemForInspector,
   SessionForInspector,
-} from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
 import type { BoardState, Message } from '../types'
 import { listChannelMessages, activateSession, spawnSession } from '../api'
 import { loadDefaultSpawnCommand } from '../preferences'

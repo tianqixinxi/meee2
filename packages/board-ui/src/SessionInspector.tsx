@@ -8,14 +8,14 @@
 // on this machine), otherwise the button is invisible.
 //
 // Style: imports SessionInspector.css. Apps must add this once at app
-// boot:  import '@tianqixinxi/board-ui/SessionInspector.css'
+// boot:  import '@meee1/board-ui/SessionInspector.css'
 
 import { useState, type ReactNode } from 'react'
 import type {
   SessionForInspector,
   InboxItemForInspector,
   ChannelMembershipForInspector,
-} from '@tianqixinxi/board-core'
+} from '@meee1/board-core'
 
 export interface SessionInspectorProps {
   session: SessionForInspector

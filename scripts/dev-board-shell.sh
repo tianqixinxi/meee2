@@ -36,7 +36,7 @@ trap cleanup EXIT INT TERM
 
 echo "Starting board Vite dev server at ${DEV_URL}"
 : > "$WEB_LOG"
-pnpm -F @tianqixinxi/board-app exec vite --host 127.0.0.1 >>"$WEB_LOG" 2>&1 &
+pnpm -F @meee1/board-app exec vite --host 127.0.0.1 >>"$WEB_LOG" 2>&1 &
 WEB_PID=$!
 
 echo "Vite log: ${WEB_LOG}"
