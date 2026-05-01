@@ -6,12 +6,51 @@ import TemplateEditor from './TemplateEditor'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
+const COLLAPSED_PROJECTS_KEY = 'meee2.sidebar.collapsedProjects.v1'
 
 /// Session 分类 key —— 动态从 session 列表里推导。规则：
 /// - `com.meee2.plugin.claude` 这种"伞 plugin"内部按 clientKind 拆 (CLI/Desktop/Cowork)
 /// - 其他 plugin（Cursor / Codex / OpenClaw / 第三方）每个 pluginId 自成一类
 /// 这样既覆盖 plugin 维度（用户主问），又在 Claude 内部保留 source 区分。
 type CategoryKey = string  // e.g. "claude:cli", "claude:desktop", "com.meee2.plugin.codex"
+
+/// session.project 是 cwd 全路径；按 project basename 当 group key（与 Claude
+/// Code app 的 sidebar 分组对齐）。
+///   - `<...>/foo/.claude/worktrees/<wt>` → `foo`（worktree 归到父项目）
+///   - 其他 → cwd 的 basename
+/// （没有用 `~/projects/<name>` 这种 regex —— 比如
+///   `~/projects/meee1_code/meee2` 的 basename 是 `meee2`，正确；regex 会
+///   错把 `meee1_code` 当项目名。）
+function projectGroupKey(s: Session): string {
+  const raw = (s.project ?? '').replace(/\/+$/, '')
+  if (!raw) return '(no project)'
+  // 1) Claude worktree：`<...>/<project>/.claude/worktrees/<wt>` → `<project>`
+  const wtIdx = raw.indexOf('/.claude/worktrees/')
+  if (wtIdx > 0) {
+    const before = raw.slice(0, wtIdx)
+    const slash = before.lastIndexOf('/')
+    const base = slash >= 0 ? before.slice(slash + 1) : before
+    if (base) return base
+  }
+  // 2) fallback：basename
+  const idx = raw.lastIndexOf('/')
+  const base = idx >= 0 ? raw.slice(idx + 1) : raw
+  return base || '(no project)'
+}
+
+function readCollapsedProjects(): Set<string> {
+  try {
+    const s = localStorage.getItem(COLLAPSED_PROJECTS_KEY)
+    if (!s) return new Set()
+    const arr = JSON.parse(s)
+    if (Array.isArray(arr)) return new Set(arr.filter((x) => typeof x === 'string'))
+  } catch {}
+  return new Set()
+}
+
+function persistCollapsedProjects(set: Set<string>) {
+  try { localStorage.setItem(COLLAPSED_PROJECTS_KEY, JSON.stringify([...set])) } catch {}
+}
 
 const CLAUDE_PLUGIN_ID = 'com.meee2.plugin.claude'
 
@@ -161,7 +200,18 @@ export default function Sidebar({
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
   const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(readCollapsedProjects)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+
+  const toggleProjectCollapsed = useCallback((proj: string) => {
+    setCollapsedProjects((prev) => {
+      const next = new Set(prev)
+      if (next.has(proj)) next.delete(proj)
+      else next.add(proj)
+      persistCollapsedProjects(next)
+      return next
+    })
+  }, [])
 
   /// 按当前 sessions 推导出 category 列表（带计数）+ pluginId → displayName 索引。
   const categoryDescriptors = useMemo(() => {
@@ -435,19 +485,33 @@ export default function Sidebar({
                 const filtered = filterByCategory(state.sessions)
                 const primary = filtered.filter((s) => s.displayGroup !== 'older')
                 const older = filtered.filter((s) => s.displayGroup === 'older')
+
+                // 分组：按 project basename。组内顺序保留传入的（已经是后端
+                // 给的活跃度顺序）。组之间按字母序，方便查找。
+                const groupSessions = (list: Session[]) => {
+                  const groups = new Map<string, Session[]>()
+                  for (const s of list) {
+                    const k = projectGroupKey(s)
+                    let arr = groups.get(k)
+                    if (!arr) { arr = []; groups.set(k, arr) }
+                    arr.push(s)
+                  }
+                  return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+                }
+
                 const renderSessionRow = (s: Session) => {
                   const count = onCanvasCounts[s.id] ?? 0
                   const onCanvas = count > 0
                   const sidShort = s.id.replace(/-/g, '').slice(0, 8)
+                  // 列表只在 selection.kind === 'none' 时渲染，所以不会有 selected 行；
+                  // 选中态由 detail panel 负责，列表里的 hover/cursor 反馈足够。
                   return (
                     <div
                       key={s.id}
-                      className="row space"
-                      style={{ marginBottom: 6, cursor: 'pointer' }}
+                      className="sidebar-session-row"
                     >
                       <div
-                        className="row"
-                        style={{ flex: 1, minWidth: 0 }}
+                        className="sidebar-session-row__main"
                         onClick={() =>
                           onSelectionChange({ kind: 'session', sessionId: s.id })
                         }
@@ -465,27 +529,19 @@ export default function Sidebar({
                           if (k === 'cli') return null
                           return (
                             <span
-                              style={{ fontSize: 10, opacity: 0.7, marginRight: 2 }}
+                              className="sidebar-session-row__kind"
                               title={k === 'desktop' ? 'Desktop' : 'Cowork'}
                             >
                               {KIND_ICON[k]}
                             </span>
                           )
                         })()}
-                        <span
-                          style={{
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {s.title}
-                        </span>
+                        <span className="sidebar-session-row__title">{s.title}</span>
                         {s.inboxPending > 0 && (
                           <span className="badge warn">📨 {s.inboxPending}</span>
                         )}
                       </div>
-                      <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+                      <div className="sidebar-session-row__actions">
                         <button
                           className="ghost"
                           style={{
@@ -507,17 +563,47 @@ export default function Sidebar({
                         >
                           {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
                         </button>
-                        <span
-                          className="mono muted"
-                          style={{ fontSize: 10 }}
-                          title={s.id}
-                        >
+                        <span className="mono muted sidebar-session-row__sid" title={s.id}>
                           {sidShort}
                         </span>
                       </div>
                     </div>
                   )
                 }
+
+                const renderProjectGroup = (
+                  proj: string,
+                  list: Session[],
+                  options?: { dimmed?: boolean },
+                ) => {
+                  const collapsed = collapsedProjects.has(proj)
+                  return (
+                    <div
+                      key={proj}
+                      className={
+                        'sidebar-project-group' +
+                        (options?.dimmed ? ' is-dimmed' : '')
+                      }
+                    >
+                      <button
+                        className="sidebar-project-group__header"
+                        onClick={() => toggleProjectCollapsed(proj)}
+                        title={collapsed ? 'Expand project' : 'Collapse project'}
+                      >
+                        <span className="sidebar-project-group__name">{proj}</span>
+                        <span className="sidebar-project-group__count">
+                          {collapsed ? `▸ ${list.length}` : list.length}
+                        </span>
+                      </button>
+                      {!collapsed && (
+                        <div className="sidebar-project-group__body">
+                          {list.map(renderSessionRow)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                }
+
                 if (filtered.length === 0) {
                   return (
                     <div className="muted" style={{ padding: '8px 0', fontSize: 11 }}>
@@ -525,11 +611,13 @@ export default function Sidebar({
                     </div>
                   )
                 }
+                const primaryGroups = groupSessions(primary)
+                const olderGroups = groupSessions(older)
                 return (
                   <>
-                    {primary.map(renderSessionRow)}
-                    {older.length > 0 && (
-                      <div style={{ marginTop: primary.length > 0 ? 8 : 0 }}>
+                    {primaryGroups.map(([k, list]) => renderProjectGroup(k, list))}
+                    {olderGroups.length > 0 && (
+                      <div style={{ marginTop: primaryGroups.length > 0 ? 10 : 0 }}>
                         <button
                           className="ghost"
                           style={{
@@ -554,7 +642,9 @@ export default function Sidebar({
                         </button>
                         {olderExpanded && (
                           <div style={{ marginTop: 4 }}>
-                            {older.map(renderSessionRow)}
+                            {olderGroups.map(([k, list]) =>
+                              renderProjectGroup(k, list, { dimmed: true }),
+                            )}
                           </div>
                         )}
                       </div>
