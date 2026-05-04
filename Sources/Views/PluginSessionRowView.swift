@@ -1,5 +1,6 @@
 import SwiftUI
 import Meee2PluginKit
+import Meee2CommKit
 
 /// Plugin Session 行视图 - 展开状态下的单个 plugin session 显示
 /// 固定高度 56px（增加以显示 last message）

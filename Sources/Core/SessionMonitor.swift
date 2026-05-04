@@ -177,7 +177,13 @@ class SessionMonitor: ObservableObject {
     /// 合新旧 sessions，保留运行时状态
     private func mergeSessions(_ newSessions: [AISession], existing: [AISession]) -> [AISession] {
         var merged: [AISession] = []
-        var existingMap = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        // Dedupe by sessionId: a respawn (or two live `claude` subprocesses for
+        // the same session, which Claude.app does sometimes) can leave two
+        // PID.json files in `~/.claude/sessions/` keyed to the same sessionId.
+        // `Dictionary(uniqueKeysWithValues:)` would fatal-error on the dup;
+        // keep the last-seen entry instead.
+        var existingMap = Dictionary(existing.map { ($0.id, $0) },
+                                     uniquingKeysWith: { _, latest in latest })
 
         for newSession in newSessions {
             if let existingSession = existingMap[newSession.id] {

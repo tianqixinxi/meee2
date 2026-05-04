@@ -129,13 +129,17 @@ textarea {
 .app {
   display: grid;
   grid-template-rows: 1fr auto;
-  grid-template-columns: 1fr auto;
+  /* sidebar 列宽直接读 :root 上的 --sidebar-width（Sidebar.tsx 维护：
+   * 展开时是用户拖拽存的宽度，collapsed 时强制 48px）。auto 模式下 grid
+   * 自动列 sizing 不严格遵守 .sidebar.collapsed 的 width !important，
+   * 改用 var 直接驱动 track 宽度。 */
+  grid-template-columns: var(--sidebar-width, 360px) 1fr;
   height: 100%;
 }
 
 .board-area {
   grid-row: 1;
-  grid-column: 1;
+  grid-column: 2;
   position: relative;
   overflow: hidden;
 }
@@ -143,6 +147,284 @@ textarea {
 /* Excalidraw container */
 .board-area .excalidraw {
   height: 100%;
+}
+
+/* SessionDock：选中 session 后画板上的合体浮窗。
+ *
+ * 默认展开（covers most of canvas，毛玻璃），右上角两个按钮：
+ *   ⤡ 折叠到底部 720×640；× 关闭。
+ * 折叠 = .session-dock--collapsed。
+ *
+ * 取代了之前两个独立 widget：
+ *   - .board-detail-panel（右侧 SessionDetail 浮窗）
+ *   - .session-composer（fixed bottom 弹出条）
+ *
+ * 键盘字符通过命令式句柄 (SessionDockHandle.appendAndFocus) 注入到
+ * dock 里的 textarea。
+ */
+.session-dock {
+  position: absolute;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  /* 毛玻璃 */
+  background: rgba(18, 20, 28, 0.55);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  animation: session-dock-slide 140ms ease-out;
+
+  /* 默认 expanded：几乎覆盖整个画板 */
+  top: 16px;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+}
+
+.session-dock--collapsed {
+  /* 折叠：底部居中 720×640 —— 用 left:50% + transform 居中 */
+  top: auto;
+  right: auto;
+  left: 50%;
+  bottom: 12px;
+  width: min(720px, calc(100% - 24px));
+  max-height: min(70vh, 640px);
+  transform: translateX(-50%);
+}
+
+@keyframes session-dock-slide {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 右上角浮动按钮组（toggle expand + close）—— 取代了之前的 header */
+.session-dock__actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+.session-dock__actions button {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #C7CCD9;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms, color 120ms;
+}
+.session-dock__actions button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #E5E7EB;
+}
+
+.session-dock__transcript {
+  flex: 1 1 auto;
+  /* dock 撑满时内容只有几条消息，原本会顶在最上面、跟下方 chat input 之间空一大段。
+   * 改成 flex 容器 + 链路上每层都 flex:1 撑满 + 最底层 margin-top: auto，
+   * 实现 chat 样式（消息少时贴底紧挨 input；消息多时自然向上滚动）。
+   *
+   * padding-top: 44px：让出右上角浮动按钮（28px 高 + top: 10）的空间，
+   * 否则 transcript 顶部内容（特别是 sticky bar）会被 toggle/close 按钮挡住。
+   *
+   * position: relative：让 .session-dock__open（右下角 "Open" 跳转按钮）能
+   * 相对 transcript 区做 absolute 定位。 */
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+  overflow: hidden;
+  padding: 44px 16px 8px;
+  position: relative;
+}
+
+/* "Open" chip — bottom-right of the transcript pane. Click → activate
+ * the session via /api/sessions/:id/activate, which downstream picks
+ * Ghostty / iTerm jump for CLI sessions or the `claude://` URL scheme
+ * for Desktop-backed Claude sessions. Same code path as Island tap and
+ * Web Board double-click. */
+/* Open chip 现在嵌在 bottombar 的 cc-bottom-right 里（跟 model/status 同行，
+ * 视觉上属于 inputbox 右下角 meta 区）。inline-flex，不再 absolute。 */
+.session-dock__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms, color 100ms;
+}
+.session-dock__open:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.98);
+}
+.session-dock__open svg {
+  opacity: 0.7;
+}
+
+/* TranscriptView 自带的 search bar（搜索框 + Tool calls 复选框 + 计数 +
+ * "refreshing" 旋转提示）在 dock 里多余，按用户要求去掉。
+ * 不动 board-ui 源码，仅 dock 上下文里隐藏；showTools 用 board-ui 内部
+ * localStorage 默认值（false），刚好等于"不显示 tool_use/tool_result"。 */
+.session-dock .transcript-search {
+  display: none;
+}
+
+/* dock 上下文：让 transcript 撑满高度并把内容贴底 */
+.session-dock .transcript-wrap,
+.session-dock .transcript-panel-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.session-dock .transcript-panel {
+  flex: 1 1 auto;
+  /* 默认 max-height: 60vh 是给老 sidebar 用的；dock 自己已限定整体高度 */
+  max-height: none;
+  min-height: 0;
+}
+
+/* 虚拟化容器：内容比 panel 矮时贴底，内容比 panel 高时正常滚动（margin-top:auto
+ * 在 flex 父布局下，剩余空间挤到上方；溢出时不再有剩余空间，效果消失） */
+.session-dock .transcript-panel > div {
+  margin-top: auto;
+}
+
+/* sticky-user bar 不再无脑隐藏 —— TranscriptView 里改成只在 "stickyIdx
+ * 是最新一条 user message"（没有更新的 prompt）时才返回 null，平时滚动看
+ * 旧对话仍会出现。视觉与右上角 expand/close 按钮的间距由 transcript 的
+ * padding-top: 44px 已经避开。 */
+
+/* ─── Sidebar search ──────────────────────────────────────────────────────
+ * Inline 搜索 input：点 SidebarTopNav 上的 Search 按钮才出现，输入按 title /
+ * project / cwd 实时过滤 session 列表。Esc / × 清空 + 关闭。 */
+.sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 6px 0;
+  padding: 5px 8px 5px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 7px;
+  transition: background 100ms, border-color 100ms;
+}
+.sidebar-search:focus-within {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.sidebar-search__icon {
+  display: inline-flex;
+  align-items: center;
+  color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
+}
+.sidebar-search__input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 0;
+}
+.sidebar-search__input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+.sidebar-search__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.sidebar-search__clear:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.session-dock__input-box {
+  position: relative;
+  margin: 8px 12px 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 12px 16px;
+  flex: 0 0 auto;
+  background: rgba(0, 0, 0, 0.18);
+  transition: border-color 120ms;
+}
+.session-dock__input-box:focus-within {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.session-dock__bottombar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px 10px;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+/* ── Excalidraw shape toolbar 移到画板底部 ────────────────────────
+ * 直接做 position: absolute 时 offsetParent 是 .shapes-section 里
+ * 一个高度 ~0 的 relative 包裹 div，bottom: 12px 算出来跑到视口顶部
+ * 上方。改用 position: fixed + 计算 sidebar 偏移，绕过 Excalidraw 自己
+ * 的层级。Excalidraw 用内联 transform: matrix 做居中（≈ translateX(-50%)），
+ * 我们把 left 算成"画板水平中点"配合它就能正中。
+ *
+ * 选中 session 时（.board-area:has(.session-dock)）toolbar 隐藏 ——
+ * 画板上已经有 dock 占视野，再保留 shape toolbar 会争抢底部空间。
+ */
+.excalidraw .App-toolbar-container {
+  position: fixed;
+  top: auto;
+  bottom: 12px;
+  /* 画板水平中点 = (sidebar-right-edge + viewport-right-edge) / 2 */
+  left: calc((100vw + var(--sidebar-width, 0px)) / 2);
+  /* 自己居中：Excalidraw 在 fixed 模式下不再注入它原本的 translateX(-w/2) 矩阵 */
+  transform: translateX(-50%);
+  z-index: 4;
+}
+
+/* 隐藏画板左上角的 Excalidraw MainMenu 汉堡按钮 + Library 按钮。
+ * 我们的菜单都在 sidebar topnav 里，画板上不需要重复入口。 */
+.excalidraw .App-menu_top__left,
+.excalidraw .App-menu__left,
+.excalidraw .layer-ui__wrapper__top-right .help-icon,
+.excalidraw .layer-ui__wrapper__top-right .default-sidebar-trigger {
+  display: none !important;
+}
+
+.board-area:has(.session-dock) .excalidraw .App-toolbar-container {
+  display: none;
 }
 
 /* 只选了 session/channel 时，抹掉 Excalidraw 的"选中元素样式编辑面板"
@@ -179,68 +461,43 @@ textarea {
   display: none !important;
 }
 
-/* ─── Board channel actions ────────────────────────────────────────────────
-   Board-owned top controls. They deliberately sit outside Excalidraw's native
-   shape toolbar so "create channel" / "create connector" read as app actions,
-   not drawing tools. */
-.board-channel-actions {
+/* ─── Board channel tool (portaled into Excalidraw .App-toolbar) ──────────
+   Create channel + DM line 两个按钮通过 React Portal 注入到 .App-toolbar
+   里，跟 rectangle/ellipse/... 这些 shape tool 同行。沿用 Excalidraw 自
+   己的 `ToolIcon ToolIcon_size_medium` class。
+   挑战：styles.css 里的全局 `button { background: var(--bg-elevated);
+   border: 1px solid; padding: 5px 12px; }` 会污染我们 portal 的 button，
+   而 Excalidraw 的 native ToolIcon 在 .excalidraw 作用域里被重置成透明。
+   我们的 button 跨了那个边界但样式被全局 button 规则覆盖，所以这里显式
+   把外观 reset 回 Excalidraw native 的样子（透明 bg / 无边框 / 0 padding）。 */
+.excalidraw .App-toolbar .board-channel-tool {
+  background: transparent;
+  border: none;
+  padding: 0;
+  border-radius: var(--border-radius-lg, 6.5px);
+}
+.excalidraw .App-toolbar .board-channel-tool:hover {
+  background: var(--button-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+/* :first-of-type 在这个 DOM 里指 Stack_horizontal 的第一个 button 子元素
+ * (= 原生 lock 工具)，匹配不到我们；所以 separator 规则没生效。
+ * 改用相邻兄弟选择器 + 反向：第一个 channel-tool 是"前面有非 channel-tool"
+ * 的那个 ——> 用 :nth-of-type 也不行（同类型计数）。最稳的：给第二个
+ * channel-tool 用 `+` 兄弟选择器加 separator inverse —— 反过来想，不如
+ * 把分隔线画在第一个 channel-tool 的 ::before 上，定位简单。 */
+.excalidraw .App-toolbar .board-channel-tool:not(.board-channel-tool + .board-channel-tool) {
+  margin-left: 8px;
+  position: relative;
+}
+.excalidraw .App-toolbar .board-channel-tool:not(.board-channel-tool + .board-channel-tool)::before {
+  content: '';
   position: absolute;
-  z-index: 5;
-  /* 28px(macOS titlebar drag zone) + 12px(原来的间距) */
-  top: 40px;
-  left: calc(50% + 126px);
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  pointer-events: auto;
-}
-.board-channel-action {
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: var(--sans);
-  color: var(--text, #F5F4EF);
-  background: var(--bg-elevated, #30302E);
-  border: 1px solid var(--border, #3A3A38);
-  border-radius: 9px;
-  box-shadow: var(--ui-island-box-shadow, 0 0 0 1px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.25));
-  cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
-  white-space: nowrap;
-}
-.board-channel-action:hover {
-  background: var(--bg-elevated-2, #3A3A38);
-  border-color: var(--border-strong, #4B4A47);
-}
-.board-channel-action:active {
-  background: var(--bg-paper, #2C2B29);
-  border-color: var(--border-strong, #4B4A47);
-  transform: translateY(1px);
-}
-.board-channel-action__glyph {
-  font-size: 14px;
-  line-height: 1;
-  color: var(--accent, #CC785C);
-  font-weight: 600;
-}
-@media (max-width: 760px) {
-  .board-channel-actions {
-    left: auto;
-    right: 14px;
-    gap: 6px;
-  }
-  .board-channel-action {
-    width: 36px;
-    padding: 0;
-    justify-content: center;
-  }
-  .board-channel-action__label {
-    display: none;
-  }
+  left: -4px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--default-border-color, rgba(255, 255, 255, 0.12));
 }
 
 /* -- Wave 18: SessionOverlay ------------------------------------------- */
@@ -266,24 +523,141 @@ textarea {
 /* Sidebar */
 .sidebar {
   grid-row: 1 / span 2;   /* 跨 board + command bar 两行，视觉上贯穿全屏高度 */
-  grid-column: 2;
+  grid-column: 1;
   width: 360px;           /* fallback; Sidebar.tsx 用 inline style 覆盖 */
   background: var(--bg-elevated);
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;     /* for .sidebar-resizer */
 }
-.sidebar.collapsed {
-  width: 28px !important; /* 覆盖 inline style */
-  transition: width 0.15s ease;
+/* Sidebar toggle icon —— 永远 fixed 在 macOS 红黄绿三个 traffic-light
+ * 按钮的右边（traffic lights 大约结束在 x:72，icon 从 x:80 起），跨折叠
+ * 和展开两态都在同一位置，跟 Claude Code 的体感一致。
+ *
+ * 关键：默认情况下 webview 顶部 28pt 是 drag region（被 DragRegionWebView
+ * hitTest 吞掉），按钮在那一条里点不动。BoardWebWindowController 里有一份
+ * `clickThroughRects` 把这个按钮的矩形从 drag region 里抠出来，让 click
+ * 透回 webview。改 CSS 位置时要顺手把那份 rect 同步改了，否则按钮看上去
+ * 有但点不响应。 */
+.sidebar-collapsed-toggle {
+  position: fixed;
+  /* 紧贴 macOS traffic lights 右侧：lights 占 12..72，留 8px 间距 → x=80。
+   * 垂直对齐 traffic lights 中心：实测 macOS traffic lights 中心 y ≈ 20
+   * （titlebar 28pt 但 lights 略往下偏，不是几何中心），button 20×20 →
+   * top: 10 → center y = 20 ✓
+   * padding/border 显式归零盖掉全局 `button { padding: 5px 12px; border: 1px solid; }`
+   * （否则 box-sizing: border-box 下 24px 横向 padding 把 width 撑到 24px）。 */
+  left: 80px;
+  top: 10px;
+  z-index: 50;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
 }
-/* drag handle pinned to the left edge —— rows 1 column 2，侧边在画板右侧，
-   所以"可拖的那条"是这个 aside 的左边 */
+/* SVG 在某些 flex 上下文里 width attribute 被无视而只渲染成 4px。强制锁定。
+ * Button 里默认挂 `.icon-rest`（中性 panel-left）。仅折叠态时才额外挂
+ * `.icon-active`（带方向 chevron），`:hover` 切换显示；展开态时只有
+ * rest 一个 icon，hover 不再变化（用户已经看到 sidebar 没必要再暗示）。 */
+.sidebar-collapsed-toggle svg {
+  width: 12px !important;
+  height: 12px !important;
+  flex-shrink: 0;
+  position: absolute;
+  transition: opacity 100ms ease;
+}
+.sidebar-collapsed-toggle .icon-rest { opacity: 1; }
+.sidebar-collapsed-toggle .icon-active { opacity: 0; }
+.sidebar-collapsed-toggle:hover .icon-rest { opacity: 0; }
+.sidebar-collapsed-toggle:hover .icon-active { opacity: 1; }
+.sidebar-collapsed-toggle:hover {
+  /* 之前用 rgba(255,255,255,0.08) 在半透明 titlebar 上跟 white icon 同色调
+   * 看着糊在一起。换成黑色叠加 —— 在深色 titlebar 上变成更深的方块，
+   * 白色 icon 明显浮起来。VSCode / Claude Code 类似处理。 */
+  background: rgba(0, 0, 0, 0.25);
+  color: #FFFFFF;
+}
+
+/* ── Hover preview: sidebar floats below the collapsed icon ─────────
+ * Triggered by hovering the toggle button while sidebar is collapsed.
+ * Position: fixed below the icon (top: 70 = top:36 + 28 height + 6
+ * gap), constrained height so it doesn't take over the viewport.
+ * Glass + heavy shadow + rounded corners so it reads as a popover, not
+ * a panel that's stuck open. Stays in place while the cursor is over
+ * either the icon or the aside (both wire the same `cancelClose`). */
+.sidebar.sidebar--preview {
+  position: fixed;
+  left: 14px;
+  top: 42px;
+  width: 360px;
+  max-width: calc(100vw - 28px);
+  height: auto;
+  max-height: 70vh;
+  border-radius: 14px;
+  background: rgba(20, 19, 18, 0.92);
+  backdrop-filter: blur(22px) saturate(1.2);
+  -webkit-backdrop-filter: blur(22px) saturate(1.2);
+  box-shadow:
+    0 20px 56px rgba(0, 0, 0, 0.55),
+    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  z-index: 60;
+  overflow: hidden;
+  /* 快速淡入：opacity 0 → 1 + 轻微下滑 4px → 0，120ms ease-out。
+   * 退出由 React 加 `sidebar--preview-leaving` class 触发反向动画；
+   * 那 120ms 跑完后 React unmount。两段时序在 Sidebar.tsx scheduleClose
+   * 里写死 120ms，跟这里 keyframe 时长保持一致。 */
+  animation: sidebar-preview-in 120ms ease-out;
+  /* Resize handle is meaningless on the floating preview. */
+}
+.sidebar.sidebar--preview-leaving {
+  animation: sidebar-preview-out 120ms ease-in forwards;
+}
+@keyframes sidebar-preview-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes sidebar-preview-out {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-4px); }
+}
+.sidebar.sidebar--preview .sidebar-resizer {
+  display: none;
+}
+/* Don't show the redundant collapse button inside the preview header —
+ * the user already collapsed it and the preview is by definition the
+ * collapsed state. Click the icon outside to fully expand. */
+.sidebar.sidebar--preview .sidebar-toggle-btn {
+  display: none;
+}
+/* The .sidebar-header has 36px top padding so its content stays clear of
+ * the macOS 28pt drag region. In preview mode the aside floats mid-screen
+ * and the header is empty (we removed the in-header toggle, and the
+ * "Inspector" label is gone too). The 36+8 padding plus an empty bar just
+ * leaves a tall void at the top of the preview overlay. Drop it. */
+.sidebar.sidebar--preview .sidebar-header {
+  display: none;
+}
+/* Trim the body's top padding too — the topnav has its own padding so we
+ * don't need extra slack at the very top of the preview. */
+.sidebar.sidebar--preview .sidebar-body {
+  padding-top: 0 !important;
+}
+/* drag handle pinned to the right edge —— sidebar 在画板左侧，
+   所以"可拖的那条"是这个 aside 的右边 */
 .sidebar-resizer {
   position: absolute;
-  left: 0;
+  right: 0;
   top: 0;
   bottom: 0;
   width: 5px;
@@ -301,7 +675,7 @@ textarea {
 }
 .sidebar-toggle {
   position: absolute;
-  right: 320px;
+  left: 320px;
   top: 48px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -388,7 +762,8 @@ textarea {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  /* Claude Code 风格：行高更紧凑（3px 上下）*/
+  padding: 3px 8px;
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.08s ease;
@@ -1167,155 +1542,146 @@ textarea {
   border-color: var(--border);
 }
 
-/* ─── SessionComposer ──────────────────────────────────────────────────
-   固定在窗口底部的消息 composer，当 session 被选中且用户开始敲键盘/粘贴时
-   从 App.tsx 弹出。Enter 发送，Shift+Enter 换行，Esc 取消。
+/* ─── 共享 chip / icon / textarea 样式（cc-*）──────────────────────
+   原本属于 SessionComposer，现在 SessionDock 复用同一套类名。
+   .session-composer / .session-composer__* 已废弃；底层 .cc-* 类保留。
 */
-.session-composer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1000;
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
-  padding: 12px 16px 16px;
-  animation: session-composer-slide 120ms ease-out;
-}
-
-@keyframes session-composer-slide {
-  from { transform: translateY(12px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.session-composer__inner {
-  pointer-events: auto;
-  width: min(720px, 100%);
-  background: linear-gradient(180deg, #1f2434 0%, #161a27 100%);
-  border: 1px solid #2F374B;
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-  padding: 10px 12px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-
-.session-composer__header {
-  display: flex;
+.cc-branch-icon {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: #8B93A7;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #1A1E2B;
+  color: #6B7488;
+  flex-shrink: 0;
 }
-.session-composer__label {
-  color: #5F6A85;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  font-size: 10px;
-}
-.session-composer__target {
+.cc-branch-name {
+  font-weight: 500;
   color: #E5E7EB;
-  font-weight: 600;
-  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
 }
-.session-composer__plugin {
-  color: #6B7280;
+.cc-branch-arrow {
+  color: #5A6478;
+  font-size: 14px;
+}
+.cc-branch-base {
+  color: #C7CCD9;
   font-weight: 400;
 }
-.session-composer__hint {
-  margin-left: auto;
-  color: #4B5367;
-  font-size: 10px;
-  letter-spacing: 0.2px;
-}
-
-.session-composer__row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-}
-
-.session-composer__textarea {
+.cc-spacer {
   flex: 1;
-  background: #0F1320;
-  border: 1px solid #2A3244;
-  border-radius: 8px;
-  color: #E5E7EB;
-  padding: 8px 10px;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.cc-stat {
   font-size: 13px;
-  line-height: 1.45;
-  resize: vertical;
-  min-height: 44px;
-  max-height: 220px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #1A1E2B;
+}
+.cc-stat--add { color: #4ADE80; }
+.cc-stat--del { color: #F87171; }
+.cc-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid #2A3040;
+  color: #E5E7EB;
+  padding: 5px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.cc-action-button:hover {
+  background: #1A1E2B;
+  border-color: #3A4156;
+}
+.cc-caret {
+  color: #6B7488;
+}
+
+.cc-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #E5E7EB;
+  padding: 0 32px 0 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: none;
+  min-height: 22px;
+  max-height: 200px;
   outline: none;
-  transition: border-color 120ms;
+  display: block;
 }
-.session-composer__textarea:focus {
-  border-color: #3B82F6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+.cc-textarea::placeholder {
+  color: #4F5768;
 }
-.session-composer__textarea:disabled {
+.cc-textarea:disabled {
   opacity: 0.6;
   cursor: wait;
 }
 
-.session-composer__send {
-  background: #3B82F6;
-  border: none;
-  color: white;
-  padding: 0 18px;
-  height: 34px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
+.cc-send-arrow {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid #2A3040;
+  border-radius: 6px;
+  color: #8B93A7;
   cursor: pointer;
-  transition: background 120ms, opacity 120ms;
+  transition: background 120ms, color 120ms, border-color 120ms;
 }
-.session-composer__send:hover:not(:disabled) {
-  background: #2563EB;
+.cc-send-arrow:hover:not(:disabled) {
+  background: #1A1E2B;
+  color: #E5E7EB;
+  border-color: #3A4156;
 }
-.session-composer__send:disabled {
-  background: #2A3244;
-  color: #5F6A85;
+.cc-send-arrow:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
-.session-composer__error {
-  color: #F87171;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-
-/* ─── composer attachments ──────────────────────────────────────────── */
-.session-composer__attachments {
+/* attachments ride above textarea inside the box */
+.cc-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 2px 2px 0;
+  margin: 0 0 8px;
 }
-.session-composer__chip {
+.cc-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: #1A2135;
-  border: 1px solid #2A3244;
+  background: #1A1E2B;
+  border: 1px solid #2A3040;
   border-radius: 6px;
   padding: 3px 6px 3px 8px;
   font-size: 11px;
   color: #D4D8E1;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   max-width: 280px;
 }
-.session-composer__chip-name {
+.cc-chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-composer__chip-remove {
+.cc-chip-remove {
   background: transparent;
   border: none;
   color: #8B93A7;
@@ -1326,13 +1692,102 @@ textarea {
   border-radius: 3px;
   transition: color 120ms, background 120ms;
 }
-.session-composer__chip-remove:hover:not(:disabled) {
+.cc-chip-remove:hover:not(:disabled) {
   color: #F87171;
   background: rgba(248, 113, 113, 0.12);
 }
-.session-composer__chip-remove:disabled {
+.cc-chip-remove:disabled {
   color: #4B5367;
   cursor: not-allowed;
+}
+
+.cc-bottom-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cc-bottom-right {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cc-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: #6B7488;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 120ms, color 120ms;
+}
+.cc-icon-btn:hover {
+  background: #1A1E2B;
+  color: #C7CCD9;
+}
+.cc-icon-btn--more {
+  width: 24px;
+  height: 24px;
+}
+
+.cc-plugin-tag {
+  font-size: 12px;
+  color: #8B93A7;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: #1A1E2B;
+}
+.cc-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: #C7CCD9;
+  font-variant-numeric: tabular-nums;
+}
+.cc-model-sep {
+  color: #3F475A;
+}
+.cc-model-state {
+  color: #6B7488;
+}
+.cc-model-state--active {
+  color: #60A5FA;
+}
+
+/* ── Spinners ───────────────────────────────────────────────────── */
+.cc-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid #2A3244;
+  border-top-color: #93C5FD;
+  border-radius: 50%;
+  animation: composer-spin 700ms linear infinite;
+}
+.cc-spinner-mini {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid #2A3244;
+  border-top-color: #60A5FA;
+  border-radius: 50%;
+  animation: composer-spin 700ms linear infinite;
+  margin-left: 2px;
+}
+@keyframes composer-spin {
+  to { transform: rotate(360deg); }
+}
+
+.cc-error {
+  color: #F87171;
+  font-size: 12px;
+  padding: 0 4px;
 }
 
 /* ─── TranscriptPanel ─────────────────────────────────────────────────
@@ -2596,4 +3051,609 @@ textarea {
 }
 @keyframes boot-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ─── Sidebar filter menu (popup, mirrors Claude Code's group-by menu) ─── */
+.sidebar-filter-menu {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 50;
+  min-width: 240px;
+  background: #1A1E2B;
+  border: 1px solid #2A3040;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #C7CCD9;
+}
+.sf-row-wrap {
+  display: block;
+}
+.sf-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 100ms;
+}
+.sf-row:hover {
+  background: #232838;
+}
+.sf-row-label {
+  flex: 1;
+  color: #E5E7EB;
+}
+.sf-row-value {
+  color: #6B7488;
+  font-size: 12px;
+  margin-right: 4px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sf-row-value--active {
+  color: #60A5FA;
+}
+.sf-chevron {
+  color: #6B7488;
+  flex-shrink: 0;
+}
+.sf-options {
+  padding: 2px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sf-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: #C7CCD9;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 100ms;
+}
+.sf-option:hover {
+  background: #232838;
+}
+.sf-option--selected {
+  color: #E5E7EB;
+}
+.sf-option-check {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  color: #60A5FA;
+  font-size: 11px;
+}
+.sf-divider {
+  height: 1px;
+  background: #2A3040;
+  margin: 4px 6px;
+}
+
+/* ─── Sidebar collapse / expand toggle (Claude Code-style icon) ──────── */
+.sidebar-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.sidebar-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.95);
+}
+.sidebar.collapsed .sidebar-toggle-btn {
+  margin: 8px;
+}
+
+/* ─── Per-group filter trigger (lives only on the first project group) ─ */
+.sidebar-project-group__filter-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.sidebar-project-group__filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  flex-shrink: 0;
+  /* hover-only chrome — match `__add` button so first-group header has the
+   * same opacity choreography as every other group's header. */
+  opacity: 0;
+  transition: opacity 100ms, background 100ms, color 100ms;
+}
+.sidebar .sidebar-project-group__header:hover .sidebar-project-group__filter,
+.sidebar-project-group__filter.is-active,
+.sidebar-project-group__filter.is-pinned {
+  opacity: 1;
+}
+/* Empty-state header: no chevron / add / hover semantics — just the
+ * always-visible filter trigger. The header itself is a static row, not
+ * a clickable button. */
+.sidebar-project-group--empty .sidebar-project-group__header {
+  cursor: default;
+  background: transparent !important;
+}
+.sidebar-project-group__filter:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.95);
+}
+.sidebar-project-group__filter .filter-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #60A5FA;
+}
+/* Override the menu's default positioning so it anchors below the filter
+ * button inside the group header instead of below the old sidebar header. */
+.sidebar-project-group__filter-wrap .sidebar-filter-menu {
+  top: 26px;
+  right: 0;
+}
+
+/* ─── Sidebar top nav: tabs + action list (mirrors Claude Code) ───── */
+.sidebar-topnav {
+  padding: 8px 8px 4px;
+  border-bottom: 1px solid var(--border, #2A3040);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Plugin category pills */
+.stn-tabs {
+  display: flex;
+  gap: 4px;
+  background: #14182280;
+  border: 1px solid #232838;
+  border-radius: 10px;
+  padding: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.stn-tabs::-webkit-scrollbar { display: none; }
+.stn-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: #8B93A7;
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms, color 100ms;
+}
+.stn-tab:hover { color: #C7CCD9; }
+.stn-tab--active {
+  background: #2A3040;
+  color: #E5E7EB;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.stn-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Action items list */
+.stn-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+}
+.stn-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #C7CCD9;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 100ms;
+}
+.stn-action:hover {
+  background: #1A1E2B;
+}
+.stn-action--primary {
+  color: #E5E7EB;
+}
+.stn-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: #6B7488;
+}
+.stn-action--primary .stn-action-icon {
+  color: #C7CCD9;
+}
+
+/* ─── Sidebar Claude-Code-style overrides ─────────────────────────────
+   完全脱离 meee2 的 warm-brown design tokens，按 Claude Code 的暗色 +
+   极简 chrome 重做。所有 override 限定在 .sidebar scope 内，不影响其他地方。
+*/
+.sidebar {
+  background: #0A0A0A !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
+  color: #E5E7EB;
+}
+.sidebar-body {
+  padding: 4px 8px 12px !important;
+}
+
+/* 顶部 header（Inspector/Session/Channel 标签那行）
+ * top: 36px 把 header 内容压到 macOS 28px 拖拽区下面，避免拖拽区
+ * 吃掉 Collapse sidebar 按钮的 click。 */
+.sidebar .sidebar-header {
+  padding: 36px 12px 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  border-bottom: none;
+  background: transparent;
+}
+
+/* ─── Top nav（tabs + actions），重新平衡尺寸 ──────────────────────────── */
+.sidebar .sidebar-topnav {
+  padding: 8px 4px 4px;
+  border-bottom: none;
+  gap: 12px;
+}
+
+/* Tabs：扁平浅灰胶囊。窄 sidebar 下允许横向滚动 */
+.sidebar .stn-tabs {
+  background: rgba(255, 255, 255, 0.04);
+  border: none;
+  border-radius: 10px;
+  padding: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sidebar .stn-tabs::-webkit-scrollbar { display: none; }
+.sidebar .stn-tab {
+  flex: 0 0 auto;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  padding: 6px 12px;
+}
+.sidebar .stn-tab:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+.sidebar .stn-tab--active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #FFFFFF;
+  box-shadow: none;
+}
+
+/* Action items（New session / Routines / Customize / More）—— 大号 line icon + 大字 */
+.sidebar .stn-actions {
+  gap: 0;
+  padding: 0;
+}
+.sidebar .stn-action {
+  padding: 9px 10px;
+  font-size: 15px;
+  font-weight: 400;
+  gap: 14px;
+  color: rgba(255, 255, 255, 0.92);
+  border-radius: 8px;
+}
+.sidebar .stn-action:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.sidebar .stn-action-icon {
+  width: 18px;
+  height: 18px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.sidebar .stn-action-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.5;
+}
+
+/* ─── Project group: dim header, chevron + add 按钮 hover 才出现 ────────── */
+.sidebar .sidebar-project-group {
+  /* Claude Code 风格更紧凑：顶部 8 + 底部 0 给 row 自己留余白 */
+  margin: 8px -4px 0;
+}
+.sidebar .sidebar-project-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* 跟 session row title 字号统一 */
+  font-size: 13px;
+  line-height: 1.45;
+  text-transform: none;
+  letter-spacing: 0;
+  color: rgba(255, 255, 255, 0.4);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 100ms, background 100ms;
+}
+/* 统一所有 group header 的 hover：bg + 文本色一起淡入，跟 session row hover
+ * 视觉一致。之前只换文字色 + group 间会因为有/没有 add 按钮各自呈现不同
+ * chrome，此规则把所有 chrome 收进 right-aligned actions slot 后，每个 group
+ * hover 起来都是同一个块状高亮。 */
+.sidebar .sidebar-project-group__header:hover {
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.04);
+}
+.sidebar .sidebar-project-group__chevron {
+  color: rgba(255, 255, 255, 0.45);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.sidebar .sidebar-project-group__header:hover .sidebar-project-group__chevron,
+.sidebar .sidebar-project-group.is-collapsed .sidebar-project-group__chevron {
+  opacity: 1;
+}
+.sidebar .sidebar-project-group__name {
+  font-weight: 400;
+  /* No longer flex:1 — name hugs its content so the chevron can sit
+   * directly after it (Claude Code's `dream-mbti ▾  …  + filter`
+   * layout, instead of our old `[>] [name] [count] [+] [filter]`).
+   * The `__spacer` below pushes actions to the far right. */
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.55);
+}
+.sidebar .sidebar-project-group__header:hover .sidebar-project-group__name {
+  color: rgba(255, 255, 255, 0.85);
+}
+.sidebar .sidebar-project-group__spacer {
+  flex: 1;
+}
+/* Right-aligned metadata hint slot (e.g. "1h–24h" on the Older bucket).
+ * Always visible, unlike `__add` / `__filter` which fade in on hover —
+ * this is informational, not chrome the user interacts with. */
+.sidebar .sidebar-project-group__hint {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.3);
+  font-family: 'SF Mono', Consolas, monospace;
+  flex-shrink: 0;
+}
+/* Count is no longer rendered (it was inline noise next to the name); rule
+ * kept as a no-op safety so a cached scene with an old text node hides
+ * cleanly. */
+.sidebar .sidebar-project-group__count {
+  display: none;
+}
+.sidebar .sidebar-project-group__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 100ms, background 100ms, color 100ms;
+}
+.sidebar .sidebar-project-group__header:hover .sidebar-project-group__add {
+  opacity: 1;
+}
+.sidebar .sidebar-project-group__add:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* ─── Session row：剥到只剩 status dot + 标题 ─────────────────────────── */
+.sidebar .sidebar-session-row {
+  /* Claude Code 风格紧凑：3px 上下行高 */
+  padding: 3px 10px;
+  border-radius: 6px;
+  gap: 10px;
+}
+.sidebar .sidebar-session-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.sidebar .sidebar-session-row.is-selected {
+  background: rgba(255, 255, 255, 0.08);
+}
+.sidebar .sidebar-session-row__title {
+  /* 跟 group header 字号统一（13px）—— 之前 14px 让行更高、视觉不齐 */
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+}
+/* 默认隐藏右侧的 eye / sid / canvas-count chrome；hover 才出现 */
+.sidebar .sidebar-session-row__actions,
+.sidebar .sidebar-session-row__sid {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.sidebar .sidebar-session-row:hover .sidebar-session-row__actions,
+.sidebar .sidebar-session-row:hover .sidebar-session-row__sid,
+.sidebar .sidebar-session-row.is-selected .sidebar-session-row__actions,
+.sidebar .sidebar-session-row.is-selected .sidebar-session-row__sid {
+  opacity: 1;
+}
+/* status / kind icon 改用更细的 line + 略大尺寸 */
+.sidebar .sidebar-session-row__kind {
+  font-size: 12px;
+  opacity: 1;
+}
+
+/* ─── Sidebar 顶上的 plugin-category 老 button 行：藏掉 ─────────────────
+   原代码在 SidebarTopNav 之外还有一排 plugin filter 按钮；现在 tabs 已经
+   覆盖了这个功能，下面那排 button 视觉上就重复了。 */
+.sidebar .row.wrap.gap-2 {
+  display: none;
+}
+
+/* ─── "Pinned" 段（空态） ──────────────────────────────────────────────── */
+.sidebar-pinned-section {
+  /* New session 按钮已经自带 padding，section 之间也有 col gap，所以这里
+   * 不需要额外的 top margin。压成 0 让 Pinned 紧贴 topnav 下边沿，跟
+   * Claude Code 风格的连续小标题对齐。 */
+  margin: 0 -4px 4px;
+  padding: 6px 8px 4px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.sidebar-pinned-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* ─── 底部用户行 ────────────────────────────────────────────────────────── */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+}
+.sidebar-footer-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-footer-user-avatar {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.55);
+}
+.sidebar-footer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+}
+.sidebar-footer-icon:hover {
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* 老的 "Sessions (N)" h4 行：现在被 SidebarTopNav 取代，藏掉 */
+.sidebar .sidebar-legacy-h4-row {
+  display: none;
+}
+
+/* sidebar 整体改成 column flex，让底部 footer 贴底 */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+}
+.sidebar .sidebar-body {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Session row icon buttons (pin / rename / canvas-toggle) ───────── */
+.sidebar .sidebar-session-row__actions {
+  gap: 2px;
+}
+.sidebar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.sidebar-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+/* ─── Inline rename input ───────────────────────────────────────────── */
+.sidebar-session-row__rename-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 5px;
+  color: #FFFFFF;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 2px 6px;
+  outline: none;
+  min-width: 0;
+}
+.sidebar-session-row__rename-input:focus {
+  border-color: rgba(96, 165, 250, 0.6);
 }

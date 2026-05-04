@@ -92,21 +92,24 @@ jobs:
           DMG="dist/meee2-v${VERSION}.dmg"
           shasum -a 256 "$DMG" | tee "${DMG}.sha256"
 
-      - name: Create / update GitHub Release
+      # 只在 tag push 路径上自动创建 GitHub Release。workflow_dispatch
+      # 路径（手动 build 验证）只把 DMG 上传成 workflow artifact，不污染
+      # Releases 页面 —— 想发 prerelease 自己打 `v0.3.0-rc1` 这种带后缀的
+      # 真 tag 即可（tag 路径自动按 prerelease 处理）。
+      - name: Create / update GitHub Release (tag pushes only)
+        if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # workflow_dispatch 场景下没有对应 tag，造一个临时 tag 名并标为 prerelease
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="dev-v${VERSION}-$(date -u +%Y%m%d%H%M)"
+          # 带 -alpha / -beta / -rc 这种 SemVer prerelease 后缀的 tag
+          # 自动标为 prerelease；纯 vX.Y.Z 走正式 release。
+          PRERELEASE_FLAG=""
+          if [[ "$VERSION" =~ - ]]; then
             PRERELEASE_FLAG="--prerelease"
-            TITLE="meee2 v${VERSION} (dev build)"
-          else
-            PRERELEASE_FLAG=""
-            TITLE="meee2 v${VERSION}"
           fi
+          TITLE="meee2 v${VERSION}"
 
           DMG="dist/meee2-v${VERSION}.dmg"
           SHA="dist/meee2-v${VERSION}.dmg.sha256"
@@ -124,7 +127,10 @@ jobs:
               "$DMG" "$SHA"
           fi
 
-      - name: Upload DMG as workflow artifact (fallback)
+      # workflow_dispatch + tag push 都把 DMG 留成 artifact（14 天保留）。
+      # tag 路径上 release 页面也有同一份 dmg，artifact 是 dispatch 路径
+      # 唯一拿到 dmg 的方式 —— 在 Actions UI 里点 run 进去 download。
+      - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: meee2-v${{ steps.ver.outputs.version }}-dmg

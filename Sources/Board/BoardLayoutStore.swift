@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 public enum BoardJSONValue: Codable, Equatable {
     case null

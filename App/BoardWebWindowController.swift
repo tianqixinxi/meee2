@@ -13,6 +13,23 @@ final class DragRegionWebView: WKWebView {
     /// 任何 padding-top（如果有）保持一致。
     var dragRegionHeight: CGFloat = 28
 
+    /// Carve-out rects (window coords, top-left origin via `fromTop`/`fromLeft`)
+    /// where clicks within the top drag region should still reach the
+    /// webview instead of being swallowed for window-drag. Used to host
+    /// HTML buttons (sidebar toggle) inside the title-bar visual band
+    /// without sacrificing their clickability.
+    ///
+    /// Frame layout matches the CSS: x is "from left", y is "from top",
+    /// both in points (= CSS px since we don't scale).
+    var clickThroughRects: [CGRect] = [
+        // Sidebar toggle icon — sits to the right of macOS traffic lights
+        // (which end around x≈72) so it visually shares the title-bar row
+        // but does NOT trigger a window drag. The CSS positions the
+        // button at left:80, top:4, 20×20; this rect adds ~4px slack on
+        // each side so the user doesn't have to hit the exact pixel edge.
+        CGRect(x: 76, y: 0, width: 28, height: 28)
+    ]
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         // `point` 在 superview 坐标系。把它换到 window 坐标（bottom-left
         // 原点），看 y 是不是在最顶 dragRegionHeight 那条里。
@@ -20,7 +37,14 @@ final class DragRegionWebView: WKWebView {
         guard let window else { return super.hitTest(point) }
         let inWindow = superview?.convert(point, to: nil) ?? point
         let fromTop = window.frame.height - inWindow.y
+        let fromLeft = inWindow.x
         if fromTop >= 0 && fromTop < dragRegionHeight {
+            // Carve-out: if the point lands inside any registered rect
+            // (e.g. the sidebar toggle), let the webview handle the
+            // click — same as if it were below the drag region.
+            for rect in clickThroughRects where rect.contains(NSPoint(x: fromLeft, y: fromTop)) {
+                return super.hitTest(point)
+            }
             return nil
         }
         return super.hitTest(point)
@@ -205,5 +229,38 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&#39;")
+    }
+}
+// MARK: - Menu Bar Actions (responder chain — active only when board window is key)
+
+extension BoardWebWindowController {
+    @objc func reloadFromMenu(_ sender: Any?) {
+        reload()
+    }
+
+    @objc func openInBrowserFromMenu(_ sender: Any?) {
+        openInBrowser()
+    }
+
+    @objc func toggleSidebarFromMenu(_ sender: Any?) {
+        webView.evaluateJavaScript("""
+            (function() {
+                var btn = document.querySelector('button[title="Expand sidebar"]') ||
+                          document.querySelector('button[title="Collapse"]');
+                if (btn) btn.click();
+            })()
+            """)
+    }
+
+    @objc func zoomInFromMenu(_ sender: Any?) {
+        webView.pageZoom = min(webView.pageZoom + 0.1, 3.0)
+    }
+
+    @objc func zoomOutFromMenu(_ sender: Any?) {
+        webView.pageZoom = max(webView.pageZoom - 0.1, 0.5)
+    }
+
+    @objc func actualSizeFromMenu(_ sender: Any?) {
+        webView.pageZoom = 1.0
     }
 }

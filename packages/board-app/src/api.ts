@@ -172,7 +172,7 @@ export async function spawnSession(input: {
   )
 }
 
-// -- assistant (ask & spawn) -----------------------------------------------
+// -- assistant (chat with tools, streamed via SSE) -------------------------
 
 /** 一条对话消息（用户 / assistant） */
 export interface AssistantMessage {
@@ -180,17 +180,123 @@ export interface AssistantMessage {
   content: string
 }
 
+/** SSE event from the assistant orchestrator (mirror of backend payloads). */
+export type AssistantEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'tool_call'; id: string; name: string; args: unknown }
+  | { type: 'tool_result'; id: string; result: unknown }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
+
+/** Settings payload sent with each chat request — mirrors Swift `AssistantSettings`. */
+export interface AssistantChatSettings {
+  provider: 'openai' | 'anthropic' | 'local'
+  apiKey?: string
+  baseUrl?: string
+  model?: string
+  enabledTools?: string[]
+}
+
 /**
- * 全局 "ask & spawn" assistant：跑本地 `claude -p` 帮你挑 cwd。
- * 全部历史每次整体 POST；assistant 判断足够了就在回复末尾吐 ```spawn fence。
+ * Stream the assistant's reply as a sequence of SSE events. Caller consumes
+ * via `for await (const ev of streamAssistantChat({...}))` and accumulates
+ * `delta.text` into the current assistant bubble, renders tool_call /
+ * tool_result chips, and stops on `done` / `error`.
+ *
+ * EventSource is GET-only and we need to POST messages, so this is a
+ * fetch + manual SSE parser. Cancellation: `signal` aborts the underlying
+ * request — the orchestrator on the server side notices the closed socket
+ * within a heartbeat.
+ */
+export async function* streamAssistantChat(input: {
+  messages: AssistantMessage[]
+  settings: AssistantChatSettings
+  signal?: AbortSignal
+}): AsyncGenerator<AssistantEvent, void, void> {
+  const res = await fetch('/api/assistant/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: input.messages, settings: input.settings }),
+    signal: input.signal,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new ApiRequestError('http_error', `assistant HTTP ${res.status}: ${body.slice(0, 300)}`, res.status)
+  }
+  const reader = res.body?.getReader()
+  if (!reader) {
+    throw new ApiRequestError('no_body', 'assistant response had no body', 0)
+  }
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) return
+    buffer += decoder.decode(value, { stream: true })
+    // SSE events are separated by `\n\n`. Each event has lines like
+    // `event: <type>` and `data: <json>`. We only emit the data line —
+    // the type is also encoded inside the data envelope from the server.
+    let sepIndex: number
+    while ((sepIndex = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sepIndex)
+      buffer = buffer.slice(sepIndex + 2)
+      const ev = parseSSEEvent(raw)
+      if (ev) yield ev
+      if (ev?.type === 'done') return
+    }
+  }
+}
+
+function parseSSEEvent(raw: string): AssistantEvent | null {
+  let evType = ''
+  let dataLine = ''
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('event: ')) evType = line.slice(7).trim()
+    else if (line.startsWith('data: ')) dataLine += line.slice(6)
+  }
+  if (!evType) return null
+  let data: any = {}
+  if (dataLine) {
+    try { data = JSON.parse(dataLine) } catch { /* fall through with empty */ }
+  }
+  switch (evType) {
+    case 'delta':
+      return { type: 'delta', text: typeof data.text === 'string' ? data.text : '' }
+    case 'tool_call':
+      return {
+        type: 'tool_call',
+        id: String(data.id ?? ''),
+        name: String(data.name ?? ''),
+        args: data.args,
+      }
+    case 'tool_result':
+      return { type: 'tool_result', id: String(data.id ?? ''), result: data.result }
+    case 'error':
+      return { type: 'error', message: typeof data.message === 'string' ? data.message : 'unknown error' }
+    case 'done':
+      return { type: 'done' }
+    default:
+      return null
+  }
+}
+
+/**
+ * @deprecated kept for backward compat. New callers should use
+ * `streamAssistantChat` to get streaming + tool events. This wrapper drains
+ * the stream and returns the concatenated assistant text only.
  */
 export async function assistantChat(
   messages: AssistantMessage[],
 ): Promise<{ content: string }> {
-  return jsonRequest<{ content: string }>('/api/assistant/chat', {
-    method: 'POST',
-    body: JSON.stringify({ messages }),
-  })
+  let content = ''
+  for await (const ev of streamAssistantChat({
+    messages,
+    settings: { provider: 'local' },
+  })) {
+    if (ev.type === 'delta') content += ev.text
+    if (ev.type === 'error') throw new ApiRequestError('assistant', ev.message, 500)
+  }
+  return { content }
 }
 
 // -- transcript ------------------------------------------------------------

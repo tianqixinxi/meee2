@@ -1,8 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardState, ClientKind, Selection, Session } from '../types'
-import SessionDetail from './SessionDetail'
 import ChannelDetail from './ChannelDetail'
-import TemplateEditor from './TemplateEditor'
+import {
+  SidebarFilterMenu,
+  loadFilterState,
+  saveFilterState,
+  type FilterState,
+} from './SidebarFilterMenu'
+import {
+  SidebarTopNav,
+  defaultTabsFromSessions,
+  type SidebarTab,
+} from './SidebarTopNav'
+import {
+  loadTitleOverrides,
+  saveTitleOverride,
+  loadPinnedSet,
+  togglePinned,
+} from '../sessionOverrides'
+import { isDmChannelName } from '@meee1/board-core'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -122,6 +138,46 @@ const WIDTH_MIN = 260
 const WIDTH_MAX = 900
 const WIDTH_DEFAULT = 360
 
+/// Sidebar collapse / expand 图标。Lucide 同款，三套：
+///   - PanelLeftIcon       (面板 + 竖条，无箭头) → "rest"，默认显示
+///   - PanelLeftCloseIcon  (面板 + ← 箭头)        → "hover" 时显示，sidebar 是 open 状态
+///   - PanelLeftOpenIcon   (面板 + → 箭头)        → "hover" 时显示，sidebar 是 collapsed 状态
+/// rest → hover 用 CSS `:hover` 切换 visibility（不走 React state 减少
+/// 一层 setState 的 重渲染），button 里同时挂"rest"和"active"两个 icon。
+/// 视觉上统一 14×14 / stroke 1.8 跟其它 sidebar 图标对齐。
+function PanelLeftIcon() {
+  return (
+    <svg className="icon-rest" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.8"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 3v18"/>
+    </svg>
+  )
+}
+function PanelLeftCloseIcon() {
+  return (
+    <svg className="icon-active" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.8"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 3v18"/>
+      <path d="m16 15-3-3 3-3"/>
+    </svg>
+  )
+}
+function PanelLeftOpenIcon() {
+  return (
+    <svg className="icon-active" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth="1.8"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <path d="M9 3v18"/>
+      <path d="m14 9 3 3-3 3"/>
+    </svg>
+  )
+}
+
 function readStoredWidth(): number {
   try {
     const s = localStorage.getItem(WIDTH_KEY)
@@ -163,6 +219,115 @@ function EyeClosedIcon() {
   )
 }
 
+/// 按"最后一次交互时间"分到 Today / Yesterday / This week / Earlier 四个桶。
+/// 桶的顺序是固定的（最近的在前）；空桶不返回。
+///
+/// 注意：最后一桶用 "Earlier" 而不是 "Older"，避免和外层折叠区
+/// （`displayGroup === 'older'`，标签 "Older (N) 1h–24h"）字面撞车
+/// —— 那个折叠区是按 idle 时长分的、和这里按日期分桶语义不同。
+function groupSessionsByDate(list: Session[]): Array<[string, Session[]]> {
+  const now = new Date()
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const dayMs = 24 * 60 * 60 * 1000
+  const yesterdayStart = startOfToday - dayMs
+  const weekStart = startOfToday - 6 * dayMs
+
+  const buckets: Record<string, Session[]> = {
+    Today: [],
+    Yesterday: [],
+    'This week': [],
+    Earlier: [],
+  }
+  const sorted = [...list].sort((a, b) => {
+    const ta = a.lastActivity ? Date.parse(a.lastActivity) : 0
+    const tb = b.lastActivity ? Date.parse(b.lastActivity) : 0
+    return tb - ta
+  })
+  for (const s of sorted) {
+    const ts = s.lastActivity ? Date.parse(s.lastActivity) : 0
+    if (!ts) {
+      buckets.Earlier.push(s)
+    } else if (ts >= startOfToday) {
+      buckets.Today.push(s)
+    } else if (ts >= yesterdayStart) {
+      buckets.Yesterday.push(s)
+    } else if (ts >= weekStart) {
+      buckets['This week'].push(s)
+    } else {
+      buckets.Earlier.push(s)
+    }
+  }
+  // 保留桶序；空桶丢掉
+  return (['Today', 'Yesterday', 'This week', 'Earlier'] as const)
+    .map((k) => [k as string, buckets[k]] as [string, Session[]])
+    .filter(([, arr]) => arr.length > 0)
+}
+
+/// 把 SidebarFilterMenu 上的多维过滤 + 排序应用到 session 列表。
+/// 注意：传入的 sessions 已经经过现有的 categoryFilter（plugin 维度，sidebar
+/// inline 那排 button），这里追加 status / project / lastActivity 过滤 + sortBy 排序。
+function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
+  const now = Date.now()
+  const lastActivityCutoffMs = (() => {
+    switch (f.lastActivity) {
+      case '1h': return 60 * 60 * 1000
+      case '24h': return 24 * 60 * 60 * 1000
+      case '7d': return 7 * 24 * 60 * 60 * 1000
+      default: return null
+    }
+  })()
+  const matchStatus = (s: Session): boolean => {
+    if (f.status === 'all') return true
+    const st = s.status
+    if (f.status === 'idle') return st === 'idle'
+    if (f.status === 'waiting') return st === 'waitingForUser'
+    if (f.status === 'active') {
+      return st === 'thinking' || st === 'tooling' || st === 'spawning'
+    }
+    return true
+  }
+  const matchProject = (s: Session): boolean => {
+    if (f.project === 'all') return true
+    return projectGroupKey(s) === f.project
+  }
+  const matchPlugin = (s: Session): boolean => {
+    if (f.plugin === 'all') return true
+    return s.pluginId === f.plugin
+  }
+  const matchActivity = (s: Session): boolean => {
+    if (lastActivityCutoffMs === null) return true
+    const ts = s.lastActivity || s.startedAt
+    if (!ts) return true  // 未知活跃时间 → 不卡
+    const t = Date.parse(ts)
+    if (Number.isNaN(t)) return true
+    return now - t <= lastActivityCutoffMs
+  }
+  const filtered = sessions.filter(
+    (s) => matchStatus(s) && matchProject(s) && matchPlugin(s) && matchActivity(s),
+  )
+  // sort
+  const titleOf = (s: Session) => s.title.toLocaleLowerCase()
+  const tsOf = (s: Session, key: 'startedAt' | 'lastActivity') => {
+    const v = key === 'startedAt' ? s.startedAt : s.lastActivity
+    if (!v) return 0
+    const t = Date.parse(v)
+    return Number.isNaN(t) ? 0 : t
+  }
+  switch (f.sortBy) {
+    case 'title':
+      filtered.sort((a, b) => titleOf(a).localeCompare(titleOf(b)))
+      break
+    case 'createdTime':
+      filtered.sort((a, b) => tsOf(b, 'startedAt') - tsOf(a, 'startedAt'))
+      break
+    case 'lastActivity':
+    default:
+      filtered.sort((a, b) => tsOf(b, 'lastActivity') - tsOf(a, 'lastActivity'))
+      break
+  }
+  return filtered
+}
+
 interface Props {
   state: BoardState | null
   selection: Selection
@@ -180,8 +345,17 @@ interface Props {
    *  - omit `sids` → operates on every session (top "Hide all" button)
    *  - pass `sids` → operates only on that subset (per-category toggle) */
   onBulkVisibility: (mode: 'show' | 'hide', sids?: string[]) => void
-  /** Write-through cache for template source edits (see App.tsx). */
-  onTemplateSaved: (templateId: string, source: string) => void
+  /** "+ New session" 顶部按钮 —— 默认打开全局 AI assistant
+   *  （meee360 风格：可询问全部 session 的整体问题，也能在某个目录下创建新 session）。 */
+  onNewSession?: () => void
+  /** 顶部 plugin 分类胶囊；不传 → 从当前 sessions 自动推导（按 plugin 分）。
+   *  比如 meee360 可以传"按归属人"分类的 tabs 完全覆盖。 */
+  tabsOverride?: SidebarTab[]
+  /** project 分组 header 上的 + 按钮：在某个项目目录下起新 session。
+   *  cwd 是该 project group 内任意一个 session 的 cwd 路径。 */
+  onCreateInProject?: (cwd: string) => void
+  /** 重命名一个 session（pencil icon → input）。 */
+  onRenameSession?: (sessionId: string, newTitle: string) => Promise<void> | void
 }
 
 export default function Sidebar({
@@ -195,13 +369,66 @@ export default function Sidebar({
   onAddToCanvas,
   onHideFromCanvas,
   onBulkVisibility,
-  onTemplateSaved,
+  onNewSession,
+  tabsOverride,
+  onCreateInProject,
+  onRenameSession,
 }: Props) {
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
   const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(readCollapsedProjects)
+  const [filterState, setFilterStateRaw] = useState<FilterState>(loadFilterState)
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
+  const [activeTabId, setActiveTabId] = useState<string>('all')
+  const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(loadTitleOverrides)
+  const [pinned, setPinned] = useState<Set<string>>(loadPinnedSet)
+  const [renamingSid, setRenamingSid] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState<string>('')
+  // 搜索：onToggleSearch 切换 input 可见性；input 显示时按 title / project basename
+  // substring match 过滤 session list（client-side，立刻见效）。
+  const [searchOpen, setSearchOpen] = useState<boolean>(false)
+  const [searchQuery, setSearchQuery] = useState<string>('')
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+
+  // override / pin 改动时同步（本组件外的修改也会触发，跨组件一致）
+  useEffect(() => {
+    const handler = () => {
+      setTitleOverrides(loadTitleOverrides())
+      setPinned(loadPinnedSet())
+    }
+    window.addEventListener('meee2:session-overrides-changed', handler)
+    return () => window.removeEventListener('meee2:session-overrides-changed', handler)
+  }, [])
+
+  const displayTitle = useCallback(
+    (s: Session) => titleOverrides[s.id] || s.title,
+    [titleOverrides],
+  )
+
+  const startRename = useCallback((s: Session) => {
+    setRenamingSid(s.id)
+    setRenameDraft(displayTitle(s))
+  }, [displayTitle])
+
+  const commitRename = useCallback(() => {
+    if (!renamingSid) return
+    const t = renameDraft.trim()
+    saveTitleOverride(renamingSid, t || null)
+    setRenamingSid(null)
+    setRenameDraft('')
+  }, [renamingSid, renameDraft])
+
+  const cancelRename = useCallback(() => {
+    setRenamingSid(null)
+    setRenameDraft('')
+  }, [])
+
+  const setFilterState = useCallback((next: FilterState) => {
+    setFilterStateRaw(next)
+    saveFilterState(next)
+  }, [])
 
   const toggleProjectCollapsed = useCallback((proj: string) => {
     setCollapsedProjects((prev) => {
@@ -258,8 +485,8 @@ export default function Sidebar({
     function onMove(e: MouseEvent) {
       const s = dragStartRef.current
       if (!s) return
-      // sidebar 在右侧：鼠标往左移 → width 增大
-      const raw = s.w + (s.x - e.clientX)
+      // sidebar 在左侧：鼠标往右移 → width 增大
+      const raw = s.w + (e.clientX - s.x)
       setWidth(clampToViewport(raw))
     }
     function onUp() {
@@ -288,31 +515,126 @@ export default function Sidebar({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  if (!open) {
-    return (
-      <aside className="sidebar collapsed">
-        <button
-          className="sidebar-header"
-          style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}
-          onClick={onOpen}
-          title="Expand sidebar"
-        >
-          «
-        </button>
-      </aside>
-    )
+  // 把 sidebar 当前渲染宽度发布到 :root 上的 CSS 变量。
+  //   - 展开：用户拖拽存的 width
+  //   - 折叠：0px（sidebar 整个收起，画板占满；按钮浮出在画板左上角）
+  // .app 的 grid-template-columns 直接读这个 var，所以折叠 / 展开切换
+  // 等于直接改 grid track 宽度，不再依赖 .sidebar 自身 width 属性。
+  useEffect(() => {
+    const px = open ? `${width}px` : '0px'
+    document.documentElement.style.setProperty('--sidebar-width', px)
+  }, [open, width])
+
+  // ── Collapsed-icon hover preview ───────────────────────────────────
+  // Hover 折叠图标 → sidebar 以 fixed overlay 形式浮在 icon 下方（不进
+  // grid 流，不挤画板）。鼠标移到 preview 上不消失；离开有 ~180ms 缓冲让
+  // 用户可以从 icon 滑到 preview。点击 icon = `onOpen()` = 切回常驻态。
+  //
+  // 进出动画两段式：
+  //   1) `hoverPreview` 控制是否在 DOM 里。
+  //   2) `previewLeaving` 控制"在 DOM 里但走 fade-out 动画"。
+  // scheduleClose 流程：180ms 宽限期 → setPreviewLeaving(true)
+  //   触发 CSS exit 动画 → 120ms 后 setHoverPreview(false) 真正卸载。
+  const [hoverPreview, setHoverPreview] = useState(false)
+  const [previewLeaving, setPreviewLeaving] = useState(false)
+  const hoverCloseTimerRef = useRef<number | null>(null)
+  const exitTimerRef = useRef<number | null>(null)
+  const cancelClose = () => {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current)
+      hoverCloseTimerRef.current = null
+    }
+    if (exitTimerRef.current !== null) {
+      window.clearTimeout(exitTimerRef.current)
+      exitTimerRef.current = null
+    }
+    setPreviewLeaving(false)
+  }
+  const scheduleClose = () => {
+    cancelClose()
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null
+      setPreviewLeaving(true)
+      exitTimerRef.current = window.setTimeout(() => {
+        setHoverPreview(false)
+        setPreviewLeaving(false)
+        exitTimerRef.current = null
+      }, 120)
+    }, 180)
+  }
+  const openPreview = () => {
+    cancelClose()
+    setHoverPreview(true)
+  }
+  // 一旦从 hover 切到 explicit-open（点击图标或别处触发 onOpen），关掉
+  // preview 避免两个 panel 重叠出现。
+  useEffect(() => {
+    if (open && hoverPreview) {
+      cancelClose()
+      setHoverPreview(false)
+    }
+  }, [open, hoverPreview])
+  useEffect(() => () => cancelClose(), [])
+
+  const isPreview = !open && hoverPreview
+
+  // session 选中后 sidebar 不再切到 detail 模式（transcript 现在浮在画板上）。
+  // 只有 channel 选中才走 detail 视图。
+  const inDetail = selection.kind === 'channel'
+
+  // Always-visible floating toggle, fixed at top:8 left:80 (right of the
+  // macOS traffic lights). One button serves both states:
+  //   • Sidebar closed → click expands; hover shows the preview overlay.
+  //   • Sidebar open   → click collapses; hover does nothing extra.
+  // BoardWebWindowController.DragRegionWebView has a matching click-through
+  // rect so this button receives clicks even though it sits inside the
+  // 28pt window-drag band. Update both files together if the position
+  // ever changes.
+  const floatingToggle = (
+    <button
+      key="floating-toggle"
+      className="sidebar-collapsed-toggle"
+      onClick={() => {
+        cancelClose()
+        setHoverPreview(false)
+        if (open) onClose()
+        else onOpen()
+      }}
+      onMouseEnter={!open ? openPreview : undefined}
+      onMouseLeave={!open ? scheduleClose : undefined}
+      title={open ? 'Collapse sidebar' : 'Expand sidebar (hover for preview)'}
+      aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+    >
+      <PanelLeftIcon />
+      {/* 只在折叠态挂 hover-active icon —— 展开时用户看到 sidebar 已经在那
+          没必要再用 chevron 暗示方向；hover 也保持静态。 */}
+      {!open && <PanelLeftOpenIcon />}
+    </button>
+  )
+
+  if (!open && !isPreview) {
+    return floatingToggle
   }
 
-  const inDetail = selection.kind === 'session' || selection.kind === 'channel'
-
   return (
-    <aside className="sidebar" style={{ width }}>
+    <>
+    {floatingToggle}
+    <aside
+      className={
+        'sidebar'
+        + (isPreview ? ' sidebar--preview' : '')
+        + (isPreview && previewLeaving ? ' sidebar--preview-leaving' : '')
+      }
+      style={isPreview ? undefined : { width }}
+      onMouseEnter={isPreview ? cancelClose : undefined}
+      onMouseLeave={isPreview ? scheduleClose : undefined}
+    >
       <div
         className="sidebar-resizer"
         onMouseDown={onResizerMouseDown}
         title="Drag to resize"
       />
-      <div className="sidebar-header row space">
+      <div className="sidebar-header row space" style={{ position: 'relative' }}>
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           {inDetail && (
             <button
@@ -324,32 +646,89 @@ export default function Sidebar({
               ‹
             </button>
           )}
-          <span>
-            {selection.kind === 'session'
-              ? 'Session'
-              : selection.kind === 'channel'
-              ? 'Channel'
-              : 'Inspector'}
-          </span>
+          {/* In detail view we show the section label so the back button has
+           * context; the default "Inspector" label is just chrome and Claude
+           * Code-style sidebars don't use a section header at all. */}
+          {inDetail && (
+            <span>{selection.kind === 'channel' ? 'Channel' : ''}</span>
+          )}
         </div>
-        <button className="ghost" style={{ padding: '2px 6px' }} onClick={onClose} title="Collapse">
-          »
-        </button>
+        {/* The collapse button used to live here; it now lives as a fixed
+         * floating toggle (top:8 left:80) shared with the collapsed state.
+         * Header right side is intentionally empty so there's nothing
+         * competing with that single icon. */}
       </div>
       <div className="sidebar-body">
         {!state && <div className="muted">Loading…</div>}
-        {state && selection.kind === 'none' && (
-          <div className="col" style={{ gap: 10 }}>
-            <div className="muted">
-              Click a session card or channel arrow to inspect. Drag cards to
-              reposition. Use ⊕ to create a channel.
-            </div>
+        {state && selection.kind !== 'channel' && (() => {
+          const tabs: SidebarTab[] = tabsOverride ?? defaultTabsFromSessions(state.sessions)
+          // 找当前 active tab（防止 sessions 变了之后 activeTabId 没对应的 tab）
+          const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
+          return (
+          <div className="col" style={{ gap: 4 }}>
+            <SidebarTopNav
+              tabs={tabs}
+              activeTabId={activeTab?.id ?? 'all'}
+              onTabChange={setActiveTabId}
+              onNewSession={onNewSession ?? (() => { /* no-op */ })}
+              onToggleSearch={() => {
+                setSearchOpen((prev) => {
+                  const next = !prev
+                  // 关搜索时清空 query，避免列表保持过滤态
+                  if (!next) setSearchQuery('')
+                  // 开搜索时下一帧 focus input
+                  if (next) requestAnimationFrame(() => searchInputRef.current?.focus())
+                  return next
+                })
+              }}
+            />
+            {searchOpen && (
+              <div className="sidebar-search">
+                <span className="sidebar-search__icon" aria-hidden>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="2"
+                       strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8"/>
+                    <path d="m21 21-4.3-4.3"/>
+                  </svg>
+                </span>
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  className="sidebar-search__input"
+                  placeholder="Filter session by title or project…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setSearchQuery('')
+                      setSearchOpen(false)
+                      e.currentTarget.blur()
+                    }
+                  }}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    className="sidebar-search__clear"
+                    title="Clear search (Esc)"
+                    aria-label="Clear search"
+                    onClick={() => {
+                      setSearchQuery('')
+                      searchInputRef.current?.focus()
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            )}
             <div className="section">
               {/* 顶部 header：标题 + 一个 toggle。当前至少有一张 card 在画布上 → "Hide all"；
                   全部不在 → "Show all"。按钮走 onBulkVisibility，由 Board 的 effect 一次性处理
                   所有 sids，避免单个触发跟 WS tick 竞争。 */}
               <div
-                className="row space"
+                className="row space sidebar-legacy-h4-row"
                 style={{ marginBottom: 6, alignItems: 'baseline' }}
               >
                 <h4 style={{ margin: 0 }}>Sessions ({state.sessions.length})</h4>
@@ -387,108 +766,44 @@ export default function Sidebar({
                   )
                 })()}
               </div>
-              {/* Plugin-动态分类过滤器：按 plugin 拆，Claude 内部再按
-                  CLI/Desktop/Cowork sub-source 拆。Cursor / Codex / OpenClaw
-                  等其他 plugin 各自一个 button。只显示 count > 0 的 category。
-                  localStorage 持久化选择。 */}
-              {categoryDescriptors.length > 1 && (
-                <div
-                  className="row"
-                  style={{ gap: 4, marginBottom: 8, flexWrap: 'wrap' }}
-                >
-                  <button
-                    className={'ghost' + (categoryFilter === 'all' ? ' active' : '')}
-                    style={{
-                      padding: '3px 9px',
-                      fontSize: 11,
-                      opacity: categoryFilter === 'all' ? 1 : 0.65,
-                      fontWeight: categoryFilter === 'all' ? 600 : 400,
-                    }}
-                    onClick={() => {
-                      setCategoryFilter('all')
-                      persistCategoryFilter('all')
-                    }}
-                    title="Show all sessions"
-                  >
-                    All {state.sessions.length}
-                  </button>
-                  {categoryDescriptors.map((d) => {
-                    const active = categoryFilter === d.key
-                    // Per-category visibility toggle. Compute scope sids and
-                    // current canvas presence so we can flip 👁 / 👁‍🗨 on the
-                    // small button without the user changing the filter.
-                    const sidsInCat = state.sessions
-                      .filter((s) => categoryKey(s) === d.key)
-                      .map((s) => s.id)
-                    const anyOnCanvas = sidsInCat.some(
-                      (id) => (onCanvasCounts[id] ?? 0) > 0,
-                    )
-                    const eyeMode: 'show' | 'hide' = anyOnCanvas ? 'hide' : 'show'
-                    return (
-                      <span
-                        key={d.key}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          border: '1px solid transparent',
-                          borderRadius: 4,
-                        }}
-                      >
-                        <button
-                          className={'ghost' + (active ? ' active' : '')}
-                          style={{
-                            padding: '3px 6px 3px 9px',
-                            fontSize: 11,
-                            opacity: active ? 1 : 0.65,
-                            fontWeight: active ? 600 : 400,
-                            border: 'none',
-                            borderTopRightRadius: 0,
-                            borderBottomRightRadius: 0,
-                          }}
-                          onClick={() => {
-                            setCategoryFilter(d.key)
-                            persistCategoryFilter(d.key)
-                          }}
-                          title={`Show only ${d.label} sessions in the list`}
-                        >
-                          {d.icon ? `${d.icon} ` : ''}{d.label} {d.count}
-                        </button>
-                        <button
-                          className="ghost"
-                          style={{
-                            padding: '3px 6px',
-                            fontSize: 11,
-                            opacity: active ? 0.9 : 0.55,
-                            border: 'none',
-                            borderLeft: '1px solid rgba(255,255,255,0.06)',
-                            borderTopLeftRadius: 0,
-                            borderBottomLeftRadius: 0,
-                          }}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onBulkVisibility(eyeMode, sidsInCat)
-                          }}
-                          title={
-                            eyeMode === 'hide'
-                              ? `Remove all ${d.label} cards from the canvas`
-                              : `Add all ${d.label} cards back to the canvas`
-                          }
-                        >
-                          {eyeMode === 'hide' ? '🙈' : '👁'}
-                        </button>
-                      </span>
-                    )
-                  })}
-                </div>
-              )}
               {(() => {
-                const filtered = filterByCategory(state.sessions)
-                const primary = filtered.filter((s) => s.displayGroup !== 'older')
-                const older = filtered.filter((s) => s.displayGroup === 'older')
+                const tabFiltered = activeTab?.match
+                  ? state.sessions.filter(activeTab.match)
+                  : state.sessions
+                let filtered = applyFilterMenu(
+                  filterByCategory(tabFiltered),
+                  filterState,
+                )
+                // 搜索：title / project basename / cwd substring 任一命中即保留
+                // （case-insensitive）。trim 一下避免单纯空格触发"无匹配"空态。
+                const q = searchQuery.trim().toLowerCase()
+                if (q) {
+                  filtered = filtered.filter((s) => {
+                    const title = (titleOverrides[s.id] || s.title || '').toLowerCase()
+                    const proj = projectGroupKey(s).toLowerCase()
+                    const cwd = (s.project || '').toLowerCase()
+                    return title.includes(q) || proj.includes(q) || cwd.includes(q)
+                  })
+                }
+                // displayGroup="older"（idle ≥ 1h）只在 groupBy=date 模式下
+                // 单独折叠成 "Older 1h–24h" 区。groupBy=project 时不再切分
+                // —— 用户按项目找东西时，stale 的 session 应该跟同项目其它
+                // session 在一起，而不是被单独抽到底部一个独立折叠区。
+                const partitionByDisplayGroup = filterState.groupBy === 'date'
+                const primary = partitionByDisplayGroup
+                  ? filtered.filter((s) => s.displayGroup !== 'older')
+                  : filtered
+                const older = partitionByDisplayGroup
+                  ? filtered.filter((s) => s.displayGroup === 'older')
+                  : []
 
-                // 分组：按 project basename。组内顺序保留传入的（已经是后端
-                // 给的活跃度顺序）。组之间按字母序，方便查找。
-                const groupSessions = (list: Session[]) => {
+                // 分组：依据 filterState.groupBy 选 project | date。
+                // - project: 按 cwd basename 分组，组内保留传入顺序，组间按字母序
+                // - date: 按 lastActivity 分到 Today / Yesterday / This week / Older 桶
+                const groupSessions = (list: Session[]): Array<[string, Session[]]> => {
+                  if (filterState.groupBy === 'date') {
+                    return groupSessionsByDate(list)
+                  }
                   const groups = new Map<string, Session[]>()
                   for (const s of list) {
                     const k = projectGroupKey(s)
@@ -502,13 +817,16 @@ export default function Sidebar({
                 const renderSessionRow = (s: Session) => {
                   const count = onCanvasCounts[s.id] ?? 0
                   const onCanvas = count > 0
-                  const sidShort = s.id.replace(/-/g, '').slice(0, 8)
-                  // 列表只在 selection.kind === 'none' 时渲染，所以不会有 selected 行；
-                  // 选中态由 detail panel 负责，列表里的 hover/cursor 反馈足够。
+                  // 选中 session 时 sidebar 仍然展示列表（transcript 浮在画板上），
+                  // 当前行用 .is-selected 加视觉反馈。
+                  const selected =
+                    selection.kind === 'session' && selection.sessionId === s.id
                   return (
                     <div
                       key={s.id}
-                      className="sidebar-session-row"
+                      className={
+                        'sidebar-session-row' + (selected ? ' is-selected' : '')
+                      }
                     >
                       <div
                         className="sidebar-session-row__main"
@@ -536,25 +854,59 @@ export default function Sidebar({
                             </span>
                           )
                         })()}
-                        <span className="sidebar-session-row__title">{s.title}</span>
-                        {s.inboxPending > 0 && (
-                          <span className="badge warn">📨 {s.inboxPending}</span>
+                        {renamingSid === s.id ? (
+                          <input
+                            className="sidebar-session-row__rename-input"
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+                              else if (e.key === 'Escape') { e.preventDefault(); cancelRename() }
+                            }}
+                            onBlur={commitRename}
+                          />
+                        ) : (
+                          <span className="sidebar-session-row__title">{displayTitle(s)}</span>
                         )}
                       </div>
                       <div className="sidebar-session-row__actions">
+                        {s.inboxPending > 0 && (
+                          <span
+                            className="badge warn sidebar-session-row__inbox"
+                            title={`${s.inboxPending} pending inbox message${s.inboxPending === 1 ? '' : 's'}`}
+                          >
+                            📨 {s.inboxPending}
+                          </span>
+                        )}
                         <button
-                          className="ghost"
-                          style={{
-                            padding: '2px 6px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            opacity: onCanvas ? 1 : 0.55,
+                          className="sidebar-icon-btn"
+                          title={pinned.has(s.id) ? 'Unpin' : 'Pin'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePinned(s.id)
                           }}
-                          title={
-                            onCanvas
-                              ? `Hide from canvas (${count} card${count === 1 ? '' : 's'})`
-                              : 'Show on canvas'
-                          }
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill={pinned.has(s.id) ? 'currentColor' : 'none'}>
+                            <path d="M12 2v6m-3-1l3 3 3-3M5 13c0-2.5 2-5 7-5s7 2.5 7 5c0 1.5-1 2-3 2H8c-2 0-3-.5-3-2zM10 15v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                        <button
+                          className="sidebar-icon-btn"
+                          title="Rename"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            startRename(s)
+                          }}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </button>
+                        <button
+                          className="sidebar-icon-btn"
+                          title={onCanvas ? `Hide from canvas (${count})` : 'Show on canvas'}
                           onClick={(e) => {
                             e.stopPropagation()
                             if (onCanvas) onHideFromCanvas(s.id)
@@ -563,38 +915,118 @@ export default function Sidebar({
                         >
                           {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
                         </button>
-                        <span className="mono muted sidebar-session-row__sid" title={s.id}>
-                          {sidShort}
-                        </span>
                       </div>
                     </div>
                   )
                 }
 
+                const hasFilter =
+                  filterState.status !== 'all' ||
+                  filterState.project !== 'all' ||
+                  filterState.plugin !== 'all' ||
+                  filterState.lastActivity !== 'all'
+
                 const renderProjectGroup = (
-                  proj: string,
+                  groupKey: string,
                   list: Session[],
-                  options?: { dimmed?: boolean },
+                  options?: { dimmed?: boolean; isFirst?: boolean },
                 ) => {
-                  const collapsed = collapsedProjects.has(proj)
+                  const collapsed = collapsedProjects.has(groupKey)
+                  // groupBy=project 时，从组内任一 session 拿 cwd 给 + 按钮用
+                  const sampleCwd =
+                    filterState.groupBy === 'project' && list[0]?.project
+                      ? list[0].project
+                      : null
                   return (
                     <div
-                      key={proj}
+                      key={groupKey}
                       className={
                         'sidebar-project-group' +
-                        (options?.dimmed ? ' is-dimmed' : '')
+                        (options?.dimmed ? ' is-dimmed' : '') +
+                        (collapsed ? ' is-collapsed' : '')
                       }
                     >
-                      <button
+                      <div
                         className="sidebar-project-group__header"
-                        onClick={() => toggleProjectCollapsed(proj)}
-                        title={collapsed ? 'Expand project' : 'Collapse project'}
+                        onClick={() => toggleProjectCollapsed(groupKey)}
+                        title={collapsed ? 'Expand' : 'Collapse'}
+                        role="button"
                       >
-                        <span className="sidebar-project-group__name">{proj}</span>
-                        <span className="sidebar-project-group__count">
-                          {collapsed ? `▸ ${list.length}` : list.length}
-                        </span>
-                      </button>
+                        <span className="sidebar-project-group__name">{groupKey}</span>
+                        <svg
+                          className="sidebar-project-group__chevron"
+                          width="11" height="11" viewBox="0 0 12 12" fill="none"
+                          aria-hidden
+                        >
+                          <path
+                            d={collapsed ? 'M4.5 3l3 3-3 3' : 'M3 4.5l3 3 3-3'}
+                            stroke="currentColor" strokeWidth="1.6"
+                            strokeLinecap="round" strokeLinejoin="round"
+                          />
+                        </svg>
+                        <span className="sidebar-project-group__spacer" />
+                        {sampleCwd && onCreateInProject && (
+                          <button
+                            className="sidebar-project-group__add"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onCreateInProject(sampleCwd)
+                            }}
+                            title={`New session in ${groupKey}`}
+                            aria-label={`New session in ${groupKey}`}
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                              <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                            </svg>
+                          </button>
+                        )}
+                        {/* Global filter trigger lives only on the first project
+                         * group's top-right; data layer is unchanged (filter is
+                         * still global). Hover-only chrome — same opacity 0→1
+                         * pattern as `__add`. */}
+                        {options?.isFirst && state && (
+                          <div
+                            className="sidebar-project-group__filter-wrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              className={
+                                'sidebar-project-group__filter' +
+                                (filterMenuOpen || hasFilter ? ' is-active' : '')
+                              }
+                              onClick={() => setFilterMenuOpen((v) => !v)}
+                              title="Filter / Group / Sort"
+                              aria-label="Filter, group, sort"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                <path d="M4 6h16M7 12h10M10 18h4"
+                                      stroke="currentColor" strokeWidth="2"
+                                      strokeLinecap="round"/>
+                              </svg>
+                              {hasFilter && (
+                                <span className="filter-dot" aria-hidden />
+                              )}
+                            </button>
+                            {filterMenuOpen && (
+                              <SidebarFilterMenu
+                                state={filterState}
+                                onChange={setFilterState}
+                                projects={Array.from(
+                                  new Set(state.sessions.map(projectGroupKey)),
+                                ).sort()}
+                                plugins={Array.from(
+                                  state.sessions.reduce((m, s) => {
+                                    if (!m.has(s.pluginId))
+                                      m.set(s.pluginId, s.pluginDisplayName)
+                                    return m
+                                  }, new Map<string, string>()).entries(),
+                                ).map(([id, label]) => ({ id, label }))}
+                                onClose={() => setFilterMenuOpen(false)}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
                       {!collapsed && (
                         <div className="sidebar-project-group__body">
                           {list.map(renderSessionRow)}
@@ -605,30 +1037,115 @@ export default function Sidebar({
                 }
 
                 if (filtered.length === 0) {
+                  // Empty filter result: render a single header so the user
+                  // can still reach the Filter / Sort menu and undo what
+                  // they set. We don't reuse `renderProjectGroup` here
+                  // because the regular header keeps chrome (chevron / add
+                  // / filter) hover-only — when the body is empty there's
+                  // nothing visible to hover, so the filter trigger has to
+                  // be always-visible. "Recents" is the plain-language
+                  // label since there's no project / date group to name.
                   return (
-                    <div className="muted" style={{ padding: '8px 0', fontSize: 11 }}>
-                      No sessions for this filter.
+                    <div className="sidebar-project-group sidebar-project-group--empty">
+                      <div className="sidebar-project-group__header" role="presentation">
+                        <span className="sidebar-project-group__name">Recents</span>
+                        <span className="sidebar-project-group__spacer" />
+                        {state && (
+                          <div
+                            className="sidebar-project-group__filter-wrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              className={
+                                'sidebar-project-group__filter is-pinned' +
+                                (filterMenuOpen || hasFilter ? ' is-active' : '')
+                              }
+                              onClick={() => setFilterMenuOpen((v) => !v)}
+                              title="Filter / Group / Sort"
+                              aria-label="Filter, group, sort"
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                <path d="M4 6h16M7 12h10M10 18h4"
+                                      stroke="currentColor" strokeWidth="2"
+                                      strokeLinecap="round"/>
+                              </svg>
+                              {hasFilter && <span className="filter-dot" aria-hidden />}
+                            </button>
+                            {filterMenuOpen && (
+                              <SidebarFilterMenu
+                                state={filterState}
+                                onChange={setFilterState}
+                                projects={Array.from(
+                                  new Set(state.sessions.map(projectGroupKey)),
+                                ).sort()}
+                                plugins={Array.from(
+                                  state.sessions.reduce((m, s) => {
+                                    if (!m.has(s.pluginId))
+                                      m.set(s.pluginId, s.pluginDisplayName)
+                                    return m
+                                  }, new Map<string, string>()).entries(),
+                                ).map(([id, label]) => ({ id, label }))}
+                                onClose={() => setFilterMenuOpen(false)}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        className="sidebar-project-group__body muted"
+                        style={{ padding: '12px 8px', fontSize: 11 }}
+                      >
+                        No sessions for this filter.
+                      </div>
                     </div>
                   )
                 }
                 const primaryGroups = groupSessions(primary)
-                const olderGroups = groupSessions(older)
+                // 外层折叠区已经表达了时间维度（"1h–24h" 这条尾标签）：
+                //   - groupBy=date：里面不再切日期子桶（否则等于把"1h–24h"
+                //     再翻译成 "Today / This week" 贴一遍），直接 flat 列表。
+                //   - groupBy=project：按 project 分桶仍有信息量（看哪个项目
+                //     堆了 stale session），保留 groupSessions。
+                const olderGroups: Array<[string, Session[]]> =
+                  filterState.groupBy === 'date'
+                    ? []
+                    : groupSessions(older)
+                // Pinned: 从全部 sessions 里按 pin 顺序拿（不受 tab/filter 限制——
+                // pinned 就是用户长期关注，全局展示更合理）
+                const pinnedSessions = state.sessions.filter((s) => pinned.has(s.id))
                 return (
                   <>
-                    {primaryGroups.map(([k, list]) => renderProjectGroup(k, list))}
-                    {olderGroups.length > 0 && (
-                      <div style={{ marginTop: primaryGroups.length > 0 ? 10 : 0 }}>
-                        <button
-                          className="ghost"
-                          style={{
-                            width: '100%',
-                            padding: '4px 2px',
-                            justifyContent: 'space-between',
-                            display: 'flex',
-                            alignItems: 'center',
-                            fontSize: 11,
-                            color: 'var(--text-dim)',
-                          }}
+                    <div className="sidebar-pinned-section">Pinned</div>
+                    {pinnedSessions.length === 0 ? (
+                      <div className="sidebar-pinned-empty">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                          <path d="M12 2v6m-3-1l3 3 3-3M5 13c0-2.5 2-5 7-5s7 2.5 7 5c0 1.5-1 2-3 2H8c-2 0-3-.5-3-2zM10 15v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        <span>Drag pin icon on a session to pin it</span>
+                      </div>
+                    ) : (
+                      <div className="sidebar-project-group__body" style={{ marginBottom: 8 }}>
+                        {pinnedSessions.map(renderSessionRow)}
+                      </div>
+                    )}
+                    {primaryGroups.map(([k, list], idx) =>
+                      renderProjectGroup(k, list, { isFirst: idx === 0 }),
+                    )}
+                    {older.length > 0 && (
+                      <div
+                        className={
+                          'sidebar-project-group is-dimmed' +
+                          (olderExpanded ? '' : ' is-collapsed')
+                        }
+                      >
+                        {/* Re-use the same project-group header chrome so
+                         * Today / Earlier / Older read as the same visual
+                         * family. Difference: Older keeps a right-aligned
+                         * "1h–24h" hint as always-visible metadata (not
+                         * hover-only); count is dropped to match every other
+                         * header. */}
+                        <div
+                          className="sidebar-project-group__header"
                           onClick={() => {
                             setOlderExpanded((v) => {
                               persistOlderExpanded(!v)
@@ -636,15 +1153,34 @@ export default function Sidebar({
                             })
                           }}
                           title="Sessions idle for more than 1 hour"
+                          role="button"
                         >
-                          <span>{olderExpanded ? '⌄' : '›'} Older ({older.length})</span>
-                          <span className="mono muted">1h-24h</span>
-                        </button>
+                          <span className="sidebar-project-group__name">
+                            Older
+                          </span>
+                          <svg
+                            className="sidebar-project-group__chevron"
+                            width="11" height="11" viewBox="0 0 12 12" fill="none"
+                            aria-hidden
+                          >
+                            <path
+                              d={olderExpanded ? 'M3 4.5l3 3 3-3' : 'M4.5 3l3 3-3 3'}
+                              stroke="currentColor" strokeWidth="1.6"
+                              strokeLinecap="round" strokeLinejoin="round"
+                            />
+                          </svg>
+                          <span className="sidebar-project-group__spacer" />
+                          <span className="sidebar-project-group__hint">
+                            1h–24h
+                          </span>
+                        </div>
                         {olderExpanded && (
-                          <div style={{ marginTop: 4 }}>
-                            {olderGroups.map(([k, list]) =>
-                              renderProjectGroup(k, list, { dimmed: true }),
-                            )}
+                          <div className="sidebar-project-group__body">
+                            {filterState.groupBy === 'date'
+                              ? older.map(renderSessionRow)
+                              : olderGroups.map(([k, list]) =>
+                                  renderProjectGroup(k, list, { dimmed: true }),
+                                )}
                           </div>
                         )}
                       </div>
@@ -654,59 +1190,67 @@ export default function Sidebar({
               })()}
             </div>
             <div className="section">
-              <h4>Channels ({state.channels.length})</h4>
-              {state.channels.length === 0 && (
-                <div className="muted">No channels yet.</div>
-              )}
-              {state.channels.map((ch) => (
-                <div
-                  key={ch.name}
-                  className="row space"
-                  style={{ marginBottom: 4, cursor: 'pointer' }}
-                  onClick={() =>
-                    onSelectionChange({ kind: 'channel', channelName: ch.name })
-                  }
-                >
-                  <span>{ch.name}</span>
-                  <span className="mono muted">
-                    {ch.members.length}m · {ch.mode}
-                    {ch.pendingCount > 0 ? ` ·⏳${ch.pendingCount}` : ''}
-                  </span>
-                </div>
-              ))}
+              {(() => {
+                // DM channels (`dm-…`) are visualised as card↔card arrows on
+                // the canvas and are intentionally hidden from this listing
+                // -- the user clicks the line to open one.
+                const visibleChannels = state.channels.filter(
+                  (c) => !isDmChannelName(c.name),
+                )
+                return (
+                  <>
+                    <h4>Channels ({visibleChannels.length})</h4>
+                    {visibleChannels.length === 0 && (
+                      <div className="muted">No channels yet.</div>
+                    )}
+                    {visibleChannels.map((ch) => (
+                      <div
+                        key={ch.name}
+                        className="row space"
+                        style={{ marginBottom: 4, cursor: 'pointer' }}
+                        onClick={() =>
+                          onSelectionChange({ kind: 'channel', channelName: ch.name })
+                        }
+                      >
+                        <span>{ch.name}</span>
+                        <span className="mono muted">
+                          {ch.members.length}m · {ch.mode}
+                          {ch.pendingCount > 0 ? ` ·⏳${ch.pendingCount}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </>
+                )
+              })()}
             </div>
           </div>
-        )}
-        {state && selection.kind === 'session' && (() => {
-          const s = state.sessions.find((x) => x.id === selection.sessionId)
-          return (
-            <div className="col" style={{ gap: 16 }}>
-              <SessionDetail state={state} sessionId={selection.sessionId} />
-              {s && (
-                <details className="section" style={{ cursor: 'pointer' }}>
-                  <summary style={{
-                    margin: 0, fontSize: 11, textTransform: 'uppercase',
-                    letterSpacing: '0.6px', color: 'var(--text-dim)',
-                    fontWeight: 600, listStyle: 'none', outline: 'none',
-                  }}>
-                    Card template ▸
-                  </summary>
-                  <div style={{ marginTop: 8 }}>
-                    <TemplateEditor
-                      sessionId={s.id}
-                      pluginDisplayName={s.pluginDisplayName}
-                      onSaved={onTemplateSaved}
-                    />
-                  </div>
-                </details>
-              )}
-            </div>
           )
         })()}
         {state && selection.kind === 'channel' && (
           <ChannelDetail state={state} channelName={selection.channelName} />
         )}
       </div>
+      {/* ── 底部用户行（mirror Claude Code's "QC + icon"） ─────────────── */}
+      <div className="sidebar-footer">
+        <div className="sidebar-footer-user">
+          <span className="sidebar-footer-user-avatar" aria-hidden>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
+          </span>
+          <span>QC</span>
+        </div>
+        <button className="sidebar-footer-icon" title="Account / settings" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
+            <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+            <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+            <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+          </svg>
+        </button>
+      </div>
     </aside>
+    </>
   )
 }

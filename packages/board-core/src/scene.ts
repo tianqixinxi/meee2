@@ -27,10 +27,42 @@ import type { LayoutMap } from './layout'
 export const RECT_W = 360
 export const RECT_H = 260
 
-/** Channel hub ellipse — sits between session cards as a visible "hub" with
- *  spokes (arrows) pointing in from each member session. */
+/** Legacy channel hub ellipse size — kept exported for callers still
+ *  referencing the old visual. The current "frame channel" form uses
+ *  `CHANNEL_FRAME_W/H` instead. */
 export const CHANNEL_W = 100
 export const CHANNEL_H = 56
+
+/** Default frame size when a new channel is placed without a member-bbox
+ *  hint. Wide enough to comfortably hold a couple of session cards
+ *  (RECT_W=360) plus header padding. */
+export const CHANNEL_FRAME_W = 820
+export const CHANNEL_FRAME_H = 540
+
+/** Prefix marking a 1-on-1 DM channel (created by drawing a line between two
+ *  session cards). DM channels are hidden from the sidebar listing. */
+export const DM_CHANNEL_PREFIX = 'dm-'
+
+/** Stable channel name for a 1-on-1 DM between two sessions. The two sids
+ *  are sorted so the same pair always produces the same name regardless of
+ *  arrow direction. Result fits the backend alias regex `[a-z0-9_-]{1,64}`. */
+export function dmChannelName(sidA: string, sidB: string): string {
+  const a = sidA.replace(/-/g, '').slice(0, 10).toLowerCase()
+  const b = sidB.replace(/-/g, '').slice(0, 10).toLowerCase()
+  const [first, second] = [a, b].sort()
+  return `${DM_CHANNEL_PREFIX}${first}-${second}`
+}
+
+export function isDmChannelName(name: string): boolean {
+  return name.startsWith(DM_CHANNEL_PREFIX)
+}
+
+/** Visual style applied to a card↔card arrow that the canvas owns as a DM
+ *  line. Distinct enough that a user-drawn vanilla arrow doesn't get
+ *  confused for one. */
+export const DM_LINE_STROKE_COLOR = '#9F7BCB' // muted violet
+export const DM_LINE_STROKE_WIDTH_BASE = 2
+export const DM_LINE_STROKE_WIDTH_PENDING = 3
 
 // -- Structural types --------------------------------------------------
 
@@ -119,9 +151,11 @@ export function panToChannelHub(
 ): boolean {
   if (!api || !channelName) return false
   const hubId = channelHubId(channelName)
+  // Frame is the current form; ellipse is the legacy form, still tolerated
+  // so unmigrated scenes can pan correctly.
   const hubEl = api
     .getSceneElements()
-    .find((el) => el?.id === hubId && el?.type === 'ellipse')
+    .find((el) => el?.id === hubId && (el?.type === 'frame' || el?.type === 'ellipse'))
   if (!hubEl) return false
   api.scrollToContent([hubEl], { fitToContent: false, animate: true })
   return true
@@ -354,33 +388,42 @@ export function buildSessionRect(
 export const buildSessionEmbeddable = buildSessionRect
 
 /**
- * Build skeletons for a channel "hub" — an ellipse container and an
- * explicitly-bound text label — at (x, y). Returns 2 elements.
+ * Build a channel "frame" skeleton — an Excalidraw native frame element. A
+ * session card is a member of this channel iff its rectangle's `frameId`
+ * points to this frame's id; Excalidraw assigns frameId automatically when
+ * the user drags a rect inside the frame's bbox. Returns 1 element.
  *
- * Why not use the `label: {text, fontSize}` sugar: that sugar makes Excalidraw
- * auto-generate a random id for the text. Random ids don't match
- * `isManagedElementId`, so the text leaks into `userShapes` and survives page
- * refresh via localStorage. After refresh, the hub is rebuilt (fresh label
- * id) but the old label is also restored — labels accumulate one-per-refresh.
- * Giving the label a deterministic `channelLabelId(name)` puts it on the
- * managed side of the fence, same rebuild semantics as the hub itself.
+ * Caller is responsible for choosing (x, y) and (w, h) — when a channel is
+ * first placed at the viewport center we use `CHANNEL_FRAME_W/H`; if member
+ * rects already exist we'd typically grow to enclose them.
+ *
+ * The frame's deterministic id (`channelHubId(name)`) puts it on the
+ * managed side of `isManagedElementId`, same as the legacy hub ellipse.
  */
 export function buildChannelHub(
   channel: ChannelForScene,
   x: number,
   y: number,
+  width: number = CHANNEL_FRAME_W,
+  height: number = CHANNEL_FRAME_H,
 ): SkeletonElement[] {
-  const hubId = channelHubId(channel.name)
-  const labelId = channelLabelId(channel.name)
-  const hub: SkeletonElement = {
-    type: 'ellipse',
-    id: hubId,
+  const frameId = channelHubId(channel.name)
+  // `children` is required by Excalidraw's frame skeleton type — omitting it
+  // makes `convertToExcalidrawElements` call `.forEach` on undefined and the
+  // whole board renders as a black screen. Empty array is fine: Excalidraw
+  // computes containment from each child's `frameId` on every render, the
+  // skeleton-level list is only the explicit seed.
+  const frame: SkeletonElement = {
+    type: 'frame',
+    id: frameId,
     x,
     y,
-    width: CHANNEL_W,
-    height: CHANNEL_H,
+    width,
+    height,
+    name: `#${channel.name}`,
+    children: [],
     strokeColor: modeStrokeColor(channel.mode),
-    backgroundColor: '#2C2B29',
+    backgroundColor: 'transparent',
     fillStyle: 'solid',
     strokeWidth: 2,
     strokeStyle: modeStrokeStyle(channel),
@@ -389,47 +432,31 @@ export function buildChannelHub(
     groupIds: [],
     opacity: 100,
     customData: { channelName: channel.name },
-    boundElements: [{ id: labelId, type: 'text' }],
   } as SkeletonElement
-  const label: SkeletonElement = {
-    type: 'text',
-    id: labelId,
-    x,
-    y,
-    width: CHANNEL_W,
-    height: CHANNEL_H,
-    text: channelHubLabelText(channel),
-    fontSize: 12,
-    textAlign: 'center',
-    verticalAlign: 'middle',
-    containerId: hubId,
-    strokeColor: '#F5F4EF',
-    backgroundColor: 'transparent',
-    fillStyle: 'solid',
-    opacity: 100,
-    groupIds: [],
-    locked: false,
-    customData: { channelLabel: channel.name },
-  } as SkeletonElement
-  return [hub, label]
+  return [frame]
 }
+
+/** Backward-compatible alias, in case downstream callers want the
+ *  expressive name. */
+export const buildChannelFrame = buildChannelHub
 
 // -- Scene builder -----------------------------------------------------
 
 /**
  * Build skeleton elements from state.
  *
- * `sessionIdToElementId(sid)` returns the **primary** rect id that channel
- * arrows should bind to for the session, or `null` to skip drawing arrows
- * touching that session. The caller computes this from the current
- * Excalidraw scene.
- *
  * Produces:
- *   - NEW session rectangles for sessions in `newSessionIds`,
- *   - NEW channel hub ellipses for channels in `newChannelNames`, and
- *   - spoke arrows session → channel hub for each current membership.
+ *   - NEW session rectangles for sessions in `newSessionIds`, and
+ *   - NEW channel frames for channels in `newChannelNames`.
  *
- * The caller merges these with existing user shapes / rects / hubs.
+ * Memberships are tracked in two places now: frame channels via Excalidraw's
+ * native `frameId` on each session rect (set by drag-into-frame), and DM
+ * channels via card↔card user-drawn arrows annotated with `customData.dm`.
+ * Neither is generated here — the caller (Board.tsx) reconciles state ↔ scene
+ * in its onChange / scene-rebuild effects.
+ *
+ * The caller merges the returned arrays with existing user shapes / rects /
+ * frames already in the scene.
  */
 export function buildScene(
   state: BoardStateForScene,
@@ -438,30 +465,8 @@ export function buildScene(
   opts: {
     /** Sessions that need a fresh rect created. */
     newSessionIds: string[]
-    /** Channels that need a fresh hub ellipse created. */
+    /** Channels that need a fresh frame created. */
     newChannelNames: string[]
-    /** Primary-element resolver for arrow binding. */
-    sessionIdToElementId: (sid: string) => string | null
-    /**
-     * Session↔channel pairs that already have a user-drawn arrow on the
-     * canvas. For each such pair we SKIP generating our own spoke — the
-     * user's arrow is the sole visual of that membership. Without this,
-     * a user who drags session→hub would see two arrows for the same
-     * membership (theirs + ours), and Excalidraw's layout loops between
-     * the two every tick, effectively freezing.
-     * Key format: `<sid>|<channelName>`.
-     */
-    existingConnections?: Set<string>
-    /**
-     * Spoke ids (`channelSpokeId(name, sid)`) already present on the canvas.
-     * For these we SKIP regeneration — the existing arrow gets style-normalized
-     * by the caller and merged into `preservedExisting`. Without this, every
-     * WebSocket tick replaces the arrow with a fresh object, which kills
-     * an in-progress drag of a bound session card (Excalidraw's drag
-     * coordinator references the now-replaced element → card freezes
-     * mid-drag in the gray "preview" state).
-     */
-    existingSpokeIds?: Set<string>
     /**
      * Override the rect's stroke / background / strokeWidth / roundness so
      * the host app's canvas background can flush the rect cleanly. meee2
@@ -477,7 +482,6 @@ export function buildScene(
    *  embeddable terminology. */
   newEmbeddables: SkeletonElement[]
   newChannelHubs: SkeletonElement[]
-  arrows: SkeletonElement[]
 } {
   const newRects: SkeletonElement[] = []
 
@@ -492,90 +496,14 @@ export function buildScene(
     const ch = channelByName.get(name)
     if (!ch) continue
     if (ch.name.startsWith('__')) continue // skip operator channels
+    if (isDmChannelName(ch.name)) continue // DM channels render as arrows, not frames
     const pos = channelLayout[name] ?? { x: 80, y: 80 }
     newChannelHubs.push(...buildChannelHub(ch, pos.x, pos.y))
-  }
-
-  const arrows: SkeletonElement[] = []
-  const knownSids = new Set(state.sessions.map((s) => s.id))
-  for (const ch of state.channels) {
-    if (ch.name.startsWith('__')) continue
-    const hubId = channelHubId(ch.name)
-    const seenSids = new Set<string>()
-    for (const member of ch.members) {
-      if (!knownSids.has(member.sessionId)) continue
-      if (seenSids.has(member.sessionId)) continue
-      seenSids.add(member.sessionId)
-
-      // 用户亲手画过这条 session↔channel arrow → 别再自动画一条重的，让用户
-      // 那条成为这个成员关系的唯一视觉。
-      if (opts.existingConnections?.has(`${member.sessionId}|${ch.name}`)) continue
-
-      // 这条 spoke 已经在场景里 → 让现有 arrow 继续存在（caller 会做 style
-      // 归一化），不再生成新对象。否则每 tick 替换会打断用户拖动 bound rect。
-      const spokeId = channelSpokeId(ch.name, member.sessionId)
-      if (opts.existingSpokeIds?.has(spokeId)) continue
-
-      const fromId = opts.sessionIdToElementId(member.sessionId)
-      if (!fromId) continue
-
-      // Spoke 几何：rect 右边中点 → hub 左边中点。直接 push points 而非走
-      // skeleton sugar，因为 convertToExcalidrawElements 对 start/end sugar
-      // 的处理会强行覆盖 x/y/points（arrow 退化成 (0,0) 处的 100px 段）。
-      const fromPos = layout[member.sessionId]
-      const hubPos = channelLayout[ch.name]
-      const ax = (fromPos?.x ?? 80) + RECT_W
-      const ay = (fromPos?.y ?? 80) + RECT_H / 2
-      const bx = (hubPos?.x ?? 80)
-      const by = (hubPos?.y ?? 80) + CHANNEL_H / 2
-      const spokeLabelId = channelSpokeLabelId(ch.name, member.sessionId)
-      arrows.push({
-        type: 'arrow',
-        id: spokeId,
-        x: ax,
-        y: ay,
-        width: bx - ax,
-        height: by - ay,
-        points: [
-          [0, 0],
-          [bx - ax, by - ay],
-        ],
-        strokeColor: modeStrokeColor(ch.mode),
-        strokeWidth: ch.pendingCount > 0 ? 3 : 2,
-        strokeStyle: modeStrokeStyle(ch),
-        roundness: null,
-        startArrowhead: null,
-        endArrowhead: null,
-        start: { id: fromId },
-        end: { id: hubId },
-        boundElements: [{ id: spokeLabelId, type: 'text' }],
-      })
-      arrows.push({
-        type: 'text',
-        id: spokeLabelId,
-        x: ax,
-        y: ay,
-        width: bx - ax,
-        height: by - ay,
-        text: member.alias,
-        fontSize: 11,
-        textAlign: 'center',
-        verticalAlign: 'middle',
-        containerId: spokeId,
-        strokeColor: '#A8A59B',
-        backgroundColor: 'transparent',
-        fillStyle: 'solid',
-        opacity: 100,
-        groupIds: [],
-        locked: false,
-      } as SkeletonElement)
-    }
   }
 
   return {
     newRects,
     newEmbeddables: newRects,
     newChannelHubs,
-    arrows,
   }
 }

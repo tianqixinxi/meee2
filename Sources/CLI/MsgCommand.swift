@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// `meee2 msg ...` 的入口 - agent + 人类的消息操作面
 public struct MsgCommand {

@@ -8,6 +8,7 @@ import Foundation
 import Combine
 import SwiftUI
 import Meee2PluginKit
+import Meee2CommKit
 
 /// 推送器单例，生命周期随 AppDelegate
 public final class Meee360Pusher: @unchecked Sendable {

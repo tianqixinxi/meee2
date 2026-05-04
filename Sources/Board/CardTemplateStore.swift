@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// CardTemplateStore —— 用户自定义卡片模板的磁盘存储
 ///

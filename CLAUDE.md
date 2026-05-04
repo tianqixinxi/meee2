@@ -48,7 +48,7 @@ Plugin SDK: `meee2-plugin-kit/` (shared dylib, defines `SessionPlugin` open clas
 - **Logging**: `MLog / MDebug / MInfo / MWarn / MError` in `Sources/`. NEVER `print()` in `Sources/Services/` — validate.sh enforces. `print()` only in `Sources/CLI/` for stdout output.
 - **No hardcoded user paths**: `NSHomeDirectory() / Bundle.main / FileManager`. SwiftLint + validate.sh enforce.
 - **`SessionData` schema**: Bump `SessionData.currentSchemaVersion` + add a migrator in `SessionDataMigrations` when on-disk shape changes. Include a regression test with a frozen legacy JSON fixture.
-- **Single `SessionStatus` enum**: Don't fork a parallel status type. Extend `TranscriptStatusResolver` if new case logic is needed.
+- **Single `SessionStatus` enum**: Don't fork a parallel status type. Extend `TranscriptStatusResolver` if new case logic is needed. **Every resolver behavior change should add a captured fixture** (see "State-trace regression fixtures" below) — the diff alone doesn't tell you whether you broke an existing case.
 - **Plugins**: Subclass `SessionPlugin`. Inter-plugin comm through `PluginManager`.
 - **Comments**: Chinese inline comments are fine. Doc comments describe *why*, not *what*.
 - **Minimum**: macOS 13.0, Swift 5.7.
@@ -104,6 +104,74 @@ tail -F /tmp/browser.log
 ```
 
 The Chromium window is interactive — the user clicks, you read the log.
+
+### State-trace regression fixtures
+
+`TranscriptStatusResolver` 是 stuck-session bug 高发区。每次复现一个现场（"为什么这条
+session 一直显示 thinking 不变"等），fix 完之后**用 `meee2 test capture` 把现场冻
+进 git**，下次任何人改 resolver 都会被这堆历史 case 扫一遍，是性价比最高的回归保
+护层（log 当 testcase 的思路）。
+
+工作流：
+
+```bash
+# 1) 现场（GUI 打开 / 终端有 stuck 的 session），找到 sid 前缀
+./.build/arm64-apple-macosx/debug/meee2 list --simple
+
+# 2) 抓现场 —— 自动写到 Tests/Fixtures/StateTraces/<name>.json
+./.build/arm64-apple-macosx/debug/meee2 test capture <sid-prefix> \
+    --name "stuck-tooling-after-pretooluse-bash" \
+    --desc "PreToolUse Bash 后 Stop hook 没回，hook=tooling，tail 是 fresh assistant；resolver 应保留 tooling"
+
+# 3) 列出 / 单条 replay
+./.build/arm64-apple-macosx/debug/meee2 test list
+./.build/arm64-apple-macosx/debug/meee2 test replay stuck-tooling-after-pretooluse-bash
+
+# 4) swift test 时自动跑 StateTraceFixtureTests，遍历目录里每条 fixture
+swift test --filter StateTraceFixtureTests
+```
+
+捕获的内容 = `SessionData`（已脱敏：pid / ghosttyTerminalId / terminalInfo 都被
+置 nil 让 fixture 跨机器可跑；`/Users/<user>` 全替换成 `~`）+ transcript 文件
+tail（最后 N 行，再 cap 到 16KB —— resolver 实际只读 4KB，4× 余量足够）+
+`/tmp/meee2.log` 里跟该 sid 有关的 `[StateTrace]` 行（人读用，不进 assertion）+
+当时 resolver 输出的 status（作为 expected）。
+
+约定：
+- 每修一个 resolver bug，至少补一条 fixture（命名要描述 case，不是 sid）。
+- `--desc` 必填的"半"约定 —— 不写 CLI 会提示，但不阻塞。
+- fixture 直接 commit 进 git（一条 ~10 KB JSON，diff 友好）。
+- fixture 目录从 `swift test` target 的 `path: "Tests"` exclude 出去，所以放在
+  `Tests/Fixtures/StateTraces/` 不参与编译。
+
+每条 fixture 同时断言两件事：
+1. `TranscriptStatusResolver.resolve(for:)` → `expected_resolved_status`
+2. `TranscriptStatusResolver.resolveCurrentTool(...)` → `expected_current_tool_override`
+   三态：`no_change` / `clear` / `set("thinking")`
+
+resolveCurrentTool 三种分支命中条件：
+
+| 分支 | 触发 |
+|---|---|
+| `no_change` | tail 末尾是 `assistant` 条目（Claude 刚回完，tool 状态由 hook 主导） |
+| `clear` | tail 末尾是 `system` 条目（Stop hook 收尾）/ user 条目带 interrupt marker / user 条目但 >180s 老 |
+| `set("thinking")` | tail 末尾是 fresh user 条目（用户刚提交、Claude 还没出第一 token） |
+
+抓 fixture 一般会落在 `no_change`（最常见，sessions 大多停在 assistant 收尾）。
+碰上 `clear` / `set("thinking")` 的瞬态（用户刚提交还没回 / Stop hook 刚到尾巴）
+就立刻 `meee2 test capture`，机会过了就抓不到那个分支了。
+
+**安全注意**：transcript tail 是真实 .jsonl 文件最后几 KB —— **会包含会话内容**
+（user prompt、assistant 回复、tool 调用、bash 输出）。capture 之前要确认：
+
+- ⛔️ **不要从无关项目的 session 抓 fixture** —— 别项目代码 / 业务讨论混进 meee2
+  repo 等于公开。只用 meee2 自身或纯 fake-session（cwd 不指向真实业务）的 session。
+- ⛔️ **不要从近期粘过 secrets / API key / 密码的 session 抓** —— 即使你心里
+  知道现在 tail 里没 secrets，下一次截到的 16KB 可能正好覆盖到。先跑一次
+  `grep -E 'sk-|ghp_|Bearer|api[_-]?key|password' Tests/Fixtures/StateTraces/<name>.json`
+  确认没东西再 commit。
+- ✅ 安全的 capture 时机：刚修完一个 resolver bug、当前 session 是 meee2 自己的
+  开发会话、最近没 paste 过 secrets。
 
 ## Acceptance / Validation
 

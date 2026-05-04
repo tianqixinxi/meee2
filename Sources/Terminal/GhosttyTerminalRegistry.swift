@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// Deterministic tty → Ghostty terminal id lookup.
 ///

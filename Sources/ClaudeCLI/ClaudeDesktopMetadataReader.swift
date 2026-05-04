@@ -10,15 +10,12 @@ import Foundation
 /// metadata。这个 reader 提供一个 cliSessionId → metadata 的查表，供 BoardDTO
 /// builder 装饰已有 PluginSession（覆盖 title / model / 标 clientKind / 跳过
 /// archived）。
-/// 来源：claude-code-sessions/ 是 desktop 内置 Claude Code agent；
-/// local-agent-mode-sessions/ 是 cowork（VM-sandboxed agent mode）。
-/// 两者 schema 几乎一致，区别只在 cwd（cowork 是 VM 内的虚拟路径）和
-/// 几个 cowork 专属字段（vmProcessName / hostLoopMode / egressAllowedDomains）。
-public enum ClaudeDesktopSource: String, Sendable {
-    case desktopCode = "desktop"   // claude-code-sessions
-    case cowork = "cowork"          // local-agent-mode-sessions (VM)
-}
-
+///
+/// 只扫 `claude-code-sessions/`（Claude.app 内嵌的 Claude Code 标签）。早期版本
+/// 还顺带扫 `local-agent-mode-sessions/`（VM 沙箱 agent mode）合成 cowork synthetic
+/// session，但 cowork 的 hook 在 VM 内、不进 host 的 `/tmp/meee2.sock`，meee2
+/// 既无法跟踪它的实时状态也无法把消息推回去——展示了反而是误导。所以现在 cowork
+/// 完全不收。
 public struct ClaudeDesktopMetadata: Sendable {
     public let cliSessionId: String
     public let title: String
@@ -29,12 +26,9 @@ public struct ClaudeDesktopMetadata: Sendable {
     /// cliSessionId 不一样；保留下来供将来 deep-link 跳转使用）
     public let desktopSessionId: String
     public let lastActivityAt: Date?
-    public let source: ClaudeDesktopSource
 
     /// transcript 文件在 host 上的路径（如果存在）。
-    /// - desktop-code session：transcript 跟 CLI 共用 `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`
-    /// - cowork session：transcript 在 metadata 文件旁边的 `local_<desktopSid>/.claude/projects/<encoded-vm-cwd>/<sid>.jsonl`
-    ///   （VM 把它内部的 .claude 目录映射到 host 上这个位置）
+    /// desktop session 跟 CLI 共用 `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`。
     /// 文件不存在时为 nil。
     public let transcriptPath: String?
 
@@ -46,7 +40,6 @@ public struct ClaudeDesktopMetadata: Sendable {
         isArchived: Bool,
         desktopSessionId: String,
         lastActivityAt: Date?,
-        source: ClaudeDesktopSource,
         transcriptPath: String?
     ) {
         self.cliSessionId = cliSessionId
@@ -56,7 +49,6 @@ public struct ClaudeDesktopMetadata: Sendable {
         self.isArchived = isArchived
         self.desktopSessionId = desktopSessionId
         self.lastActivityAt = lastActivityAt
-        self.source = source
         self.transcriptPath = transcriptPath
     }
 }
@@ -67,19 +59,13 @@ public struct ClaudeDesktopMetadata: Sendable {
 public final class ClaudeDesktopMetadataReader {
     public static let shared = ClaudeDesktopMetadataReader()
 
-    /// metadata 文件根目录（macOS 标准 Application Support 路径）。
-    /// 扫描两种 source：
-    ///   - claude-code-sessions/   → ClaudeDesktopSource.desktopCode
-    ///   - local-agent-mode-sessions/  → ClaudeDesktopSource.cowork
-    private let scanRoots: [(URL, ClaudeDesktopSource)] = {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
+    /// metadata 根目录（macOS 标准 Application Support 路径下的 claude-code-sessions/）。
+    private let scanRoot: URL = {
+        URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library")
             .appendingPathComponent("Application Support")
             .appendingPathComponent("Claude")
-        return [
-            (base.appendingPathComponent("claude-code-sessions"), .desktopCode),
-            (base.appendingPathComponent("local-agent-mode-sessions"), .cowork)
-        ]
+            .appendingPathComponent("claude-code-sessions")
     }()
 
     /// 扫描间隔。新建 desktop session 也会触发 hook → ClaudePlugin 立刻知道，
@@ -102,8 +88,7 @@ public final class ClaudeDesktopMetadataReader {
         timer = t
         lock.unlock()
         t.resume()
-        let roots = scanRoots.map { $0.0.lastPathComponent }.joined(separator: ", ")
-        MLog("[ClaudeDesktopMetadataReader] Started, interval: \(refreshInterval)s, roots: [\(roots)]")
+        MLog("[ClaudeDesktopMetadataReader] Started, interval: \(refreshInterval)s, root: \(scanRoot.lastPathComponent)")
     }
 
     public func stop() {
@@ -133,13 +118,9 @@ public final class ClaudeDesktopMetadataReader {
     /// 文件不多（典型 < 100），open+decode 也不慢，每 30s 一次成本可忽略。
     private func refresh() {
         var fresh: [String: ClaudeDesktopMetadata] = [:]
-        for (root, source) in scanRoots {
-            guard FileManager.default.fileExists(atPath: root.path) else { continue }
-            for url in collectMetadataFiles(under: root) {
-                guard let m = parseMetadata(at: url, source: source) else { continue }
-                // 同一 cliSessionId 出现在两个 root（理论上不会，cowork 和
-                // desktop-code 的 cliSessionId 命名空间互不重叠）也无妨——
-                // 后写覆盖前写，最近一次解析的 source 胜出。
+        if FileManager.default.fileExists(atPath: scanRoot.path) {
+            for url in collectMetadataFiles(under: scanRoot) {
+                guard let m = parseMetadata(at: url) else { continue }
                 fresh[m.cliSessionId] = m
             }
         }
@@ -148,11 +129,11 @@ public final class ClaudeDesktopMetadataReader {
         index = fresh
         lock.unlock()
         if fresh.count != prev {
-            MDebug("[ClaudeDesktopMetadataReader] index: \(prev) → \(fresh.count) desktop+cowork sessions")
+            MDebug("[ClaudeDesktopMetadataReader] index: \(prev) → \(fresh.count) desktop sessions")
         }
     }
 
-    /// 递归找 root 下所有 local_*.json 文件。两种 root 目录结构都是
+    /// 递归找 root 下所有 local_*.json 文件。目录结构是
     /// `<root>/<userId>/<workspaceId>/local_<uuid>.json`，深度固定但保险起见
     /// 用 enumerator 全扫。
     private func collectMetadataFiles(under root: URL) -> [URL] {
@@ -170,36 +151,17 @@ public final class ClaudeDesktopMetadataReader {
         return out
     }
 
-    /// 推导 transcript path。两种 source 路径不同：
-    ///   - desktop-code: ~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl
-    ///   - cowork:       <metadata-dir>/local_<desktopSid>/.claude/projects/<encoded-vm-cwd>/<sid>.jsonl
-    /// 文件不存在返回 nil（cowork session 还没进 VM 跑过 / 路径不是预期形态）。
-    private func resolveTranscriptPath(
-        metadataURL: URL,
-        cliSessionId: String,
-        cwd: String?,
-        desktopSessionId: String,
-        source: ClaudeDesktopSource
-    ) -> String? {
+    /// 推导 transcript path：跟 CLI 共用 `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`。
+    /// 文件不存在返回 nil。
+    private func resolveTranscriptPath(cliSessionId: String, cwd: String?) -> String? {
         guard let cwd = cwd, !cwd.isEmpty else { return nil }
         let encoded = cwd.replacingOccurrences(of: "/", with: "-")
-        let candidate: String
-        switch source {
-        case .desktopCode:
-            // host-truth：和 CLI 共用 ~/.claude/projects/
-            let home = NSHomeDirectory()
-            candidate = "\(home)/.claude/projects/\(encoded)/\(cliSessionId).jsonl"
-        case .cowork:
-            // VM 把 .claude 映射到 metadata 文件旁边
-            // metadata file: .../local_<sid>.json
-            // session home : .../local_<sid>/   （同名无 .json）
-            let metaDir = metadataURL.deletingPathExtension().path
-            candidate = "\(metaDir)/.claude/projects/\(encoded)/\(cliSessionId).jsonl"
-        }
+        let home = NSHomeDirectory()
+        let candidate = "\(home)/.claude/projects/\(encoded)/\(cliSessionId).jsonl"
         return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
     }
 
-    private func parseMetadata(at url: URL, source: ClaudeDesktopSource) -> ClaudeDesktopMetadata? {
+    private func parseMetadata(at url: URL) -> ClaudeDesktopMetadata? {
         guard let data = try? Data(contentsOf: url),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -219,13 +181,7 @@ public final class ClaudeDesktopMetadataReader {
             }
             return nil
         }()
-        let transcriptPath = resolveTranscriptPath(
-            metadataURL: url,
-            cliSessionId: cliSid,
-            cwd: cwd,
-            desktopSessionId: desktopSid,
-            source: source
-        )
+        let transcriptPath = resolveTranscriptPath(cliSessionId: cliSid, cwd: cwd)
         return ClaudeDesktopMetadata(
             cliSessionId: cliSid,
             title: title,
@@ -234,7 +190,6 @@ public final class ClaudeDesktopMetadataReader {
             isArchived: isArchived,
             desktopSessionId: desktopSid,
             lastActivityAt: lastActivityAt,
-            source: source,
             transcriptPath: transcriptPath
         )
     }
