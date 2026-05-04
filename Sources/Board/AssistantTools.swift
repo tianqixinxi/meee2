@@ -247,8 +247,12 @@ enum AssistantTools {
         // path. The new claude process will register itself via SessionStart
         // hook within a few seconds and show up on the board.
         let spawner = SpawnerRouter.forTerminal(termProgram)
+        // Swift 6 strict concurrency 不允许 @Sendable closure 捕获 var；
+        // snapshot 到 let 再喂给 Task。
+        let cwdFinal = cwd
+        let commandFinal = command
         Task {
-            _ = await spawner.spawn(cwd: cwd, command: command)
+            _ = await spawner.spawn(cwd: cwdFinal, command: commandFinal)
         }
 
         return .success([
