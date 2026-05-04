@@ -116,12 +116,31 @@ public final class ClaudeDesktopMetadataReader {
 
     /// 重新扫描整个目录，重建索引。
     /// 文件不多（典型 < 100），open+decode 也不慢，每 30s 一次成本可忽略。
+    ///
+    /// 同一个 cliSessionId 可能对应多个 `local_<uuid>.json` wrapper —— Claude
+    /// Desktop 端在某些操作（resume / 重新打开 / 等）下会另起 wrapper 但保留
+    /// CLI session 实体。用户在 Desktop UI 里 archive 的是单个 wrapper（标
+    /// `isArchived=true` 的也只是该 wrapper），底层 CLI session 通常还在另
+    /// 一个 wrapper 里活着 isArchived=false。
+    ///
+    /// 历史 bug（2026-05-04 现场）：以前这里是 `fresh[id] = m`（last-write-wins）
+    /// + `enumerator` 顺序不定 → archived 的旧 wrapper 抢到 index 槽位 →
+    /// BoardAPI.archivedDesktopSids 把整条 cliSessionId 误判成 archived → 当前
+    /// session 在 webui 里凭空消失。
+    ///
+    /// 正确语义：只要还有任何一个 wrapper 没被 archive，这个 cliSessionId 就
+    /// 是活的。冲突时 prefer unarchived；都 unarchived / 都 archived 时选
+    /// `lastActivityAt` 最新的（最贴近用户最近操作的那条）。
     private func refresh() {
         var fresh: [String: ClaudeDesktopMetadata] = [:]
         if FileManager.default.fileExists(atPath: scanRoot.path) {
             for url in collectMetadataFiles(under: scanRoot) {
                 guard let m = parseMetadata(at: url) else { continue }
-                fresh[m.cliSessionId] = m
+                if let prev = fresh[m.cliSessionId] {
+                    fresh[m.cliSessionId] = Self.preferredMetadata(prev, m)
+                } else {
+                    fresh[m.cliSessionId] = m
+                }
             }
         }
         lock.lock()
@@ -130,6 +149,28 @@ public final class ClaudeDesktopMetadataReader {
         lock.unlock()
         if fresh.count != prev {
             MDebug("[ClaudeDesktopMetadataReader] index: \(prev) → \(fresh.count) desktop sessions")
+        }
+    }
+
+    /// 同一 cliSessionId 的两条 metadata 选一条留下：
+    ///   1. 任一 unarchived → 选 unarchived（active 优先）
+    ///   2. 都 unarchived 或都 archived → 选 `lastActivityAt` 更新的
+    ///   3. lastActivity 都缺 → 任选 a（稳定，避免无意义的 index churn）
+    /// internal 访问级别 —— 让 `@testable import` 能直接测纯函数行为，
+    /// 不用搭整个文件系统 + JSON parsing 的舞台。
+    static func preferredMetadata(_ a: ClaudeDesktopMetadata, _ b: ClaudeDesktopMetadata) -> ClaudeDesktopMetadata {
+        if a.isArchived != b.isArchived {
+            return a.isArchived ? b : a
+        }
+        switch (a.lastActivityAt, b.lastActivityAt) {
+        case let (.some(da), .some(db)):
+            return da >= db ? a : b
+        case (.some, .none):
+            return a
+        case (.none, .some):
+            return b
+        case (.none, .none):
+            return a
         }
     }
 
