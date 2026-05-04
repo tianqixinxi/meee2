@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Swifter
+import Meee2CommKit
 
 /// BoardServer —— 本地 HTTP + WebSocket 服务器
 ///

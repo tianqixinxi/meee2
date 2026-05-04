@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Excalidraw,
-  Footer,
   MainMenu,
   convertToExcalidrawElements,
 } from '@excalidraw/excalidraw'
@@ -17,15 +17,13 @@ import {
   buildScene,
   buildSessionEmbeddable,
   channelHubId,
-  channelHubLabelText,
   panToChannelHub,
-  channelLabelId,
   modeStrokeColor,
   modeStrokeStyle,
   RECT_W,
   RECT_H,
-  CHANNEL_W,
-  CHANNEL_H,
+  CHANNEL_FRAME_W,
+  CHANNEL_FRAME_H,
   isManagedElementId,
   parseChannelFromElement,
   parseSessionLink,
@@ -35,10 +33,21 @@ import {
   debounce,
   ensurePositions,
   ensureChannelPositions,
+  dmChannelName,
+  isDmChannelName,
+  DM_LINE_STROKE_COLOR,
+  DM_LINE_STROKE_WIDTH_BASE,
+  DM_LINE_STROKE_WIDTH_PENDING,
   type LayoutMap,
   type CanvasPersistence,
 } from '@meee1/board-core'
-import { activateSession, addMember, removeMember } from '../api'
+import {
+  activateSession,
+  addMember,
+  createChannel,
+  deleteChannel,
+  removeMember,
+} from '../api'
 import { SessionOverlay } from './SessionOverlay'
 
 /**
@@ -110,33 +119,36 @@ function FitIcon() {
 }
 
 const SIDEBAR_FOCUS_ZOOM = 1.25
-const CHANNEL_MEMBERSHIP_META_KEY = 'channelMembership'
 
-interface ChannelMembershipMeta {
-  sid: string
+/** Annotation written into a card-to-card arrow's customData so we can
+ *  recognise it as a "DM line" across refreshes -- Excalidraw can briefly
+ *  drop bindings on load (user shapes restore before managed rects rebuild),
+ *  and without a persisted hint the arrow temporarily looks like a vanilla
+ *  shape. */
+const DM_ARROW_META_KEY = 'dmArrow'
+
+interface DmMeta {
   channel: string
-  alias?: string
+  sidA: string
+  sidB: string
 }
 
-type ConnectorKind = 'managed' | 'user'
-
-interface ConnectorSnapshot extends ChannelMembershipMeta {
-  arrowId: string
-  kind: ConnectorKind
+function readDmMeta(el: any): DmMeta | null {
+  const meta = el?.customData?.[DM_ARROW_META_KEY]
+  if (!meta || typeof meta !== 'object') return null
+  const channel = typeof meta.channel === 'string' ? meta.channel : null
+  const sidA = typeof meta.sidA === 'string' ? meta.sidA : null
+  const sidB = typeof meta.sidB === 'string' ? meta.sidB : null
+  if (!channel || !sidA || !sidB) return null
+  return { channel, sidA, sidB }
 }
 
-function connectorKey(channel: string, sid: string): string {
-  return `${channel}\u0000${sid}`
-}
-
-function connectorKeyFromMeta(meta: ChannelMembershipMeta): string {
-  return connectorKey(meta.channel, meta.sid)
-}
-
-function parseConnectorKey(key: string): { channel: string; sid: string } | null {
-  const i = key.indexOf('\u0000')
-  if (i < 0) return null
-  return { channel: key.slice(0, i), sid: key.slice(i + 1) }
+function withDmMeta(el: any, meta: DmMeta): any {
+  const customData = {
+    ...(el.customData ?? {}),
+    [DM_ARROW_META_KEY]: meta,
+  }
+  return { ...el, customData }
 }
 
 function liveSessionRects(
@@ -175,37 +187,9 @@ function focusSceneElement(
   })
 }
 
-function parseChannelMembershipMeta(el: any): ChannelMembershipMeta | null {
-  const meta = el?.customData?.[CHANNEL_MEMBERSHIP_META_KEY]
-  if (!meta || typeof meta !== 'object') return null
-  const sid = typeof meta.sid === 'string' ? meta.sid : null
-  const channel = typeof meta.channel === 'string' ? meta.channel : null
-  if (!sid || !channel) return null
-  return {
-    sid,
-    channel,
-    alias: typeof meta.alias === 'string' ? meta.alias : undefined,
-  }
-}
-
-function withChannelMembershipMeta(
-  el: any,
-  meta: ChannelMembershipMeta,
-): any {
-  const customData = {
-    ...(el.customData ?? {}),
-    [CHANNEL_MEMBERSHIP_META_KEY]: meta,
-  }
-  return { ...el, customData }
-}
-
-function withoutChannelMembershipMeta(el: any): any {
-  if (!el?.customData?.[CHANNEL_MEMBERSHIP_META_KEY]) return el
-  const customData = { ...el.customData }
-  delete customData[CHANNEL_MEMBERSHIP_META_KEY]
-  return { ...el, customData }
-}
-
+/** Resolve a session sid from an Excalidraw element id of the form
+ *  `session-<sid>` or `session-<sid>-<copyId>`. Greedy longest-match so a
+ *  copy id with hyphens doesn't accidentally swallow a real sid. */
 function resolveSessionIdFromElementId(
   id: string,
   sessionIds: readonly string[],
@@ -221,14 +205,56 @@ function resolveSessionIdFromElementId(
   return best
 }
 
-function resolveChannelNameFromElementId(
-  id: string,
+/** Read a binding endpoint and return the session sid it points to (or
+ *  null). Tolerates the brief tick where Excalidraw drops bindings during
+ *  scene rebuild by falling back to the element id pattern. */
+function endpointSid(
+  endpointElementId: string | undefined,
+  elementsById: ReadonlyMap<string, ExcalidrawElement>,
+  sessionIds: readonly string[],
+): string | null {
+  if (!endpointElementId) return null
+  const el = elementsById.get(endpointElementId)
+  if (el && !(el as any).isDeleted) {
+    const sid = parseSessionFromElement(el)
+    if (sid && sessionIds.includes(sid)) return sid
+  }
+  return resolveSessionIdFromElementId(endpointElementId, sessionIds)
+}
+
+/** Identify a card-to-card arrow, i.e. one whose start AND end bindings both
+ *  resolve to (different) session rects -- that's the gesture for creating a
+ *  1-on-1 DM channel. Falls back to persisted DM meta so a refreshed arrow
+ *  remains classified even if Excalidraw dropped its bindings. */
+function classifyDmArrow(
+  el: any,
+  elementsById: ReadonlyMap<string, ExcalidrawElement>,
+  sessionIds: readonly string[],
+): { sidA: string; sidB: string } | null {
+  if (!el || el.type !== 'arrow' || el.isDeleted) return null
+  const sStart = endpointSid(el.startBinding?.elementId, elementsById, sessionIds)
+  const sEnd = endpointSid(el.endBinding?.elementId, elementsById, sessionIds)
+  if (sStart && sEnd && sStart !== sEnd) {
+    return { sidA: sStart, sidB: sEnd }
+  }
+  const meta = readDmMeta(el)
+  if (meta && sessionIds.includes(meta.sidA) && sessionIds.includes(meta.sidB)) {
+    return { sidA: meta.sidA, sidB: meta.sidB }
+  }
+  return null
+}
+
+/** Match a frameId on a session rect to its channel name, if any. The frame
+ *  id is the deterministic `channel-<name>` string we put on every channel
+ *  frame. */
+function frameIdToChannelName(
+  frameId: string | null | undefined,
   channelNames: readonly string[],
 ): string | null {
-  if (!id.startsWith('channel-')) return null
-  const rest = id.slice('channel-'.length)
-  // Spokes and labels are managed children, not channel hubs.
-  if (rest.includes('-spoke-') || rest.endsWith('-label')) return null
+  if (!frameId || !frameId.startsWith('channel-')) return null
+  const rest = frameId.slice('channel-'.length)
+  // Greedy longest-match; channels named e.g. `foo` and `foo-bar` both match
+  // an id of `channel-foo-bar`, prefer the longer.
   let best: string | null = null
   for (const name of channelNames) {
     if (rest === name) {
@@ -238,145 +264,6 @@ function resolveChannelNameFromElementId(
   return best
 }
 
-function resolveManagedSpokeMembership(
-  el: any,
-  sessionById: ReadonlyMap<string, { id: string; title: string }>,
-  channelNames: readonly string[],
-): ConnectorSnapshot | null {
-  if (!el || el.type !== 'arrow' || el.isDeleted) return null
-  if (typeof el.id !== 'string') return null
-  if (!el.id.startsWith('channel-') || !el.id.includes('-spoke-')) return null
-
-  let best: { channel: string; sid: string } | null = null
-  for (const channel of channelNames) {
-    const prefix = `channel-${channel}-spoke-`
-    if (!el.id.startsWith(prefix)) continue
-    const sid = el.id.slice(prefix.length)
-    if (!sessionById.has(sid)) continue
-    if (!best || channel.length > best.channel.length) {
-      best = { channel, sid }
-    }
-  }
-  if (!best) return null
-
-  const session = sessionById.get(best.sid)
-  return {
-    arrowId: el.id,
-    kind: 'managed',
-    sid: best.sid,
-    channel: best.channel,
-    alias: session ? aliasFromSession(session.title, session.id) : undefined,
-  }
-}
-
-function classifyBoundElement(
-  id: string | undefined,
-  elementsById: ReadonlyMap<string, ExcalidrawElement>,
-  sessionIds: readonly string[],
-  channelNames: readonly string[],
-): { sid?: string; channel?: string } {
-  if (!id) return {}
-
-  const el = elementsById.get(id)
-  if (el && !(el as any).isDeleted) {
-    const sid = parseSessionFromElement(el)
-    if (sid && sessionIds.includes(sid)) return { sid }
-    const channel = parseChannelFromElement(el)
-    if (channel && channelNames.includes(channel)) return { channel }
-  }
-
-  const sid = resolveSessionIdFromElementId(id, sessionIds)
-  if (sid) return { sid }
-  const channel = resolveChannelNameFromElementId(id, channelNames)
-  if (channel) return { channel }
-  return {}
-}
-
-function resolveArrowMembership(
-  el: any,
-  elementsById: ReadonlyMap<string, ExcalidrawElement>,
-  sessionById: ReadonlyMap<string, { id: string; title: string }>,
-  channelNames: readonly string[],
-): ConnectorSnapshot | null {
-  if (!el || el.type !== 'arrow' || el.isDeleted) return null
-  const managed = resolveManagedSpokeMembership(el, sessionById, channelNames)
-  if (managed) return managed
-
-  const startId = el.startBinding?.elementId as string | undefined
-  const endId = el.endBinding?.elementId as string | undefined
-  const sessionIds = [...sessionById.keys()]
-  const s = classifyBoundElement(startId, elementsById, sessionIds, channelNames)
-  const e = classifyBoundElement(endId, elementsById, sessionIds, channelNames)
-
-  let sid: string | null = null
-  let channel: string | null = null
-  if (s.sid && e.channel) {
-    sid = s.sid
-    channel = e.channel
-  } else if (e.sid && s.channel) {
-    sid = e.sid
-    channel = s.channel
-  }
-
-  if (sid && channel) {
-    const session = sessionById.get(sid)
-    return {
-      arrowId: el.id,
-      kind: 'user',
-      sid,
-      channel,
-      alias: session ? aliasFromSession(session.title, session.id) : undefined,
-    }
-  }
-
-  // Excalidraw can temporarily drop bindings when a persisted user arrow is
-  // loaded before its managed session rect / channel hub has been rebuilt.
-  // If we annotated the arrow earlier, keep treating it as the visual for
-  // that membership so refresh doesn't create an extra auto-spoke.
-  const meta = parseChannelMembershipMeta(el)
-  if (meta && sessionById.has(meta.sid) && channelNames.includes(meta.channel)) {
-    const session = sessionById.get(meta.sid)
-    return {
-      arrowId: el.id,
-      kind: 'user',
-      ...meta,
-      alias: meta.alias ?? (session ? aliasFromSession(session.title, session.id) : undefined),
-    }
-  }
-
-  return null
-}
-
-function liveConnectorKeys(state: BoardState): Set<string> {
-  const keys = new Set<string>()
-  for (const ch of state.channels) {
-    if (ch.name.startsWith('__')) continue
-    for (const m of ch.members) {
-      keys.add(connectorKey(ch.name, m.sessionId))
-    }
-  }
-  return keys
-}
-
-function aliasesForConnector(
-  state: BoardState,
-  channel: string,
-  sid: string,
-): string[] {
-  const ch = state.channels.find((c) => c.name === channel)
-  if (!ch) return []
-  return ch.members
-    .filter((m) => m.sessionId === sid)
-    .map((m) => m.alias)
-}
-
-function stateHasConnector(
-  state: BoardState,
-  channel: string,
-  sid: string,
-): boolean {
-  return aliasesForConnector(state, channel, sid).length > 0
-}
 
 interface Props {
   state: BoardState | null
@@ -472,6 +359,23 @@ export default function Board({
   initial,
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  // 把 Create channel / DM line 两个按钮 portal 到 Excalidraw 自己的
+  // 横向 shape tool 行 (`.App-toolbar .Stack_horizontal`) 里 ——
+  // Excalidraw 不暴露添加 shape tool 的公开 API（issue #7583 / #6697 已
+  // 确认），所以走 React Portal 直接 attach 到那个 flex 行的 DOM 节点。
+  // 必须挂到 .Stack_horizontal 而不是 .App-toolbar 本身，否则会成为
+  // toolbar 的另一行子元素，被 wrap 到第二行去（实测过）。
+  const [toolbarRowEl, setToolbarRowEl] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    const find = () => {
+      const el = document.querySelector('.excalidraw .App-toolbar .Stack_horizontal') as HTMLElement | null
+      setToolbarRowEl((prev) => (prev === el ? prev : el))
+    }
+    find()
+    const obs = new MutationObserver(find)
+    obs.observe(document.body, { childList: true, subtree: true })
+    return () => obs.disconnect()
+  }, [])
   // Persistence is fully async via CanvasPersistence. App.tsx hydrates all
   // slots up-front (Promise.all of loadXxx) and passes them in as `initial`,
   // so these useRefs can take values synchronously at first render — same
@@ -520,14 +424,25 @@ export default function Board({
   const lastHideBumpRef = useRef<number>(-1)
   const lastBulkBumpRef = useRef<number>(-1)
   const lastFocusSessionBumpRef = useRef<number>(-1)
-  // Connector tracking: every visible session↔channel connector, whether it
-  // is our managed spoke or a user-drawn arrow, represents one membership key.
-  // Keyed by `${channel}\0${sid}` so deleting the visual connector can remove
-  // the real ChannelRegistry membership instead of the next rebuild growing it
-  // back.
-  const knownConnectorMembershipsRef = useRef<Map<string, ConnectorSnapshot>>(new Map())
-  const pendingAddConnectorKeysRef = useRef<Set<string>>(new Set())
-  const pendingDeleteConnectorKeysRef = useRef<Set<string>>(new Set())
+  // Frame-membership snapshot from the previous tick: sid -> channel name.
+  // Used to detect a card moving between frames so we can issue the right
+  // addMember/removeMember pair against the backend.
+  const knownFrameMembershipsRef = useRef<Map<string, string>>(new Map())
+  // DM channels we know exist on the canvas this tick: channel name -> sids.
+  // Diff against state.channels to detect new lines (createChannel +
+  // addMember x2) and removed lines (deleteChannel).
+  const knownDmChannelsRef = useRef<Map<string, { sidA: string; sidB: string }>>(new Map())
+  // 上一次 onChange 看到的非-DM channel frame 名集合。当用户在画板上选中
+  // channel frame 并按 Delete 后，本 tick 这个 frame 没了但 state.channels
+  // 还有该 channel —— 触发 deleteChannel(...) 让 backend 也删掉，否则下一
+  // 次 scene rebuild 又会把 frame 补回来（"删了又冒"），用户感知就是删不掉。
+  const knownChannelFramesRef = useRef<Set<string>>(new Set())
+  // In-flight DM channel mutations, keyed by channel name. Prevents the same
+  // line being created or deleted twice while the network round-trip is
+  // pending.
+  const pendingDmOpsRef = useRef<Set<string>>(new Set())
+  // In-flight frame-membership mutations, keyed by `${channel}|${sid}`.
+  const pendingFrameOpsRef = useRef<Set<string>>(new Set())
   const lastPlaceChannelBumpRef = useRef<number>(-1)
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
@@ -608,6 +523,14 @@ export default function Board({
   )
 
   // -- Scene rebuild on state change -------------------------------------
+  // Reconciles Excalidraw scene with backend state. Two managed shapes:
+  //   - session rectangles (one or more per session; the DOM overlay paints
+  //     the live card on top)
+  //   - channel frames (one per non-DM channel; cards inside the frame =
+  //     channel members; Excalidraw assigns frameId on drag-into-frame)
+  // DM channels are visualised as user-drawn arrows between two session
+  // rects -- they don't get their own managed shape; styling is normalised
+  // here so a refreshed DM arrow keeps the violet/dashed look.
   useEffect(() => {
     if (!api || !state) return
 
@@ -616,19 +539,18 @@ export default function Board({
     saveLayoutDebounced(layoutRef.current)
 
     // Channel names (filter out operator '__…' defensively; backend already
-    // strips them but guard anyway).
+    // strips them but guard anyway). DM channels get filtered separately
+    // below: they don't render as frames.
     const channelNames = state.channels
       .map((c) => c.name)
       .filter((n) => !n.startsWith('__'))
+    const frameChannelNames = channelNames.filter((n) => !isDmChannelName(n))
     channelLayoutRef.current = ensureChannelPositions(
-      channelNames,
+      frameChannelNames,
       channelLayoutRef.current,
     )
     saveChannelLayoutDebounced(channelLayoutRef.current)
 
-    // 提前构建：按 deterministic id / customData / live 集合识别 binding 端点；
-    // 给 userShapes 重描色（你画的白线绑了 channel 就该统一成 spoke 绿）和
-    // 后面的 existingConnections detection 共用。
     const sessionById = new Map(
       state.sessions.map((s) => [s.id, { id: s.id, title: s.title }]),
     )
@@ -637,22 +559,15 @@ export default function Board({
         .filter((c) => !c.name.startsWith('__'))
         .map((c) => [c.name, c]),
     )
-    const stateConnectorKeys = liveConnectorKeys(state)
-    for (const key of pendingDeleteConnectorKeysRef.current) {
-      if (!stateConnectorKeys.has(key)) pendingDeleteConnectorKeysRef.current.delete(key)
-    }
-    for (const key of pendingAddConnectorKeysRef.current) {
-      if (stateConnectorKeys.has(key)) pendingAddConnectorKeysRef.current.delete(key)
-    }
+    const sessionIdsArr = state.sessions.map((s) => s.id)
 
-    // Current scene → classify existing elements.
+    // -- Bucket existing elements --------------------------------------
     const existing = api.getSceneElements()
     const elementsById = new Map(existing.map((el) => [el.id, el]))
-    // 清理：随机 id 的 channel label 文本——这些是老版本（用 Excalidraw
-    // `label: {…}` 糖生成的、id 随机）残留的孤儿。它们会被
-    // `!isManagedElementId` 误收进 userShapes 并在每次 refresh 累加一条。
-    // 任何 text 元素如果 containerId 指向 `channel-<name>` 但自己 id 不是
-    // `channel-<name>-label`，一律丢弃。
+
+    // userShapes: anything not on the managed-id allowlist (sessions and
+    // channel-* shapes). Filters out orphaned channel-text labels so they
+    // don't accumulate one-per-refresh.
     const userShapesRaw = existing.filter((e) => {
       if (isManagedElementId(e.id)) return false
       if (e.type === 'text') {
@@ -663,11 +578,16 @@ export default function Board({
       }
       return true
     })
-    // user shape arrows 两件事:
-    // 1. gap=null/focus=null → 补成 1/0（drag 跟随的前提）
-    // 2. 如果 binding 是 session↔channel → restyle 成 spoke 视觉（绿色 / dashed
-    //    /…由 channel mode 决定），跟 auto-spoke 保持一致；不再"白线 + 绿线"
-    //    同时存在或刷新后变颜色的 surprise。
+    // Restyle DM arrows: any user-drawn arrow whose start AND end bind to
+    // session rects is a DM line. Apply distinctive violet/dashed style and
+    // persist DM meta into customData so the next rebuild can keep it
+    // recognised even if Excalidraw drops bindings.
+    const dmStyleStrokeWidth = (channel: string) => {
+      const ch = liveChannelByName.get(channel)
+      return ch && ch.pendingCount > 0
+        ? DM_LINE_STROKE_WIDTH_PENDING
+        : DM_LINE_STROKE_WIDTH_BASE
+    }
     const userShapes = userShapesRaw.map((el: any) => {
       if (el.type !== 'arrow') return el
       const sb = el.startBinding ? { ...el.startBinding } : null
@@ -678,50 +598,47 @@ export default function Board({
       if (eb && eb.elementId && eb.gap == null) { eb.gap = 1; touched = true }
       if (eb && eb.elementId && eb.focus == null) { eb.focus = 0; touched = true }
 
-      // Channel-bound arrow → 应用 spoke styling + 写入 membership meta。
-      // meta 是刷新去重的关键：用户手画的 connector 是随机 id，且 Excalidraw
-      // 在 initialSceneData 里先加载 userElements、后 rebuild managed rect/hub 时，
-      // 可能短暂丢 binding。meta 让下一次刷新仍知道这条 arrow 已经代表该连接。
-      const membership = resolveArrowMembership(el, elementsById, sessionById, channelNames)
-      const ch = membership ? liveChannelByName.get(membership.channel) : null
-      if (membership && ch) {
-        const key = connectorKeyFromMeta(membership)
-        const liveOrPendingAdd =
-          stateConnectorKeys.has(key) || pendingAddConnectorKeysRef.current.has(key)
-        if (!liveOrPendingAdd) {
-          return { ...el, isDeleted: true }
-        }
-        return withChannelMembershipMeta({
+      const dm = classifyDmArrow(el, elementsById, sessionIdsArr)
+      if (dm) {
+        const channel = dmChannelName(dm.sidA, dm.sidB)
+        return withDmMeta({
           ...el,
           startBinding: sb,
           endBinding: eb,
-          strokeColor: modeStrokeColor(ch.mode),
-          strokeWidth: ch.pendingCount > 0 ? 3 : 2,
-          strokeStyle: modeStrokeStyle(ch),
+          strokeColor: DM_LINE_STROKE_COLOR,
+          strokeWidth: dmStyleStrokeWidth(channel),
+          strokeStyle: 'dashed',
           startArrowhead: null,
           endArrowhead: null,
-        }, membership)
+        }, { channel, sidA: dm.sidA, sidB: dm.sidB })
       }
-      if (!touched) return withoutChannelMembershipMeta(el)
-      return withoutChannelMembershipMeta({ ...el, startBinding: sb, endBinding: eb })
+      if (!touched) return el
+      return { ...el, startBinding: sb, endBinding: eb }
     })
-    // 所有 filter 都显式排除 isDeleted —— 不同 Excalidraw 版本 getSceneElements()
-    // 可能会返回 tombstoned 元素（用户删除但保留到 undo 栈）。如果 deleted hub
-    // 被算进 knownChannelNames，对应 channel 就永远不会被自动重建，表现就是
-    // "椭圆消失了但 channel 还在"——正好对应用户报告的 bug。
+
+    // Session rects.
     const existingEmbeddables = existing.filter(
       (e) =>
         e.type === 'rectangle' &&
         !(e as any).isDeleted &&
         parseSessionFromElement(e) !== null,
     )
-    const existingChannelHubs = existing.filter(
+
+    // Current channel frames (the new shape) + legacy hubs/labels/spokes
+    // that we tombstone on this rebuild.
+    const existingChannelFrames = existing.filter(
+      (e) =>
+        (e as any).type === 'frame' &&
+        !(e as any).isDeleted &&
+        parseChannelFromElement(e) !== null,
+    )
+    const legacyHubEllipses = existing.filter(
       (e) =>
         e.type === 'ellipse' &&
         !(e as any).isDeleted &&
         parseChannelFromElement(e) !== null,
     )
-    const existingChannelLabels = existing.filter(
+    const legacyHubLabels = existing.filter(
       (e) =>
         e.type === 'text' &&
         !(e as any).isDeleted &&
@@ -729,10 +646,7 @@ export default function Board({
         e.id.startsWith('channel-') &&
         e.id.endsWith('-label'),
     )
-    // 现有的自动 spoke arrows——id 形如 `channel-<name>-spoke-<sid>`。
-    // 单独分桶后续做 style 归一化，并跳过 buildScene 的重新生成（关键：避免
-    // 每 tick 替换正在拖动的 bound arrow 让 drag 卡死）。
-    const existingSpokes = existing.filter(
+    const legacySpokes = existing.filter(
       (e) =>
         e.type === 'arrow' &&
         !(e as any).isDeleted &&
@@ -740,14 +654,9 @@ export default function Board({
         e.id.startsWith('channel-') &&
         e.id.includes('-spoke-'),
     )
-    const existingSpokeIds = new Set(existingSpokes.map((e) => e.id))
-    // Spoke labels — Excalidraw `label: {…}` sugar generates a text element
-    // whose containerId points back at the spoke arrow. Filter them in their
-    // own bucket so they survive the rebuild (they'd otherwise be excluded
-    // from userShapes by the channel-text guard).
-    const existingSpokeLabels = existing.filter((e) => {
+    const legacySpokeLabels = existing.filter((e) => {
       if (e.type !== 'text') return false
-      if ((e as any).isDeleted) return true // still preserve so we tombstone
+      if ((e as any).isDeleted) return true
       const cid = (e as any).containerId as string | undefined
       if (!cid) return false
       return cid.startsWith('channel-') && cid.includes('-spoke-')
@@ -758,18 +667,12 @@ export default function Board({
       const sid = parseSessionFromElement(e)
       if (sid) knownSessionIds.add(sid)
     }
-    const knownChannelNames = new Set<string>()
-    for (const e of existingChannelHubs) {
+    const knownFrameChannelNames = new Set<string>()
+    for (const e of existingChannelFrames) {
       const name = parseChannelFromElement(e)
-      if (name) knownChannelNames.add(name)
+      if (name) knownFrameChannelNames.add(name)
     }
 
-    // 规则：
-    //   - 从没 dismiss 过的 session → 默认给它加一张 card（首次加载 / 新 session 会命中）
-    //   - 用户 hide 过（sid 在 dismissedRef 里）→ 不要自动加回来，尊重隐藏意图
-    //   - 用户重新点 "Add to canvas" → addToCanvas effect 里会把 sid 从 dismissedRef
-    //     删掉，然后 reportCountsRef 的 "appeared" 路径也会兜底清理，下一轮 rebuild
-    //     这里就会再走默认加卡的分支
     const newSessionIds: string[] = []
     for (const s of state.sessions) {
       if (s.displayGroup === 'older') continue
@@ -778,8 +681,6 @@ export default function Board({
       newSessionIds.push(s.id)
     }
 
-    // Only log when something interesting happens (new rects / dismissed
-    // count). Keeps console clean on every WS tick.
     if (newSessionIds.length > 0 || dismissedRef.current.size > 0) {
       console.log(
         '[Board.scene] new=%d dismissed=%d',
@@ -788,206 +689,98 @@ export default function Board({
       )
     }
 
-    // Resolve "primary" embeddable id per session id for arrow binding.
-    const primaryMap = new Map<string, string>()
-    for (const e of existingEmbeddables) {
-      const sid = parseSessionFromElement(e)
-      if (sid && !primaryMap.has(sid)) primaryMap.set(sid, e.id)
-    }
-    for (const sid of newSessionIds) {
-      if (!primaryMap.has(sid)) primaryMap.set(sid, sessionRectId(sid))
-    }
-
-    // Channels that are new to this scene (no hub ellipse yet).
-    const newChannelNames = channelNames.filter(
-      (n) => !knownChannelNames.has(n),
+    // Channels needing a fresh frame: every non-DM channel that hasn't been
+    // built yet.
+    const newChannelNames = frameChannelNames.filter(
+      (n) => !knownFrameChannelNames.has(n),
     )
     if (newChannelNames.length > 0) {
       console.log(
-        '[Board] rebuilding missing channel hubs:',
+        '[Board] rebuilding missing channel frames:',
         newChannelNames,
         '(known:',
-        Array.from(knownChannelNames),
+        Array.from(knownFrameChannelNames),
         ')',
       )
     }
 
-    // 扫出用户已经亲手画过的 session↔channel 连接，让 buildScene 知道
-    // 哪些成员关系已经有 arrow 了、别重复画——避免"白线 + 绿线"双图。
-    // 这里也喂入 pendingDelete tombstone：用户刚删了 connector、DELETE 还没
-    // 回来时，state 里 membership 仍短暂存在，但画布不能立刻把线长回来。
-    // 双重 source：
-    //   (1) 现有 arrow 的 binding.elementId 走 deterministic id 模式
-    //   (2) handleChange 实时记录的 knownConnectorMembershipsRef —— 即便 Excalidraw
-    //       binding 后来变 null / 半绑也能识别
-    const existingConnections = new Set<string>()
-    for (const el of existing) {
-      if (el.type !== 'arrow') continue
-      if ((el as any).isDeleted) continue
-      if (el.id.startsWith('channel-') && el.id.includes('-spoke-')) continue
-      const membership = resolveArrowMembership(
-        el,
-        elementsById,
-        sessionById,
-        channelNames,
-      )
-      if (membership?.kind === 'user') {
-        existingConnections.add(`${membership.sid}|${membership.channel}`)
-      }
-    }
-    // 兜底 (2)：handleChange 已经识别过的 user arrow → 直接信任它的 sid+channel
-    for (const [key, info] of knownConnectorMembershipsRef.current) {
-      if (info.kind !== 'user') continue
-      if (pendingDeleteConnectorKeysRef.current.has(key)) continue
-      existingConnections.add(`${info.sid}|${info.channel}`)
-    }
-    for (const key of pendingDeleteConnectorKeysRef.current) {
-      const parsed = parseConnectorKey(key)
-      if (parsed) existingConnections.add(`${parsed.sid}|${parsed.channel}`)
-    }
-
-    const { newEmbeddables, newChannelHubs, arrows } = buildScene(
+    const { newEmbeddables, newChannelHubs } = buildScene(
       state,
       layoutRef.current,
       channelLayoutRef.current,
       {
         newSessionIds,
         newChannelNames,
-        sessionIdToElementId: (sid) => primaryMap.get(sid) ?? null,
-        existingConnections,
-        existingSpokeIds,
       },
     )
 
     const converted = convertToExcalidrawElements(
-      [...newEmbeddables, ...newChannelHubs, ...arrows] as any,
+      [...newEmbeddables, ...newChannelHubs] as any,
       { regenerateIds: false },
     )
 
-    // ── Patch spoke arrow bindings + reverse boundElements ────────────
-    // convertToExcalidrawElements 处理 arrow 的 start/end skeleton sugar 时只
-    // 设了 elementId + focus，gap 留 null。null gap 会让 Excalidraw 后续的
-    // binding-update 路径把 arrow 当成"未真正 bound"，drag rect 不跟随，看
-    // 起来像断开。这里手动把每个 spoke 的 startBinding/endBinding 补成完整
-    // PointBinding（gap=1），并维护 rect/hub 的 boundElements 反向链。
-    // boundElements 是 Excalidraw drag 路径找跟随 arrow 的依据，缺失就拖不动。
-    const spokeBindingsByOwner = new Map<string, Set<string>>() // elementId → spoke ids
-    const ensureBound = (ownerId: string, spokeId: string) => {
-      let set = spokeBindingsByOwner.get(ownerId)
-      if (!set) { set = new Set(); spokeBindingsByOwner.set(ownerId, set) }
-      set.add(spokeId)
-    }
-    for (const el of converted as any[]) {
-      if (el.type !== 'arrow') continue
-      const id: string = el.id
-      if (!id.startsWith('channel-') || !id.includes('-spoke-')) continue
-      if (el.startBinding && el.startBinding.elementId) {
-        if (el.startBinding.gap == null) el.startBinding.gap = 1
-        if (el.startBinding.focus == null) el.startBinding.focus = 0
-        ensureBound(el.startBinding.elementId, id)
-      }
-      if (el.endBinding && el.endBinding.elementId) {
-        if (el.endBinding.gap == null) el.endBinding.gap = 1
-        if (el.endBinding.focus == null) el.endBinding.focus = 0
-        ensureBound(el.endBinding.elementId, id)
-      }
-    }
-    // Also collect for spokes we PRESERVED (didn't regenerate) so the bound
-    // rect/hub still lists them — handled below where normalizedSpokes is
-    // computed; the loop just needs the merged set.
-    const recordPreservedSpoke = (spokeEl: any) => {
-      const id: string = spokeEl.id
-      if (!id?.startsWith('channel-') || !id.includes('-spoke-')) return
-      if (spokeEl.isDeleted) return
-      if (spokeEl.startBinding?.elementId) ensureBound(spokeEl.startBinding.elementId, id)
-      if (spokeEl.endBinding?.elementId) ensureBound(spokeEl.endBinding.elementId, id)
-    }
-    // existingSpokes were classified earlier; their bindings should already be
-    // valid (we set them on first creation), so just register their owner refs.
-    for (const sp of existingSpokes as any[]) recordPreservedSpoke(sp)
-    // 同样为 user-drawn arrows（不是 channel- 前缀的 spoke）注册反向 boundElements。
-    // 不然用户手画的 session→channel arrow 在 refresh 后即便 binding 修好了，
-    // 也因为 rect.boundElements 不含它而不跟随 drag —— 看起来还是"断开"。
-    for (const sh of userShapes as any[]) {
-      if (sh.type !== 'arrow') continue
-      if (sh.isDeleted) continue
-      const sid = sh.startBinding?.elementId
-      const eid = sh.endBinding?.elementId
-      if (sid) ensureBound(sid, sh.id)
-      if (eid) ensureBound(eid, sh.id)
-    }
-    // Helper that merges into an element's existing boundElements without
-    // disturbing user-drawn arrow refs / text container refs.
-    const mergeBoundElements = (el: any): any => {
-      const want = spokeBindingsByOwner.get(el.id)
-      if (!want || want.size === 0) return el
-      const existing: { id: string; type: string }[] = (el.boundElements as any) ?? []
-      const merged = [...existing]
-      const seen = new Set(existing.map((b) => b.id))
-      for (const spokeId of want) {
-        if (!seen.has(spokeId)) merged.push({ id: spokeId, type: 'arrow' })
-      }
-      return { ...el, boundElements: merged }
-    }
-    // Apply to converted elements (newly created rects/hubs)
-    const convertedWithBindings = (converted as any[]).map((el) => {
-      if (el.type === 'rectangle' || el.type === 'ellipse') return mergeBoundElements(el)
-      return el
-    })
-
-    // Migration：把旧版本遗留在画板上的 session rect（半透明灰底）强制归一到
-    // 当前配色。Excalidraw 的 element state 是持久化的，旧 rect 如果不刷，
-    // 就会一直从 overlay 四周漏出 rgba(30,30,30,0.4) 这层灰影。
-    // 值必须和 scene.ts 里 buildSessionEmbeddable 保持一致。
-    //
-    // 同时在这里兜底：如果一个 rect 对应的 sid 已经不在 state.sessions 里
-    //（session 被 kill / 终端关了、ClaudePlugin.syncToStore 删掉了记录），
-    // 上面的 SessionOverlay 会 `if (!session) continue` 跳过渲染 → 画板上
-    // 只剩个没有 CardHost 贴图的白矩形。把它们标 isDeleted:true 收走，
-    // 用户看到的就是"session 关了 → 卡片消失"的预期体感。Undo 仍能恢复。
+    // -- Normalize existing rects --------------------------------------
+    // Force the meee2 background colors so legacy rects don't leak grey
+    // halos around the DOM overlay; tombstone rects whose session is gone.
+    // Also sync `frameId` from backend state: every session that's a
+    // member of a (non-DM) frame channel should have its rects belong to
+    // that frame visually. This is essential for the upgrade path where
+    // pre-existing channel memberships load before the user has dragged
+    // anything -- without it, handleChange's frame-membership diff would
+    // see "no frameId on rects" vs "memberships in state" and start
+    // removing those memberships. We skip the sync for sessions whose
+    // frame ops are currently in-flight to preserve the user's drag intent
+    // while the network round-trip is pending.
     const liveSids = new Set(ids)
+    const stateFrameMembershipBySid = new Map<string, string>()
+    for (const ch of state.channels) {
+      if (ch.name.startsWith('__')) continue
+      if (isDmChannelName(ch.name)) continue
+      for (const m of ch.members) {
+        stateFrameMembershipBySid.set(m.sessionId, ch.name)
+      }
+    }
+    const sidHasPendingFrameOp = (sid: string): boolean => {
+      for (const opKey of pendingFrameOpsRef.current) {
+        if (opKey.endsWith(`|${sid}`)) return true
+      }
+      return false
+    }
     const normalizedExisting = existingEmbeddables.map((el: any) => {
       const sid = parseSessionFromElement(el)
       if (sid && !liveSids.has(sid)) {
         return { ...el, isDeleted: true }
       }
-      return mergeBoundElements({
+      const next: any = {
         ...el,
         strokeColor: '#262624',
         backgroundColor: '#262624',
         fillStyle: 'solid',
-      })
+      }
+      if (sid && !sidHasPendingFrameOp(sid)) {
+        const expectedChannel = stateFrameMembershipBySid.get(sid) ?? null
+        const expectedFrameId = expectedChannel ? channelHubId(expectedChannel) : null
+        next.frameId = expectedFrameId
+      }
+      return next
     })
 
-    // Keep existing channel hubs in place (preserve user-positioned x/y), but
-    // re-sync stroke color / stroke style to the current channel mode +
-    // pending count. If a channel has been removed from state (or renamed),
-    // retire its hub via isDeleted so Excalidraw's Undo can still restore it.
-    // (liveChannelByName 在文件上方已 hoist。)
-    // Channel hubs are 100% managed — every visual field is derived from
-    // channel state. Preserve ONLY identity (id, x, y) + bookkeeping Excalidraw
-    // needs to keep (version, versionNonce, seed, updated, index, frameId,
-    // groupIds). Everything the user could have accidentally edited
-    // (backgroundColor / opacity / roundness / width / height / strokeWidth /
-    // fillStyle / boundElements / customData) is reset from the builder.
-    // Reason: these ellipses were getting "dirty" — a partial state snapshot
-    // or user stroke-color edit would stick across ticks.
-    const normalizedChannelHubs = existingChannelHubs.map((el: any) => {
+    // -- Normalize existing channel frames -----------------------------
+    // Preserve user-positioned x/y/width/height (frame is a user-resizable
+    // container) but re-sync stroke color / strokeStyle based on mode +
+    // pending. Tombstone if its channel was deleted.
+    const normalizedChannelFrames = existingChannelFrames.map((el: any) => {
       const name = parseChannelFromElement(el)
       const ch = name ? liveChannelByName.get(name) : null
       if (!ch) {
         return { ...el, isDeleted: true }
       }
-      // boundElements 既要保留 label 也要保留连进来的 spokes —— 缺 spokes 就
-      // 没有反向链，hub 移动时 arrow 不跟随。先建 label 项，mergeBoundElements
-      // 再把所有 ensureBound 注册的 spoke 合进来。
-      return mergeBoundElements({
+      return {
         ...el,
-        type: 'ellipse',
-        width: CHANNEL_W,
-        height: CHANNEL_H,
+        type: 'frame',
+        name: `#${ch.name}`,
         strokeColor: modeStrokeColor(ch.mode),
-        backgroundColor: '#2C2B29',
+        backgroundColor: 'transparent',
         fillStyle: 'solid',
         strokeWidth: 2,
         strokeStyle: modeStrokeStyle(ch),
@@ -995,131 +788,30 @@ export default function Board({
         opacity: 100,
         locked: false,
         customData: { channelName: ch.name },
-        boundElements: [{ id: channelLabelId(ch.name), type: 'text' }],
-      })
-    })
-    // Spoke arrows: keep the existing arrow object (don't replace each tick —
-    // that breaks an in-progress drag of a bound rect, which is the root of
-    // the "card connected to channel turns gray and freezes" bug). Re-sync
-    // stroke color / strokeStyle / strokeWidth from current channel state so
-    // mode changes / pendingCount blinks still apply. If the membership has
-    // disappeared (or the channel was deleted), tombstone the spoke so Undo
-    // can still restore it.
-    const liveSpokeMembership = new Map<string, string>() // spokeId → channelName
-    for (const ch of state.channels) {
-      if (ch.name.startsWith('__')) continue
-      for (const m of ch.members) {
-        // user-drawn arrows for a membership take precedence — if one exists
-        // we WON'T have a spoke for that member anyway (buildScene skipped),
-        // so this map only tracks where an auto-spoke is the visual.
-        if (existingConnections.has(`${m.sessionId}|${ch.name}`)) continue
-        liveSpokeMembership.set(`channel-${ch.name}-spoke-${m.sessionId}`, ch.name)
       }
-    }
-    const normalizedSpokes = existingSpokes.map((el: any) => {
-      const id = el.id as string
-      const chName = liveSpokeMembership.get(id)
-      const ch = chName ? liveChannelByName.get(chName) : null
-      if (!ch) {
-        return { ...el, isDeleted: true }
-      }
-      // 修复历史遗留 spoke 的 gap=null 问题（旧版本里 conversion 没填 gap，
-      // drag rect 时 arrow 不跟随）。新创建的 spoke 已经在 convertedWithBindings
-      // 那条路径补好了 gap=1，但 user reload / 老 scene 持久化下来的 spoke
-      // 仍可能是 null。
-      const sb = el.startBinding ? { ...el.startBinding } : null
-      const eb = el.endBinding ? { ...el.endBinding } : null
-      if (sb && sb.gap == null) sb.gap = 1
-      if (sb && sb.focus == null) sb.focus = 0
-      if (eb && eb.gap == null) eb.gap = 1
-      if (eb && eb.focus == null) eb.focus = 0
-      return {
-        ...el,
-        strokeColor: modeStrokeColor(ch.mode),
-        strokeWidth: ch.pendingCount > 0 ? 3 : 2,
-        strokeStyle: modeStrokeStyle(ch),
-        startArrowhead: null,
-        endArrowhead: null,
-        startBinding: sb,
-        endBinding: eb,
-      }
-    })
-    // Tombstone spoke labels whose parent spoke is gone; also tombstone any
-    // legacy label whose id is NOT the deterministic `channel-…-spoke-…-label`
-    // form. Old behavior used `label:{...}` skeleton sugar → random ids leaked
-    // into user-shapes localStorage → after page reload, the bad label coexists
-    // with the new managed label, two stacked labels per arrow.
-    const liveSpokeIds = new Set(
-      normalizedSpokes.filter((el: any) => !el.isDeleted).map((el: any) => el.id as string),
-    )
-    const normalizedSpokeLabels = existingSpokeLabels.map((el: any) => {
-      const cid = (el as any).containerId as string
-      if (!liveSpokeIds.has(cid)) {
-        return { ...el, isDeleted: true }
-      }
-      const id = (el as any).id as string
-      const expectedId = `${cid}-label` // channel-X-spoke-Y → channel-X-spoke-Y-label
-      if (id !== expectedId) {
-        return { ...el, isDeleted: true }
-      }
-      return el
     })
 
-    // Same aggressive normalization for the label: user edits to fontSize /
-    // textAlign / strokeColor shouldn't stick either.
-    const normalizedChannelLabels = existingChannelLabels.map((el: any) => {
-      const id: string = el.id
-      const name = id.slice('channel-'.length, id.length - '-label'.length)
-      const ch = liveChannelByName.get(name)
-      if (!ch) {
-        return { ...el, isDeleted: true }
-      }
-      const nextText = channelHubLabelText(ch)
-      return {
-        ...el,
-        type: 'text',
-        text: nextText,
-        originalText: nextText,
-        fontSize: 12,
-        textAlign: 'center',
-        verticalAlign: 'middle',
-        strokeColor: '#F5F4EF',
-        backgroundColor: 'transparent',
-        fillStyle: 'solid',
-        opacity: 100,
-        locked: false,
-        containerId: channelHubId(ch.name),
-        customData: { channelLabel: ch.name },
-      }
-    })
+    // -- Tombstone legacy ellipse hubs / labels / spokes ---------------
+    const tombstone = (el: any) => ({ ...el, isDeleted: true })
+    const tombstonedLegacyHubs = legacyHubEllipses.map(tombstone)
+    const tombstonedLegacyHubLabels = legacyHubLabels.map(tombstone)
+    const tombstonedLegacySpokes = legacySpokes.map(tombstone)
+    const tombstonedLegacySpokeLabels = legacySpokeLabels.map(tombstone)
 
     const preservedExisting = [
       ...userShapes,
       ...normalizedExisting,
-      ...normalizedChannelHubs,
-      ...normalizedChannelLabels,
-      ...normalizedSpokes,
-      ...normalizedSpokeLabels,
+      ...normalizedChannelFrames,
+      ...tombstonedLegacyHubs,
+      ...tombstonedLegacyHubLabels,
+      ...tombstonedLegacySpokes,
+      ...tombstonedLegacySpokeLabels,
     ]
 
-    const finalElements = [...preservedExisting, ...convertedWithBindings]
+    const finalElements = [...preservedExisting, ...converted]
     api.updateScene({
       elements: finalElements as any,
     })
-    const finalById = new Map(finalElements.map((el: any) => [el.id, el as ExcalidrawElement]))
-    const finalConnectors = new Map<string, ConnectorSnapshot>()
-    for (const el of finalElements as any[]) {
-      if (el.type !== 'arrow' || el.isDeleted) continue
-      const membership = resolveArrowMembership(el, finalById, sessionById, channelNames)
-      if (!membership?.alias) continue
-      const key = connectorKeyFromMeta(membership)
-      const existingConnector = finalConnectors.get(key)
-      if (!existingConnector || (existingConnector.kind === 'managed' && membership.kind === 'user')) {
-        finalConnectors.set(key, membership)
-      }
-    }
-    knownConnectorMembershipsRef.current = finalConnectors
-    // Report counts (preserved existing + newly converted embeddables).
     reportCountsRef.current(finalElements)
   }, [api, state, saveLayoutDebounced, saveChannelLayoutDebounced])
 
@@ -1356,13 +1048,14 @@ export default function Board({
     reportCountsRef.current(next)
   }, [api, state, bulkVisibilityRequest, saveLayoutDebounced])
 
-  // -- Place a freshly-created channel hub at the current viewport center --
+  // -- Place a freshly-created channel frame at the current viewport center --
   // The dialog calls onCreated(name) in App.tsx, which sets
   // placeChannelRequest. We consume it here: compute viewport center (same
   // math as add-to-canvas), write into channelLayoutRef + persist, then
-  // schedule a scene rebuild so the hub materialises at that point. The
-  // scene-rebuild effect above sees a new-channel-name and builds the hub
-  // from channelLayoutRef[name].
+  // schedule a scene rebuild so the frame materialises at that point. The
+  // scene-rebuild effect above sees a new-channel-name and builds the frame
+  // from channelLayoutRef[name]. DM channels skip this path -- they're
+  // visualised as arrows and don't get a managed frame.
   useEffect(() => {
     if (!api || !state || !placeChannelRequest) return
     if (placeChannelRequest.bump === lastPlaceChannelBumpRef.current) return
@@ -1370,6 +1063,7 @@ export default function Board({
 
     const name = placeChannelRequest.channelName
     if (!name || name.startsWith('__')) return
+    if (isDmChannelName(name)) return
 
     const appState = api.getAppState()
     const viewW = appState.width ?? 800
@@ -1377,9 +1071,9 @@ export default function Board({
     const zoom = appState.zoom.value || 1
     const cx = -appState.scrollX + viewW / zoom / 2
     const cy = -appState.scrollY + viewH / zoom / 2
-    // Center the ellipse on viewport center.
-    const x = Math.round(cx - CHANNEL_W / 2)
-    const y = Math.round(cy - CHANNEL_H / 2)
+    // Center the frame on viewport center.
+    const x = Math.round(cx - CHANNEL_FRAME_W / 2)
+    const y = Math.round(cy - CHANNEL_FRAME_H / 2)
 
     channelLayoutRef.current = {
       ...channelLayoutRef.current,
@@ -1387,23 +1081,20 @@ export default function Board({
     }
     saveChannelLayoutDebounced(channelLayoutRef.current)
 
-    // If the hub hasn't been built yet (state may not have been delivered
-    // over WS on this tick), the scene-rebuild effect will pick up the
-    // saved position the next time it fires with the channel present.
-    // If the hub already exists (e.g. the channel was re-created with the
+    // If the frame already exists (e.g. the channel was re-created with the
     // same name after a short delete), move it and re-scroll into view.
-    const hubEl = api.getSceneElements().find(
-      (el) => el.id === channelHubId(name) && el.type === 'ellipse',
+    const frameEl = api.getSceneElements().find(
+      (el) => el.id === channelHubId(name) && (el as any).type === 'frame',
     ) as any
-    if (hubEl) {
+    if (frameEl) {
       const next = api.getSceneElements().map((el) => {
-        if (el.id === channelHubId(name) && el.type === 'ellipse') {
+        if (el.id === channelHubId(name) && (el as any).type === 'frame') {
           return { ...el, x, y } as any
         }
         return el
       })
       api.updateScene({ elements: next as any })
-      api.scrollToContent([hubEl], { fitToContent: false, animate: true })
+      api.scrollToContent([frameEl], { fitToContent: false, animate: true })
     } else {
       // Build and insert immediately using whatever channel snapshot we
       // have; the scene-rebuild effect will normalise it once state updates.
@@ -1733,104 +1424,213 @@ export default function Board({
           saveChannelLayoutDebounced(next)
         }
       }
-      // ── Channel membership via connectors ─────────────────────────────
-      // Any visible session↔channel connector is a visual claim for exactly
-      // one ChannelRegistry membership. We scan both managed spokes and
-      // user-drawn arrows; adding a user arrow joins the channel, deleting the
-      // last visual connector for a pair leaves the channel.
+      // -- Frame channel membership via Excalidraw frameId --------------
+      // Excalidraw assigns frameId on every element when its bbox lands
+      // inside a frame's bbox (drag-into-frame gesture). We treat that as
+      // an addMember; frameId becoming null (drag-out) as removeMember.
+      // Per the user's spec each session card belongs to at most ONE frame
+      // channel: if a session has multiple rects spread across different
+      // frames, the lexically smallest channel name wins so the choice is
+      // deterministic.
       {
-        // 同 rebuild 路径的 resolver：优先看当前元素 customData，fallback 到
-        // deterministic id（含 session-<sid>-<copyId>），最后用 arrow meta。
-        const elementsByIdLocal = new Map(elements.map((el) => [el.id, el]))
-        const sessionByIdLocal = new Map(
-          state.sessions.map((s) => [s.id, { id: s.id, title: s.title }]),
-        )
         const channelNamesLocal = state.channels
           .map((c) => c.name)
-          .filter((n) => !n.startsWith('__'))
-        const currentConnectors = new Map<string, ConnectorSnapshot>()
-        const annotatedArrows = new Map<string, ChannelMembershipMeta>()
+          .filter((n) => !n.startsWith('__') && !isDmChannelName(n))
+        const frameChannelByFrameId = new Map<string, string>()
         for (const el of elements) {
-          if (el.type !== 'arrow') continue
-          if ((el as any).isDeleted) continue
-          const membership = resolveArrowMembership(
-            el,
-            elementsByIdLocal,
-            sessionByIdLocal,
-            channelNamesLocal,
-          )
-          if (!membership?.alias) continue
-          const key = connectorKeyFromMeta(membership)
-          const existing = currentConnectors.get(key)
-          if (!existing || (existing.kind === 'managed' && membership.kind === 'user')) {
-            currentConnectors.set(key, membership)
-          }
-          if (membership.kind === 'user') {
-            annotatedArrows.set(el.id, membership)
+          if ((el as any).type !== 'frame' || (el as any).isDeleted) continue
+          const name = parseChannelFromElement(el)
+          if (name && channelNamesLocal.includes(name)) {
+            frameChannelByFrameId.set(el.id, name)
           }
         }
+        // sid -> channel currently expressed by frameId on at least one rect
+        const desiredFrameMembership = new Map<string, string>()
+        for (const el of elements) {
+          if (el.type !== 'rectangle' || (el as any).isDeleted) continue
+          const sid = parseSessionFromElement(el)
+          if (!sid) continue
+          const fid = (el as any).frameId as string | null | undefined
+          const channel = fid ? frameChannelByFrameId.get(fid) : null
+          if (!channel) continue
+          const prior = desiredFrameMembership.get(sid)
+          if (!prior || channel < prior) desiredFrameMembership.set(sid, channel)
+        }
+        // Diff against state: each session has at most one frame-channel
+        // membership in our world. Channels not in desired -> leave; new
+        // -> join.
+        const currentFrameMembership = new Map<string, string>()
+        for (const ch of state.channels) {
+          if (ch.name.startsWith('__')) continue
+          if (isDmChannelName(ch.name)) continue
+          for (const m of ch.members) {
+            currentFrameMembership.set(m.sessionId, ch.name)
+          }
+        }
+        const allSids = new Set<string>([
+          ...desiredFrameMembership.keys(),
+          ...currentFrameMembership.keys(),
+        ])
+        for (const sid of allSids) {
+          const want = desiredFrameMembership.get(sid) ?? null
+          const have = currentFrameMembership.get(sid) ?? null
+          if (want === have) continue
+          const session = state.sessions.find((s) => s.id === sid)
+          const alias = session ? aliasFromSession(session.title, session.id) : null
+          if (!alias) continue
+          if (have && have !== want) {
+            const opKey = `leave|${have}|${sid}`
+            if (!pendingFrameOpsRef.current.has(opKey)) {
+              pendingFrameOpsRef.current.add(opKey)
+              const ch = state.channels.find((c) => c.name === have)
+              const aliases = ch
+                ? ch.members.filter((m) => m.sessionId === sid).map((m) => m.alias)
+                : [alias]
+              console.log('[Board.frame] removeMember', { channel: have, sid, aliases })
+              void Promise.all(aliases.map((a) => removeMember(have, a)))
+                .then(() => {
+                  pendingFrameOpsRef.current.delete(opKey)
+                  onRefresh()
+                })
+                .catch((e) => {
+                  pendingFrameOpsRef.current.delete(opKey)
+                  console.warn('[Board.frame] removeMember failed:', (e as Error).message)
+                })
+            }
+          }
+          if (want && want !== have) {
+            const opKey = `join|${want}|${sid}`
+            if (!pendingFrameOpsRef.current.has(opKey)) {
+              pendingFrameOpsRef.current.add(opKey)
+              console.log('[Board.frame] addMember', { channel: want, sid, alias })
+              void addMember(want, alias, sid)
+                .then(() => {
+                  pendingFrameOpsRef.current.delete(opKey)
+                  onRefresh()
+                })
+                .catch((e) => {
+                  pendingFrameOpsRef.current.delete(opKey)
+                  console.warn('[Board.frame] addMember failed:', (e as Error).message)
+                })
+            }
+          }
+        }
+        knownFrameMembershipsRef.current = desiredFrameMembership
+      }
 
-        if (annotatedArrows.size > 0) {
+      // -- DM channel via card-to-card arrow ------------------------------
+      // Detect every user-drawn arrow whose start AND end bind to session
+      // rects -> ensure a `dm-<a>-<b>` channel exists with those two
+      // members. When the arrow is deleted, delete the channel.
+      {
+        const elementsByIdLocal = new Map(elements.map((el) => [el.id, el]))
+        const sessionIdsLocal = state.sessions.map((s) => s.id)
+        const presentDmChannels = new Map<string, { sidA: string; sidB: string }>()
+        const dmAnnotations = new Map<string, DmMeta>()
+        for (const el of elements) {
+          if (el.type !== 'arrow' || (el as any).isDeleted) continue
+          const dm = classifyDmArrow(el, elementsByIdLocal, sessionIdsLocal)
+          if (!dm) continue
+          const channel = dmChannelName(dm.sidA, dm.sidB)
+          presentDmChannels.set(channel, dm)
+          dmAnnotations.set(el.id, { channel, sidA: dm.sidA, sidB: dm.sidB })
+        }
+
+        if (dmAnnotations.size > 0) {
           elementsForPersistence = elements.map((el) => {
             if (el.type !== 'arrow') return el
-            const meta = annotatedArrows.get(el.id)
-            return meta ? withChannelMembershipMeta(el, meta) : el
+            const meta = dmAnnotations.get(el.id)
+            return meta ? withDmMeta(el, meta) : el
           }) as readonly ExcalidrawElement[]
         }
 
-        // additions: only user-drawn connectors can create memberships.
-        for (const [key, info] of currentConnectors) {
-          if (info.kind !== 'user') continue
-          if (!info.alias) continue
-          const alias = info.alias
-          if (stateHasConnector(state, info.channel, info.sid)) continue
-          if (pendingAddConnectorKeysRef.current.has(key)) continue
-          if (pendingDeleteConnectorKeysRef.current.has(key)) continue
-          pendingAddConnectorKeysRef.current.add(key)
-          console.log('[Board.connector] addMember', info)
-          void addMember(info.channel, alias, info.sid)
+        const stateDmChannels = new Set<string>(
+          state.channels.filter((c) => isDmChannelName(c.name)).map((c) => c.name),
+        )
+
+        // Additions: arrow exists on canvas but channel doesn't.
+        for (const [channel, info] of presentDmChannels) {
+          if (stateDmChannels.has(channel)) continue
+          if (pendingDmOpsRef.current.has(channel)) continue
+          const sessionA = state.sessions.find((s) => s.id === info.sidA)
+          const sessionB = state.sessions.find((s) => s.id === info.sidB)
+          if (!sessionA || !sessionB) continue
+          const aliasA = aliasFromSession(sessionA.title, sessionA.id)
+          const aliasB = aliasFromSession(sessionB.title, sessionB.id)
+          pendingDmOpsRef.current.add(channel)
+          console.log('[Board.dm] createChannel', channel, info)
+          void createChannel({ name: channel })
+            .then(() =>
+              Promise.all([
+                addMember(channel, aliasA, info.sidA),
+                addMember(channel, aliasB, info.sidB),
+              ]),
+            )
             .then(() => {
-              pendingAddConnectorKeysRef.current.delete(key)
-              // User may have deleted the connector while the add request was
-              // still in flight. In that case immediately leave again so the
-              // backend does not resurrect a line the user just removed.
-              if (pendingDeleteConnectorKeysRef.current.has(key)) {
-                return removeMember(info.channel, alias)
-              }
+              pendingDmOpsRef.current.delete(channel)
               onRefresh()
-              return undefined
             })
             .catch((e) => {
-              pendingAddConnectorKeysRef.current.delete(key)
-              console.warn('[Board.connector] addMember failed:', (e as Error).message)
+              pendingDmOpsRef.current.delete(channel)
+              console.warn('[Board.dm] createChannel failed:', (e as Error).message)
             })
         }
 
-        // removals: when the last visual connector for channel+sid disappears,
-        // remove every alias that session has in that channel. The canvas shows
-        // one connector per session↔channel pair, so deletion should remove
-        // the full visual relationship, not just one arbitrary alias.
-        for (const [key, info] of knownConnectorMembershipsRef.current) {
-          if (currentConnectors.has(key)) continue
-          if (pendingDeleteConnectorKeysRef.current.has(key)) continue
-          const aliases = aliasesForConnector(state, info.channel, info.sid)
-          if (aliases.length === 0) continue
-          pendingDeleteConnectorKeysRef.current.add(key)
-          console.log('[Board.connector] removeMember', {
-            channel: info.channel,
-            sid: info.sid,
-            aliases,
-          })
-          void Promise.all(aliases.map((alias) => removeMember(info.channel, alias)))
+        // Removals: channel exists but arrow gone.
+        for (const channel of knownDmChannelsRef.current.keys()) {
+          if (presentDmChannels.has(channel)) continue
+          if (!stateDmChannels.has(channel)) continue
+          if (pendingDmOpsRef.current.has(channel)) continue
+          pendingDmOpsRef.current.add(channel)
+          console.log('[Board.dm] deleteChannel', channel)
+          void deleteChannel(channel)
             .then(() => {
+              pendingDmOpsRef.current.delete(channel)
               onRefresh()
             })
             .catch((e) => {
-              pendingDeleteConnectorKeysRef.current.delete(key)
-              console.warn('[Board.connector] removeMember failed:', (e as Error).message)
+              pendingDmOpsRef.current.delete(channel)
+              console.warn('[Board.dm] deleteChannel failed:', (e as Error).message)
             })
         }
-        knownConnectorMembershipsRef.current = currentConnectors
+        knownDmChannelsRef.current = presentDmChannels
+      }
+
+      // -- 非-DM channel frames：用户在画板上删 frame ⇔ 删 channel ----
+      // 与 DM 段对齐的逻辑：本 tick 看到的非-DM channel frame 名集合，对比
+      // 上一 tick 的 known 集合 + 当前 state.channels。
+      //   - frame 出现且 channel 也存在 → 不动（创建路径走 NewChannelDialog）
+      //   - frame 消失但 channel 还在 → 用户按 Delete 删掉了 frame → 调
+      //     deleteChannel 让 backend 同步删，否则下一次 scene 重建又冒回来
+      {
+        const presentChannelFrames = new Set<string>()
+        for (const el of elements) {
+          if ((el as any).type !== 'frame' || (el as any).isDeleted) continue
+          const name = parseChannelFromElement(el)
+          if (!name) continue
+          if (isDmChannelName(name)) continue
+          presentChannelFrames.add(name)
+        }
+        const stateChannelNames = new Set<string>(
+          state.channels.filter((c) => !isDmChannelName(c.name)).map((c) => c.name),
+        )
+        for (const name of knownChannelFramesRef.current) {
+          if (presentChannelFrames.has(name)) continue
+          if (!stateChannelNames.has(name)) continue
+          if (pendingDmOpsRef.current.has(name)) continue
+          pendingDmOpsRef.current.add(name)
+          console.log('[Board.channelFrame] deleteChannel', name)
+          void deleteChannel(name)
+            .then(() => {
+              pendingDmOpsRef.current.delete(name)
+              onRefresh()
+            })
+            .catch((e) => {
+              pendingDmOpsRef.current.delete(name)
+              console.warn('[Board.channelFrame] deleteChannel failed:', (e as Error).message)
+            })
+        }
+        knownChannelFramesRef.current = presentChannelFrames
       }
 
       // Report counts on every change so sidebar stays in sync with
@@ -1948,60 +1748,60 @@ export default function Board({
           <MainMenu.Separator />
           <MainMenu.DefaultItems.Help />
         </MainMenu>
-        <Footer>
-          {/* Sits next to Excalidraw's native zoom/undo/redo cluster. */}
-          <button
-            className="excalidraw-footer-btn"
-            onClick={onRefresh}
-            title="Force refresh board state from backend"
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--color-on-surface, #e5e5e5)',
-              padding: '0 10px',
-              cursor: 'pointer',
-              fontSize: 13,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-              height: '100%',
-            }}
-          >
-            <RefreshIcon />
-            <span>Refresh</span>
-          </button>
-        </Footer>
+        {/* 之前 Footer 里有个手动 Refresh 按钮（贴 Excalidraw 原生 zoom/
+            undo/redo 旁边）。WS state.changed 已经把状态推到位，按用户
+            要求去掉了。MainMenu 里的 "Refresh" 入口保留作为兜底。 */}
       </Excalidraw>
-      {/*
-        Board-owned channel actions. These intentionally do NOT portal into
-        Excalidraw's native toolbar; they are separate controls that sit near
-        the top toolbar without becoming part of the shape tool group.
-      */}
-      <div className="board-channel-actions" role="toolbar" aria-label="Channel actions">
-        <button
-          className="board-channel-action"
-          onClick={onNewChannel}
-          title="Create a new channel"
-        >
-          <span className="board-channel-action__glyph">+</span>
-          <span className="board-channel-action__label">Create channel</span>
-        </button>
-        <button
-          className="board-channel-action"
-          onClick={() => {
-            if (!api) return
-            try {
-              ;(api as any).setActiveTool({ type: 'arrow' })
-            } catch (e) {
-              console.warn('[Board] setActiveTool(arrow) failed', e)
-            }
-          }}
-          title="Create connector: drag from a session card to a channel hub"
-        >
-          <span className="board-channel-action__glyph">→</span>
-          <span className="board-channel-action__label">Create connector</span>
-        </button>
-      </div>
+      {/* Channel actions —— portal 进 Excalidraw 自己的 .App-toolbar，
+          作为 shape tool 旁边的两个图标按钮，视觉上完全融合。
+          Excalidraw 没暴露 shape tool 注册 API（社区 issue #7583 / #6697
+          确认只有 MainMenu/Footer/renderTopRightUI 三个公开口子），所以
+          走 React Portal 直接 attach 到 toolbar DOM 节点，是目前唯一
+          能做到"加一个图标按钮跟 rectangle/ellipse 同列"的办法。 */}
+      {toolbarRowEl && createPortal(
+        <>
+          {/* className 跟 native shape tool 一致：`ToolIcon ToolIcon_size_medium`。
+              不加 `ToolIcon_type_floating` —— 那条会让 .ToolIcon__icon 套一个
+              深色背景，和原生 shape tool（透明背景）不一致。 */}
+          <button
+            className="ToolIcon ToolIcon_size_medium board-channel-tool"
+            onClick={onNewChannel}
+            title="Create a new channel"
+            type="button"
+            aria-label="Create channel"
+          >
+            <div className="ToolIcon__icon" tabIndex={-1}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.6"/>
+                <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+              </svg>
+            </div>
+          </button>
+          <button
+            className="ToolIcon ToolIcon_size_medium board-channel-tool"
+            onClick={() => {
+              if (!api) return
+              try {
+                ;(api as any).setActiveTool({ type: 'arrow' })
+              } catch (e) {
+                console.warn('[Board] setActiveTool(arrow) failed', e)
+              }
+            }}
+            title="Create DM line: drag from one session card to another"
+            type="button"
+            aria-label="Create DM line"
+          >
+            <div className="ToolIcon__icon" tabIndex={-1}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                <circle cx="6" cy="12" r="2" stroke="currentColor" strokeWidth="1.6"/>
+                <circle cx="18" cy="12" r="2" stroke="currentColor" strokeWidth="1.6"/>
+                <path d="M8 12h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+              </svg>
+            </div>
+          </button>
+        </>,
+        toolbarRowEl,
+      )}
       <SessionOverlay
         excalidrawAPI={api}
         state={state}

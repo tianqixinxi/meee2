@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 
 /// `meee2 channel ...` 的入口 - 人工面向的频道管理
 public struct ChannelCommand {

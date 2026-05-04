@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Meee2PluginKit
 import Combine
+import Meee2CommKit
 
 /// 会话数据 - 完整的会话信息模型
 /// 兼容 csm 的 SessionData 格式
@@ -584,7 +585,9 @@ extension SessionData {
     /// `TranscriptStatusResolver` 解析，与 TUI / Board 同源。
     public func toPluginSession(pluginId: String = "com.meee2.plugin.claude") -> PluginSession {
         let resolvedStatus = TranscriptStatusResolver.resolve(for: self)
-        NSLog("[StateTrace][pluginSession] sid=\(sessionId.prefix(8)) hook=\(status.rawValue) → resolved=\(resolvedStatus.rawValue) (for Island/StatusManager)")
+        // 这里以前每条 PluginSession 重建都打一行——Island/StatusManager 拿
+        // 状态会把它打上千次/秒。需要 trace 时去 resolver 内部 uncached path
+        // 的日志看（那里才是真有信息的转折点）。
         return PluginSession(
             id: sessionId,
             pluginId: pluginId,

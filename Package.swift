@@ -14,6 +14,7 @@ let package = Package(
     ],
     dependencies: [
         .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
+        .package(name: "Meee2CommKit", path: "meee2-comm-kit"),
         .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0"),
     ],
     targets: [
@@ -21,9 +22,15 @@ let package = Package(
             name: "meee2Kit",
             dependencies: [
                 .product(name: "Meee2PluginKit", package: "Meee2PluginKit"),
+                .product(name: "Meee2CommKit", package: "Meee2CommKit"),
                 .product(name: "Swifter", package: "swifter"),
             ],
             path: "Sources",
+            // ncurses TUI 入口已经从 CLI / 菜单里下掉；整个 TUI/ 目录排除
+            // 编译。ListCommand 用的 ANSI 颜色片段保留在 CLI/TUIColor.swift。
+            exclude: [
+                "TUI",
+            ],
             resources: [
                 .copy("Board/WebDist"),
             ]
@@ -36,7 +43,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "meee2App",
-            dependencies: ["meee2Kit", .product(name: "Meee2PluginKit", package: "Meee2PluginKit")],
+            dependencies: [
+                "meee2Kit",
+                .product(name: "Meee2PluginKit", package: "Meee2PluginKit"),
+                .product(name: "Meee2CommKit", package: "Meee2CommKit"),
+            ],
             path: "App",
             linkerSettings: [
                 .linkedFramework("Foundation"),

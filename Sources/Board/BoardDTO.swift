@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import Meee2PluginKit
+import Meee2CommKit
 
 // MARK: - DTO 类型：API 响应用的扁平化结构，供 Wave 10b React 前端消费
 
@@ -371,9 +372,18 @@ enum BoardDTOBuilder {
             }
         }()
         let displayGroup: String? = {
-            guard session.pluginId == "com.meee2.plugin.codex",
-                  let lastUpdated = session.lastUpdated,
-                  Date().timeIntervalSince(lastUpdated) >= 3600 else {
+            // 跨插件统一：idle ≥ 1h 且不在阻塞等用户响应 → 折叠到 Sidebar 的
+            // Older 区。Codex (poll) / Claude (hook) 都走同一条规则。
+            //   - 时间源：与 Sidebar 日期分桶用的 lastActivity 同源（sessionData
+            //     优先，缺失回退 PluginSession.lastUpdated），保证「折叠/分桶」
+            //     共识。
+            //   - 状态豁免：`.permissionRequired` 是真正阻塞的弹框，挂超过
+            //     1h 也不该折叠，否则用户找不回操作入口。
+            //     `.waitingForUser` 语义就是 idle，不豁免。
+            guard resolvedStatus != .permissionRequired else { return nil }
+            let lastActivity = sessionData?.lastActivity ?? session.lastUpdated
+            guard let last = lastActivity,
+                  Date().timeIntervalSince(last) >= 3600 else {
                 return nil
             }
             return "older"

@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Meee2PluginKit
+import Meee2CommKit
 
 /// AgentInboxShell —— Layer 2 of the messaging stack.
 ///
@@ -68,8 +69,52 @@ public final class AgentInboxShell {
     public func flushInboxIfResting(sessionId: String) {
         let messages = MessageRouter.shared.peekInbox(sessionId: sessionId)
         guard !messages.isEmpty else { return }
+
+        // 早退保护：如果这条 session 根本拿不到 native terminal id（没 ghostty
+        // gtid、没 iTerm sid、也不是 Apple Terminal），那 inbox 里每条消息都
+        // 注定 hit "no native id" skip 分支。**不要**逐条 iterate —— 那会变
+        // 成每次 sessionMetadataChanged 都 O(N) 跑过 N 条 stale 消息（一条
+        // session 留下 5K+ 历史 ops 通知就把 main thread 烧到 60% CPU，灵动
+        // 岛 / WebUI 顿挫；见 2026-05-04 现场分析）。
+        if let target = Self.deliveryTarget(for: sessionId), !Self.targetHasDispatcher(target) {
+            // 用 logSkipNoDispatcher 的同一 throttle key（见 deliverIfResting）。
+            logSkipNoDispatcher(sessionId: sessionId, term: target.terminalInfo?.termProgram ?? "", suppressedCount: messages.count)
+            return
+        }
+
         for msg in messages {
             deliverIfResting(sessionId: sessionId, message: msg)
+        }
+    }
+
+    /// target 是否能选到一个 dispatcher（Ghostty / iTerm / Apple Terminal）。
+    /// 与 deliverIfResting 里的判断保持一致 —— 改一处必须改另一处。
+    private static func targetHasDispatcher(_ target: DeliveryTarget) -> Bool {
+        if let g = target.ghosttyTerminalId, !g.isEmpty { return true }
+        if let i = target.iTermSessionId, !i.isEmpty { return true }
+        let term = (target.terminalInfo?.termProgram ?? "").lowercased()
+        let tty = target.terminalInfo?.tty ?? ""
+        if !tty.isEmpty,
+           term.contains("apple_terminal") || term.contains("apple terminal") || term == "terminal" {
+            return true
+        }
+        return false
+    }
+
+    /// 限频版的 "no native id" 日志（沿用 lastSkipLog 的 60s 节流 key）。
+    private func logSkipNoDispatcher(sessionId: String, term: String, suppressedCount: Int) {
+        let key = "\(sessionId)|__no_dispatcher__"
+        let shouldLog: Bool = queue.sync {
+            let now = Date()
+            if let prev = lastSkipLog[key],
+               now.timeIntervalSince(prev.at) < 60 {
+                return false
+            }
+            lastSkipLog[key] = (.idle, now)
+            return true
+        }
+        if shouldLog {
+            NSLog("[AgentInboxShell] flush skipped sid=\(sessionId.prefix(8)) — no native id (term=\(term)), \(suppressedCount) msg(s) deferred")
         }
     }
 
@@ -180,7 +225,8 @@ public final class AgentInboxShell {
             dispatch = { await AppleTerminalInputStream().sendText(tty: ttyForCapture, text: payload) }
             pathLabel = "apple-terminal"
         } else {
-            NSLog("[AgentInboxShell] push skipped sid=\(sessionId.prefix(8)) — no native id (term=\(term))")
+            // 与 flushInboxIfResting 早退用同一节流 key —— 单消息直推也吃同一个 60s 配额。
+            logSkipNoDispatcher(sessionId: sessionId, term: term, suppressedCount: 1)
             queue.async { [weak self] in self?.inFlightPushes.remove(key) }
             return
         }
@@ -312,5 +358,13 @@ public final class AgentInboxShell {
                     break
                 }
             }
+    }
+}
+
+extension AgentInboxShell: InboxPushDelegate {
+    /// MessageRouter 的 push delegate 入口:把消息扔给 tryDeliver,
+    /// 让 Layer 2 既有的 idle/busy/policy 决策继续生效。
+    public func handleInboxPush(sessionId: String, message: A2AMessage) {
+        tryDeliver(sessionId: sessionId, message: message)
     }
 }

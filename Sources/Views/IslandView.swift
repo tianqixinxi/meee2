@@ -539,9 +539,6 @@ public struct IslandView: View {
                         Button("Open Board") {
                             NotificationCenter.default.post(name: NSNotification.Name("openBoard"), object: nil)
                         }
-                        Button("TUI") {
-                            NotificationCenter.default.post(name: NSNotification.Name("openTUI"), object: nil)
-                        }
                         Button("Settings...") {
                             NotificationCenter.default.post(name: NSNotification.Name("openSettings"), object: nil)
                         }

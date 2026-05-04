@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Swifter
 import Meee2PluginKit
+import Meee2CommKit
 
 /// BoardAPI —— 所有 REST 路由的处理器
 /// 每个处理器返回 HttpResponse；成功时以 `.raw(status, reason, headers, writer)` 发送 JSON。
@@ -156,40 +157,25 @@ enum BoardAPI {
     /// POST /api/sessions/:id/activate
     /// 触发对应 session 的终端跳转（等同于 Island 点击卡片的行为）。
     /// Body: 无。响应: {"ok": true} 或 404。
+    ///
+    /// 两种情况：
+    /// (1) Synthetic Desktop session — 子进程已退出但 metadata 文件还在，
+    ///     PluginManager 里查不到 → 直接走 ClaudeDesktopActivator。
+    /// (2) Live plugin session — 交给 PluginManager.activateTerminal。
+    ///     ClaudePlugin 内部会自己识别 Desktop-backed 然后短路到同一个
+    ///     ClaudeDesktopActivator，所以 Island 点击同一个 session 行为一致。
     static func activateSession(_ req: HttpRequest) -> HttpResponse {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        // 先看是不是 desktop synthetic session（PluginManager 不知道它，
-        // 因为它的子进程已经退出——但 metadata 文件仍在）。
-        // 命中即直接 activate Claude.app，不走 PluginManager。
         if let metadataSid = resolveDesktopMetadataSid(sid) {
-            activateClaudeDesktop(sid: metadataSid)
+            ClaudeDesktopActivator.activate(sid: metadataSid)
             return jsonResponse(OkEnvelope(ok: true))
         }
         guard let session = resolvePluginSession(sid) else {
             return errorResponse("not_found", "session not found: \(sid)", status: 404)
         }
-
-        // 真实 session 也可能是 desktop 起的（hook 刚到、子进程还活着的几秒钟
-        // 窗口期），用 metadata + entrypoint 双信号决定走 desktop activate。
-        // metadata reader 30s 才扫一次，所以新建 desktop session 第一个扫描
-        // 周期内会漏；entrypoint 写在 transcript 顶部，hook 一来就能读到。
-        let realSessionId = pluginSessionIds(session).last ?? session.id
-        let isDesktopBacked: Bool = {
-            if ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: realSessionId) != nil {
-                return true
-            }
-            let path = SessionStore.shared.get(realSessionId)?.transcriptPath
-                ?? session.transcriptPath
-            return ClaudeEntrypointReader.read(transcriptPath: path)
-                == ClaudeEntrypointReader.knownDesktop
-        }()
-        if isDesktopBacked {
-            activateClaudeDesktop(sid: realSessionId)
-        } else {
-            PluginManager.shared.activateTerminal(for: session)
-        }
+        PluginManager.shared.activateTerminal(for: session)
         return jsonResponse(OkEnvelope(ok: true))
     }
 
@@ -269,42 +255,6 @@ enum BoardAPI {
             return [sid]
         }
         return nil
-    }
-
-    /// 激活 Claude.app 并跳转到对应 session 的 tab。
-    ///
-    /// Claude.app（com.anthropic.claudefordesktop）注册了 `claude://` URL
-    /// scheme，asar 反编译里 Resume handler 实现：
-    ///
-    ///   case _E.Resume: {
-    ///     const s = t.searchParams.get("session");
-    ///     if (s && UUIDRegex.test(s)) {
-    ///       Ys.importCliSession(s).then(o => dispatchNavigate(getSessionRoute(o)))
-    ///     }
-    ///   }
-    ///
-    /// `importCliSession` 是幂等的 get-or-create：cliSessionId 已经有 desktop
-    /// local session 就返回已有的，否则新建一条。所以**只能**对已经识别为
-    /// desktop 的 session 用这条 URL；对纯 CLI session 调用会把它"导入"成
-    /// desktop session，跟用户预期相反。调用方必须先用 metadata reader 或
-    /// entrypoint 确认是 desktop 起的。
-    ///
-    /// 同时 raise app 到前台，避免 NSWorkspace.open 在 app 未运行时只起进程
-    /// 不抢焦点的边缘 case。
-    private static func activateClaudeDesktop(sid: String? = nil) {
-        if let sid = sid,
-           let url = URL(string: "claude://claude.ai/resume?session=\(sid)") {
-            NSWorkspace.shared.open(url)
-            MLog("[BoardAPI] activateClaudeDesktop sid=\(sid.prefix(8)) → resume?session=...")
-        }
-
-        let script = "tell application \"Claude\" to activate"
-        let process = Process()
-        process.launchPath = "/usr/bin/osascript"
-        process.arguments = ["-e", script]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
     }
 
     /// POST /api/sessions/:id/inject

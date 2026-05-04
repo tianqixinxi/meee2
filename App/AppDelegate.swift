@@ -1,6 +1,7 @@
 import SwiftUI
 import meee2Kit
 import Meee2PluginKit
+import Meee2CommKit
 
 /// AppDelegate - 管理 macOS 特有的窗口和状态栏
 public class AppDelegate: NSObject, NSApplicationDelegate {
@@ -34,6 +35,33 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // 初始化日志管理器
         _ = LogManager.shared
+
+        // Comm-kit 用一个独立的 logHandler;这里把它桥到主仓的 MLog 家族,
+        // 让 MessageRouter / ChannelRegistry / AuditLogger 内部日志走同一管道。
+        // 必须在 MessageRouter 第一次被触碰之前完成。
+        commLogHandler = { level, msg in
+            switch level {
+            case .debug: MDebug(msg)
+            case .info: MInfo(msg)
+            case .warning: MWarn(msg)
+            case .error: MError(msg)
+            }
+        }
+
+        // 把 cwd → sessionId 的反查能力注入 comm-kit。Tests 不走 AppDelegate,
+        // 因此 A2AIdentity 在测试里默认无 resolver,cwd 路径返回 nil(测试本来
+        // 也不依赖 cwd 解析,符合现状)。
+        A2AIdentity.resolver = SessionStoreIdentityResolver()
+
+        // AgentInboxShell 是 plugin 路径的 push delegate(把消息 paste 到
+        // 终端)。注册必须在 startAll() / bindChannelOrientationHook() 之前 ——
+        // plugin 启动 / orientation 推送都会触发 send → deliver → push,漏注册
+        // 会让首批消息缺失 push 通知。
+        // `_ = AgentInboxShell.shared` 一并完成强制 init —— 之前是 MessageRouter.init
+        // 里隐式触发的,现在改成在这里显式做,确保 SessionEventBus 订阅 +
+        // 1.5s flushAllInboxes 调度生效。
+        _ = AgentInboxShell.shared
+        MessageRouter.shared.registerPushDelegate(AgentInboxShell.shared)
 
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
@@ -159,9 +187,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 设置菜单（简化版：只有 Settings 和 Quit）
         let menu = NSMenu()
-        let tuiItem = NSMenuItem(title: "TUI", action: #selector(openTUI), keyEquivalent: "t")
-        tuiItem.target = self
-        menu.addItem(tuiItem)
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
@@ -200,14 +225,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             selector: #selector(openSettings),
             name: NSNotification.Name("openSettings"),
-            object: nil
-        )
-
-        // 监听打开 TUI 的通知
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(openTUI),
-            name: NSNotification.Name("openTUI"),
             object: nil
         )
 
@@ -290,203 +307,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
 
-    @objc private func openTUI() {
-        NSLog("[AppDelegate] openTUI called")
-
-        // 捕获主线程需要的值
-        let frontmostApp = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-
-        // 所有 AppleScript 操作放到后台线程，避免阻塞 GUI
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-
-            // 检查 CLI 是否已安装
-            let cliPath = "/usr/local/bin/meee2"
-            let expectedTarget = "/Applications/meee2.app/Contents/MacOS/meee2"
-
-            var needsInstall = false
-            if !FileManager.default.fileExists(atPath: cliPath) {
-                NSLog("[AppDelegate] CLI not found at \(cliPath)")
-                needsInstall = true
-            } else if let linkDest = try? FileManager.default.destinationOfSymbolicLink(atPath: cliPath),
-                      linkDest != expectedTarget {
-                NSLog("[AppDelegate] CLI symlink points to \(linkDest), expected \(expectedTarget)")
-                needsInstall = true
-            } else {
-                NSLog("[AppDelegate] CLI already installed correctly")
-            }
-
-            if needsInstall {
-                NSLog("[AppDelegate] Attempting to install CLI...")
-                let installScript = """
-                do shell script "ln -sf \(expectedTarget) \(cliPath)" with administrator privileges
-                """
-
-                if let appleScript = NSAppleScript(source: installScript) {
-                    var error: NSDictionary?
-                    appleScript.executeAndReturnError(&error)
-                    if let error = error {
-                        NSLog("[AppDelegate] CLI install error: \(error)")
-                        DispatchQueue.main.async {
-                            let alert = NSAlert()
-                            alert.messageText = "CLI Installation Required"
-                            alert.informativeText = "To use TUI, meee2 CLI needs to be installed to /usr/local/bin/. Please authorize the installation."
-                            alert.alertStyle = .warning
-                            alert.addButton(withTitle: "OK")
-                            alert.runModal()
-                        }
-                        return
-                    }
-                    NSLog("[AppDelegate] CLI installed successfully")
-                }
-            }
-
-            // 在后台线程启动 TUI
-            NSLog("[AppDelegate] Launching TUI...")
-            self.launchTUIAsync(frontmostApp: frontmostApp)
-        }
-    }
-
-    /// 在后台线程启动 TUI（frontmostApp 已在主线程捕获）
-    private func launchTUIAsync(frontmostApp: String) {
-        NSLog("[AppDelegate] Frontmost app: \(frontmostApp)")
-
-        switch frontmostApp {
-        case "com.mitchellh.ghostty":
-            launchTUIInGhostty()
-        case "com.googlecode.iterm2":
-            launchTUIIniTerm2()
-        case "com.apple.Terminal":
-            launchTUIInTerminal()
-        default:
-            // frontmost 不是已识别的终端（菜单栏点击常见就是这种）。按已安装
-            // 优先级回落：Ghostty > iTerm2 > Terminal。每条 launch 函数自己
-            // 内部还会检测 app 是否安装、不在就再降一级。
-            if FileManager.default.fileExists(atPath: "/Applications/Ghostty.app") {
-                launchTUIInGhostty()
-            } else if FileManager.default.fileExists(atPath: "/Applications/iTerm.app")
-                    || FileManager.default.fileExists(atPath: "/Applications/iTerm2.app") {
-                launchTUIIniTerm2()
-            } else {
-                launchTUIInTerminal()
-            }
-        }
-    }
-
-    // MARK: - TUI Launch
-
-    /// 解析 meee2 二进制文件路径（开发时用 .build/debug/，打包后用 app bundle）
-    private var meee2BinaryPath: String {
-        // 1. 优先使用 bundle 内的可执行文件（生产环境）
-        if let bundlePath = Bundle.main.executablePath,
-           FileManager.default.fileExists(atPath: bundlePath) {
-            return bundlePath
-        }
-        // 2. /usr/local/bin/meee2 (CLI symlink)
-        let cliPath = "/usr/local/bin/meee2"
-        if FileManager.default.fileExists(atPath: cliPath) {
-            return cliPath
-        }
-        // 3. 最后尝试 PATH 中的 meee2
-        return "meee2"
-    }
-
-    private func launchTUIInGhostty() {
-        // Ghostty 使用 ghostty 命令打开新窗口
-        // 检查 Ghostty 是否安装
-        let ghosttyPath = "/Applications/Ghostty.app/Contents/MacOS/ghostty"
-        guard FileManager.default.fileExists(atPath: ghosttyPath) else {
-            NSLog("[AppDelegate] Ghostty not found at \(ghosttyPath), falling back to Terminal")
-            launchTUIInTerminal()
-            return
-        }
-
-        let binaryPath = meee2BinaryPath
-        let script = """
-        tell application "Ghostty"
-            activate
-        end tell
-        do shell script "\(ghosttyPath) -e \(binaryPath) tui &"
-        """
-
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                NSLog("[AppDelegate] Ghostty launch error: \(error), falling back to Terminal")
-                launchTUIInTerminal()
-            } else {
-                NSLog("[AppDelegate] TUI launched in Ghostty")
-            }
-        } else {
-            NSLog("[AppDelegate] Failed to create AppleScript for Ghostty, falling back to Terminal")
-            launchTUIInTerminal()
-        }
-    }
-
-    private func launchTUIIniTerm2() {
-        // 检查 iTerm2 是否安装
-        guard FileManager.default.fileExists(atPath: "/Applications/iTerm.app") ||
-              FileManager.default.fileExists(atPath: "/Applications/iTerm2.app") else {
-            NSLog("[AppDelegate] iTerm2 not found, falling back to Terminal")
-            launchTUIInTerminal()
-            return
-        }
-
-        let binaryPath = meee2BinaryPath
-        let script = """
-        tell application "iTerm2"
-            activate
-            tell current window
-                create tab with default profile
-                tell current session
-                    write text "\(binaryPath) tui"
-                end tell
-            end tell
-        end tell
-        """
-
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                NSLog("[AppDelegate] iTerm2 launch error: \(error), falling back to Terminal")
-                launchTUIInTerminal()
-            } else {
-                NSLog("[AppDelegate] TUI launched in iTerm2")
-            }
-        } else {
-            NSLog("[AppDelegate] Failed to create AppleScript for iTerm2, falling back to Terminal")
-            launchTUIInTerminal()
-        }
-    }
-
-    private func launchTUIInTerminal() {
-        let binaryPath = meee2BinaryPath
-        let script = """
-        tell application "Terminal"
-            activate
-            do script "\(binaryPath) tui"
-        end tell
-        """
-
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-            if let error = error {
-                // 只 log，不弹 modal alert：meee2 是 .accessory activation policy
-                // （菜单栏 app，无 Dock icon），这种 app 弹 NSAlert.runModal()
-                // 时 alert 窗口经常无法被正确带到前台，但主线程已经进了 modal
-                // event loop，结果是整个 UI 卡死且没有任何可见提示。
-                NSLog("[AppDelegate] Terminal launch error: \(error[NSAppleScript.errorMessage] ?? "Unknown error")")
-            } else {
-                NSLog("[AppDelegate] TUI launched in Terminal")
-            }
-        } else {
-            NSLog("[AppDelegate] Failed to create AppleScript for Terminal")
-        }
-    }
-
     private func createSettingsWindow() {
         let contentView = NSHostingView(rootView: SettingsView())
         contentView.frame = NSRect(x: 0, y: 0, width: 520, height: 450)
@@ -547,10 +367,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                                          action: #selector(openBoardMenu),
                                          keyEquivalent: "b")
         boardItem.target = self
-        let tuiItem2 = fileMenu.addItem(withTitle: "TUI",
-                                        action: #selector(openTUI),
-                                        keyEquivalent: "t")
-        tuiItem2.target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window",
                          action: #selector(NSWindow.performClose(_:)),
@@ -760,12 +576,53 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screenParametersDidChange() {
-        // 屏幕参数变化时重新检测刘海并定位窗口
-        if let screen = getSelectedScreen() {
-            let newNotchSize = screen.notchSize
-            if newNotchSize != deviceNotchSize && newNotchSize != .zero {
-                deviceNotchSize = newNotchSize
-            }
+        // 屏幕参数变化（接外接 / 拔外接 / 刘海机回来）时全量重算：
+        //   1. 同步 deviceNotchSize  → 决定窗口宽高
+        //   2. 同步 statusManager.notchSize → IslandView 内部 shape 几何
+        //   3. 重设 hosting view frame  → 防止 SwiftUI 缓存上次屏的 layout
+        //   4. setFrame                 → 把窗口对齐到新屏顶部正中
+        //
+        // 之前只更新 deviceNotchSize 且加了 `!= .zero` 守卫，结果：
+        //   - statusManager.notchSize 永远停在第一次启动时的值，岛内 shape
+        //     不跟着新屏幕的真实刘海宽度走 → 视觉上和真刘海错位。
+        //   - reconnect 瞬间 safeAreaInsets 可能短暂为 0，被守卫吞掉后值
+        //     就锁死在旧屏的尺寸了。
+        //
+        // 现在的策略：拿到非零就直接更新；拿到零（外接 / 过渡瞬态）就
+        // 退回 defaultIslandSize，并在 200ms 后重试一次抓真值。
+        refreshIslandForCurrentScreen()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            self?.refreshIslandForCurrentScreen()
+        }
+    }
+
+    /// 重新读取当前屏 notch、同步 StatusManager、重排窗口。幂等。
+    private func refreshIslandForCurrentScreen() {
+        guard let screen = getSelectedScreen() else { return }
+
+        let detected = screen.notchSize
+        let resolved: CGSize
+        if detected != .zero {
+            resolved = detected
+        } else {
+            // 外接显示器 / 过渡态：回退到默认尺寸而不是保留旧值
+            resolved = defaultIslandSize
+        }
+
+        if resolved != deviceNotchSize {
+            deviceNotchSize = resolved
+        }
+        // 关键修复：IslandView 是按 statusManager.notchSize 计算
+        // compactWidth / 内部 shape 的，必须每次屏幕变都同步一次
+        if statusManager.notchSize != resolved {
+            statusManager.notchSize = resolved
+        }
+
+        // 重排 hosting view 大小 + 窗口位置
+        if let window = islandWindow {
+            let windowWidth = max(deviceNotchSize.width, 500)
+            let windowHeight = expandedHeight
+            window.contentView?.frame = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
         }
         positionIslandWindow()
     }

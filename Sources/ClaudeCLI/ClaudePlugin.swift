@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Combine
 import Meee2PluginKit
+import Meee2CommKit
 
 /// Claude Code 插件
 /// 将 Claude CLI 的 session 和 hook 管理封装为统一插件
@@ -201,6 +202,18 @@ class ClaudePlugin: SessionPlugin {
             : session.id
         NSLog("========== [JUMP FLOW begin] sid=\(originalId.prefix(8)) title=\(session.title) ==========")
         MLog("[ClaudePlugin] activateTerminal called, originalId=\(originalId)")
+
+        // Desktop-backed Claude session → 走 claude:// URL scheme，TerminalManager
+        // 对没有 TTY/termProgram 的 desktop session 找不到正确窗口。统一在这里
+        // 短路，让 Island / Web Board / 任何 PluginManager.activateTerminal 调用
+        // 方拿到一致行为。`transcriptPath` 优先用 SessionStore 里的最新值。
+        let transcriptPath = sessionStore.get(originalId)?.transcriptPath
+            ?? session.transcriptPath
+        if ClaudeDesktopActivator.isDesktopBacked(sid: originalId, transcriptPath: transcriptPath) {
+            MLog("[ClaudePlugin] desktop-backed → ClaudeDesktopActivator.activate sid=\(originalId.prefix(8))")
+            ClaudeDesktopActivator.activate(sid: originalId)
+            return
+        }
 
         // 先尝试从 sessionMonitor 找到完整 session
         if var aiSession = sessionMonitor.sessions.first(where: { $0.id == originalId }) {

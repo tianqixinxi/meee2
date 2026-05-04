@@ -51,14 +51,24 @@ mkdir -p "$APP_DIR/Contents/Resources"
 cp ".build/release/${APP_NAME}" "$APP_DIR/Contents/MacOS/${APP_NAME}"
 chmod +x "$APP_DIR/Contents/MacOS/${APP_NAME}"
 
-# Copy dylib
-DYLIB_SRC="$HOME/.meee2/lib/libMeee2PluginKit.dylib"
-if [ -f "$DYLIB_SRC" ]; then
-    cp "$DYLIB_SRC" "$APP_DIR/Contents/Frameworks/"
-    echo "Copied libMeee2PluginKit.dylib"
-else
-    echo "Warning: libMeee2PluginKit.dylib not found at $DYLIB_SRC"
-fi
+# Copy dylibs the binary needs at runtime via @rpath.
+# Both PluginKit and CommKit are dynamic libs (see meee2-*-kit/Package.swift),
+# the binary itself was rpath'd to Frameworks/ a few lines down. Any new
+# dynamic dependency added to Package.swift needs to be appended here too.
+RUNTIME_DYLIBS=(
+    "libMeee2PluginKit.dylib"
+    "libMeee2CommKit.dylib"
+)
+for dylib in "${RUNTIME_DYLIBS[@]}"; do
+    src=".build/release/$dylib"
+    if [ -f "$src" ]; then
+        cp "$src" "$APP_DIR/Contents/Frameworks/"
+        echo "Copied $dylib"
+    else
+        echo "ERROR: $dylib not found at $src — app will fail to launch"
+        exit 1
+    fi
+done
 
 # Copy SwiftPM resource bundle (contains WebDist etc.)
 RESOURCE_BUNDLE=".build/arm64-apple-macosx/release/meee2_meee2Kit.bundle"
@@ -148,10 +158,12 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_DIR/Contents
 echo ""
 echo "=== Signing App Bundle ==="
 
-# Sign frameworks first
-if [ -f "$APP_DIR/Contents/Frameworks/libMeee2PluginKit.dylib" ]; then
-    codesign --force --sign - "$APP_DIR/Contents/Frameworks/libMeee2PluginKit.dylib"
-fi
+# Sign frameworks first (must be signed before the bundle is signed)
+for dylib in "${RUNTIME_DYLIBS[@]}"; do
+    if [ -f "$APP_DIR/Contents/Frameworks/$dylib" ]; then
+        codesign --force --sign - "$APP_DIR/Contents/Frameworks/$dylib"
+    fi
+done
 
 # Sign the app with entitlements
 codesign --force --sign - --entitlements meee2.entitlements --deep "$APP_DIR"

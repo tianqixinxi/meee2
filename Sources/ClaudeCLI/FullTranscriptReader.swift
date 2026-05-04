@@ -121,19 +121,42 @@ public enum FullTranscriptReader {
         //     全收，Web UI 上一句话能被渲染几十次——就是用户报的那个 bug
         // 所以：last-prompt 文本只在「不出现于 type=user.string」时才保留，且
         // 自身也要去重。
-        // Pass 1：收集所有 type=user 里 content=string 的 dedupe key。
+        // Pass 1：收集所有 type=user 里的真实 prompt 文本作为 dedupe key。
         // dedupe key = whitespace-collapsed + trimmed。Claude CLI 拷贝 prompt 到
         // last-prompt 时会做 `\n` → space 的 normalize；不做 collapse 的话 exact
         // match 漏判。
+        //
+        // 同时支持新旧两种 content 形式：
+        //   - 旧版：content = "..." (string)
+        //   - 新版：content = [{"type":"text","text":"..."}, ...] (array)
+        // 不覆盖 array 形式时，纯 array-form 用户消息不会进 seen 集合，
+        // last-prompt 复制同样文本就会"漏夹击"，被 emit 成 idx-N 重复条目。
         var seenUserStringKeys = Set<String>()
         for line in lines {
             guard let d = line.data(using: .utf8),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   (j["type"] as? String) == "user",
-                  let msg = j["message"] as? [String: Any],
-                  let str = msg["content"] as? String,
-                  !str.isEmpty else { continue }
-            seenUserStringKeys.insert(Self.dedupeKey(str))
+                  let msg = j["message"] as? [String: Any] else { continue }
+            let content = msg["content"]
+            if let str = content as? String, !str.isEmpty {
+                seenUserStringKeys.insert(Self.dedupeKey(str))
+            } else if let arr = content as? [[String: Any]] {
+                // array 形式：把每个 text block 单独入集合，并把整段 concat
+                // 一份也入 —— last-prompt 可能拼接 / 单挑某一段。
+                var concat: [String] = []
+                for b in arr {
+                    if (b["type"] as? String) == "text",
+                       let t = b["text"] as? String,
+                       !t.isEmpty {
+                        seenUserStringKeys.insert(Self.dedupeKey(t))
+                        concat.append(t)
+                    }
+                }
+                if concat.count > 1 {
+                    let joined = concat.joined(separator: "\n")
+                    seenUserStringKeys.insert(Self.dedupeKey(joined))
+                }
+            }
         }
         // 同时把 user.string keys 排序拿一份长度递减的快照——last-prompt 可能
         // 把长 prompt 截断到末尾 `…`，需要 prefix 命中才算重复。

@@ -169,7 +169,10 @@ public enum TranscriptStatusResolver {
             if let cached = _resolvedCache[sid],
                Date().timeIntervalSince(cached.at) < _resolvedCacheTTL {
                 _resolvedCacheLock.unlock()
-                NSLog("[StateTrace][resolver] sid=\(sid.prefix(8)) hook=\(hookStatus.rawValue) → \(cached.status.rawValue) (CACHED)")
+                // Cache 命中是热路径——这里以前每次都 NSLog，导致一条 stuck
+                // session（5K+ 条 stale inbox 消息）每秒能写 10K 行 log，把
+                // main thread 烧到 60% CPU。CACHED 路径默认静默；要观察 cache
+                // 行为时把日志重新打开（命中率本来就该靠测试或仪表盘看）。
                 return cached.status
             }
             _resolvedCacheLock.unlock()

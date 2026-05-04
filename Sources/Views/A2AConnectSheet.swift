@@ -1,5 +1,6 @@
 import SwiftUI
 import Meee2PluginKit
+import Meee2CommKit
 
 /// 用户发起 A2A 连接请求的描述 —— 由 IslandView 作为 `.sheet(item:)` 的驱动值
 /// 必须是顶层类型（非嵌套）以便 IslandView 作为 @State 使用

@@ -9,12 +9,10 @@ import {
 } from 'react'
 import Board from './components/Board'
 import Sidebar from './components/Sidebar'
+import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
-import { SessionComposer } from './components/SessionComposer'
 import { NewSessionDialog } from './components/NewSessionDialog'
-import { AssistantChat } from './components/AssistantChat'
 import { PreferencesDialog } from './components/PreferencesDialog'
-import { CommandBar } from './components/CommandBar'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
@@ -77,7 +75,16 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   const [newSessionOpen, setNewSessionOpen] = useState(false)
-  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [newSessionDefaultCwd, setNewSessionDefaultCwd] = useState<string | undefined>(undefined)
+  // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮 / sidebar New session
+  // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
+  // assistantRequested=false → mode='session'；assistantRequested=true → mode='assistant'。
+  // 键盘 hijack 在画板空白时也会 setAssistantRequested(true)。
+  // 替换了原来独立的 `assistantOpen` state，让所有触发路径汇到同一个 dock 入口。
+  const [assistantRequested, setAssistantRequested] = useState(false)
+  // Assistant 模式 chat 历史 lift 到 App level，跨 dock 开关持久化。只有
+  // 用户在 dock 里打 `/new-session`（或 /clear / /reset）才会清空。
+  const [assistantMessages, setAssistantMessages] = useState<DisplayMessage[]>([])
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
   // 用户点击 session card 时移除。持久化通过 persistence.saveUnreadSids。
@@ -118,11 +125,16 @@ export default function App() {
   const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
     {},
   )
-  // 选中 session 时，任意键盘/粘贴输入会打开一个底部 composer，按 Enter 把
-  // 消息直接注入该 session 的 inbox（下一轮 Claude 能看到）
-  const [composer, setComposer] = useState<
-    { sessionId: string; seed: string } | null
-  >(null)
+  // Dock：统一的画板浮窗。两种触发方式：
+  //   - dockOpen + selection.kind === 'session' + !assistantRequested → mode='session'
+  //   - dockOpen + (assistantRequested || no session)                  → mode='assistant'
+  // 用户在画板上按可打印键 / 粘贴会触发 dock 挂载（mode 由当前 selection
+  // 决定）。Click Ask AI / New session / group `+` → assistantRequested=true。
+  // dock × 按钮关 dock：session 模式保留 selection；assistant 模式 reset
+  // assistantRequested。
+  const [dockOpen, setDockOpen] = useState(false)
+  const dockSeedRef = useRef<string>('')
+  const dockRef = useRef<DockHandle | null>(null)
   // Template cache: templateId → raw TSX source. Missing keys fall back to
   // DEFAULT_TEMPLATE. Populated lazily as pluginIds show up on screen, and
   // refetched on WS state.changed ticks (Wave 17a backend signals template
@@ -282,19 +294,36 @@ export default function App() {
     [],
   )
 
-  // Global keyboard/paste hijack: when a session is selected, any printable
-  // keystroke or paste opens the bottom composer seeded with that input.
-  // Inputs/textareas (including the composer itself) keep normal behavior.
+  // Global keyboard/paste hijack: 选中 session 时画板上的可打印键 / 粘贴
+  // 决定 dock 的可见性：
+  //   - dock 没开 → 把这次键值当 seed，setDockOpen(true)；mount 后 dock
+  //     会消费 dockSeedRef 里的初始值。
+  //   - dock 已开 → 直接调 appendAndFocus 注入到现有 textarea。
   //
   // 关键：用 capture 阶段 + stopImmediatePropagation —— Excalidraw 自己在
   // document 层装了 keydown/paste handler（按字母就造文本元素、粘贴生成
-  // 图片等），如果我们走冒泡会被它抢先。capture 阶段先到、再 preventDefault +
-  // stopImmediatePropagation 把事件彻底吃掉。
+  // 图片等），冒泡会被它抢先。capture 先到再吃掉事件即可。
   const selectedSessionId =
     selection.kind === 'session' ? selection.sessionId : null
-  useEffect(() => {
-    if (!selectedSessionId) return
 
+  // 切换 session（包括取消选择）时重置 dock 可见性 + assistant 标记 ——
+  // 下次按键重新打开（mode 由新的 selection 决定）。
+  useEffect(() => {
+    setDockOpen(false)
+    setAssistantRequested(false)
+    dockSeedRef.current = ''
+  }, [selectedSessionId])
+
+  // Two distinct keystroke flows depending on selection:
+  //   - A session is selected → the keystroke seeds the SessionDock for that
+  //     session (existing behaviour).
+  //   - Nothing selected (just the canvas) → the keystroke opens the
+  //     "Ask & Spawn" assistant as a temporary global chatbox seeded with
+  //     the keystroke. Same gesture, different target.
+  // Don't fire when the user already has an open Excalidraw shape selected
+  // (so they can still type into Excalidraw text shapes etc.). The
+  // `selection.kind === 'session'` vs `'none'` split handles that.
+  useEffect(() => {
     const isInputTarget = (t: EventTarget | null) => {
       if (!(t instanceof HTMLElement)) return false
       const tag = t.tagName
@@ -306,69 +335,61 @@ export default function App() {
       )
     }
 
+    const dispatch = (text: string) => {
+      if (dockOpen) {
+        dockRef.current?.appendAndFocus(text)
+        return
+      }
+      // Mount a fresh dock with this seed. selection 是 session → 自动走
+      // session 模式；selection none → 强制 assistant 模式（hijack 只在
+      // session-or-none 时触发，channel 选中时已经被前面的 guard 挡掉）。
+      dockSeedRef.current = text
+      if (!selectedSessionId) setAssistantRequested(true)
+      setDockOpen(true)
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
-      const targetTag =
-        e.target instanceof HTMLElement ? e.target.tagName : '(?)'
-      // 所有 keydown 都打，方便用 DevTools Console 诊断
-      console.log(
-        '[Composer] keydown captured key=%s target=%s composer=%s inputTarget=%s',
-        e.key,
-        targetTag,
-        composer ? 'open' : 'null',
-        isInputTarget(e.target),
-      )
-      if (composer) return
       if (isInputTarget(e.target)) return
       if (e.metaKey || e.ctrlKey || e.altKey) return
+      // Plain Enter on empty canvas → open assistant with no seed (gesture
+      // is "I want to chat", not "I typed Enter as content").
+      if (
+        e.key === 'Enter' &&
+        !selectedSessionId &&
+        selection.kind === 'none' &&
+        !dockOpen
+      ) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        setAssistantRequested(true)
+        dockSeedRef.current = ''
+        setDockOpen(true)
+        return
+      }
       if (e.key.length !== 1) return
-      console.log('[Composer] → opening with seed=%s', e.key)
+      if (!selectedSessionId && selection.kind !== 'none') return
       e.preventDefault()
       e.stopImmediatePropagation()
-      setComposer({ sessionId: selectedSessionId, seed: e.key })
+      dispatch(e.key)
     }
 
     const onPaste = (e: ClipboardEvent) => {
-      const targetTag =
-        e.target instanceof HTMLElement ? e.target.tagName : '(?)'
-      const text = e.clipboardData?.getData('text') ?? ''
-      console.log(
-        '[Composer] paste captured target=%s textLen=%d composer=%s inputTarget=%s',
-        targetTag,
-        text.length,
-        composer ? 'open' : 'null',
-        isInputTarget(e.target),
-      )
-      if (composer) return
       if (isInputTarget(e.target)) return
+      if (!selectedSessionId && selection.kind !== 'none') return
+      const text = e.clipboardData?.getData('text') ?? ''
       if (!text) return
-      console.log('[Composer] → opening with pasted text (len=%d)', text.length)
       e.preventDefault()
       e.stopImmediatePropagation()
-      setComposer({ sessionId: selectedSessionId, seed: text })
+      dispatch(text)
     }
 
-    // window + capture 是 DOM 事件流最早能 hook 的位置；Excalidraw 不管在
-    // document 还是 canvas 上装 handler，都会晚于这里。
     window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('paste', onPaste, true)
     return () => {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('paste', onPaste, true)
     }
-  }, [selectedSessionId, composer])
-
-  // 选中 session 切换 / 取消选择时，关掉正在输入的 composer
-  useEffect(() => {
-    if (composer && composer.sessionId !== selectedSessionId) {
-      setComposer(null)
-    }
-  }, [selectedSessionId, composer])
-
-  const composerSession =
-    composer && boardState.state
-      ? boardState.state.sessions.find((s) => s.id === composer.sessionId) ??
-        null
-      : null
+  }, [selectedSessionId, selection.kind, dockOpen])
 
   // Refetch currently-cached templates on every state tick. The backend may
   // emit a single state.changed frame after a template edit; rather than
@@ -438,7 +459,12 @@ export default function App() {
             onNewChannel={() => setNewChannelOpen(true)}
             placeChannelRequest={placeChannelRequest}
             onNewSession={() => setNewSessionOpen(true)}
-            onAskAndSpawn={() => setAssistantOpen(true)}
+            onAskAndSpawn={() => {
+              setSelection({ kind: 'none' })
+              setAssistantRequested(true)
+              dockSeedRef.current = ''
+              setDockOpen(true)
+            }}
             onPreferences={() => setPreferencesOpen(true)}
             onFit={() => setFitSignal((x) => x + 1)}
           />
@@ -447,6 +473,46 @@ export default function App() {
               {boardState.error}
             </div>
           )}
+          {/* 统一 Dock 入口：mode 由 selection + assistantRequested 决定。
+              session-mode：现有 session 的 transcript + injectToSession。
+              assistant-mode：AI 对话 + spawnSession。
+              Esc / × 关闭：session 模式保留 selection，assistant 模式清
+              assistantRequested。下次再按键又能重开。 */}
+          {dockOpen && boardState.state && (() => {
+            const sessionForDock =
+              selection.kind === 'session'
+                ? boardState.state.sessions.find((x) => x.id === selection.sessionId)
+                : undefined
+            const useAssistant = assistantRequested || !sessionForDock
+            const mode: DockMode = useAssistant
+              ? {
+                  kind: 'assistant',
+                  messages: assistantMessages,
+                  setMessages: setAssistantMessages,
+                  onSpawned: (cwd) => {
+                    setDockOpen(false)
+                    setAssistantRequested(false)
+                    pushToast('success', `Spawning Claude in ${cwd}`)
+                  },
+                  onError: (msg) => pushToast('error', msg),
+                }
+              : {
+                  kind: 'session',
+                  state: boardState.state,
+                  session: sessionForDock!,
+                }
+            return (
+              <Dock
+                ref={dockRef}
+                mode={mode}
+                initialSeed={dockSeedRef.current}
+                onClose={() => {
+                  setDockOpen(false)
+                  if (useAssistant) setAssistantRequested(false)
+                }}
+              />
+            )
+          })()}
         </div>
         <Sidebar
           state={boardState.state}
@@ -459,17 +525,20 @@ export default function App() {
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}
-          onTemplateSaved={applyTemplateLocally}
-        />
-        <CommandBar
-          state={boardState.state}
-          selection={selection}
-          connected={boardState.connected}
-          unreadCount={unreadSids.size}
-          onNewSession={() => setNewSessionOpen(true)}
-          onAskAndSpawn={() => setAssistantOpen(true)}
-          onPreferences={() => setPreferencesOpen(true)}
-          onNewChannel={() => setNewChannelOpen(true)}
+          onNewSession={() => {
+            // New session 入口 = 打开 Dock 的 assistant 模式（无 seed）
+            setSelection({ kind: 'none' })
+            setAssistantRequested(true)
+            dockSeedRef.current = ''
+            setDockOpen(true)
+          }}
+          onCreateInProject={(cwd) => {
+            // 同一个入口，只是 seed 里把 cwd 写死，AI 直接出 spawn fence
+            setSelection({ kind: 'none' })
+            setAssistantRequested(true)
+            dockSeedRef.current = `在 ${cwd} 下新建一个 session，`
+            setDockOpen(true)
+          }}
         />
         {newChannelOpen && boardState.state && (
           <NewChannelDialog
@@ -485,35 +554,26 @@ export default function App() {
         )}
         {newSessionOpen && (
           <NewSessionDialog
-            onClose={() => setNewSessionOpen(false)}
+            defaultCwd={newSessionDefaultCwd}
+            onClose={() => {
+              setNewSessionOpen(false)
+              setNewSessionDefaultCwd(undefined)
+            }}
             onSpawned={(cwd) => {
               setNewSessionOpen(false)
+              setNewSessionDefaultCwd(undefined)
               pushToast('success', `Spawning Claude in ${cwd}`)
             }}
             onError={(msg) => pushToast('error', msg)}
           />
         )}
-        {assistantOpen && (
-          <AssistantChat
-            onClose={() => setAssistantOpen(false)}
-            onSpawned={(cwd) => {
-              setAssistantOpen(false)
-              pushToast('success', `Spawning Claude in ${cwd}`)
-            }}
-            onError={(msg) => pushToast('error', msg)}
-          />
-        )}
+        {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}
         {preferencesOpen && (
           <PreferencesDialog
             onClose={() => setPreferencesOpen(false)}
             onSaved={(cmd) => pushToast('success', `Default spawn command: ${cmd}`)}
           />
         )}
-        <SessionComposer
-          session={composerSession}
-          seedContent={composer?.seed ?? ''}
-          onClose={() => setComposer(null)}
-        />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

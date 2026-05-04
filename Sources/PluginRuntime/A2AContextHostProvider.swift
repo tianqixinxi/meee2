@@ -1,5 +1,6 @@
 import Foundation
 import Meee2PluginKit
+import Meee2CommKit
 
 /// Host-side `A2AContextProvider` 实现：把 plugin-kit 的查询接口绑到
 /// MessageRouter / A2AIdentity 上。App 启动时实例化一次然后

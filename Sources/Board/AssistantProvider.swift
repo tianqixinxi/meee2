@@ -1,0 +1,667 @@
+import Foundation
+
+// MARK: - Shared types
+
+/// LLM-facing message format used across all three providers. Each provider
+/// converts to its native shape before sending.
+struct ChatMessage {
+    let role: Role
+    let content: String
+    /// Tool-call references, only populated on assistant messages that requested tools.
+    let toolCalls: [ToolCallRef]
+    /// Tool-result message — `toolCallId` references the matching call on a previous assistant message.
+    let toolCallId: String?
+
+    enum Role: String {
+        case system, user, assistant, tool
+    }
+
+    init(role: Role, content: String, toolCalls: [ToolCallRef] = [], toolCallId: String? = nil) {
+        self.role = role
+        self.content = content
+        self.toolCalls = toolCalls
+        self.toolCallId = toolCallId
+    }
+}
+
+struct ToolCallRef {
+    let id: String
+    let name: String
+    /// Arguments as a JSON string (providers serialize back to object shape on send).
+    let argsJSON: String
+}
+
+/// Event a provider yields as it streams a response. The AssistantAPI
+/// orchestrator forwards these to the SSE client + reacts to `.toolCall`
+/// by running the tool and looping back to the provider with the result.
+enum ProviderEvent {
+    case textDelta(String)
+    /// Tool call request from the LLM. Yielded once the args are fully
+    /// accumulated (we don't stream partial JSON args).
+    case toolCall(id: String, name: String, argsJSON: String)
+    /// End of one provider turn. If the response contained tool calls the
+    /// orchestrator will resume by calling the provider again with results
+    /// appended.
+    case turnDone(stopReason: String?)
+    case error(String)
+}
+
+struct AssistantSettings {
+    enum Provider: String {
+        case openai     // OpenAI-compatible /v1/chat/completions
+        case anthropic  // Anthropic /v1/messages
+        case local      // claude -p
+    }
+
+    let provider: Provider
+    let apiKey: String        // empty for local
+    let baseUrl: String       // empty for local
+    let model: String         // empty for local → claude default
+    let enabledTools: Set<String>?  // nil = all
+}
+
+/// Common interface across hosted (OpenAI / Anthropic) and local (claude -p)
+/// providers. Each implementation streams `ProviderEvent` values as the LLM
+/// produces output; the orchestrator on top of this protocol handles the
+/// tool-use loop + SSE relay.
+protocol AssistantProvider {
+    /// Run one turn against the LLM. Returns an async sequence of events.
+    /// The provider is responsible for streaming text deltas and emitting
+    /// fully-assembled tool calls (no partial JSON).
+    func runTurn(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings
+    ) -> AsyncThrowingStream<ProviderEvent, Error>
+}
+
+// MARK: - Provider factory
+
+enum AssistantProviderFactory {
+    static func make(_ kind: AssistantSettings.Provider) -> AssistantProvider {
+        switch kind {
+        case .openai: return OpenAIProvider()
+        case .anthropic: return AnthropicProvider()
+        case .local: return LocalClaudeProvider()
+        }
+    }
+}
+
+// MARK: - OpenAI-compatible provider
+
+/// POSTs `{baseUrl}/chat/completions` with `stream: true` and parses SSE
+/// chunks. Supports any OpenAI-compatible endpoint (Anthropic via OpenRouter,
+/// LiteLLM, Ollama, vLLM, …) so users get a single configuration knob for
+/// "any hosted LLM that speaks the OpenAI shape".
+struct OpenAIProvider: AssistantProvider {
+    func runTurn(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await stream(
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        tools: tools,
+                        settings: settings,
+                        continuation: continuation
+                    )
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    private func stream(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings,
+        continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
+    ) async throws {
+        let baseUrl = (settings.baseUrl.isEmpty ? "https://api.openai.com/v1" : settings.baseUrl)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard let url = URL(string: "\(baseUrl)/chat/completions") else {
+            throw NSError(domain: "AssistantProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid baseUrl: \(baseUrl)"])
+        }
+
+        // Build messages
+        var oaiMessages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+        for m in messages {
+            switch m.role {
+            case .system:
+                oaiMessages.append(["role": "system", "content": m.content])
+            case .user:
+                oaiMessages.append(["role": "user", "content": m.content])
+            case .assistant:
+                if m.toolCalls.isEmpty {
+                    oaiMessages.append(["role": "assistant", "content": m.content])
+                } else {
+                    oaiMessages.append([
+                        "role": "assistant",
+                        "content": m.content,
+                        "tool_calls": m.toolCalls.map { tc in
+                            [
+                                "id": tc.id,
+                                "type": "function",
+                                "function": [
+                                    "name": tc.name,
+                                    "arguments": tc.argsJSON
+                                ]
+                            ] as [String: Any]
+                        }
+                    ])
+                }
+            case .tool:
+                oaiMessages.append([
+                    "role": "tool",
+                    "tool_call_id": m.toolCallId ?? "",
+                    "content": m.content
+                ])
+            }
+        }
+
+        var body: [String: Any] = [
+            "model": settings.model.isEmpty ? "gpt-4o-mini" : settings.model,
+            "messages": oaiMessages,
+            "temperature": 0.2,
+            "stream": true
+        ]
+        if !tools.isEmpty {
+            body["tools"] = tools.map { t in
+                [
+                    "type": "function",
+                    "function": [
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.inputSchema
+                    ]
+                ] as [String: Any]
+            }
+            body["tool_choice"] = "auto"
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(settings.apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            // Read error body for diagnostics
+            var errBody = ""
+            for try await line in bytes.lines { errBody += line + "\n" }
+            throw NSError(domain: "AssistantProvider", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "openai HTTP \(http.statusCode): \(errBody.prefix(500))"])
+        }
+
+        // Parse SSE: each event is `data: {...}\n\n`. We track tool_call deltas
+        // by index since OpenAI sends fragmented `function.arguments` chunks.
+        struct ToolCallAcc { var id = ""; var name = ""; var args = "" }
+        var toolAccs: [Int: ToolCallAcc] = [:]
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let payload = String(line.dropFirst(6))
+            if payload == "[DONE]" {
+                // Flush any complete tool calls
+                for (_, acc) in toolAccs.sorted(by: { $0.key < $1.key }) {
+                    if !acc.id.isEmpty {
+                        continuation.yield(.toolCall(id: acc.id, name: acc.name, argsJSON: acc.args))
+                    }
+                }
+                continuation.yield(.turnDone(stopReason: nil))
+                continuation.finish()
+                return
+            }
+            guard let data = payload.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let choices = obj["choices"] as? [[String: Any]],
+                  let first = choices.first else { continue }
+
+            let delta = first["delta"] as? [String: Any] ?? [:]
+            if let txt = delta["content"] as? String, !txt.isEmpty {
+                continuation.yield(.textDelta(txt))
+            }
+            if let tcalls = delta["tool_calls"] as? [[String: Any]] {
+                for tc in tcalls {
+                    let idx = (tc["index"] as? Int) ?? 0
+                    var acc = toolAccs[idx] ?? ToolCallAcc()
+                    if let id = tc["id"] as? String, !id.isEmpty { acc.id = id }
+                    if let fn = tc["function"] as? [String: Any] {
+                        if let name = fn["name"] as? String, !name.isEmpty { acc.name = name }
+                        if let args = fn["arguments"] as? String { acc.args += args }
+                    }
+                    toolAccs[idx] = acc
+                }
+            }
+            if let stop = first["finish_reason"] as? String, !stop.isEmpty {
+                // Some implementations emit finish_reason on the last delta
+                // before [DONE]; flush tool calls and end the turn early.
+                for (_, acc) in toolAccs.sorted(by: { $0.key < $1.key }) {
+                    if !acc.id.isEmpty {
+                        continuation.yield(.toolCall(id: acc.id, name: acc.name, argsJSON: acc.args))
+                    }
+                }
+                continuation.yield(.turnDone(stopReason: stop))
+                continuation.finish()
+                return
+            }
+        }
+        // Stream ended without [DONE] — close out anyway.
+        continuation.yield(.turnDone(stopReason: nil))
+        continuation.finish()
+    }
+}
+
+// MARK: - Anthropic-native provider
+
+/// POSTs `{baseUrl}/v1/messages` with `stream: true`. Handles Anthropic's
+/// distinct event types (`content_block_delta`, `tool_use`, etc.) and
+/// converts them into the same `ProviderEvent` shape.
+struct AnthropicProvider: AssistantProvider {
+    func runTurn(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await stream(
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        tools: tools,
+                        settings: settings,
+                        continuation: continuation
+                    )
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    private func stream(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings,
+        continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
+    ) async throws {
+        let baseUrl = (settings.baseUrl.isEmpty ? "https://api.anthropic.com" : settings.baseUrl)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard let url = URL(string: "\(baseUrl)/v1/messages") else {
+            throw NSError(domain: "AssistantProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "invalid baseUrl: \(baseUrl)"])
+        }
+
+        // Anthropic separates `system` (top-level) from `messages` (only user/assistant).
+        // Tool results live in user messages as content blocks of type "tool_result".
+        var anMessages: [[String: Any]] = []
+        var pendingToolResults: [[String: Any]] = []
+        for m in messages {
+            switch m.role {
+            case .system:
+                continue  // already in top-level system
+            case .user:
+                if !pendingToolResults.isEmpty {
+                    anMessages.append(["role": "user", "content": pendingToolResults])
+                    pendingToolResults.removeAll()
+                }
+                anMessages.append(["role": "user", "content": m.content])
+            case .assistant:
+                if !pendingToolResults.isEmpty {
+                    anMessages.append(["role": "user", "content": pendingToolResults])
+                    pendingToolResults.removeAll()
+                }
+                if m.toolCalls.isEmpty {
+                    anMessages.append(["role": "assistant", "content": m.content])
+                } else {
+                    var blocks: [[String: Any]] = []
+                    if !m.content.isEmpty {
+                        blocks.append(["type": "text", "text": m.content])
+                    }
+                    for tc in m.toolCalls {
+                        let parsed = (try? JSONSerialization.jsonObject(with: Data(tc.argsJSON.utf8))) ?? [:]
+                        blocks.append([
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.name,
+                            "input": parsed
+                        ])
+                    }
+                    anMessages.append(["role": "assistant", "content": blocks])
+                }
+            case .tool:
+                pendingToolResults.append([
+                    "type": "tool_result",
+                    "tool_use_id": m.toolCallId ?? "",
+                    "content": m.content
+                ])
+            }
+        }
+        if !pendingToolResults.isEmpty {
+            anMessages.append(["role": "user", "content": pendingToolResults])
+        }
+
+        var body: [String: Any] = [
+            "model": settings.model.isEmpty ? "claude-haiku-4-5-20251001" : settings.model,
+            "system": systemPrompt,
+            "messages": anMessages,
+            "max_tokens": 4096,
+            "stream": true
+        ]
+        if !tools.isEmpty {
+            body["tools"] = tools.map { t in
+                [
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.inputSchema
+                ] as [String: Any]
+            }
+        }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue(settings.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            var errBody = ""
+            for try await line in bytes.lines { errBody += line + "\n" }
+            throw NSError(domain: "AssistantProvider", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "anthropic HTTP \(http.statusCode): \(errBody.prefix(500))"])
+        }
+
+        // Anthropic SSE: events with `event:` then `data: {...}`. We track
+        // each content_block by index; tool_use blocks accumulate
+        // `partial_json` deltas before being emitted as one tool call.
+        struct ToolUseAcc { var id = ""; var name = ""; var args = "" }
+        var toolBlocks: [Int: ToolUseAcc] = [:]
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let payload = String(line.dropFirst(6))
+            guard let data = payload.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let type = obj["type"] as? String else { continue }
+
+            switch type {
+            case "content_block_start":
+                let idx = (obj["index"] as? Int) ?? 0
+                if let block = obj["content_block"] as? [String: Any],
+                   block["type"] as? String == "tool_use" {
+                    var acc = ToolUseAcc()
+                    acc.id = block["id"] as? String ?? ""
+                    acc.name = block["name"] as? String ?? ""
+                    toolBlocks[idx] = acc
+                }
+            case "content_block_delta":
+                let idx = (obj["index"] as? Int) ?? 0
+                guard let delta = obj["delta"] as? [String: Any] else { continue }
+                if delta["type"] as? String == "text_delta",
+                   let txt = delta["text"] as? String, !txt.isEmpty {
+                    continuation.yield(.textDelta(txt))
+                } else if delta["type"] as? String == "input_json_delta",
+                          let partial = delta["partial_json"] as? String {
+                    var acc = toolBlocks[idx] ?? ToolUseAcc()
+                    acc.args += partial
+                    toolBlocks[idx] = acc
+                }
+            case "content_block_stop":
+                let idx = (obj["index"] as? Int) ?? 0
+                if let acc = toolBlocks[idx], !acc.id.isEmpty {
+                    continuation.yield(.toolCall(id: acc.id, name: acc.name, argsJSON: acc.args))
+                    toolBlocks.removeValue(forKey: idx)
+                }
+            case "message_delta":
+                if let delta = obj["delta"] as? [String: Any],
+                   let stop = delta["stop_reason"] as? String {
+                    // Wait for message_stop to actually finish so we don't
+                    // close the stream before any tail content_block_stop.
+                    _ = stop
+                }
+            case "message_stop":
+                continuation.yield(.turnDone(stopReason: nil))
+                continuation.finish()
+                return
+            case "error":
+                let msg = (obj["error"] as? [String: Any])?["message"] as? String ?? "anthropic stream error"
+                continuation.yield(.error(msg))
+                continuation.finish()
+                return
+            default:
+                break
+            }
+        }
+        continuation.yield(.turnDone(stopReason: nil))
+        continuation.finish()
+    }
+}
+
+// MARK: - Local claude -p provider
+
+/// Spawns a local `claude -p --output-format stream-json --print` and parses
+/// the JSONL events. This lets the user run the assistant entirely on their
+/// machine (no API key, reuses ~/.claude OAuth) while still going through
+/// the same `runTurn` / `ProviderEvent` shape as hosted providers.
+///
+/// Tools: claude CLI has no native function-calling for the `-p` mode, so
+/// instead we instruct the model via the system prompt to emit a fenced
+/// JSON block when it wants to call a tool, and parse that out of the final
+/// text. The orchestrator then runs the tool and re-invokes claude with the
+/// result appended to the conversation. This gives us the same end-to-end
+/// behaviour without a local MCP roundtrip.
+struct LocalClaudeProvider: AssistantProvider {
+    func runTurn(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        tools: [ToolDef],
+        settings: AssistantSettings
+    ) -> AsyncThrowingStream<ProviderEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task.detached {
+                do {
+                    try runProcess(
+                        systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
+                        messages: messages,
+                        continuation: continuation
+                    )
+                } catch {
+                    continuation.yield(.error(error.localizedDescription))
+                    continuation.finish()
+                }
+            }
+        }
+    }
+
+    func augmentedSystemPrompt(_ base: String, tools: [ToolDef]) -> String {
+        guard !tools.isEmpty else { return base }
+        // Describe the tools and the fenced-JSON protocol so claude -p can
+        // request them. Keep it terse — claude is good at following this
+        // pattern from minimal instructions.
+        var s = base
+        s += "\n\nYou have these tools available. To call one, output exactly one fenced block like:\n\n"
+        s += "```tool\n{\"name\": \"<tool_name>\", \"args\": { ... }}\n```\n\n"
+        s += "After you emit the fence, stop. The runtime will execute the tool and reply with the result, then you continue. If you don't need a tool, just answer normally.\n\n"
+        s += "Tools:\n"
+        for t in tools {
+            let schemaJSON = (try? JSONSerialization.data(withJSONObject: t.inputSchema, options: [.sortedKeys]))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            s += "- `\(t.name)` — \(t.description) (schema: \(schemaJSON))\n"
+        }
+        return s
+    }
+
+    private func runProcess(
+        systemPrompt: String,
+        messages: [ChatMessage],
+        continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
+    ) throws {
+        let claudePath = resolveClaudeBinary()
+        let process = Process()
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+
+        let args = [
+            "-p",
+            "--append-system-prompt", systemPrompt,
+            "--no-session-persistence",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose"
+        ]
+        if let p = claudePath {
+            process.executableURL = URL(fileURLWithPath: p)
+            process.arguments = args
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["claude"] + args
+        }
+        process.environment = ProcessInfo.processInfo.environment
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+
+        // Render conversation as a plain prompt — same shape the previous
+        // implementation used. claude -p treats stdin as the user input.
+        var rendered: [String] = []
+        for m in messages {
+            let role: String
+            switch m.role {
+            case .user: role = "User"
+            case .assistant: role = "Assistant"
+            case .tool: role = "ToolResult(\(m.toolCallId ?? ""))"
+            case .system: continue
+            }
+            rendered.append("\(role): \(m.content)")
+        }
+        rendered.append("Assistant:")
+        let prompt = rendered.joined(separator: "\n\n")
+        if let data = prompt.data(using: .utf8) {
+            stdin.fileHandleForWriting.write(data)
+        }
+        try? stdin.fileHandleForWriting.close()
+
+        // Buffer stream-json line-by-line and emit text deltas. claude's
+        // stream-json events look like:
+        //   {"type":"assistant","message":{"content":[{"type":"text","text":"…"}]}}
+        // and partial messages with "delta" subevents.
+        var buf = Data()
+        var fullText = ""
+        let handle = stdout.fileHandleForReading
+        // synchronous read loop because we're inside a detached Task; using
+        // readabilityHandler complicates teardown.
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                if !process.isRunning { break }
+                Thread.sleep(forTimeInterval: 0.02)
+                continue
+            }
+            buf.append(chunk)
+            while let nl = buf.firstIndex(of: 0x0A) {
+                let line = buf.subdata(in: 0..<nl)
+                buf.removeSubrange(0...nl)
+                guard let s = String(data: line, encoding: .utf8), !s.isEmpty else { continue }
+                guard let obj = (try? JSONSerialization.jsonObject(with: Data(s.utf8))) as? [String: Any] else { continue }
+                let kind = obj["type"] as? String ?? ""
+                if kind == "stream_event",
+                   let evt = obj["event"] as? [String: Any] {
+                    let etype = evt["type"] as? String ?? ""
+                    if etype == "content_block_delta",
+                       let delta = evt["delta"] as? [String: Any],
+                       delta["type"] as? String == "text_delta",
+                       let txt = delta["text"] as? String {
+                        fullText += txt
+                        continuation.yield(.textDelta(txt))
+                    }
+                } else if kind == "assistant",
+                          let msg = obj["message"] as? [String: Any],
+                          let content = msg["content"] as? [[String: Any]] {
+                    // Final assistant message — fullText may already be
+                    // populated from deltas; emit any tail text we missed.
+                    var tail = ""
+                    for blk in content where blk["type"] as? String == "text" {
+                        tail += (blk["text"] as? String ?? "")
+                    }
+                    if tail.count > fullText.count {
+                        let missing = String(tail.suffix(tail.count - fullText.count))
+                        if !missing.isEmpty {
+                            continuation.yield(.textDelta(missing))
+                            fullText = tail
+                        }
+                    }
+                }
+            }
+        }
+
+        // Wait for exit
+        while process.isRunning {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.terminationStatus != 0 {
+            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+            let err = String(data: errData, encoding: .utf8) ?? ""
+            continuation.yield(.error("claude exited \(process.terminationStatus): \(err.prefix(400))"))
+            continuation.finish()
+            return
+        }
+
+        // Look for tool-call fence in the final text and emit as a tool call.
+        if let call = parseToolFence(fullText) {
+            continuation.yield(.toolCall(id: call.id, name: call.name, argsJSON: call.args))
+        }
+        continuation.yield(.turnDone(stopReason: nil))
+        continuation.finish()
+    }
+
+    struct ParsedToolFence: Equatable { let id: String; let name: String; let args: String }
+
+    /// Exposed for tests — pure parser, no side effects.
+    func parseToolFence(_ text: String) -> ParsedToolFence? {
+        // Match ```tool\n{...}\n``` (greedy across newlines)
+        let pattern = #"```tool\s*\n([\s\S]*?)\n```"#
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              m.numberOfRanges >= 2,
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        let json = String(text[r])
+        guard let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let name = obj["name"] as? String, !name.isEmpty,
+              let argsObj = obj["args"] as? [String: Any] else { return nil }
+        let argsData = (try? JSONSerialization.data(withJSONObject: argsObj)) ?? Data("{}".utf8)
+        let argsJSON = String(data: argsData, encoding: .utf8) ?? "{}"
+        // Synthesize a tool-call id since claude -p doesn't issue one.
+        let id = "local-\(UUID().uuidString.prefix(8))"
+        return ParsedToolFence(id: String(id), name: name, args: argsJSON)
+    }
+
+    private func resolveClaudeBinary() -> String? {
+        let candidates = [
+            (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin/claude"),
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude"
+        ]
+        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
+            return p
+        }
+        return nil
+    }
+}

@@ -12,10 +12,6 @@ public struct CLI {
         let command = args.first ?? ""
 
         switch command {
-        case "tui":
-            runTUI()
-            return false
-
         case "board":
             return BoardCommand.run()  // 返回 false 表示退出，不启动 GUI
 
@@ -63,6 +59,10 @@ public struct CLI {
             ChannelCommand.run(args: Array(args.dropFirst()))
             return false
 
+        case "test":
+            TestCommand.run(args: Array(args.dropFirst()))
+            return false
+
         case "--help", "-h", "help":
             printHelp()
             return false
@@ -78,11 +78,6 @@ public struct CLI {
         }
     }
 
-    private static func runTUI() {
-        var dashboard = DashboardView()
-        dashboard.run()
-    }
-
     private static func printHelp() {
         print("""
         meee2 - Claude Session Manager
@@ -90,7 +85,6 @@ public struct CLI {
         Usage:
           meee2                  Start GUI (default)
           meee2 gui              Start GUI
-          meee2 tui              Start TUI dashboard
           meee2 board            Open whiteboard visualization (sessions + A2A channels)
           meee2 list             List sessions
           meee2 list --json      List sessions in JSON format
@@ -115,7 +109,7 @@ public struct CLI {
 
     private static func printUsage() {
         print("Usage: meee2 <command> [args]")
-        print("Commands: gui, tui, board, list, send, jump, note, channel, msg, whoami, help, version")
+        print("Commands: gui, board, list, send, jump, note, channel, msg, whoami, help, version")
         print("Run 'meee2 --help' for more information")
     }
 

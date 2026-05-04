@@ -233,6 +233,19 @@ export function TranscriptView({
       if (end <= top + 2) { stickyIdx = i; break }
     }
 
+    // Don't show sticky when the chosen user entry IS the most recent user
+    // message in the conversation —— there's nothing "scrolled past" worth
+    // reminding the user about; the bar would just duplicate whatever they
+    // most recently typed (or the prompt they just scrolled away from).
+    // Sticky is meaningful only when there's a NEWER user prompt below.
+    if (stickyIdx != null) {
+      let hasLaterUserMsg = false
+      for (let i = stickyIdx + 1; i < visibleEntries.length; i++) {
+        if (visibleEntries[i].type === 'user') { hasLaterUserMsg = true; break }
+      }
+      if (!hasLaterUserMsg) stickyIdx = null
+    }
+
     let sticky: { index: number; text: string } | null = null
     if (stickyIdx != null) {
       let start = stickyIdx

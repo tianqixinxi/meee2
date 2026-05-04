@@ -1,5 +1,6 @@
 import XCTest
 @testable import meee2Kit
+import Meee2CommKit
 
 final class HookSocketServerDesktopDrainTests: XCTestCase {
 

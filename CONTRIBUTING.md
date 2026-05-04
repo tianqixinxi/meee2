@@ -50,6 +50,7 @@ See `CLAUDE.md` for the full list. The load-bearing ones:
 - **Plugins**: subclass `SessionPlugin` (in `meee2-plugin-kit`). Inter-plugin communication goes through `PluginManager`, never direct references.
 - **Persistence**: `SessionData` is persisted to `~/.meee2/sessions/`. If you change the on-disk schema, bump `SessionData.currentSchemaVersion` and add a migrator — see `Sources/Services/SessionStore.swift`.
 - **Comments**: Chinese inline comments are fine; keep public doc comments descriptive.
+- **Resolver regressions**: any change to `TranscriptStatusResolver` should add a captured fixture for the case you're fixing — see [State-trace regression fixtures](CLAUDE.md#state-trace-regression-fixtures). One-liner: `meee2 test capture <sid> --name <case> --desc "..."`, commit the resulting JSON.
 
 ## Commit & PR
 

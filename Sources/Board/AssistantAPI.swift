@@ -1,125 +1,280 @@
 import Foundation
 import Swifter
+import Meee2PluginKit
 
-/// 全局 "ask & spawn" assistant —— 跑本地 `claude -p` 帮用户选 cwd 并开新 session。
+/// Global "ask & spawn" assistant — chat endpoint that supports three LLM
+/// providers (OpenAI-compatible, Anthropic native, local `claude -p`) behind
+/// the same SSE response shape.
 ///
-/// 设计背景：用户想在 Web UI 里用自然语言描述 "去 meee1 开个新 claude"，
-/// 而不是手填路径。做成一个 per-conversation 的 chat endpoint，前端把全部
-/// 历史 POST 过来，后端单轮 `claude -p` 吐下一条回复。
+/// Frontend POSTs `{ messages, settings }` and reads a server-sent-events
+/// stream. Each event the orchestrator emits is one of:
+///   • `delta`        — incremental text chunk for the current turn
+///   • `tool_call`    — LLM is calling a tool, payload `{id, name, args}`
+///   • `tool_result`  — tool finished, payload `{id, result}`
+///   • `error`        — terminal failure, stream ends after
+///   • `done`         — final event, always last; client closes EventSource
 ///
-/// 为什么不用 `--session-id`：这种短交互多轮状态管理不划算；把历史拼回去
-/// prompt 里足够了，而且每次 stateless 更好 debug。
+/// Settings shape:
+///   {
+///     provider: "openai" | "anthropic" | "local",
+///     apiKey?: string,        // required for openai/anthropic, ignored for local
+///     baseUrl?: string,       // optional override for hosted endpoints
+///     model?: string,         // optional, sane defaults per provider
+///     enabledTools?: string[] // omit = all tools enabled
+///   }
 ///
-/// 收敛信号：让 assistant 在确定 cwd 之后，输出一段 ```spawn fence：
-///   ```spawn
-///   {"cwd": "/abs/path"}
-///   ```
-/// 前端看到这个 fence 就渲染"Spawn here"按钮，点击走现有
-/// `POST /api/sessions/spawn`。
+/// Tool catalogue lives in `AssistantTools` and is enforced server-side —
+/// the frontend can't ask for tools it hasn't been granted.
 enum AssistantAPI {
 
-    // MARK: - 请求/响应
+    private static let maxToolIterations = 8
+    /// Total wall-clock cap for the whole orchestration. Hosted providers
+    /// usually finish in <30s but local `claude -p` can take longer with
+    /// big prompts; 180s is a comfortable upper bound.
+    private static let totalTimeoutSeconds: TimeInterval = 180
 
-    private struct ChatRequest: Decodable {
-        let messages: [ChatMessage]
-    }
-    private struct ChatMessage: Decodable {
-        let role: String   // "user" | "assistant"
-        let content: String
-    }
-    private struct ChatResponse: Encodable {
-        let content: String
-    }
-
-    // MARK: - 路由
+    // MARK: - Route
 
     /// POST /api/assistant/chat
-    /// Body: `{"messages": [{"role": "user|assistant", "content": "..."}]}`
+    /// Body: `{ messages: [{role, content}], settings: {...} }`
+    /// Response: `text/event-stream` (see file header for event types).
     static func chat(_ req: HttpRequest) -> HttpResponse {
         let data = Data(req.body)
-        guard let parsed = try? JSONDecoder().decode(ChatRequest.self, from: data) else {
-            return BoardAPI.errorResponse("invalid_json", "expected {messages: [{role, content}]}", status: 400)
+        guard let bodyObj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return BoardAPI.errorResponse("invalid_json", "expected {messages, settings}", status: 400)
         }
-        guard !parsed.messages.isEmpty,
-              parsed.messages.last?.role == "user",
-              !(parsed.messages.last?.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) else {
-            return BoardAPI.errorResponse("bad_request", "last message must be user with non-empty content", status: 400)
+        guard let rawMessages = bodyObj["messages"] as? [[String: Any]], !rawMessages.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "messages must be a non-empty array", status: 400)
         }
 
-        // 拼上下文
-        let systemPrompt = buildSystemPrompt()
-        let userPrompt = renderConversation(parsed.messages)
+        let settings = parseSettings(bodyObj["settings"] as? [String: Any])
+        let messages = rawMessages.compactMap { dict -> ChatMessage? in
+            guard let role = dict["role"] as? String,
+                  let content = dict["content"] as? String else { return nil }
+            switch role {
+            case "user": return ChatMessage(role: .user, content: content)
+            case "assistant": return ChatMessage(role: .assistant, content: content)
+            default: return nil
+            }
+        }
+        guard !messages.isEmpty, messages.last?.role == .user else {
+            return BoardAPI.errorResponse("bad_request", "last message must be role=user", status: 400)
+        }
 
-        // 跑 claude -p
-        let result = runClaudePrint(systemPrompt: systemPrompt, userPrompt: userPrompt, timeout: 30.0)
-        switch result {
-        case .success(let text):
-            return BoardAPI.jsonResponse(ChatResponse(content: text))
-        case .failure(let reason):
-            return BoardAPI.errorResponse("assistant_failed", reason, status: 500)
+        let systemPrompt = buildSystemPrompt(settings: settings)
+
+        // SSE response. The writer block runs synchronously in Swifter; we
+        // launch the async orchestrator inside, signal completion via a
+        // DispatchGroup, and serialize all writes through one queue so the
+        // socket isn't written from two threads at once.
+        return .raw(200, "OK", [
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no"
+        ]) { writer in
+            let writeQueue = DispatchQueue(label: "assistant.sse.write")
+            let send: (String, String) -> Void = { eventType, json in
+                let line = "event: \(eventType)\ndata: \(json)\n\n"
+                let bytes = Array(line.utf8)
+                writeQueue.sync {
+                    try? writer.write(bytes)
+                }
+            }
+
+            let group = DispatchGroup()
+            group.enter()
+            Task.detached {
+                await orchestrate(
+                    systemPrompt: systemPrompt,
+                    initialMessages: messages,
+                    settings: settings,
+                    send: send
+                )
+                group.leave()
+            }
+            _ = group.wait(timeout: .now() + totalTimeoutSeconds)
         }
     }
 
-    // MARK: - System prompt & conversation rendering
+    // MARK: - Orchestration loop
 
-    private static func buildSystemPrompt() -> String {
+    /// Drives the conversation: call provider → relay events → if tool
+    /// calls came back, dispatch them and re-prompt the LLM with results.
+    /// Loops up to `maxToolIterations` times before giving up.
+    private static func orchestrate(
+        systemPrompt: String,
+        initialMessages: [ChatMessage],
+        settings: AssistantSettings,
+        send: @escaping (String, String) -> Void
+    ) async {
+        var transcript = initialMessages
+        let tools = AssistantTools.filter(settings.enabledTools)
+
+        for iter in 0..<maxToolIterations {
+            let provider = AssistantProviderFactory.make(settings.provider)
+            var pendingCalls: [ToolCallRef] = []
+            var assistantText = ""
+            var streamFailed = false
+
+            do {
+                for try await ev in provider.runTurn(
+                    systemPrompt: systemPrompt,
+                    messages: transcript,
+                    tools: tools,
+                    settings: settings
+                ) {
+                    switch ev {
+                    case .textDelta(let txt):
+                        assistantText += txt
+                        send("delta", encodeJSON(["text": txt]))
+                    case .toolCall(let id, let name, let argsJSON):
+                        pendingCalls.append(ToolCallRef(id: id, name: name, argsJSON: argsJSON))
+                        // Splice the raw args JSON in unquoted so the client
+                        // receives a real object, not a string.
+                        let argsBlob = argsJSON.isEmpty ? "{}" : argsJSON
+                        send("tool_call",
+                             "{\"id\":\(jsonString(id)),\"name\":\(jsonString(name)),\"args\":\(argsBlob)}")
+                    case .turnDone:
+                        break
+                    case .error(let msg):
+                        send("error", encodeJSON(["message": msg]))
+                        send("done", "{}")
+                        return
+                    }
+                }
+            } catch {
+                send("error", encodeJSON(["message": error.localizedDescription]))
+                send("done", "{}")
+                streamFailed = true
+            }
+            if streamFailed { return }
+
+            // No tool calls → conversation done.
+            if pendingCalls.isEmpty {
+                send("done", "{}")
+                return
+            }
+
+            // Tool calls present → execute each, append assistant + tool
+            // messages to the transcript, loop back to the provider.
+            transcript.append(ChatMessage(
+                role: .assistant,
+                content: assistantText,
+                toolCalls: pendingCalls
+            ))
+            for call in pendingCalls {
+                let argsObj = (try? JSONSerialization.jsonObject(with: Data(call.argsJSON.utf8))) as? [String: Any] ?? [:]
+                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools)
+                let resultJSON: String
+                switch result {
+                case .success(let payload):
+                    if let data = try? JSONSerialization.data(withJSONObject: payload),
+                       let s = String(data: data, encoding: .utf8) {
+                        resultJSON = s
+                    } else {
+                        resultJSON = "{}"
+                    }
+                case .failure(let msg):
+                    resultJSON = encodeJSON(["error": msg])
+                }
+                send("tool_result",
+                     "{\"id\":\(jsonString(call.id)),\"result\":\(resultJSON)}")
+                transcript.append(ChatMessage(
+                    role: .tool,
+                    content: resultJSON,
+                    toolCallId: call.id
+                ))
+            }
+
+            _ = iter  // suppress unused
+        }
+
+        // Hit the iteration cap.
+        send("error", encodeJSON(["message": "max tool iterations reached (\(maxToolIterations))"]))
+        send("done", "{}")
+    }
+
+    // MARK: - Settings parsing
+
+    /// Internal (not `private`) so unit tests can hit it directly without
+    /// having to spin up the whole HTTP path.
+    static func parseSettings(_ raw: [String: Any]?) -> AssistantSettings {
+        let dict = raw ?? [:]
+        let providerStr = (dict["provider"] as? String) ?? "local"
+        let provider = AssistantSettings.Provider(rawValue: providerStr) ?? .local
+        let apiKey = (dict["apiKey"] as? String) ?? ""
+        let baseUrl = (dict["baseUrl"] as? String) ?? ""
+        let model = (dict["model"] as? String) ?? ""
+        let enabledList = dict["enabledTools"] as? [String]
+        let enabled: Set<String>? = enabledList.map { Set($0) }
+        return AssistantSettings(
+            provider: provider,
+            apiKey: apiKey,
+            baseUrl: baseUrl,
+            model: model,
+            enabledTools: enabled
+        )
+    }
+
+    // MARK: - System prompt
+
+    static func buildSystemPrompt(settings: AssistantSettings) -> String {
         let cwds = candidateCwds()
         let cwdList = cwds.isEmpty
             ? "(no recent projects found)"
-            : cwds.map { "- \($0)" }.joined(separator: "\n")
+            : cwds.prefix(20).map { "- \($0)" }.joined(separator: "\n")
+
+        let sessionSummary = currentSessionSummary()
 
         return """
-        You are a concise assistant that helps the user pick a working directory (cwd) for a new Claude Code session, and then triggers the spawn via a structured final answer. You have no tools.
+        You are the meee2 board assistant. The user can see a canvas of
+        live Claude / Codex / etc. sessions and is asking you to query,
+        summarise, or spawn new ones.
 
-        Known recent project directories on this machine:
+        Be concise. Respond in the user's language (often Chinese).
+
+        Current sessions on the board:
+        \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
+
+        Recent project directories on this machine:
         \(cwdList)
 
-        The user's home is \(NSHomeDirectory()).
+        User's home is \(NSHomeDirectory()). Always use absolute paths
+        (expand `~` to the home).
+
+        You have these tools available (call them when the user's intent
+        clearly maps to one):
+          • get_session_list    — narrow by status / plugin / project
+          • get_session_info    — fetch full state + recent transcript
+          • create_session      — spawn a new claude session at a cwd
 
         Guidelines:
-        - Be brief. Ask at most one clarifying question per turn, only when strictly necessary.
-        - Absolute paths (expand `~` to the user's home) are mandatory in the final answer.
-        - If the user's intent is clear enough — e.g. they named a project that matches the list above, or gave an explicit path — skip confirmation and jump to the final answer.
-        - The final answer MUST end with a fenced code block tagged `spawn` containing a single-line JSON object with key `cwd`:
-
-          ```spawn
-          {"cwd": "/Users/.../projects/foo"}
-          ```
-
-          The fenced block triggers the UI to render a "Spawn here" button. Include it only when you have a definitive cwd.
-        - Do not invent paths not in the list unless the user explicitly provides one.
-        - Do not suggest running arbitrary commands; only the `cwd` matters.
-        - Respond in the same language as the user (usually Chinese).
+          • If the user asks "what sessions do I have", call get_session_list
+            instead of guessing.
+          • If they ask about a specific session, call get_session_info.
+          • If they ask to create / open a new session, call create_session
+            with an absolute cwd.
+          • For mutating tools (create_session) prefer to confirm the cwd
+            briefly with the user first if there's any ambiguity.
         """
     }
 
-    private static func renderConversation(_ messages: [ChatMessage]) -> String {
-        // 把多轮对话渲染成一段文本喂给 claude -p。最后一行明确提示 assistant
-        // 接着说哪一轮，减少 claude 把自己当用户接话的概率。
-        var out: [String] = []
-        for m in messages {
-            let role = m.role.lowercased() == "assistant" ? "Assistant" : "User"
-            out.append("\(role): \(m.content)")
-        }
-        out.append("Assistant:")
-        return out.joined(separator: "\n\n")
+    private static func currentSessionSummary() -> String {
+        let sessions = PluginManager.shared.sessions
+            .filter { $0.status != .dead }
+            .prefix(20)
+        return sessions.map { s in
+            let st = String(describing: s.status).replacingOccurrences(of: "SessionStatus.", with: "")
+            let title = s.title.isEmpty ? "(untitled)" : s.title
+            let proj = (s.cwd ?? "").isEmpty ? "" : " · \(s.cwd!)"
+            return "- \(s.id.prefix(8)) [\(st)] \(title)\(proj)"
+        }.joined(separator: "\n")
     }
 
-    // MARK: - 候选目录
-
-    /// 从 SessionTerminalStore 里拿历史 session 的完整 cwd（hook 每次都带
-    /// 真实 cwd 到这个 store），再加 `~/projects/*` 一层的子目录作为冷启动
-    /// 兜底。返回去重后的绝对路径列表，最多 30 个避免 prompt 过长。
-    ///
-    /// 为什么不用 SessionData/PluginSession：SessionData.project 只存 basename
-    /// ("meee1")、toPluginSession 把 cwd 也设成这个 basename，没完整路径。
-    /// transcript 路径解码不稳（`_` 和 `/` 都被 mangle 成 `-`）。只有
-    /// SessionTerminalStore 从 hook payload 里拿到真正的 cwd 并持久化了。
+    /// Recent project directories from SessionTerminalStore + ~/projects/*
     private static func candidateCwds() -> [String] {
         var seen: Set<String> = []
         var out: [String] = []
-
-        // 1) 历史 session terminal info 里的完整 cwd（按 lastActivityAt 从新到旧）
         let infos = SessionTerminalStore.shared.getAll().values
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
         for info in infos {
@@ -130,8 +285,6 @@ enum AssistantAPI {
                 if out.count >= 20 { break }
             }
         }
-
-        // 2) ~/projects/*（一层），兜底给新环境
         let projectsRoot = (NSHomeDirectory() as NSString).appendingPathComponent("projects")
         if let children = try? FileManager.default.contentsOfDirectory(atPath: projectsRoot) {
             for child in children.sorted() {
@@ -145,94 +298,27 @@ enum AssistantAPI {
                 }
             }
         }
-
         return out
     }
 
-    // MARK: - 跑 claude -p
+    // MARK: - JSON helpers
 
-    private enum RunResult {
-        case success(String)
-        case failure(String)
+    /// Build a single JSON object from a `[String: Any]` payload (string /
+    /// number / bool / nested dict / array). Used for `delta` and `error`
+    /// events whose payloads are pure data; events that need to splice raw
+    /// JSON (tool_call args, tool_result result) build the line manually.
+    private static func encodeJSON(_ obj: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+              let s = String(data: data, encoding: .utf8) else { return "{}" }
+        return s
     }
 
-    private static func runClaudePrint(systemPrompt: String, userPrompt: String, timeout: TimeInterval) -> RunResult {
-        // claude 不一定在默认 PATH 上。先找几个常见位置，都没有再走 `/usr/bin/env claude`。
-        let claudePath = resolveClaudeBinary()
-
-        let process = Process()
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-
-        if let claudePath = claudePath {
-            process.executableURL = URL(fileURLWithPath: claudePath)
-            process.arguments = [
-                "-p",
-                "--append-system-prompt", systemPrompt,
-                "--no-session-persistence",
-                "--output-format", "text"
-            ]
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = [
-                "claude",
-                "-p",
-                "--append-system-prompt", systemPrompt,
-                "--no-session-persistence",
-                "--output-format", "text"
-            ]
-        }
-
-        // 继承用户环境，保证 OAuth / HOME / PATH 都对齐。
-        process.environment = ProcessInfo.processInfo.environment
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        do {
-            try process.run()
-        } catch {
-            return .failure("failed to launch claude: \(error.localizedDescription)")
-        }
-
-        // 喂 prompt
-        let handle = stdin.fileHandleForWriting
-        if let payload = userPrompt.data(using: .utf8) {
-            handle.write(payload)
-        }
-        try? handle.close()
-
-        // 带 timeout 等进程退出
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning {
-            if Date() >= deadline {
-                process.terminate()
-                return .failure("claude -p timed out after \(Int(timeout))s")
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let out = String(data: outData, encoding: .utf8) ?? ""
-        if process.terminationStatus != 0 {
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let err = String(data: errData, encoding: .utf8) ?? ""
-            return .failure("claude exited \(process.terminationStatus): \(err.prefix(400))")
-        }
-
-        return .success(out.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    private static func resolveClaudeBinary() -> String? {
-        let candidates = [
-            (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin/claude"),
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude"
-        ]
-        for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
-            return p
-        }
-        return nil
+    /// Quote + escape a string into a JSON string literal (including the
+    /// surrounding double quotes). Use for splicing into hand-built JSON.
+    private static func jsonString(_ s: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: [s], options: [])) ?? Data("[\"\"]".utf8)
+        guard let str = String(data: data, encoding: .utf8) else { return "\"\"" }
+        // ["foo"] → "foo"
+        return String(str.dropFirst().dropLast())
     }
 }

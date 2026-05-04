@@ -1,6 +1,7 @@
 import XCTest
 import Darwin
 @testable import meee2Kit
+import Meee2CommKit
 
 final class A2ATests: XCTestCase {
 

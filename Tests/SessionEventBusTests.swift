@@ -1,6 +1,7 @@
 import XCTest
 import Combine
 @testable import meee2Kit
+import Meee2CommKit
 
 final class SessionEventBusTests: XCTestCase {
 

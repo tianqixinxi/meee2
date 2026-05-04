@@ -6,6 +6,8 @@ interface Props {
   onClose: () => void
   onSpawned: (cwd: string) => void
   onError: (msg: string) => void
+  /** 预填的 cwd —— 从 sidebar 项目组的 + 按钮触发时传入项目目录 */
+  defaultCwd?: string
 }
 
 /**
@@ -15,8 +17,8 @@ interface Props {
  * 不存在就 mkdir"。点 Spawn 会让 daemon 启一个新 Ghostty 窗口、落在 cwd
  * 并自动跑 `claude`——沿用本地 OAuth，不需要再登录。
  */
-export function NewSessionDialog({ onClose, onSpawned, onError }: Props) {
-  const [cwd, setCwd] = useState('~/')
+export function NewSessionDialog({ onClose, onSpawned, onError, defaultCwd }: Props) {
+  const [cwd, setCwd] = useState(defaultCwd || '~/')
   const [createIfMissing, setCreateIfMissing] = useState(false)
   // 默认 command 从 Preferences 里读；用户改了又改 & 点 Spawn 后顺手存回，下次打开记住
   const [command, setCommand] = useState<string>(loadDefaultSpawnCommand)
