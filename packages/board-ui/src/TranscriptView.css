@@ -762,38 +762,52 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Pending tool block — tool name + small inline spinner + "running…". */
-.tx-tool--pending {
-  background: rgba(34, 197, 94, 0.06);
-  border-color: rgba(34, 197, 94, 0.22);
-}
-
-.tx-tool__icon--pulse {
+/* In-flight tool 单行 chip：跟历史 rollup 同一级视觉，不要 .tx-tool 那套
+ * 完整 block chrome（border、padding、background 都收掉）。绿色调表
+ * 示"活的"。*/
+.tx-tool-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  margin: 4px 0;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+  font-size: 11.5px;
+  color: rgba(187, 247, 208, 0.95);
+  width: fit-content;
+  max-width: 100%;
   animation: tx-pulse 1.4s ease-in-out infinite;
 }
 
-@keyframes tx-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.45; }
-}
-
-.tx-tool__pending-label {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
+.tx-tool-pending__icon {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   color: rgba(187, 247, 208, 0.75);
-  font-style: italic;
 }
 
-.tx-tool__pending-spinner {
+.tx-tool-pending__label {
+  font-weight: 600;
+}
+
+.tx-tool-pending__caption {
+  font-style: italic;
+  color: rgba(187, 247, 208, 0.65);
+  font-size: 10.5px;
+}
+
+.tx-tool-pending__spinner {
   display: inline-block;
   width: 9px; height: 9px;
   border-radius: 50%;
   border: 1.4px solid rgba(187, 247, 208, 0.25);
   border-top-color: rgba(187, 247, 208, 0.9);
   animation: sd-spin 0.7s linear infinite;
+}
+
+@keyframes tx-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 
 /* Pending text (for the "Thinking…" placeholder). */

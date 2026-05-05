@@ -973,19 +973,17 @@ function ToolUseBlock({
   )
 }
 
-/// In-flight tool_use 占位：tool 名 + spinner，没 input / result。
-/// 等 PostToolUse hook 把真 entry 写进 jsonl + status 翻 idle，这条会被
-/// dedup 掉（visibleEntries 里检查最后一条 entry 是否包含同名 tool_use）。
+/// In-flight tool_use 占位：单行 chip 视觉，跟历史 rollup 同一级（don't
+/// expand into a full tool block with input / result chrome since both are
+/// pending）。一旦 PostToolUse 把真 entry 写进 jsonl + status 翻 idle，这条
+/// 会被替换成正式的 ToolUseBlock。
 function PendingToolUseBlock({ toolName }: { toolName: string }) {
   return (
-    <div className="tx-tool tx-tool--pending">
-      <div className="tx-tool__header">
-        <span className="tx-tool__icon tx-tool__icon--pulse">{toolIcon(toolName)}</span>
-        <span className="tx-tool__name">{toolName}</span>
-        <span className="tx-tool__pending-label">
-          <span className="tx-tool__pending-spinner" aria-hidden /> running…
-        </span>
-      </div>
+    <div className="tx-tool-pending">
+      <span className="tx-tool-pending__icon">{toolIcon(toolName)}</span>
+      <span className="tx-tool-pending__label">{toolName}</span>
+      <span className="tx-tool-pending__spinner" aria-hidden />
+      <span className="tx-tool-pending__caption">running…</span>
     </div>
   )
 }
