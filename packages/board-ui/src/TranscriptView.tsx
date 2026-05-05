@@ -586,9 +586,56 @@ function EntryRow({
   isLive?: boolean
 }) {
   let renderedFirstText = false
+
+  // 历史 toolcall 折叠：连续 ≥2 个 tool_use（中间没 text 打断）合成一个
+  // ToolGroupBlock 显示 "Ran 3 commands, read 2 files" 摘要，点开展开看每条。
+  // 单条 tool_use 还是走 ToolUseBlock，不必折叠。Live 占位 entry 不折叠
+  // （它本来就一条 tool_use，没意义）。
+  const renderItems = (() => {
+    if (isLive) return entry.blocks.map((b, i) => ({ kind: 'block' as const, block: b, index: i }))
+    type Item =
+      | { kind: 'block'; block: TranscriptBlockForView; index: number }
+      | { kind: 'tool-group'; blocks: TranscriptBlockForView[]; startIndex: number }
+    const out: Item[] = []
+    let i = 0
+    while (i < entry.blocks.length) {
+      const b = entry.blocks[i]
+      if (b.type === 'tool_use') {
+        // 收集连续的 tool_use
+        let j = i
+        const run: TranscriptBlockForView[] = []
+        while (j < entry.blocks.length && entry.blocks[j].type === 'tool_use') {
+          run.push(entry.blocks[j])
+          j += 1
+        }
+        if (run.length >= 2) {
+          out.push({ kind: 'tool-group', blocks: run, startIndex: i })
+        } else {
+          out.push({ kind: 'block', block: run[0], index: i })
+        }
+        i = j
+      } else {
+        out.push({ kind: 'block', block: b, index: i })
+        i += 1
+      }
+    }
+    return out
+  })()
+
   return (
     <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}${isLive ? ' tx-entry--live' : ''}`}>
-      {entry.blocks.map((b, i) => {
+      {renderItems.map((item, idx) => {
+        if (item.kind === 'tool-group') {
+          return (
+            <ToolGroupBlock
+              key={`tg-${item.startIndex}`}
+              blocks={item.blocks}
+              resultsByToolUseId={resultsByToolUseId}
+            />
+          )
+        }
+        const b = item.block
+        const i = item.index
         switch (b.type) {
           case 'text': {
             const hideLabel = hideRoleChip || renderedFirstText
@@ -606,8 +653,7 @@ function EntryRow({
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
-            // In-flight tool_use 没 toolInput / 没 result —— 渲染 spinner
-            // 占位（PendingToolUseBlock）；正常 tool_use 走完整 ToolUseBlock。
+            // 单条 tool_use（既不连续也不属于 group）—— 完整渲染
             if (isLive) {
               return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
             }
@@ -626,6 +672,113 @@ function EntryRow({
       })}
     </div>
   )
+}
+
+// ─── tool group rollup ────────────────────────────────────────────────────
+
+/// 多个连续 tool_use 折叠成单条摘要。模仿 Claude Code 自带 "Ran 3 commands,
+/// read 2 files" 的视觉。点开后逐条展示完整 ToolUseBlock。
+function ToolGroupBlock({
+  blocks,
+  resultsByToolUseId,
+}: {
+  blocks: TranscriptBlockForView[]
+  resultsByToolUseId: Map<string, TranscriptBlockForView>
+}) {
+  const [open, setOpen] = useState(false)
+  const summary = summarizeToolBlocks(blocks)
+  return (
+    <div className={`tx-tool-group${open ? ' tx-tool-group--open' : ''}`}>
+      <button
+        type="button"
+        className="tx-tool-group__header"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <span className="tx-tool-group__chevron" aria-hidden>{open ? '▾' : '▸'}</span>
+        <span className="tx-tool-group__summary">{summary}</span>
+      </button>
+      {open && (
+        <div className="tx-tool-group__body">
+          {blocks.map((b, i) => (
+            <ToolUseBlock
+              key={i}
+              block={b}
+              result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/// 把一组 tool_use 块按工具类别归并成一句人话。
+/// 维度：
+///   - Bash / BashOutput     → "ran N command(s)"
+///   - Read                  → "read N file(s)"
+///   - Edit / MultiEdit /
+///     Write                 → "edited N file(s)"
+///   - Grep / Glob           → "searched N time(s)"
+///   - 其它                  → "called N <toolName>"（按 toolName 分桶）
+/// 输出例子：「Ran 2 commands, read 3 files, edited 1 file」
+function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
+  const buckets: { ran: number; read: number; edited: number; searched: number; other: Map<string, number> } = {
+    ran: 0,
+    read: 0,
+    edited: 0,
+    searched: 0,
+    other: new Map(),
+  }
+  for (const b of blocks) {
+    const name = b.toolName ?? ''
+    switch (name) {
+      case 'Bash':
+      case 'BashOutput':
+        buckets.ran += 1
+        break
+      case 'Read':
+        buckets.read += 1
+        break
+      case 'Edit':
+      case 'MultiEdit':
+      case 'Write':
+        buckets.edited += 1
+        break
+      case 'Grep':
+      case 'Glob':
+        buckets.searched += 1
+        break
+      default: {
+        const key = name || 'tool'
+        buckets.other.set(key, (buckets.other.get(key) ?? 0) + 1)
+      }
+    }
+  }
+  const parts: string[] = []
+  // 第一个分句首字母大写（"Ran 2 commands"），后续小写衔接（"read 3 files"）
+  const verbs: Array<[number, string]> = [
+    [buckets.ran, 'command'],
+    [buckets.read, 'file'],
+    [buckets.edited, 'file'],
+    [buckets.searched, 'search'],
+  ]
+  const verbWords = ['Ran', 'read', 'edited', 'searched']
+  for (let i = 0; i < verbs.length; i++) {
+    const [count, noun] = verbs[i]
+    if (count === 0) continue
+    const verb = parts.length === 0 ? verbWords[i] : verbWords[i].toLowerCase()
+    const verbCapitalized = parts.length === 0
+      ? verb.charAt(0).toUpperCase() + verb.slice(1)
+      : verb
+    parts.push(`${verbCapitalized} ${count} ${noun}${count !== 1 ? 's' : ''}`)
+  }
+  for (const [name, count] of buckets.other) {
+    const verbHead = parts.length === 0 ? 'Called' : 'called'
+    parts.push(`${verbHead} ${count} ${name}${count !== 1 ? 's' : ''}`)
+  }
+  if (parts.length === 0) return `${blocks.length} tool calls`
+  return parts.join(', ')
 }
 
 const TextBlock = memo(function TextBlock({
