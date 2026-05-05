@@ -22,6 +22,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { Zap } from 'lucide-react'
 
 interface AttachmentItem {
   id: string
@@ -279,17 +280,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             aria-label="Push to Desktop now"
             type="button"
           >
-            {/* lightning ⚡ icon — 表示"立刻强制送达"；视觉上跟主 send
-             *  ↑ 区分但形状对称（同尺寸 + 同 hover style）。 */}
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
-              <path
-                d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            {/* lucide Zap icon — "立刻强制送达"；视觉上跟主 send 的箭头
+             *  分开但同尺寸 + 同 hover style。 */}
+            <Zap size={14} aria-hidden />
           </button>
         )}
         <button

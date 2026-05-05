@@ -62,7 +62,7 @@ function statusLabelHelper(status: string): string {
     running: '● running',
     idle: '○ idle',
     thinking: '✦ thinking',
-    tooling: '⚡ tooling',
+    tooling: '▸ tooling',
     waitingInput: '⌛ waiting',
     waiting_input: '⌛ waiting',
     permissionRequest: '⚠ permission',

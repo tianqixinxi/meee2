@@ -44,19 +44,20 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
+    "@meee1/board-cards": "workspace:*",
     "@meee1/board-core": "workspace:*",
-    "@meee1/board-cards": "workspace:*"
+    "lucide-react": "^1.14.0"
   },
   "peerDependencies": {
     "@excalidraw/excalidraw": "^0.18.0",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
     "@tanstack/react-virtual": "^3.0.0",
-    "react-markdown": "^10.0.0",
+    "highlight.js": "^11.0.0",
+    "react": "^19.0.0",
     "react-diff-viewer-continued": "^4.0.0",
-    "remark-gfm": "^4.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.0.0",
     "rehype-highlight": "^7.0.0",
-    "highlight.js": "^11.0.0"
+    "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

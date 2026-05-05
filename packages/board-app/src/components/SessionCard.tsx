@@ -1,5 +1,15 @@
 import type { Session, TranscriptEntry } from '../types'
 import { shortenProject } from '@meee1/board-core'
+// Lucide icons replace inline emoji glyphs in status / inbox / bg-agent
+// chips. Keeping size: 11 to match the ~11px font cards use.
+import {
+  Zap,
+  Package,
+  Inbox,
+  Lock,
+  Settings as SettingsIcon,
+  Wrench,
+} from 'lucide-react'
 
 interface SessionCardProps {
   session: Session
@@ -101,27 +111,40 @@ export function SessionCard({
   const rows = messages.slice(-5)
   const sidShort = session.id.replace(/-/g, '').slice(0, 8)
 
-  const footerStatus = session.currentTool
-    ? `⚡ ${session.currentTool}`
-    : session.status === 'active'
-    ? '● active'
-    : session.status === 'thinking'
-    ? '✦ thinking'
-    : session.status === 'tooling'
-    ? '⚡ tooling'
-    : session.status === 'compacting'
-    ? '📦 compacting'
-    : session.status === 'completed'
-    ? '✓ completed'
-    : session.status === 'idle'
-    ? '○ idle'
-    : session.status === 'waitingForUser'
-    ? '○ idle'
-    : session.status === 'permissionRequired'
-    ? '🔒 permission'
-    : session.status === 'dead'
-    ? '✖ dead'
-    : `● ${session.status}`
+  // 状态行：图标走 lucide，文字保留原 label。原本用 emoji 前缀字符串，
+  // 改成 React 节点（icon + text）。idle / completed / dead 这种纯几何
+  // 字符（○ ✓ ✖ ●）保留——它们不是 emoji，单字符渲染稳定。
+  const footerStatus: React.ReactNode = session.currentTool ? (
+    <span className="session-card__status-line">
+      <Zap size={11} aria-hidden /> {session.currentTool}
+    </span>
+  ) : session.status === 'active' ? (
+    '● active'
+  ) : session.status === 'thinking' ? (
+    '✦ thinking'
+  ) : session.status === 'tooling' ? (
+    <span className="session-card__status-line">
+      <Zap size={11} aria-hidden /> tooling
+    </span>
+  ) : session.status === 'compacting' ? (
+    <span className="session-card__status-line">
+      <Package size={11} aria-hidden /> compacting
+    </span>
+  ) : session.status === 'completed' ? (
+    '✓ completed'
+  ) : session.status === 'idle' ? (
+    '○ idle'
+  ) : session.status === 'waitingForUser' ? (
+    '○ idle'
+  ) : session.status === 'permissionRequired' ? (
+    <span className="session-card__status-line">
+      <Lock size={11} aria-hidden /> permission
+    </span>
+  ) : session.status === 'dead' ? (
+    '✖ dead'
+  ) : (
+    `● ${session.status}`
+  )
 
   const cardClass = [
     'session-card',
@@ -192,12 +215,12 @@ export function SessionCard({
               .map((a) => `${bgKindGlyph(a.kind)} ${a.description ?? a.id}`)
               .join('\n')}
           >
-            ⚙ {session.backgroundAgents.length} bg
+            <SettingsIcon size={10} aria-hidden /> {session.backgroundAgents.length} bg
           </span>
         )}
         {session.inboxPending > 0 && (
           <span className="session-card__pending">
-            📨 {session.inboxPending}
+            <Inbox size={11} aria-hidden /> {session.inboxPending}
           </span>
         )}
         <span className="session-card__sid">{sidShort}</span>

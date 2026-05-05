@@ -19,6 +19,7 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
+import { Inbox } from 'lucide-react'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -877,7 +878,7 @@ export default function Sidebar({
                             className="badge warn sidebar-session-row__inbox"
                             title={`${s.inboxPending} pending inbox message${s.inboxPending === 1 ? '' : 's'}`}
                           >
-                            📨 {s.inboxPending}
+                            <Inbox size={11} aria-hidden /> {s.inboxPending}
                           </span>
                         )}
                         <button

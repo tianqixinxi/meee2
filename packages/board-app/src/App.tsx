@@ -366,11 +366,37 @@ export default function App() {
         setDockOpen(true)
         return
       }
+      // Plain Enter on a selected session → open Dock (transcript view) for
+      // that session. Mirrors the double-click gesture; gives keyboard users
+      // the same "show transcript" affordance.
+      if (e.key === 'Enter' && selectedSessionId && !dockOpen) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        dockSeedRef.current = ''
+        setDockOpen(true)
+        return
+      }
       if (e.key.length !== 1) return
       if (!selectedSessionId && selection.kind !== 'none') return
       e.preventDefault()
       e.stopImmediatePropagation()
       dispatch(e.key)
+    }
+
+    // Double-click anywhere on the canvas while a session is selected → open
+    // its Dock. Excalidraw's own dblclick on a rect does selection but no
+    // navigation; we layer the Dock-open gesture on top. We only fire when
+    // the target is *outside* an input/composer (keep textarea dblclick =
+    // word-select behaviour), and when a session is currently selected.
+    const onDblClick = (e: MouseEvent) => {
+      if (isInputTarget(e.target)) return
+      if (!selectedSessionId) return
+      if (dockOpen) return
+      // Don't fight the Dock or any modal that explicitly absorbs dblclicks
+      // (`.session-dock` is the Dock root; nothing else uses it).
+      if (e.target instanceof Element && e.target.closest('.session-dock')) return
+      dockSeedRef.current = ''
+      setDockOpen(true)
     }
 
     const onPaste = (e: ClipboardEvent) => {
@@ -396,9 +422,11 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('paste', onPaste, true)
+    window.addEventListener('dblclick', onDblClick, true)
     return () => {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('paste', onPaste, true)
+      window.removeEventListener('dblclick', onDblClick, true)
     }
   }, [selectedSessionId, selection.kind, dockOpen])
 

@@ -1279,9 +1279,20 @@ textarea {
   color: #C5C5C5;
   font-weight: 400;
 }
+/* Assistant message prefix — the Diamond glyph used to be a unicode
+ * pseudo-element character "◆"; we now render lucide icons inline in
+ * SessionCard.tsx where applicable. CSS keeps a minimal accent dot in
+ * the message border instead so we don't fight a JSX-rendered icon. */
 .session-card__msg--assistant .session-card__msg-body::before {
-  content: "◆ ";
-  color: #A78BFA;
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: #A78BFA;
+  margin-right: 6px;
+  transform: rotate(45deg);
+  vertical-align: 1px;
 }
 .session-card__msg--tool .session-card__msg-body {
   color: #9CA3AF;

@@ -42,6 +42,8 @@ import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
 import {
   loadTranscriptVerbosity,
   saveTranscriptVerbosity,
+  loadDockExpanded,
+  saveDockExpanded,
   type TranscriptVerbosity,
 } from '@meee1/board-ui'
 
@@ -99,7 +101,19 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
 
   // session 模式默认 expanded（看 transcript），assistant 模式默认折叠
   // （问 AI 是个轻交互，不该立刻占满整个画板）。
-  const [expanded, setExpanded] = useState(mode.kind === 'session')
+  // session 模式：跨 session 切换记住用户上次选的 expand 状态（localStorage）；
+  // assistant 模式不持久化（轻交互，每次 spawn 都从折叠开始）。
+  const [expandedState, setExpandedState] = useState(() =>
+    mode.kind === 'session' ? loadDockExpanded(true) : false,
+  )
+  const expanded = expandedState
+  const setExpanded = (next: boolean | ((prev: boolean) => boolean)) => {
+    setExpandedState((prev) => {
+      const v = typeof next === 'function' ? next(prev) : next
+      if (mode.kind === 'session') saveDockExpanded(v)
+      return v
+    })
+  }
 
   const composerRef = useRef<ChatComposerHandle | null>(null)
 
