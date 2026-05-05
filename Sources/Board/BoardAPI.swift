@@ -330,6 +330,86 @@ enum BoardAPI {
         }
     }
 
+    /// POST /api/sessions/:id/push-now
+    /// 显式 "Push to Desktop" —— 把 content（如有）写进 inbox，然后立刻调
+    /// AgentInboxShell.pushDesktopNow 把 inbox 通过 AppleScript keystroke
+    /// 注入 Claude.app 当前 focused 输入框。会抢焦点，所以必须用户主动触
+    /// 发（webui Dock 的 ⚡ 按钮）—— 默认 inject path 不走这条。
+    ///
+    /// Body: {"content": "..."}（可空：如果 inbox 已有 pending msg，content
+    ///                         为空就只 drain 现有的）
+    /// 响应: {"delivered": N, "message": MessageDTO?, "error": "..."?}
+    static func pushToDesktopNow(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let session = resolvePluginSession(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        let targetSessionId = inboxSessionId(for: session)
+        let sessionData = SessionStore.shared.get(targetSessionId)
+        let isDesktop = ClaudeDesktopActivator.isDesktopBacked(
+            sid: targetSessionId,
+            transcriptPath: sessionData?.transcriptPath
+        )
+        guard isDesktop else {
+            return errorResponse(
+                "not_desktop",
+                "push-now only applies to Claude Desktop sessions; CLI sessions deliver immediately via terminal typeIn",
+                status: 400
+            )
+        }
+
+        // 可选 content：写 inbox。空 content = 只 drain 现有 pending。
+        var injectedMsg: MessageDTO?
+        if let json = parseJSONBody(req),
+           let content = json["content"] as? String, !content.isEmpty {
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
+                let written = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: content,
+                    injectedByHuman: true
+                )
+                injectedMsg = BoardDTOBuilder.messageDTO(written)
+            } catch {
+                return errorResponse("bad_request", error.localizedDescription, status: 400)
+            }
+        }
+
+        // Drain 通过 keystroke。同步阻塞这条 HTTP request 的 thread —— 用
+        // semaphore 等 Task 完成。webui 用户体验：点 ⚡ 后 ~2s 看到 toast，
+        // 期间 Claude.app 弹起 + 输入框出现文字 + 自动回车。
+        let sem = DispatchSemaphore(value: 0)
+        var delivered = 0
+        var error: String?
+        Task {
+            let result = await AgentInboxShell.shared.pushDesktopNow(sessionId: targetSessionId)
+            delivered = result.delivered
+            error = result.error
+            sem.signal()
+        }
+        // 最多等 15s（resume + activate + keystroke + tail delay 约 2s/条，
+        // 留余量）。超时返回 partial 结果让 user 知道。
+        _ = sem.wait(timeout: .now() + 15.0)
+
+        BoardServer.shared.broadcastStateChanged()
+        let payload = PushNowResponse(
+            delivered: delivered,
+            message: injectedMsg,
+            error: error
+        )
+        return jsonResponse(payload)
+    }
+
+    private struct PushNowResponse: Encodable {
+        let delivered: Int
+        let message: MessageDTO?
+        let error: String?
+    }
+
     /// GET /api/sessions/:id/transcript?limit=...
     /// 返回该 session 的完整 transcript entries（user/assistant），每个
     /// entry 的 blocks 保留原始结构：text / thinking / tool_use / tool_result。

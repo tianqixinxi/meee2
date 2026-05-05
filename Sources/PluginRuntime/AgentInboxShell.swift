@@ -87,6 +87,58 @@ public final class AgentInboxShell {
         }
     }
 
+    // MARK: - Explicit "Push to Desktop" path
+
+    /// 显式触发：把 inbox 里所有消息通过 ClaudeDesktopInputStream（AppleScript
+    /// keystroke）立刻送进 Claude.app 当前 focused 输入框。**只为 explicit
+    /// user-initiated push 设计**（webui Dock 的 ⚡ 按钮）—— 默认 inject 流
+    /// 不调这个，避免抢焦点。
+    ///
+    /// 行为：
+    ///   1. 拒绝非 Desktop session（CLI 走 typeIn 已经够用）
+    ///   2. 串行（ClaudeDesktopInputStream 内部 actor 已经保证）
+    ///   3. 每条 keystroke 成功就 removeFromInbox + ConversationContext.recordInbound
+    ///   4. 失败的留 inbox 兜底（下个 Stop hook 再 drain）
+    /// 返回 (delivered: 成功推送条数, error: nil 全成功 / 描述失败原因)
+    @discardableResult
+    public func pushDesktopNow(sessionId: String) async -> (delivered: Int, error: String?) {
+        guard let target = Self.deliveryTarget(for: sessionId) else {
+            return (0, "session not found")
+        }
+        // 当前不强制 desktop-only —— 但 CLI session 没必要走这条
+        // （typeIn 已经无焦干扰直推），caller (BoardAPI) 自己 gate
+        let messages = MessageRouter.shared.peekInbox(sessionId: sessionId)
+        guard !messages.isEmpty else {
+            return (0, nil)
+        }
+
+        var delivered = 0
+        var lastErr: String?
+        for msg in messages {
+            // 跟 deliverIfResting 一样走 policy 格式化（[meee2 a2a] 前缀等）
+            let policy = Self.snapshotPolicy(for: sessionId)
+            let view = Self.inboundView(of: msg)
+            guard let payload = policy.format(view) else {
+                MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
+                continue
+            }
+            let ok = await ClaudeDesktopInputStream().sendText(sid: sessionId, text: payload)
+            NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) ok=\(ok)")
+            if ok {
+                delivered += 1
+                MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
+                ConversationContext.shared.recordInbound(sessionId: sessionId, message: msg)
+            } else {
+                lastErr = "keystroke failed (check Accessibility permission for meee2 in System Settings, and that Claude.app is running)"
+                // 一条失败就停 —— 继续尝试只会再抢一次焦点没用
+                break
+            }
+            // 给 target 一个 lastActivity bump，让 webui 状态及时更新
+            _ = target  // silence warning
+        }
+        return (delivered, lastErr)
+    }
+
     /// target 是否能选到一个 dispatcher（Ghostty / iTerm / Apple Terminal）。
     /// 与 deliverIfResting 里的判断保持一致 —— 改一处必须改另一处。
     ///

@@ -27,6 +27,7 @@ import type { BoardState, Session } from '../types'
 import {
   activateSession,
   injectToSession,
+  pushToDesktopNow,
   uploadAttachment,
   spawnSession,
   streamAssistantChat,
@@ -390,6 +391,27 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             ? (f) => uploadAttachment(mode.session.id, f)
             : undefined
         }
+        // ⚡ Push button —— 只对 Desktop session 露出。Default Send 走 inject
+        // 写 inbox + 等下个 Stop drain（不抢焦点）；Push 立刻 keystroke 进
+        // Claude.app 的输入框（会抢焦点 + 自动回车）。是用户主动选择的快
+        // 速路径，避免 idle desktop session 卡 inbox 等很久的问题。
+        onPush={
+          mode.kind === 'session' && mode.session.clientKind === 'desktop'
+            ? async (content: string) => {
+                const shortId = mode.session.id.slice(0, 8)
+                const r = await pushToDesktopNow(mode.session.id, content)
+                if (r.error) {
+                  toast.push('error', `Push failed (${shortId}): ${r.error}`)
+                  return
+                }
+                toast.push(
+                  'success',
+                  `Pushed to Claude.app — ${r.delivered} message(s) delivered (${shortId})`
+                )
+              }
+            : undefined
+        }
+        pushTitle="Push to Desktop now — focuses Claude.app and types the message in directly (requires Accessibility permission)"
         bottomLeft={
           mode.kind === 'session' ? (
             <>
