@@ -118,16 +118,22 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
-        webView.load(URLRequest(url: boardURL))
+        // ignore HTTP cache on first load —— meee2 重启时 BoardServer 端
+        // WebDist 通常已经被 swift build 重新拷过来（vite 出的 chunk 文件
+        // 名带 hash，但 index.html 不带），WKWebView 默认走持久化 HTTP cache
+        // 会复用上次跑的旧 index.html → 看到的是上一版 UI，新 feature 凭空
+        // 不见。强制 ignore 让每次新启动都重新 fetch 入口。
+        var req = URLRequest(url: boardURL)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        webView.load(req)
     }
 
     func reload() {
         isShowingLoadError = false
-        if webView.url == boardURL {
-            webView.reload()
-        } else {
-            webView.load(URLRequest(url: boardURL))
-        }
+        // 与 loadIfNeeded 同源：用户主动 reload 时也吞掉 HTTP cache
+        var req = URLRequest(url: boardURL)
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        webView.load(req)
     }
 
     func openInBrowser() {
