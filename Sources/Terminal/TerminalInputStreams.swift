@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // MARK: - iTerm2 input injection
 
@@ -105,10 +108,24 @@ public struct AppleTerminalInputStream {
 /// session id 给 AppleScript 锚定，只能用 System Events `keystroke` —— 这
 /// 个命令打到当前 focus 的元素，所以 *必须* 先把对的 session 切到前台。
 ///
+/// 关键实现细节：
+///
+/// 1. **NSAppleScript 而不是 osascript 子进程**。`Process(/usr/bin/osascript)`
+///    跑的脚本身份是 `osascript` 自己，没有 Accessibility 权限就报
+///    `error 1002 osascript is not allowed to send keystrokes`。
+///    `NSAppleScript` 在 meee2 进程内执行，身份是 meee2.app —— 用户给
+///    meee2 授过 Accessibility（已经为 Ghostty TerminalJumper 需要），
+///    keystroke 就能走通。TerminalJumper.runAppleScript 已经踩过这条坑。
+///
+/// 2. **全局串行**。Claude.app 是单例 + 同时只能 focus 一个 session，所以
+///    每次 sendText 都通过 `claude://resume` 切换 + activate + keystroke。
+///    多个 sendText 并发会让 Claude.app 在 sessions 之间抽搐（2026-05-05
+///    现场：4 条 inbox 消息分散在 2 个 desktop session 上，每秒翻 2-3 次）。
+///    用一个 global actor 串行所有 keystroke 调用，一条做完才轮下一条。
+///
 /// 调用前提：
-///   * Claude.app 在跑（用 `process "Claude" exists` 检测，否则 fail）
-///   * meee2 已被授予 Accessibility 权限（meee2 现在为 Ghostty TerminalJumper
-///     就需要这个权限，绝大多数用户已经给了）
+///   * Claude.app 在跑（脚本里检测，没在跑直接 fail）
+///   * meee2.app 有 Accessibility 权限（meee2 启动时通常用户已授）
 ///   * 目标 sid 是 desktop-backed（caller 自己判定，这里不管）
 ///   * 目标 session 处于 idle / waitingForUser / completed
 ///     （AgentInboxShell 已经 gate 在 resting，避免 Claude 正在跑 turn 时
@@ -118,24 +135,31 @@ public struct AppleTerminalInputStream {
 ///   1. `claude://resume?session=<sid>` deep-link 切到目标 session（已通过
 ///      ClaudeDesktopActivator 验证过，URL handler 走 `Resume` host 然后
 ///      `importCliSession` + 导航）
-///   2. 1.0s delay 让 Claude.app 完成 navigation + 输入框 focus（Electron
-///      app 异步加载 conversation view，硬编码延迟比 polling 简单）
+///   2. 1.0s delay 让 Claude.app 完成 navigation + 输入框 focus
 ///   3. System Events keystroke <text> + key code 36 (Return) 提交
 ///
-/// 失败模式：
-///   * Claude.app 没启动 → `process "Claude" exists` 返 false → 返 false
-///   * Accessibility 权限缺失 → keystroke 抛错 → osascript 退出非 0 →
-///     runOSAScript 返 "err:..." → 返 false
-///   * `claude://resume` URL 失效（Claude.app 改了 URL handler）→ 切错
-///     session，但 keystroke 仍发到当前 focus 的输入框，message 进了**别**
-///     的 session。这种情况短期内不会发生（CLI session 跳转都依赖这条 URL）；
-///     若改了我们整套 desktop 集成都要更新
-///
-/// 返回值：osascript 输出 "ok" 算成功；其它都是失败，message 留 inbox。
+/// 返回值：脚本无错算成功；脚本错（`error 1002`、`process not running`、
+/// AppleScript 语法等）都返 false，message 留 inbox 等下次 Stop 兜底。
 public struct ClaudeDesktopInputStream {
+    /// 全局 actor 串行所有 desktop keystroke。任何并发 caller 都被排队，
+    /// 一条 sendText 完整走完（resume + activate + keystroke + Return + 收
+    /// 尾延迟）才轮下一条。避免多 session 同时 push 时 Claude.app 抽搐。
+    private actor Serializer {
+        static let shared = Serializer()
+        func runExclusive<T>(_ op: () async -> T) async -> T {
+            await op()
+        }
+    }
+
     public init() {}
 
     public func sendText(sid: String, text: String) async -> Bool {
+        await Serializer.shared.runExclusive {
+            await Self.runOnce(sid: sid, text: text)
+        }
+    }
+
+    private static func runOnce(sid: String, text: String) async -> Bool {
         // 文本结尾的换行会被 keystroke 当字面字符发，会比 key code 36 多敲
         // 一行——剥掉。
         var body = text
@@ -147,42 +171,63 @@ public struct ClaudeDesktopInputStream {
             .replacingOccurrences(of: "\"", with: "\\\"")
         let escapedSid = sid.replacingOccurrences(of: "\"", with: "\\\"")
 
-        // 第一步：检查 Claude.app 在跑。在跑才有 URL handler 接 deep-link。
-        // 不在跑的话 NSWorkspace.open 会启动 Claude.app，但用户体验糟（突
-        // 然弹个新 app）+ 启动后 navigation 时序更难拿捏。直接 fail 让
-        // 消息留 inbox 等用户自己开 Claude.app。
         let script = """
-        on run
-            tell application "System Events"
-                if not (exists process "Claude") then
-                    return "err:claude_not_running"
-                end if
+        tell application "System Events"
+            if not (exists process "Claude") then
+                error "claude_not_running" number -2700
+            end if
+        end tell
+
+        do shell script "open 'claude://resume?session=\(escapedSid)'"
+        delay 1.0
+
+        tell application "Claude" to activate
+        delay 0.3
+
+        tell application "System Events"
+            tell process "Claude"
+                set frontmost to true
+                delay 0.2
+                keystroke "\(escapedText)"
+                delay 0.1
+                key code 36 -- Return
             end tell
+        end tell
 
-            -- claude://resume?session=<sid> 切到目标 session（importCliSession 是 idempotent get-or-create）
-            do shell script "open 'claude://resume?session=\(escapedSid)'"
-            delay 1.0
-
-            tell application "Claude" to activate
-            delay 0.3
-
-            tell application "System Events"
-                tell process "Claude"
-                    set frontmost to true
-                    delay 0.2
-                    keystroke "\(escapedText)"
-                    delay 0.1
-                    key code 36 -- Return
-                end tell
-            end tell
-            return "ok"
-        end run
+        -- 收尾延迟：让 Claude.app 把 keystroke 吃进去再放下一条（如果有），
+        -- 否则下一条 sendText 立刻又 resume + activate 会撞 Electron view
+        -- 还在异步处理上一条的状态。
+        delay 0.4
+        return "ok"
         """
 
-        let result = await runOSAScript(script)
+        let result = await runNSAppleScript(script)
         NSLog("[ClaudeDesktopInputStream] sendText sid=\(sid.prefix(8)) textLen=\(text.count) result='\(result)'")
         return result == "ok"
     }
+}
+
+/// 在 meee2 进程内执行 AppleScript（继承 meee2.app 的 Accessibility 权限）。
+/// 返回 stringValue；脚本报错时返回 "err:<msg>" 让 caller 直接 log。
+@inline(__always)
+private func runNSAppleScript(_ source: String) async -> String {
+    #if canImport(AppKit)
+    return await MainActor.run {
+        guard let script = NSAppleScript(source: source) else {
+            return "err:nsapplescript_create_failed"
+        }
+        var errorInfo: NSDictionary?
+        let result = script.executeAndReturnError(&errorInfo)
+        if let errorInfo = errorInfo {
+            let msg = errorInfo[NSAppleScript.errorMessage] as? String ?? "unknown"
+            let num = errorInfo[NSAppleScript.errorNumber] as? Int ?? 0
+            return "err:[\(num)] \(msg)"
+        }
+        return result.stringValue ?? ""
+    }
+    #else
+    return "err:appkit_unavailable"
+    #endif
 }
 
 // MARK: - shared osascript runner

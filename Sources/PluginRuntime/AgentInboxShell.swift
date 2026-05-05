@@ -87,9 +87,14 @@ public final class AgentInboxShell {
         }
     }
 
-    /// target 是否能选到一个 dispatcher（Ghostty / iTerm / Apple Terminal /
-    /// Claude Desktop）。与 deliverIfResting 里的判断保持一致 —— 改一处必须
-    /// 改另一处。
+    /// target 是否能选到一个 dispatcher（Ghostty / iTerm / Apple Terminal）。
+    /// 与 deliverIfResting 里的判断保持一致 —— 改一处必须改另一处。
+    ///
+    /// **Desktop 故意不算 dispatcher**：ClaudeDesktopInputStream 虽然存在，
+    /// 但它会 activate Claude.app 抢焦点，对"webui 顺手发条消息"这种场景太
+    /// 打扰。Desktop session 走既有的 inbox + Stop hook drain 路径
+    /// （HookSocketServer.drainResponseForDesktopStop）—— 不立刻送达但不抢
+    /// 焦点。InputStream 留给将来的"显式 Push to Desktop"按钮使用。
     private static func targetHasDispatcher(_ target: DeliveryTarget) -> Bool {
         if let g = target.ghosttyTerminalId, !g.isEmpty { return true }
         if let i = target.iTermSessionId, !i.isEmpty { return true }
@@ -99,11 +104,6 @@ public final class AgentInboxShell {
            term.contains("apple_terminal") || term.contains("apple terminal") || term == "terminal" {
             return true
         }
-        // Claude Desktop session 也算有 dispatcher：会通过 ClaudeDesktopInputStream
-        // 走 AppleScript keystroke 路径。这条分支让 flushInboxIfResting 不再
-        // 在 desktop session 上 early-exit (no_dispatcher) —— 真正会进入
-        // deliverIfResting 让它来分发。
-        if target.isDesktop { return true }
         return false
     }
 
@@ -132,11 +132,6 @@ public final class AgentInboxShell {
         let terminalInfo: PluginTerminalInfo?
         let ghosttyTerminalId: String?
         let iTermSessionId: String?
-        /// `true` 当 session 是 Claude.app 内嵌的（ClaudeDesktopActivator.isDesktopBacked
-        /// 命中）。Desktop session 没 tty，不能走 Ghostty/iTerm/Terminal
-        /// 路径，但可以通过 ClaudeDesktopInputStream + AppleScript keystroke
-        /// 推。
-        let isDesktop: Bool
     }
 
     /// 真正决定要不要把这条消息推到 agent terminal。
@@ -241,16 +236,6 @@ public final class AgentInboxShell {
             let ttyForCapture = bareTty
             dispatch = { await AppleTerminalInputStream().sendText(tty: ttyForCapture, text: payload) }
             pathLabel = "apple-terminal"
-        } else if target.isDesktop {
-            // Claude.app 内嵌 session — AppleScript keystroke 进当前 focus 的
-            // 输入框。caller 端（resting gate 在上面）已经保证 effectiveStatus
-            // ∈ {idle, waitingForUser, completed}，所以 keystroke 不会跟正在
-            // 跑的 turn 冲突。失败（Claude.app 没启动 / 没 Accessibility 权
-            // 限 / URL 切换不到目标 sid）则消息保留 inbox，等用户在 Desktop
-            // 内手动触发 Stop hook，由 drainResponseForDesktopStop 兜底。
-            let sidForCapture = sessionId
-            dispatch = { await ClaudeDesktopInputStream().sendText(sid: sidForCapture, text: payload) }
-            pathLabel = "claude-desktop"
         } else {
             // 与 flushInboxIfResting 早退用同一节流 key —— 单消息直推也吃同一个 60s 配额。
             logSkipNoDispatcher(sessionId: sessionId, term: term, suppressedCount: 1)
@@ -282,11 +267,7 @@ public final class AgentInboxShell {
                 effectiveStatus: TranscriptStatusResolver.resolve(for: data),
                 terminalInfo: data.terminalInfo,
                 ghosttyTerminalId: data.ghosttyTerminalId,
-                iTermSessionId: data.iTermSessionId,
-                isDesktop: ClaudeDesktopActivator.isDesktopBacked(
-                    sid: sessionId,
-                    transcriptPath: data.transcriptPath
-                )
+                iTermSessionId: data.iTermSessionId
             )
         }
         guard let session = snapshotPluginSession(for: sessionId) else {
@@ -297,14 +278,7 @@ public final class AgentInboxShell {
             effectiveStatus: session.status,
             terminalInfo: session.terminalInfo,
             ghosttyTerminalId: nil,
-            iTermSessionId: nil,
-            // 走 PluginSession 这条 fallback path 时没 transcriptPath 提
-            // 供，仅 metadata reader 这一信号源可以判定 desktop（entrypoint
-            // reader 拿不到 transcript 就直接返 nil，不会误判）。
-            isDesktop: ClaudeDesktopActivator.isDesktopBacked(
-                sid: sessionId,
-                transcriptPath: session.transcriptPath
-            )
+            iTermSessionId: nil
         )
     }
 
