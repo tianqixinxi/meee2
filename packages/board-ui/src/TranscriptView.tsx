@@ -652,10 +652,12 @@ function EntryRow({
 }) {
   let renderedFirstText = false
 
-  // 历史 toolcall 折叠：连续 ≥2 个 tool_use（中间没 text 打断）合成一个
-  // ToolGroupBlock 显示 "Ran 3 commands, read 2 files" 摘要，点开展开看每条。
-  // 单条 tool_use 还是走 ToolUseBlock，不必折叠。Live 占位 entry 不折叠
-  // （它本来就一条 tool_use，没意义）。
+  // 历史 toolcall 折叠：连续 ≥1 个 tool_use 都用 ToolGroupBlock 包起来——
+  // 这样单 tool 跟多 tool 视觉一模一样（同一个 chip 形状，summary 不同）。
+  // 单 tool 时 summary 是"Edited X.tsx" / "Read Y.swift" / "Ran git status"
+  // 这种"动词 + 对象"形式，多 tool 时是"Edited 3 files, ran a command"
+  // 这种聚合形式（见 summarizeToolBlocks）。Live 占位 entry 维持原有的
+  // PendingToolUseBlock 走绿色 chip。
   const renderItems = (() => {
     if (isLive) return entry.blocks.map((b, i) => ({ kind: 'block' as const, block: b, index: i }))
     type Item =
@@ -673,11 +675,7 @@ function EntryRow({
           run.push(entry.blocks[j])
           j += 1
         }
-        if (run.length >= 2) {
-          out.push({ kind: 'tool-group', blocks: run, startIndex: i })
-        } else {
-          out.push({ kind: 'block', block: run[0], index: i })
-        }
+        out.push({ kind: 'tool-group', blocks: run, startIndex: i })
         i = j
       } else {
         out.push({ kind: 'block', block: b, index: i })
@@ -719,19 +717,11 @@ function EntryRow({
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
-            // 单条 tool_use（不属于 group）—— 在 normal/thinking 默认折叠
-            // （summary 一行，点 ▸ 展开看 input + result），verbose 默认展开。
-            if (isLive) {
-              return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
-            }
-            return (
-              <ToolUseBlock
-                key={i}
-                block={b}
-                result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
-                defaultOpen={verbosity === 'verbose'}
-              />
-            )
+            // 非 isLive 路径不会走到这里——renderItems pre-pass 把所有
+            // tool_use（包括单条）都打包成 'tool-group' item 了。这里只
+            // 处理 isLive 占位的合成 entry（liveStatus === 'tooling'），
+            // 它直接用 PendingToolUseBlock 走 in-flight 绿色 chip。
+            return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
           case 'tool_result':
             return <OrphanToolResult key={i} block={b} />
           default:
@@ -785,7 +775,16 @@ function ToolGroupBlock({
 }
 
 /// 把一组 tool_use 块按工具类别归并成一句人话。
-/// 维度：
+///
+/// 单条特殊处理（match Claude Code 自带视图）：直接说"动词 + 对象"，
+/// 不用 generic "Edited 1 file"——
+///   - Bash         → "Ran <command>" （cmd 截到 60 字符）
+///   - Edit/MultiEdit/Write → "Edited <basename>"
+///   - Read         → "Read <basename>"
+///   - Grep         → "Searched for \"<pattern>\""
+///   - Glob         → "Listed <pattern>"
+///
+/// 多条按桶聚合：
 ///   - Bash / BashOutput     → "ran N command(s)"
 ///   - Read                  → "read N file(s)"
 ///   - Edit / MultiEdit /
@@ -794,6 +793,9 @@ function ToolGroupBlock({
 ///   - 其它                  → "called N <toolName>"（按 toolName 分桶）
 /// 输出例子：「Ran 2 commands, read 3 files, edited 1 file」
 function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
+  if (blocks.length === 1) {
+    return summarizeSingleTool(blocks[0])
+  }
   const buckets: { ran: number; read: number; edited: number; searched: number; other: Map<string, number> } = {
     ran: 0,
     read: 0,
@@ -850,6 +852,50 @@ function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
   }
   if (parts.length === 0) return `${blocks.length} tool calls`
   return parts.join(', ')
+}
+
+/// 单 tool 的"动词 + 对象"摘要，用在 ToolGroupBlock header 当 summary 文字。
+/// 设计意图：跟 Claude Code 自带视图一致，单 tool 显示具体在干啥的最相关
+/// 信息（filename / command），不重复显示 tool 名（Edit/Read/Bash 太冗）。
+function summarizeSingleTool(b: TranscriptBlockForView): string {
+  const name = b.toolName ?? 'Tool'
+  const input = safeParse(b.toolInputJSON) ?? {}
+  const trim = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n).trimEnd() + '…')
+  const basename = (p: string) => p.split('/').pop() || p
+  switch (name) {
+    case 'Bash':
+    case 'BashOutput': {
+      const cmd = (input.command as string) ?? ''
+      return cmd ? `Ran ${trim(cmd, 70)}` : 'Ran command'
+    }
+    case 'Edit':
+    case 'MultiEdit':
+    case 'Write': {
+      const path = (input.file_path as string) ?? ''
+      return path ? `Edited ${basename(path)}` : 'Edited file'
+    }
+    case 'Read': {
+      const path = (input.file_path as string) ?? ''
+      return path ? `Read ${basename(path)}` : 'Read file'
+    }
+    case 'Grep': {
+      const pat = (input.pattern as string) ?? ''
+      return pat ? `Searched for "${trim(pat, 40)}"` : 'Searched'
+    }
+    case 'Glob': {
+      const pat = (input.pattern as string) ?? ''
+      return pat ? `Listed ${trim(pat, 40)}` : 'Listed files'
+    }
+    case 'WebFetch': {
+      const url = (input.url as string) ?? ''
+      return url ? `Fetched ${trim(url, 60)}` : 'Fetched URL'
+    }
+    case 'WebSearch': {
+      const q = (input.query as string) ?? ''
+      return q ? `Searched web for "${trim(q, 40)}"` : 'Searched web'
+    }
+    default: return name
+  }
 }
 
 const TextBlock = memo(function TextBlock({
