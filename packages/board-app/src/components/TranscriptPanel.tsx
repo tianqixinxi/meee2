@@ -4,7 +4,7 @@
 // in @meee1/board-ui.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { TranscriptView } from '@meee1/board-ui'
+import { TranscriptView, type TranscriptVerbosity } from '@meee1/board-ui'
 import type { TranscriptEntryForView } from '@meee1/board-core'
 import { fetchTranscript } from '../api'
 
@@ -26,6 +26,11 @@ interface Props {
   /** SessionDTO.currentTask —— optional one-line description of the
    *  active step (used when liveStatus === 'thinking'). */
   liveCurrentTask?: string | null
+  /** When provided, TranscriptView runs in controlled-verbosity mode
+   *  and hides its in-search-bar pill — the parent renders the pill
+   *  elsewhere (e.g. Dock's ChatComposer bottomLeft slot). */
+  verbosity?: TranscriptVerbosity
+  onVerbosityChange?: (v: TranscriptVerbosity) => void
 }
 
 export default function TranscriptPanel({
@@ -36,6 +41,8 @@ export default function TranscriptPanel({
   liveStatus = null,
   liveCurrentTool = null,
   liveCurrentTask = null,
+  verbosity,
+  onVerbosityChange,
 }: Props) {
   const [entries, setEntries] = useState<TranscriptEntryForView[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -99,6 +106,8 @@ export default function TranscriptPanel({
       liveStatus={liveStatus}
       liveCurrentTool={liveCurrentTool}
       liveCurrentTask={liveCurrentTask}
+      verbosity={verbosity}
+      onVerbosityChange={onVerbosityChange}
     />
   )
 }

@@ -37,6 +37,11 @@ import { readLlmSettings, activeTools } from '../lib/llmSettings'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
+import {
+  loadTranscriptVerbosity,
+  saveTranscriptVerbosity,
+  type TranscriptVerbosity,
+} from '@meee1/board-ui'
 
 // ── Mode 类型 ──────────────────────────────────────────────────────────
 
@@ -95,6 +100,16 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   const [expanded, setExpanded] = useState(mode.kind === 'session')
 
   const composerRef = useRef<ChatComposerHandle | null>(null)
+
+  // Transcript verbosity 在 Dock 这一级存——这样我们能把 segmented
+  // pill 直接渲到 ChatComposer 的 bottomLeft 里（用户视觉惯性：filter
+  // 跟 input box 在一起，搜索栏旁边没他要的设置）。TranscriptPanel/View
+  // 在 controlled mode 下信我们的值，不再自己管。
+  const [verbosity, setVerbosityState] = useState<TranscriptVerbosity>(loadTranscriptVerbosity)
+  const setVerbosity = (v: TranscriptVerbosity) => {
+    setVerbosityState(v)
+    saveTranscriptVerbosity(v)
+  }
 
   // 命令式：转发到 ChatComposer
   useImperativeHandle(
@@ -323,6 +338,8 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             liveStatus={mode.session.status ?? null}
             liveCurrentTool={mode.session.currentTool ?? null}
             liveCurrentTask={mode.session.currentTask ?? null}
+            verbosity={verbosity}
+            onVerbosityChange={setVerbosity}
           />
         ) : (
           <div
@@ -375,6 +392,38 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
                   <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" />
                 </svg>
               </button>
+              {/* Transcript verbosity segmented pill —— 跟 input 同行的左下，
+                  user 期待 filter 跟 input box 在一起。同 storage key
+                  跟 TranscriptView uncontrolled fallback 共享，保留以前的
+                  user 偏好。*/}
+              <div
+                className="cc-verbosity"
+                role="radiogroup"
+                aria-label="Transcript verbosity"
+              >
+                {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    role="radio"
+                    aria-checked={verbosity === level}
+                    className={
+                      'cc-verbosity-btn' +
+                      (verbosity === level ? ' cc-verbosity-btn--active' : '')
+                    }
+                    title={
+                      level === 'normal'
+                        ? 'Normal — text only'
+                        : level === 'thinking'
+                        ? 'Thinking — text + thinking blocks'
+                        : 'Verbose — full transcript with tool inputs/outputs'
+                    }
+                    onClick={() => setVerbosity(level)}
+                  >
+                    {level}
+                  </button>
+                ))}
+              </div>
             </>
           ) : null
         }

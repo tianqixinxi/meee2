@@ -53,6 +53,14 @@ export interface TranscriptViewProps {
   liveCurrentTool?: string | null
   /** Optional one-line description of the current task / step. */
   liveCurrentTask?: string | null
+  /** Optional controlled verbosity. If both `verbosity` and
+   *  `onVerbosityChange` are provided, the in-search-bar segmented pill
+   *  is hidden — parent owns the UI for it (e.g. meee2's Dock renders
+   *  the pill in its ChatComposer's bottomLeft slot). When undefined,
+   *  TranscriptView keeps its own pill + localStorage state, the
+   *  original self-managed behavior. */
+  verbosity?: TranscriptVerbosity
+  onVerbosityChange?: (v: TranscriptVerbosity) => void
 }
 
 // ─── module cache (cross-mount session memory) ───────────────────────────
@@ -79,16 +87,31 @@ const VERBOSITY_KEY = 'meee2.transcript.verbosity.v1'
 const LEGACY_TOOL_VIS_KEY = 'meee2.transcript.showTools.v1'
 
 function loadVerbosity(): TranscriptVerbosity {
+  return loadTranscriptVerbosity()
+}
+
+/// 给外部 owner 复用同一份 localStorage 存储——让 Dock 这种把 pill 渲在
+/// 自己 toolbar 里、又想跟 TranscriptView 的 uncontrolled fallback 同 key 的
+/// 场景能 hydrate / persist 同一个值。
+export function loadTranscriptVerbosity(): TranscriptVerbosity {
   try {
     if (typeof localStorage === 'undefined') return 'normal'
     const v = localStorage.getItem(VERBOSITY_KEY)
     if (v === 'normal' || v === 'thinking' || v === 'verbose') return v
-    // 迁移旧 showTools key
+    // 迁移旧 showTools key（true → verbose, false → normal）
     const legacy = localStorage.getItem(LEGACY_TOOL_VIS_KEY)
     if (legacy === 'true') return 'verbose'
     if (legacy === 'false') return 'normal'
   } catch { /* ignore */ }
   return 'normal'
+}
+
+export function saveTranscriptVerbosity(v: TranscriptVerbosity): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(VERBOSITY_KEY, v)
+    localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
+  } catch { /* ignore */ }
 }
 
 function entrySignature(entries: TranscriptEntryForView[]): string {
@@ -118,10 +141,23 @@ export function TranscriptView({
   liveStatus = null,
   liveCurrentTool = null,
   liveCurrentTask = null,
+  verbosity: controlledVerbosity,
+  onVerbosityChange,
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
-  const [verbosity, setVerbosity] = useState<TranscriptVerbosity>(loadVerbosity)
+  // Controlled vs uncontrolled verbosity. parent 既给 verbosity 又给
+  // onVerbosityChange → 受控（隐藏自带 pill）。否则走 localStorage 自管。
+  const isControlled = controlledVerbosity !== undefined && onVerbosityChange !== undefined
+  const [internalVerbosity, setInternalVerbosity] = useState<TranscriptVerbosity>(loadVerbosity)
+  const verbosity = isControlled ? controlledVerbosity : internalVerbosity
+  const setVerbosity = (v: TranscriptVerbosity) => {
+    if (isControlled) {
+      onVerbosityChange!(v)
+    } else {
+      setInternalVerbosity(v)
+    }
+  }
 
   const parentRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(initialCache?.stickyBottom ?? true)
@@ -151,14 +187,15 @@ export function TranscriptView({
     }
   }, [cacheKey])
 
-  // Persist verbosity
+  // Persist verbosity (uncontrolled mode only — controlled mode的
+  // 持久化由 parent 负责，避免双方同时往 localStorage 写造成 race)
   useEffect(() => {
+    if (isControlled) return
     try {
-      localStorage.setItem(VERBOSITY_KEY, verbosity)
-      // 一并清掉 legacy key —— 迁移完就别留
+      localStorage.setItem(VERBOSITY_KEY, internalVerbosity)
       localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
     } catch { /* ignore */ }
-  }, [verbosity])
+  }, [internalVerbosity, isControlled])
 
   // Update cache signature when entries change (so cross-mount re-entry knows
   // whether content moved on)
@@ -466,34 +503,36 @@ export function TranscriptView({
             }
           }}
         />
-        <div
-          className="transcript-search__verbosity"
-          role="radiogroup"
-          aria-label="Transcript verbosity"
-        >
-          {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
-            <button
-              key={level}
-              type="button"
-              role="radio"
-              aria-checked={verbosity === level}
-              className={
-                'transcript-search__verbosity-btn' +
-                (verbosity === level ? ' transcript-search__verbosity-btn--active' : '')
-              }
-              title={
-                level === 'normal'
-                  ? 'Normal — text only (no thinking, no tool calls)'
-                  : level === 'thinking'
-                  ? 'Thinking — text + thinking blocks'
-                  : 'Verbose — full transcript including tool inputs/outputs'
-              }
-              onClick={() => setVerbosity(level)}
-            >
-              {level}
-            </button>
-          ))}
-        </div>
+        {!isControlled && (
+          <div
+            className="transcript-search__verbosity"
+            role="radiogroup"
+            aria-label="Transcript verbosity"
+          >
+            {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
+              <button
+                key={level}
+                type="button"
+                role="radio"
+                aria-checked={verbosity === level}
+                className={
+                  'transcript-search__verbosity-btn' +
+                  (verbosity === level ? ' transcript-search__verbosity-btn--active' : '')
+                }
+                title={
+                  level === 'normal'
+                    ? 'Normal — text only (no thinking, no tool calls)'
+                    : level === 'thinking'
+                    ? 'Thinking — text + thinking blocks'
+                    : 'Verbose — full transcript including tool inputs/outputs'
+                }
+                onClick={() => setVerbosity(level)}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+        )}
         <span className="transcript-search__count">
           {query
             ? `${filteredEntries.length}/${entries.length}`
