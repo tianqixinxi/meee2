@@ -142,7 +142,14 @@ export function SessionRowMenu({
         onClose()
         return
       }
-      // 字母快捷键：P / R / D（Open in 的 submenu 单独走 hover-展开）
+      // 字母快捷键：P / R / D —— 但不能在输入框里触发，否则用户在
+      // CommandBar / 重命名 input 里敲 "p" 都会被吞。document.activeElement
+      // 是 input/textarea/contenteditable 时直接放行。
+      const ae = document.activeElement as HTMLElement | null
+      if (ae) {
+        const tag = ae.tagName.toLowerCase()
+        if (tag === 'input' || tag === 'textarea' || ae.isContentEditable) return
+      }
       const k = e.key.toLowerCase()
       if (k === 'p') { e.preventDefault(); onTogglePin(); onClose() }
       else if (k === 'r') { e.preventDefault(); onRename(); onClose() }

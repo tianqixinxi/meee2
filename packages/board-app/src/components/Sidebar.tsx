@@ -22,6 +22,7 @@ import { isDmChannelName } from '@meee1/board-core'
 import { Inbox, MoreHorizontal } from 'lucide-react'
 import { SessionRowMenu } from './SessionRowMenu'
 import { activateSession, spawnSession } from '../api'
+import { useToast } from '../App'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -377,6 +378,7 @@ export default function Sidebar({
   onCreateInProject,
   onRenameSession,
 }: Props) {
+  const toast = useToast()
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
   const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
@@ -935,16 +937,43 @@ export default function Sidebar({
                             // 走 BoardAPI.activateSession —— 后端按 clientKind
                             // dispatch（ClaudeDesktopActivator 走 claude://，
                             // CLI 走 TerminalJumper）。
-                            void activateSession(s.id).catch(() => undefined)
+                            activateSession(s.id).catch((err) => {
+                              toast.push(
+                                'error',
+                                `Open in original failed: ${(err as Error).message ?? 'unknown'}`
+                              )
+                            })
                           }}
-                          onTogglePin={() => togglePinned(s.id)}
+                          onTogglePin={() => {
+                            const nowPinned = togglePinned(s.id)
+                            toast.push(
+                              'success',
+                              nowPinned
+                                ? `Pinned: ${displayTitle(s)}`
+                                : `Unpinned: ${displayTitle(s)}`
+                            )
+                          }}
                           onRename={() => startRename(s)}
                           onDuplicate={() => {
                             // Duplicate = spawn 新 session in same cwd。
                             // 用 SessionDTO.project（cwd 全路径）作为 cwd。
                             const cwd = s.project
-                            if (!cwd) return
-                            void spawnSession({ cwd }).catch(() => undefined)
+                            if (!cwd) {
+                              toast.push('error', 'Cannot duplicate: source session has no cwd')
+                              return
+                            }
+                            const shortId = s.id.slice(0, 8)
+                            toast.push('info', `Duplicating session in ${cwd}…`)
+                            spawnSession({ cwd })
+                              .then(() => {
+                                toast.push(
+                                  'success',
+                                  `New session spawned in ${cwd} (from ${shortId})`
+                                )
+                              })
+                              .catch((err) => {
+                                toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
+                              })
                           }}
                         />
                       )}
