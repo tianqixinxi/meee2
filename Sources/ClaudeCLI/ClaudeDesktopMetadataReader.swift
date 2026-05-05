@@ -118,30 +118,38 @@ public final class ClaudeDesktopMetadataReader {
     /// 文件不多（典型 < 100），open+decode 也不慢，每 30s 一次成本可忽略。
     ///
     /// 同一个 cliSessionId 可能对应多个 `local_<uuid>.json` wrapper —— Claude
-    /// Desktop 端在某些操作（resume / 重新打开 / 等）下会另起 wrapper 但保留
-    /// CLI session 实体。用户在 Desktop UI 里 archive 的是单个 wrapper（标
-    /// `isArchived=true` 的也只是该 wrapper），底层 CLI session 通常还在另
-    /// 一个 wrapper 里活着 isArchived=false。
+    /// Desktop 端在不同入口下会另起 wrapper 但保留 CLI session 实体。常见组合：
+    ///   - "primary" wrapper `local_<cliSessionId>.json` —— resume 入口创建，
+    ///     timestamp 最新但 title=null
+    ///   - "named" wrapper `local_<random>.json` —— Desktop UI 创建并自动起
+    ///     的人类可读 title，timestamp 较旧
     ///
-    /// 历史 bug（2026-05-04 现场）：以前这里是 `fresh[id] = m`（last-write-wins）
-    /// + `enumerator` 顺序不定 → archived 的旧 wrapper 抢到 index 槽位 →
-    /// BoardAPI.archivedDesktopSids 把整条 cliSessionId 误判成 archived → 当前
-    /// session 在 webui 里凭空消失。
+    /// 历史 bug（2026-05-04 现场）：
+    ///   * (a) refresh() 是 last-write-wins，`enumerator` 顺序不定 → archived
+    ///        旧 wrapper 抢槽 → /api/state 把整条 cliSessionId 当 archived 过
+    ///        滤掉 → 当前 dev session 在 webui 里凭空消失。
+    ///   * (b) 第一版修复改成"prefer unarchived，按 lastActivityAt 取最新"，
+    ///        结果总是挑到 title=null 的 primary wrapper → webui 全部显示
+    ///        "(untitled)"，丢了 Desktop UI 起的人类标题。
     ///
-    /// 正确语义：只要还有任何一个 wrapper 没被 archive，这个 cliSessionId 就
-    /// 是活的。冲突时 prefer unarchived；都 unarchived / 都 archived 时选
-    /// `lastActivityAt` 最新的（最贴近用户最近操作的那条）。
+    /// 现在的策略：**不挑 wrapper，合并字段**——把同一 cliSessionId 的所有
+    /// wrapper 合成一条 ClaudeDesktopMetadata：
+    ///   - isArchived = 全部 wrapper 都 archived 才视为 archived（任一 active
+    ///     就保留 session）
+    ///   - title       = 任一 wrapper 的非空 title；多个有时取最新那条的
+    ///   - cwd / model / transcriptPath = 同 title 的策略：取最先非空那条的
+    ///   - lastActivityAt = 取最大值
     private func refresh() {
-        var fresh: [String: ClaudeDesktopMetadata] = [:]
+        var groups: [String: [ClaudeDesktopMetadata]] = [:]
         if FileManager.default.fileExists(atPath: scanRoot.path) {
             for url in collectMetadataFiles(under: scanRoot) {
                 guard let m = parseMetadata(at: url) else { continue }
-                if let prev = fresh[m.cliSessionId] {
-                    fresh[m.cliSessionId] = Self.preferredMetadata(prev, m)
-                } else {
-                    fresh[m.cliSessionId] = m
-                }
+                groups[m.cliSessionId, default: []].append(m)
             }
+        }
+        var fresh: [String: ClaudeDesktopMetadata] = [:]
+        for (cliSid, ms) in groups {
+            fresh[cliSid] = Self.mergeMetadata(ms)
         }
         lock.lock()
         let prev = index.count
@@ -152,26 +160,56 @@ public final class ClaudeDesktopMetadataReader {
         }
     }
 
-    /// 同一 cliSessionId 的两条 metadata 选一条留下：
-    ///   1. 任一 unarchived → 选 unarchived（active 优先）
-    ///   2. 都 unarchived 或都 archived → 选 `lastActivityAt` 更新的
-    ///   3. lastActivity 都缺 → 任选 a（稳定，避免无意义的 index churn）
-    /// internal 访问级别 —— 让 `@testable import` 能直接测纯函数行为，
-    /// 不用搭整个文件系统 + JSON parsing 的舞台。
-    static func preferredMetadata(_ a: ClaudeDesktopMetadata, _ b: ClaudeDesktopMetadata) -> ClaudeDesktopMetadata {
-        if a.isArchived != b.isArchived {
-            return a.isArchived ? b : a
+    /// 把同一 cliSessionId 的多条 wrapper metadata 合成一条。internal 访问
+    /// 级别 —— 让 `@testable import` 能直接测纯函数行为。
+    ///
+    /// - isArchived: 全部 archived 才返回 true（任一 active 就活）
+    /// - title:      取最新的非"(untitled)"非空 title；都没有则 "(untitled)"
+    /// - lastActivityAt: max
+    /// - 其它字段:    取最新有值那条
+    /// 输入空数组返回 nil（调用方上游应保证非空）。
+    static func mergeMetadata(_ wrappers: [ClaudeDesktopMetadata]) -> ClaudeDesktopMetadata? {
+        guard let first = wrappers.first else { return nil }
+        if wrappers.count == 1 { return first }
+
+        // 按 lastActivityAt 降序，nil 排末（"最新优先"取值用）
+        let byRecency = wrappers.sorted { lhs, rhs in
+            switch (lhs.lastActivityAt, rhs.lastActivityAt) {
+            case let (.some(l), .some(r)): return l > r
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return false
+            }
         }
-        switch (a.lastActivityAt, b.lastActivityAt) {
-        case let (.some(da), .some(db)):
-            return da >= db ? a : b
-        case (.some, .none):
-            return a
-        case (.none, .some):
-            return b
-        case (.none, .none):
-            return a
-        }
+
+        let isArchived = wrappers.allSatisfy { $0.isArchived }
+        let title: String = {
+            // 在按时间排序的列表里找第一条 "有意义的" title。
+            // null/空/(untitled) 都不算有意义。
+            for m in byRecency {
+                let t = m.title
+                if !t.isEmpty, t != "(untitled)" { return t }
+            }
+            return "(untitled)"
+        }()
+        let model    = byRecency.first(where: { $0.model != nil })?.model
+        let cwd      = byRecency.first(where: { $0.cwd != nil })?.cwd
+        let transcriptPath = byRecency.first(where: { $0.transcriptPath != nil })?.transcriptPath
+        let lastActivityAt = wrappers.compactMap { $0.lastActivityAt }.max()
+        // desktopSessionId 取最近活跃的 wrapper 的——该 id 主要给 deep-link /
+        // activate 用，最近活跃的那个最可能能跟 Desktop UI 同步上。
+        let desktopSessionId = byRecency.first?.desktopSessionId ?? first.desktopSessionId
+
+        return ClaudeDesktopMetadata(
+            cliSessionId: first.cliSessionId,
+            title: title,
+            model: model,
+            cwd: cwd,
+            isArchived: isArchived,
+            desktopSessionId: desktopSessionId,
+            lastActivityAt: lastActivityAt,
+            transcriptPath: transcriptPath
+        )
     }
 
     /// 递归找 root 下所有 local_*.json 文件。目录结构是
