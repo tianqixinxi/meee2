@@ -53,6 +53,14 @@ export interface TranscriptViewProps {
   liveCurrentTool?: string | null
   /** Optional one-line description of the current task / step. */
   liveCurrentTask?: string | null
+  /** Optional controlled verbosity. If both `verbosity` and
+   *  `onVerbosityChange` are provided, the in-search-bar segmented pill
+   *  is hidden — parent owns the UI for it (e.g. meee2's Dock renders
+   *  the pill in its ChatComposer's bottomLeft slot). When undefined,
+   *  TranscriptView keeps its own pill + localStorage state, the
+   *  original self-managed behavior. */
+  verbosity?: TranscriptVerbosity
+  onVerbosityChange?: (v: TranscriptVerbosity) => void
 }
 
 // ─── module cache (cross-mount session memory) ───────────────────────────
@@ -79,16 +87,31 @@ const VERBOSITY_KEY = 'meee2.transcript.verbosity.v1'
 const LEGACY_TOOL_VIS_KEY = 'meee2.transcript.showTools.v1'
 
 function loadVerbosity(): TranscriptVerbosity {
+  return loadTranscriptVerbosity()
+}
+
+/// 给外部 owner 复用同一份 localStorage 存储——让 Dock 这种把 pill 渲在
+/// 自己 toolbar 里、又想跟 TranscriptView 的 uncontrolled fallback 同 key 的
+/// 场景能 hydrate / persist 同一个值。
+export function loadTranscriptVerbosity(): TranscriptVerbosity {
   try {
     if (typeof localStorage === 'undefined') return 'normal'
     const v = localStorage.getItem(VERBOSITY_KEY)
     if (v === 'normal' || v === 'thinking' || v === 'verbose') return v
-    // 迁移旧 showTools key
+    // 迁移旧 showTools key（true → verbose, false → normal）
     const legacy = localStorage.getItem(LEGACY_TOOL_VIS_KEY)
     if (legacy === 'true') return 'verbose'
     if (legacy === 'false') return 'normal'
   } catch { /* ignore */ }
   return 'normal'
+}
+
+export function saveTranscriptVerbosity(v: TranscriptVerbosity): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(VERBOSITY_KEY, v)
+    localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
+  } catch { /* ignore */ }
 }
 
 function entrySignature(entries: TranscriptEntryForView[]): string {
@@ -118,10 +141,23 @@ export function TranscriptView({
   liveStatus = null,
   liveCurrentTool = null,
   liveCurrentTask = null,
+  verbosity: controlledVerbosity,
+  onVerbosityChange,
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
-  const [verbosity, setVerbosity] = useState<TranscriptVerbosity>(loadVerbosity)
+  // Controlled vs uncontrolled verbosity. parent 既给 verbosity 又给
+  // onVerbosityChange → 受控（隐藏自带 pill）。否则走 localStorage 自管。
+  const isControlled = controlledVerbosity !== undefined && onVerbosityChange !== undefined
+  const [internalVerbosity, setInternalVerbosity] = useState<TranscriptVerbosity>(loadVerbosity)
+  const verbosity = isControlled ? controlledVerbosity : internalVerbosity
+  const setVerbosity = (v: TranscriptVerbosity) => {
+    if (isControlled) {
+      onVerbosityChange!(v)
+    } else {
+      setInternalVerbosity(v)
+    }
+  }
 
   const parentRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(initialCache?.stickyBottom ?? true)
@@ -151,14 +187,15 @@ export function TranscriptView({
     }
   }, [cacheKey])
 
-  // Persist verbosity
+  // Persist verbosity (uncontrolled mode only — controlled mode的
+  // 持久化由 parent 负责，避免双方同时往 localStorage 写造成 race)
   useEffect(() => {
+    if (isControlled) return
     try {
-      localStorage.setItem(VERBOSITY_KEY, verbosity)
-      // 一并清掉 legacy key —— 迁移完就别留
+      localStorage.setItem(VERBOSITY_KEY, internalVerbosity)
       localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
     } catch { /* ignore */ }
-  }, [verbosity])
+  }, [internalVerbosity, isControlled])
 
   // Update cache signature when entries change (so cross-mount re-entry knows
   // whether content moved on)
@@ -194,32 +231,58 @@ export function TranscriptView({
     return m
   }, [entries])
 
-  // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）
-  //   normal:   text 块（user/assistant 都算）
-  //   thinking: text + thinking
-  //   verbose:  全部块都保留
+  // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）。
+  //
+  // 三档语义（和 Claude Code 自带视图对齐）：
+  //   normal:   text + tool_use（折叠成 summary 一行，点 ▸ 展开）
+  //   thinking: 同 normal，再加 thinking 块（默认折叠）
+  //   verbose:  全部块都保留 + tool_use 默认展开（点击可手动收起）
+  //
+  // tool_use 在所有模式都展示——只是默认展开 / 折叠状态不一样（由
+  // EntryRow 渲染时根据 verbosity 决定）。tool_result 也都保留（极少落
+  // 在 assistant entry 上，但保留以备 orphan 渲染）。
   //
   // 末尾根据 liveStatus 合成一条 in-flight 占位 entry（实时 toolcall 进度，
   // 模仿 Claude Code 自带的 streaming 渲染）。覆盖三种状态：
   //   tooling:  显示当前在跑的 tool 名 + spinner
   //   thinking: 显示 "Thinking…" 脉冲块
   //   else:     不合成
-  // De-dup：search 中（query 非空）不合成；最后一条真 entry 已经包含同名
-  // tool_use 时跳过（覆盖 PostToolUse 已写入 jsonl 但 status 还没翻 idle 的瞬态）
+  // De-dup：search 中（query 非空）不合成。
   const visibleEntries = useMemo(() => {
     const out: TranscriptEntryForView[] = []
     for (const e of filteredEntries) {
       const isPureOrphan =
         e.type === 'user' && e.blocks.every((b) => b.type === 'tool_result')
       if (isPureOrphan) continue
-      if (verbosity === 'verbose') { out.push(e); continue }
       const kept = e.blocks.filter((b) => {
         if (b.type === 'text') return true
-        if (b.type === 'thinking') return verbosity === 'thinking'
-        // tool_use / tool_result 在 normal + thinking 都隐藏
+        if (b.type === 'thinking') return verbosity !== 'normal'
+        if (b.type === 'tool_use') return true
+        if (b.type === 'tool_result') return true
         return false
       })
       if (kept.length === 0) continue
+
+      // Cross-entry tool-run 拼接：claude 经常拆 turn 成多条 assistant
+      // entry（text + tool_use_A → 看 tool_result_A → 接 tool_use_B + ...）
+      // 我们想把"上一条 entry 结尾的 tool_use"和"这条 entry 开头的 tool_use"
+      // 视为同一连续 run，让 EntryRow 内部的 per-entry grouping 把它们一
+      // 起 rollup。具体做法是把这条 entry 的 blocks 直接 splice 到上一条
+      // 末尾——前提是两条都是 assistant entry，prev 末块是 tool_use，
+      // current 首块是 tool_use（中间允许多 tool_use 和 text 混合，但起
+      // 接缝两侧必须是 tool_use 才是真"continuation"）。
+      const prev = out[out.length - 1]
+      const isAssistant = e.type === 'assistant'
+      const prevIsAssistant = prev?.type === 'assistant'
+      const prevEndsWithTool = prev && prev.blocks[prev.blocks.length - 1]?.type === 'tool_use'
+      const currStartsWithTool = kept[0]?.type === 'tool_use'
+      if (
+        isAssistant && prevIsAssistant && prevEndsWithTool && currStartsWithTool
+      ) {
+        out[out.length - 1] = { ...prev, blocks: [...prev.blocks, ...kept] }
+        continue
+      }
+
       out.push({ ...e, blocks: kept })
     }
 
@@ -466,34 +529,36 @@ export function TranscriptView({
             }
           }}
         />
-        <div
-          className="transcript-search__verbosity"
-          role="radiogroup"
-          aria-label="Transcript verbosity"
-        >
-          {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
-            <button
-              key={level}
-              type="button"
-              role="radio"
-              aria-checked={verbosity === level}
-              className={
-                'transcript-search__verbosity-btn' +
-                (verbosity === level ? ' transcript-search__verbosity-btn--active' : '')
-              }
-              title={
-                level === 'normal'
-                  ? 'Normal — text only (no thinking, no tool calls)'
-                  : level === 'thinking'
-                  ? 'Thinking — text + thinking blocks'
-                  : 'Verbose — full transcript including tool inputs/outputs'
-              }
-              onClick={() => setVerbosity(level)}
-            >
-              {level}
-            </button>
-          ))}
-        </div>
+        {!isControlled && (
+          <div
+            className="transcript-search__verbosity"
+            role="radiogroup"
+            aria-label="Transcript verbosity"
+          >
+            {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
+              <button
+                key={level}
+                type="button"
+                role="radio"
+                aria-checked={verbosity === level}
+                className={
+                  'transcript-search__verbosity-btn' +
+                  (verbosity === level ? ' transcript-search__verbosity-btn--active' : '')
+                }
+                title={
+                  level === 'normal'
+                    ? 'Normal — text only (no thinking, no tool calls)'
+                    : level === 'thinking'
+                    ? 'Thinking — text + thinking blocks'
+                    : 'Verbose — full transcript including tool inputs/outputs'
+                }
+                onClick={() => setVerbosity(level)}
+              >
+                {level}
+              </button>
+            ))}
+          </div>
+        )}
         <span className="transcript-search__count">
           {query
             ? `${filteredEntries.length}/${entries.length}`
@@ -587,10 +652,12 @@ function EntryRow({
 }) {
   let renderedFirstText = false
 
-  // 历史 toolcall 折叠：连续 ≥2 个 tool_use（中间没 text 打断）合成一个
-  // ToolGroupBlock 显示 "Ran 3 commands, read 2 files" 摘要，点开展开看每条。
-  // 单条 tool_use 还是走 ToolUseBlock，不必折叠。Live 占位 entry 不折叠
-  // （它本来就一条 tool_use，没意义）。
+  // 历史 toolcall 折叠：连续 ≥1 个 tool_use 都用 ToolGroupBlock 包起来——
+  // 这样单 tool 跟多 tool 视觉一模一样（同一个 chip 形状，summary 不同）。
+  // 单 tool 时 summary 是"Edited X.tsx" / "Read Y.swift" / "Ran git status"
+  // 这种"动词 + 对象"形式，多 tool 时是"Edited 3 files, ran a command"
+  // 这种聚合形式（见 summarizeToolBlocks）。Live 占位 entry 维持原有的
+  // PendingToolUseBlock 走绿色 chip。
   const renderItems = (() => {
     if (isLive) return entry.blocks.map((b, i) => ({ kind: 'block' as const, block: b, index: i }))
     type Item =
@@ -608,11 +675,7 @@ function EntryRow({
           run.push(entry.blocks[j])
           j += 1
         }
-        if (run.length >= 2) {
-          out.push({ kind: 'tool-group', blocks: run, startIndex: i })
-        } else {
-          out.push({ kind: 'block', block: run[0], index: i })
-        }
+        out.push({ kind: 'tool-group', blocks: run, startIndex: i })
         i = j
       } else {
         out.push({ kind: 'block', block: b, index: i })
@@ -631,6 +694,7 @@ function EntryRow({
               key={`tg-${item.startIndex}`}
               blocks={item.blocks}
               resultsByToolUseId={resultsByToolUseId}
+              defaultOpen={verbosity === 'verbose'}
             />
           )
         }
@@ -653,17 +717,11 @@ function EntryRow({
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
-            // 单条 tool_use（既不连续也不属于 group）—— 完整渲染
-            if (isLive) {
-              return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
-            }
-            return (
-              <ToolUseBlock
-                key={i}
-                block={b}
-                result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
-              />
-            )
+            // 非 isLive 路径不会走到这里——renderItems pre-pass 把所有
+            // tool_use（包括单条）都打包成 'tool-group' item 了。这里只
+            // 处理 isLive 占位的合成 entry（liveStatus === 'tooling'），
+            // 它直接用 PendingToolUseBlock 走 in-flight 绿色 chip。
+            return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
           case 'tool_result':
             return <OrphanToolResult key={i} block={b} />
           default:
@@ -681,11 +739,13 @@ function EntryRow({
 function ToolGroupBlock({
   blocks,
   resultsByToolUseId,
+  defaultOpen = false,
 }: {
   blocks: TranscriptBlockForView[]
   resultsByToolUseId: Map<string, TranscriptBlockForView>
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const summary = summarizeToolBlocks(blocks)
   return (
     <div className={`tx-tool-group${open ? ' tx-tool-group--open' : ''}`}>
@@ -705,6 +765,7 @@ function ToolGroupBlock({
               key={i}
               block={b}
               result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
+              defaultOpen
             />
           ))}
         </div>
@@ -714,7 +775,16 @@ function ToolGroupBlock({
 }
 
 /// 把一组 tool_use 块按工具类别归并成一句人话。
-/// 维度：
+///
+/// 单条特殊处理（match Claude Code 自带视图）：直接说"动词 + 对象"，
+/// 不用 generic "Edited 1 file"——
+///   - Bash         → "Ran <command>" （cmd 截到 60 字符）
+///   - Edit/MultiEdit/Write → "Edited <basename>"
+///   - Read         → "Read <basename>"
+///   - Grep         → "Searched for \"<pattern>\""
+///   - Glob         → "Listed <pattern>"
+///
+/// 多条按桶聚合：
 ///   - Bash / BashOutput     → "ran N command(s)"
 ///   - Read                  → "read N file(s)"
 ///   - Edit / MultiEdit /
@@ -723,6 +793,9 @@ function ToolGroupBlock({
 ///   - 其它                  → "called N <toolName>"（按 toolName 分桶）
 /// 输出例子：「Ran 2 commands, read 3 files, edited 1 file」
 function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
+  if (blocks.length === 1) {
+    return summarizeSingleTool(blocks[0])
+  }
   const buckets: { ran: number; read: number; edited: number; searched: number; other: Map<string, number> } = {
     ran: 0,
     read: 0,
@@ -779,6 +852,50 @@ function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
   }
   if (parts.length === 0) return `${blocks.length} tool calls`
   return parts.join(', ')
+}
+
+/// 单 tool 的"动词 + 对象"摘要，用在 ToolGroupBlock header 当 summary 文字。
+/// 设计意图：跟 Claude Code 自带视图一致，单 tool 显示具体在干啥的最相关
+/// 信息（filename / command），不重复显示 tool 名（Edit/Read/Bash 太冗）。
+function summarizeSingleTool(b: TranscriptBlockForView): string {
+  const name = b.toolName ?? 'Tool'
+  const input = safeParse(b.toolInputJSON) ?? {}
+  const trim = (s: string, n: number) => (s.length <= n ? s : s.slice(0, n).trimEnd() + '…')
+  const basename = (p: string) => p.split('/').pop() || p
+  switch (name) {
+    case 'Bash':
+    case 'BashOutput': {
+      const cmd = (input.command as string) ?? ''
+      return cmd ? `Ran ${trim(cmd, 70)}` : 'Ran command'
+    }
+    case 'Edit':
+    case 'MultiEdit':
+    case 'Write': {
+      const path = (input.file_path as string) ?? ''
+      return path ? `Edited ${basename(path)}` : 'Edited file'
+    }
+    case 'Read': {
+      const path = (input.file_path as string) ?? ''
+      return path ? `Read ${basename(path)}` : 'Read file'
+    }
+    case 'Grep': {
+      const pat = (input.pattern as string) ?? ''
+      return pat ? `Searched for "${trim(pat, 40)}"` : 'Searched'
+    }
+    case 'Glob': {
+      const pat = (input.pattern as string) ?? ''
+      return pat ? `Listed ${trim(pat, 40)}` : 'Listed files'
+    }
+    case 'WebFetch': {
+      const url = (input.url as string) ?? ''
+      return url ? `Fetched ${trim(url, 60)}` : 'Fetched URL'
+    }
+    case 'WebSearch': {
+      const q = (input.query as string) ?? ''
+      return q ? `Searched web for "${trim(q, 40)}"` : 'Searched web'
+    }
+    default: return name
+  }
 }
 
 const TextBlock = memo(function TextBlock({
@@ -861,41 +978,58 @@ function ThinkingBlock({ text, forceOpen = false }: { text: string; forceOpen?: 
   )
 }
 
+/// 单个 tool_use 块，跟 Claude Code 本体一样 collapsible：
+///   - Header: icon + name + summary（"Bash · ./scripts/validate.sh"）+ 末尾 chevron
+///   - Body:   ToolInputBody + ToolResultBody（input 详情 + result 输出）
+/// `defaultOpen` 默认 false（normal/thinking 折叠成一行）；verbose 模式 EntryRow
+/// 会传 true 让所有 tool 默认展开。Header 整条点击 toggle —— 因此样式上
+/// 把它从 div 升级成 button 给键盘可达 + cursor:pointer。
 function ToolUseBlock({
   block,
   result,
+  defaultOpen = false,
 }: {
   block: TranscriptBlockForView
   result: TranscriptBlockForView | undefined
+  defaultOpen?: boolean
 }) {
+  const [open, setOpen] = useState(defaultOpen)
   const name = block.toolName ?? 'Tool'
   const input = safeParse(block.toolInputJSON) ?? {}
   return (
-    <div className="tx-tool">
-      <div className="tx-tool__header">
+    <div className={`tx-tool${open ? ' tx-tool--open' : ' tx-tool--collapsed'}`}>
+      <button
+        type="button"
+        className="tx-tool__header"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
         <span className="tx-tool__icon">{toolIcon(name)}</span>
         <span className="tx-tool__name">{name}</span>
         <span className="tx-tool__summary">{summarizeToolInput(name, input)}</span>
-      </div>
-      <ToolInputBody name={name} input={input} />
-      {result && <ToolResultBody block={result} />}
+        <span className="tx-tool__chevron" aria-hidden>{open ? '⌄' : '›'}</span>
+      </button>
+      {open && (
+        <div className="tx-tool__body">
+          <ToolInputBody name={name} input={input} />
+          {result && <ToolResultBody block={result} />}
+        </div>
+      )}
     </div>
   )
 }
 
-/// In-flight tool_use 占位：tool 名 + spinner，没 input / result。
-/// 等 PostToolUse hook 把真 entry 写进 jsonl + status 翻 idle，这条会被
-/// dedup 掉（visibleEntries 里检查最后一条 entry 是否包含同名 tool_use）。
+/// In-flight tool_use 占位：单行 chip 视觉，跟历史 rollup 同一级（don't
+/// expand into a full tool block with input / result chrome since both are
+/// pending）。一旦 PostToolUse 把真 entry 写进 jsonl + status 翻 idle，这条
+/// 会被替换成正式的 ToolUseBlock。
 function PendingToolUseBlock({ toolName }: { toolName: string }) {
   return (
-    <div className="tx-tool tx-tool--pending">
-      <div className="tx-tool__header">
-        <span className="tx-tool__icon tx-tool__icon--pulse">{toolIcon(toolName)}</span>
-        <span className="tx-tool__name">{toolName}</span>
-        <span className="tx-tool__pending-label">
-          <span className="tx-tool__pending-spinner" aria-hidden /> running…
-        </span>
-      </div>
+    <div className="tx-tool-pending">
+      <span className="tx-tool-pending__icon">{toolIcon(toolName)}</span>
+      <span className="tx-tool-pending__label">{toolName}</span>
+      <span className="tx-tool-pending__spinner" aria-hidden />
+      <span className="tx-tool-pending__caption">running…</span>
     </div>
   )
 }
