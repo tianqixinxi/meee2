@@ -227,15 +227,15 @@ export function TranscriptView({
     if (query.trim()) return out  // search 中不混入合成条目，避免污染计数
     if (liveStatus !== 'tooling' && liveStatus !== 'thinking') return out
 
-    // 最后一条真 entry 是 assistant 且最后一个 tool_use 跟当前 currentTool
-    // 同名 → PostToolUse 写完但 status 还没翻 idle，跳过避免重复
-    const last = out[out.length - 1]
-    if (last && last.type === 'assistant') {
-      const lastToolUse = [...last.blocks].reverse().find((b) => b.type === 'tool_use')
-      if (lastToolUse && lastToolUse.toolName && lastToolUse.toolName === liveCurrentTool) {
-        return out
-      }
-    }
+    // 不做 toolName-based dedup —— 之前用 lastToolUse.toolName === liveCurrentTool
+    // 来吞掉 PostToolUse 写完但 status 还没翻 idle 的瞬态，但 toolName 重复
+    // 太常见（多轮 Bash 是日常），会把新的 in-flight 完全藏掉。Codex review
+    // P2 的合理告诫。
+    //
+    // 现在的语义：liveStatus 是 tooling 就显示占位 —— 哪怕历史最后一条
+    // entry 也是 Bash，"刚跑完 + 现在又跑一个" 在多步 turn 里是真实情况，
+    // 两个块同时显示不算冲突，反而准确。占位条目有 tx-entry--live 视觉标记
+    // 跟历史块区分得清楚。
 
     if (liveStatus === 'tooling' && liveCurrentTool) {
       out.push({
