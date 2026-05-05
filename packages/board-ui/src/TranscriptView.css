@@ -557,31 +557,46 @@
   animation: sd-spin 0.7s linear infinite;
 }
 
-.transcript-search__toggle {
+/* Segmented 三态 verbosity 选择器（替代旧的 Tool calls checkbox）。
+ * normal / thinking / verbose 三个 radio 按钮拼成一条 pill。
+ * Active 态用绿色 accent —— 跟其它 transcript chip 视觉同源。 */
+.transcript-search__verbosity {
   display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10.5px;
-  color: #9CA3B3;
-  padding: 3px 8px;
+  align-items: stretch;
   border-radius: 999px;
   background: #11141C;
   border: 1px solid #26303F;
-  cursor: pointer;
+  overflow: hidden;
   user-select: none;
-  white-space: nowrap;
 }
 
-.transcript-search__toggle input {
-  accent-color: #22C55E;
-  margin: 0;
+.transcript-search__verbosity-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #9CA3B3;
+  font-size: 10.5px;
+  font-family: inherit;
+  padding: 3px 9px;
   cursor: pointer;
+  text-transform: capitalize;
+  border-right: 1px solid #26303F;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.transcript-search__toggle:has(input:checked) {
+.transcript-search__verbosity-btn:last-child {
+  border-right: none;
+}
+
+.transcript-search__verbosity-btn:hover {
+  color: #D1D5DB;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.transcript-search__verbosity-btn--active,
+.transcript-search__verbosity-btn--active:hover {
   color: #BBF7D0;
-  background: rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.18);
 }
 
 .tx-text--assistant .tx-text__body p { margin: 0 0 6px; }

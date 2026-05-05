@@ -55,14 +55,30 @@ interface TxCacheEntry {
 }
 const txCache = new Map<string, TxCacheEntry>()
 
-const TOOL_VIS_KEY = 'meee2.transcript.showTools.v1'
-function loadShowTools(): boolean {
+// 三档 transcript 展示。和 Claude Code 自身的 verbosity 行为对齐：
+//   - normal:   只看 user / assistant 的文本；藏 thinking + tool_use + tool_result
+//   - thinking: normal + 展示 thinking 块（默认折叠）
+//   - verbose:  展示一切。thinking 块默认展开；tool 块完整显示 input + output
+//
+// 旧的 boolean `showTools` (`meee2.transcript.showTools.v1`) 迁移：true →
+// verbose，false → normal。Thinking 这一档之前不存在，迁移到这之后用户
+// 想要中间态自己点。
+export type TranscriptVerbosity = 'normal' | 'thinking' | 'verbose'
+
+const VERBOSITY_KEY = 'meee2.transcript.verbosity.v1'
+const LEGACY_TOOL_VIS_KEY = 'meee2.transcript.showTools.v1'
+
+function loadVerbosity(): TranscriptVerbosity {
   try {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem(TOOL_VIS_KEY) : null
-    if (v === 'true') return true
-    if (v === 'false') return false
+    if (typeof localStorage === 'undefined') return 'normal'
+    const v = localStorage.getItem(VERBOSITY_KEY)
+    if (v === 'normal' || v === 'thinking' || v === 'verbose') return v
+    // 迁移旧 showTools key
+    const legacy = localStorage.getItem(LEGACY_TOOL_VIS_KEY)
+    if (legacy === 'true') return 'verbose'
+    if (legacy === 'false') return 'normal'
   } catch { /* ignore */ }
-  return false
+  return 'normal'
 }
 
 function entrySignature(entries: TranscriptEntryForView[]): string {
@@ -88,7 +104,7 @@ export function TranscriptView({
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
-  const [showTools, setShowTools] = useState<boolean>(loadShowTools)
+  const [verbosity, setVerbosity] = useState<TranscriptVerbosity>(loadVerbosity)
 
   const parentRef = useRef<HTMLDivElement | null>(null)
   const stickToBottomRef = useRef(initialCache?.stickyBottom ?? true)
@@ -118,10 +134,14 @@ export function TranscriptView({
     }
   }, [cacheKey])
 
-  // Persist tool toggle
+  // Persist verbosity
   useEffect(() => {
-    try { localStorage.setItem(TOOL_VIS_KEY, showTools ? 'true' : 'false') } catch { /* ignore */ }
-  }, [showTools])
+    try {
+      localStorage.setItem(VERBOSITY_KEY, verbosity)
+      // 一并清掉 legacy key —— 迁移完就别留
+      localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
+    } catch { /* ignore */ }
+  }, [verbosity])
 
   // Update cache signature when entries change (so cross-mount re-entry knows
   // whether content moved on)
@@ -157,20 +177,28 @@ export function TranscriptView({
     return m
   }, [entries])
 
-  // Apply tool-vis filter + drop pure-tool_result user entries
+  // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）
+  //   normal:   text 块（user/assistant 都算）
+  //   thinking: text + thinking
+  //   verbose:  全部块都保留
   const visibleEntries = useMemo(() => {
     const out: TranscriptEntryForView[] = []
     for (const e of filteredEntries) {
       const isPureOrphan =
         e.type === 'user' && e.blocks.every((b) => b.type === 'tool_result')
       if (isPureOrphan) continue
-      if (showTools) { out.push(e); continue }
-      const kept = e.blocks.filter((b) => b.type !== 'tool_use' && b.type !== 'tool_result')
+      if (verbosity === 'verbose') { out.push(e); continue }
+      const kept = e.blocks.filter((b) => {
+        if (b.type === 'text') return true
+        if (b.type === 'thinking') return verbosity === 'thinking'
+        // tool_use / tool_result 在 normal + thinking 都隐藏
+        return false
+      })
       if (kept.length === 0) continue
       out.push({ ...e, blocks: kept })
     }
     return out
-  }, [filteredEntries, showTools])
+  }, [filteredEntries, verbosity])
 
   // Continuous-role merging (hide chip on consecutive same-role entries)
   const hideRoleChipFor = useMemo(() => {
@@ -371,10 +399,34 @@ export function TranscriptView({
             }
           }}
         />
-        <label className="transcript-search__toggle" title="Show tool_use / tool_result blocks">
-          <input type="checkbox" checked={showTools} onChange={(e) => setShowTools(e.target.checked)} />
-          <span>Tool calls</span>
-        </label>
+        <div
+          className="transcript-search__verbosity"
+          role="radiogroup"
+          aria-label="Transcript verbosity"
+        >
+          {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
+            <button
+              key={level}
+              type="button"
+              role="radio"
+              aria-checked={verbosity === level}
+              className={
+                'transcript-search__verbosity-btn' +
+                (verbosity === level ? ' transcript-search__verbosity-btn--active' : '')
+              }
+              title={
+                level === 'normal'
+                  ? 'Normal — text only (no thinking, no tool calls)'
+                  : level === 'thinking'
+                  ? 'Thinking — text + thinking blocks'
+                  : 'Verbose — full transcript including tool inputs/outputs'
+              }
+              onClick={() => setVerbosity(level)}
+            >
+              {level}
+            </button>
+          ))}
+        </div>
         <span className="transcript-search__count">
           {query
             ? `${filteredEntries.length}/${entries.length}`
@@ -426,6 +478,7 @@ export function TranscriptView({
                       entry={e}
                       resultsByToolUseId={resultsByToolUseId}
                       hideRoleChip={hideRoleChipFor.has(e.id)}
+                      verbosity={verbosity}
                     />
                   </div>
                 )
@@ -454,10 +507,12 @@ function EntryRow({
   entry,
   resultsByToolUseId,
   hideRoleChip,
+  verbosity,
 }: {
   entry: TranscriptEntryForView
   resultsByToolUseId: Map<string, TranscriptBlockForView>
   hideRoleChip: boolean
+  verbosity: TranscriptVerbosity
 }) {
   let renderedFirstText = false
   return (
@@ -470,7 +525,7 @@ function EntryRow({
             return <TextBlock key={i} role={entry.type} text={b.text ?? ''} hideLabel={hideLabel} />
           }
           case 'thinking':
-            return <ThinkingBlock key={i} text={b.text ?? ''} />
+            return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
             return (
               <ToolUseBlock
@@ -539,11 +594,25 @@ const TextBlock = memo(function TextBlock({
   )
 })
 
-function ThinkingBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
+/// `forceOpen` 是 verbose 模式的契约：处于 verbose 时永远展开 thinking 块，
+/// 不管该实例之前手动点过收起没——这跟 Codex review 指出的 P2 bug 相关：
+/// 之前用 `useState(defaultOpen)` 只在 mount 取一次，从 thinking 切到 verbose
+/// 时已经 mount 的实例不会响应 prop 翻转，留着收起态违反 verbose 契约。
+///
+/// 行为定义：
+///   - forceOpen=true（verbose 模式）→ 一律 open，按钮还能点但视觉总是展开
+///   - forceOpen=false（thinking 模式）→ 走用户手动 toggle 的本地状态，
+///     默认收起；切回 verbose 又会被强制展开。
+function ThinkingBlock({ text, forceOpen = false }: { text: string; forceOpen?: boolean }) {
+  const [userOpen, setUserOpen] = useState(false)
+  const open = forceOpen || userOpen
   return (
     <div className="tx-thinking">
-      <button className="tx-thinking__toggle" onClick={() => setOpen(!open)}>
+      <button
+        className="tx-thinking__toggle"
+        onClick={() => setUserOpen(!open)}
+        title={forceOpen ? 'Verbose mode auto-expands thinking — toggle disabled' : undefined}
+      >
         {open ? '▾' : '▸'} thinking
       </button>
       {open && <div className="tx-thinking__body">{text}</div>}
