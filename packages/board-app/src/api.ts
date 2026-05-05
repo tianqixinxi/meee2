@@ -385,6 +385,14 @@ export interface PushNowResult {
   delivered: number
   message: Message | null
   error: string | null
+  /** Server-routed error category: `accessibility_denied` /
+   *  `claude_not_running` / `keystroke_failed` / null. WebUI uses this to
+   *  decide whether to offer "Open Settings" affordance vs plain toast. */
+  errorCode:
+    | 'accessibility_denied'
+    | 'claude_not_running'
+    | 'keystroke_failed'
+    | null
 }
 
 export async function pushToDesktopNow(
@@ -395,6 +403,7 @@ export async function pushToDesktopNow(
     delivered?: number
     message?: Message | null
     error?: string | null
+    errorCode?: string | null
   }>(
     `/api/sessions/${encodeURIComponent(id)}/push-now`,
     {
@@ -402,11 +411,26 @@ export async function pushToDesktopNow(
       body: JSON.stringify({ content }),
     },
   )
+  const code = r.errorCode
+  const errorCode =
+    code === 'accessibility_denied' ||
+    code === 'claude_not_running' ||
+    code === 'keystroke_failed'
+      ? code
+      : null
   return {
     delivered: r.delivered ?? 0,
     message: r.message ?? null,
     error: r.error ?? null,
+    errorCode,
   }
+}
+
+/// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，
+/// 给 meee2 授权 keystroke。配合 push-now 失败时 errorCode='accessibility_denied'
+/// 的 toast 一起用。
+export async function openAccessibilitySettings(): Promise<void> {
+  await jsonRequest('/api/system/open-accessibility-settings', { method: 'POST' })
 }
 
 /**

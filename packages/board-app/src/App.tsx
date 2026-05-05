@@ -376,7 +376,18 @@ export default function App() {
     const onPaste = (e: ClipboardEvent) => {
       if (isInputTarget(e.target)) return
       if (!selectedSessionId && selection.kind !== 'none') return
+      // Don't hijack Excalidraw's own clipboard payload — it stores its
+      // scene JSON in text/plain prefixed with {"type":"excalidraw/clipboard"...}
+      // and consuming it here breaks canvas copy/paste of session cards.
+      const types = e.clipboardData?.types ?? []
+      if (
+        types.includes('application/vnd.excalidraw+json') ||
+        types.includes('application/vnd.excalidrawlib+json')
+      ) {
+        return
+      }
       const text = e.clipboardData?.getData('text') ?? ''
+      if (text.startsWith('{"type":"excalidraw/clipboard"')) return
       if (!text) return
       e.preventDefault()
       e.stopImmediatePropagation()

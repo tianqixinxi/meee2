@@ -305,6 +305,7 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
+        server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)

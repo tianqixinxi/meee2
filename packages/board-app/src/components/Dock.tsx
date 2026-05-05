@@ -27,6 +27,7 @@ import type { BoardState, Session } from '../types'
 import {
   activateSession,
   injectToSession,
+  openAccessibilitySettings,
   pushToDesktopNow,
   uploadAttachment,
   spawnSession,
@@ -400,14 +401,32 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             ? async (content: string) => {
                 const shortId = mode.session.id.slice(0, 8)
                 const r = await pushToDesktopNow(mode.session.id, content)
-                if (r.error) {
-                  toast.push('error', `Push failed (${shortId}): ${r.error}`)
+                if (!r.error) {
+                  toast.push(
+                    'success',
+                    `Pushed to Claude.app — ${r.delivered} message(s) delivered (${shortId})`
+                  )
                   return
                 }
-                toast.push(
-                  'success',
-                  `Pushed to Claude.app — ${r.delivered} message(s) delivered (${shortId})`
-                )
+                if (r.errorCode === 'accessibility_denied') {
+                  // 弹 toast 之外，立刻把 user 跳到 System Settings → Accessibility
+                  // 让授权流程一步到位（user 加 meee2 + 开关 ON 之后回 webui
+                  // 重试 ⚡）。
+                  await openAccessibilitySettings().catch(() => undefined)
+                  toast.push(
+                    'error',
+                    'Accessibility permission required — System Settings opened. Add /Applications/meee2.app and turn the toggle on, then retry ⚡.'
+                  )
+                  return
+                }
+                if (r.errorCode === 'claude_not_running') {
+                  toast.push(
+                    'error',
+                    'Claude.app is not running. Open it first, then retry ⚡.'
+                  )
+                  return
+                }
+                toast.push('error', `Push failed (${shortId}): ${r.error}`)
               }
             : undefined
         }

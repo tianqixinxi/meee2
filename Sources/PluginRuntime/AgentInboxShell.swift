@@ -122,18 +122,23 @@ public final class AgentInboxShell {
                 MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
                 continue
             }
-            let ok = await ClaudeDesktopInputStream().sendText(sid: sessionId, text: payload)
-            NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) ok=\(ok)")
-            if ok {
+            do {
+                try await ClaudeDesktopInputStream().sendTextThrowing(sid: sessionId, text: payload)
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) ok=true")
                 delivered += 1
                 MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
                 ConversationContext.shared.recordInbound(sessionId: sessionId, message: msg)
-            } else {
-                lastErr = "keystroke failed (check Accessibility permission for meee2 in System Settings, and that Claude.app is running)"
-                // 一条失败就停 —— 继续尝试只会再抢一次焦点没用
+            } catch let err as ClaudeDesktopInputStream.SendError {
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) failed: \(err.errorDescription ?? "")")
+                lastErr = err.errorDescription
+                // accessibilityNotGranted 是 user-actionable，提示 webui
+                // 用专门的 toast；其它错误一条失败就停，避免连环抢焦点。
+                break
+            } catch {
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) failed: \(error.localizedDescription)")
+                lastErr = error.localizedDescription
                 break
             }
-            // 给 target 一个 lastActivity bump，让 webui 状态及时更新
             _ = target  // silence warning
         }
         return (delivered, lastErr)

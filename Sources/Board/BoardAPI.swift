@@ -396,18 +396,54 @@ enum BoardAPI {
         _ = sem.wait(timeout: .now() + 15.0)
 
         BoardServer.shared.broadcastStateChanged()
+        // 把 error string 翻成 webui 可路由的 errorCode：
+        //   accessibility_denied → webui 提示 + 一键开 System Settings
+        //   claude_not_running   → 用户开 Claude.app 重试
+        //   其它                  → 普通 toast
+        let errorCode: String? = {
+            guard let err = error else { return nil }
+            if err.contains("Accessibility") || err.contains("不允许发送按键") {
+                return "accessibility_denied"
+            }
+            if err.contains("Claude.app is not running") || err.contains("claude_not_running") {
+                return "claude_not_running"
+            }
+            return "keystroke_failed"
+        }()
         let payload = PushNowResponse(
             delivered: delivered,
             message: injectedMsg,
-            error: error
+            error: error,
+            errorCode: errorCode
         )
         return jsonResponse(payload)
+    }
+
+    /// POST /api/system/open-accessibility-settings
+    /// 把 user 弹去 System Settings → Privacy & Security → Accessibility 页。
+    /// 用 NSWorkspace + 已知的 prefpane URL（macOS 13+ 通用）。
+    static func openAccessibilitySettings(_ req: HttpRequest) -> HttpResponse {
+        #if canImport(AppKit)
+        DispatchQueue.main.async {
+            // x-apple.systempreferences 是 macOS 13+ 的 anchor URL scheme。
+            // anchor `Privacy_Accessibility` 直接跳到 Accessibility 子页。
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+        #else
+        return errorResponse("unsupported", "open-accessibility-settings is macOS only", status: 501)
+        #endif
     }
 
     private struct PushNowResponse: Encodable {
         let delivered: Int
         let message: MessageDTO?
         let error: String?
+        /// 给 webui 区分错误类型用：`accessibility_denied` → 触发"open Settings"
+        /// 链接；其它错误只显示 toast。nil = 成功 / 没特殊处理需要。
+        let errorCode: String?
     }
 
     /// GET /api/sessions/:id/transcript?limit=...

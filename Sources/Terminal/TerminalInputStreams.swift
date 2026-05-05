@@ -2,6 +2,9 @@ import Foundation
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(ApplicationServices)
+import ApplicationServices
+#endif
 
 // MARK: - iTerm2 input injection
 
@@ -151,15 +154,74 @@ public struct ClaudeDesktopInputStream {
         }
     }
 
-    public init() {}
+    public enum SendError: Error, LocalizedError {
+        case accessibilityNotGranted
+        case claudeNotRunning
+        case appleScriptFailed(String)
 
-    public func sendText(sid: String, text: String) async -> Bool {
-        await Serializer.shared.runExclusive {
-            await Self.runOnce(sid: sid, text: text)
+        public var errorDescription: String? {
+            switch self {
+            case .accessibilityNotGranted:
+                return "meee2 doesn't have Accessibility permission. " +
+                    "System Settings → Privacy & Security → Accessibility, " +
+                    "add /Applications/meee2.app and turn the toggle on."
+            case .claudeNotRunning:
+                return "Claude.app is not running."
+            case .appleScriptFailed(let detail):
+                return "Keystroke failed: \(detail)"
+            }
         }
     }
 
-    private static func runOnce(sid: String, text: String) async -> Bool {
+    public init() {}
+
+    /// 旧 Bool API：保持向后兼容（AgentInboxShell.deliverIfResting 等老 caller
+    /// 不需要 typed error）。新 caller 优先用 `sendTextThrowing` 拿到具体
+    /// 错误类型。
+    public func sendText(sid: String, text: String) async -> Bool {
+        do {
+            try await sendTextThrowing(sid: sid, text: text)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// throws 版本：上层（pushDesktopNow / BoardAPI）能区分 accessibilityNotGranted
+    /// 还是普通 keystroke 失败，给 webui 不同 toast / 操作（自动开 System
+    /// Settings 等）。
+    public func sendTextThrowing(sid: String, text: String) async throws {
+        // 先做 Accessibility 预检——没权限就直接 throw，不抢焦点不动 Claude.app。
+        // 用户授权后再点 push 重试，体验干净。
+        if !Self.isAccessibilityTrusted() {
+            throw SendError.accessibilityNotGranted
+        }
+        let result = await Serializer.shared.runExclusive {
+            await Self.runOnce(sid: sid, text: text)
+        }
+        if result == "ok" { return }
+        if result.contains("claude_not_running") {
+            throw SendError.claudeNotRunning
+        }
+        throw SendError.appleScriptFailed(result)
+    }
+
+    /// 通过 ApplicationServices 的 `AXIsProcessTrusted`（C API）查 meee2.app
+    /// 自身是否在 macOS Accessibility allowlist 里。**不弹 prompt** ——
+    /// `AXIsProcessTrustedWithOptions(prompt: true)` 会立刻抛系统弹窗，
+    /// 但如果 user 之前已经主动 deny 过，prompt 不会再出现，会很迷惑；
+    /// 我们更想"探测 + 上报 webui"，让 user 在自己的节奏去 System Settings。
+    private static func isAccessibilityTrusted() -> Bool {
+        #if canImport(ApplicationServices)
+        return AXIsProcessTrusted()
+        #else
+        return false
+        #endif
+    }
+
+    /// Returns "ok" on success, or the runNSAppleScript error string on failure
+    /// (looks like `err:[N] <msg>` or `err:claude_not_running`).
+    private static func runOnce(sid: String, text: String) async -> String {
         // 文本结尾的换行会被 keystroke 当字面字符发，会比 key code 36 多敲
         // 一行——剥掉。
         var body = text
@@ -203,7 +265,7 @@ public struct ClaudeDesktopInputStream {
 
         let result = await runNSAppleScript(script)
         NSLog("[ClaudeDesktopInputStream] sendText sid=\(sid.prefix(8)) textLen=\(text.count) result='\(result)'")
-        return result == "ok"
+        return result
     }
 }
 

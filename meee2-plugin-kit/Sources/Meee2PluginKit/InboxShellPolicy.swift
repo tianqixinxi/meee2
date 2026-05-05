@@ -47,12 +47,14 @@ public struct PassthroughPolicy: InboxShellPolicy {
 public struct LabeledSenderPolicy: InboxShellPolicy {
     public init() {}
     public func format(_ envelope: A2AInboundView) -> String? {
-        let header: String
+        // operator/human-injected messages（Dock / Web / `meee2 msg send --human`）
+        // 是用户直接键入，应该和 terminal 里的真键盘输入无差别——不贴前缀。
+        // 只有 agent → agent A2A 才需要 `[meee2 a2a] from @<alias>` 标签让接收
+        // 方 Claude 知道要走 send_message 回复。
         if envelope.injectedByHuman {
-            header = "[meee2 a2a] from operator on #\(envelope.channel):"
-        } else {
-            header = "[meee2 a2a] from @\(envelope.fromAlias) on #\(envelope.channel):"
+            return envelope.content
         }
+        let header = "[meee2 a2a] from @\(envelope.fromAlias) on #\(envelope.channel):"
         return "\(header)\n\(envelope.content)"
     }
 }
