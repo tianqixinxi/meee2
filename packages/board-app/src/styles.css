@@ -831,6 +831,35 @@ textarea {
   flex-shrink: 0;
 }
 
+/* 左侧 status dot —— 仅指示 session 是不是 live（在跑）。
+ *   live      → 绿色脉冲（thinking / tooling / active / compacting）
+ *   attention → 橙色脉冲（permissionRequired，等用户点确认）
+ *   off       → 透明的占位圆，保持行内对齐不抖动 */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot--live {
+  background: #22C55E;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6);
+  animation: status-dot-pulse 1.6s ease-in-out infinite;
+}
+.status-dot--attention {
+  background: #F59E0B;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6);
+  animation: status-dot-pulse 1.2s ease-in-out infinite;
+}
+.status-dot--off {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+@keyframes status-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
 .section {
   margin-bottom: 14px;
 }
@@ -3591,11 +3620,27 @@ textarea {
   border-radius: 6px;
   gap: 10px;
 }
+/* hover 渐变：从右（带色但透明度高，已经偏淡）一路淡到左（完全透明）。
+ * --row-accent 由 Sidebar.tsx 设置（Claude 橙 / Codex 蓝 / Cursor 灰 /
+ * OpenClaw 红）。整体强度刻意压低 —— sidebar 里同时几十行，每行 hover
+ * 都跳出大块色会很闹；只是给一抹品牌色提示。 */
 .sidebar .sidebar-session-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background:
+    linear-gradient(
+      270deg,
+      color-mix(in srgb, var(--row-accent, #888) 12%, transparent) 0%,
+      color-mix(in srgb, var(--row-accent, #888) 4%, transparent) 60%,
+      transparent 100%
+    );
 }
 .sidebar .sidebar-session-row.is-selected {
-  background: rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(
+      270deg,
+      color-mix(in srgb, var(--row-accent, #888) 18%, transparent) 0%,
+      color-mix(in srgb, var(--row-accent, #888) 7%, transparent) 60%,
+      rgba(255, 255, 255, 0.03) 100%
+    );
 }
 .sidebar .sidebar-session-row__title {
   /* 跟 group header 字号统一（13px）—— 之前 14px 让行更高、视觉不齐 */
@@ -3626,6 +3671,16 @@ textarea {
  * 视觉参考截图（用户截图）：黑底圆角 + 8px padding + item flex row
  * with icon 左、label 中、shortcut 右；hover bg 略亮；分组之间细分
  * 隔线；submenu 右挂。 */
+
+/* Transparent backdrop —— covers viewport while menu is open, click
+ * anywhere outside the menu (which is z-indexed above) → onClose. */
+.srm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 999;
+}
+
 .srm-overlay {
   position: fixed;
   width: 220px;

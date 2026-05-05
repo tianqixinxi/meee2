@@ -73,6 +73,32 @@ function persistCollapsedProjects(set: Set<string>) {
 }
 
 const CLAUDE_PLUGIN_ID = 'com.meee2.plugin.claude'
+const CODEX_PLUGIN_ID = 'com.meee2.plugin.codex'
+const CURSOR_PLUGIN_ID = 'com.meee2.plugin.cursor'
+const OPENCLAW_PLUGIN_ID = 'com.meee2.plugin.openclaw'
+
+/// 不同 plugin 的 row hover 强调色（hover 时一抹渐变背景）。frontend 默认值
+/// 覆盖 plugin metadata 里的 pluginColor —— 让品牌色保持稳定（用户在
+/// product spec 里点名 Claude 橙、Codex 蓝、Cursor 灰、OpenClaw 红）。
+function accentForPlugin(pluginId: string, fallback: string): string {
+  switch (pluginId) {
+    case CLAUDE_PLUGIN_ID: return '#FF9500'
+    case CODEX_PLUGIN_ID: return '#3B82F6'
+    case CURSOR_PLUGIN_ID: return '#9CA3AF'
+    case OPENCLAW_PLUGIN_ID: return '#EF4444'
+    default: return fallback
+  }
+}
+
+/// session 是不是真的"活着在跑"——仅 isWorking 状态点亮左侧 status dot。
+/// idle / waitingForUser / completed / dead 都不算 live，permissionRequired 单
+/// 独算 attention（橙色脉冲）让用户一眼分辨"需要点确认" vs "正常在算"。
+function liveDotKind(status: string): 'live' | 'attention' | null {
+  if (status === 'thinking' || status === 'tooling' ||
+      status === 'active' || status === 'compacting') return 'live'
+  if (status === 'permissionRequired') return 'attention'
+  return null
+}
 
 /// 把 session.clientKind 规范化（缺字段 / 未知值 → 'cli'，因为 cli 是默认）
 function normalizeKind(k: string | null | undefined): ClientKind {
@@ -837,6 +863,8 @@ export default function Sidebar({
                   // 当前行用 .is-selected 加视觉反馈。
                   const selected =
                     selection.kind === 'session' && selection.sessionId === s.id
+                  const dot = liveDotKind(s.status)
+                  const accent = accentForPlugin(s.pluginId, s.pluginColor)
                   return (
                     <div
                       key={s.id}
@@ -845,6 +873,7 @@ export default function Sidebar({
                         (selected ? ' is-selected' : '') +
                         (menuForSid === s.id ? ' is-menu-open' : '')
                       }
+                      style={{ ['--row-accent' as any]: accent }}
                     >
                       <div
                         className="sidebar-session-row__main"
@@ -853,8 +882,13 @@ export default function Sidebar({
                         }
                       >
                         <span
-                          className="color-dot"
-                          style={{ background: s.pluginColor }}
+                          className={
+                            'status-dot' +
+                            (dot === 'live' ? ' status-dot--live' :
+                              dot === 'attention' ? ' status-dot--attention' :
+                              ' status-dot--off')
+                          }
+                          aria-hidden
                         />
                         {(() => {
                           // Claude session 多 source（CLI/Desktop/Cowork）共用一个

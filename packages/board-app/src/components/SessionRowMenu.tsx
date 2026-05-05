@@ -130,21 +130,23 @@ export function SessionRowMenu({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [submenuOpen, setSubmenuOpen] = useState(false)
 
-  // 点 backdrop 或按 Esc 关闭。click-outside 检测：rootRef 之外的点击都关。
+  // 关闭逻辑：
+  //   - 点击 backdrop（fixed inset:0 透明覆盖层）→ onClose
+  //   - 按 Esc → onClose
+  //   - 选中某个 item 时 item 自己 onClick 里调 onClose
+  // 之前用 document.addEventListener('mousedown', ..., capture: true) 做
+  // click-outside 检测，结果在某些 React 18 重渲染时序下会比 button 的
+  // onClick 早一步把菜单 unmount —— 用户看到"点了没反应"。Backdrop pattern
+  // 是 React 标准做法，不会跟 component-internal 事件竞争。
   useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!rootRef.current) return
-      if (!rootRef.current.contains(e.target as Node)) onClose()
-    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         onClose()
         return
       }
-      // 字母快捷键：P / R / D —— 但不能在输入框里触发，否则用户在
-      // CommandBar / 重命名 input 里敲 "p" 都会被吞。document.activeElement
-      // 是 input/textarea/contenteditable 时直接放行。
+      // 字母快捷键 P / R / D 不能在 input/textarea 里触发，否则用户重命名
+      // 中敲 'p' 会被吞，CommandBar 打字也会被吞。
       const ae = document.activeElement as HTMLElement | null
       if (ae) {
         const tag = ae.tagName.toLowerCase()
@@ -155,13 +157,8 @@ export function SessionRowMenu({
       else if (k === 'r') { e.preventDefault(); onRename(); onClose() }
       else if (k === 'd') { e.preventDefault(); onDuplicate(); onClose() }
     }
-    // capture 阶段挂 click 监听，避免被 React 的事件冒泡前抢掉
-    document.addEventListener('mousedown', onDocClick, true)
-    document.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick, true)
-      document.removeEventListener('keydown', onKey, true)
-    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [onClose, onTogglePin, onRename, onDuplicate])
 
   // 默认贴在 anchor 右下；如果右侧出屏就翻转到左侧
@@ -175,7 +172,12 @@ export function SessionRowMenu({
   }
 
   return (
-    <div ref={rootRef} className="srm-overlay" style={style} role="menu">
+    <>
+      {/* Backdrop —— 占满 viewport 的透明层，捕获菜单外的任意点击关掉
+       *  菜单。比 document-level capture listener 可靠。pointer-events
+       *  按需打开（默认 transparent，不影响背后元素的 visual hover state）。 */}
+      <div className="srm-backdrop" onClick={onClose} />
+      <div ref={rootRef} className="srm-overlay" style={style} role="menu">
       {/* Open in ▸ 带 submenu */}
       <div
         className={'srm-item-wrap' + (submenuOpen ? ' is-submenu-open' : '')}
@@ -225,6 +227,7 @@ export function SessionRowMenu({
         shortcut="D"
         onClick={() => { onDuplicate(); onClose() }}
       />
-    </div>
+      </div>
+    </>
   )
 }
