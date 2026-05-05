@@ -36,6 +36,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 初始化日志管理器
         _ = LogManager.shared
 
+        // 启动诊断头 —— 用户报"open board 不行"时第一眼要看的版本/路径/
+        // 是否被 Gatekeeper translocated。必须在所有其他启动逻辑之前打。
+        AppDiagnostics.logBootBanner()
+
         // Comm-kit 用一个独立的 logHandler;这里把它桥到主仓的 MLog 家族,
         // 让 MessageRouter / ChannelRegistry / AuditLogger 内部日志走同一管道。
         // 必须在 MessageRouter 第一次被触碰之前完成。
@@ -128,9 +132,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // BoardServer 会选择后续空闲端口并在本进程内保持稳定。
         do {
             try BoardServer.shared.start()
-            NSLog("[AppDelegate] BoardServer listening on \(BoardServer.shared.url)")
+            MInfo("[AppDelegate] BoardServer listening on \(BoardServer.shared.url)")
         } catch {
-            NSLog("[AppDelegate] BoardServer failed to start: \(error)")
+            MError("[AppDelegate] BoardServer failed to start: \(error)")
         }
 
         if BoardCommand.shouldShowOnLaunch {
@@ -198,6 +202,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+        menu.addItem(NSMenuItem.separator())
+        // 诊断入口 —— 客户报问题时第一指引：菜单点 Reveal Log →
+        // 拖 meee2.log 发我；或 Copy Diagnostic Info 把版本/BoardServer
+        // 状态/9876 占用情况一键塞剪贴板。
+        let revealLogItem = NSMenuItem(
+            title: "Reveal Log in Finder",
+            action: #selector(revealLogInFinder),
+            keyEquivalent: ""
+        )
+        revealLogItem.target = self
+        menu.addItem(revealLogItem)
+        let diagItem = NSMenuItem(
+            title: "Copy Diagnostic Info",
+            action: #selector(copyDiagnosticInfo(_:)),
+            keyEquivalent: ""
+        )
+        diagItem.target = self
+        menu.addItem(diagItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
@@ -274,11 +296,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openBoardMenu() {
+        MInfo("[AppDelegate] Open Board clicked (BoardServer.isRunning=\(BoardServer.shared.isRunning))")
         if !BoardServer.shared.isRunning {
             do {
                 try BoardServer.shared.start()
+                MInfo("[AppDelegate] BoardServer started on demand: \(BoardServer.shared.url)")
             } catch {
-                NSLog("[AppDelegate] failed to start board server: \(error)")
+                MError("[AppDelegate] failed to start board server: \(error)")
                 let alert = NSAlert()
                 alert.messageText = "Failed to start Board server"
                 alert.informativeText = "\(error)"
@@ -289,12 +313,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         let fallbackURL = URL(string: BoardServer.shared.url)!
-        if boardWindowController == nil {
+        let isFirstShow = boardWindowController == nil
+        if isFirstShow {
+            MInfo("[AppDelegate] Creating BoardWebWindowController for \(fallbackURL.absoluteString)")
             boardWindowController = BoardWebWindowController(boardURL: fallbackURL)
             boardWindowController?.onClose = { [weak self] in
+                MInfo("[AppDelegate] Board window closed")
                 self?.boardWindowController = nil
                 NSApp.setActivationPolicy(.accessory)
             }
+        } else {
+            MInfo("[AppDelegate] Reusing existing BoardWebWindowController")
         }
         NSApp.setActivationPolicy(.regular)
         boardWindowController?.show()
@@ -325,6 +354,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Diagnostics
+
+    @objc private func revealLogInFinder() {
+        let url = LogManager.shared.logFileURL
+        MInfo("[AppDelegate] Reveal Log clicked → \(url.path)")
+        // 文件可能因为还没写过任何东西而不存在 —— 兜底创建空文件，免得
+        // Finder 弹"找不到"。
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    @objc private func copyDiagnosticInfo(_ sender: NSMenuItem) {
+        MInfo("[AppDelegate] Copy Diagnostic Info clicked")
+        let payload = AppDiagnostics.clipboardDiagnostic()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(payload, forType: .string)
+        // 短暂改菜单项标题作为反馈 —— 用户菜单已收起，但下次打开会看到
+        // "Copied!"，0.8s 后恢复。比弹 alert 安静。
+        let originalTitle = sender.title
+        sender.title = "Copied to clipboard ✓"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            sender.title = originalTitle
+        }
     }
 
     // MARK: - Main Menu Bar
@@ -501,15 +558,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         deviceNotchSize = screen.notchSize
 
         // 调试输出
-        print("Screen: \(screen.displayName)")
-        print("Screen frame: \(screen.frame)")
-        print("Screen safeAreaInsets: \(screen.safeAreaInsets)")
-        print("Detected notch size: \(deviceNotchSize)")
+        MDebug("[AppDelegate] Screen: \(screen.displayName) frame=\(screen.frame) safeAreaInsets=\(screen.safeAreaInsets) notch=\(deviceNotchSize)")
 
         // 如果没有刘海，使用默认尺寸
         if deviceNotchSize == .zero {
             deviceNotchSize = defaultIslandSize
-            print("No notch detected, using default size: \(deviceNotchSize)")
+            MDebug("[AppDelegate] No notch detected, using default size: \(deviceNotchSize)")
         }
 
         // 更新 StatusManager 中的刘海尺寸
@@ -544,21 +598,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 显示窗口
         islandWindow?.makeKeyAndOrderFront(nil)
         islandWindow?.orderFrontRegardless()  // 强制显示
-        NSLog("[AppDelegate] Window frame: \(islandWindow?.frame ?? .zero)")
-        NSLog("[AppDelegate] Window visible: \(islandWindow?.isVisible ?? false)")
-        NSLog("[AppDelegate] Window level: \(islandWindow?.level.rawValue ?? -1)")
+        MDebug("[AppDelegate] Island window frame=\(islandWindow?.frame ?? .zero) visible=\(islandWindow?.isVisible ?? false) level=\(islandWindow?.level.rawValue ?? -1)")
     }
 
     private func positionIslandWindow() {
         guard let window = islandWindow,
               let screen = getSelectedScreen() else {
-            NSLog("[AppDelegate] positionIslandWindow: no window or screen")
+            MWarn("[AppDelegate] positionIslandWindow: no window or screen")
             return
         }
 
         let screenFrame = screen.frame
-        NSLog("[AppDelegate] Screen frame: \(screenFrame)")
-        NSLog("[AppDelegate] Screen: \(screen.displayName)")
 
         // 窗口尺寸
         let windowWidth = max(deviceNotchSize.width, 500)
@@ -571,8 +621,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         let newFrame = NSRect(x: x, y: y, width: windowWidth, height: windowHeight)
         window.setFrame(newFrame, display: true)
-        NSLog("[AppDelegate] Window positioned at: (\(x), \(y)), size: \(windowWidth)x\(windowHeight)")
-        NSLog("[AppDelegate] Window frame after: \(window.frame)")
+        MDebug("[AppDelegate] Island positioned screen=\(screen.displayName) frame=\(screenFrame) target=(\(x),\(y)) size=\(windowWidth)x\(windowHeight) actual=\(window.frame)")
     }
 
     @objc private func screenParametersDidChange() {
