@@ -262,6 +262,27 @@ export function TranscriptView({
         return false
       })
       if (kept.length === 0) continue
+
+      // Cross-entry tool-run 拼接：claude 经常拆 turn 成多条 assistant
+      // entry（text + tool_use_A → 看 tool_result_A → 接 tool_use_B + ...）
+      // 我们想把"上一条 entry 结尾的 tool_use"和"这条 entry 开头的 tool_use"
+      // 视为同一连续 run，让 EntryRow 内部的 per-entry grouping 把它们一
+      // 起 rollup。具体做法是把这条 entry 的 blocks 直接 splice 到上一条
+      // 末尾——前提是两条都是 assistant entry，prev 末块是 tool_use，
+      // current 首块是 tool_use（中间允许多 tool_use 和 text 混合，但起
+      // 接缝两侧必须是 tool_use 才是真"continuation"）。
+      const prev = out[out.length - 1]
+      const isAssistant = e.type === 'assistant'
+      const prevIsAssistant = prev?.type === 'assistant'
+      const prevEndsWithTool = prev && prev.blocks[prev.blocks.length - 1]?.type === 'tool_use'
+      const currStartsWithTool = kept[0]?.type === 'tool_use'
+      if (
+        isAssistant && prevIsAssistant && prevEndsWithTool && currStartsWithTool
+      ) {
+        out[out.length - 1] = { ...prev, blocks: [...prev.blocks, ...kept] }
+        continue
+      }
+
       out.push({ ...e, blocks: kept })
     }
 
