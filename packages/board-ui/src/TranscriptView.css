@@ -768,10 +768,13 @@
  * tail of the transcript so the user always sees current activity.
  */
 
-/* Live entry container — slim left bar in green to mark "current". */
+/* Live entry container — slim left bar in green to mark "current".
+ * 之前用 margin-left: -8px 让内容与其它 entry 对齐，但 transcript panel 容器
+ * 只有 2px 横向 padding，负边距会让 live entry 越界到 panel 左侧外面。
+ * 改成纯 padding-left（不偏移），live entry 内容比常规 entry 内缩 8px，可
+ * 接受的视觉差。 */
 .tx-entry--live {
   border-left: 2px solid rgba(34, 197, 94, 0.45);
-  margin-left: -8px;  /* offset the border so content stays aligned */
   padding-left: 6px;
   animation: tx-live-fade-in 0.18s ease-out;
 }

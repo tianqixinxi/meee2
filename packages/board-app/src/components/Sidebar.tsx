@@ -19,7 +19,9 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { Inbox } from 'lucide-react'
+import { Inbox, MoreHorizontal } from 'lucide-react'
+import { SessionRowMenu } from './SessionRowMenu'
+import { activateSession, spawnSession } from '../api'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -412,6 +414,17 @@ export default function Sidebar({
     setRenamingSid(s.id)
     setRenameDraft(displayTitle(s))
   }, [displayTitle])
+
+  // ── Hover overlay menu ───────────────────────────────────────────
+  // 每行只露一个 ⋯ 按钮（hover 时浮现），点开覆盖菜单（Open in / Pin /
+  // Rename / Duplicate）。状态：当前打开菜单的 sid + anchor 按钮的 rect
+  // （给 overlay 定位用）。
+  const [menuForSid, setMenuForSid] = useState<string | null>(null)
+  const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null)
+  const closeMenu = useCallback(() => {
+    setMenuForSid(null)
+    setMenuAnchorRect(null)
+  }, [])
 
   const commitRename = useCallback(() => {
     if (!renamingSid) return
@@ -826,7 +839,9 @@ export default function Sidebar({
                     <div
                       key={s.id}
                       className={
-                        'sidebar-session-row' + (selected ? ' is-selected' : '')
+                        'sidebar-session-row' +
+                        (selected ? ' is-selected' : '') +
+                        (menuForSid === s.id ? ' is-menu-open' : '')
                       }
                     >
                       <div
@@ -881,42 +896,58 @@ export default function Sidebar({
                             <Inbox size={11} aria-hidden /> {s.inboxPending}
                           </span>
                         )}
+                        {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
+                         *  overlay，里面集成原本的 pin / rename / canvas 三键
+                         *  + 新加的 Duplicate 与 Open in submenu。*/}
                         <button
-                          className="sidebar-icon-btn"
-                          title={pinned.has(s.id) ? 'Unpin' : 'Pin'}
+                          className="sidebar-icon-btn sidebar-session-row__more"
+                          title="Actions"
+                          aria-label="Open session actions menu"
                           onClick={(e) => {
                             e.stopPropagation()
-                            togglePinned(s.id)
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                            if (menuForSid === s.id) {
+                              closeMenu()
+                            } else {
+                              setMenuForSid(s.id)
+                              setMenuAnchorRect(rect)
+                            }
                           }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill={pinned.has(s.id) ? 'currentColor' : 'none'}>
-                            <path d="M12 2v6m-3-1l3 3 3-3M5 13c0-2.5 2-5 7-5s7 2.5 7 5c0 1.5-1 2-3 2H8c-2 0-3-.5-3-2zM10 15v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </button>
-                        <button
-                          className="sidebar-icon-btn"
-                          title="Rename"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            startRename(s)
-                          }}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </button>
-                        <button
-                          className="sidebar-icon-btn"
-                          title={onCanvas ? `Hide from canvas (${count})` : 'Show on canvas'}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (onCanvas) onHideFromCanvas(s.id)
-                            else onAddToCanvas(s.id)
-                          }}
-                        >
-                          {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                          <MoreHorizontal size={14} aria-hidden />
                         </button>
                       </div>
+                      {menuForSid === s.id && (
+                        <SessionRowMenu
+                          session={s}
+                          isPinned={pinned.has(s.id)}
+                          onClose={closeMenu}
+                          anchorRect={menuAnchorRect}
+                          onOpenInCanvas={() => {
+                            // 加到 canvas（如果还没在）+ 选中 session 让 dock
+                            // 弹出 + 默认展开。saveDockExpanded 让下次再切回
+                            // 同样保持展开；TranscriptPanel 会自动 mount。
+                            if (!onCanvas) onAddToCanvas(s.id)
+                            onSelectionChange({ kind: 'session', sessionId: s.id })
+                          }}
+                          onOpenInOriginal={() => {
+                            // claude desktop / cli session / codex session 全
+                            // 走 BoardAPI.activateSession —— 后端按 clientKind
+                            // dispatch（ClaudeDesktopActivator 走 claude://，
+                            // CLI 走 TerminalJumper）。
+                            void activateSession(s.id).catch(() => undefined)
+                          }}
+                          onTogglePin={() => togglePinned(s.id)}
+                          onRename={() => startRename(s)}
+                          onDuplicate={() => {
+                            // Duplicate = spawn 新 session in same cwd。
+                            // 用 SessionDTO.project（cwd 全路径）作为 cwd。
+                            const cwd = s.project
+                            if (!cwd) return
+                            void spawnSession({ cwd }).catch(() => undefined)
+                          }}
+                        />
+                      )}
                     </div>
                   )
                 }
