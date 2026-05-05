@@ -320,6 +320,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             sessionId={mode.session.id}
             limit={200}
             refreshTrigger={mode.state}
+            liveStatus={mode.session.status ?? null}
+            liveCurrentTool={mode.session.currentTool ?? null}
+            liveCurrentTask={mode.session.currentTask ?? null}
           />
         ) : (
           <div

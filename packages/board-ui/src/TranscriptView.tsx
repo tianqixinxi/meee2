@@ -43,6 +43,16 @@ export interface TranscriptViewProps {
   refreshing?: boolean
   /** Search input placeholder text. */
   searchPlaceholder?: string
+  /** Live session status for the in-flight placeholder ("thinking" /
+   *  "tooling" trigger a synthetic block at the tail; anything else
+   *  hides it). The transcript file only catches up after PostToolUse /
+   *  Stop hooks, so this gives the user something to watch in the
+   *  meantime — same UX as Claude Code's native streaming view. */
+  liveStatus?: string | null
+  /** Tool currently running (only meaningful when liveStatus === 'tooling'). */
+  liveCurrentTool?: string | null
+  /** Optional one-line description of the current task / step. */
+  liveCurrentTask?: string | null
 }
 
 // ─── module cache (cross-mount session memory) ───────────────────────────
@@ -94,6 +104,10 @@ function entrySignature(entries: TranscriptEntryForView[]): string {
 
 // ─── main component ──────────────────────────────────────────────────────
 
+/// 稳定的合成 in-flight entry id —— 用 sentinel 不用 random，方便 virtualizer
+/// 跨 render 复用同一个测量结果，不闪烁。
+const LIVE_ENTRY_ID = '__live_in_flight__'
+
 export function TranscriptView({
   entries,
   cacheKey,
@@ -101,6 +115,9 @@ export function TranscriptView({
   error,
   refreshing,
   searchPlaceholder = 'Search in messages (tool name / text)…',
+  liveStatus = null,
+  liveCurrentTool = null,
+  liveCurrentTask = null,
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
@@ -181,6 +198,14 @@ export function TranscriptView({
   //   normal:   text 块（user/assistant 都算）
   //   thinking: text + thinking
   //   verbose:  全部块都保留
+  //
+  // 末尾根据 liveStatus 合成一条 in-flight 占位 entry（实时 toolcall 进度，
+  // 模仿 Claude Code 自带的 streaming 渲染）。覆盖三种状态：
+  //   tooling:  显示当前在跑的 tool 名 + spinner
+  //   thinking: 显示 "Thinking…" 脉冲块
+  //   else:     不合成
+  // De-dup：search 中（query 非空）不合成；最后一条真 entry 已经包含同名
+  // tool_use 时跳过（覆盖 PostToolUse 已写入 jsonl 但 status 还没翻 idle 的瞬态）
   const visibleEntries = useMemo(() => {
     const out: TranscriptEntryForView[] = []
     for (const e of filteredEntries) {
@@ -197,8 +222,50 @@ export function TranscriptView({
       if (kept.length === 0) continue
       out.push({ ...e, blocks: kept })
     }
+
+    // ── 合成 in-flight entry ─────────────────────────────────────────
+    if (query.trim()) return out  // search 中不混入合成条目，避免污染计数
+    if (liveStatus !== 'tooling' && liveStatus !== 'thinking') return out
+
+    // 不做 toolName-based dedup —— 之前用 lastToolUse.toolName === liveCurrentTool
+    // 来吞掉 PostToolUse 写完但 status 还没翻 idle 的瞬态，但 toolName 重复
+    // 太常见（多轮 Bash 是日常），会把新的 in-flight 完全藏掉。Codex review
+    // P2 的合理告诫。
+    //
+    // 现在的语义：liveStatus 是 tooling 就显示占位 —— 哪怕历史最后一条
+    // entry 也是 Bash，"刚跑完 + 现在又跑一个" 在多步 turn 里是真实情况，
+    // 两个块同时显示不算冲突，反而准确。占位条目有 tx-entry--live 视觉标记
+    // 跟历史块区分得清楚。
+
+    if (liveStatus === 'tooling' && liveCurrentTool) {
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'tool_use',
+            toolName: liveCurrentTool,
+            toolInputJSON: undefined,
+            toolId: '__live__',
+          },
+        ],
+      })
+    } else if (liveStatus === 'thinking') {
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'text',
+            text: liveCurrentTask || 'Thinking…',
+          },
+        ],
+      })
+    }
     return out
-  }, [filteredEntries, verbosity])
+  }, [filteredEntries, verbosity, query, liveStatus, liveCurrentTool, liveCurrentTask])
 
   // Continuous-role merging (hide chip on consecutive same-role entries)
   const hideRoleChipFor = useMemo(() => {
@@ -479,6 +546,7 @@ export function TranscriptView({
                       resultsByToolUseId={resultsByToolUseId}
                       hideRoleChip={hideRoleChipFor.has(e.id)}
                       verbosity={verbosity}
+                      isLive={e.id === LIVE_ENTRY_ID}
                     />
                   </div>
                 )
@@ -508,25 +576,87 @@ function EntryRow({
   resultsByToolUseId,
   hideRoleChip,
   verbosity,
+  isLive = false,
 }: {
   entry: TranscriptEntryForView
   resultsByToolUseId: Map<string, TranscriptBlockForView>
   hideRoleChip: boolean
   verbosity: TranscriptVerbosity
+  /** Synthetic in-flight entry — render with pending visual state. */
+  isLive?: boolean
 }) {
   let renderedFirstText = false
+
+  // 历史 toolcall 折叠：连续 ≥2 个 tool_use（中间没 text 打断）合成一个
+  // ToolGroupBlock 显示 "Ran 3 commands, read 2 files" 摘要，点开展开看每条。
+  // 单条 tool_use 还是走 ToolUseBlock，不必折叠。Live 占位 entry 不折叠
+  // （它本来就一条 tool_use，没意义）。
+  const renderItems = (() => {
+    if (isLive) return entry.blocks.map((b, i) => ({ kind: 'block' as const, block: b, index: i }))
+    type Item =
+      | { kind: 'block'; block: TranscriptBlockForView; index: number }
+      | { kind: 'tool-group'; blocks: TranscriptBlockForView[]; startIndex: number }
+    const out: Item[] = []
+    let i = 0
+    while (i < entry.blocks.length) {
+      const b = entry.blocks[i]
+      if (b.type === 'tool_use') {
+        // 收集连续的 tool_use
+        let j = i
+        const run: TranscriptBlockForView[] = []
+        while (j < entry.blocks.length && entry.blocks[j].type === 'tool_use') {
+          run.push(entry.blocks[j])
+          j += 1
+        }
+        if (run.length >= 2) {
+          out.push({ kind: 'tool-group', blocks: run, startIndex: i })
+        } else {
+          out.push({ kind: 'block', block: run[0], index: i })
+        }
+        i = j
+      } else {
+        out.push({ kind: 'block', block: b, index: i })
+        i += 1
+      }
+    }
+    return out
+  })()
+
   return (
-    <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}`}>
-      {entry.blocks.map((b, i) => {
+    <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}${isLive ? ' tx-entry--live' : ''}`}>
+      {renderItems.map((item, idx) => {
+        if (item.kind === 'tool-group') {
+          return (
+            <ToolGroupBlock
+              key={`tg-${item.startIndex}`}
+              blocks={item.blocks}
+              resultsByToolUseId={resultsByToolUseId}
+            />
+          )
+        }
+        const b = item.block
+        const i = item.index
         switch (b.type) {
           case 'text': {
             const hideLabel = hideRoleChip || renderedFirstText
             renderedFirstText = true
-            return <TextBlock key={i} role={entry.type} text={b.text ?? ''} hideLabel={hideLabel} />
+            return (
+              <TextBlock
+                key={i}
+                role={entry.type}
+                text={b.text ?? ''}
+                hideLabel={hideLabel}
+                isPending={isLive}
+              />
+            )
           }
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
+            // 单条 tool_use（既不连续也不属于 group）—— 完整渲染
+            if (isLive) {
+              return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
+            }
             return (
               <ToolUseBlock
                 key={i}
@@ -544,14 +674,125 @@ function EntryRow({
   )
 }
 
+// ─── tool group rollup ────────────────────────────────────────────────────
+
+/// 多个连续 tool_use 折叠成单条摘要。模仿 Claude Code 自带 "Ran 3 commands,
+/// read 2 files" 的视觉。点开后逐条展示完整 ToolUseBlock。
+function ToolGroupBlock({
+  blocks,
+  resultsByToolUseId,
+}: {
+  blocks: TranscriptBlockForView[]
+  resultsByToolUseId: Map<string, TranscriptBlockForView>
+}) {
+  const [open, setOpen] = useState(false)
+  const summary = summarizeToolBlocks(blocks)
+  return (
+    <div className={`tx-tool-group${open ? ' tx-tool-group--open' : ''}`}>
+      <button
+        type="button"
+        className="tx-tool-group__header"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
+        <span className="tx-tool-group__chevron" aria-hidden>{open ? '▾' : '▸'}</span>
+        <span className="tx-tool-group__summary">{summary}</span>
+      </button>
+      {open && (
+        <div className="tx-tool-group__body">
+          {blocks.map((b, i) => (
+            <ToolUseBlock
+              key={i}
+              block={b}
+              result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/// 把一组 tool_use 块按工具类别归并成一句人话。
+/// 维度：
+///   - Bash / BashOutput     → "ran N command(s)"
+///   - Read                  → "read N file(s)"
+///   - Edit / MultiEdit /
+///     Write                 → "edited N file(s)"
+///   - Grep / Glob           → "searched N time(s)"
+///   - 其它                  → "called N <toolName>"（按 toolName 分桶）
+/// 输出例子：「Ran 2 commands, read 3 files, edited 1 file」
+function summarizeToolBlocks(blocks: TranscriptBlockForView[]): string {
+  const buckets: { ran: number; read: number; edited: number; searched: number; other: Map<string, number> } = {
+    ran: 0,
+    read: 0,
+    edited: 0,
+    searched: 0,
+    other: new Map(),
+  }
+  for (const b of blocks) {
+    const name = b.toolName ?? ''
+    switch (name) {
+      case 'Bash':
+      case 'BashOutput':
+        buckets.ran += 1
+        break
+      case 'Read':
+        buckets.read += 1
+        break
+      case 'Edit':
+      case 'MultiEdit':
+      case 'Write':
+        buckets.edited += 1
+        break
+      case 'Grep':
+      case 'Glob':
+        buckets.searched += 1
+        break
+      default: {
+        const key = name || 'tool'
+        buckets.other.set(key, (buckets.other.get(key) ?? 0) + 1)
+      }
+    }
+  }
+  const parts: string[] = []
+  // 第一个分句首字母大写（"Ran 2 commands"），后续小写衔接（"read 3 files"）
+  const verbs: Array<[number, string]> = [
+    [buckets.ran, 'command'],
+    [buckets.read, 'file'],
+    [buckets.edited, 'file'],
+    [buckets.searched, 'search'],
+  ]
+  const verbWords = ['Ran', 'read', 'edited', 'searched']
+  for (let i = 0; i < verbs.length; i++) {
+    const [count, noun] = verbs[i]
+    if (count === 0) continue
+    const verb = parts.length === 0 ? verbWords[i] : verbWords[i].toLowerCase()
+    const verbCapitalized = parts.length === 0
+      ? verb.charAt(0).toUpperCase() + verb.slice(1)
+      : verb
+    parts.push(`${verbCapitalized} ${count} ${noun}${count !== 1 ? 's' : ''}`)
+  }
+  for (const [name, count] of buckets.other) {
+    const verbHead = parts.length === 0 ? 'Called' : 'called'
+    parts.push(`${verbHead} ${count} ${name}${count !== 1 ? 's' : ''}`)
+  }
+  if (parts.length === 0) return `${blocks.length} tool calls`
+  return parts.join(', ')
+}
+
 const TextBlock = memo(function TextBlock({
   role,
   text,
   hideLabel,
+  isPending = false,
 }: {
   role: string
   text: string
   hideLabel?: boolean
+  /** When true, render with the live in-flight visual state (pulsing
+   *  three-dot suffix for the "Thinking…" placeholder). */
+  isPending?: boolean
 }) {
   const isAssistant = role === 'assistant'
   const isUser = role === 'user'
@@ -561,7 +802,7 @@ const TextBlock = memo(function TextBlock({
     ? 'tx-text--injected'
     : isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
   return (
-    <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}`}>
+    <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}${isPending ? ' tx-text--pending' : ''}`}>
       {!hideLabel && (
         <div className="tx-text__role">
           {isAssistant && <span className="tx-text__role-glyph" aria-hidden>◆</span>}
@@ -638,6 +879,23 @@ function ToolUseBlock({
       </div>
       <ToolInputBody name={name} input={input} />
       {result && <ToolResultBody block={result} />}
+    </div>
+  )
+}
+
+/// In-flight tool_use 占位：tool 名 + spinner，没 input / result。
+/// 等 PostToolUse hook 把真 entry 写进 jsonl + status 翻 idle，这条会被
+/// dedup 掉（visibleEntries 里检查最后一条 entry 是否包含同名 tool_use）。
+function PendingToolUseBlock({ toolName }: { toolName: string }) {
+  return (
+    <div className="tx-tool tx-tool--pending">
+      <div className="tx-tool__header">
+        <span className="tx-tool__icon tx-tool__icon--pulse">{toolIcon(toolName)}</span>
+        <span className="tx-tool__name">{toolName}</span>
+        <span className="tx-tool__pending-label">
+          <span className="tx-tool__pending-spinner" aria-hidden /> running…
+        </span>
+      </div>
     </div>
   )
 }

@@ -40,6 +40,10 @@ export interface Session {
   inboxPending: number
   recentMessages: TranscriptEntry[]
   currentTool: string | null
+  /** Optional one-line description of the current step, used as the
+   *  fallback caption for the live in-flight tail block when status is
+   *  thinking. Mirrors SessionDTO.currentTask on the Swift side. */
+  currentTask?: string | null
   // 关于 cost：后端曾经把 Claude CLI 的 usage.costUSD 原样透出，但那个数字
   // 经常不准（不同模型单价 / cache read-write / local OAuth 免费额度都没算进去），
   // 只会误导，已经从 DTO 里移掉。UI 上展示 usageStats.input/output tokens 就好。

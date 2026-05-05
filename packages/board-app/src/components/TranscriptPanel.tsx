@@ -16,6 +16,16 @@ interface Props {
   pollMs?: number
   /** Last N entries; 0/undefined = full transcript. */
   limit?: number
+  /** Live session status for the in-flight tail block (synthetic
+   *  "Bash · running…" / "Thinking…" placeholder rendered while jsonl
+   *  hasn't caught up yet). Pass the SessionDTO.status straight through. */
+  liveStatus?: string | null
+  /** SessionDTO.currentTool —— Bash / Edit / Read / etc. Only meaningful
+   *  when liveStatus === 'tooling'. */
+  liveCurrentTool?: string | null
+  /** SessionDTO.currentTask —— optional one-line description of the
+   *  active step (used when liveStatus === 'thinking'). */
+  liveCurrentTask?: string | null
 }
 
 export default function TranscriptPanel({
@@ -23,6 +33,9 @@ export default function TranscriptPanel({
   refreshTrigger,
   pollMs = 10_000,
   limit,
+  liveStatus = null,
+  liveCurrentTool = null,
+  liveCurrentTask = null,
 }: Props) {
   const [entries, setEntries] = useState<TranscriptEntryForView[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -83,6 +96,9 @@ export default function TranscriptPanel({
       error={error}
       refreshing={refreshing}
       searchPlaceholder="Search in terminal messages (tool name / text)…"
+      liveStatus={liveStatus}
+      liveCurrentTool={liveCurrentTool}
+      liveCurrentTask={liveCurrentTask}
     />
   )
 }
