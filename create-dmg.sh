@@ -139,6 +139,13 @@ cat > "$APP_DIR/Contents/Info.plist" << 'EOF'
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <!-- Apple Events automation usage description. Triggered the first time
+         meee2 sends Apple events to other apps (Ghostty / iTerm2 / Terminal
+         for session focus + jump, Claude.app for the explicit "Push to
+         Desktop now" keystroke flow). Without this key the privacy prompt
+         has no explainer and reads as suspicious. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the meee2 board into the running session.</string>
 </dict>
 </plist>
 EOF
