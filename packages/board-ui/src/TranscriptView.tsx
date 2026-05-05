@@ -525,7 +525,7 @@ function EntryRow({
             return <TextBlock key={i} role={entry.type} text={b.text ?? ''} hideLabel={hideLabel} />
           }
           case 'thinking':
-            return <ThinkingBlock key={i} text={b.text ?? ''} defaultOpen={verbosity === 'verbose'} />
+            return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
             return (
               <ToolUseBlock
@@ -594,13 +594,25 @@ const TextBlock = memo(function TextBlock({
   )
 })
 
-function ThinkingBlock({ text, defaultOpen = false }: { text: string; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen)
-  // verbose 模式切回非 verbose 时不强制收起：用户在 verbose 里手动点过的状态
-  // 应该被尊重；只在第一次 mount 时用 defaultOpen。这里 useEffect 不重置 open。
+/// `forceOpen` 是 verbose 模式的契约：处于 verbose 时永远展开 thinking 块，
+/// 不管该实例之前手动点过收起没——这跟 Codex review 指出的 P2 bug 相关：
+/// 之前用 `useState(defaultOpen)` 只在 mount 取一次，从 thinking 切到 verbose
+/// 时已经 mount 的实例不会响应 prop 翻转，留着收起态违反 verbose 契约。
+///
+/// 行为定义：
+///   - forceOpen=true（verbose 模式）→ 一律 open，按钮还能点但视觉总是展开
+///   - forceOpen=false（thinking 模式）→ 走用户手动 toggle 的本地状态，
+///     默认收起；切回 verbose 又会被强制展开。
+function ThinkingBlock({ text, forceOpen = false }: { text: string; forceOpen?: boolean }) {
+  const [userOpen, setUserOpen] = useState(false)
+  const open = forceOpen || userOpen
   return (
     <div className="tx-thinking">
-      <button className="tx-thinking__toggle" onClick={() => setOpen(!open)}>
+      <button
+        className="tx-thinking__toggle"
+        onClick={() => setUserOpen(!open)}
+        title={forceOpen ? 'Verbose mode auto-expands thinking — toggle disabled' : undefined}
+      >
         {open ? '▾' : '▸'} thinking
       </button>
       {open && <div className="tx-thinking__body">{text}</div>}
