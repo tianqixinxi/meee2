@@ -38,6 +38,21 @@ for dylib in "${RUNTIME_DYLIBS[@]}"; do
     fi
 done
 
+# Copy Info.plist —— deploy.sh 之前从来不更新 Info.plist，于是 dev iteration
+# 时改了 App/Info.plist（加 NSAppleEventsUsageDescription 之类的）不会生效。
+# 复制时保留 create-dmg.sh 写入的 CFBundleShortVersionString（如有），不
+# 然 dev 部署会把版本号改回 0.2.0 之类的硬编码值。
+if [ -f /Applications/meee2.app/Contents/Info.plist ] \
+        && command -v plutil >/dev/null 2>&1; then
+    EXISTING_VERSION=$(plutil -extract CFBundleShortVersionString raw \
+        /Applications/meee2.app/Contents/Info.plist 2>/dev/null || true)
+fi
+cp App/Info.plist /Applications/meee2.app/Contents/Info.plist
+if [ -n "${EXISTING_VERSION:-}" ] && command -v plutil >/dev/null 2>&1; then
+    plutil -replace CFBundleShortVersionString -string "$EXISTING_VERSION" \
+        /Applications/meee2.app/Contents/Info.plist 2>/dev/null || true
+fi
+
 # Copy SwiftPM resource bundle (contains WebDist)
 cp -R .build/arm64-apple-macosx/release/meee2_meee2Kit.bundle /Applications/meee2.app/Contents/Resources/ 2>/dev/null
 
