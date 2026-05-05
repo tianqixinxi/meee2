@@ -231,29 +231,34 @@ export function TranscriptView({
     return m
   }, [entries])
 
-  // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）
-  //   normal:   text 块（user/assistant 都算）
-  //   thinking: text + thinking
-  //   verbose:  全部块都保留
+  // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）。
+  //
+  // 三档语义（和 Claude Code 自带视图对齐）：
+  //   normal:   text + tool_use（折叠成 summary 一行，点 ▸ 展开）
+  //   thinking: 同 normal，再加 thinking 块（默认折叠）
+  //   verbose:  全部块都保留 + tool_use 默认展开（点击可手动收起）
+  //
+  // tool_use 在所有模式都展示——只是默认展开 / 折叠状态不一样（由
+  // EntryRow 渲染时根据 verbosity 决定）。tool_result 也都保留（极少落
+  // 在 assistant entry 上，但保留以备 orphan 渲染）。
   //
   // 末尾根据 liveStatus 合成一条 in-flight 占位 entry（实时 toolcall 进度，
   // 模仿 Claude Code 自带的 streaming 渲染）。覆盖三种状态：
   //   tooling:  显示当前在跑的 tool 名 + spinner
   //   thinking: 显示 "Thinking…" 脉冲块
   //   else:     不合成
-  // De-dup：search 中（query 非空）不合成；最后一条真 entry 已经包含同名
-  // tool_use 时跳过（覆盖 PostToolUse 已写入 jsonl 但 status 还没翻 idle 的瞬态）
+  // De-dup：search 中（query 非空）不合成。
   const visibleEntries = useMemo(() => {
     const out: TranscriptEntryForView[] = []
     for (const e of filteredEntries) {
       const isPureOrphan =
         e.type === 'user' && e.blocks.every((b) => b.type === 'tool_result')
       if (isPureOrphan) continue
-      if (verbosity === 'verbose') { out.push(e); continue }
       const kept = e.blocks.filter((b) => {
         if (b.type === 'text') return true
-        if (b.type === 'thinking') return verbosity === 'thinking'
-        // tool_use / tool_result 在 normal + thinking 都隐藏
+        if (b.type === 'thinking') return verbosity !== 'normal'
+        if (b.type === 'tool_use') return true
+        if (b.type === 'tool_result') return true
         return false
       })
       if (kept.length === 0) continue
@@ -670,6 +675,7 @@ function EntryRow({
               key={`tg-${item.startIndex}`}
               blocks={item.blocks}
               resultsByToolUseId={resultsByToolUseId}
+              defaultOpen={verbosity === 'verbose'}
             />
           )
         }
@@ -692,7 +698,8 @@ function EntryRow({
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
-            // 单条 tool_use（既不连续也不属于 group）—— 完整渲染
+            // 单条 tool_use（不属于 group）—— 在 normal/thinking 默认折叠
+            // （summary 一行，点 ▸ 展开看 input + result），verbose 默认展开。
             if (isLive) {
               return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
             }
@@ -701,6 +708,7 @@ function EntryRow({
                 key={i}
                 block={b}
                 result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
+                defaultOpen={verbosity === 'verbose'}
               />
             )
           case 'tool_result':
@@ -720,11 +728,13 @@ function EntryRow({
 function ToolGroupBlock({
   blocks,
   resultsByToolUseId,
+  defaultOpen = false,
 }: {
   blocks: TranscriptBlockForView[]
   resultsByToolUseId: Map<string, TranscriptBlockForView>
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const summary = summarizeToolBlocks(blocks)
   return (
     <div className={`tx-tool-group${open ? ' tx-tool-group--open' : ''}`}>
@@ -744,6 +754,7 @@ function ToolGroupBlock({
               key={i}
               block={b}
               result={b.toolId ? resultsByToolUseId.get(b.toolId) : undefined}
+              defaultOpen
             />
           ))}
         </div>
@@ -900,24 +911,43 @@ function ThinkingBlock({ text, forceOpen = false }: { text: string; forceOpen?: 
   )
 }
 
+/// 单个 tool_use 块，跟 Claude Code 本体一样 collapsible：
+///   - Header: icon + name + summary（"Bash · ./scripts/validate.sh"）+ 末尾 chevron
+///   - Body:   ToolInputBody + ToolResultBody（input 详情 + result 输出）
+/// `defaultOpen` 默认 false（normal/thinking 折叠成一行）；verbose 模式 EntryRow
+/// 会传 true 让所有 tool 默认展开。Header 整条点击 toggle —— 因此样式上
+/// 把它从 div 升级成 button 给键盘可达 + cursor:pointer。
 function ToolUseBlock({
   block,
   result,
+  defaultOpen = false,
 }: {
   block: TranscriptBlockForView
   result: TranscriptBlockForView | undefined
+  defaultOpen?: boolean
 }) {
+  const [open, setOpen] = useState(defaultOpen)
   const name = block.toolName ?? 'Tool'
   const input = safeParse(block.toolInputJSON) ?? {}
   return (
-    <div className="tx-tool">
-      <div className="tx-tool__header">
+    <div className={`tx-tool${open ? ' tx-tool--open' : ' tx-tool--collapsed'}`}>
+      <button
+        type="button"
+        className="tx-tool__header"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+      >
         <span className="tx-tool__icon">{toolIcon(name)}</span>
         <span className="tx-tool__name">{name}</span>
         <span className="tx-tool__summary">{summarizeToolInput(name, input)}</span>
-      </div>
-      <ToolInputBody name={name} input={input} />
-      {result && <ToolResultBody block={result} />}
+        <span className="tx-tool__chevron" aria-hidden>{open ? '⌄' : '›'}</span>
+      </button>
+      {open && (
+        <div className="tx-tool__body">
+          <ToolInputBody name={name} input={input} />
+          {result && <ToolResultBody block={result} />}
+        </div>
+      )}
     </div>
   )
 }

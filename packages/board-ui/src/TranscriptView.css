@@ -182,12 +182,50 @@
 }
 
 .tx-tool--orphan { opacity: 0.75; }
+
+/* Header is now an interactive <button> (whole row toggles open / closed).
+ * Reset native button chrome but keep flex layout from the old div. */
 .tx-tool__header {
+  appearance: none;
   display: flex;
   align-items: baseline;
   gap: 6px;
-  margin-bottom: 4px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
   color: #A8B0C2;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+
+.tx-tool--collapsed .tx-tool__header {
+  margin-bottom: 0;  /* 折叠时 header 直接吃掉容器内边距，更紧凑 */
+}
+.tx-tool--open .tx-tool__header {
+  margin-bottom: 4px;
+}
+
+.tx-tool__header:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.tx-tool__chevron {
+  margin-left: auto;
+  font-size: 11px;
+  color: #6B7488;
+  flex: 0 0 auto;
+  padding-left: 4px;
+}
+
+.tx-tool__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .tx-tool__icon {
