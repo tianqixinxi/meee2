@@ -158,7 +158,15 @@ struct ErrorDTO: Encodable {
 // MARK: - 单条响应包装
 
 struct ChannelEnvelope: Encodable { let channel: ChannelDTO }
-struct MessageEnvelope: Encodable { let message: MessageDTO }
+struct MessageEnvelope: Encodable {
+    let message: MessageDTO
+    /// 投递语义提示。none = 默认（CLI / 已立刻 push 走 Ghostty 等）；
+    /// `queued_until_next_turn` = Desktop session 没 terminal 可以 typeIn，
+    /// 消息已写入 inbox，等下一个 Stop hook 触发 drainResponseForDesktopStop
+    /// 转成 block-decision reason 才被 Claude.app 看到。session 当前空闲时
+    /// 这个等待可能比较久。WebUI 据此显示 toast 提示用户。
+    var delivery: String?
+}
 struct MessagesEnvelope: Encodable { let messages: [MessageDTO] }
 struct OkEnvelope: Encodable { let ok: Bool }
 

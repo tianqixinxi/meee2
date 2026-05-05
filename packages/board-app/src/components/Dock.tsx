@@ -160,8 +160,19 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   const handleSend = async (content: string) => {
     if (mode.kind === 'session') {
       const shortId = mode.session.id.slice(0, 8)
-      await injectToSession(mode.session.id, content)
-      toast.push('success', `Sent to ${mode.session.title} (${shortId})`)
+      const result = await injectToSession(mode.session.id, content)
+      // Desktop session 没 tty，消息得等下一个 Stop hook 才被 Claude.app
+      // 看到——idle 时尤其要提示用户"还没送达，需要 desktop 这条 turn
+      // 跑完才生效"，不然 user 觉得是丢消息了。CLI session 走立即 typeIn
+      // 路径，正常 success toast。
+      if (result.delivery === 'queued_until_next_turn') {
+        toast.push(
+          'info',
+          `Queued for ${mode.session.title} (${shortId}) — Desktop session will pick it up at the end of its current turn`
+        )
+      } else {
+        toast.push('success', `Sent to ${mode.session.title} (${shortId})`)
+      }
       return
     }
 
