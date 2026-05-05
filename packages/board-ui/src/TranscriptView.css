@@ -700,3 +700,84 @@
   padding: 2px 4px;
 }
 
+
+/* ─── In-flight live indicators ───────────────────────────────────
+ * Synthetic entry rendered when the session is still running a tool
+ * or thinking. Disappears once PostToolUse / Stop hooks land and the
+ * real jsonl entry shows up in `entries`.
+ *
+ * Visual goal: noticeable but not loud. Same pulse / spinner family
+ * the rest of the dashboard uses (sd-pulse keyframes). Sticky at the
+ * tail of the transcript so the user always sees current activity.
+ */
+
+/* Live entry container — slim left bar in green to mark "current". */
+.tx-entry--live {
+  border-left: 2px solid rgba(34, 197, 94, 0.45);
+  margin-left: -8px;  /* offset the border so content stays aligned */
+  padding-left: 6px;
+  animation: tx-live-fade-in 0.18s ease-out;
+}
+
+@keyframes tx-live-fade-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Pending tool block — tool name + small inline spinner + "running…". */
+.tx-tool--pending {
+  background: rgba(34, 197, 94, 0.06);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.tx-tool__icon--pulse {
+  animation: tx-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes tx-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+.tx-tool__pending-label {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: rgba(187, 247, 208, 0.75);
+  font-style: italic;
+}
+
+.tx-tool__pending-spinner {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  border: 1.4px solid rgba(187, 247, 208, 0.25);
+  border-top-color: rgba(187, 247, 208, 0.9);
+  animation: sd-spin 0.7s linear infinite;
+}
+
+/* Pending text (for the "Thinking…" placeholder). */
+.tx-text--pending .tx-text__body {
+  color: rgba(209, 213, 219, 0.7);
+  font-style: italic;
+}
+
+.tx-text--pending .tx-text__body::after {
+  content: '';
+  display: inline-block;
+  margin-left: 6px;
+  width: 4px; height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: tx-thinking-dots 1.2s ease-in-out infinite;
+  box-shadow:
+    7px 0 0 currentColor,
+    14px 0 0 currentColor;
+}
+
+@keyframes tx-thinking-dots {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}

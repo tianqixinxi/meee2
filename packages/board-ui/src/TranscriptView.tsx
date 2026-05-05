@@ -43,6 +43,16 @@ export interface TranscriptViewProps {
   refreshing?: boolean
   /** Search input placeholder text. */
   searchPlaceholder?: string
+  /** Live session status for the in-flight placeholder ("thinking" /
+   *  "tooling" trigger a synthetic block at the tail; anything else
+   *  hides it). The transcript file only catches up after PostToolUse /
+   *  Stop hooks, so this gives the user something to watch in the
+   *  meantime — same UX as Claude Code's native streaming view. */
+  liveStatus?: string | null
+  /** Tool currently running (only meaningful when liveStatus === 'tooling'). */
+  liveCurrentTool?: string | null
+  /** Optional one-line description of the current task / step. */
+  liveCurrentTask?: string | null
 }
 
 // ─── module cache (cross-mount session memory) ───────────────────────────
@@ -94,6 +104,10 @@ function entrySignature(entries: TranscriptEntryForView[]): string {
 
 // ─── main component ──────────────────────────────────────────────────────
 
+/// 稳定的合成 in-flight entry id —— 用 sentinel 不用 random，方便 virtualizer
+/// 跨 render 复用同一个测量结果，不闪烁。
+const LIVE_ENTRY_ID = '__live_in_flight__'
+
 export function TranscriptView({
   entries,
   cacheKey,
@@ -101,6 +115,9 @@ export function TranscriptView({
   error,
   refreshing,
   searchPlaceholder = 'Search in messages (tool name / text)…',
+  liveStatus = null,
+  liveCurrentTool = null,
+  liveCurrentTask = null,
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
@@ -181,6 +198,14 @@ export function TranscriptView({
   //   normal:   text 块（user/assistant 都算）
   //   thinking: text + thinking
   //   verbose:  全部块都保留
+  //
+  // 末尾根据 liveStatus 合成一条 in-flight 占位 entry（实时 toolcall 进度，
+  // 模仿 Claude Code 自带的 streaming 渲染）。覆盖三种状态：
+  //   tooling:  显示当前在跑的 tool 名 + spinner
+  //   thinking: 显示 "Thinking…" 脉冲块
+  //   else:     不合成
+  // De-dup：search 中（query 非空）不合成；最后一条真 entry 已经包含同名
+  // tool_use 时跳过（覆盖 PostToolUse 已写入 jsonl 但 status 还没翻 idle 的瞬态）
   const visibleEntries = useMemo(() => {
     const out: TranscriptEntryForView[] = []
     for (const e of filteredEntries) {
@@ -197,8 +222,50 @@ export function TranscriptView({
       if (kept.length === 0) continue
       out.push({ ...e, blocks: kept })
     }
+
+    // ── 合成 in-flight entry ─────────────────────────────────────────
+    if (query.trim()) return out  // search 中不混入合成条目，避免污染计数
+    if (liveStatus !== 'tooling' && liveStatus !== 'thinking') return out
+
+    // 最后一条真 entry 是 assistant 且最后一个 tool_use 跟当前 currentTool
+    // 同名 → PostToolUse 写完但 status 还没翻 idle，跳过避免重复
+    const last = out[out.length - 1]
+    if (last && last.type === 'assistant') {
+      const lastToolUse = [...last.blocks].reverse().find((b) => b.type === 'tool_use')
+      if (lastToolUse && lastToolUse.toolName && lastToolUse.toolName === liveCurrentTool) {
+        return out
+      }
+    }
+
+    if (liveStatus === 'tooling' && liveCurrentTool) {
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'tool_use',
+            toolName: liveCurrentTool,
+            toolInputJSON: undefined,
+            toolId: '__live__',
+          },
+        ],
+      })
+    } else if (liveStatus === 'thinking') {
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'text',
+            text: liveCurrentTask || 'Thinking…',
+          },
+        ],
+      })
+    }
     return out
-  }, [filteredEntries, verbosity])
+  }, [filteredEntries, verbosity, query, liveStatus, liveCurrentTool, liveCurrentTask])
 
   // Continuous-role merging (hide chip on consecutive same-role entries)
   const hideRoleChipFor = useMemo(() => {
@@ -479,6 +546,7 @@ export function TranscriptView({
                       resultsByToolUseId={resultsByToolUseId}
                       hideRoleChip={hideRoleChipFor.has(e.id)}
                       verbosity={verbosity}
+                      isLive={e.id === LIVE_ENTRY_ID}
                     />
                   </div>
                 )
@@ -508,25 +576,41 @@ function EntryRow({
   resultsByToolUseId,
   hideRoleChip,
   verbosity,
+  isLive = false,
 }: {
   entry: TranscriptEntryForView
   resultsByToolUseId: Map<string, TranscriptBlockForView>
   hideRoleChip: boolean
   verbosity: TranscriptVerbosity
+  /** Synthetic in-flight entry — render with pending visual state. */
+  isLive?: boolean
 }) {
   let renderedFirstText = false
   return (
-    <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}`}>
+    <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}${isLive ? ' tx-entry--live' : ''}`}>
       {entry.blocks.map((b, i) => {
         switch (b.type) {
           case 'text': {
             const hideLabel = hideRoleChip || renderedFirstText
             renderedFirstText = true
-            return <TextBlock key={i} role={entry.type} text={b.text ?? ''} hideLabel={hideLabel} />
+            return (
+              <TextBlock
+                key={i}
+                role={entry.type}
+                text={b.text ?? ''}
+                hideLabel={hideLabel}
+                isPending={isLive}
+              />
+            )
           }
           case 'thinking':
             return <ThinkingBlock key={i} text={b.text ?? ''} forceOpen={verbosity === 'verbose'} />
           case 'tool_use':
+            // In-flight tool_use 没 toolInput / 没 result —— 渲染 spinner
+            // 占位（PendingToolUseBlock）；正常 tool_use 走完整 ToolUseBlock。
+            if (isLive) {
+              return <PendingToolUseBlock key={i} toolName={b.toolName ?? 'Tool'} />
+            }
             return (
               <ToolUseBlock
                 key={i}
@@ -548,10 +632,14 @@ const TextBlock = memo(function TextBlock({
   role,
   text,
   hideLabel,
+  isPending = false,
 }: {
   role: string
   text: string
   hideLabel?: boolean
+  /** When true, render with the live in-flight visual state (pulsing
+   *  three-dot suffix for the "Thinking…" placeholder). */
+  isPending?: boolean
 }) {
   const isAssistant = role === 'assistant'
   const isUser = role === 'user'
@@ -561,7 +649,7 @@ const TextBlock = memo(function TextBlock({
     ? 'tx-text--injected'
     : isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
   return (
-    <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}`}>
+    <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}${isPending ? ' tx-text--pending' : ''}`}>
       {!hideLabel && (
         <div className="tx-text__role">
           {isAssistant && <span className="tx-text__role-glyph" aria-hidden>◆</span>}
@@ -638,6 +726,23 @@ function ToolUseBlock({
       </div>
       <ToolInputBody name={name} input={input} />
       {result && <ToolResultBody block={result} />}
+    </div>
+  )
+}
+
+/// In-flight tool_use 占位：tool 名 + spinner，没 input / result。
+/// 等 PostToolUse hook 把真 entry 写进 jsonl + status 翻 idle，这条会被
+/// dedup 掉（visibleEntries 里检查最后一条 entry 是否包含同名 tool_use）。
+function PendingToolUseBlock({ toolName }: { toolName: string }) {
+  return (
+    <div className="tx-tool tx-tool--pending">
+      <div className="tx-tool__header">
+        <span className="tx-tool__icon tx-tool__icon--pulse">{toolIcon(toolName)}</span>
+        <span className="tx-tool__name">{toolName}</span>
+        <span className="tx-tool__pending-label">
+          <span className="tx-tool__pending-spinner" aria-hidden /> running…
+        </span>
+      </div>
     </div>
   )
 }
