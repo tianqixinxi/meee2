@@ -302,11 +302,29 @@ enum BoardAPI {
                 content: content,
                 injectedByHuman: true
             )
-            let status = SessionStore.shared.get(targetSessionId)?.status.rawValue ?? session.status.rawValue
+            let sessionData = SessionStore.shared.get(targetSessionId)
+            let status = sessionData?.status.rawValue ?? session.status.rawValue
             NSLog("[inject] via channel=\(channelName) msg=\(written.id) sid=\(targetSessionId.prefix(8)) status=\(status)")
             BoardServer.shared.broadcastStateChanged()
-            return jsonResponse(MessageEnvelope(message: BoardDTOBuilder.messageDTO(written)),
-                                status: 201, reason: "Created")
+
+            // Delivery semantics 提示：Desktop session 没 terminal，立刻
+            // typeIn 走不通——只能等 Stop hook 把 inbox drain 进 block-
+            // decision reason。session 处于 idle 时尤其需要提醒：Stop 不
+            // 会自己 fire，消息会一直 queued 直到用户在 Desktop 里继续。
+            let isDesktop = ClaudeDesktopActivator.isDesktopBacked(
+                sid: targetSessionId,
+                transcriptPath: sessionData?.transcriptPath
+            )
+            let delivery: String? = isDesktop ? "queued_until_next_turn" : nil
+
+            return jsonResponse(
+                MessageEnvelope(
+                    message: BoardDTOBuilder.messageDTO(written),
+                    delivery: delivery
+                ),
+                status: 201,
+                reason: "Created"
+            )
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
         }

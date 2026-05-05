@@ -332,21 +332,34 @@ export async function fetchTranscript(
 }
 
 /**
- * 把一条消息直接注入到某个 Claude session 的 inbox。下一个 Stop hook
- * 到达时会被塞给 Claude 作为 block-decision 输入（= 下一轮的 user message）。
+ * 把一条消息直接注入到某个 Claude session 的 inbox。
+ *
+ * - **CLI session**：AgentInboxShell 立刻通过 Ghostty/iTerm/Apple Terminal
+ *   typeIn 推到终端，session 看上去就像用户敲进去的。`delivery` 为 nil。
+ * - **Desktop session**：claude-desktop 子进程没 tty 可以 typeIn，消息只能
+ *   等下一个 Stop hook 触发 drainResponseForDesktopStop 转成 block-decision
+ *   reason 才被 Claude.app 看到。`delivery: 'queued_until_next_turn'` 表示
+ *   "已收下、待 desktop 这条 turn 结束才生效"。session 空闲时可能等很久。
  */
+export interface InjectResult {
+  message: Message
+  delivery: 'queued_until_next_turn' | null
+}
+
 export async function injectToSession(
   id: string,
   content: string,
-): Promise<Message> {
-  const r = await jsonRequest<{ message: Message }>(
+): Promise<InjectResult> {
+  const r = await jsonRequest<{ message: Message; delivery?: string | null }>(
     `/api/sessions/${encodeURIComponent(id)}/inject`,
     {
       method: 'POST',
       body: JSON.stringify({ content }),
     },
   )
-  return r.message
+  const delivery: InjectResult['delivery'] =
+    r.delivery === 'queued_until_next_turn' ? r.delivery : null
+  return { message: r.message, delivery }
 }
 
 /**
