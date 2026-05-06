@@ -110,41 +110,42 @@ jobs:
         run: swift test --parallel
 
       # ── Apple Developer ID signing keychain setup (only if secrets present) ──
-      # 把 secrets 里的 base64 证书还原成 .p12 → import 到一个临时 keychain →
-      # unlock 让 codesign 能用。Runner shutdown 时 keychain 自动消失，没残留。
-      - name: Set up signing keychain
-        id: signing
-        if: ${{ env.HAS_SIGNING_SECRETS == '1' }}
-        env:
-          HAS_SIGNING_SECRETS: ${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 != '' && secrets.APPLE_DEV_ID_CERT_PASSWORD != '' && secrets.APPLE_DEV_ID_IDENTITY != '' && '1' || '0' }}
-          P12_BASE64: ${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 }}
-          P12_PASSWORD: ${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}
+      # apple-actions/import-codesign-certs handles the whole keychain
+      # dance (create temp keychain, import .p12, set partition list,
+      # prepend to search list) reliably across runner image variants.
+      # Manual `security import` in shell tripped on
+      # `SecKeychainItemImport: One or more parameters ... not valid`
+      # on macos-15 runners despite working locally — the action's
+      # `keychain-password` defaults are tested against many edge cases
+      # we'd otherwise have to reverse-engineer.
+      - name: Compute signing-secrets gate
+        id: signing-gate
         run: |
-          KEYCHAIN_NAME="meee2-signing.keychain-db"
-          KEYCHAIN_PWD=$(uuidgen)
-          P12_PATH="$RUNNER_TEMP/cert.p12"
+          if [ -n "${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 }}" ] \
+              && [ -n "${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}" ] \
+              && [ -n "${{ secrets.APPLE_DEV_ID_IDENTITY }}" ]; then
+              echo "configured=1" >> "$GITHUB_OUTPUT"
+          else
+              echo "configured=0" >> "$GITHUB_OUTPUT"
+          fi
 
-          echo "$P12_BASE64" | base64 --decode > "$P12_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
-          security set-keychain-settings -lut 7200 "$KEYCHAIN_NAME"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
-          security import "$P12_PATH" -k "$KEYCHAIN_NAME" \
-              -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-              -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
-          # Prepend our keychain so codesign sees the cert without flag
-          security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | tr -d '"')
-
-          rm -f "$P12_PATH"
-          echo "configured=1" >> "$GITHUB_OUTPUT"
+      - name: Import signing certificate
+        id: signing
+        if: ${{ steps.signing-gate.outputs.configured == '1' }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}
+          # Use a runner-scoped keychain alias; cleaned up automatically
+          keychain: meee2-signing
+          keychain-password: ${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}
 
       # ── Notary credentials profile (only if secrets present) ─────────────
       # store-credentials 把 Apple ID + Team + app-specific password 存进
       # keychain alias，后面 notarize.sh 用 --keychain-profile 引用。
       - name: Set up notary credentials
         id: notary
-        if: ${{ env.HAS_NOTARY_SECRETS == '1' && steps.signing.outputs.configured == '1' }}
+        if: ${{ env.HAS_NOTARY_SECRETS == '1' && steps.signing-gate.outputs.configured == '1' }}
         env:
           HAS_NOTARY_SECRETS: ${{ secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_TEAM_ID != '' && secrets.APPLE_NOTARY_PASSWORD != '' && '1' || '0' }}
           APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
@@ -162,7 +163,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           SKIP_FINDER_UI: '1'      # 跳过 Finder AppleScript styling，headless runner 无 Finder
           UNIVERSAL: '1'           # CI 一律产 universal binary 让 Intel Mac 能跑
-          IDENTITY: ${{ steps.signing.outputs.configured == '1' && secrets.APPLE_DEV_ID_IDENTITY || '' }}
+          IDENTITY: ${{ steps.signing-gate.outputs.configured == '1' && secrets.APPLE_DEV_ID_IDENTITY || '' }}
           NOTARIZE: ${{ steps.notary.outputs.configured == '1' && '1' || '0' }}
           NOTARY_PROFILE: ${{ steps.notary.outputs.configured == '1' && 'meee2-notary' || '' }}
           NOTARIZE_APP: ${{ steps.notary.outputs.configured == '1' && '1' || '0' }}
