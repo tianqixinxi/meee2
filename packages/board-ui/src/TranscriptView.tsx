@@ -338,7 +338,11 @@ export function TranscriptView({
 
     // ── 合成 in-flight entry ─────────────────────────────────────────
     if (query.trim()) return out  // search 中不混入合成条目，避免污染计数
-    if (liveStatus !== 'tooling' && liveStatus !== 'thinking') return out
+    if (
+      liveStatus !== 'tooling' &&
+      liveStatus !== 'thinking' &&
+      liveStatus !== 'permissionRequired'
+    ) return out
 
     // 不做 toolName-based dedup —— 之前用 lastToolUse.toolName === liveCurrentTool
     // 来吞掉 PostToolUse 写完但 status 还没翻 idle 的瞬态，但 toolName 重复
@@ -373,6 +377,23 @@ export function TranscriptView({
           {
             type: 'text',
             text: liveCurrentTask || 'Thinking…',
+          },
+        ],
+      })
+    } else if (liveStatus === 'permissionRequired') {
+      // Claude 在等用户在 terminal 里点 y/n 批准 tool 调用——transcript 文件
+      // 还没把这一刻写进去（写要等 PostToolUse），但 UI 不能让用户盯着空。
+      // 用一条带 attention 颜色的合成 entry 提示"等你点"。
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'text',
+            text: liveCurrentTool
+              ? `Waiting for permission to use ${liveCurrentTool}…`
+              : 'Waiting for permission…',
           },
         ],
       })

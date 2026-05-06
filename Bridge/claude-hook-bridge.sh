@@ -17,6 +17,11 @@ echo "$(date +%H:%M:%S) ENTER pid=$$ env_event=${CLAUDE_HOOK_EVENT_NAME:-none} c
 if [ -n "$INPUT" ] && command -v jq &> /dev/null; then
     _peek=$(echo "$INPUT" | jq -r '.hook_event_name // "MISSING"' 2>/dev/null)
     echo "  json.hook_event_name=$_peek" >> /tmp/meee2-bridge-debug.log
+    # Temporary tap：dump full payload of Notification + PermissionRequest
+    # so we can see the exact message field shape. Remove once we've captured.
+    if [ "$_peek" = "Notification" ] || [ "$_peek" = "PermissionRequest" ]; then
+        echo "$(date +%H:%M:%S) PAYLOAD event=$_peek $INPUT" >> /tmp/meee2-permission-payload.log
+    fi
 fi
 
 # 读取终端环境变量
