@@ -107,8 +107,13 @@ export function SessionCard({
   )
   const tokens = tokensText(session.usageStats)
   const messages = session.recentMessages ?? []
-  // 新设计更紧凑 → 多容一条消息
-  const rows = messages.slice(-5)
+  // 卡片只展示 user input + assistant output 这两端的"对话"，过滤掉 tool
+  // call 噪音（read/write/bash 这类中间步对快速浏览没价值，且经常把
+  // 真正的回复挤到 5 条窗口外面看不到）。先过滤再 slice(-5)，确保任意
+  // 时刻都尽量给满 5 条 user/assistant 消息。
+  const rows = messages
+    .filter((e) => e.role === 'user' || e.role === 'assistant')
+    .slice(-5)
   const sidShort = session.id.replace(/-/g, '').slice(0, 8)
 
   // 状态行：图标走 lucide，文字保留原 label。原本用 emoji 前缀字符串，
@@ -177,9 +182,20 @@ export function SessionCard({
       title="Double-click to jump to terminal"
     >
       {/* active / waiting / dead 都有 LIVE badge（颜色跟着 halo）；
-          idle / completed 没有，避免视觉噪音 */}
+          idle / completed 没有，避免视觉噪音。
+          LIVE 态特殊处理：换成三个 staggered bounce 小点（和 Sidebar
+          的 status-dots-live 视觉同源）；其它 badge (ATTN/WAIT/DEAD)
+          保留文字胶囊—— 它们的 label 携带语义，比纯动效更明确。 */}
       {liveKind.badge && (
-        <div className="session-card__live">{liveKind.badge}</div>
+        liveKind.badge === 'LIVE' ? (
+          <div className="session-card__live session-card__live--dots" aria-label="live">
+            <span className="status-dots-live" aria-hidden>
+              <span /><span /><span />
+            </span>
+          </div>
+        ) : (
+          <div className="session-card__live">{liveKind.badge}</div>
+        )
       )}
 
       <div className="session-card__header">

@@ -287,7 +287,12 @@ function SessionCard({ session, board, helpers }) {
   const dot = statusStyle(session.status, urgent)
   const tokens = tokenText(session.usageStats)
   const messages = session.recentMessages || []
-  const rows = messages.slice(-5)
+  // 卡片只展示 user input + assistant output 这两端的"对话"，过滤掉 tool
+  // call 噪音（read/write/bash 中间步对快速浏览没价值，且常把真正的回复
+  // 挤出 5 条窗口）。先过滤再 slice(-5)，让任何时刻都尽量塞满 5 条对话。
+  const rows = messages
+    .filter((e) => e.role === 'user' || e.role === 'assistant')
+    .slice(-5)
   const sidShort = session.id.replace(/-/g, '').slice(0, 8)
   const bar = statusBarColor(session.status, urgent)
 
