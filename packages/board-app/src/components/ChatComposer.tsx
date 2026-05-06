@@ -23,6 +23,7 @@ import {
   useState,
 } from 'react'
 import { Zap } from 'lucide-react'
+import { Tooltip } from './Tooltip'
 
 interface AttachmentItem {
   id: string
@@ -272,24 +273,33 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
           rows={2}
         />
         {submitPush && (
-          <button
-            className="cc-send-push"
-            onClick={submitPush}
-            disabled={!canSend}
-            title={pushTitle ?? 'Push to Desktop now (focuses Claude.app)'}
-            aria-label="Push to Desktop now"
-            type="button"
+          <Tooltip
+            label={pushTitle ?? 'Push to Desktop now (focuses Claude.app)'}
+            placement="top"
+            enabled={canSend}
           >
-            {/* lucide Zap icon — "立刻强制送达"；视觉上跟主 send 的箭头
-             *  分开但同尺寸 + 同 hover style。 */}
-            <Zap size={14} aria-hidden />
-          </button>
+            <button
+              className="cc-send-push"
+              onClick={submitPush}
+              disabled={!canSend}
+              aria-label="Push to Desktop now"
+              type="button"
+            >
+              {/* lucide Zap icon — "立刻强制送达"；视觉上跟主 send 的箭头
+               *  分开但同尺寸 + 同 hover style。 */}
+              <Zap size={14} aria-hidden />
+            </button>
+          </Tooltip>
         )}
+        <Tooltip
+          label={busy ? 'Sending…' : 'Send'}
+          shortcut={busy ? undefined : '⏎'}
+          placement="top"
+        >
         <button
           className="cc-send-arrow"
           onClick={submit}
           disabled={!canSend}
-          title={busy ? 'Sending…' : 'Send (Enter)'}
           aria-label="Send message"
           type="button"
         >
@@ -307,6 +317,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             </svg>
           )}
         </button>
+        </Tooltip>
       </div>
 
       {/* ── bottombar（左/右槽位由父组件填）──────────────────────── */}

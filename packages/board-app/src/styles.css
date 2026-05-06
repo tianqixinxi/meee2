@@ -544,13 +544,17 @@ textarea {
 .sidebar-collapsed-toggle {
   position: fixed;
   /* 紧贴 macOS traffic lights 右侧：lights 占 12..72，留 8px 间距 → x=80。
-   * 垂直对齐 traffic lights 中心：实测 macOS traffic lights 中心 y ≈ 20
-   * （titlebar 28pt 但 lights 略往下偏，不是几何中心），button 20×20 →
-   * top: 10 → center y = 20 ✓
-   * padding/border 显式归零盖掉全局 `button { padding: 5px 12px; border: 1px solid; }`
-   * （否则 box-sizing: border-box 下 24px 横向 padding 把 width 撑到 24px）。 */
+   *
+   * 垂直对齐 traffic lights 中心：macOS .fullSizeContentView + 28pt
+   * titlebar 下，traffic lights 是 11×11px，y 从 ~7 到 ~18，中心 y≈12.5。
+   * 之前用 top:10 (20×20 button → center y=20) 实测视觉上明显偏下。
+   * 改成 top:3 让 button center = y≈13，跟 lights 中心齐平。
+   *
+   * padding/border 显式归零盖掉全局 `button { padding: 5px 12px;
+   * border: 1px solid; }`（否则 box-sizing: border-box 下 24px 横向
+   * padding 把 width 撑到 24px）。 */
   left: 80px;
-  top: 10px;
+  top: 3px;
   z-index: 50;
   width: 20px;
   height: 20px;
@@ -3917,4 +3921,53 @@ textarea {
 }
 .sidebar-session-row__rename-input:focus {
   border-color: rgba(96, 165, 250, 0.6);
+}
+
+/* ─── Tooltip (hover bubble) ────────────────────────────────────────── */
+/* 通过 portal 挂在 document.body 上，绕开 sidebar/dock 的 overflow 裁剪。
+ * `position: fixed` + viewport 坐标，不跟随父级 transform。 */
+.mee-tooltip {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(28, 28, 30, 0.96);
+  color: #f5f5f7;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32),
+              0 2px 4px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: mee-tooltip-fade-in 0.12s ease-out;
+}
+.mee-tooltip--top {
+  transform: translate(-50%, -100%);
+}
+.mee-tooltip__label {
+  letter-spacing: 0.01em;
+}
+.mee-tooltip__shortcut {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(245, 245, 247, 0.88);
+  letter-spacing: 0;
+}
+@keyframes mee-tooltip-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }

@@ -21,6 +21,7 @@ import {
 import { isDmChannelName } from '@meee1/board-core'
 import { Inbox, MoreHorizontal } from 'lucide-react'
 import { SessionRowMenu } from './SessionRowMenu'
+import { Tooltip } from './Tooltip'
 import { activateSession, spawnSession } from '../api'
 import { useToast } from '../App'
 
@@ -633,25 +634,29 @@ export default function Sidebar({
   // 28pt window-drag band. Update both files together if the position
   // ever changes.
   const floatingToggle = (
-    <button
-      key="floating-toggle"
-      className="sidebar-collapsed-toggle"
-      onClick={() => {
-        cancelClose()
-        setHoverPreview(false)
-        if (open) onClose()
-        else onOpen()
-      }}
-      onMouseEnter={!open ? openPreview : undefined}
-      onMouseLeave={!open ? scheduleClose : undefined}
-      title={open ? 'Collapse sidebar' : 'Expand sidebar (hover for preview)'}
-      aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+    <Tooltip
+      label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+      placement="bottom"
     >
-      <PanelLeftIcon />
-      {/* 只在折叠态挂 hover-active icon —— 展开时用户看到 sidebar 已经在那
-          没必要再用 chevron 暗示方向；hover 也保持静态。 */}
-      {!open && <PanelLeftOpenIcon />}
-    </button>
+      <button
+        key="floating-toggle"
+        className="sidebar-collapsed-toggle"
+        onClick={() => {
+          cancelClose()
+          setHoverPreview(false)
+          if (open) onClose()
+          else onOpen()
+        }}
+        onMouseEnter={!open ? openPreview : undefined}
+        onMouseLeave={!open ? scheduleClose : undefined}
+        aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+      >
+        <PanelLeftIcon />
+        {/* 只在折叠态挂 hover-active icon —— 展开时用户看到 sidebar 已经在那
+            没必要再用 chevron 暗示方向；hover 也保持静态。 */}
+        {!open && <PanelLeftOpenIcon />}
+      </button>
+    </Tooltip>
   )
 
   if (!open && !isPreview) {
@@ -679,14 +684,16 @@ export default function Sidebar({
       <div className="sidebar-header row space" style={{ position: 'relative' }}>
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           {inDetail && (
-            <button
-              className="ghost"
-              style={{ padding: '2px 6px' }}
-              onClick={() => onSelectionChange({ kind: 'none' })}
-              title="Back to session list"
-            >
-              ‹
-            </button>
+            <Tooltip label="Back to session list">
+              <button
+                className="ghost"
+                style={{ padding: '2px 6px' }}
+                onClick={() => onSelectionChange({ kind: 'none' })}
+                aria-label="Back to session list"
+              >
+                ‹
+              </button>
+            </Tooltip>
           )}
           {/* In detail view we show the section label so the back button has
            * context; the default "Inspector" label is just chrome and Claude
@@ -750,18 +757,19 @@ export default function Sidebar({
                   }}
                 />
                 {searchQuery && (
-                  <button
-                    type="button"
-                    className="sidebar-search__clear"
-                    title="Clear search (Esc)"
-                    aria-label="Clear search"
-                    onClick={() => {
-                      setSearchQuery('')
-                      searchInputRef.current?.focus()
-                    }}
-                  >
-                    ×
-                  </button>
+                  <Tooltip label="Clear search" shortcut="Esc">
+                    <button
+                      type="button"
+                      className="sidebar-search__clear"
+                      aria-label="Clear search"
+                      onClick={() => {
+                        setSearchQuery('')
+                        searchInputRef.current?.focus()
+                      }}
+                    >
+                      ×
+                    </button>
+                  </Tooltip>
                 )}
               </div>
             )}
@@ -935,9 +943,9 @@ export default function Sidebar({
                         {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
                          *  overlay，里面集成原本的 pin / rename / canvas 三键
                          *  + 新加的 Duplicate 与 Open in submenu。*/}
+                        <Tooltip label="Actions">
                         <button
                           className="sidebar-icon-btn sidebar-session-row__more"
-                          title="Actions"
                           aria-label="Open session actions menu"
                           onClick={(e) => {
                             e.stopPropagation()
@@ -952,6 +960,7 @@ export default function Sidebar({
                         >
                           <MoreHorizontal size={14} aria-hidden />
                         </button>
+                        </Tooltip>
                       </div>
                       {menuForSid === s.id && (
                         <SessionRowMenu
@@ -1009,6 +1018,12 @@ export default function Sidebar({
                                 toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
                               })
                           }}
+                          onHide={onCanvas ? () => {
+                            // 把 sid 加进 dismissed 集合 + 把 canvas 上的 rect
+                            // 删掉。下次状态刷新不会自动重建（Board.tsx:681）。
+                            onHideFromCanvas(s.id)
+                            toast.push('info', `Hidden: ${displayTitle(s)}`)
+                          } : undefined}
                         />
                       )}
                     </div>
@@ -1061,19 +1076,20 @@ export default function Sidebar({
                         </svg>
                         <span className="sidebar-project-group__spacer" />
                         {sampleCwd && onCreateInProject && (
-                          <button
-                            className="sidebar-project-group__add"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onCreateInProject(sampleCwd)
-                            }}
-                            title={`New session in ${groupKey}`}
-                            aria-label={`New session in ${groupKey}`}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                              <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                            </svg>
-                          </button>
+                          <Tooltip label={`New session in ${groupKey}`}>
+                            <button
+                              className="sidebar-project-group__add"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onCreateInProject(sampleCwd)
+                              }}
+                              aria-label={`New session in ${groupKey}`}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                              </svg>
+                            </button>
+                          </Tooltip>
                         )}
                         {/* Global filter trigger lives only on the first project
                          * group's top-right; data layer is unchanged (filter is
@@ -1084,24 +1100,25 @@ export default function Sidebar({
                             className="sidebar-project-group__filter-wrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              className={
-                                'sidebar-project-group__filter' +
-                                (filterMenuOpen || hasFilter ? ' is-active' : '')
-                              }
-                              onClick={() => setFilterMenuOpen((v) => !v)}
-                              title="Filter / Group / Sort"
-                              aria-label="Filter, group, sort"
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                                <path d="M4 6h16M7 12h10M10 18h4"
-                                      stroke="currentColor" strokeWidth="2"
-                                      strokeLinecap="round"/>
-                              </svg>
-                              {hasFilter && (
-                                <span className="filter-dot" aria-hidden />
-                              )}
-                            </button>
+                            <Tooltip label="Filter / Group / Sort">
+                              <button
+                                className={
+                                  'sidebar-project-group__filter' +
+                                  (filterMenuOpen || hasFilter ? ' is-active' : '')
+                                }
+                                onClick={() => setFilterMenuOpen((v) => !v)}
+                                aria-label="Filter, group, sort"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                  <path d="M4 6h16M7 12h10M10 18h4"
+                                        stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round"/>
+                                </svg>
+                                {hasFilter && (
+                                  <span className="filter-dot" aria-hidden />
+                                )}
+                              </button>
+                            </Tooltip>
                             {filterMenuOpen && (
                               <SidebarFilterMenu
                                 state={filterState}
@@ -1150,22 +1167,23 @@ export default function Sidebar({
                             className="sidebar-project-group__filter-wrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              className={
-                                'sidebar-project-group__filter is-pinned' +
-                                (filterMenuOpen || hasFilter ? ' is-active' : '')
-                              }
-                              onClick={() => setFilterMenuOpen((v) => !v)}
-                              title="Filter / Group / Sort"
-                              aria-label="Filter, group, sort"
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                                <path d="M4 6h16M7 12h10M10 18h4"
-                                      stroke="currentColor" strokeWidth="2"
-                                      strokeLinecap="round"/>
-                              </svg>
-                              {hasFilter && <span className="filter-dot" aria-hidden />}
-                            </button>
+                            <Tooltip label="Filter / Group / Sort">
+                              <button
+                                className={
+                                  'sidebar-project-group__filter is-pinned' +
+                                  (filterMenuOpen || hasFilter ? ' is-active' : '')
+                                }
+                                onClick={() => setFilterMenuOpen((v) => !v)}
+                                aria-label="Filter, group, sort"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                  <path d="M4 6h16M7 12h10M10 18h4"
+                                        stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round"/>
+                                </svg>
+                                {hasFilter && <span className="filter-dot" aria-hidden />}
+                              </button>
+                            </Tooltip>
                             {filterMenuOpen && (
                               <SidebarFilterMenu
                                 state={filterState}
@@ -1336,14 +1354,16 @@ export default function Sidebar({
           </span>
           <span>QC</span>
         </div>
-        <button className="sidebar-footer-icon" title="Account / settings" type="button">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-          </svg>
-        </button>
+        <Tooltip label="Account / settings" placement="top">
+          <button className="sidebar-footer-icon" type="button" aria-label="Account / settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </Tooltip>
       </div>
     </aside>
     </>

@@ -39,6 +39,7 @@ import { readLlmSettings, activeTools } from '../lib/llmSettings'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
+import { Tooltip } from './Tooltip'
 import {
   loadTranscriptVerbosity,
   saveTranscriptVerbosity,
@@ -324,34 +325,36 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     >
       {/* ── 右上角浮动按钮：toggle expand + close ─────────── */}
       <div className="session-dock__actions">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          title={expanded ? 'Collapse to bottom' : 'Expand to fill canvas'}
-          aria-label={expanded ? 'Collapse dock' : 'Expand dock'}
-          aria-pressed={!expanded}
-        >
-          {expanded ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M10 4v6H4M14 20v-6h6M4 4l7 7M20 20l-7-7"
-                stroke="currentColor" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M4 14v6h6M14 4h6v6M4 20l7-7M20 4l-7 7"
-                stroke="currentColor" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          )}
-        </button>
-        <button
-          onClick={onClose}
-          title="Close (Esc when input is empty)"
-          aria-label="Close dock"
-          style={{ fontSize: 18, lineHeight: 1 }}
-        >
-          ×
-        </button>
+        <Tooltip label={expanded ? 'Collapse to bottom' : 'Expand to fill canvas'}>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? 'Collapse dock' : 'Expand dock'}
+            aria-pressed={!expanded}
+          >
+            {expanded ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M10 4v6H4M14 20v-6h6M4 4l7 7M20 20l-7-7"
+                  stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M4 14v6h6M14 4h6v6M4 20l7-7M20 4l-7 7"
+                  stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+        </Tooltip>
+        <Tooltip label="Close" shortcut="Esc">
+          <button
+            onClick={onClose}
+            aria-label="Close dock"
+            style={{ fontSize: 18, lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </Tooltip>
       </div>
 
       {/* ── 中间区：mode 分流 ──────────────────────────────── */}
@@ -448,16 +451,24 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
         bottomLeft={
           mode.kind === 'session' ? (
             <>
-              <button className="cc-icon-btn" title="Attach file (paste image)" type="button">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-              <button className="cc-icon-btn" title="Quick command" type="button">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              </button>
+              <Tooltip label="Attach file (paste image)">
+                <button className="cc-icon-btn" type="button" aria-label="Attach file">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </Tooltip>
+              <Tooltip label="Quick command">
+                <button className="cc-icon-btn" type="button" aria-label="Quick command">
+                  {/* slash-command 视觉：方框 + 内嵌 / —— 比纯空 rect 多一笔 */}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <rect x="4" y="4" width="16" height="16" rx="3"
+                          stroke="currentColor" strokeWidth="1.6" />
+                    <path d="M14 8l-4 8" stroke="currentColor"
+                          strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </Tooltip>
               {/* Transcript verbosity segmented pill —— 跟 input 同行的左下，
                   user 期待 filter 跟 input box 在一起。同 storage key
                   跟 TranscriptView uncontrolled fallback 共享，保留以前的
@@ -510,22 +521,23 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
               </span>
               {/* Open chip 移到 bottombar 最右 —— 跟 model/status 一行，
                 * 视觉上属于 inputbox 右下角的 meta 区。 */}
-              <button
-                className="session-dock__open"
-                onClick={() => {
-                  if (mode.kind === 'session') void activateSession(mode.session.id)
-                }}
-                title="Open session terminal / Claude.app"
-                aria-label="Open session"
-                type="button"
-              >
-                Open
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" strokeWidth="1.8"
-                     strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M7 17 17 7M9 7h8v8"/>
-                </svg>
-              </button>
+              <Tooltip label="Open session terminal / Claude.app" placement="top">
+                <button
+                  className="session-dock__open"
+                  onClick={() => {
+                    if (mode.kind === 'session') void activateSession(mode.session.id)
+                  }}
+                  aria-label="Open session"
+                  type="button"
+                >
+                  Open
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="1.8"
+                       strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M7 17 17 7M9 7h8v8"/>
+                  </svg>
+                </button>
+              </Tooltip>
             </>
           ) : (
             <>

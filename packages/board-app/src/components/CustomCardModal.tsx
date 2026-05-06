@@ -18,6 +18,7 @@ import {
   userPresetIdFromLabel,
 } from '@meee1/board-cards'
 import type { TemplatePreset } from '@meee1/board-cards'
+import { Tooltip } from './Tooltip'
 
 // 贴给 Claude Code 的 instruction：既告诉数据形状（session / board /
 // helpers），也给出 runtime 约束（no imports, 360×260, 自包含），再给一个
@@ -131,7 +132,9 @@ export function CustomCardModal({ onClose, onSaved }: Props) {
       <div className="card-custom-modal" onClick={(e) => e.stopPropagation()}>
         <div className="card-custom-modal__header">
           <div className="card-custom-modal__title">New custom card</div>
-          <button onClick={onClose} title="Close (Esc)">✕</button>
+          <Tooltip label="Close" shortcut="Esc">
+            <button onClick={onClose} aria-label="Close">✕</button>
+          </Tooltip>
         </div>
 
         <div className="card-custom-modal__body">
@@ -141,13 +144,14 @@ export function CustomCardModal({ onClose, onSaved }: Props) {
               1. Ask Claude Code to write it (copy + paste this prompt)
             </div>
             <div className="card-custom-modal__prompt">
-              <button
-                className="card-custom-modal__copy-btn"
-                onClick={copyInstruction}
-                title="Copy instruction to clipboard"
-              >
-                {copied ? '✓ copied' : '📋 copy'}
-              </button>
+              <Tooltip label="Copy instruction to clipboard">
+                <button
+                  className="card-custom-modal__copy-btn"
+                  onClick={copyInstruction}
+                >
+                  {copied ? '✓ copied' : '📋 copy'}
+                </button>
+              </Tooltip>
               <pre id="card-custom-instruction-pre" style={{ margin: 0, fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>
                 {CLAUDE_INSTRUCTION}
               </pre>

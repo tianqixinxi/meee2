@@ -49,6 +49,7 @@ import {
   removeMember,
 } from '../api'
 import { SessionOverlay } from './SessionOverlay'
+import { Tooltip } from './Tooltip'
 
 /**
  * Derive a deterministic channel alias from a session's title + id so each
@@ -1763,20 +1764,22 @@ export default function Board({
           {/* className 跟 native shape tool 一致：`ToolIcon ToolIcon_size_medium`。
               不加 `ToolIcon_type_floating` —— 那条会让 .ToolIcon__icon 套一个
               深色背景，和原生 shape tool（透明背景）不一致。 */}
-          <button
-            className="ToolIcon ToolIcon_size_medium board-channel-tool"
-            onClick={onNewChannel}
-            title="Create a new channel"
-            type="button"
-            aria-label="Create channel"
-          >
-            <div className="ToolIcon__icon" tabIndex={-1}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.6"/>
-                <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-              </svg>
-            </div>
-          </button>
+          <Tooltip label="Create a new channel">
+            <button
+              className="ToolIcon ToolIcon_size_medium board-channel-tool"
+              onClick={onNewChannel}
+              type="button"
+              aria-label="Create channel"
+            >
+              <div className="ToolIcon__icon" tabIndex={-1}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.6"/>
+                  <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </div>
+            </button>
+          </Tooltip>
+          <Tooltip label="Create DM line: drag from one session card to another">
           <button
             className="ToolIcon ToolIcon_size_medium board-channel-tool"
             onClick={() => {
@@ -1787,7 +1790,6 @@ export default function Board({
                 console.warn('[Board] setActiveTool(arrow) failed', e)
               }
             }}
-            title="Create DM line: drag from one session card to another"
             type="button"
             aria-label="Create DM line"
           >
@@ -1799,6 +1801,7 @@ export default function Board({
               </svg>
             </div>
           </button>
+          </Tooltip>
         </>,
         toolbarRowEl,
       )}

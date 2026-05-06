@@ -23,6 +23,7 @@ import {
   Layout as CanvasIcon,
   Terminal as TerminalIcon,
   AppWindow,
+  EyeOff,
 } from 'lucide-react'
 import type { Session } from '../types'
 
@@ -39,6 +40,10 @@ export interface SessionRowMenuProps {
   onTogglePin: () => void
   onRename: () => void
   onDuplicate: () => void
+  /** "Hide from canvas"：把该 session sid 加进 dismissed 集合，下次刷新不再
+   *  自动建卡片。仅在 session 已经在 canvas 上时才显示这一项 —— 不在的话
+   *  Hide 无意义。父组件传 undefined 即不渲染该 menu item。 */
+  onHide?: () => void
   /** 菜单挂在 session 行的 ⋯ 按钮上，传入按钮的 DOMRect 用来定位 overlay。 */
   anchorRect: DOMRect | null
 }
@@ -125,6 +130,7 @@ export function SessionRowMenu({
   onTogglePin,
   onRename,
   onDuplicate,
+  onHide,
   anchorRect,
 }: SessionRowMenuProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -156,10 +162,11 @@ export function SessionRowMenu({
       if (k === 'p') { e.preventDefault(); onTogglePin(); onClose() }
       else if (k === 'r') { e.preventDefault(); onRename(); onClose() }
       else if (k === 'd') { e.preventDefault(); onDuplicate(); onClose() }
+      else if (k === 'h' && onHide) { e.preventDefault(); onHide(); onClose() }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose, onTogglePin, onRename, onDuplicate])
+  }, [onClose, onTogglePin, onRename, onDuplicate, onHide])
 
   // 默认贴在 anchor 右下；如果右侧出屏就翻转到左侧
   const style: React.CSSProperties = {}
@@ -227,6 +234,17 @@ export function SessionRowMenu({
         shortcut="D"
         onClick={() => { onDuplicate(); onClose() }}
       />
+      {onHide && (
+        <>
+          <div className="srm-divider" aria-hidden />
+          <MenuItem
+            icon={<EyeOff size={13} aria-hidden />}
+            label="Hide from canvas"
+            shortcut="H"
+            onClick={() => { onHide(); onClose() }}
+          />
+        </>
+      )}
       </div>
     </>
   )
