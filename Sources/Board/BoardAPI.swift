@@ -205,7 +205,7 @@ enum BoardAPI {
             return errorResponse(
                 "no_pid",
                 "this session has no controllable process — close it from its host app",
-                status: 409,
+                status: 409
             )
         }
         // 进程已经走了：kill(pid, 0) 返回 -1 / ESRCH。直接清掉 lingering card 算成功
