@@ -543,18 +543,26 @@ textarea {
  * 有但点不响应。 */
 .sidebar-collapsed-toggle {
   position: fixed;
-  /* 紧贴 macOS traffic lights 右侧：lights 占 12..72，留 8px 间距 → x=80。
+  /* 位置由 BoardWebWindowController.injectTitlebarMetrics 在窗口 didFinish /
+   * didResize / didEnterFullScreen 时算出来：
+   *   --titlebar-btn-center-y: traffic light 垂直中心（CSS px，从 content
+   *                            view 顶 origin 算）
+   *   --titlebar-lights-right: zoom（最右一颗 light）的右边 x 边界
+   * 不再硬编码——以前 top:10 → 偏下，top:3 → 偏上，每次 macOS / titlebar
+   * 配置略变都得手调。Native AppKit 直接读 standardWindowButton.frame 才
+   * 是稳定来源（参考 Linear / Arc / VSCode 的同款思路）。
    *
-   * 垂直对齐 traffic lights 中心：macOS .fullSizeContentView + 28pt
-   * titlebar 下，traffic lights 是 11×11px，y 从 ~7 到 ~18，中心 y≈12.5。
-   * 之前用 top:10 (20×20 button → center y=20) 实测视觉上明显偏下。
-   * 改成 top:3 让 button center = y≈13，跟 lights 中心齐平。
+   * Fallback 默认值：
+   *   --titlebar-btn-center-y: 13px  (28pt titlebar + 11px lights 居中近似)
+   *   --titlebar-lights-right: 72px  (12 + 3 dots × 20)
+   * 在 web 浏览器（非 meee2.app）打开时 macOS 的 traffic lights 不存在，
+   * sidebar toggle 还是按 fallback 落位。
    *
    * padding/border 显式归零盖掉全局 `button { padding: 5px 12px;
    * border: 1px solid; }`（否则 box-sizing: border-box 下 24px 横向
    * padding 把 width 撑到 24px）。 */
-  left: 80px;
-  top: 3px;
+  left: calc(var(--titlebar-lights-right, 72px) + 8px);
+  top: calc(var(--titlebar-btn-center-y, 13px) - 10px);  /* 10 = button height / 2 */
   z-index: 50;
   width: 20px;
   height: 20px;
@@ -1687,9 +1695,13 @@ textarea {
   background: transparent;
   border: 1px solid #2A3040;
   border-radius: 6px;
-  color: #8B93A7;
+  color: #B6BBCB;
   cursor: pointer;
   transition: background 120ms, color 120ms, border-color 120ms;
+}
+.cc-send-arrow > svg, .cc-send-push > svg {
+  width: 16px;
+  height: 16px;
 }
 .cc-send-arrow:hover:not(:disabled) {
   background: #1A1E2B;
@@ -1794,10 +1806,17 @@ textarea {
   height: 28px;
   background: transparent;
   border: none;
-  color: #6B7488;
+  color: #B6BBCB;
   cursor: pointer;
   border-radius: 6px;
   transition: background 120ms, color 120ms;
+}
+/* svg 之前 14×14 在 28×28 button 里看起来跟空的一样——bump 到 18，
+ * 同时 stroke 增粗，在 hidpi 屏上一目了然。 */
+.cc-icon-btn > svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8;
 }
 .cc-icon-btn:hover {
   background: #1A1E2B;

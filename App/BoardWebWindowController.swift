@@ -159,6 +159,60 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             retryWorkItem?.cancel()
             retryWorkItem = nil
         }
+        // 页面加载完后立刻把 traffic light 的真实位置喂给 webui，让
+        // sidebar-collapsed-toggle 能精确对齐。窗口 resize / titlebar 模式
+        // 切换时也要更新（NSWindow.didResize 通知触发）。
+        injectTitlebarMetrics()
+    }
+
+    /// 把 macOS 系统级 traffic light 按钮的中心点（webview CSS 坐标）注入
+    /// document root style 上的两个 CSS 变量。这样 webui 那边的对齐 button
+    /// 不再硬编码 top:Xpx 猜测，直接用：
+    ///   top: calc(var(--titlebar-btn-center-y) - 10px);  // 10 = 自身高/2
+    ///   left: calc(var(--titlebar-btn-right-edge) + 8px); // lights 右边 + 间距
+    ///
+    /// 触发时机：webView didFinish 一次（页面 mount 后）+ window resize / state
+    /// 变化（didResize / didEnterFullScreen 等）每次。fullscreen 进出和 zoom
+    /// 都会让 lights 位置变（fullscreen 期间 NSStandardWindowButton.frame
+    /// 还是有效但实际不显示——CSS variable 会更新成 0/0，sidebar 那侧的
+    /// `--titlebar-btn-center-y: 0` 不影响布局，按钮会顶到 top:0 自然 hidden
+    /// 在 fullscreen UI 下也合理）。
+    func injectTitlebarMetrics() {
+        guard let window = window,
+              let close = window.standardWindowButton(.closeButton),
+              let zoom = window.standardWindowButton(.zoomButton) else {
+            return
+        }
+        // closeButton.frame 是 windowContentView 子视图坐标系（bottom-left 原点）。
+        // 转到 window content view 顶部坐标（top-left 原点） = contentHeight - frame.midY
+        guard let contentView = window.contentView else { return }
+        let contentH = contentView.frame.height
+        let centerY_topOrigin = contentH - close.frame.midY
+        // CSS 用的是 webview viewport 坐标系；因为 contentView == webView 本身，
+        // 1:1 对应。lights 最右一颗按钮（zoom）的右边 x 用来定位 sidebar toggle。
+        let lightsRightEdge = zoom.frame.maxX
+        let centerY = max(0, Double(centerY_topOrigin))
+        let rightEdge = max(0, Double(lightsRightEdge))
+        let js = """
+        (function(){
+          const r = document.documentElement.style;
+          r.setProperty('--titlebar-btn-center-y', '\(centerY)px');
+          r.setProperty('--titlebar-lights-right', '\(rightEdge)px');
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        injectTitlebarMetrics()
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        injectTitlebarMetrics()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        injectTitlebarMetrics()
     }
 
     private func showLoadError(_ error: Error) {
