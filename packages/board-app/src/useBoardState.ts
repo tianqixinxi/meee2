@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { connectEvents, fetchState } from './api'
 import type { BoardState } from './types'
+import { isOlderSession } from './types'
 
 export interface BoardStateHook {
   state: BoardState | null
@@ -73,7 +74,10 @@ export function useBoardState(): BoardStateHook {
  * 计算 BoardState 的内容指纹。故意排除"churny" 字段（lastActivity、
  * startedAt —— 这些每个 WS tick 都在刷新但 UI 不直接渲染它们）。
  * 只对"真变了用户才关心"的字段做比对：sessions 的 id/status/title/project/
- * currentTool/inboxPending/pendingPermissionTool/displayGroup/recentMessages、channels。
+ * currentTool/inboxPending/pendingPermissionTool/older(派生)/recentMessages、channels。
+ *
+ * `older` 改成前端从 lastActivity 派生（isOlderSession）。在 signature 里
+ * 记录其布尔值，确保 1h 阈值翻越时下游 UI 能拿到 new state 触发重渲。
  */
 function signatureFor(s: BoardState): string {
   const slim = {
@@ -85,7 +89,7 @@ function signatureFor(s: BoardState): string {
       currentTool: x.currentTool,
       inboxPending: x.inboxPending,
       pendingPermissionTool: x.pendingPermissionTool,
-      displayGroup: x.displayGroup,
+      older: isOlderSession(x),
       // recentMessages 里每条 text 是最后 200 字，内容变了才代表"有新消息"
       recent: x.recentMessages?.map((m) => `${m.role}:${m.text}`).join('|'),
     })),

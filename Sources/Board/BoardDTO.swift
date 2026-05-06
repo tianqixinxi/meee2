@@ -64,9 +64,9 @@ struct SessionDTO: Encodable {
     /// 这个字段供前端区分卡片图标 / 跳转目标。
     let clientKind: String?
 
-    /// 前端展示分组。nil/default 表示主列表；"older" 表示仍可打开但默认折叠、
-    /// 不自动铺到画布上的历史 session。
-    let displayGroup: String?
+    // 注：旧版本曾下发 `displayGroup: "older"` 字段（idle ≥ 1h）。这是 webui
+    // 呈现规则，已挪到前端从 lastActivity 派生（see board-app/types.ts
+    // isOlderSession）—— DTO 不再扛这个职责。
 }
 
 /// Recap DTO
@@ -379,23 +379,9 @@ enum BoardDTOBuilder {
             default: return "cli"
             }
         }()
-        let displayGroup: String? = {
-            // 跨插件统一：idle ≥ 1h 且不在阻塞等用户响应 → 折叠到 Sidebar 的
-            // Older 区。Codex (poll) / Claude (hook) 都走同一条规则。
-            //   - 时间源：与 Sidebar 日期分桶用的 lastActivity 同源（sessionData
-            //     优先，缺失回退 PluginSession.lastUpdated），保证「折叠/分桶」
-            //     共识。
-            //   - 状态豁免：`.permissionRequired` 是真正阻塞的弹框，挂超过
-            //     1h 也不该折叠，否则用户找不回操作入口。
-            //     `.waitingForUser` 语义就是 idle，不豁免。
-            guard resolvedStatus != .permissionRequired else { return nil }
-            let lastActivity = sessionData?.lastActivity ?? session.lastUpdated
-            guard let last = lastActivity,
-                  Date().timeIntervalSince(last) >= 3600 else {
-                return nil
-            }
-            return "older"
-        }()
+        // 注：之前在这里算 displayGroup="older"（idle ≥ 1h），现在该判定挪到
+        // 前端（board-app/types.ts isOlderSession）—— DTO 只下发原始 lastActivity，
+        // 由 webui 决定要不要折叠/不自动建卡。
 
         // title 优先用 desktop 的 user-friendly 标题（"AI Product Twitter
         // Marketing Strategy" 这种），fallback 到 PluginSession.title（cwd basename）
@@ -441,8 +427,7 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
-            clientKind: clientKind,
-            displayGroup: displayGroup
+            clientKind: clientKind
         )
     }
 
@@ -495,8 +480,7 @@ enum BoardDTOBuilder {
             termProgram: nil,
             backgroundAgents: [],
             latestRecap: nil,
-            clientKind: "desktop",
-            displayGroup: nil
+            clientKind: "desktop"
         )
     }
 

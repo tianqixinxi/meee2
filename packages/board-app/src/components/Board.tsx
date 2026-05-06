@@ -12,6 +12,7 @@ import type {
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
 import type { BoardState, Selection } from '../types'
+import { isOlderSession } from '../types'
 import {
   buildChannelHub,
   buildScene,
@@ -676,7 +677,10 @@ export default function Board({
 
     const newSessionIds: string[] = []
     for (const s of state.sessions) {
-      if (s.displayGroup === 'older') continue
+      // 「自动建卡」的两条隐藏规则全部由前端决定 (types.ts:isOlderSession +
+      // dismissedRef)。后端不再下发 displayGroup —— Board / Sidebar 共用同
+      // 一个 helper 保持一致。
+      if (isOlderSession(s)) continue
       if (knownSessionIds.has(s.id)) continue
       if (dismissedRef.current.has(s.id)) continue
       newSessionIds.push(s.id)
