@@ -59,7 +59,7 @@ jobs:
   # ── Stage 1: build + sign + notarize, upload DMG as artifact ─────────────
   build:
     name: Build · Sign · Notarize
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 50
     outputs:
       version: ${{ steps.ver.outputs.version }}
@@ -212,7 +212,7 @@ jobs:
   publish:
     name: Publish to GitHub Releases (manual approval)
     needs: build
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 10
     environment:
       name: release
