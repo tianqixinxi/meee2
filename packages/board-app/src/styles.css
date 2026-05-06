@@ -867,9 +867,47 @@ textarea {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.10);
 }
+/* "刚跑完一轮、等用户查看" —— 蓝色单点脉冲。语义介于 --live (在算)
+ * 和 --off (idle 没事) 之间：动作已结束但有内容待用户消费。和
+ * SessionOverlay 的红色 NotificationDot 共用 unreadSids 数据源；用户
+ * 点了 row 之后由 App 层清掉。 */
+.status-dot--pending {
+  background: #3B82F6;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+  animation: status-dot-pulse-blue 1.6s ease-in-out infinite;
+}
+@keyframes status-dot-pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
+}
 @keyframes status-dot-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45); }
   50%      { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
+}
+
+/* 三点 typing-style live indicator —— 替代单个 pulsing 圆，给 sidebar 行
+ * 一个更明显的"正在执行"信号。占位宽 ~14px（比单点 8px 宽 6px），sidebar
+ * 行的 gap 够吸收这个差。dot 颜色复用 --live 的绿，对色觉/状态视觉同源。 */
+.status-dots-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 14px;
+  height: 8px;
+}
+.status-dots-live > span {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #22C55E;
+  animation: status-dots-live-bounce 1.2s ease-in-out infinite;
+}
+.status-dots-live > span:nth-child(2) { animation-delay: 0.15s; }
+.status-dots-live > span:nth-child(3) { animation-delay: 0.30s; }
+@keyframes status-dots-live-bounce {
+  0%, 100% { opacity: 0.30; transform: translateY(0); }
+  50%      { opacity: 1.00; transform: translateY(-1px); }
 }
 
 .section {
@@ -1192,6 +1230,16 @@ textarea {
 @keyframes live-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.82); }
+}
+/* LIVE 态的三点变体：剥掉胶囊外壳（border / bg / 文字），只保留三个绿点
+ * 的 staggered bounce。其它 badge (ATTN / WAIT / DEAD) 仍走原胶囊。 */
+.session-card__live--dots {
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+}
+.session-card__live--dots::before {
+  display: none;
 }
 
 /* Header: title · plugin 名 + cost 右对齐 */
@@ -1811,8 +1859,22 @@ textarea {
   border-radius: 6px;
   transition: background 120ms, color 120ms;
 }
-/* svg 之前 14×14 在 28×28 button 里看起来跟空的一样——bump 到 18，
- * 同时 stroke 增粗，在 hidpi 屏上一目了然。 */
+
+/* ─── icon-button SVG 强制 size ─────────────────────────────────────────
+ * Chrome 在 flex 容器里有时不 honor SVG 的 width/height attribute，把宽
+ * 度算成 0（lucide 的 .lucide-ellipsis ⋯ 在 .sidebar-icon-btn 里就这么
+ * 渲成了高 14、宽 0 ——视觉上整个 icon 消失）。这一条把所有 icon 按钮里
+ * 的 svg 显式 size + flex-shrink:0，一次盖掉 sidebar / dock / chat
+ * composer 三处的 ⋯ / + / Zap / arrow / 等所有图标。 */
+.sidebar-icon-btn > svg,
+.cc-icon-btn > svg,
+.cc-send-arrow > svg,
+.cc-send-push > svg,
+.session-dock__actions > button > svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
 .cc-icon-btn > svg {
   width: 18px;
   height: 18px;
@@ -3671,17 +3733,19 @@ textarea {
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.92);
 }
-/* 默认隐藏右侧的 eye / sid / canvas-count chrome；hover 才出现 */
-.sidebar .sidebar-session-row__actions,
+/* hover-only chrome：⋯ 菜单按钮 + 调试用 sid。inbox badge 跟新加的可见性
+ * toggle 不在这里，前者只在 inboxPending>0 才条件渲染（始终可见有意义），
+ * 后者本身是 at-a-glance 状态指示器（永远可见，下方按 onCanvas 调透明度）。 */
+.sidebar .sidebar-session-row__more,
 .sidebar .sidebar-session-row__sid {
   opacity: 0;
   transition: opacity 120ms;
 }
-.sidebar .sidebar-session-row:hover .sidebar-session-row__actions,
+.sidebar .sidebar-session-row:hover .sidebar-session-row__more,
 .sidebar .sidebar-session-row:hover .sidebar-session-row__sid,
-.sidebar .sidebar-session-row.is-selected .sidebar-session-row__actions,
+.sidebar .sidebar-session-row.is-selected .sidebar-session-row__more,
 .sidebar .sidebar-session-row.is-selected .sidebar-session-row__sid,
-.sidebar .sidebar-session-row.is-menu-open .sidebar-session-row__actions,
+.sidebar .sidebar-session-row.is-menu-open .sidebar-session-row__more,
 .sidebar .sidebar-session-row.is-menu-open .sidebar-session-row__sid {
   opacity: 1;
 }
@@ -3854,7 +3918,6 @@ textarea {
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 13px;
   color: rgba(255, 255, 255, 0.78);
 }
@@ -3923,6 +3986,24 @@ textarea {
 .sidebar-icon-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.95);
+}
+
+/* 可见性 toggle：默认完全藏起来（hover-only），跟 ⋯ 同款行为。
+ * 之前 idle 留 0.35 半透明做"画板可见性状态指示"，但实际让 row 右侧
+ * 永远顶着一颗眼睛，视觉很闹；改成 hover/selected/menu-open 才出现。
+ * data-on-canvas=true 时 hover 出来用 plugin accent 染色，false 时白色 —
+ * 用户一打开就能看出该 session 当前是否挂在画板上。 */
+.sidebar-session-row__visibility {
+  opacity: 0;
+  transition: opacity 120ms, color 100ms;
+}
+.sidebar-session-row__visibility[data-on-canvas="true"] {
+  color: var(--row-accent, rgba(255, 255, 255, 0.92));
+}
+.sidebar .sidebar-session-row:hover .sidebar-session-row__visibility,
+.sidebar .sidebar-session-row.is-selected .sidebar-session-row__visibility,
+.sidebar .sidebar-session-row.is-menu-open .sidebar-session-row__visibility {
+  opacity: 1;
 }
 
 /* ─── Inline rename input ───────────────────────────────────────────── */

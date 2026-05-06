@@ -294,15 +294,19 @@ export default function App() {
     [],
   )
 
-  // Global keyboard/paste hijack: 选中 session 时画板上的可打印键 / 粘贴
-  // 决定 dock 的可见性：
+  // Global keyboard hijack: 选中 session 时画板上的可打印键决定 dock 的可见性：
   //   - dock 没开 → 把这次键值当 seed，setDockOpen(true)；mount 后 dock
   //     会消费 dockSeedRef 里的初始值。
   //   - dock 已开 → 直接调 appendAndFocus 注入到现有 textarea。
   //
   // 关键：用 capture 阶段 + stopImmediatePropagation —— Excalidraw 自己在
-  // document 层装了 keydown/paste handler（按字母就造文本元素、粘贴生成
-  // 图片等），冒泡会被它抢先。capture 先到再吃掉事件即可。
+  // document 层装了 keydown handler（按字母就造文本元素），冒泡会被它抢先。
+  // capture 先到再吃掉事件即可。
+  //
+  // ⚠️ 不再 hijack `paste` 事件 —— 之前为了"canvas 上 cmd+V 直接 seed dock"
+  // 装了 window-level paste listener，但代价是 cmd+V 永远落不到 excalidraw
+  // 自己的剪贴板 handler 上，"复制 session card / 粘贴图片到画板"全断。
+  // 字母键 seed dock 的 affordance 已经够直观，cmd+V 让回 excalidraw 原生路径。
   const selectedSessionId =
     selection.kind === 'session' ? selection.sessionId : null
 
@@ -399,12 +403,16 @@ export default function App() {
       setDockOpen(true)
     }
 
+    // 选中 session 时画板上 Cmd+V 应该把粘贴文本灌进 Dock 输入框（dock
+    // 没开就以 seed 形式开起来；已开就 append 到现有 textarea）。Excalidraw
+    // 自己的 paste handler 也挂在 document，capture 阶段先抢，否则会被它
+    // 当成 Excalidraw scene 数据处理掉。
     const onPaste = (e: ClipboardEvent) => {
       if (isInputTarget(e.target)) return
       if (!selectedSessionId && selection.kind !== 'none') return
-      // Don't hijack Excalidraw's own clipboard payload — it stores its
-      // scene JSON in text/plain prefixed with {"type":"excalidraw/clipboard"...}
-      // and consuming it here breaks canvas copy/paste of session cards.
+      // 用户从画板里 copy 了 Excalidraw 元素再 paste —— Excalidraw 把 scene
+      // JSON 写在 text/plain，开头是 {"type":"excalidraw/clipboard"。这种
+      // payload 不能塞进 Dock，让 Excalidraw 自己处理（不 preventDefault）。
       const types = e.clipboardData?.types ?? []
       if (
         types.includes('application/vnd.excalidraw+json') ||
@@ -561,6 +569,7 @@ export default function App() {
           onOpen={() => setSidebarOpen(true)}
           onSelectionChange={handleSidebarSelectionChange}
           onCanvasCounts={onCanvasCounts}
+          unreadSids={unreadSids}
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardState, ClientKind, Selection, Session } from '../types'
+import { isOlderSession } from '../types'
 import ChannelDetail from './ChannelDetail'
 import {
   SidebarFilterMenu,
@@ -20,9 +21,9 @@ import {
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
 import { Inbox, MoreHorizontal } from 'lucide-react'
-import { SessionRowMenu } from './SessionRowMenu'
+import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
-import { activateSession, spawnSession } from '../api'
+import { activateSession, closeSession, spawnSession } from '../api'
 import { useToast } from '../App'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
@@ -91,13 +92,21 @@ function accentForPlugin(pluginId: string, fallback: string): string {
   }
 }
 
-/// session 是不是真的"活着在跑"——仅 isWorking 状态点亮左侧 status dot。
-/// idle / waitingForUser / completed / dead 都不算 live，permissionRequired 单
-/// 独算 attention（橙色脉冲）让用户一眼分辨"需要点确认" vs "正常在算"。
-function liveDotKind(status: string): 'live' | 'attention' | null {
+/// session 行左侧 status indicator 的 kind 判定：
+///   - `live`      —— thinking / tooling / active / compacting，三点 typing 动效（绿）
+///   - `attention` —— permissionRequired，单点橙色脉冲（用户需要点确认）
+///   - `pending`   —— unread（status 从工作态转到休息态，Claude 刚回完一轮，
+///                     待用户查看），单点蓝色脉冲。优先级低于 attention：
+///                     permissionRequired + unread 同时成立时仍走 attention。
+///   - `null`      —— idle / waitingForUser / completed / dead 等"无需关注"态
+function liveDotKind(
+  status: string,
+  unread: boolean,
+): 'live' | 'attention' | 'pending' | null {
   if (status === 'thinking' || status === 'tooling' ||
       status === 'active' || status === 'compacting') return 'live'
   if (status === 'permissionRequired') return 'attention'
+  if (unread) return 'pending'
   return null
 }
 
@@ -254,7 +263,7 @@ function EyeClosedIcon() {
 /// 桶的顺序是固定的（最近的在前）；空桶不返回。
 ///
 /// 注意：最后一桶用 "Earlier" 而不是 "Older"，避免和外层折叠区
-/// （`displayGroup === 'older'`，标签 "Older (N) 1h–24h"）字面撞车
+/// （`isOlderSession()` 派生，标签 "Older (N) 1h–24h"）字面撞车
 /// —— 那个折叠区是按 idle 时长分的、和这里按日期分桶语义不同。
 function groupSessionsByDate(list: Session[]): Array<[string, Session[]]> {
   const now = new Date()
@@ -311,7 +320,12 @@ function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
     if (f.status === 'all') return true
     const st = s.status
     if (f.status === 'idle') return st === 'idle'
-    if (f.status === 'waiting') return st === 'waitingForUser'
+    // waitingForUser 和 permissionRequired 都算 "在等用户" —— 漏掉
+    // permissionRequired 会让"等批 tool"的 session 在 waiting 视图里消失，
+    // 而那其实是用户最该看的一种 waiting。
+    if (f.status === 'waiting') {
+      return st === 'waitingForUser' || st === 'permissionRequired'
+    }
     if (f.status === 'active') {
       return st === 'thinking' || st === 'tooling' || st === 'spawning'
     }
@@ -368,6 +382,9 @@ interface Props {
   onSelectionChange: (s: Selection) => void
   /** Count of embeddable elements currently on the canvas, keyed by sid. */
   onCanvasCounts: Record<string, number>
+  /** sid → "刚从工作态转到休息态、还没被用户查看"。Sidebar 用它点亮蓝点，
+   *  和 SessionOverlay 的红点共享同一个 set —— 用户点 row 后由 App 清除。 */
+  unreadSids: Set<string>
   /** Request to insert a new embeddable card for this session. */
   onAddToCanvas: (sessionId: string) => void
   /** Request to remove all cards for this session from the canvas. */
@@ -397,6 +414,7 @@ export default function Sidebar({
   onClose,
   onSelectionChange,
   onCanvasCounts,
+  unreadSids,
   onAddToCanvas,
   onHideFromCanvas,
   onBulkVisibility,
@@ -675,6 +693,15 @@ export default function Sidebar({
       style={isPreview ? undefined : { width }}
       onMouseEnter={isPreview ? cancelClose : undefined}
       onMouseLeave={isPreview ? scheduleClose : undefined}
+      // Suppress the native context menu inside the sidebar so right-click is
+      // ours to define (the per-row handler turns it into the SessionRowMenu).
+      // 例外：rename input / 普通 input 上保留原生菜单，否则用户没法 paste。
+      onContextMenu={(e) => {
+        const t = e.target as HTMLElement | null
+        const tag = t?.tagName?.toLowerCase()
+        if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return
+        e.preventDefault()
+      }}
     >
       <div
         className="sidebar-resizer"
@@ -835,16 +862,17 @@ export default function Sidebar({
                     return title.includes(q) || proj.includes(q) || cwd.includes(q)
                   })
                 }
-                // displayGroup="older"（idle ≥ 1h）只在 groupBy=date 模式下
-                // 单独折叠成 "Older 1h–24h" 区。groupBy=project 时不再切分
-                // —— 用户按项目找东西时，stale 的 session 应该跟同项目其它
-                // session 在一起，而不是被单独抽到底部一个独立折叠区。
+                // older（idle ≥ 1h，前端从 lastActivity 派生，见
+                // types.ts:isOlderSession）只在 groupBy=date 模式下单独折叠
+                // 成 "Older 1h–24h" 区。groupBy=project 时不再切分 —— 用户按
+                // 项目找东西时，stale 的 session 应该跟同项目其它 session
+                // 在一起，而不是被单独抽到底部一个独立折叠区。
                 const partitionByDisplayGroup = filterState.groupBy === 'date'
                 const primary = partitionByDisplayGroup
-                  ? filtered.filter((s) => s.displayGroup !== 'older')
+                  ? filtered.filter((s) => !isOlderSession(s))
                   : filtered
                 const older = partitionByDisplayGroup
-                  ? filtered.filter((s) => s.displayGroup === 'older')
+                  ? filtered.filter((s) => isOlderSession(s))
                   : []
 
                 // 分组：依据 filterState.groupBy 选 project | date。
@@ -871,7 +899,7 @@ export default function Sidebar({
                   // 当前行用 .is-selected 加视觉反馈。
                   const selected =
                     selection.kind === 'session' && selection.sessionId === s.id
-                  const dot = liveDotKind(s.status)
+                  const dot = liveDotKind(s.status, unreadSids.has(s.id))
                   const accent = accentForPlugin(s.pluginId, s.pluginColor)
                   return (
                     <div
@@ -882,6 +910,27 @@ export default function Sidebar({
                         (menuForSid === s.id ? ' is-menu-open' : '')
                       }
                       style={{ ['--row-accent' as any]: accent }}
+                      // Right-click 行为 = 点 ⋯ 按钮：打开 SessionRowMenu，定
+                      // 位到鼠标坐标。给 menu 一个零宽 synthetic DOMRect，于是
+                      // 它的 (top, left) 计算结果直接落在 (clientY+4, clientX)。
+                      // 跳过 input / textarea，让 rename 输入框保留原生菜单。
+                      onContextMenu={(e) => {
+                        const t = e.target as HTMLElement | null
+                        const tag = t?.tagName?.toLowerCase()
+                        if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const W = 220
+                        const x = e.clientX
+                        const y = e.clientY
+                        const rect = {
+                          top: y, bottom: y, left: x, right: x + W,
+                          x, y, width: W, height: 0,
+                          toJSON: () => ({}),
+                        } as DOMRect
+                        setMenuForSid(s.id)
+                        setMenuAnchorRect(rect)
+                      }}
                     >
                       <div
                         className="sidebar-session-row__main"
@@ -889,15 +938,25 @@ export default function Sidebar({
                           onSelectionChange({ kind: 'session', sessionId: s.id })
                         }
                       >
-                        <span
-                          className={
-                            'status-dot' +
-                            (dot === 'live' ? ' status-dot--live' :
-                              dot === 'attention' ? ' status-dot--attention' :
-                              ' status-dot--off')
-                          }
-                          aria-hidden
-                        />
+                        {dot === 'live' ? (
+                          // 三个 sequential bounce 的小点 —— 比单个 pulsing
+                          // 圆更直观传达"正在执行"。颜色复用 --live 的绿，
+                          // 时序参考 transcript 的 tx-thinking-dots 但拆成
+                          // 三个独立 dot 走 staggered delay。
+                          <span className="status-dots-live" aria-hidden>
+                            <span /><span /><span />
+                          </span>
+                        ) : (
+                          <span
+                            className={
+                              'status-dot' +
+                              (dot === 'attention' ? ' status-dot--attention' :
+                                dot === 'pending' ? ' status-dot--pending' :
+                                ' status-dot--off')
+                            }
+                            aria-hidden
+                          />
+                        )}
                         {(() => {
                           // Claude session 多 source（CLI/Desktop/Cowork）共用一个
                           // pluginColor，加 source icon 才能视觉上分清。其他 plugin
@@ -940,6 +999,28 @@ export default function Sidebar({
                             <Inbox size={11} aria-hidden /> {s.inboxPending}
                           </span>
                         )}
+                        {/* Canvas 可见性 toggle —— 始终可见的状态指示器 + 一键
+                         *  toggle。on canvas 时 eye-open 实色，off canvas 时
+                         *  eye-off 半透明（hover 提亮）。比藏在 ⋯ 菜单深处的
+                         *  Hide / Show 一击即得。 */}
+                        <Tooltip label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}>
+                          <button
+                            className="sidebar-icon-btn sidebar-session-row__visibility"
+                            data-on-canvas={onCanvas ? 'true' : 'false'}
+                            aria-label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}
+                            aria-pressed={onCanvas}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (onCanvas) {
+                                onHideFromCanvas(s.id)
+                              } else {
+                                onAddToCanvas(s.id)
+                              }
+                            }}
+                          >
+                            {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                          </button>
+                        </Tooltip>
                         {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
                          *  overlay，里面集成原本的 pin / rename / canvas 三键
                          *  + 新加的 Duplicate 与 Open in submenu。*/}
@@ -1024,6 +1105,42 @@ export default function Sidebar({
                             onHideFromCanvas(s.id)
                             toast.push('info', `Hidden: ${displayTitle(s)}`)
                           } : undefined}
+                          onCloseSession={() => {
+                            // SIGTERM 真实进程。Desktop / Cowork / external 后端会拒
+                            // （没 pid），把 toast 翻译成"自己回宿主 app 关"。
+                            const shortId = s.id.slice(0, 8)
+                            const name = displayTitle(s)
+                            closeSession(s.id)
+                              .then((r) => {
+                                if (r.ok) {
+                                  toast.push(
+                                    'success',
+                                    r.alreadyDead
+                                      ? `${name} (${shortId}) was already gone — removed from board`
+                                      : `Closed ${name} (${shortId})`
+                                  )
+                                  return
+                                }
+                                if (r.errorCode === 'no_pid') {
+                                  // Desktop / Cowork / external — 提示用户回原 app 关
+                                  toast.push(
+                                    'error',
+                                    `Can't close ${name} from here — please close it in ${originalClientLabel(s)} yourself.`
+                                  )
+                                  return
+                                }
+                                toast.push(
+                                  'error',
+                                  `Couldn't close ${name} (${r.errorCode}): ${r.error ?? 'unknown error'}. Try closing it manually in ${originalClientLabel(s)}.`
+                                )
+                              })
+                              .catch((err) => {
+                                toast.push(
+                                  'error',
+                                  `Close failed: ${(err as Error).message ?? 'unknown'}. Close it manually in ${originalClientLabel(s)}.`
+                                )
+                              })
+                          }}
                         />
                       )}
                     </div>
