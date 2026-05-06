@@ -1,43 +1,70 @@
 name: Release
 
-# 发布流程：
-#   * 在 main 上打 tag `v<semver>` (例如 v0.2.0) 并 push
-#   * workflow 起 macos runner 构建 release binary + .app bundle + .dmg
-#   * 把 dmg + sha256 上传到 GitHub Release，正文用 git log 自动生成
+# 发布流程（人工双段式）：
 #
-# 不做的事：
-#   - 不用正式 Apple Developer ID 签名 / notarization（项目还没 enroll；ad-hoc
-#     签名足够开发者用户使用，Gatekeeper 第一次打开要右键 Open）。需要正式
-#     签名时再加 `APPLE_CERTIFICATE_P12` / `AC_API_KEY_*` 等 secrets + 一个
-#     签名 step。
-#   - 不 touch main branch。版本号来源于 tag 名，代码里没有版本号字段可变动
-#     （Info.plist 在 create-dmg.sh 里按 env VERSION 模板化生成）。
+#   1. Actions → "Release" → "Run workflow"，填 VERSION（不带 v 前缀）
+#   2. `build` job 自动跑：编译 + 签名 + 公证(如果配齐了 secrets) + 上传 DMG
+#      到 workflow artifact
+#   3. `publish` job 卡在 "Waiting for review"。审阅 build job 日志 / 下载
+#      artifact 试装 → 满意了 → Approve
+#   4. publish job 自动跑：下 artifact，gh release create 上传到 GitHub
+#      Release，按 prerelease/正式自动判定（VERSION 含 `-` → prerelease）
 #
-# 手动触发：`workflow_dispatch` 允许不打 tag 也能跑一次（产物会标记为 prerelease）。
+# 不做自动 tag 触发 —— 防止误推 tag 直接走到 Release 页面。任何发布都要
+# 人主动从 Actions UI 触发。
+#
+# 签名 / 公证 (gracefully degrades)：
+#   - 如果 repo secrets 配齐了，自动用 Developer ID 签名 + 公证 DMG。
+#   - 任何一项缺失，自动 fallback 到 ad-hoc + 不公证（DMG 还是产出，只是
+#     Gatekeeper 第一次打开要右键 Open）。
+#
+#   需要的 secrets（详见 PACKAGING.md "GitHub Secrets" 一节）：
+#     APPLE_DEV_ID_CERT_P12_BASE64  — Developer ID Application 证书的 .p12 base64
+#     APPLE_DEV_ID_CERT_PASSWORD    — 该 .p12 的导出密码
+#     APPLE_DEV_ID_IDENTITY         — codesign --sign 用的字符串，比如
+#                                      "Developer ID Application: Your Name (TEAMID)"
+#     APPLE_NOTARY_APPLE_ID         — 公证用的 Apple ID（你的开发者账号）
+#     APPLE_NOTARY_TEAM_ID          — 团队 ID (10 位字符)
+#     APPLE_NOTARY_PASSWORD         — Apple ID 的 App-Specific Password
+#                                      (https://appleid.apple.com → Sign-In and Security)
+#
+# 一次性配置 —— "Approve to release" 这道闸需要先在仓库里建一个 environment：
+#   GitHub repo → Settings → Environments → "New environment" → 名字 `release`
+#     → 勾 "Required reviewers" 加你自己（或团队）
+#   建完 publish job 才会真正卡住等审批；不建的话会直接发出去（环境不存在
+#   不阻塞 workflow，要 explicit 配）。
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version string to bake into the artifact (without leading v)'
+        description: 'Version (no leading v), e.g. 0.3.0 or 0.3.0-rc1'
         required: true
         default: '0.0.0-dev'
+      prerelease:
+        description: 'Mark as prerelease (auto-on if VERSION contains "-")'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.ref }}-${{ github.event.inputs.version }}
   cancel-in-progress: false
 
 permissions:
   contents: write   # 必需：gh release create 要写 Release assets
 
 jobs:
-  build-and-release:
-    name: Build DMG · Attach to Release
+
+  # ── Stage 1: build + sign + notarize, upload DMG as artifact ─────────────
+  build:
+    name: Build · Sign · Notarize
     runs-on: macos-14
-    timeout-minutes: 40
+    timeout-minutes: 50
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      dmg-name: ${{ steps.ver.outputs.dmg-name }}
+      is-prerelease: ${{ steps.ver.outputs.is-prerelease }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,16 +75,18 @@ jobs:
       - name: Compute VERSION
         id: ver
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          VERSION="${{ github.event.inputs.version }}"
+          DMG_NAME="meee2-v${VERSION}.dmg"
+          # 含 "-" 的（rc1 / alpha / beta）默认 prerelease；明示 input 可强制
+          if [[ "$VERSION" =~ - ]] || [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
+              IS_PRERELEASE="true"
           else
-            # tag 名形如 v0.2.0；strip 前缀
-            TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"
+              IS_PRERELEASE="false"
           fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing version: $VERSION"
+          echo "dmg-name=$DMG_NAME" >> "$GITHUB_OUTPUT"
+          echo "is-prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION (prerelease=$IS_PRERELEASE)"
 
       - name: Show toolchain
         run: |
@@ -70,66 +99,103 @@ jobs:
           path: |
             .build
             ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-spm-release-${{ hashFiles('Package.resolved', 'Package.swift') }}
+          key: ${{ runner.os }}-spm-release-universal-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
+            ${{ runner.os }}-spm-release-universal-
             ${{ runner.os }}-spm-release-
             ${{ runner.os }}-spm-
 
-      # 先跑一次 test 作 sanity —— 挂掉的 tag 不该 release
+      # 先跑一次 test 作 sanity —— 挂掉的 build 不该 release
       - name: Sanity test
         run: swift test --parallel
+
+      # ── Apple Developer ID signing keychain setup (only if secrets present) ──
+      # 把 secrets 里的 base64 证书还原成 .p12 → import 到一个临时 keychain →
+      # unlock 让 codesign 能用。Runner shutdown 时 keychain 自动消失，没残留。
+      - name: Set up signing keychain
+        id: signing
+        if: ${{ env.HAS_SIGNING_SECRETS == '1' }}
+        env:
+          HAS_SIGNING_SECRETS: ${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 != '' && secrets.APPLE_DEV_ID_CERT_PASSWORD != '' && secrets.APPLE_DEV_ID_IDENTITY != '' && '1' || '0' }}
+          P12_BASE64: ${{ secrets.APPLE_DEV_ID_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_NAME="meee2-signing.keychain-db"
+          KEYCHAIN_PWD=$(uuidgen)
+          P12_PATH="$RUNNER_TEMP/cert.p12"
+
+          echo "$P12_BASE64" | base64 --decode > "$P12_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_NAME"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
+          security import "$P12_PATH" -k "$KEYCHAIN_NAME" \
+              -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PWD" "$KEYCHAIN_NAME"
+          # Prepend our keychain so codesign sees the cert without flag
+          security list-keychains -d user -s "$KEYCHAIN_NAME" $(security list-keychains -d user | tr -d '"')
+
+          rm -f "$P12_PATH"
+          echo "configured=1" >> "$GITHUB_OUTPUT"
+
+      # ── Notary credentials profile (only if secrets present) ─────────────
+      # store-credentials 把 Apple ID + Team + app-specific password 存进
+      # keychain alias，后面 notarize.sh 用 --keychain-profile 引用。
+      - name: Set up notary credentials
+        id: notary
+        if: ${{ env.HAS_NOTARY_SECRETS == '1' && steps.signing.outputs.configured == '1' }}
+        env:
+          HAS_NOTARY_SECRETS: ${{ secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_TEAM_ID != '' && secrets.APPLE_NOTARY_PASSWORD != '' && '1' || '0' }}
+          APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+          APP_SPECIFIC_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials meee2-notary \
+              --apple-id "$APPLE_ID" \
+              --team-id "$TEAM_ID" \
+              --password "$APP_SPECIFIC_PWD"
+          echo "configured=1" >> "$GITHUB_OUTPUT"
 
       - name: Build release + package DMG
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           SKIP_FINDER_UI: '1'      # 跳过 Finder AppleScript styling，headless runner 无 Finder
+          UNIVERSAL: '1'           # CI 一律产 universal binary 让 Intel Mac 能跑
+          IDENTITY: ${{ steps.signing.outputs.configured == '1' && secrets.APPLE_DEV_ID_IDENTITY || '' }}
+          NOTARIZE: ${{ steps.notary.outputs.configured == '1' && '1' || '0' }}
+          NOTARY_PROFILE: ${{ steps.notary.outputs.configured == '1' && 'meee2-notary' || '' }}
+          NOTARIZE_APP: ${{ steps.notary.outputs.configured == '1' && '1' || '0' }}
         run: |
+          if [ -n "${IDENTITY:-}" ]; then
+              echo "Building with Developer ID signing: $IDENTITY"
+              [ "$NOTARIZE" = "1" ] && echo "Notarization: ON" || echo "Notarization: OFF (no notary creds)"
+          else
+              echo "Building with ad-hoc signature (no APPLE_DEV_ID_* secrets configured)."
+              echo "Distributed DMG will require right-click → Open on first launch."
+          fi
           ./create-dmg.sh
           ls -lh dist/
 
       - name: Compute SHA256
-        run: |
-          DMG="dist/meee2-v${VERSION}.dmg"
-          shasum -a 256 "$DMG" | tee "${DMG}.sha256"
-
-      # 只在 tag push 路径上自动创建 GitHub Release。workflow_dispatch
-      # 路径（手动 build 验证）只把 DMG 上传成 workflow artifact，不污染
-      # Releases 页面 —— 想发 prerelease 自己打 `v0.3.0-rc1` 这种带后缀的
-      # 真 tag 即可（tag 路径自动按 prerelease 处理）。
-      - name: Create / update GitHub Release (tag pushes only)
-        if: ${{ github.event_name == 'push' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          DMG_NAME: ${{ steps.ver.outputs.dmg-name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          # 带 -alpha / -beta / -rc 这种 SemVer prerelease 后缀的 tag
-          # 自动标为 prerelease；纯 vX.Y.Z 走正式 release。
-          PRERELEASE_FLAG=""
-          if [[ "$VERSION" =~ - ]]; then
-            PRERELEASE_FLAG="--prerelease"
-          fi
-          TITLE="meee2 v${VERSION}"
+          shasum -a 256 "dist/${DMG_NAME}" | tee "dist/${DMG_NAME}.sha256"
 
-          DMG="dist/meee2-v${VERSION}.dmg"
-          SHA="dist/meee2-v${VERSION}.dmg.sha256"
+      # Gatekeeper sanity assess —— 只在真签名/公证完才有意义
+      - name: Verify signature + notarization
+        if: ${{ steps.notary.outputs.configured == '1' }}
+        env:
+          DMG_NAME: ${{ steps.ver.outputs.dmg-name }}
+        run: |
+          echo "=== spctl assess ==="
+          spctl --assess --type open --context context:primary-signature -vvv "dist/${DMG_NAME}" || \
+              echo "(spctl returned non-zero — review above output)"
+          echo
+          echo "=== stapler validate ==="
+          xcrun stapler validate "dist/${DMG_NAME}"
 
-          # 已存在同名 release → 覆盖 asset；否则新建 + 自动 release notes
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG exists; re-uploading assets"
-            gh release upload "$TAG" "$DMG" "$SHA" --clobber
-          else
-            echo "Creating release $TAG"
-            gh release create "$TAG" \
-              --title "$TITLE" \
-              $PRERELEASE_FLAG \
-              --generate-notes \
-              "$DMG" "$SHA"
-          fi
-
-      # workflow_dispatch + tag push 都把 DMG 留成 artifact（14 天保留）。
-      # tag 路径上 release 页面也有同一份 dmg，artifact 是 dispatch 路径
-      # 唯一拿到 dmg 的方式 —— 在 Actions UI 里点 run 进去 download。
       - name: Upload DMG as workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -137,4 +203,61 @@ jobs:
           path: |
             dist/meee2-v*.dmg
             dist/meee2-v*.dmg.sha256
-          retention-days: 14
+          retention-days: 30
+          if-no-files-found: error
+
+  # ── Stage 2: human-gated GitHub Release publish ──────────────────────────
+  # 卡在 environment "release" 的 required reviewers —— 你在 GitHub UI 里
+  # Approve 之后才会跑这里。Approve 之前 publish 一直显示 "Waiting"。
+  publish:
+    name: Publish to GitHub Releases (manual approval)
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 10
+    environment:
+      name: release
+      url: ${{ steps.create.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gh release --generate-notes 需要历史
+
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: meee2-v${{ needs.build.outputs.version }}-dmg
+          path: dist/
+
+      - name: Create GitHub Release
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          DMG_NAME: ${{ needs.build.outputs.dmg-name }}
+          IS_PRERELEASE: ${{ needs.build.outputs.is-prerelease }}
+        run: |
+          TAG="v${VERSION}"
+          TITLE="meee2 v${VERSION}"
+          PRERELEASE_FLAG=""
+          [ "$IS_PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
+
+          DMG="dist/${DMG_NAME}"
+          SHA="dist/${DMG_NAME}.sha256"
+
+          # 已存在同 tag → 上传 / 覆盖 asset；否则新建 + 自动 release notes
+          if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG exists; re-uploading assets"
+              gh release upload "$TAG" "$DMG" "$SHA" --clobber
+              URL=$(gh release view "$TAG" --json url -q .url)
+          else
+              echo "Creating release $TAG"
+              gh release create "$TAG" \
+                  --title "$TITLE" \
+                  $PRERELEASE_FLAG \
+                  --generate-notes \
+                  "$DMG" "$SHA"
+              URL=$(gh release view "$TAG" --json url -q .url)
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Released::$URL"
