@@ -24,6 +24,7 @@ import {
   Terminal as TerminalIcon,
   AppWindow,
   EyeOff,
+  Power,
 } from 'lucide-react'
 import type { Session } from '../types'
 
@@ -44,6 +45,10 @@ export interface SessionRowMenuProps {
    *  自动建卡片。仅在 session 已经在 canvas 上时才显示这一项 —— 不在的话
    *  Hide 无意义。父组件传 undefined 即不渲染该 menu item。 */
   onHide?: () => void
+  /** "Close session"：SIGTERM 真实进程并清掉 board 记录。CLI session 才能用，
+   *  Desktop / Cowork / external 没 pid 后端会拒，父组件拿到 errorCode='no_pid'
+   *  时弹 toast 让用户回宿主 app 自己关。 */
+  onCloseSession?: () => void
   /** 菜单挂在 session 行的 ⋯ 按钮上，传入按钮的 DOMRect 用来定位 overlay。 */
   anchorRect: DOMRect | null
 }
@@ -131,6 +136,7 @@ export function SessionRowMenu({
   onRename,
   onDuplicate,
   onHide,
+  onCloseSession,
   anchorRect,
 }: SessionRowMenuProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -242,6 +248,17 @@ export function SessionRowMenu({
             label="Hide from canvas"
             shortcut="H"
             onClick={() => { onHide(); onClose() }}
+          />
+        </>
+      )}
+      {onCloseSession && (
+        <>
+          {!onHide && <div className="srm-divider" aria-hidden />}
+          <MenuItem
+            icon={<Power size={13} aria-hidden />}
+            label="Close session"
+            danger
+            onClick={() => { onCloseSession(); onClose() }}
           />
         </>
       )}

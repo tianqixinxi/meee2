@@ -179,6 +179,59 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    /// DELETE /api/sessions/:id
+    /// SIGTERM 真实进程并清掉 SessionStore 记录。
+    ///
+    /// 失败语义（前端会拿 errorCode 翻译成"请你自己手动关"toast）:
+    ///   - no_pid          → 该 session 没 pid（Desktop / Cowork / external chat）
+    ///   - not_found       → sid 没匹配上
+    ///   - kill_failed     → kill() 系统调用挂了（罕见，errno 会带回去）
+    /// 注意：进程已经死了但 card 还在的情况不算失败 —— 直接清记录返回 ok。
+    static func closeSession(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        // SessionStore 同时支持 full-id 和单一前缀匹配，跟 inject / activate 一致
+        let resolved: SessionData? = {
+            if let s = SessionStore.shared.get(sid) { return s }
+            let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+            return matches.count == 1 ? matches[0] : nil
+        }()
+        guard let session = resolved else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        guard let pid = session.pid else {
+            // Desktop / Cowork / external —— meee2 不持有 pid，必须用户自己回宿主 app 关
+            return errorResponse(
+                "no_pid",
+                "this session has no controllable process — close it from its host app",
+                status: 409,
+            )
+        }
+        // 进程已经走了：kill(pid, 0) 返回 -1 / ESRCH。直接清掉 lingering card 算成功
+        if kill(pid_t(pid), 0) != 0 {
+            SessionStore.shared.delete(session.sessionId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CloseEnvelope(ok: true, alreadyDead: true))
+        }
+        // SIGTERM —— 让 Claude CLI 有机会 flush transcript / 退出 raw mode 再退出。
+        // 不用 SIGKILL：终端会留下乱码 + 没机会 cleanup。
+        let r = kill(pid_t(pid), SIGTERM)
+        if r != 0 {
+            let err = String(cString: strerror(errno))
+            return errorResponse("kill_failed", "SIGTERM failed: \(err)", status: 500)
+        }
+        SessionStore.shared.delete(session.sessionId)
+        BoardServer.shared.broadcastStateChanged()
+        MLog("[BoardAPI] Closed session \(session.sessionId.prefix(8)) (SIGTERM pid \(pid))")
+        return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
+    }
+
+    private struct CloseEnvelope: Encodable {
+        let ok: Bool
+        let alreadyDead: Bool
+    }
+
     /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明
     /// 该 sid 是 desktop 起的 session（不一定在 PluginManager 里）。
     /// 返回完整 cliSessionId（前端可能传 short-id）。

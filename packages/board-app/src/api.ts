@@ -498,6 +498,36 @@ export async function activateSession(id: string): Promise<boolean> {
   }
 }
 
+/** Result shape from `closeSession`. Caller decides whether to surface
+ *  success / "already dead" / failure differently in the UI. */
+export interface CloseSessionResult {
+  ok: boolean
+  alreadyDead?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/**
+ * DELETE /api/sessions/:id —— SIGTERM the underlying process and drop the
+ * session record. The backend rejects sessions that have no controllable pid
+ * (Desktop / Cowork / external chat) with `errorCode === 'no_pid'` so the
+ * caller can tell the user to close it manually in its host app.
+ */
+export async function closeSession(id: string): Promise<CloseSessionResult> {
+  try {
+    const r = await jsonRequest<{ ok: boolean; alreadyDead: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    )
+    return { ok: true, alreadyDead: r.alreadyDead }
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, errorCode: e.code, error: e.message }
+    }
+    return { ok: false, errorCode: 'unknown', error: (e as Error).message ?? String(e) }
+  }
+}
+
 export async function listChannelMessages(
   channel: string,
   opts: { statuses?: MessageStatus[]; limit?: number } = {},
