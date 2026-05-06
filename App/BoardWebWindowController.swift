@@ -183,16 +183,53 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
               let zoom = window.standardWindowButton(.zoomButton) else {
             return
         }
-        // closeButton.frame 是 windowContentView 子视图坐标系（bottom-left 原点）。
-        // 转到 window content view 顶部坐标（top-left 原点） = contentHeight - frame.midY
         guard let contentView = window.contentView else { return }
-        let contentH = contentView.frame.height
-        let centerY_topOrigin = contentH - close.frame.midY
-        // CSS 用的是 webview viewport 坐标系；因为 contentView == webView 本身，
-        // 1:1 对应。lights 最右一颗按钮（zoom）的右边 x 用来定位 sidebar toggle。
-        let lightsRightEdge = zoom.frame.maxX
-        let centerY = max(0, Double(centerY_topOrigin))
-        let rightEdge = max(0, Double(lightsRightEdge))
+
+        // close.frame / zoom.frame 是它们各自 superview 的坐标系。在
+        // .fullSizeContentView 模式下 AppKit 通常把 traffic light 直接挂到
+        // contentView 上（也就是这里的 WKWebView，本身 isFlipped=true），
+        // 所以 frame.y 已经是 "从顶部往下"。如果挂在 NSThemeFrame 这种
+        // 非 flipped 的 superview 上，要先转换到 contentView 坐标系再判断。
+        //
+        // 决定 centerY (CSS top) 的关键：contentView 是不是 flipped。
+        //   • flipped (WKWebView) → centerY = closeRectInCV.midY 直接用
+        //   • 非 flipped (NSView) → centerY = bounds.height - closeRectInCV.midY
+        let closeRectInCV: NSRect
+        let zoomRectInCV: NSRect
+        if let closeSV = close.superview {
+            closeRectInCV = contentView.convert(close.frame, from: closeSV)
+        } else {
+            closeRectInCV = close.frame
+        }
+        if let zoomSV = zoom.superview {
+            zoomRectInCV = contentView.convert(zoom.frame, from: zoomSV)
+        } else {
+            zoomRectInCV = zoom.frame
+        }
+
+        let cvHeight = contentView.bounds.height
+        let isFlipped = contentView.isFlipped
+        let centerY_top: CGFloat = isFlipped
+            ? closeRectInCV.midY
+            : (cvHeight - closeRectInCV.midY)
+        let lightsRight = zoomRectInCV.maxX
+
+        // Sanity clamp — titlebar height is < 40 on macOS standard windows.
+        // 如果计算出来不合理（负数 / >40 / >150），用回 fallback (13 / 72)，
+        // 不要把 sidebar toggle 推到屏幕外让用户找不到。
+        let centerY: Double = {
+            let v = Double(centerY_top)
+            if v.isFinite && v > 0 && v < 40 { return v }
+            return 13
+        }()
+        let rightEdge: Double = {
+            let v = Double(lightsRight)
+            if v.isFinite && v > 0 && v < 200 { return v }
+            return 72
+        }()
+
+        NSLog("[BoardWindow] titlebar metrics: close.frame=\(close.frame) closeInCV=\(closeRectInCV) cvHeight=\(cvHeight) flipped=\(isFlipped) raw_centerY_top=\(centerY_top) → centerY=\(centerY) lightsRight=\(rightEdge)")
+
         let js = """
         (function(){
           const r = document.documentElement.style;
