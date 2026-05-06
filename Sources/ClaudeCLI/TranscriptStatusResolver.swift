@@ -473,7 +473,11 @@ private let _abandonedUserEntryThreshold: TimeInterval = 180.0  // 3 min
 // 真挂的 session 一般 10 分钟也不会有人耐心等了。
 // 长期方案：plumb SessionData.lastActivity（最近一次 hook 时间）进 resolver，
 // 用 "lastActivity 也很久没更新" 而不是只看 transcript 尾巴年龄做判断。
-private let _staleSystemTailThreshold: TimeInterval = 600.0
+// 600s 太宽容——session 实际已经 idle 但 system tail 因为是 Stop hook block-
+// decision reason 注入留下的，hook 也卡在 tooling（PreToolUse 设的，没等到
+// PostToolUse 就被 ESC 或 Claude 自己跳过），结果 UI 上"tooling 卡 10 分钟"
+// 才降级。改成 90s 跟下面注释一致 + 跟 assistant tail 60s 对齐。
+private let _staleSystemTailThreshold: TimeInterval = 90.0
 
 /// 针对 hookStatus=working + tail 是 assistant 条目的"ESC-mid-stream"场景。
 /// Claude 在 stream 文字时 transcript 每秒都在追写；tail 停在同一条 assistant
