@@ -51,11 +51,80 @@ final class DragRegionWebView: WKWebView {
     }
 }
 
+/// 把 WKWebView 内 JS 的 `console.error / console.warn / window.onerror /
+/// unhandledrejection` 转回 native log。注入脚本在 documentStart 跑一次，
+/// 把上述事件 postMessage 到 `meee2Diag` handler，本类落到 `~/Library/Logs/meee2.log`。
+///
+/// 拆成独立的 NSObject 是为了规避 WKUserContentController → handler →
+/// controller 的循环引用：BoardWebWindowController 强引用 controller，
+/// controller 强引用 handler，所以 handler 不能再引用 BoardWebWindowController。
+/// 这里只调全局 MLog 家族，无需任何上下文。
+private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
+    static let messageName = "meee2Diag"
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let dict = message.body as? [String: Any] else { return }
+        let level = (dict["level"] as? String) ?? "error"
+        let msg = (dict["msg"] as? String) ?? ""
+        // 截断单条日志，防 React 抛个 10MB JSON 把日志撑爆
+        let trimmed = msg.count > 2000 ? String(msg.prefix(2000)) + "…(truncated)" : msg
+        switch level {
+        case "warn": MWarn("[BoardWebWindow.js] \(trimmed)")
+        default: MError("[BoardWebWindow.js] \(trimmed)")
+        }
+    }
+
+    /// 在 documentStart 注入：包裹 console.error/warn + 监听全局错误 +
+    /// 未处理 promise rejection。所有 catch 都吞 try/catch，再失败就放弃，
+    /// 不能让 logging 自己把页面打挂。
+    static let captureScript: String = """
+    (function() {
+      function send(level, args) {
+        try {
+          var parts = [];
+          for (var i = 0; i < args.length; i++) {
+            var a = args[i];
+            if (a instanceof Error) {
+              parts.push(a.stack || a.message || String(a));
+            } else if (typeof a === 'object' && a !== null) {
+              try { parts.push(JSON.stringify(a)); }
+              catch (e) { parts.push(String(a)); }
+            } else {
+              parts.push(String(a));
+            }
+          }
+          window.webkit.messageHandlers.meee2Diag.postMessage({
+            level: level,
+            msg: parts.join(' ')
+          });
+        } catch (e) { /* ignore — never let the bridge crash the page */ }
+      }
+      var origErr = console.error.bind(console);
+      console.error = function() { send('error', arguments); origErr.apply(console, arguments); };
+      var origWarn = console.warn.bind(console);
+      console.warn = function() { send('warn', arguments); origWarn.apply(console, arguments); };
+      window.addEventListener('error', function(e) {
+        var loc = (e.filename || '?') + ':' + (e.lineno || '?') + ':' + (e.colno || '?');
+        send('error', ['[uncaught] ' + (e.message || '?') + ' @ ' + loc]);
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        var reason = e.reason;
+        var msg = '?';
+        if (reason instanceof Error) msg = reason.stack || reason.message;
+        else if (reason !== undefined) { try { msg = JSON.stringify(reason); } catch (x) { msg = String(reason); } }
+        send('error', ['[unhandled rejection] ' + msg]);
+      });
+    })();
+    """
+}
+
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
     private var isShowingLoadError = false
+    private let jsConsoleBridge = JSConsoleBridge()
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -73,6 +142,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // 暂时不灵的代价比 app 起不来小得多。
         // —— 后续可换 KVC 安全包装（ObjC `@try/@catch` 桥）+ underscored key
         // 重试，但是要在另起 PR 里做，跟 Open Board 修复解耦。
+
+        // 注入 JS 控制台桥 —— 把 React app 内部的 console.error / 抛错
+        // 转回 native log。配置必须在 WKWebView init 之前完成。
+        let userContentController = WKUserContentController()
+        userContentController.addUserScript(WKUserScript(
+            source: JSConsoleBridge.captureScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        ))
+        userContentController.add(jsConsoleBridge, name: JSConsoleBridge.messageName)
+        configuration.userContentController = userContentController
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
@@ -133,6 +213,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
+        MInfo("[BoardWebWindow] initial load → \(boardURL.absoluteString)")
         // ignore HTTP cache on first load —— meee2 重启时 BoardServer 端
         // WebDist 通常已经被 swift build 重新拷过来（vite 出的 chunk 文件
         // 名带 hash，但 index.html 不带），WKWebView 默认走持久化 HTTP cache
@@ -145,6 +226,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func reload() {
         isShowingLoadError = false
+        MInfo("[BoardWebWindow] reload → \(boardURL.absoluteString)")
         // 与 loadIfNeeded 同源：用户主动 reload 时也吞掉 HTTP cache
         var req = URLRequest(url: boardURL)
         req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -156,21 +238,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
 
     func windowWillClose(_ notification: Notification) {
+        MInfo("[BoardWebWindow] windowWillClose")
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        MError("[BoardWebWindow] navigation failed: \(error.localizedDescription) (url=\(webView.url?.absoluteString ?? "?"))")
         showLoadError(error)
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        MError("[BoardWebWindow] provisional navigation failed: \(error.localizedDescription) (target=\(boardURL.absoluteString))")
         showLoadError(error)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if !isShowingLoadError {
+            MInfo("[BoardWebWindow] load finished → \(webView.url?.absoluteString ?? "?")")
             retryWorkItem?.cancel()
             retryWorkItem = nil
         }
@@ -265,6 +351,28 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowDidExitFullScreen(_ notification: Notification) {
         injectTitlebarMetrics()
+    }
+
+    /// HTTP 4xx / 5xx 不会触发 `didFail*` —— WKWebView 把"服务器有响应"当成
+    /// 正常 navigation。但用户体感是白屏 / 错乱。这里在 navigationResponse
+    /// 里探一眼状态码，非 2xx/3xx 就 MWarn 一行 +URL，让客户日志能定位。
+    /// 仍然 .allow，让页面照常渲染（500 页面自己也会画 something）。
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if let http = navigationResponse.response as? HTTPURLResponse,
+           !(200..<400).contains(http.statusCode) {
+            MWarn("[BoardWebWindow] HTTP \(http.statusCode) for \(http.url?.absoluteString ?? "?")")
+        }
+        decisionHandler(.allow)
+    }
+
+    /// Renderer 进程崩溃 —— 页面变白、navigationDelegate 不会回调
+    /// didFail。表现就是"open board 一片白，刷新有时管用有时不"。
+    /// 这里至少先记一笔 + 自动 reload，让客户能看到"崩了"的证据。
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MError("[BoardWebWindow] WebContent process terminated; reloading")
+        reload()
     }
 
     private func showLoadError(_ error: Error) {
