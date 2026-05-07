@@ -62,7 +62,21 @@
     <string>NA19lgoaQ0LSrt5Z0ARJuHaTrce96npVqcGg809aCoQ=</string>
     <key>SUEnableAutomaticChecks</key>
     <true/>
+    <!-- 1 小时轮询。Sparkle 在启动后 SUScheduledCheckInterval 之后才发起
+         首次"自动 check",所以这个值就是用户感知到的"多久才知道有新版"的
+         上限。86400(24h)对 dev 太长(改完 release 第二天才看见 pill);
+         3600 对生产用户也合理(更新很少这么频繁)。 -->
     <key>SUScheduledCheckInterval</key>
-    <integer>86400</integer>
+    <integer>3600</integer>
+    <!-- Codex 风格 Update pill 体验的关键:Sparkle 24h 调度里发现新版后,
+         自动下载 + EdDSA 验签,把 staged update 缓存到本地。用户点 pill
+         时 Sparkle 跳过"下载进度"环节,直接弹 "Install and Relaunch" 一
+         键确认框 → app 立即 apply 已下好的包并重启。
+         没这个 key 的话:点 pill 才开始下载 → 用户要等几十秒。
+         (注:Sparkle 标准 user driver 下,最终那一下"Install and Relaunch"
+         确认框无法消除;真要做成 zero-click 无弹框需要自定义
+         SPUStandardUserDriverDelegate。) -->
+    <key>SUAutomaticallyUpdate</key>
+    <true/>
 </dict>
 </plist>

@@ -13,22 +13,32 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 弹框、下载进度、relaunch 流程），用 Info.plist 的 SUFeedURL +
     /// SUPublicEDKey 决定从哪拉 appcast 以及拿什么公钥校验签名。
     ///
-    /// `startingUpdater: false` —— **不在 lazy init 时自动 startUpdater**。
-    /// startingUpdater=true 路径下 Sparkle 在每次启动都会立刻做一次
-    /// background check + 用 SUStandardUserDriver 处理结果。这条路径在
-    /// ad-hoc 签名 + .accessory app 组合下会触发 "The updater failed to
-    /// start" 弹框，每次启动都吓用户一跳。
-    /// 关掉 startingUpdater 之后，updater 在 instance 创建时就不调
-    /// startUpdater，menubar / Settings 的 "Check for Updates…" 走
-    /// `checkForUpdates(_:)` 显式触发，那条路径不会在 init 阶段炸；
-    /// 自动后台检查通过 SUEnableAutomaticChecks=true + 第一次手动点
-    /// 后由 Sparkle 自己接管调度（24h interval）。
-    private lazy var updaterController: SPUStandardUpdaterController = {
-        SPUStandardUpdaterController(
-            startingUpdater: false,
-            updaterDelegate: nil,
-            userDriverDelegate: nil
+    /// 自定义 user driver —— 把 Sparkle 所有交互 dialog 全自动 confirm,
+    /// 实现"点 pill 直接装 + relaunch,零弹框"。详见 SilentInstallUserDriver。
+    private let silentDriver = SilentInstallUserDriver()
+
+    /// SPUUpdater + 自定义 driver(取代 SPUStandardUpdaterController + 标准
+    /// driver)。Sparkle 后台 24h 调度 + SUAutomaticallyUpdate=YES 自动下载
+    /// stage,用户点 pill / menubar item 时调 installUpdatesIfAvailable() 立即
+    /// apply,silentDriver 把所有"Install and Relaunch"等确认框自动 confirm。
+    ///
+    /// 历史:之前用 SPUStandardUpdaterController(startingUpdater:true) + 标准
+    /// driver,一定会弹 "Install and Relaunch" 框。改成自管 SPUUpdater 是为
+    /// 了能注入自定义 driver。
+    private lazy var updater: SPUUpdater = {
+        let u = SPUUpdater(
+            hostBundle: Bundle.main,
+            applicationBundle: Bundle.main,
+            userDriver: silentDriver,
+            delegate: nil
         )
+        do {
+            try u.start()
+            NSLog("[Sparkle] updater started, automaticallyChecksForUpdates=\(u.automaticallyChecksForUpdates)")
+        } catch {
+            NSLog("[Sparkle] updater failed to start: \(error)")
+        }
+        return u
     }()
 
     /// 灵动岛窗口
@@ -188,6 +198,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        // 强制 init Sparkle updater(lazy var,不主动 touch 永远不创建,
+        // 后台 24h 调度也跑不起来)。`_ = updater` 触发 init → updater.start()
+        // → Sparkle 立即启动 schedule + 后续可被 pill / menubar 调用。
+        _ = updater
+
+        // 启动后 15s kick 一次 bg check —— Sparkle 自己的 schedule 要等
+        // SUScheduledCheckInterval(1h)才发起首次 check,在新启动 / 用户更新
+        // 心切的情况下太慢。15s 给 BoardServer / plugin 启动腾出时间,然后
+        // 触发一次完整 cycle:fetch appcast → 下载 → stage → halt。
+        // 后续每小时由 Sparkle schedule 重复跑。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            self?.updater.checkForUpdatesInBackground()
+        }
+
+        // 把 silentDriver 的 staged 状态桥到 meee2Kit 模块。BoardAPI.getVersion
+        // 读这两个 → frontend UpdatePill 决定是否渲染 + dev panel 显示版本号。
+        SparkleStagedBridge.setSnapshot { [weak self] in
+            self?.silentDriver.isReadyToInstall ?? false
+        }
+        SparkleStagedBridge.setStagedVersionProvider { [weak self] in
+            self?.silentDriver.stagedVersion
+        }
+
+        // 启动 VersionChecker shared 单例的后台轮询。BoardServer 的
+        // /api/version + Settings UI 都从 VersionChecker.shared 读,只跑一份
+        // 拉取避免 N 倍 raw.githubusercontent 流量。
+        VersionChecker.shared.startBackgroundCheck()
+
         // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
         // "Check for Updates" 通知 → 在这里桥到 SPUStandardUpdaterController。
         // 这条通道把 Settings 那个按钮和 menubar "Check for Updates…" 完全
@@ -198,10 +236,42 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: Notification.Name("meee2.checkForUpdates"),
             object: nil
         )
+        // Background-only path:silent 拉 + 下载 + stage,不弹 UI。BoardServer
+        // /api/update/check-in-background 走这条,主要给 dev 测试预下载流程用。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleBackgroundUpdateRequest),
+            name: Notification.Name("meee2.checkForUpdatesInBackground"),
+            object: nil
+        )
     }
 
+    /// pill click 入口。三条路径:
+    ///   1. **staged 包是最新版** → confirmPendingInstall → Sparkle 秒装 + relaunch。
+    ///   2. **staged 包过时**(远端出了更新版) → discardPending 丢掉旧 reply,
+    ///      然后跑 user-initiated checkForUpdates 拉真正的最新版下来装。
+    ///   3. **没 staged 包** → 直接 user-initiated checkForUpdates 走完整闭环。
     @objc private func handleCheckForUpdatesRequest() {
-        updaterController.checkForUpdates(nil)
+        let stagedV = silentDriver.stagedVersion
+        let latestV = VersionChecker.shared.latestVersion
+        if let stagedV, stagedV == latestV {
+            // 路径 1
+            _ = silentDriver.confirmPendingInstall()
+            return
+        }
+        // 路径 2(staged 但版本对不上)/ 路径 3(完全没 staged):
+        _ = silentDriver.discardPendingInstall()
+        // user-initiated check —— silentDriver 看到 userInitiated=true,
+        // 这次 cycle 的 showReady 会 auto-install 不再 halt,直接 relaunch。
+        updater.checkForUpdates()
+    }
+
+    /// SPUUpdater.checkForUpdatesInBackground —— silent 路径,driver 也都 no-op。
+    /// 走完整 cycle:fetch appcast → 下载 → 验签 → stage。
+    /// dev UI 的 "Check" pill 调这个让 Sparkle 把 DMG 预下好,之后点 Update
+    /// 才能立即 apply 不再下载。生产环境靠 24h 调度自己跑这条。
+    @objc private func handleBackgroundUpdateRequest() {
+        updater.checkForUpdatesInBackground()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -259,15 +329,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         diagItem.target = self
         menu.addItem(diagItem)
         menu.addItem(NSMenuItem.separator())
-        // Sparkle —— `checkForUpdates(_:)` 是 SPUStandardUpdaterController 的
-        // 标准 action selector；item 的 enable/disable 由 updaterController 自管
-        // （updater 还在 init / 还在等下次 schedule 的时候 grey 出）。
+        // Sparkle —— 跟 pill 同一条入口,silentDriver 把所有 dialog 自动 confirm,
+        // 点完直接装 + relaunch,无弹框。
         let updateItem = NSMenuItem(
             title: "Check for Updates…",
-            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            action: #selector(handleCheckForUpdatesRequest),
             keyEquivalent: ""
         )
-        updateItem.target = updaterController
+        updateItem.target = self
         menu.addItem(updateItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")

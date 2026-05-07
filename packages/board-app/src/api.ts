@@ -51,6 +51,53 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+// -- app version / Sparkle update ------------------------------------------
+
+export interface VersionInfo {
+  current: string
+  latest: string | null
+  hasUpdate: boolean
+  isChecking: boolean
+  lastError: string | null
+  /// codex-style 信号:Sparkle 后台已经下完 + verify + stage,点 pill 就秒
+  /// 重启,不再下载。生产 UI 只在 isStaged=true 时渲染 Update pill。
+  isStaged: boolean
+  /// 当前 staged 包的版本号(showUpdateFound 时 Sparkle 给的)。dev e2e
+  /// 测试"staged 过时"场景时对比 latest != stagedVersion。
+  stagedVersion: string | null
+}
+
+export function fetchVersion(): Promise<VersionInfo> {
+  return jsonRequest<VersionInfo>('/api/version')
+}
+
+/// 强制刷一遍 appcast(后端会重新拉 raw.githubusercontent),返回最新 cache。
+export function checkForVersionUpdate(): Promise<VersionInfo> {
+  return jsonRequest<VersionInfo>('/api/version/check', { method: 'POST' })
+}
+
+/// 触发 Sparkle 安装流程。如果 SUAutomaticallyUpdate=YES 且后台已下载 + 验签
+/// 完成,Sparkle 会跳过下载步直接弹 "Install and Relaunch" 一键确认框,
+/// 用户点一下立刻 apply + relaunch。
+export function installAppUpdate(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/update/install', { method: 'POST' })
+}
+
+/// 让 Sparkle 在后台 silent 走完整 cycle:fetch appcast → 下载 DMG → 验签 →
+/// stage 到本地。无 UI。dev 测试 codex-style 预下载体验时,先调这个等几秒
+/// 让 Sparkle 把包下好,再调 installAppUpdate() 才能体验"立刻 Install and Relaunch"。
+export function checkUpdateInBackground(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/update/check-in-background', { method: 'POST' })
+}
+
+/// **DEV-ONLY** 后门:override VersionChecker.shared.latestVersion 假造"远端
+/// 出了更新版"场景。`version=null` / 不传 → 清掉 override(下次 background
+/// check 拉到的真实 latest 会接管)。
+export function devOverrideLatest(version: string | null): Promise<{ ok: boolean }> {
+  const qs = version ? `?version=${encodeURIComponent(version)}` : ''
+  return jsonRequest<{ ok: boolean }>(`/api/_dev/override-latest${qs}`, { method: 'POST' })
+}
+
 // -- channels --------------------------------------------------------------
 
 export async function createChannel(input: {

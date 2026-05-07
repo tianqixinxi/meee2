@@ -23,6 +23,7 @@ import { isDmChannelName } from '@meee1/board-core'
 import { Inbox, MoreHorizontal } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
+import { UpdatePill } from './UpdatePill'
 import { activateSession, closeSession, spawnSession } from '../api'
 import { useToast } from '../App'
 
@@ -729,10 +730,10 @@ export default function Sidebar({
             <span>{selection.kind === 'channel' ? 'Channel' : ''}</span>
           )}
         </div>
-        {/* The collapse button used to live here; it now lives as a fixed
-         * floating toggle (top:8 left:80) shared with the collapsed state.
-         * Header right side is intentionally empty so there's nothing
-         * competing with that single icon. */}
+        {/* Header right side: codex-style "Update" pill 只在有新版时出现,
+         * 平时空白(原本只有 fixed 的 sidebar-collapse toggle 浮在左侧
+         * traffic-light 旁,header 右侧没东西竞争)。 */}
+        <UpdatePill />
       </div>
       <div className="sidebar-body">
         {!state && <div className="muted">Loading…</div>}
