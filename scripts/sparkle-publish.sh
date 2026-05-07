@@ -173,14 +173,22 @@ existing = re.search(
 if existing:
     xml = xml[:existing.start()] + xml[existing.end():]
 
-# 2) insert new item right before the </channel> close tag
-m = re.search(r'(\s*)</channel>', xml)
-if not m:
-    print('ERROR: appcast.xml missing </channel> close tag', file=sys.stderr)
-    sys.exit(1)
-xml = xml[:m.start()] + '\n' + item + m.group(0) + xml[m.end():]
+# 2) PREPEND the new item — RSS convention is newest-first, and our
+# VersionChecker / clients reading the feed treat the first <item> as
+# the latest. Insert before the first existing <item>; if no items yet
+# (skeleton state), insert before </channel>.
+first_item = re.search(r'^[^\S\n]*<item>', xml, re.MULTILINE)
+if first_item:
+    xml = xml[:first_item.start()] + item + '\n' + xml[first_item.start():]
+else:
+    m = re.search(r'(\s*)</channel>', xml)
+    if not m:
+        print('ERROR: appcast.xml missing </channel> close tag', file=sys.stderr)
+        sys.exit(1)
+    xml = xml[:m.start()] + '\n' + item + m.group(0) + xml[m.end():]
+
 appcast_path.write_text(xml)
-print(f'updated {appcast_path} with item {version} ({"replaced" if existing else "added"})')
+print(f'updated {appcast_path} with item {version} ({"replaced" if existing else "prepended"})')
 PY
 
 rm -f "$ITEM_FILE"
