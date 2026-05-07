@@ -29,7 +29,7 @@ final class ClaudeDesktopMetadataReaderTests: XCTestCase {
             cliSessionId: cliSid,
             title: title,
             model: nil,
-            cwd: "/Users/qc/projects/meee1_code/meee2",
+            cwd: "/Users/test/meee2",
             isArchived: isArchived,
             desktopSessionId: "local_\(wrapper)",
             lastActivityAt: lastActivity,
