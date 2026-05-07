@@ -141,13 +141,27 @@ jobs:
           keychain-password: ${{ secrets.APPLE_DEV_ID_CERT_PASSWORD }}
 
       # ── Notary credentials profile (only if secrets present) ─────────────
+      # ⚠️ 两个独立 step：
+      #   1. notary-gate: 把 secrets.* 比较结果落进 step output（secrets 在
+      #      step body 里 OK，但 step `if` 不允许引用 secrets context）。
+      #   2. notary: 用上一步的 output gate；output 是 step context，可在 if 用。
       # store-credentials 把 Apple ID + Team + app-specific password 存进
       # keychain alias，后面 notarize.sh 用 --keychain-profile 引用。
+      - name: Compute notary-secrets gate
+        id: notary-gate
+        run: |
+          if [ -n "${{ secrets.APPLE_NOTARY_APPLE_ID }}" ] \
+              && [ -n "${{ secrets.APPLE_NOTARY_TEAM_ID }}" ] \
+              && [ -n "${{ secrets.APPLE_NOTARY_PASSWORD }}" ]; then
+              echo "configured=1" >> "$GITHUB_OUTPUT"
+          else
+              echo "configured=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up notary credentials
         id: notary
-        if: ${{ env.HAS_NOTARY_SECRETS == '1' && steps.signing-gate.outputs.configured == '1' }}
+        if: ${{ steps.notary-gate.outputs.configured == '1' && steps.signing-gate.outputs.configured == '1' }}
         env:
-          HAS_NOTARY_SECRETS: ${{ secrets.APPLE_NOTARY_APPLE_ID != '' && secrets.APPLE_NOTARY_TEAM_ID != '' && secrets.APPLE_NOTARY_PASSWORD != '' && '1' || '0' }}
           APPLE_ID: ${{ secrets.APPLE_NOTARY_APPLE_ID }}
           TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
           APP_SPECIFIC_PWD: ${{ secrets.APPLE_NOTARY_PASSWORD }}
