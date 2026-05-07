@@ -106,27 +106,59 @@ class VersionChecker: ObservableObject {
         }
     }
 
-    /// 从 appcast.xml 拿最新一条 item 的 sparkle:version。XML 内部按发布顺序
-    /// 排，新的在前（sparkle-publish.sh 的 prepend 行为）。简单 regex 匹配：
+    /// 从 appcast.xml 拿"最新"版本号 —— **扫所有 sparkle:shortVersionString 取
+    /// 最大值**，不依赖 item 文件顺序。早期 sparkle-publish.sh 把新 item 加在
+    /// channel 末尾（应该 prepend 但写成了 append），导致 first-match-wins
+    /// 拿到最老 entry。即使脚本修了，存量 appcast.xml 顺序还是乱的；这个
+    /// parser 用语义版本最大值兜住所有历史顺序。
     /// 不引第三方 XML 库，appcast schema 稳定，正则够用。
     static func parseLatestVersion(fromAppcast data: Data) -> String? {
         guard let xml = String(data: data, encoding: .utf8) else { return nil }
         // 优先 sparkle:shortVersionString（user-facing），fallback sparkle:version。
-        if let m = xml.range(of: #"<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>"#,
-                             options: .regularExpression) {
-            let raw = String(xml[m])
-            if let inner = raw.range(of: #">[^<]+<"#, options: .regularExpression) {
-                return String(raw[inner]).dropFirst().dropLast().trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+        let candidates = collectAll(in: xml,
+                                    pattern: #"<sparkle:shortVersionString>([^<]+)</sparkle:shortVersionString>"#)
+            ?? collectAll(in: xml, pattern: #"<sparkle:version>([^<]+)</sparkle:version>"#)
+            ?? []
+        guard !candidates.isEmpty else { return nil }
+        // 用 isNewerVersion 当排序 key —— 同一份 semver 比较逻辑。
+        return candidates.max(by: { a, b in
+            // a < b iff b is newer than a
+            VersionChecker.staticIsNewerVersion(new: b, current: a)
+        })
+    }
+
+    /// 把所有 `<tag>VALUE</tag>` 形式的内容收齐返回。开闭标签由调用者拼好的
+    /// pattern 决定 —— 这里用 NSRegularExpression 而不是 String.range(of:) 因为
+    /// 我们要拿到所有匹配，不止第一个。
+    private static func collectAll(in xml: String, pattern: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return nil
         }
-        if let m = xml.range(of: #"<sparkle:version>([^<]+)</sparkle:version>"#,
-                             options: .regularExpression) {
-            let raw = String(xml[m])
-            if let inner = raw.range(of: #">[^<]+<"#, options: .regularExpression) {
-                return String(raw[inner]).dropFirst().dropLast().trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+        let ns = xml as NSString
+        let matches = regex.matches(in: xml, options: [], range: NSRange(location: 0, length: ns.length))
+        let results: [String] = matches.compactMap { m in
+            guard m.numberOfRanges >= 2 else { return nil }
+            return ns.substring(with: m.range(at: 1))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return nil
+        return results.isEmpty ? nil : results
+    }
+
+    /// Static 版的 isNewerVersion，用于 parseLatestVersion 排序。逻辑跟 instance
+    /// 版完全一致 —— 重复一份是因为 instance 方法不能直接当 closure key 在
+    /// `max(by:)` 里用 self（static parser 没 self）。
+    private static func staticIsNewerVersion(new: String, current: String) -> Bool {
+        let (newCore, newPre) = splitPrerelease(new)
+        let (curCore, curPre) = splitPrerelease(current)
+        let cmp = compareCore(newCore, curCore)
+        if cmp != .orderedSame { return cmp == .orderedDescending }
+        switch (newPre, curPre) {
+        case (nil, nil): return false
+        case (nil, _?):  return true
+        case (_?, nil):  return false
+        case (let a?, let b?):
+            return a.compare(b, options: .numeric) == .orderedDescending
+        }
     }
 
     /// 简化版 SemVer-ish 比较，能处理 `0.3.0`、`0.3.0-rc4`、`1.0.0` 这种。
