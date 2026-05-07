@@ -898,7 +898,7 @@ public struct SettingsView: View {
 
     // MARK: - About Settings
 
-    @ObservedObject private var versionChecker = VersionChecker()
+    @ObservedObject private var versionChecker = VersionChecker.shared
 
     private var aboutSettings: some View {
         Form {
@@ -939,10 +939,19 @@ public struct SettingsView: View {
 
                         Spacer()
 
-                        if let url = versionChecker.releasesPageUrl {
-                            Link("Download", destination: url)
-                                .foregroundColor(.blue)
+                        // 触发 Sparkle modal —— 不再走 GitHub 网页手动下载。
+                        // AppDelegate 接到这条通知会调
+                        // SPUStandardUpdaterController.checkForUpdates,弹
+                        // "Install / Skip / Remind" 对话框,用户点 Install
+                        // 后 Sparkle 自动 download → verify EdDSA → relaunch。
+                        Button("Install Update…") {
+                            NotificationCenter.default.post(
+                                name: Notification.Name("meee2.checkForUpdates"),
+                                object: nil
+                            )
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
                 }
 

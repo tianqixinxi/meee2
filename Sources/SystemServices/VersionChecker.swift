@@ -10,12 +10,17 @@ import Combine
 /// 是好几周前的老正式版,跟 menubar Sparkle 给的"有 v0.3.0-rc4 可下载"自相
 /// 矛盾。改成解析 appcast.xml 的第一个 `<item>` —— Sparkle 自己也是这样判
 /// "最新"。
-class VersionChecker: ObservableObject {
-    @Published var latestVersion: String?
-    @Published var currentVersion: String
-    @Published var hasUpdate: Bool = false
-    @Published var isChecking: Bool = false
-    @Published var lastError: String?
+public class VersionChecker: ObservableObject {
+    /// 进程级共享实例。AppDelegate 启动时 startBackgroundCheck();
+    /// SettingsView 跟 BoardServer 都从这里读 latestVersion/hasUpdate,
+    /// 不再各自起一份避免 N 倍 raw.githubusercontent 拉取。
+    public static let shared = VersionChecker()
+
+    @Published public var latestVersion: String?
+    @Published public var currentVersion: String
+    @Published public var hasUpdate: Bool = false
+    @Published public var isChecking: Bool = false
+    @Published public var lastError: String?
 
     private var timer: Timer?
     /// Background check interval. Lower than Sparkle's 24h schedule so the
@@ -23,11 +28,11 @@ class VersionChecker: ObservableObject {
     /// own scheduler still owns the actual update prompt timing.
     private let checkInterval: TimeInterval = 6 * 3600
 
-    init() {
+    public init() {
         currentVersion = Self.getCurrentAppVersion()
     }
 
-    func startBackgroundCheck() {
+    public func startBackgroundCheck() {
         Task { await checkVersion() }
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
             Task { await self?.checkVersion() }
@@ -35,14 +40,37 @@ class VersionChecker: ObservableObject {
         NSLog("[VersionChecker] Started background check, interval: \(checkInterval)s")
     }
 
-    func stopBackgroundCheck() {
+    public func stopBackgroundCheck() {
         timer?.invalidate()
         timer = nil
         NSLog("[VersionChecker] Stopped")
     }
 
-    func checkForUpdate() async {
+    public func checkForUpdate() async {
         await checkVersion()
+    }
+
+    /// **DEV-ONLY** 后门:手动 override latest version,触发 hasUpdate 重算。
+    /// 用来 e2e 测试"staged 包过时"场景(staged 0.4.1 + 假 latest=0.4.99
+    /// → 点 pill 时 driver 应该 discard pending → fresh check)。
+    /// 传 nil/空:**强制 re-fetch appcast 恢复真实 latest**(不是清空,
+    /// 否则 webui pill 会暂时不渲染)。
+    public func devOverrideLatest(_ version: String?) {
+        if let v = version, !v.isEmpty {
+            Task { @MainActor in
+                self.latestVersion = v
+                self.hasUpdate = self.isNewerVersion(new: v, current: self.currentVersion)
+                NSLog("[VersionChecker] DEV override latest=\(v) hasUpdate=\(self.hasUpdate)")
+            }
+        } else {
+            // Clear override = re-fetch real appcast。这是同步阻塞的 ?
+            // 不,checkVersion 是 async。e2e 测试调完这条会立刻 assert
+            // latest,所以等一下再返回 —— 给 checkVersion 时间完成。
+            Task {
+                await self.checkForUpdate()
+                NSLog("[VersionChecker] DEV override cleared, re-fetched latest=\(self.latestVersion ?? "nil")")
+            }
+        }
     }
 
     /// Releases 页面 URL —— 仅作 fallback 给 Settings 的 "Download" link 用。

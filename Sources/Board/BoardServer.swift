@@ -373,6 +373,12 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
+        server.GET["/api/version"] = BoardServer.cors(BoardAPI.getVersion)
+        server.POST["/api/version/check"] = BoardServer.cors(BoardAPI.checkVersion)
+        server.POST["/api/update/install"] = BoardServer.cors(BoardAPI.installUpdate)
+        server.POST["/api/update/check-in-background"] = BoardServer.cors(BoardAPI.checkUpdateInBackground)
+        server.POST["/api/_dev/override-latest"] = BoardServer.cors(BoardAPI.devOverrideLatest)
+        server.GET["/api/_dev/pill-click-plan"] = BoardServer.cors(BoardAPI.devPillClickPlan)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)

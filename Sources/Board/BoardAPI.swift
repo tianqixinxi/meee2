@@ -490,6 +490,143 @@ enum BoardAPI {
         #endif
     }
 
+    private struct VersionResponse: Encodable {
+        let current: String
+        let latest: String?
+        let hasUpdate: Bool
+        let isChecking: Bool
+        let lastError: String?
+        /// codex-style "pill only when ready to instant-install" 信号。
+        /// AppDelegate 把 SilentInstallUserDriver.isReadyToInstall 桥过来。
+        /// 生产 UI 只在 `isStaged=true` 时渲染 pill,保证用户点击就秒重启。
+        let isStaged: Bool
+        /// 当前 staged 包的版本号(showUpdateFound 时 Sparkle 给的)。
+        /// 用于 dev e2e 测试"staged 过时"场景:对比 latest != stagedVersion 时
+        /// 用户点 pill 应该 discard + fresh check。
+        let stagedVersion: String?
+    }
+
+    /// GET /api/version
+    /// board webui 顶部 "Update" pill 的数据源。读 VersionChecker.shared
+    /// 当前 cache(AppDelegate 启动时已经 startBackgroundCheck,每 6h 刷一次),
+    /// 不在 request 路径上做网络拉取。webui 想强制刷的话走 POST
+    /// /api/version/check。
+    static func getVersion(_ req: HttpRequest) -> HttpResponse {
+        let v = VersionChecker.shared
+        return jsonResponse(VersionResponse(
+            current: v.currentVersion,
+            latest: v.latestVersion,
+            hasUpdate: v.hasUpdate,
+            isChecking: v.isChecking,
+            lastError: v.lastError,
+            isStaged: SparkleStagedBridge.snapshot(),
+            stagedVersion: SparkleStagedBridge.stagedVersion()
+        ))
+    }
+
+    /// POST /api/_dev/override-latest?version=0.4.99
+    /// **DEV-ONLY** 测试入口:手动 override VersionChecker.shared.latestVersion。
+    /// 假造"远端出了更新版"场景,验证用户点 pill 时 driver 会 discard 旧 staged
+    /// 包并 fresh check。重启 app 或下次 background check 会自然覆盖回真实值。
+    /// 不传 version → clear override + 阻塞等 fresh fetch 完成,这样 e2e
+    /// 脚本立刻 assert latest 不会拿到 nil。
+    static func devOverrideLatest(_ req: HttpRequest) -> HttpResponse {
+        let version = req.queryParams.first(where: { $0.0 == "version" })?.1
+        let v = version?.isEmpty == false ? version : nil
+        if v == nil {
+            // Clear path:同步等 fetch 完成
+            let sem = DispatchSemaphore(value: 0)
+            Task {
+                await VersionChecker.shared.checkForUpdate()
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 30)
+        } else {
+            VersionChecker.shared.devOverrideLatest(v)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private struct PillClickPlan: Encodable {
+        /// "instant_install"(staged 包是最新,会秒装)/ "discard_and_recheck"
+        /// (staged 过时,会 discard 旧 reply 起 fresh check)/ "fresh_check"
+        /// (没 staged 包,跑 user-initiated check)。
+        let plan: String
+        let stagedVersion: String?
+        let latestVersion: String?
+    }
+
+    /// GET /api/_dev/pill-click-plan
+    /// **DEV-ONLY** dry-run:不真触发 install,只报告"如果现在点 pill 会走哪条路径"。
+    /// e2e 测试用 —— 验证逻辑不引发 side effect(scenario 5 用这个,不再真触发
+    /// install 让 Sparkle 重新装 0.4.1)。
+    static func devPillClickPlan(_ req: HttpRequest) -> HttpResponse {
+        let staged = SparkleStagedBridge.stagedVersion()
+        let latest = VersionChecker.shared.latestVersion
+        let plan: String
+        if let s = staged, s == latest {
+            plan = "instant_install"
+        } else if staged != nil {
+            plan = "discard_and_recheck"
+        } else {
+            plan = "fresh_check"
+        }
+        return jsonResponse(PillClickPlan(plan: plan, stagedVersion: staged, latestVersion: latest))
+    }
+
+    /// POST /api/version/check
+    /// 强制重新拉一次 appcast.xml,然后 200 返回最新 cache。webui pill 点
+    /// 一下 refresh 用。
+    static func checkVersion(_ req: HttpRequest) -> HttpResponse {
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            await VersionChecker.shared.checkForUpdate()
+            sem.signal()
+        }
+        // 30s timeout cap —— appcast 是 raw.githubusercontent CDN,正常 <1s
+        _ = sem.wait(timeout: .now() + 30)
+        return getVersion(req)
+    }
+
+    /// POST /api/update/check-in-background
+    /// Silent 触发 Sparkle 跑一次完整 background cycle:fetch appcast →
+    /// 下载 DMG → 验 EdDSA → stage 到本地。不弹任何 UI。下载完成后再调
+    /// /api/update/install 才会一次到位 "Install and Relaunch"。
+    /// 主要给 dev 测预下载流程用 —— 生产环境靠 24h 调度。
+    static func checkUpdateInBackground(_ req: HttpRequest) -> HttpResponse {
+        #if canImport(AppKit)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: Notification.Name("meee2.checkForUpdatesInBackground"),
+                object: nil
+            )
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+        #else
+        return errorResponse("unsupported", "background update check is macOS only", status: 501)
+        #endif
+    }
+
+    /// POST /api/update/install
+    /// 触发 Sparkle 安装流程。如果 SUAutomaticallyUpdate=YES 且后台已经
+    /// 下载好新版,这一步会立刻 apply + relaunch(codex-style 体验);
+    /// 否则会弹 Sparkle 的标准 modal 让用户确认。具体路径由 Sparkle 自
+    /// 决定 —— BoardAPI 这边只发通知,AppDelegate 接住调
+    /// SPUStandardUpdaterController.checkForUpdates(_:)。
+    static func installUpdate(_ req: HttpRequest) -> HttpResponse {
+        #if canImport(AppKit)
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(
+                name: Notification.Name("meee2.checkForUpdates"),
+                object: nil
+            )
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+        #else
+        return errorResponse("unsupported", "update install is macOS only", status: 501)
+        #endif
+    }
+
     private struct PushNowResponse: Encodable {
         let delivered: Int
         let message: MessageDTO?

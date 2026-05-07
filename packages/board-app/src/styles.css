@@ -720,6 +720,43 @@ textarea {
   padding: 12px;
 }
 
+/* ─── Update pill (codex-style) ──────────────────────────────────────
+   Sidebar header 右上角 pill,只在有新版时出现(dev 模式下永远显示)。
+   蓝色实色,小尺寸,跟 traffic-light 视觉对齐。 */
+.update-pill {
+  -webkit-app-region: no-drag;  /* titlebar drag zone 里抢回点击 */
+  appearance: none;
+  border: none;
+  background: var(--accent, #2f7af5);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 120ms ease, opacity 120ms ease, transform 80ms ease;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.update-pill:hover { background: var(--accent-hover, #1d68e8); }
+.update-pill:active { transform: translateY(0.5px); }
+.update-pill:disabled, .update-pill--installing {
+  opacity: 0.7;
+  cursor: progress;
+}
+/* Dev-mode "Check" pill —— 暗灰底,跟正经更新提示区分开 */
+.update-pill--dev {
+  background: rgba(255, 255, 255, 0.10);
+  color: var(--text-dim, #9aa0a6);
+  font-weight: 500;
+}
+.update-pill--dev:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text, #e8eaed);
+}
+
 /* ─── Sidebar: project-grouped session list ──────────────────────────────
    借鉴 Claude Code app 的 sidebar：每个 project (cwd basename) 一个 section，
    header 是淡色小字 + count，session 行紧凑。点击 session 行 → select；
