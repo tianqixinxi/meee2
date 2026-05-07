@@ -88,6 +88,24 @@ for dylib in "${RUNTIME_DYLIBS[@]}"; do
     fi
 done
 
+# Sparkle.framework —— bundled separately because it's an xcframework
+# binary artifact (lives under .build/artifacts/...) not a SwiftPM
+# library output. Without this the binary links fine but the runtime
+# Sparkle controller can't spawn its XPC Downloader/Installer subprocesses
+# → "Unable to Check For Updates / The updater failed to start" on click.
+SPARKLE_SRC=$(find .build -maxdepth 6 -name "Sparkle.framework" -type d -path "*/Sparkle.xcframework/macos-arm64_x86_64/*" 2>/dev/null | head -1)
+if [ -z "$SPARKLE_SRC" ]; then
+    # Fallback: SwiftPM may have copied it into BUILD_DIR
+    SPARKLE_SRC="$BUILD_DIR/Sparkle.framework"
+fi
+if [ ! -d "$SPARKLE_SRC" ]; then
+    echo "WARN: Sparkle.framework not found — auto-update will not work in this build"
+    echo "  expected at .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+else
+    cp -R "$SPARKLE_SRC" "$APP_DIR/Contents/Frameworks/"
+    echo "Copied Sparkle.framework (from $SPARKLE_SRC)"
+fi
+
 # Copy SwiftPM resource bundle (contains WebDist etc.). Path differs by
 # build mode: single-arch lives under .build/<host-arch>/release, universal
 # under .build/apple/Products/Release. `find` picks whichever exists.
@@ -150,6 +168,26 @@ for dylib in "${RUNTIME_DYLIBS[@]}"; do
         meee2_sign "$APP_DIR/Contents/Frameworks/$dylib"
     fi
 done
+
+# Sparkle.framework needs deepest-first signing of its XPC services and
+# Updater.app, then Autoupdate, then the framework itself. Order matters —
+# codesign refuses to sign a parent whose contents already changed under
+# a different signature. The framework comes from Sparkle's release with
+# a Sparkle-team signature; we re-sign with our Developer ID so the
+# host app's signature is consistent (notarization rejects mixed teams).
+SPARKLE_FW="$APP_DIR/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE_FW" ]; then
+    SPARKLE_VERSIONS_DIR="$SPARKLE_FW/Versions/B"
+    [ -d "$SPARKLE_VERSIONS_DIR/XPCServices/Downloader.xpc" ] && \
+        meee2_sign "$SPARKLE_VERSIONS_DIR/XPCServices/Downloader.xpc"
+    [ -d "$SPARKLE_VERSIONS_DIR/XPCServices/Installer.xpc" ] && \
+        meee2_sign "$SPARKLE_VERSIONS_DIR/XPCServices/Installer.xpc"
+    [ -d "$SPARKLE_VERSIONS_DIR/Updater.app" ] && \
+        meee2_sign "$SPARKLE_VERSIONS_DIR/Updater.app"
+    [ -f "$SPARKLE_VERSIONS_DIR/Autoupdate" ] && \
+        meee2_sign "$SPARKLE_VERSIONS_DIR/Autoupdate"
+    meee2_sign "$SPARKLE_FW"
+fi
 
 # Sign inner executable, then bundle. We don't pass --deep: it's officially
 # discouraged and signs everything indiscriminately, which conflicts with

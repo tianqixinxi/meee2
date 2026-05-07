@@ -28,6 +28,16 @@ sleep 0.5
 
 cp "$BUILD_DIR/meee2" /Applications/meee2.app/Contents/MacOS/meee2
 
+# Make sure the deployed binary has @executable_path/../Frameworks in
+# its LC_RPATH so dyld can find Sparkle.framework (and any other
+# frameworks we drop into Contents/Frameworks/ later). build.sh added
+# a developer-machine-specific rpath; deploy.sh historically dropped
+# dylibs in MacOS/ to dodge that, but Sparkle is a framework that
+# MUST be in Frameworks/. The `|| true` is for re-deploy when the
+# rpath is already present — install_name_tool is non-idempotent.
+install_name_tool -add_rpath "@executable_path/../Frameworks" \
+    /Applications/meee2.app/Contents/MacOS/meee2 2>/dev/null || true
+
 # Runtime dylibs the binary loads via @rpath. CommKit was extracted out of
 # Sources/Core into the meee2-comm-kit subpackage in 2026-04 — must be
 # bundled or `dyld[]: Library not loaded: @rpath/libMeee2CommKit.dylib`
@@ -50,6 +60,29 @@ for dylib in "${RUNTIME_DYLIBS[@]}"; do
         exit 1
     fi
 done
+
+# Sparkle.framework lives in xcframework artifact dir, not in BUILD_DIR.
+# Find it then drop into the .app's Frameworks/ (deploy.sh historically
+# put dylibs in MacOS/, but a framework MUST be in Frameworks/ for dyld
+# to load it via @rpath/Sparkle.framework — which is how Sparkle is
+# linked). Also walk inside-out signing so the local ad-hoc deploy
+# works the same as a notarized release build.
+SPARKLE_SRC=$(find .build -maxdepth 6 -name "Sparkle.framework" -type d -path "*/Sparkle.xcframework/macos-arm64_x86_64/*" 2>/dev/null | head -1)
+if [ -n "$SPARKLE_SRC" ] && [ -d "$SPARKLE_SRC" ]; then
+    mkdir -p /Applications/meee2.app/Contents/Frameworks
+    rm -rf /Applications/meee2.app/Contents/Frameworks/Sparkle.framework
+    cp -R "$SPARKLE_SRC" /Applications/meee2.app/Contents/Frameworks/
+    SPARKLE_FW=/Applications/meee2.app/Contents/Frameworks/Sparkle.framework
+    SPARKLE_V="$SPARKLE_FW/Versions/B"
+    [ -d "$SPARKLE_V/XPCServices/Downloader.xpc" ] && meee2_sign "$SPARKLE_V/XPCServices/Downloader.xpc"
+    [ -d "$SPARKLE_V/XPCServices/Installer.xpc"  ] && meee2_sign "$SPARKLE_V/XPCServices/Installer.xpc"
+    [ -d "$SPARKLE_V/Updater.app" ] && meee2_sign "$SPARKLE_V/Updater.app"
+    [ -f "$SPARKLE_V/Autoupdate" ] && meee2_sign "$SPARKLE_V/Autoupdate"
+    meee2_sign "$SPARKLE_FW"
+    echo "Bundled + signed Sparkle.framework"
+else
+    echo "WARN: Sparkle.framework not found under .build/artifacts — deployed app won't auto-update"
+fi
 
 # Copy Info.plist —— deploy.sh 之前从来不更新 Info.plist，于是 dev iteration
 # 时改了 App/Info.plist（加 NSAppleEventsUsageDescription 之类的）不会生效。
