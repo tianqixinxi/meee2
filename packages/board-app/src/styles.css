@@ -593,10 +593,10 @@ textarea {
 .sidebar-collapsed-toggle:hover .icon-rest { opacity: 0; }
 .sidebar-collapsed-toggle:hover .icon-active { opacity: 1; }
 .sidebar-collapsed-toggle:hover {
-  /* 之前用 rgba(255,255,255,0.08) 在半透明 titlebar 上跟 white icon 同色调
-   * 看着糊在一起。换成黑色叠加 —— 在深色 titlebar 上变成更深的方块，
-   * 白色 icon 明显浮起来。VSCode / Claude Code 类似处理。 */
-  background: rgba(0, 0, 0, 0.25);
+  /* 不叠 hover 背景 —— 之前用 rgba(0,0,0,0.25) 黑方块跟 titlebar 暗色重叠，
+   * 折叠态的 active chevron 跟黑底糊在一起看不清。改成单纯把 icon 颜色
+   * 从 70% 白提到全白做反馈，靠对比度变化提示 hover，干净不抢戏。 */
+  background: transparent;
   color: #FFFFFF;
 }
 
@@ -3555,6 +3555,12 @@ textarea {
   padding: 3px;
   overflow-x: auto;
   scrollbar-width: none;
+  /* tab 条的灰底只覆盖到 tabs 实际宽度 —— sidebar 拖很宽时不要拉一整条
+   * 横灰条占用视觉空间。align-self: flex-start 让它在 sidebar-topnav 的
+   * 列布局里靠左缩到 fit-content。 */
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
 }
 .sidebar .stn-tabs::-webkit-scrollbar { display: none; }
 .sidebar .stn-tab {

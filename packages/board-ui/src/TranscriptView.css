@@ -3,10 +3,10 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
   padding: 4px 2px 8px;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: #D4D8E1;
 }
 
@@ -27,19 +27,19 @@
 .tx-entry {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 4px 0;
+  gap: 3px;
+  padding: 2px 0;
 }
 
 .tx-entry--merged {
   padding-top: 0;
-  margin-top: -4px;
+  margin-top: -2px;
 }
 
 .tx-text {
-  padding: 8px 12px;
+  padding: 2px 0;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 0;
 }
 
 .tx-text__body {
@@ -72,31 +72,24 @@
   max-width: 86%;
   background: #332825;                /* 比 --bg-paper 稍深的暖褐 */
   border: 1px solid #4A3A35;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: var(--radius-md) var(--radius-md) 4px var(--radius-md);
   box-shadow: 0 1px 0 rgba(204, 120, 92, 0.08);
 }
 
-.tx-text--user .tx-text__role {
-  color: #F0D5C7;
-  background: var(--accent-subtle);
-  border: 1px solid rgba(204, 120, 92, 0.38);
+/* 去掉 user / assistant 的 role chip —— Claude Code Desktop 风格不渲染
+ * "YOU" / "Claude" label，靠"右侧暖褐气泡"和"左侧全宽流"的对齐 +
+ * 背景差异自然分辨发言人。chip 只在 injected / other（少数特殊态）保留。 */
+.tx-text--user .tx-text__role,
+.tx-text--assistant .tx-text__role {
+  display: none;
 }
 
 .tx-text--assistant {
   background: transparent;
-  border-left: 3px solid var(--accent);
-  padding: 4px 12px 6px 14px;
+  border-left: none;
+  padding: 0;
   border-radius: 0;
-}
-
-.tx-text--assistant .tx-text__role {
-  color: var(--text);
-  background: rgba(245, 244, 239, 0.08);
-  border: 1px solid rgba(245, 244, 239, 0.18);
-  font-family: var(--serif);          /* "Claude" 这个名字用 serif，有名字感 */
-  font-weight: 500;
-  letter-spacing: 0;
 }
 
 .tx-text--other .tx-text__role {
@@ -180,19 +173,19 @@
  */
 .tx-tool,
 .tx-tool-group {
-  margin: 4px 0;
-  border-radius: 6px;
-  background: rgba(148, 163, 184, 0.06);
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  font-size: 11.5px;
+  margin: 1px 0;
+  border-radius: 4px;
+  background: transparent;
+  border: none;
+  font-size: 12.5px;
   overflow: hidden;
 }
 
-.tx-tool--orphan { opacity: 0.75; }
+.tx-tool--orphan { opacity: 0.6; }
 
-/* Shared header: clickable row, icon + name + summary + chevron.
- * Used by both single tool and rollup group via the modifier block
- * selectors below. */
+/* Claude Code Desktop 风格的最小 tool 行：透明背景、无边框、纯单行
+ * `Edited a file ›` / `Ran 2 commands ›`，hover 才有一抹微亮底。展开
+ * 时 body 单独有个浅缩进 + 微背景区分，但 header 本身保持 plain。 */
 .tx-tool__header,
 .tx-tool-group__header {
   appearance: none;
@@ -200,51 +193,55 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 6px 10px;
+  padding: 1px 6px;
   background: transparent;
   border: none;
-  color: #C4CBD7;
+  color: #9CA3B3;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease;
+  border-radius: 4px;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .tx-tool__header:hover,
 .tx-tool-group__header:hover {
-  background: rgba(148, 163, 184, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: #C4CBD7;
 }
 
 .tx-tool--open > .tx-tool__header,
 .tx-tool-group--open > .tx-tool-group__header {
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  color: #C4CBD7;
 }
 
 .tx-tool__chevron,
 .tx-tool-group__chevron {
-  margin-left: auto;
-  font-size: 12px;
+  margin-left: 6px;
+  font-size: 11px;
   color: #6B7488;
   flex: 0 0 auto;
-  padding-left: 4px;
   line-height: 1;
 }
 
 .tx-tool__body,
 .tx-tool-group__body {
-  padding: 6px 10px 8px;
+  padding: 4px 8px 6px 22px;       /* 缩进 22px 对齐到 chevron 后面的文本起点 */
   display: flex;
   flex-direction: column;
   gap: 4px;
+  font-size: 12px;
+  color: #9AA3B5;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  margin-left: 10px;
 }
 
-/* Inside a group, individual tool blocks lose their outer border
- * since the group already owns it; keep them visually nested. */
+/* group 内嵌的 tool —— 没有自己 chrome */
 .tx-tool-group__body .tx-tool {
   margin: 0;
   background: transparent;
-  border: 1px solid rgba(148, 163, 184, 0.10);
+  border: none;
 }
 
 .tx-tool__icon {
@@ -255,14 +252,14 @@
 }
 
 .tx-tool__name {
-  font-weight: 600;
-  color: #F3F4F6;
-  font-size: 11px;
+  font-weight: 500;
+  color: #C4CBD7;
+  font-size: 12.5px;
 }
 
 .tx-tool__summary {
   color: #7F8698;
-  font-size: 11px;
+  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

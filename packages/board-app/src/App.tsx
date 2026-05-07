@@ -403,16 +403,22 @@ export default function App() {
       setDockOpen(true)
     }
 
-    // 选中 session 时画板上 Cmd+V 应该把粘贴文本灌进 Dock 输入框（dock
-    // 没开就以 seed 形式开起来；已开就 append 到现有 textarea）。Excalidraw
-    // 自己的 paste handler 也挂在 document，capture 阶段先抢，否则会被它
-    // 当成 Excalidraw scene 数据处理掉。
+    // Canvas-level cmd+V hijack —— 选中 session card 后粘贴 → 自动开
+    // dock + 把内容当 seed 灌进 textarea，不用先点输入框。三档分流：
+    //   - target 是输入框（INPUT/TEXTAREA/contentEditable）：完全 pass-
+    //       through（不 preventDefault / 不 stopPropagation），让原生
+    //       paste flow 把内容插进 textarea。这条以前每次有人 stopPropagation
+    //       都会把客户端里 textarea 粘贴一起搞挂。
+    //   - 选中 session card + 非输入框：preventDefault + stopImmediate
+    //       夺过事件 → dispatch 把文本灌进 dock（dock 没开就开 + seed，
+    //       已开就 appendAndFocus）。
+    //   - 没选 session（或 channel 选中等）+ 非输入框：完全放手，让
+    //       Excalidraw 自己处理 canvas 上的粘贴。
     const onPaste = (e: ClipboardEvent) => {
       if (isInputTarget(e.target)) return
-      if (!selectedSessionId && selection.kind !== 'none') return
-      // 用户从画板里 copy 了 Excalidraw 元素再 paste —— Excalidraw 把 scene
-      // JSON 写在 text/plain，开头是 {"type":"excalidraw/clipboard"。这种
-      // payload 不能塞进 Dock，让 Excalidraw 自己处理（不 preventDefault）。
+      if (!selectedSessionId) return
+      // Excalidraw 自己的 clipboard payload（{"type":"excalidraw/clipboard"...}）
+      // 不能塞进 dock，让它原生接。
       const types = e.clipboardData?.types ?? []
       if (
         types.includes('application/vnd.excalidraw+json') ||

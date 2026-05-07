@@ -52,8 +52,10 @@ export function SidebarTopNav({
 }: Props) {
   return (
     <div className="sidebar-topnav">
-      {/* ── Tabs (plugin 分类胶囊) ───────────────────────────────── */}
-      {tabs.length > 0 && (
+      {/* ── Tabs (plugin 分类胶囊) ───────────────────────────────────
+       *  只有一个 tab 时直接不渲染整条 —— "All" 单独存在没意义，徒占
+       *  垂直空间。≥2 个 tab 才展示。 */}
+      {tabs.length > 1 && (
         <div className="stn-tabs" role="tablist">
           {tabs.map((t) => {
             const active = t.id === activeTabId

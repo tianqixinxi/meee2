@@ -41,12 +41,17 @@ import TranscriptPanel from './TranscriptPanel'
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
 import { Tooltip } from './Tooltip'
 import {
+  TranscriptView,
   loadTranscriptVerbosity,
   saveTranscriptVerbosity,
   loadDockExpanded,
   saveDockExpanded,
   type TranscriptVerbosity,
 } from '@meee1/board-ui'
+import type {
+  TranscriptBlockForView,
+  TranscriptEntryForView,
+} from '@meee1/board-core'
 
 // ── Mode 类型 ──────────────────────────────────────────────────────────
 
@@ -372,26 +377,49 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             onVerbosityChange={setVerbosity}
           />
         ) : (
-          <div
-            ref={logRef}
-            className="col"
-            style={{ gap: 12, overflowY: 'auto', flex: 1, marginTop: 'auto' }}
-          >
-            {messages.length === 0 && !busy && (
+          // Assistant 模式复用 TranscriptView —— 跟 session 模式视觉同源
+          // （markdown 渲染 / 代码块 / tool block 折叠 / verbosity 控件）。
+          // DisplayMessage[] 由下面 adapter 转成 TranscriptEntryForView[]。
+          // Spawn fence 单独抽出来在底下渲一个 button 行（保留 ChatBubble
+          // 时代的"⚡ Spawn here"功能 —— TranscriptView 不认这个 fence）。
+          <div className="col" style={{ flex: 1, minHeight: 0, gap: 8 }}>
+            {messages.length === 0 && !busy ? (
               <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 4px' }}>
                 Ask anything — summarise sessions, draft a prompt, or describe
                 a project to spawn a new Claude session in.
               </div>
+            ) : (
+              <TranscriptView
+                entries={assistantMessagesToTranscriptEntries(messages)}
+                cacheKey="__assistant_dock__"
+                liveStatus={busy ? 'thinking' : null}
+                verbosity={verbosity}
+                onVerbosityChange={setVerbosity}
+              />
             )}
-            {messages.map((m, i) => (
-              <ChatBubble key={i} message={m} onSpawn={handleSpawn} />
-            ))}
-            {busy && messages[messages.length - 1]?.content === '' &&
-              !(messages[messages.length - 1]?.toolEvents?.length) && (
-                <div className="muted" style={{ fontSize: 12, padding: '0 4px' }}>
-                  …thinking
+            {messages.map((m, i) => {
+              if (m.role !== 'assistant') return null
+              const { spawn } = splitSpawnFence(m.content)
+              if (!spawn) return null
+              return (
+                <div key={`spawn-${i}`} className="row" style={{
+                  gap: 8, padding: '6px 8px',
+                  background: 'rgba(167, 139, 250, 0.08)',
+                  border: '1px solid rgba(167, 139, 250, 0.3)',
+                  borderRadius: 6, alignItems: 'center',
+                }}>
+                  <span style={{ fontSize: 11, color: '#A78BFA' }}>⚡ Spawn at</span>
+                  <code style={{ fontSize: 11, flex: 1, wordBreak: 'break-all' }}>{spawn.cwd}</code>
+                  <button
+                    className="primary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    onClick={() => handleSpawn(spawn.cwd, true)}
+                  >
+                    Spawn here
+                  </button>
                 </div>
-              )}
+              )
+            })}
             {err && <div className="inline-error" style={{ margin: '4px 4px 0' }}>{err}</div>}
           </div>
         )}
@@ -638,6 +666,79 @@ function ToolChip({ event }: { event: ToolEvent }) {
 }
 
 /** 扫 assistant 回复里有没有 ```spawn\n{...}\n``` fence；有的话解析出 cwd。 */
+/// LLM 流式回复时，tool-call 的 JSON 经常跟着 delta text 一起进 content
+/// 字符串（"{"name": "X", "args": {...}}"），同时又另有结构化 tool_call
+/// 事件 —— 渲染时会出现三份重复。这里把 content 里 tool-call JSON 噪音
+/// 剥掉，只留真正的 prose 给 TranscriptView 走 markdown 渲染。
+///   - 行首 `{"name":..., "args":{...}}` 整行删
+///   - 被孤立的开 fence ` ``` ` 后面跟非空字符（造成 markdown 把后面整段
+///     当 code block）也修一下：把那行的开 fence 砍掉留 markdown 内容
+function cleanAssistantContent(text: string): string {
+  if (!text) return text
+  // strip lines that look like {"name": "tool", "args": {...}}
+  let cleaned = text.replace(
+    /^\s*\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{[\s\S]*?\}\s*\}\s*$\n?/gm,
+    '',
+  )
+  // 落单的 "```<text>" 开 fence —— 通常 LLM 把 tool result 包了 fence 没闭，
+  // 导致后面 markdown 全被 react-markdown 当代码块渲。简单粗暴：行首 ```
+  // 后面紧跟非空字符 → 把那 ``` 去掉，保留后面的内容当普通 markdown。
+  cleaned = cleaned.replace(/^\s*```([^\n`].*)$/gm, '$1')
+  return cleaned.trim()
+}
+
+/// 把 assistant 模式的 DisplayMessage[] 适配成 TranscriptView 吃的
+/// TranscriptEntryForView[] —— 复用 session 模式同款渲染（markdown /
+/// 代码块 / tool block 折叠）。每条 message 一个 entry：
+///   - role 直传（user / assistant）
+///   - content 进 text block；spawn fence 文字 + tool-call JSON 噪音预先剥掉
+///   - toolEvents → 一对 tool_use + tool_result block；result 序列化成 JSON
+///     文本（TranscriptView 自己会 truncate 显示）
+function assistantMessagesToTranscriptEntries(
+  messages: DisplayMessage[],
+): TranscriptEntryForView[] {
+  return messages.map((m, i) => {
+    const blocks: TranscriptBlockForView[] = []
+    const { body } = splitSpawnFence(m.content)
+    const cleanedBody = m.role === 'assistant' ? cleanAssistantContent(body) : body
+    if (cleanedBody) {
+      blocks.push({ type: 'text', text: cleanedBody })
+    }
+    for (const te of m.toolEvents ?? []) {
+      const argsJSON = (() => {
+        if (typeof te.args === 'string') return te.args
+        try { return JSON.stringify(te.args ?? {}, null, 2) } catch { return '{}' }
+      })()
+      blocks.push({
+        type: 'tool_use',
+        toolId: te.id,
+        toolUseId: te.id,
+        toolName: te.name,
+        toolInputJSON: argsJSON,
+      })
+      if (te.result !== undefined || te.error) {
+        const resultText = te.error
+          ? `Error: ${te.error}`
+          : (typeof te.result === 'string'
+              ? te.result
+              : (() => { try { return JSON.stringify(te.result, null, 2) } catch { return String(te.result) } })())
+        blocks.push({
+          type: 'tool_result',
+          toolUseId: te.id,
+          toolName: te.name,
+          toolResultText: resultText,
+        })
+      }
+    }
+    return {
+      id: `assistant-${i}`,
+      type: m.role,
+      timestamp: null,
+      blocks,
+    }
+  })
+}
+
 function splitSpawnFence(text: string): { body: string; spawn: { cwd: string } | null } {
   const re = /```spawn\s*\n([\s\S]*?)\n```/
   const m = text.match(re)

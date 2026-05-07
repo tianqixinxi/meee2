@@ -1186,7 +1186,15 @@ export default function Board({
     if (dismissedRef.current.delete(sid)) {
       void persistence.saveDismissed(dismissedRef.current)
     }
-    focusSceneElement(api, target)
+    // 关键：focusSceneElement 推到下一帧。否则跟下面 multi-select push-back
+    // effect 在同一同步批里跑，Excalidraw 处理 selectedElementIds 时偶发会
+    // 把 scroll/zoom 一起重算，导致 focus 改的 scrollX/scrollY 立刻被覆盖
+    // —— 用户感受到的"点很多次才切过去"就是这个 race。延后一帧让 focus
+    // 单独成 batch，scroll/zoom 改动稳稳生效。
+    const targetEl = target
+    requestAnimationFrame(() => {
+      focusSceneElement(api, targetEl)
+    })
   }, [api, state, focusSessionRequest, persistence])
 
   // -- Multi-select all cards for the sidebar-selected session --------

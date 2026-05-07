@@ -49,6 +49,46 @@ final class DragRegionWebView: WKWebView {
         }
         return super.hitTest(point)
     }
+
+    /// 显式拦截 cmd+V / cmd+C / cmd+X / cmd+A 把它们转成 paste:/copy:/cut:/
+    /// selectAll: 走 NSResponder chain。
+    ///
+    /// 背景：WKWebView 在嵌入场景下默认会把 cmd+V 翻译成 keydown 派发给
+    /// JS 但**不会**自动触发 paste 事件 / textarea 默认插入（即使开了
+    /// `_javaScriptCanAccessClipboard` SPI 也不够），导致客户端里 cmd+V
+    /// 完全没反应。同样地 cmd+C 也不会自动 copy。
+    ///
+    /// 这里在 performKeyEquivalent 阶段强制调对应 NSResponder 方法。
+    /// WKWebView 自身实现 paste(_:) / copy(_:) 等，会调 WebKit 内的
+    /// editor pipeline，正确触发 textarea 默认行为 + JS clipboard 事件。
+    /// 返回 true 告诉 NSWindow "事件已处理"，跳过菜单 keyEquivalent 二次
+    /// 派发避免重复粘贴。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command {
+            switch event.charactersIgnoringModifiers {
+            case "v":
+                if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "c":
+                if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "x":
+                if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "a":
+                if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) {
+                    return true
+                }
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 /// 把 WKWebView 内 JS 的 `console.error / console.warn / window.onerror /
@@ -133,15 +173,28 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "meee2-board-shell"
-        // WKWebView 默认禁掉 DOM clipboard。试过 setValue:forKey: 直接在
-        // WKPreferences 上挂 "javaScriptCanAccessClipboard"/"domPasteAllowed"
-        // —— 19:34 那波在 BoardWebWindowController init 里 NSUndefinedKey
-        // Exception 把 app 整挂掉（Swift 不接 ObjC 异常）。底层属性名带
-        // 下划线（`_javaScriptCanAccessClipboard`），且哪怕 underscored 也
-        // 是 SPI，未来 macOS 改名风险高。先放弃 KVC 路径，cmd+V 在客户端
-        // 暂时不灵的代价比 app 起不来小得多。
-        // —— 后续可换 KVC 安全包装（ObjC `@try/@catch` 桥）+ underscored key
-        // 重试，但是要在另起 PR 里做，跟 Open Board 修复解耦。
+        // 打开 WKWebView 的 DOM clipboard SPI —— WebKit 在嵌入场景下默认
+        // 关闭 cmd+V / cmd+C 的 paste/copy 事件分发到 JS（也不让 textarea
+        // 的原生 paste 走完整 flow），导致客户端里复制粘贴一律不响应。
+        // Safari / Chrome 是因为它们自己也设了同款 SPI 才不出问题。
+        //
+        // 安全 KVC：直接 setValue:forKey: 命中未知 key 抛 NSUndefinedKey
+        // Exception，Swift 不接 ObjC 异常 → 整个 app 闪退（早上 19:34 那
+        // 次就是这么挂的）。先用 responds(to:) 探针 setter 存在再调，未知
+        // 静默跳过。两套候选 setter 名（无下划线 / 带下划线）轮试一遍 ——
+        // Apple 不同 macOS 版本之间在 SPI 名上互换过。
+        let prefs = configuration.preferences as NSObject
+        for key in ["javaScriptCanAccessClipboard", "domPasteAllowed"] {
+            let cap = key.prefix(1).uppercased() + key.dropFirst()
+            for setterName in ["set\(cap):", "_set\(cap):"] {
+                let sel = NSSelectorFromString(setterName)
+                if prefs.responds(to: sel) {
+                    prefs.setValue(true, forKey: key)
+                    NSLog("[BoardWebWindowController] enabled WKPreferences SPI key=\(key) via \(setterName)")
+                    break
+                }
+            }
+        }
 
         // 注入 JS 控制台桥 —— 把 React app 内部的 console.error / 抛错
         // 转回 native log。配置必须在 WKWebView init 之前完成。
