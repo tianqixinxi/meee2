@@ -6,6 +6,27 @@
         <link>https://raw.githubusercontent.com/tianqixinxi/meee2/main/appcast.xml</link>
         <description>meee2 release feed</description>
         <language>en</language>
+        <item>
+            <title>meee2 v0.4.2</title>
+            <description><![CDATA[## What's Changed
+* fix(sparkle): prepend new appcast items + parse latest by max version by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/18
+* feat(sparkle): codex-style silent update + sidebar Update pill by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/19
+
+
+**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/v0.4.1...v0.4.2]]></description>
+            <pubDate>Thu, 07 May 2026 17:48:51 +0000</pubDate>
+            <sparkle:version>0.4.2</sparkle:version>
+            <sparkle:shortVersionString>0.4.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/tianqixinxi/meee2/releases/download/v0.4.2/meee2-v0.4.2.dmg"
+                sparkle:version="0.4.2"
+                sparkle:shortVersionString="0.4.2"
+                type="application/octet-stream"
+                sparkle:edSignature="68eRbo3ab05KpjxJniB+ZpRnrrxuFur8Qm22ddzmdtWqLAq1PeyHXJSQmMkR5LyTpNGa1aDcJgCgwzLM6r0dAQ=="
+                length="12452875" />
+        </item>
+
 <item>
             <title>meee2 v0.4.1</title>
             <description><![CDATA[## What's Changed
