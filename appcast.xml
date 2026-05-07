@@ -68,38 +68,6 @@
                 sparkle:edSignature="I2Vac6Den3J1IGEqXJrZRoJZZ0iEkmwlYflh4ZfrRokD938KHxOXD397V+JD8fNthfWOBZ1ch6OGCCXIAqwfAA=="
                 length="11415189" />
         </item>
-        <item>
-            <title>meee2 v0.4.0</title>
-            <description><![CDATA[## What's Changed
-* [codex] Publish board packages under meee1 scope by @rsgok in https://github.com/tianqixinxi/meee2/pull/5
-* Publish board packages to npm by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/6
-* Redesign WebUI shell — Claude Code-inspired, truly transparent titlebar by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/7
-* WIP merge: comm-kit split, WebUI shell, TUI removal, perf + IME fixes by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/8
-* fix(ClaudeDesktopMetadataReader): pick unarchived wrapper when cliSessionId collides by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/9
-* feat(TranscriptView): three-level verbosity (normal / thinking / verbose) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/10
-* fix(BoardWebWindowController): bypass HTTP cache on initial load + reload by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/11
-* feat(TranscriptView): live in-flight indicator + tool-call rollup by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/12
-* feat(Dock): move transcript verbosity pill from search bar to ChatComposer by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/13
-* fix(inject): surface "queued_until_next_turn" delivery hint for Desktop sessions by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/14
-* feat(diagnostics): user-visible log + status-bar diag entries by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/16
-* feat(ClaudeDesktopInputStream): infrastructure for explicit-push to Desktop sessions by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/15
-
-## New Contributors
-* @hawkelethan9 made their first contribution in https://github.com/tianqixinxi/meee2/pull/6
-
-**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/0.3.0...v0.4.0]]></description>
-            <pubDate>Thu, 07 May 2026 08:05:15 +0000</pubDate>
-            <sparkle:version>0.4.0</sparkle:version>
-            <sparkle:shortVersionString>0.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/tianqixinxi/meee2/releases/download/v0.4.0/meee2-v0.4.0.dmg"
-                sparkle:version="0.4.0"
-                sparkle:shortVersionString="0.4.0"
-                type="application/octet-stream"
-                sparkle:edSignature="C5DNGZPSIXo4vuuMDxjdPWRZEXA+D/UepiuxrIb6k9SJl/ArX5sR5OTxDbt0aU89aP6wyuppJeWrkWCPWfuhCA=="
-                length="8909383" />
-        </item>
 
 
 
