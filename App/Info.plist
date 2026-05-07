@@ -51,7 +51,7 @@
          private key (kept in macOS Keychain locally + GH Secret
          SPARKLE_ED_PRIVATE_KEY_BASE64 for CI). -->
     <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/tianqixinxi/meee2/main/appcast.xml</string>
+    <string>https://raw.githubusercontent.com/tianqixinxi/meee2/appcast/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>NA19lgoaQ0LSrt5Z0ARJuHaTrce96npVqcGg809aCoQ=</string>
     <key>SUEnableAutomaticChecks</key>

@@ -223,11 +223,13 @@ and "manual triggered, human-approved publish."
 - [x] **Sparkle auto-update** — `sparkle-project/Sparkle` 2.x added as
   SwiftPM dep, `SPUStandardUpdaterController` wired into `AppDelegate`,
   status-bar menu has "Check for Updates…" item. `App/Info.plist` carries
-  `SUFeedURL` (raw appcast.xml on `main`) + `SUPublicEDKey`. Each release
-  CI run (when `SPARKLE_ED_PRIVATE_KEY_BASE64` secret is set) signs the
-  notarized DMG with EdDSA and pushes a fresh `<item>` into `appcast.xml`
-  on main via `scripts/sparkle-publish.sh`. Skips silently when the
-  secret is missing — DMG still ships, just no auto-update for that
+  `SUFeedURL` (raw appcast.xml on the `appcast` branch — kept off `main`
+  because `main` has branch protection that blocks even GITHUB_TOKEN's
+  push) + `SUPublicEDKey`. Each release CI run (when
+  `SPARKLE_ED_PRIVATE_KEY_BASE64` secret is set) signs the notarized DMG
+  with EdDSA and pushes a fresh `<item>` into `appcast.xml` on the
+  `appcast` branch via `scripts/sparkle-publish.sh`. Skips silently when
+  the secret is missing — DMG still ships, just no auto-update for that
   version.
 
 ### NOT done — needs your input
