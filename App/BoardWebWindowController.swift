@@ -64,9 +64,24 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "meee2-board-shell"
+        // WKWebView 默认禁掉 DOM clipboard。试过 setValue:forKey: 直接在
+        // WKPreferences 上挂 "javaScriptCanAccessClipboard"/"domPasteAllowed"
+        // —— 19:34 那波在 BoardWebWindowController init 里 NSUndefinedKey
+        // Exception 把 app 整挂掉（Swift 不接 ObjC 异常）。底层属性名带
+        // 下划线（`_javaScriptCanAccessClipboard`），且哪怕 underscored 也
+        // 是 SPI，未来 macOS 改名风险高。先放弃 KVC 路径，cmd+V 在客户端
+        // 暂时不灵的代价比 app 起不来小得多。
+        // —— 后续可换 KVC 安全包装（ObjC `@try/@catch` 桥）+ underscored key
+        // 重试，但是要在另起 PR 里做，跟 Open Board 修复解耦。
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
+        // 开 Web Inspector —— `isInspectable` 是 macOS 13.3+ 公开 API，
+        // 直接走 typed property（KVC 也行但风格不统一）。@available 编译
+        // 时已经卡住低版本，无需 runtime check。
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
