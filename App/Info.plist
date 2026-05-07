@@ -42,5 +42,21 @@
          has no explainer and reads as suspicious. -->
     <key>NSAppleEventsUsageDescription</key>
     <string>meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the meee2 board into the running session.</string>
+
+    <!-- Sparkle auto-update. SUFeedURL is the appcast.xml that lives in the
+         repo root on the main branch (raw-served by GitHub) — release.yml's
+         Sparkle publish step appends a new <item> after each notarized DMG
+         lands on Releases. SUPublicEDKey verifies sign_update's EdDSA
+         signature on download; rotating it requires regenerating the matching
+         private key (kept in macOS Keychain locally + GH Secret
+         SPARKLE_ED_PRIVATE_KEY_BASE64 for CI). -->
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/tianqixinxi/meee2/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>NA19lgoaQ0LSrt5Z0ARJuHaTrce96npVqcGg809aCoQ=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>

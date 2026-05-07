@@ -2,11 +2,26 @@ import SwiftUI
 import meee2Kit
 import Meee2PluginKit
 import Meee2CommKit
+import Sparkle
 
 /// AppDelegate - 管理 macOS 特有的窗口和状态栏
 public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 状态栏图标
     private var statusItem: NSStatusItem?
+
+    /// Sparkle 自动更新控制器。Standard 版自带 UI（"Check for Updates…"
+    /// 弹框、下载进度、relaunch 流程），用 Info.plist 的 SUFeedURL +
+    /// SUPublicEDKey 决定从哪拉 appcast 以及拿什么公钥校验签名。
+    /// `startingUpdater: true` 让 updater 在 mainmenu drawn 之后立刻起来：
+    /// 既调度 backgroundCheckForUpdates，也激活 menu validation
+    /// （否则 NSMenuItem 的 enabled 状态走 nil-target 不更新）。
+    private lazy var updaterController: SPUStandardUpdaterController = {
+        SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+    }()
 
     /// 灵动岛窗口
     private var islandWindow: DynamicIslandWindow?
@@ -198,6 +213,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
+        menu.addItem(NSMenuItem.separator())
+        // Sparkle —— `checkForUpdates(_:)` 是 SPUStandardUpdaterController 的
+        // 标准 action selector；item 的 enable/disable 由 updaterController 自管
+        // （updater 还在 init / 还在等下次 schedule 的时候 grey 出）。
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updateItem.target = updaterController
+        menu.addItem(updateItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self

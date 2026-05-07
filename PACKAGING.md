@@ -134,6 +134,40 @@ Export the cert as `.p12`:
 | `APPLE_NOTARY_TEAM_ID` | the 10-char team ID (same as the parens in IDENTITY) |
 | `APPLE_NOTARY_PASSWORD` | the App-Specific Password from §3 |
 
+### Sparkle EdDSA private key (1 secret — optional)
+
+| Name | Value |
+|---|---|
+| `SPARKLE_ED_PRIVATE_KEY_BASE64` | base64 of the 44-byte EdDSA private key |
+
+Generated once with `bin/generate_keys` from the Sparkle release tarball.
+The matching public key is hardcoded into `App/Info.plist` under
+`SUPublicEDKey` so client builds can verify update signatures.
+
+To rotate:
+
+```bash
+# Wipe the existing key from your local Keychain so generate_keys
+# doesn't reuse it.
+security delete-generic-password -a ed25519 -s "https://sparkle-project.org"
+
+# Re-run from a Sparkle tarball you've already extracted
+/tmp/sparkle/bin/generate_keys
+/tmp/sparkle/bin/generate_keys -p
+# Update App/Info.plist's SUPublicEDKey with the printed string
+
+# Export private + upload to the GH Secret
+/tmp/sparkle/bin/generate_keys -x ~/.meee2/sparkle/ed25519-priv.key
+chmod 600 ~/.meee2/sparkle/ed25519-priv.key
+openssl base64 -A -in ~/.meee2/sparkle/ed25519-priv.key \
+  | gh secret set SPARKLE_ED_PRIVATE_KEY_BASE64
+```
+
+Without this secret CI publishes the GitHub Release but **skips the
+appcast update** — older clients won't see the new version through
+"Check for Updates…". The DMG itself is still notarized and Gatekeeper-
+clean; only the auto-update notification is missed.
+
 ### One-time: Create the `release` environment for the manual approval gate
 
 The release workflow is a two-stage manual flow:
@@ -186,20 +220,23 @@ and "manual triggered, human-approved publish."
   missing.
 - [x] **Uninstall script** (`uninstall.sh`) — surgical cleanup of state +
   Claude hooks + MCP registrations. dry-run by default.
+- [x] **Sparkle auto-update** — `sparkle-project/Sparkle` 2.x added as
+  SwiftPM dep, `SPUStandardUpdaterController` wired into `AppDelegate`,
+  status-bar menu has "Check for Updates…" item. `App/Info.plist` carries
+  `SUFeedURL` (raw appcast.xml on `main`) + `SUPublicEDKey`. Each release
+  CI run (when `SPARKLE_ED_PRIVATE_KEY_BASE64` secret is set) signs the
+  notarized DMG with EdDSA and pushes a fresh `<item>` into `appcast.xml`
+  on main via `scripts/sparkle-publish.sh`. Skips silently when the
+  secret is missing — DMG still ships, just no auto-update for that
+  version.
 
 ### NOT done — needs your input
 
 - [ ] **Apple Developer Program** — manual ($99/yr).
 - [ ] **Developer ID cert + .p12** — manual (Keychain export, GH secret).
 - [ ] **App-Specific Password + notarytool profile** — manual (Apple ID web).
-- [ ] **GitHub Secrets** — paste the six values above into repo settings.
-- [ ] **Sparkle auto-update** — not added. Decisions needed first:
-  - Where to host the appcast XML? (your server / GitHub Releases / S3)
-  - EdDSA signing key: I can't generate it for you — `generate_keys` from
-    Sparkle distribution makes a private key that must NOT be committed.
-  - Once decided, the integration is: SwiftPM dep on `sparkle-project/Sparkle`,
-    `SUFeedURL` + `SUPublicEDKey` in `App/Info.plist`, wire up
-    `SPUStandardUpdaterController` in `AppDelegate`. ~30 lines.
+- [ ] **GitHub Secrets** — paste the seven values above into repo settings
+  (six Apple + one Sparkle).
 
 ### Known gaps (low priority)
 
