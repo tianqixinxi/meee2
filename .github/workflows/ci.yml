@@ -74,6 +74,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-spm-
 
+      # WebDist is gitignored (built artifact). Package.swift's
+      # `.copy("Board/WebDist")` resource declaration needs the dir
+      # populated before `swift build`. Generate it here — board-packages
+      # job already does the same on its ubuntu runner but can't share
+      # filesystem with this validate runner.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+      - name: Build web frontend (SwiftPM resource)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm -F @meee1/board-app build
+
       - name: Install SwiftLint
         run: |
           if ! command -v swiftlint >/dev/null 2>&1; then
