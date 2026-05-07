@@ -72,6 +72,25 @@ jobs:
           submodules: recursive
           fetch-depth: 0    # 用于 gh release 的 release-notes 生成
 
+      # Formal releases (no `-` in VERSION → marked stable on the
+      # Releases page) MUST come from main. main 走完整 status check
+      # + review 流程，feature branch 没有这个保证。Prereleases (rc /
+      # alpha / beta) can still come from any branch — that's the whole
+      # point of dispatch from a working branch.
+      - name: Refuse formal release from non-main ref
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "$VERSION" == *-* ]]; then
+              echo "VERSION=$VERSION → prerelease, ref check skipped"
+              exit 0
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error title=Refusing non-main formal release::Cannot publish formal v$VERSION from $GITHUB_REF. Merge to main first, then re-run from main."
+              exit 1
+          fi
+          echo "VERSION=$VERSION (formal) on $GITHUB_REF — proceeding"
+
       - name: Compute VERSION
         id: ver
         run: |
