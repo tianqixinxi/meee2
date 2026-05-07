@@ -35,14 +35,23 @@ echo "Packaging version: $VERSION"
 
 echo "=== Building ${APP_NAME} ==="
 
-# Build web frontend so WebDist is populated before swift build
+# Build web frontend so WebDist is populated before swift build.
+# `pnpm build` (no -F filter) walks the whole workspace in dep order so
+# board-app's tsc can resolve @meee1/{board-cards,board-core,board-ui,
+# board-persistence-http} via emitted .d.ts. -F filter alone fails on
+# a clean runner because deps haven't been built yet.
 echo "=== Building Web Board ==="
 if command -v pnpm &>/dev/null; then
     pnpm install --frozen-lockfile=false
-    pnpm -F @meee1/board-app build
+    pnpm build
     echo "Web Board built → Sources/Board/WebDist/"
 else
-    echo "Warning: pnpm not found; using existing WebDist (may be stale)"
+    # Hard-fail instead of silently shipping empty WebDist (.gitkeep only)
+    # which used to surface as "Open Board → 404". WebDist is required and
+    # must be regenerated each release; release.yml installs pnpm via
+    # corepack on macos-15 runner.
+    echo "ERROR: pnpm not found — cannot build WebDist; refusing to ship empty Board" >&2
+    exit 1
 fi
 
 SKIP_WEB_BUILD=1 ./build.sh

@@ -112,6 +112,20 @@ jobs:
           swift --version
           xcodebuild -version || true
 
+      # WebDist 是 vite build 输出，repo 里只剩 .gitkeep。create-dmg.sh 在
+      # pnpm 不存在时会 fallback "use existing WebDist" 然后把空 .gitkeep 打进
+      # .app → Board 窗口 404。release runner 必须装 pnpm；validate(ci.yml)
+      # 已经装，release 之前漏了 → v0.4.0 DMG 的 Board 全空。
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+          pnpm --version
+
       - name: Cache SwiftPM build
         uses: actions/cache@v4
         with:
