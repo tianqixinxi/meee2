@@ -63,7 +63,7 @@ fi
 REPO_FLAG=()
 if [ -n "${REPO:-}" ]; then REPO_FLAG=(--repo "$REPO"); fi
 
-REL_JSON=$(gh release view "$TAG" "${REPO_FLAG[@]}" --json url,publishedAt,assets,body 2>/dev/null) || {
+REL_JSON=$(gh release view "$TAG" ${REPO_FLAG[@]+"${REPO_FLAG[@]}"} --json url,publishedAt,assets,body 2>/dev/null) || {
     echo "ERROR: GitHub Release $TAG not found (publish DMG to Releases first)" >&2
     exit 1
 }
@@ -97,7 +97,7 @@ print(json.load(sys.stdin)['body'] or '')
 TMP_DMG=$(mktemp -t "meee2-sparkle.XXXXXX")
 trap 'rm -f "$TMP_DMG"' EXIT
 echo "==> downloading $DMG_NAME from release $TAG..."
-gh release download "$TAG" "${REPO_FLAG[@]}" -p "$DMG_NAME" -O "$TMP_DMG" --clobber
+gh release download "$TAG" ${REPO_FLAG[@]+"${REPO_FLAG[@]}"} -p "$DMG_NAME" -O "$TMP_DMG" --clobber
 DMG_BYTES=$(wc -c < "$TMP_DMG" | tr -d ' ')
 
 # ── sign with EdDSA ───────────────────────────────────────────────────
