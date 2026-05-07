@@ -90,7 +90,11 @@ jobs:
       - name: Build web frontend (SwiftPM resource)
         run: |
           pnpm install --frozen-lockfile
-          pnpm -F @meee1/board-app build
+          # Whole-workspace build, not `-F @meee1/board-app`. board-app
+          # depends on @meee1/{board-cards,board-core,board-ui,
+          # board-persistence-http} via workspace:* — those need to emit
+          # their .d.ts before tsc on board-app can resolve the imports.
+          pnpm build
 
       - name: Install SwiftLint
         run: |
