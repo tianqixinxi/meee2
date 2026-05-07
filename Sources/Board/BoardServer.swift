@@ -9,21 +9,36 @@ import Meee2CommKit
 /// - REST API：`/api/*` 路径由 `BoardAPI` 处理
 /// - WebSocket：`/api/events` 推送 `{"type":"state.changed","timestamp":"..."}`
 ///
-/// 绑定：仅 127.0.0.1 （通过 Swifter 的 `listenAddressIPv4` + `forceIPv4: true`）
+/// 绑定：默认仅 127.0.0.1 （通过 Swifter 的 `listenAddressIPv4` + `forceIPv4: true`）。
+/// 设 env `MEEE2_BOARD_BIND=0.0.0.0` 可暴露到局域网（无 auth，自担风险）。
 public final class BoardServer {
     public static let shared = BoardServer()
     public static let defaultPort: UInt16 = 9876
+    public static let defaultBindAddress: String = "127.0.0.1"
     public static let maxAutoPortOffset: UInt16 = 100
     public static let portEnvVar = "MEEE2_BOARD_PORT"
+    public static let bindEnvVar = "MEEE2_BOARD_BIND"
 
     private var server: HttpServer?
     private let stateLock = NSLock()
     private let preferredPort: UInt16
+    /// 实际 bind 的 IPv4 地址。`127.0.0.1` = 仅本机；`0.0.0.0` = 全部接口（LAN 可达）；
+    /// 也可指定具体网卡 IP（比如只暴露给 `192.168.1.0/24`）。
+    private let bindAddress: String
 
     public private(set) var isRunning: Bool = false
     public private(set) var port: UInt16 = BoardServer.defaultPort
 
+    /// Loopback URL —— 内部回调（meee360 OAuth callback / CLI 提示）始终用这个，
+    /// 即使 server 暴露到 0.0.0.0，浏览器在本机访问 `127.0.0.1` 一样能命中。
     public var url: String { "http://127.0.0.1:\(port)" }
+
+    /// LAN 可达 URLs —— 当 bindAddress 非 loopback 时，遍历本机所有 IPv4 网卡。
+    /// 用于启动时打印让用户知道局域网里别的设备该填什么地址。
+    public var lanURLs: [String] {
+        guard bindAddress != Self.defaultBindAddress else { return [] }
+        return Self.enumerateLanIPv4Addresses().map { "http://\($0):\(port)" }
+    }
 
     /// 当前活跃的 WebSocket sessions（broadcast 用）
     private var wsSessions: [WebSocketSession] = []
@@ -41,6 +56,10 @@ public final class BoardServer {
         } else {
             self.preferredPort = Self.defaultPort
         }
+        // bind 地址也可通过环境变量覆盖。空串 / 非法值 → 回落 loopback。
+        let envBind = ProcessInfo.processInfo.environment[Self.bindEnvVar]?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        self.bindAddress = envBind.isEmpty ? Self.defaultBindAddress : envBind
     }
 
     // MARK: - 生命周期
@@ -57,8 +76,9 @@ public final class BoardServer {
         var lastError: Error?
         for candidate in candidatePorts() {
             let server = HttpServer()
-            // 仅监听环回地址，防止对外暴露
-            server.listenAddressIPv4 = "127.0.0.1"
+            // 默认只监听环回地址；用户设置 MEEE2_BOARD_BIND=0.0.0.0 可暴露到 LAN
+            // （API 没 auth，等于完全开放，仅家里 / 私有 WiFi 用）。
+            server.listenAddressIPv4 = bindAddress
 
             registerRoutes(on: server)
 
@@ -67,7 +87,16 @@ public final class BoardServer {
                 self.server = server
                 self.port = candidate
                 self.isRunning = true
-                MInfo("[BoardServer] listening on \(url) (bound to 127.0.0.1)")
+                if bindAddress == Self.defaultBindAddress {
+                    MInfo("[BoardServer] listening on \(url) (bound to 127.0.0.1)")
+                } else {
+                    MWarn("[BoardServer] LAN-exposed: bound to \(bindAddress):\(candidate). " +
+                          "BoardAPI has no auth — anyone on the network can spawn / inject / kill sessions.")
+                    MInfo("[BoardServer] loopback: \(url)")
+                    for lurl in lanURLs {
+                        MInfo("[BoardServer] LAN reachable: \(lurl)")
+                    }
+                }
                 writeRuntimeInfo()
                 subscribeToEventBus()
                 return
@@ -130,9 +159,10 @@ public final class BoardServer {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let payload: [String: Any] = [
                 "name": "meee2-board-server",
-                "host": "127.0.0.1",
+                "host": bindAddress,
                 "port": Int(port),
                 "url": url,
+                "lanUrls": lanURLs,
                 "pid": Int(ProcessInfo.processInfo.processIdentifier),
                 "updatedAt": BoardDTOBuilder.iso(Date())
             ]
@@ -167,6 +197,42 @@ public final class BoardServer {
         return appSupport
             .appendingPathComponent("meee2", isDirectory: true)
             .appendingPathComponent("board-server.json", isDirectory: false)
+    }
+
+    /// 列出本机所有非 loopback IPv4 地址（en0/en1/Wi-Fi/以太网/USB-C 网卡等）。
+    /// 用 `getifaddrs()` —— BSD 标准 API，不需要额外依赖。过滤掉 link-local
+    /// （169.254.x）和 utun / awdl0 / llw0 这些不是真 LAN 的虚拟接口。
+    static func enumerateLanIPv4Addresses() -> [String] {
+        var results: [String] = []
+        var ifaddrPtr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddrPtr) == 0, let first = ifaddrPtr else { return results }
+        defer { freeifaddrs(ifaddrPtr) }
+
+        var cursor: UnsafeMutablePointer<ifaddrs>? = first
+        while let ptr = cursor {
+            defer { cursor = ptr.pointee.ifa_next }
+            let flags = Int32(ptr.pointee.ifa_flags)
+            // 必须 UP + RUNNING + 非 loopback
+            guard (flags & IFF_UP) != 0,
+                  (flags & IFF_RUNNING) != 0,
+                  (flags & IFF_LOOPBACK) == 0,
+                  let addr = ptr.pointee.ifa_addr else { continue }
+            guard addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+
+            // 接口名过滤：utun*（VPN）、awdl0 / llw0（Apple Wireless Direct Link）跳过
+            let ifname = String(cString: ptr.pointee.ifa_name)
+            if ifname.hasPrefix("utun") || ifname == "awdl0" || ifname == "llw0" { continue }
+
+            var hostBuf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let saLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let rc = getnameinfo(addr, saLen, &hostBuf, socklen_t(hostBuf.count), nil, 0, NI_NUMERICHOST)
+            guard rc == 0 else { continue }
+            let host = String(cString: hostBuf)
+            // 169.254.x 是 link-local 自分配地址，没用
+            if host.hasPrefix("169.254.") { continue }
+            results.append(host)
+        }
+        return results
     }
 
     // MARK: - 广播
@@ -304,6 +370,9 @@ public final class BoardServer {
         server.GET["/api/state"]   = BoardServer.cors(BoardAPI.getState)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
+        server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
+        server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
+        server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)

@@ -1,5 +1,15 @@
 import type { Session, TranscriptEntry } from '../types'
 import { shortenProject } from '@meee1/board-core'
+// Lucide icons replace inline emoji glyphs in status / inbox / bg-agent
+// chips. Keeping size: 11 to match the ~11px font cards use.
+import {
+  Zap,
+  Package,
+  Inbox,
+  Lock,
+  Settings as SettingsIcon,
+  Wrench,
+} from 'lucide-react'
 
 interface SessionCardProps {
   session: Session
@@ -97,31 +107,49 @@ export function SessionCard({
   )
   const tokens = tokensText(session.usageStats)
   const messages = session.recentMessages ?? []
-  // 新设计更紧凑 → 多容一条消息
-  const rows = messages.slice(-5)
+  // 卡片只展示 user input + assistant output 这两端的"对话"，过滤掉 tool
+  // call 噪音（read/write/bash 这类中间步对快速浏览没价值，且经常把
+  // 真正的回复挤到 5 条窗口外面看不到）。先过滤再 slice(-5)，确保任意
+  // 时刻都尽量给满 5 条 user/assistant 消息。
+  const rows = messages
+    .filter((e) => e.role === 'user' || e.role === 'assistant')
+    .slice(-5)
   const sidShort = session.id.replace(/-/g, '').slice(0, 8)
 
-  const footerStatus = session.currentTool
-    ? `⚡ ${session.currentTool}`
-    : session.status === 'active'
-    ? '● active'
-    : session.status === 'thinking'
-    ? '✦ thinking'
-    : session.status === 'tooling'
-    ? '⚡ tooling'
-    : session.status === 'compacting'
-    ? '📦 compacting'
-    : session.status === 'completed'
-    ? '✓ completed'
-    : session.status === 'idle'
-    ? '○ idle'
-    : session.status === 'waitingForUser'
-    ? '○ idle'
-    : session.status === 'permissionRequired'
-    ? '🔒 permission'
-    : session.status === 'dead'
-    ? '✖ dead'
-    : `● ${session.status}`
+  // 状态行：图标走 lucide，文字保留原 label。原本用 emoji 前缀字符串，
+  // 改成 React 节点（icon + text）。idle / completed / dead 这种纯几何
+  // 字符（○ ✓ ✖ ●）保留——它们不是 emoji，单字符渲染稳定。
+  const footerStatus: React.ReactNode = session.currentTool ? (
+    <span className="session-card__status-line">
+      <Zap size={11} aria-hidden /> {session.currentTool}
+    </span>
+  ) : session.status === 'active' ? (
+    '● active'
+  ) : session.status === 'thinking' ? (
+    '✦ thinking'
+  ) : session.status === 'tooling' ? (
+    <span className="session-card__status-line">
+      <Zap size={11} aria-hidden /> tooling
+    </span>
+  ) : session.status === 'compacting' ? (
+    <span className="session-card__status-line">
+      <Package size={11} aria-hidden /> compacting
+    </span>
+  ) : session.status === 'completed' ? (
+    '✓ completed'
+  ) : session.status === 'idle' ? (
+    '○ idle'
+  ) : session.status === 'waitingForUser' ? (
+    '○ idle'
+  ) : session.status === 'permissionRequired' ? (
+    <span className="session-card__status-line">
+      <Lock size={11} aria-hidden /> permission
+    </span>
+  ) : session.status === 'dead' ? (
+    '✖ dead'
+  ) : (
+    `● ${session.status}`
+  )
 
   const cardClass = [
     'session-card',
@@ -154,9 +182,20 @@ export function SessionCard({
       title="Double-click to jump to terminal"
     >
       {/* active / waiting / dead 都有 LIVE badge（颜色跟着 halo）；
-          idle / completed 没有，避免视觉噪音 */}
+          idle / completed 没有，避免视觉噪音。
+          LIVE 态特殊处理：换成三个 staggered bounce 小点（和 Sidebar
+          的 status-dots-live 视觉同源）；其它 badge (ATTN/WAIT/DEAD)
+          保留文字胶囊—— 它们的 label 携带语义，比纯动效更明确。 */}
       {liveKind.badge && (
-        <div className="session-card__live">{liveKind.badge}</div>
+        liveKind.badge === 'LIVE' ? (
+          <div className="session-card__live session-card__live--dots" aria-label="live">
+            <span className="status-dots-live" aria-hidden>
+              <span /><span /><span />
+            </span>
+          </div>
+        ) : (
+          <div className="session-card__live">{liveKind.badge}</div>
+        )
       )}
 
       <div className="session-card__header">
@@ -192,12 +231,12 @@ export function SessionCard({
               .map((a) => `${bgKindGlyph(a.kind)} ${a.description ?? a.id}`)
               .join('\n')}
           >
-            ⚙ {session.backgroundAgents.length} bg
+            <SettingsIcon size={10} aria-hidden /> {session.backgroundAgents.length} bg
           </span>
         )}
         {session.inboxPending > 0 && (
           <span className="session-card__pending">
-            📨 {session.inboxPending}
+            <Inbox size={11} aria-hidden /> {session.inboxPending}
           </span>
         )}
         <span className="session-card__sid">{sidShort}</span>

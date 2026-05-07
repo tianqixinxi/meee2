@@ -179,6 +179,59 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    /// DELETE /api/sessions/:id
+    /// SIGTERM 真实进程并清掉 SessionStore 记录。
+    ///
+    /// 失败语义（前端会拿 errorCode 翻译成"请你自己手动关"toast）:
+    ///   - no_pid          → 该 session 没 pid（Desktop / Cowork / external chat）
+    ///   - not_found       → sid 没匹配上
+    ///   - kill_failed     → kill() 系统调用挂了（罕见，errno 会带回去）
+    /// 注意：进程已经死了但 card 还在的情况不算失败 —— 直接清记录返回 ok。
+    static func closeSession(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        // SessionStore 同时支持 full-id 和单一前缀匹配，跟 inject / activate 一致
+        let resolved: SessionData? = {
+            if let s = SessionStore.shared.get(sid) { return s }
+            let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+            return matches.count == 1 ? matches[0] : nil
+        }()
+        guard let session = resolved else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        guard let pid = session.pid else {
+            // Desktop / Cowork / external —— meee2 不持有 pid，必须用户自己回宿主 app 关
+            return errorResponse(
+                "no_pid",
+                "this session has no controllable process — close it from its host app",
+                status: 409
+            )
+        }
+        // 进程已经走了：kill(pid, 0) 返回 -1 / ESRCH。直接清掉 lingering card 算成功
+        if kill(pid_t(pid), 0) != 0 {
+            SessionStore.shared.delete(session.sessionId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CloseEnvelope(ok: true, alreadyDead: true))
+        }
+        // SIGTERM —— 让 Claude CLI 有机会 flush transcript / 退出 raw mode 再退出。
+        // 不用 SIGKILL：终端会留下乱码 + 没机会 cleanup。
+        let r = kill(pid_t(pid), SIGTERM)
+        if r != 0 {
+            let err = String(cString: strerror(errno))
+            return errorResponse("kill_failed", "SIGTERM failed: \(err)", status: 500)
+        }
+        SessionStore.shared.delete(session.sessionId)
+        BoardServer.shared.broadcastStateChanged()
+        MLog("[BoardAPI] Closed session \(session.sessionId.prefix(8)) (SIGTERM pid \(pid))")
+        return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
+    }
+
+    private struct CloseEnvelope: Encodable {
+        let ok: Bool
+        let alreadyDead: Bool
+    }
+
     /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明
     /// 该 sid 是 desktop 起的 session（不一定在 PluginManager 里）。
     /// 返回完整 cliSessionId（前端可能传 short-id）。
@@ -328,6 +381,122 @@ enum BoardAPI {
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
         }
+    }
+
+    /// POST /api/sessions/:id/push-now
+    /// 显式 "Push to Desktop" —— 把 content（如有）写进 inbox，然后立刻调
+    /// AgentInboxShell.pushDesktopNow 把 inbox 通过 AppleScript keystroke
+    /// 注入 Claude.app 当前 focused 输入框。会抢焦点，所以必须用户主动触
+    /// 发（webui Dock 的 ⚡ 按钮）—— 默认 inject path 不走这条。
+    ///
+    /// Body: {"content": "..."}（可空：如果 inbox 已有 pending msg，content
+    ///                         为空就只 drain 现有的）
+    /// 响应: {"delivered": N, "message": MessageDTO?, "error": "..."?}
+    static func pushToDesktopNow(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let session = resolvePluginSession(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        let targetSessionId = inboxSessionId(for: session)
+        let sessionData = SessionStore.shared.get(targetSessionId)
+        let isDesktop = ClaudeDesktopActivator.isDesktopBacked(
+            sid: targetSessionId,
+            transcriptPath: sessionData?.transcriptPath
+        )
+        guard isDesktop else {
+            return errorResponse(
+                "not_desktop",
+                "push-now only applies to Claude Desktop sessions; CLI sessions deliver immediately via terminal typeIn",
+                status: 400
+            )
+        }
+
+        // 可选 content：写 inbox。空 content = 只 drain 现有 pending。
+        var injectedMsg: MessageDTO?
+        if let json = parseJSONBody(req),
+           let content = json["content"] as? String, !content.isEmpty {
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
+                let written = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: content,
+                    injectedByHuman: true
+                )
+                injectedMsg = BoardDTOBuilder.messageDTO(written)
+            } catch {
+                return errorResponse("bad_request", error.localizedDescription, status: 400)
+            }
+        }
+
+        // Drain 通过 keystroke。同步阻塞这条 HTTP request 的 thread —— 用
+        // semaphore 等 Task 完成。webui 用户体验：点 ⚡ 后 ~2s 看到 toast，
+        // 期间 Claude.app 弹起 + 输入框出现文字 + 自动回车。
+        let sem = DispatchSemaphore(value: 0)
+        var delivered = 0
+        var error: String?
+        Task {
+            let result = await AgentInboxShell.shared.pushDesktopNow(sessionId: targetSessionId)
+            delivered = result.delivered
+            error = result.error
+            sem.signal()
+        }
+        // 最多等 15s（resume + activate + keystroke + tail delay 约 2s/条，
+        // 留余量）。超时返回 partial 结果让 user 知道。
+        _ = sem.wait(timeout: .now() + 15.0)
+
+        BoardServer.shared.broadcastStateChanged()
+        // 把 error string 翻成 webui 可路由的 errorCode：
+        //   accessibility_denied → webui 提示 + 一键开 System Settings
+        //   claude_not_running   → 用户开 Claude.app 重试
+        //   其它                  → 普通 toast
+        let errorCode: String? = {
+            guard let err = error else { return nil }
+            if err.contains("Accessibility") || err.contains("不允许发送按键") {
+                return "accessibility_denied"
+            }
+            if err.contains("Claude.app is not running") || err.contains("claude_not_running") {
+                return "claude_not_running"
+            }
+            return "keystroke_failed"
+        }()
+        let payload = PushNowResponse(
+            delivered: delivered,
+            message: injectedMsg,
+            error: error,
+            errorCode: errorCode
+        )
+        return jsonResponse(payload)
+    }
+
+    /// POST /api/system/open-accessibility-settings
+    /// 把 user 弹去 System Settings → Privacy & Security → Accessibility 页。
+    /// 用 NSWorkspace + 已知的 prefpane URL（macOS 13+ 通用）。
+    static func openAccessibilitySettings(_ req: HttpRequest) -> HttpResponse {
+        #if canImport(AppKit)
+        DispatchQueue.main.async {
+            // x-apple.systempreferences 是 macOS 13+ 的 anchor URL scheme。
+            // anchor `Privacy_Accessibility` 直接跳到 Accessibility 子页。
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+        #else
+        return errorResponse("unsupported", "open-accessibility-settings is macOS only", status: 501)
+        #endif
+    }
+
+    private struct PushNowResponse: Encodable {
+        let delivered: Int
+        let message: MessageDTO?
+        let error: String?
+        /// 给 webui 区分错误类型用：`accessibility_denied` → 触发"open Settings"
+        /// 链接；其它错误只显示 toast。nil = 成功 / 没特殊处理需要。
+        let errorCode: String?
     }
 
     /// GET /api/sessions/:id/transcript?limit=...

@@ -448,9 +448,40 @@ class ClaudePlugin: SessionPlugin {
             }
 
         case .notification:
-            // 通知 - 可能需要等待用户
+            // 通知 - 可能等用户输入，也可能是等用户批 tool 权限。
+            //
+            // 旧实现一刀切设 .waitingForUser，但 Claude Code 的 Notification
+            // hook 会**紧跟在 PermissionRequest 之后**发一条同类型 Notification
+            // （`notification_type=permission_prompt`，message 形如 "Claude
+            // needs your permission to use Bash"），把刚被 PermissionRequest
+            // 设的 .permissionRequired 立刻覆盖成 .waitingForUser ——所以灵动
+            // 岛/卡片只会闪一下橙色 attention 然后被抹平，UI 上看不到"在等
+            // 批权限"的稳定状态。
+            //
+            // 区分三层信号（任一命中都走 .permissionRequired，否则
+            // .waitingForUser）：
+            //   1. notification_type == "permission_prompt"（最可靠，Claude
+            //      Code 自己给出的标记）
+            //   2. pendingPermissions[sid] 还有未批的请求（PermissionRequest
+            //      hook 已经到，状态肯定该是 permissionRequired）
+            //   3. message 文本含 permission/approve 字样（防御未来 Claude
+            //      Code 改版只发 Notification 不发 PermissionRequest）
+            let msg = (event.notification ?? "").lowercased()
+            let typedPermission = (event.notificationType ?? "") == "permission_prompt"
+            let messageLooksLikePermission =
+                msg.contains("permission") ||
+                msg.contains("approval") ||
+                msg.contains("approve")
+            pendingPermissionsLock.lock()
+            let hasPending = pendingPermissions[sessionId] != nil
+            pendingPermissionsLock.unlock()
+
             sessionStatusesLock.lock()
-            sessionStatuses[sessionId] = .waitingForUser
+            if typedPermission || hasPending || messageLooksLikePermission {
+                sessionStatuses[sessionId] = .permissionRequired
+            } else {
+                sessionStatuses[sessionId] = .waitingForUser
+            }
             sessionStatusesLock.unlock()
 
         case .userPromptSubmit:

@@ -1,4 +1,5 @@
 import type { Session } from '../types'
+import { Tooltip } from './Tooltip'
 
 /**
  * Sidebar 顶部"导航区"——三段：
@@ -51,8 +52,10 @@ export function SidebarTopNav({
 }: Props) {
   return (
     <div className="sidebar-topnav">
-      {/* ── Tabs (plugin 分类胶囊) ───────────────────────────────── */}
-      {tabs.length > 0 && (
+      {/* ── Tabs (plugin 分类胶囊) ───────────────────────────────────
+       *  只有一个 tab 时直接不渲染整条 —— "All" 单独存在没意义，徒占
+       *  垂直空间。≥2 个 tab 才展示。 */}
+      {tabs.length > 1 && (
         <div className="stn-tabs" role="tablist">
           {tabs.map((t) => {
             const active = t.id === activeTabId
@@ -74,58 +77,68 @@ export function SidebarTopNav({
 
       {/* ── Action items ────────────────────────────────────────── */}
       <div className="stn-actions">
-        <button className="stn-action stn-action--primary" onClick={onNewSession} title="Open global AI assistant">
-          <span className="stn-action-icon" aria-hidden>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
-          </span>
-          New session
-        </button>
-        {onToggleSearch && (
-          <button className="stn-action" onClick={onToggleSearch} title="Search sessions (filter by title / project)">
+        <Tooltip label="Open global AI assistant">
+          <button className="stn-action stn-action--primary" onClick={onNewSession}>
             <span className="stn-action-icon" aria-hidden>
-              {/* Lucide `search` —— 11,11 圆心 + 8 半径，对角 m21 21-4.3 是把柄 */}
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth="2"
-                   strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.3-4.3"/>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               </svg>
             </span>
-            Search
+            New session
           </button>
+        </Tooltip>
+        {onToggleSearch && (
+          <Tooltip label="Search sessions (filter by title / project)">
+            <button className="stn-action" onClick={onToggleSearch}>
+              <span className="stn-action-icon" aria-hidden>
+                {/* Lucide `search` —— 11,11 圆心 + 8 半径，对角 m21 21-4.3 是把柄 */}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" strokeWidth="2"
+                     strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <path d="m21 21-4.3-4.3"/>
+                </svg>
+              </span>
+              Search
+            </button>
+          </Tooltip>
         )}
         {onRoutines && (
-          <button className="stn-action" onClick={onRoutines} title="Routines (scheduled background tasks)">
-            <span className="stn-action-icon" aria-hidden>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"/>
-              </svg>
-            </span>
-            Routines
-          </button>
+          <Tooltip label="Routines (scheduled background tasks)">
+            <button className="stn-action" onClick={onRoutines}>
+              <span className="stn-action-icon" aria-hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" fill="none"/>
+                </svg>
+              </span>
+              Routines
+            </button>
+          </Tooltip>
         )}
         {onCustomize && (
-          <button className="stn-action" onClick={onCustomize} title="Customize">
-            <span className="stn-action-icon" aria-hidden>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <rect x="3" y="7" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8"/>
-                <path d="M8 7V5a4 4 0 0 1 8 0v2" stroke="currentColor" strokeWidth="1.8"/>
-              </svg>
-            </span>
-            Customize
-          </button>
+          <Tooltip label="Customize">
+            <button className="stn-action" onClick={onCustomize}>
+              <span className="stn-action-icon" aria-hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="7" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8"/>
+                  <path d="M8 7V5a4 4 0 0 1 8 0v2" stroke="currentColor" strokeWidth="1.8"/>
+                </svg>
+              </span>
+              Customize
+            </button>
+          </Tooltip>
         )}
         {onMore && (
-          <button className="stn-action" onClick={onMore} title="More">
-            <span className="stn-action-icon" aria-hidden>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </span>
-            More
-          </button>
+          <Tooltip label="More">
+            <button className="stn-action" onClick={onMore}>
+              <span className="stn-action-icon" aria-hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </span>
+              More
+            </button>
+          </Tooltip>
         )}
       </div>
     </div>

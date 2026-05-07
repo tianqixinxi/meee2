@@ -17,9 +17,15 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2.0</string>
+    <string>0.0.0-dev</string>
+    <!-- CFBundleVersion 必须跟 CFBundleShortVersionString 同步：Sparkle 比版本
+         时优先看 CFBundleVersion；不一致会让 Settings 的 VersionChecker 跟
+         Sparkle 的判断分裂（前者比 ShortVersion 字符串，后者比 Bundle build
+         number）。create-dmg.sh / deploy.sh 都把这两个字段一并 plutil 覆写
+         成同一个 VERSION 值。源里这个 0.0.0-dev 只是占位，dev 直接 swift
+         build 跑测试时不会生效到 Info.plist —— release 流程注入。 -->
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>0.0.0-dev</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
@@ -35,5 +41,28 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <!-- Apple Events automation usage description. Triggered the first time
+         meee2 sends Apple events to other apps (Ghostty / iTerm2 / Terminal
+         for session focus + jump, Claude.app for the explicit "Push to
+         Desktop now" keystroke flow). Without this key the privacy prompt
+         has no explainer and reads as suspicious. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the meee2 board into the running session.</string>
+
+    <!-- Sparkle auto-update. SUFeedURL is the appcast.xml that lives in the
+         repo root on the main branch (raw-served by GitHub) — release.yml's
+         Sparkle publish step appends a new <item> after each notarized DMG
+         lands on Releases. SUPublicEDKey verifies sign_update's EdDSA
+         signature on download; rotating it requires regenerating the matching
+         private key (kept in macOS Keychain locally + GH Secret
+         SPARKLE_ED_PRIVATE_KEY_BASE64 for CI). -->
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/tianqixinxi/meee2/appcast/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>NA19lgoaQ0LSrt5Z0ARJuHaTrce96npVqcGg809aCoQ=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
 </dict>
 </plist>

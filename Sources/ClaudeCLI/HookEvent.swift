@@ -97,6 +97,11 @@ public struct HookEvent: Decodable, Sendable {
     /// 通知消息内容
     public let notification: String?
 
+    /// 通知类型 (Claude Code 在 Notification 事件里给出，区分
+    /// "permission_prompt"（等用户批 tool 权限）vs "idle_prompt"（等用户输入）。
+    /// 比解析 message 文本更可靠 —— 直接拿这个字段判断。
+    public let notificationType: String?
+
     /// 最后的 assistant 消息 (Stop 事件)
     public let lastAssistantMessage: String?
 
@@ -380,6 +385,7 @@ public struct HookEvent: Decodable, Sendable {
         case transcriptPath = "transcript_path"
         case cwd
         case notification
+        case notificationType = "notification_type"
         case lastAssistantMessage = "last_assistant_message"
         case toolName = "tool_name"
         case rawToolInput = "tool_input"
@@ -408,6 +414,7 @@ public struct HookEvent: Decodable, Sendable {
         sessionId: String? = nil,
         cwd: String? = nil,
         notification: String? = nil,
+        notificationType: String? = nil,
         lastAssistantMessage: String? = nil,
         toolUseId: String? = nil,
         toolName: String? = nil,
@@ -431,6 +438,7 @@ public struct HookEvent: Decodable, Sendable {
         self.sessionId = sessionId
         self.cwd = cwd
         self.notification = notification
+        self.notificationType = notificationType
         self.lastAssistantMessage = lastAssistantMessage
         self.toolUseId = toolUseId
         self.toolName = toolName
@@ -471,6 +479,7 @@ public struct HookEvent: Decodable, Sendable {
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         notification = try container.decodeIfPresent(String.self, forKey: .notification)
+        notificationType = try container.decodeIfPresent(String.self, forKey: .notificationType)
         lastAssistantMessage = try container.decodeIfPresent(String.self, forKey: .lastAssistantMessage)
         toolUseId = try container.decodeIfPresent(String.self, forKey: .toolUseId)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)

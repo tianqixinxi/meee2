@@ -46,7 +46,12 @@ jobs:
 
   validate:
     name: Build · Test · Lint
-    runs-on: macos-14
+    # macos-15 (Xcode 16 / Swift 6) — macos-14 ships Xcode 15.4 / Swift 5.10
+    # which rejects this codebase's Task-captured-var concurrency patterns
+    # in pushToDesktopNow etc. (Swift 6 in Swift-5-language-mode allows them
+    # silently, Swift 5.10 errors out). release.yml is on macos-15 since
+    # 2026-05-06 — keep the two CI surfaces aligned.
+    runs-on: macos-15
     timeout-minutes: 25
 
     steps:
@@ -68,6 +73,28 @@ jobs:
           key: ${{ runner.os }}-spm-${{ hashFiles('Package.resolved', 'Package.swift') }}
           restore-keys: |
             ${{ runner.os }}-spm-
+
+      # WebDist is gitignored (built artifact). Package.swift's
+      # `.copy("Board/WebDist")` resource declaration needs the dir
+      # populated before `swift build`. Generate it here — board-packages
+      # job already does the same on its ubuntu runner but can't share
+      # filesystem with this validate runner.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+      - name: Build web frontend (SwiftPM resource)
+        run: |
+          pnpm install --frozen-lockfile
+          # Whole-workspace build, not `-F @meee1/board-app`. board-app
+          # depends on @meee1/{board-cards,board-core,board-ui,
+          # board-persistence-http} via workspace:* — those need to emit
+          # their .d.ts before tsc on board-app can resolve the imports.
+          pnpm build
 
       - name: Install SwiftLint
         run: |

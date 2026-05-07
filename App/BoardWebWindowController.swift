@@ -49,6 +49,46 @@ final class DragRegionWebView: WKWebView {
         }
         return super.hitTest(point)
     }
+
+    /// 显式拦截 cmd+V / cmd+C / cmd+X / cmd+A 把它们转成 paste:/copy:/cut:/
+    /// selectAll: 走 NSResponder chain。
+    ///
+    /// 背景：WKWebView 在嵌入场景下默认会把 cmd+V 翻译成 keydown 派发给
+    /// JS 但**不会**自动触发 paste 事件 / textarea 默认插入（即使开了
+    /// `_javaScriptCanAccessClipboard` SPI 也不够），导致客户端里 cmd+V
+    /// 完全没反应。同样地 cmd+C 也不会自动 copy。
+    ///
+    /// 这里在 performKeyEquivalent 阶段强制调对应 NSResponder 方法。
+    /// WKWebView 自身实现 paste(_:) / copy(_:) 等，会调 WebKit 内的
+    /// editor pipeline，正确触发 textarea 默认行为 + JS clipboard 事件。
+    /// 返回 true 告诉 NSWindow "事件已处理"，跳过菜单 keyEquivalent 二次
+    /// 派发避免重复粘贴。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if mods == .command {
+            switch event.charactersIgnoringModifiers {
+            case "v":
+                if NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "c":
+                if NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "x":
+                if NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: self) {
+                    return true
+                }
+            case "a":
+                if NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: self) {
+                    return true
+                }
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 /// 把 WKWebView 内 JS 的 `console.error / console.warn / window.onerror /
@@ -133,6 +173,28 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "meee2-board-shell"
+        // 打开 WKWebView 的 DOM clipboard SPI —— WebKit 在嵌入场景下默认
+        // 关闭 cmd+V / cmd+C 的 paste/copy 事件分发到 JS（也不让 textarea
+        // 的原生 paste 走完整 flow），导致客户端里复制粘贴一律不响应。
+        // Safari / Chrome 是因为它们自己也设了同款 SPI 才不出问题。
+        //
+        // 安全 KVC：直接 setValue:forKey: 命中未知 key 抛 NSUndefinedKey
+        // Exception，Swift 不接 ObjC 异常 → 整个 app 闪退（早上 19:34 那
+        // 次就是这么挂的）。先用 responds(to:) 探针 setter 存在再调，未知
+        // 静默跳过。两套候选 setter 名（无下划线 / 带下划线）轮试一遍 ——
+        // Apple 不同 macOS 版本之间在 SPI 名上互换过。
+        let prefs = configuration.preferences as NSObject
+        for key in ["javaScriptCanAccessClipboard", "domPasteAllowed"] {
+            let cap = key.prefix(1).uppercased() + key.dropFirst()
+            for setterName in ["set\(cap):", "_set\(cap):"] {
+                let sel = NSSelectorFromString(setterName)
+                if prefs.responds(to: sel) {
+                    prefs.setValue(true, forKey: key)
+                    NSLog("[BoardWebWindowController] enabled WKPreferences SPI key=\(key) via \(setterName)")
+                    break
+                }
+            }
+        }
 
         // 注入 JS 控制台桥 —— 把 React app 内部的 console.error / 抛错
         // 转回 native log。配置必须在 WKWebView init 之前完成。
@@ -147,6 +209,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
+        // 开 Web Inspector —— `isInspectable` 是 macOS 13.3+ 公开 API，
+        // 直接走 typed property（KVC 也行但风格不统一）。@available 编译
+        // 时已经卡住低版本，无需 runtime check。
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
@@ -245,6 +313,97 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             retryWorkItem?.cancel()
             retryWorkItem = nil
         }
+        // 页面加载完后立刻把 traffic light 的真实位置喂给 webui，让
+        // sidebar-collapsed-toggle 能精确对齐。窗口 resize / titlebar 模式
+        // 切换时也要更新（NSWindow.didResize 通知触发）。
+        injectTitlebarMetrics()
+    }
+
+    /// 把 macOS 系统级 traffic light 按钮的中心点（webview CSS 坐标）注入
+    /// document root style 上的两个 CSS 变量。这样 webui 那边的对齐 button
+    /// 不再硬编码 top:Xpx 猜测，直接用：
+    ///   top: calc(var(--titlebar-btn-center-y) - 10px);  // 10 = 自身高/2
+    ///   left: calc(var(--titlebar-btn-right-edge) + 8px); // lights 右边 + 间距
+    ///
+    /// 触发时机：webView didFinish 一次（页面 mount 后）+ window resize / state
+    /// 变化（didResize / didEnterFullScreen 等）每次。fullscreen 进出和 zoom
+    /// 都会让 lights 位置变（fullscreen 期间 NSStandardWindowButton.frame
+    /// 还是有效但实际不显示——CSS variable 会更新成 0/0，sidebar 那侧的
+    /// `--titlebar-btn-center-y: 0` 不影响布局，按钮会顶到 top:0 自然 hidden
+    /// 在 fullscreen UI 下也合理）。
+    func injectTitlebarMetrics() {
+        guard let window = window,
+              let close = window.standardWindowButton(.closeButton),
+              let zoom = window.standardWindowButton(.zoomButton) else {
+            return
+        }
+        guard let contentView = window.contentView else { return }
+
+        // close.frame / zoom.frame 是它们各自 superview 的坐标系。在
+        // .fullSizeContentView 模式下 AppKit 通常把 traffic light 直接挂到
+        // contentView 上（也就是这里的 WKWebView，本身 isFlipped=true），
+        // 所以 frame.y 已经是 "从顶部往下"。如果挂在 NSThemeFrame 这种
+        // 非 flipped 的 superview 上，要先转换到 contentView 坐标系再判断。
+        //
+        // 决定 centerY (CSS top) 的关键：contentView 是不是 flipped。
+        //   • flipped (WKWebView) → centerY = closeRectInCV.midY 直接用
+        //   • 非 flipped (NSView) → centerY = bounds.height - closeRectInCV.midY
+        let closeRectInCV: NSRect
+        let zoomRectInCV: NSRect
+        if let closeSV = close.superview {
+            closeRectInCV = contentView.convert(close.frame, from: closeSV)
+        } else {
+            closeRectInCV = close.frame
+        }
+        if let zoomSV = zoom.superview {
+            zoomRectInCV = contentView.convert(zoom.frame, from: zoomSV)
+        } else {
+            zoomRectInCV = zoom.frame
+        }
+
+        let cvHeight = contentView.bounds.height
+        let isFlipped = contentView.isFlipped
+        let centerY_top: CGFloat = isFlipped
+            ? closeRectInCV.midY
+            : (cvHeight - closeRectInCV.midY)
+        let lightsRight = zoomRectInCV.maxX
+
+        // Sanity clamp — titlebar height is < 40 on macOS standard windows.
+        // 如果计算出来不合理（负数 / >40 / >150），用回 fallback (13 / 72)，
+        // 不要把 sidebar toggle 推到屏幕外让用户找不到。
+        let centerY: Double = {
+            let v = Double(centerY_top)
+            if v.isFinite && v > 0 && v < 40 { return v }
+            return 13
+        }()
+        let rightEdge: Double = {
+            let v = Double(lightsRight)
+            if v.isFinite && v > 0 && v < 200 { return v }
+            return 72
+        }()
+
+        NSLog("[BoardWindow] titlebar metrics: close.frame=\(close.frame) closeInCV=\(closeRectInCV) cvHeight=\(cvHeight) flipped=\(isFlipped) raw_centerY_top=\(centerY_top) → centerY=\(centerY) lightsRight=\(rightEdge)")
+
+        let js = """
+        (function(){
+          const r = document.documentElement.style;
+          r.setProperty('--titlebar-btn-center-y', '\(centerY)px');
+          r.setProperty('--titlebar-lights-right', '\(rightEdge)px');
+        })();
+        """
+        webView.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        injectTitlebarMetrics()
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        injectTitlebarMetrics()
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        injectTitlebarMetrics()
     }
 
     /// HTTP 4xx / 5xx 不会触发 `didFail*` —— WKWebView 把"服务器有响应"当成

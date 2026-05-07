@@ -363,6 +363,77 @@ export async function injectToSession(
 }
 
 /**
+ * Explicit "Push to Desktop" —— 只对 Desktop session 有意义。
+ *
+ * 把 content（如有）写进 inbox，然后立刻通过 AppleScript keystroke 把
+ * inbox 里所有 pending 消息注入 Claude.app 当前 focused 输入框。会让
+ * Claude.app 跳到前台 → 切到目标 session → 自动键入 → 自动回车 → 产生
+ * 真 user entry 进 transcript。
+ *
+ * 用户主动触发（webui Dock 的 ⚡ 按钮）—— 默认 send path 不走这条避免
+ * 抢焦点。
+ *
+ * 失败模式（返回 `error` 字段非空）：
+ *   - meee2 没 Accessibility 权限 → System Settings → Privacy & Security →
+ *     Accessibility 里给 meee2 勾上
+ *   - Claude.app 没在跑
+ *   - session 不是 Desktop（API 端 400）
+ *
+ * 服务端最多阻塞 15s 等 keystroke 完成。`delivered` 是成功推送的条数。
+ */
+export interface PushNowResult {
+  delivered: number
+  message: Message | null
+  error: string | null
+  /** Server-routed error category: `accessibility_denied` /
+   *  `claude_not_running` / `keystroke_failed` / null. WebUI uses this to
+   *  decide whether to offer "Open Settings" affordance vs plain toast. */
+  errorCode:
+    | 'accessibility_denied'
+    | 'claude_not_running'
+    | 'keystroke_failed'
+    | null
+}
+
+export async function pushToDesktopNow(
+  id: string,
+  content: string,
+): Promise<PushNowResult> {
+  const r = await jsonRequest<{
+    delivered?: number
+    message?: Message | null
+    error?: string | null
+    errorCode?: string | null
+  }>(
+    `/api/sessions/${encodeURIComponent(id)}/push-now`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    },
+  )
+  const code = r.errorCode
+  const errorCode =
+    code === 'accessibility_denied' ||
+    code === 'claude_not_running' ||
+    code === 'keystroke_failed'
+      ? code
+      : null
+  return {
+    delivered: r.delivered ?? 0,
+    message: r.message ?? null,
+    error: r.error ?? null,
+    errorCode,
+  }
+}
+
+/// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，
+/// 给 meee2 授权 keystroke。配合 push-now 失败时 errorCode='accessibility_denied'
+/// 的 toast 一起用。
+export async function openAccessibilitySettings(): Promise<void> {
+  await jsonRequest('/api/system/open-accessibility-settings', { method: 'POST' })
+}
+
+/**
  * 把一张图片附件上传到 session，得到一个后端落盘后的绝对路径。
  *
  * 后端期望的是 base64 JSON 而不是 multipart —— 原因在 `Sources/Board/AttachmentsAPI.swift`
@@ -424,6 +495,36 @@ export async function activateSession(id: string): Promise<boolean> {
   } catch (e) {
     console.error('[activateSession] FAILED for', id.slice(0, 8), e)
     return false
+  }
+}
+
+/** Result shape from `closeSession`. Caller decides whether to surface
+ *  success / "already dead" / failure differently in the UI. */
+export interface CloseSessionResult {
+  ok: boolean
+  alreadyDead?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/**
+ * DELETE /api/sessions/:id —— SIGTERM the underlying process and drop the
+ * session record. The backend rejects sessions that have no controllable pid
+ * (Desktop / Cowork / external chat) with `errorCode === 'no_pid'` so the
+ * caller can tell the user to close it manually in its host app.
+ */
+export async function closeSession(id: string): Promise<CloseSessionResult> {
+  try {
+    const r = await jsonRequest<{ ok: boolean; alreadyDead: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    )
+    return { ok: true, alreadyDead: r.alreadyDead }
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, errorCode: e.code, error: e.message }
+    }
+    return { ok: false, errorCode: 'unknown', error: (e as Error).message ?? String(e) }
   }
 }
 

@@ -3,6 +3,7 @@ import type { BoardState, Selection, Session } from '../types'
 import { injectToSession, spawnSession } from '../api'
 import { loadDefaultSpawnCommand } from '../preferences'
 import { useToast } from '../App'
+import { Zap, Inbox, FolderOpen, Diamond } from 'lucide-react'
 
 interface Props {
   state: BoardState | null
@@ -130,12 +131,12 @@ export function CommandBar({
           {connected ? 'live' : 'offline'}
         </span>
         <span className="cb-chip" title="Sessions on the board">
-          <span className="cb-chip__glyph">⚡</span>
+          <span className="cb-chip__glyph"><Zap size={11} aria-hidden /></span>
           {sessionCount} session{sessionCount === 1 ? '' : 's'}
         </span>
         {totalInbox > 0 && (
           <span className="cb-chip cb-chip--warn" title="Pending inbox messages">
-            <span className="cb-chip__glyph">📨</span>
+            <span className="cb-chip__glyph"><Inbox size={11} aria-hidden /></span>
             {totalInbox} pending
           </span>
         )}
@@ -146,7 +147,7 @@ export function CommandBar({
           </span>
         )}
         <span className="cb-chip" title="Working directory context">
-          <span className="cb-chip__glyph">📂</span>
+          <span className="cb-chip__glyph"><FolderOpen size={11} aria-hidden /></span>
           {cwdLabel}
         </span>
         {selectedSession && (
@@ -160,7 +161,7 @@ export function CommandBar({
         )}
         <span className="cb-spacer" />
         <span className="cb-chip cb-chip--ghost" title="Default spawn command">
-          <span className="cb-chip__glyph">◆</span>
+          <span className="cb-chip__glyph"><Diamond size={11} aria-hidden /></span>
           {defaultModel}
         </span>
       </div>

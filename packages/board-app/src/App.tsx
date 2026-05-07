@@ -294,15 +294,19 @@ export default function App() {
     [],
   )
 
-  // Global keyboard/paste hijack: 选中 session 时画板上的可打印键 / 粘贴
-  // 决定 dock 的可见性：
+  // Global keyboard hijack: 选中 session 时画板上的可打印键决定 dock 的可见性：
   //   - dock 没开 → 把这次键值当 seed，setDockOpen(true)；mount 后 dock
   //     会消费 dockSeedRef 里的初始值。
   //   - dock 已开 → 直接调 appendAndFocus 注入到现有 textarea。
   //
   // 关键：用 capture 阶段 + stopImmediatePropagation —— Excalidraw 自己在
-  // document 层装了 keydown/paste handler（按字母就造文本元素、粘贴生成
-  // 图片等），冒泡会被它抢先。capture 先到再吃掉事件即可。
+  // document 层装了 keydown handler（按字母就造文本元素），冒泡会被它抢先。
+  // capture 先到再吃掉事件即可。
+  //
+  // ⚠️ 不再 hijack `paste` 事件 —— 之前为了"canvas 上 cmd+V 直接 seed dock"
+  // 装了 window-level paste listener，但代价是 cmd+V 永远落不到 excalidraw
+  // 自己的剪贴板 handler 上，"复制 session card / 粘贴图片到画板"全断。
+  // 字母键 seed dock 的 affordance 已经够直观，cmd+V 让回 excalidraw 原生路径。
   const selectedSessionId =
     selection.kind === 'session' ? selection.sessionId : null
 
@@ -366,6 +370,16 @@ export default function App() {
         setDockOpen(true)
         return
       }
+      // Plain Enter on a selected session → open Dock (transcript view) for
+      // that session. Mirrors the double-click gesture; gives keyboard users
+      // the same "show transcript" affordance.
+      if (e.key === 'Enter' && selectedSessionId && !dockOpen) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        dockSeedRef.current = ''
+        setDockOpen(true)
+        return
+      }
       if (e.key.length !== 1) return
       if (!selectedSessionId && selection.kind !== 'none') return
       e.preventDefault()
@@ -373,10 +387,47 @@ export default function App() {
       dispatch(e.key)
     }
 
+    // Double-click anywhere on the canvas while a session is selected → open
+    // its Dock. Excalidraw's own dblclick on a rect does selection but no
+    // navigation; we layer the Dock-open gesture on top. We only fire when
+    // the target is *outside* an input/composer (keep textarea dblclick =
+    // word-select behaviour), and when a session is currently selected.
+    const onDblClick = (e: MouseEvent) => {
+      if (isInputTarget(e.target)) return
+      if (!selectedSessionId) return
+      if (dockOpen) return
+      // Don't fight the Dock or any modal that explicitly absorbs dblclicks
+      // (`.session-dock` is the Dock root; nothing else uses it).
+      if (e.target instanceof Element && e.target.closest('.session-dock')) return
+      dockSeedRef.current = ''
+      setDockOpen(true)
+    }
+
+    // Canvas-level cmd+V hijack —— 选中 session card 后粘贴 → 自动开
+    // dock + 把内容当 seed 灌进 textarea，不用先点输入框。三档分流：
+    //   - target 是输入框（INPUT/TEXTAREA/contentEditable）：完全 pass-
+    //       through（不 preventDefault / 不 stopPropagation），让原生
+    //       paste flow 把内容插进 textarea。这条以前每次有人 stopPropagation
+    //       都会把客户端里 textarea 粘贴一起搞挂。
+    //   - 选中 session card + 非输入框：preventDefault + stopImmediate
+    //       夺过事件 → dispatch 把文本灌进 dock（dock 没开就开 + seed，
+    //       已开就 appendAndFocus）。
+    //   - 没选 session（或 channel 选中等）+ 非输入框：完全放手，让
+    //       Excalidraw 自己处理 canvas 上的粘贴。
     const onPaste = (e: ClipboardEvent) => {
       if (isInputTarget(e.target)) return
-      if (!selectedSessionId && selection.kind !== 'none') return
+      if (!selectedSessionId) return
+      // Excalidraw 自己的 clipboard payload（{"type":"excalidraw/clipboard"...}）
+      // 不能塞进 dock，让它原生接。
+      const types = e.clipboardData?.types ?? []
+      if (
+        types.includes('application/vnd.excalidraw+json') ||
+        types.includes('application/vnd.excalidrawlib+json')
+      ) {
+        return
+      }
       const text = e.clipboardData?.getData('text') ?? ''
+      if (text.startsWith('{"type":"excalidraw/clipboard"')) return
       if (!text) return
       e.preventDefault()
       e.stopImmediatePropagation()
@@ -385,9 +436,11 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('paste', onPaste, true)
+    window.addEventListener('dblclick', onDblClick, true)
     return () => {
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('paste', onPaste, true)
+      window.removeEventListener('dblclick', onDblClick, true)
     }
   }, [selectedSessionId, selection.kind, dockOpen])
 
@@ -522,6 +575,7 @@ export default function App() {
           onOpen={() => setSidebarOpen(true)}
           onSelectionChange={handleSidebarSelectionChange}
           onCanvasCounts={onCanvasCounts}
+          unreadSids={unreadSids}
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}

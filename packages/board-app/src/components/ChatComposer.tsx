@@ -22,6 +22,8 @@ import {
   useRef,
   useState,
 } from 'react'
+import { Zap } from 'lucide-react'
+import { Tooltip } from './Tooltip'
 
 interface AttachmentItem {
   id: string
@@ -54,6 +56,13 @@ interface Props {
   bottomLeft?: React.ReactNode
   /** Sending 时禁用 textarea 并把 send 换成 spinner。父组件想强制独立控制 busy 时用。 */
   externalBusy?: boolean
+  /** Optional 第二个 send action。提供时渲染 ⚡ 按钮在主 send 旁边，跑跟
+   *  主 send 一样的 content 校验 / 清空逻辑，但调用 onPush 而不是 onSend。
+   *  Dock 给 Desktop session 传这个，对应"explicit Push to Desktop now"
+   *  路径（会抢焦点 + 立刻 keystroke 进 Claude.app）。 */
+  onPush?: (content: string) => Promise<void> | void
+  /** Push 按钮的 hover tooltip。`onPush` 不传时此 prop 无意义。 */
+  pushTitle?: string
 }
 
 export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatComposer(
@@ -67,6 +76,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     bottomRight,
     bottomLeft,
     externalBusy,
+    onPush,
+    pushTitle,
   },
   ref,
 ) {
@@ -117,7 +128,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     [],
   )
 
-  const submit = async () => {
+  /// 共用的 send 执行体。`action` 决定走 onSend 还是 onPush，其它（content
+  /// 校验、busy 锁、attachment 渲染、清空 / 错误显示）都一样。
+  const runSend = async (action: (content: string) => Promise<void> | void) => {
     const body = value.trim()
     if (!body && attachments.length === 0) return
     if (busy) return
@@ -128,7 +141,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     setSending(true)
     setError(null)
     try {
-      await onSend(content)
+      await action(content)
       setValue('')
       setAttachments([])
     } catch (e) {
@@ -137,6 +150,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
       setSending(false)
     }
   }
+
+  const submit = () => runSend(onSend)
+  const submitPush = onPush ? () => runSend(onPush) : undefined
 
   // IME 组词期间不能 submit。仅靠 `e.nativeEvent.isComposing` 在 WKWebView
   // + macOS 中文 IME 下不可靠（确认候选词时 Enter 已经收到 compositionend，
@@ -256,11 +272,34 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
           onPaste={uploadImage ? handlePaste : undefined}
           rows={2}
         />
+        {submitPush && (
+          <Tooltip
+            label={pushTitle ?? 'Push to Desktop now (focuses Claude.app)'}
+            placement="top"
+            enabled={canSend}
+          >
+            <button
+              className="cc-send-push"
+              onClick={submitPush}
+              disabled={!canSend}
+              aria-label="Push to Desktop now"
+              type="button"
+            >
+              {/* lucide Zap icon — "立刻强制送达"；视觉上跟主 send 的箭头
+               *  分开但同尺寸 + 同 hover style。 */}
+              <Zap size={14} aria-hidden />
+            </button>
+          </Tooltip>
+        )}
+        <Tooltip
+          label={busy ? 'Sending…' : 'Send'}
+          shortcut={busy ? undefined : '⏎'}
+          placement="top"
+        >
         <button
           className="cc-send-arrow"
           onClick={submit}
           disabled={!canSend}
-          title={busy ? 'Sending…' : 'Send (Enter)'}
           aria-label="Send message"
           type="button"
         >
@@ -278,6 +317,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
             </svg>
           )}
         </button>
+        </Tooltip>
       </div>
 
       {/* ── bottombar（左/右槽位由父组件填）──────────────────────── */}

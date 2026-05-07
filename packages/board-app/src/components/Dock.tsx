@@ -27,6 +27,8 @@ import type { BoardState, Session } from '../types'
 import {
   activateSession,
   injectToSession,
+  openAccessibilitySettings,
+  pushToDesktopNow,
   uploadAttachment,
   spawnSession,
   streamAssistantChat,
@@ -37,11 +39,19 @@ import { readLlmSettings, activeTools } from '../lib/llmSettings'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
+import { Tooltip } from './Tooltip'
 import {
+  TranscriptView,
   loadTranscriptVerbosity,
   saveTranscriptVerbosity,
+  loadDockExpanded,
+  saveDockExpanded,
   type TranscriptVerbosity,
 } from '@meee1/board-ui'
+import type {
+  TranscriptBlockForView,
+  TranscriptEntryForView,
+} from '@meee1/board-core'
 
 // ── Mode 类型 ──────────────────────────────────────────────────────────
 
@@ -97,7 +107,19 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
 
   // session 模式默认 expanded（看 transcript），assistant 模式默认折叠
   // （问 AI 是个轻交互，不该立刻占满整个画板）。
-  const [expanded, setExpanded] = useState(mode.kind === 'session')
+  // session 模式：跨 session 切换记住用户上次选的 expand 状态（localStorage）；
+  // assistant 模式不持久化（轻交互，每次 spawn 都从折叠开始）。
+  const [expandedState, setExpandedState] = useState(() =>
+    mode.kind === 'session' ? loadDockExpanded(true) : false,
+  )
+  const expanded = expandedState
+  const setExpanded = (next: boolean | ((prev: boolean) => boolean)) => {
+    setExpandedState((prev) => {
+      const v = typeof next === 'function' ? next(prev) : next
+      if (mode.kind === 'session') saveDockExpanded(v)
+      return v
+    })
+  }
 
   const composerRef = useRef<ChatComposerHandle | null>(null)
 
@@ -308,34 +330,36 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     >
       {/* ── 右上角浮动按钮：toggle expand + close ─────────── */}
       <div className="session-dock__actions">
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          title={expanded ? 'Collapse to bottom' : 'Expand to fill canvas'}
-          aria-label={expanded ? 'Collapse dock' : 'Expand dock'}
-          aria-pressed={!expanded}
-        >
-          {expanded ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M10 4v6H4M14 20v-6h6M4 4l7 7M20 20l-7-7"
-                stroke="currentColor" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <path d="M4 14v6h6M14 4h6v6M4 20l7-7M20 4l-7 7"
-                stroke="currentColor" strokeWidth="2"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          )}
-        </button>
-        <button
-          onClick={onClose}
-          title="Close (Esc when input is empty)"
-          aria-label="Close dock"
-          style={{ fontSize: 18, lineHeight: 1 }}
-        >
-          ×
-        </button>
+        <Tooltip label={expanded ? 'Collapse to bottom' : 'Expand to fill canvas'}>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? 'Collapse dock' : 'Expand dock'}
+            aria-pressed={!expanded}
+          >
+            {expanded ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M10 4v6H4M14 20v-6h6M4 4l7 7M20 20l-7-7"
+                  stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M4 14v6h6M14 4h6v6M4 20l7-7M20 4l-7 7"
+                  stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+        </Tooltip>
+        <Tooltip label="Close" shortcut="Esc">
+          <button
+            onClick={onClose}
+            aria-label="Close dock"
+            style={{ fontSize: 18, lineHeight: 1 }}
+          >
+            ×
+          </button>
+        </Tooltip>
       </div>
 
       {/* ── 中间区：mode 分流 ──────────────────────────────── */}
@@ -353,26 +377,49 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             onVerbosityChange={setVerbosity}
           />
         ) : (
-          <div
-            ref={logRef}
-            className="col"
-            style={{ gap: 12, overflowY: 'auto', flex: 1, marginTop: 'auto' }}
-          >
-            {messages.length === 0 && !busy && (
+          // Assistant 模式复用 TranscriptView —— 跟 session 模式视觉同源
+          // （markdown 渲染 / 代码块 / tool block 折叠 / verbosity 控件）。
+          // DisplayMessage[] 由下面 adapter 转成 TranscriptEntryForView[]。
+          // Spawn fence 单独抽出来在底下渲一个 button 行（保留 ChatBubble
+          // 时代的"⚡ Spawn here"功能 —— TranscriptView 不认这个 fence）。
+          <div className="col" style={{ flex: 1, minHeight: 0, gap: 8 }}>
+            {messages.length === 0 && !busy ? (
               <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 4px' }}>
                 Ask anything — summarise sessions, draft a prompt, or describe
                 a project to spawn a new Claude session in.
               </div>
+            ) : (
+              <TranscriptView
+                entries={assistantMessagesToTranscriptEntries(messages)}
+                cacheKey="__assistant_dock__"
+                liveStatus={busy ? 'thinking' : null}
+                verbosity={verbosity}
+                onVerbosityChange={setVerbosity}
+              />
             )}
-            {messages.map((m, i) => (
-              <ChatBubble key={i} message={m} onSpawn={handleSpawn} />
-            ))}
-            {busy && messages[messages.length - 1]?.content === '' &&
-              !(messages[messages.length - 1]?.toolEvents?.length) && (
-                <div className="muted" style={{ fontSize: 12, padding: '0 4px' }}>
-                  …thinking
+            {messages.map((m, i) => {
+              if (m.role !== 'assistant') return null
+              const { spawn } = splitSpawnFence(m.content)
+              if (!spawn) return null
+              return (
+                <div key={`spawn-${i}`} className="row" style={{
+                  gap: 8, padding: '6px 8px',
+                  background: 'rgba(167, 139, 250, 0.08)',
+                  border: '1px solid rgba(167, 139, 250, 0.3)',
+                  borderRadius: 6, alignItems: 'center',
+                }}>
+                  <span style={{ fontSize: 11, color: '#A78BFA' }}>⚡ Spawn at</span>
+                  <code style={{ fontSize: 11, flex: 1, wordBreak: 'break-all' }}>{spawn.cwd}</code>
+                  <button
+                    className="primary"
+                    style={{ fontSize: 11, padding: '3px 10px' }}
+                    onClick={() => handleSpawn(spawn.cwd, true)}
+                  >
+                    Spawn here
+                  </button>
                 </div>
-              )}
+              )
+            })}
             {err && <div className="inline-error" style={{ margin: '4px 4px 0' }}>{err}</div>}
           </div>
         )}
@@ -390,19 +437,66 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             ? (f) => uploadAttachment(mode.session.id, f)
             : undefined
         }
+        // ⚡ Push button —— 只对 Desktop session 露出。Default Send 走 inject
+        // 写 inbox + 等下个 Stop drain（不抢焦点）；Push 立刻 keystroke 进
+        // Claude.app 的输入框（会抢焦点 + 自动回车）。是用户主动选择的快
+        // 速路径，避免 idle desktop session 卡 inbox 等很久的问题。
+        onPush={
+          mode.kind === 'session' && mode.session.clientKind === 'desktop'
+            ? async (content: string) => {
+                const shortId = mode.session.id.slice(0, 8)
+                const r = await pushToDesktopNow(mode.session.id, content)
+                if (!r.error) {
+                  toast.push(
+                    'success',
+                    `Pushed to Claude.app — ${r.delivered} message(s) delivered (${shortId})`
+                  )
+                  return
+                }
+                if (r.errorCode === 'accessibility_denied') {
+                  // 弹 toast 之外，立刻把 user 跳到 System Settings → Accessibility
+                  // 让授权流程一步到位（user 加 meee2 + 开关 ON 之后回 webui
+                  // 重试 ⚡）。
+                  await openAccessibilitySettings().catch(() => undefined)
+                  toast.push(
+                    'error',
+                    'Accessibility permission required — System Settings opened. Add /Applications/meee2.app and turn the toggle on, then retry ⚡.'
+                  )
+                  return
+                }
+                if (r.errorCode === 'claude_not_running') {
+                  toast.push(
+                    'error',
+                    'Claude.app is not running. Open it first, then retry ⚡.'
+                  )
+                  return
+                }
+                toast.push('error', `Push failed (${shortId}): ${r.error}`)
+              }
+            : undefined
+        }
+        pushTitle="Push to Desktop now — focuses Claude.app and types the message in directly (requires Accessibility permission)"
         bottomLeft={
           mode.kind === 'session' ? (
             <>
-              <button className="cc-icon-btn" title="Attach file (paste image)" type="button">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-              </button>
-              <button className="cc-icon-btn" title="Quick command" type="button">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                </svg>
-              </button>
+              <Tooltip label="Attach file (paste image)">
+                <button className="cc-icon-btn" type="button" aria-label="Attach file">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </Tooltip>
+              <Tooltip label="Quick command">
+                <button className="cc-icon-btn" type="button" aria-label="Quick command">
+                  {/* slash-command 视觉：方框 + 内嵌 / —— 比纯空 rect 多一笔 */}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                    <rect x="4" y="4" width="16" height="16" rx="3"
+                          stroke="currentColor" strokeWidth="1.6" />
+                    <path d="M14 8l-4 8" stroke="currentColor"
+                          strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </Tooltip>
               {/* Transcript verbosity segmented pill —— 跟 input 同行的左下，
                   user 期待 filter 跟 input box 在一起。同 storage key
                   跟 TranscriptView uncontrolled fallback 共享，保留以前的
@@ -455,22 +549,23 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
               </span>
               {/* Open chip 移到 bottombar 最右 —— 跟 model/status 一行，
                 * 视觉上属于 inputbox 右下角的 meta 区。 */}
-              <button
-                className="session-dock__open"
-                onClick={() => {
-                  if (mode.kind === 'session') void activateSession(mode.session.id)
-                }}
-                title="Open session terminal / Claude.app"
-                aria-label="Open session"
-                type="button"
-              >
-                Open
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
-                     stroke="currentColor" strokeWidth="1.8"
-                     strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M7 17 17 7M9 7h8v8"/>
-                </svg>
-              </button>
+              <Tooltip label="Open session terminal / Claude.app" placement="top">
+                <button
+                  className="session-dock__open"
+                  onClick={() => {
+                    if (mode.kind === 'session') void activateSession(mode.session.id)
+                  }}
+                  aria-label="Open session"
+                  type="button"
+                >
+                  Open
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="1.8"
+                       strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M7 17 17 7M9 7h8v8"/>
+                  </svg>
+                </button>
+              </Tooltip>
             </>
           ) : (
             <>
@@ -571,6 +666,79 @@ function ToolChip({ event }: { event: ToolEvent }) {
 }
 
 /** 扫 assistant 回复里有没有 ```spawn\n{...}\n``` fence；有的话解析出 cwd。 */
+/// LLM 流式回复时，tool-call 的 JSON 经常跟着 delta text 一起进 content
+/// 字符串（"{"name": "X", "args": {...}}"），同时又另有结构化 tool_call
+/// 事件 —— 渲染时会出现三份重复。这里把 content 里 tool-call JSON 噪音
+/// 剥掉，只留真正的 prose 给 TranscriptView 走 markdown 渲染。
+///   - 行首 `{"name":..., "args":{...}}` 整行删
+///   - 被孤立的开 fence ` ``` ` 后面跟非空字符（造成 markdown 把后面整段
+///     当 code block）也修一下：把那行的开 fence 砍掉留 markdown 内容
+function cleanAssistantContent(text: string): string {
+  if (!text) return text
+  // strip lines that look like {"name": "tool", "args": {...}}
+  let cleaned = text.replace(
+    /^\s*\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"args"\s*:\s*\{[\s\S]*?\}\s*\}\s*$\n?/gm,
+    '',
+  )
+  // 落单的 "```<text>" 开 fence —— 通常 LLM 把 tool result 包了 fence 没闭，
+  // 导致后面 markdown 全被 react-markdown 当代码块渲。简单粗暴：行首 ```
+  // 后面紧跟非空字符 → 把那 ``` 去掉，保留后面的内容当普通 markdown。
+  cleaned = cleaned.replace(/^\s*```([^\n`].*)$/gm, '$1')
+  return cleaned.trim()
+}
+
+/// 把 assistant 模式的 DisplayMessage[] 适配成 TranscriptView 吃的
+/// TranscriptEntryForView[] —— 复用 session 模式同款渲染（markdown /
+/// 代码块 / tool block 折叠）。每条 message 一个 entry：
+///   - role 直传（user / assistant）
+///   - content 进 text block；spawn fence 文字 + tool-call JSON 噪音预先剥掉
+///   - toolEvents → 一对 tool_use + tool_result block；result 序列化成 JSON
+///     文本（TranscriptView 自己会 truncate 显示）
+function assistantMessagesToTranscriptEntries(
+  messages: DisplayMessage[],
+): TranscriptEntryForView[] {
+  return messages.map((m, i) => {
+    const blocks: TranscriptBlockForView[] = []
+    const { body } = splitSpawnFence(m.content)
+    const cleanedBody = m.role === 'assistant' ? cleanAssistantContent(body) : body
+    if (cleanedBody) {
+      blocks.push({ type: 'text', text: cleanedBody })
+    }
+    for (const te of m.toolEvents ?? []) {
+      const argsJSON = (() => {
+        if (typeof te.args === 'string') return te.args
+        try { return JSON.stringify(te.args ?? {}, null, 2) } catch { return '{}' }
+      })()
+      blocks.push({
+        type: 'tool_use',
+        toolId: te.id,
+        toolUseId: te.id,
+        toolName: te.name,
+        toolInputJSON: argsJSON,
+      })
+      if (te.result !== undefined || te.error) {
+        const resultText = te.error
+          ? `Error: ${te.error}`
+          : (typeof te.result === 'string'
+              ? te.result
+              : (() => { try { return JSON.stringify(te.result, null, 2) } catch { return String(te.result) } })())
+        blocks.push({
+          type: 'tool_result',
+          toolUseId: te.id,
+          toolName: te.name,
+          toolResultText: resultText,
+        })
+      }
+    }
+    return {
+      id: `assistant-${i}`,
+      type: m.role,
+      timestamp: null,
+      blocks,
+    }
+  })
+}
+
 function splitSpawnFence(text: string): { body: string; spawn: { cwd: string } | null } {
   const re = /```spawn\s*\n([\s\S]*?)\n```/
   const m = text.match(re)

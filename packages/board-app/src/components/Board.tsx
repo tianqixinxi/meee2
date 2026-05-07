@@ -12,6 +12,7 @@ import type {
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
 import type { BoardState, Selection } from '../types'
+import { isOlderSession } from '../types'
 import {
   buildChannelHub,
   buildScene,
@@ -49,6 +50,7 @@ import {
   removeMember,
 } from '../api'
 import { SessionOverlay } from './SessionOverlay'
+import { Tooltip } from './Tooltip'
 
 /**
  * Derive a deterministic channel alias from a session's title + id so each
@@ -675,7 +677,10 @@ export default function Board({
 
     const newSessionIds: string[] = []
     for (const s of state.sessions) {
-      if (s.displayGroup === 'older') continue
+      // 「自动建卡」的两条隐藏规则全部由前端决定 (types.ts:isOlderSession +
+      // dismissedRef)。后端不再下发 displayGroup —— Board / Sidebar 共用同
+      // 一个 helper 保持一致。
+      if (isOlderSession(s)) continue
       if (knownSessionIds.has(s.id)) continue
       if (dismissedRef.current.has(s.id)) continue
       newSessionIds.push(s.id)
@@ -1181,7 +1186,15 @@ export default function Board({
     if (dismissedRef.current.delete(sid)) {
       void persistence.saveDismissed(dismissedRef.current)
     }
-    focusSceneElement(api, target)
+    // 关键：focusSceneElement 推到下一帧。否则跟下面 multi-select push-back
+    // effect 在同一同步批里跑，Excalidraw 处理 selectedElementIds 时偶发会
+    // 把 scroll/zoom 一起重算，导致 focus 改的 scrollX/scrollY 立刻被覆盖
+    // —— 用户感受到的"点很多次才切过去"就是这个 race。延后一帧让 focus
+    // 单独成 batch，scroll/zoom 改动稳稳生效。
+    const targetEl = target
+    requestAnimationFrame(() => {
+      focusSceneElement(api, targetEl)
+    })
   }, [api, state, focusSessionRequest, persistence])
 
   // -- Multi-select all cards for the sidebar-selected session --------
@@ -1763,20 +1776,22 @@ export default function Board({
           {/* className 跟 native shape tool 一致：`ToolIcon ToolIcon_size_medium`。
               不加 `ToolIcon_type_floating` —— 那条会让 .ToolIcon__icon 套一个
               深色背景，和原生 shape tool（透明背景）不一致。 */}
-          <button
-            className="ToolIcon ToolIcon_size_medium board-channel-tool"
-            onClick={onNewChannel}
-            title="Create a new channel"
-            type="button"
-            aria-label="Create channel"
-          >
-            <div className="ToolIcon__icon" tabIndex={-1}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.6"/>
-                <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-              </svg>
-            </div>
-          </button>
+          <Tooltip label="Create a new channel">
+            <button
+              className="ToolIcon ToolIcon_size_medium board-channel-tool"
+              onClick={onNewChannel}
+              type="button"
+              aria-label="Create channel"
+            >
+              <div className="ToolIcon__icon" tabIndex={-1}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                  <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" strokeWidth="1.6"/>
+                  <path d="M12 8v8M8 12h8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                </svg>
+              </div>
+            </button>
+          </Tooltip>
+          <Tooltip label="Create DM line: drag from one session card to another">
           <button
             className="ToolIcon ToolIcon_size_medium board-channel-tool"
             onClick={() => {
@@ -1787,7 +1802,6 @@ export default function Board({
                 console.warn('[Board] setActiveTool(arrow) failed', e)
               }
             }}
-            title="Create DM line: drag from one session card to another"
             type="button"
             aria-label="Create DM line"
           >
@@ -1799,6 +1813,7 @@ export default function Board({
               </svg>
             </div>
           </button>
+          </Tooltip>
         </>,
         toolbarRowEl,
       )}

@@ -2,11 +2,34 @@ import SwiftUI
 import meee2Kit
 import Meee2PluginKit
 import Meee2CommKit
+import Sparkle
 
 /// AppDelegate - 管理 macOS 特有的窗口和状态栏
 public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 状态栏图标
     private var statusItem: NSStatusItem?
+
+    /// Sparkle 自动更新控制器。Standard 版自带 UI（"Check for Updates…"
+    /// 弹框、下载进度、relaunch 流程），用 Info.plist 的 SUFeedURL +
+    /// SUPublicEDKey 决定从哪拉 appcast 以及拿什么公钥校验签名。
+    ///
+    /// `startingUpdater: false` —— **不在 lazy init 时自动 startUpdater**。
+    /// startingUpdater=true 路径下 Sparkle 在每次启动都会立刻做一次
+    /// background check + 用 SUStandardUserDriver 处理结果。这条路径在
+    /// ad-hoc 签名 + .accessory app 组合下会触发 "The updater failed to
+    /// start" 弹框，每次启动都吓用户一跳。
+    /// 关掉 startingUpdater 之后，updater 在 instance 创建时就不调
+    /// startUpdater，menubar / Settings 的 "Check for Updates…" 走
+    /// `checkForUpdates(_:)` 显式触发，那条路径不会在 init 阶段炸；
+    /// 自动后台检查通过 SUEnableAutomaticChecks=true + 第一次手动点
+    /// 后由 Sparkle 自己接管调度（24h interval）。
+    private lazy var updaterController: SPUStandardUpdaterController = {
+        SPUStandardUpdaterController(
+            startingUpdater: false,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
+    }()
 
     /// 灵动岛窗口
     private var islandWindow: DynamicIslandWindow?
@@ -164,6 +187,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: .screenSelectionChanged,
             object: nil
         )
+
+        // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
+        // "Check for Updates" 通知 → 在这里桥到 SPUStandardUpdaterController。
+        // 这条通道把 Settings 那个按钮和 menubar "Check for Updates…" 完全
+        // 整成一套：触发同样的 Sparkle modal,同样的下载/安装流程。
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleCheckForUpdatesRequest),
+            name: Notification.Name("meee2.checkForUpdates"),
+            object: nil
+        )
+    }
+
+    @objc private func handleCheckForUpdatesRequest() {
+        updaterController.checkForUpdates(nil)
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -220,6 +258,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
         diagItem.target = self
         menu.addItem(diagItem)
+        menu.addItem(NSMenuItem.separator())
+        // Sparkle —— `checkForUpdates(_:)` 是 SPUStandardUpdaterController 的
+        // 标准 action selector；item 的 enable/disable 由 updaterController 自管
+        // （updater 还在 init / 还在等下次 schedule 的时候 grey 出）。
+        let updateItem = NSMenuItem(
+            title: "Check for Updates…",
+            action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+            keyEquivalent: ""
+        )
+        updateItem.target = updaterController
+        menu.addItem(updateItem)
         menu.addItem(NSMenuItem.separator())
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self

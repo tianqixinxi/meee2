@@ -11,6 +11,7 @@ import {
   setChannelMode,
 } from '../api'
 import { useToast } from '../App'
+import { Tooltip } from './Tooltip'
 
 interface Props {
   state: BoardState
@@ -198,13 +199,15 @@ export default function ChannelDetail({ state, channelName }: Props) {
               </div>
               <div className="mono muted">{m.sessionId.slice(0, 8)}</div>
             </div>
-            <button
-              className="ghost"
-              onClick={() => removeMemberClick(m.alias)}
-              title="Remove member"
-            >
-              ✕
-            </button>
+            <Tooltip label="Remove member">
+              <button
+                className="ghost"
+                onClick={() => removeMemberClick(m.alias)}
+                aria-label="Remove member"
+              >
+                ✕
+              </button>
+            </Tooltip>
           </div>
         ))}
         {!addingMember && (

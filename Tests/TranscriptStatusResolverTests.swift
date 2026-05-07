@@ -299,35 +299,31 @@ final class TranscriptStatusResolverTests: XCTestCase {
         }
     }
 
-    /// priority 1 边界：600s 不触发，601s 触发
+    /// priority 1 边界：90s 不触发，91s 触发。
+    /// 阈值是 `_staleSystemTailThreshold` (resolver 内部常量)；改动这条 case
+    /// 时也要同步 stuck-tooling-system-tail-3min fixture 的 expected 状态。
     func testSystem_stale_boundary() {
         let borderline = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "system", ageSeconds: 600),
+            last: entry(type: "system", ageSeconds: 90),
             hookStatus: .tooling,
             now: now
         )
-        XCTAssertEqual(borderline.status, .tooling, "600s 不应触发")
+        XCTAssertEqual(borderline.status, .tooling, "90s 不应触发")
 
         let over = TranscriptStatusResolver.decideFromTail(
-            last: entry(type: "system", ageSeconds: 601),
+            last: entry(type: "system", ageSeconds: 91),
             hookStatus: .tooling,
             now: now
         )
-        XCTAssertEqual(over.status, .idle, "601s 应触发")
+        XCTAssertEqual(over.status, .idle, "91s 应触发")
     }
 
-    /// 回归：90-600s 之间的 system tail + hook=tooling 必须保留 tooling
-    /// （之前 90s 阈值时 100s 也降级，长 Bash 命令被误判 idle）。
-    func testSystem_longRunningTool_notDowngraded() {
-        for age in [100.0, 200.0, 400.0, 599.0] {
-            let (status, _) = TranscriptStatusResolver.decideFromTail(
-                last: entry(type: "system", ageSeconds: age),
-                hookStatus: .tooling,
-                now: now
-            )
-            XCTAssertEqual(status, .tooling, "age=\(age)s + hook=tooling 不应降级")
-        }
-    }
+    // 注：之前有一条 testSystem_longRunningTool_notDowngraded 测试，断言
+    // 100-599s system tail + hook=tooling 不该降级（防长 Bash 误判 idle）。
+    // resolver 阈值收紧到 90s 后该用例的前提（"system tail >90s 仍可能在
+    // 跑 tool"）反过来是 bug 来源 —— 实际场景里 system tail 老于 90s 几乎
+    // 都是 Stop hook block-decision 注入后 PostToolUse 没回，hook 卡 tooling。
+    // 删除该用例，stuck-tooling-system-tail-3min fixture 已经覆盖新行为。
 
     /// priority 2: hook=.active + system tail（即使 <90s）→ .idle
     func testSystem_activeHook_forcesIdle() {

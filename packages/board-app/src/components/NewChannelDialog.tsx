@@ -7,6 +7,7 @@ import {
   sendMessage,
 } from '../api'
 import { useToast } from '../App'
+import { Tooltip } from './Tooltip'
 
 interface Props {
   state: BoardState
@@ -169,14 +170,16 @@ export default function NewChannelDialog({ state, onClose, onCreated }: Props) {
                   onChange={(e) => updateRow(idx, { alias: e.target.value })}
                   placeholder="alias"
                 />
-                <button
-                  className="ghost"
-                  onClick={() => removeRow(idx)}
-                  disabled={members.length <= 2}
-                  title="Remove row"
-                >
-                  ✕
-                </button>
+                <Tooltip label="Remove row" enabled={members.length > 2}>
+                  <button
+                    className="ghost"
+                    onClick={() => removeRow(idx)}
+                    disabled={members.length <= 2}
+                    aria-label="Remove row"
+                  >
+                    ✕
+                  </button>
+                </Tooltip>
               </div>
             ))}
             <button onClick={addRow} style={{ marginTop: 4 }}>

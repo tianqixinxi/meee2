@@ -22,6 +22,26 @@ import rehypeHighlight from 'rehype-highlight'
 import ReactDiffViewer from 'react-diff-viewer-continued'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import 'highlight.js/styles/github-dark.css'
+import {
+  Terminal as TerminalIcon,
+  FileText,
+  Pencil,
+  Search,
+  Folder,
+  Globe,
+  Bot,
+  ListTodo,
+  BookOpen,
+  Settings as ToolFallbackIcon,
+  ChevronRight,
+  ChevronDown,
+  Loader2,
+  Diamond,
+  Inbox as InjectedIcon,
+  CheckSquare,
+  Square,
+  CircleDashed,
+} from 'lucide-react'
 import type {
   TranscriptBlockForView,
   TranscriptEntryForView,
@@ -111,6 +131,27 @@ export function saveTranscriptVerbosity(v: TranscriptVerbosity): void {
     if (typeof localStorage === 'undefined') return
     localStorage.setItem(VERBOSITY_KEY, v)
     localStorage.removeItem(LEGACY_TOOL_VIS_KEY)
+  } catch { /* ignore */ }
+}
+
+const DOCK_EXPANDED_KEY = 'meee2.dock.expanded.v1'
+
+/// Dock 的"全屏 vs 底栏"展开状态——跨 session 切换共享一份偏好（用户希望
+/// 在 A card 选 expanded 后，切到 B card 也保持 expanded）。
+export function loadDockExpanded(fallback: boolean): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return fallback
+    const v = localStorage.getItem(DOCK_EXPANDED_KEY)
+    if (v === 'true') return true
+    if (v === 'false') return false
+  } catch { /* ignore */ }
+  return fallback
+}
+
+export function saveDockExpanded(v: boolean): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(DOCK_EXPANDED_KEY, v ? 'true' : 'false')
   } catch { /* ignore */ }
 }
 
@@ -283,12 +324,25 @@ export function TranscriptView({
         continue
       }
 
+      // 连续的同类 user/injected 条目合并成一个气泡：用户在 Dock/终端连发
+      // 多条而 Claude 还没回的情况下，原版会渲染成 N 个独立 "You" 卡片，
+      // 视觉上既冗余又像系统漏处理。合并后变成一个气泡里多段文字，跟
+      // 大多数 chat UI 的"用户连发"行为对齐。
+      if (prev && prev.type === e.type && (e.type === 'user' || e.type === 'injected')) {
+        out[out.length - 1] = { ...prev, blocks: [...prev.blocks, ...kept] }
+        continue
+      }
+
       out.push({ ...e, blocks: kept })
     }
 
     // ── 合成 in-flight entry ─────────────────────────────────────────
     if (query.trim()) return out  // search 中不混入合成条目，避免污染计数
-    if (liveStatus !== 'tooling' && liveStatus !== 'thinking') return out
+    if (
+      liveStatus !== 'tooling' &&
+      liveStatus !== 'thinking' &&
+      liveStatus !== 'permissionRequired'
+    ) return out
 
     // 不做 toolName-based dedup —— 之前用 lastToolUse.toolName === liveCurrentTool
     // 来吞掉 PostToolUse 写完但 status 还没翻 idle 的瞬态，但 toolName 重复
@@ -323,6 +377,23 @@ export function TranscriptView({
           {
             type: 'text',
             text: liveCurrentTask || 'Thinking…',
+          },
+        ],
+      })
+    } else if (liveStatus === 'permissionRequired') {
+      // Claude 在等用户在 terminal 里点 y/n 批准 tool 调用——transcript 文件
+      // 还没把这一刻写进去（写要等 PostToolUse），但 UI 不能让用户盯着空。
+      // 用一条带 attention 颜色的合成 entry 提示"等你点"。
+      out.push({
+        id: LIVE_ENTRY_ID,
+        type: 'assistant',
+        timestamp: null,
+        blocks: [
+          {
+            type: 'text',
+            text: liveCurrentTool
+              ? `Waiting for permission to use ${liveCurrentTool}…`
+              : 'Waiting for permission…',
           },
         ],
       })
@@ -755,7 +826,9 @@ function ToolGroupBlock({
         onClick={() => setOpen(!open)}
         aria-expanded={open}
       >
-        <span className="tx-tool-group__chevron" aria-hidden>{open ? '▾' : '▸'}</span>
+        <span className="tx-tool-group__chevron" aria-hidden>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
         <span className="tx-tool-group__summary">{summary}</span>
       </button>
       {open && (
@@ -914,7 +987,10 @@ const TextBlock = memo(function TextBlock({
   const isAssistant = role === 'assistant'
   const isUser = role === 'user'
   const isInjected = role === 'injected'
-  const roleLabel = isInjected ? '📨 Injected' : isUser ? 'You' : isAssistant ? 'Claude' : role
+  // Injected 行用 lucide Inbox icon + "Injected" 文字代替 emoji 前缀。
+  const roleLabel: ReactNode = isInjected
+    ? (<><InjectedIcon size={11} aria-hidden /> Injected</>)
+    : isUser ? 'You' : isAssistant ? 'Claude' : role
   const cls = isInjected
     ? 'tx-text--injected'
     : isUser ? 'tx-text--user' : isAssistant ? 'tx-text--assistant' : 'tx-text--other'
@@ -922,7 +998,7 @@ const TextBlock = memo(function TextBlock({
     <div className={`tx-text ${cls}${hideLabel ? ' tx-text--merged' : ''}${isPending ? ' tx-text--pending' : ''}`}>
       {!hideLabel && (
         <div className="tx-text__role">
-          {isAssistant && <span className="tx-text__role-glyph" aria-hidden>◆</span>}
+          {isAssistant && <span className="tx-text__role-glyph" aria-hidden><Diamond size={11} /></span>}
           <span className="tx-text__role-name">{roleLabel}</span>
         </div>
       )}
@@ -971,7 +1047,7 @@ function ThinkingBlock({ text, forceOpen = false }: { text: string; forceOpen?: 
         onClick={() => setUserOpen(!open)}
         title={forceOpen ? 'Verbose mode auto-expands thinking — toggle disabled' : undefined}
       >
-        {open ? '▾' : '▸'} thinking
+        {open ? <ChevronDown size={11} aria-hidden /> : <ChevronRight size={11} aria-hidden />} thinking
       </button>
       {open && <div className="tx-thinking__body">{text}</div>}
     </div>
@@ -1004,10 +1080,12 @@ function ToolUseBlock({
         onClick={() => setOpen(!open)}
         aria-expanded={open}
       >
-        <span className="tx-tool__icon">{toolIcon(name)}</span>
+        <span className="tx-tool__icon"><ToolIcon name={name} /></span>
         <span className="tx-tool__name">{name}</span>
         <span className="tx-tool__summary">{summarizeToolInput(name, input)}</span>
-        <span className="tx-tool__chevron" aria-hidden>{open ? '⌄' : '›'}</span>
+        <span className="tx-tool__chevron" aria-hidden>
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </span>
       </button>
       {open && (
         <div className="tx-tool__body">
@@ -1026,7 +1104,7 @@ function ToolUseBlock({
 function PendingToolUseBlock({ toolName }: { toolName: string }) {
   return (
     <div className="tx-tool-pending">
-      <span className="tx-tool-pending__icon">{toolIcon(toolName)}</span>
+      <span className="tx-tool-pending__icon"><ToolIcon name={toolName} /></span>
       <span className="tx-tool-pending__label">{toolName}</span>
       <span className="tx-tool-pending__spinner" aria-hidden />
       <span className="tx-tool-pending__caption">running…</span>
@@ -1146,7 +1224,7 @@ function ToolInputBody({ name, input }: { name: string; input: Record<string, an
       <ul className="tx-tool__todos">
         {input.todos.map((t: any, i: number) => (
           <li key={i} className={`tx-tool__todo tx-tool__todo--${t.status}`}>
-            {todoGlyph(t.status)} {t.content ?? t.activeForm ?? ''}
+            <TodoGlyph status={t.status} /> {t.content ?? t.activeForm ?? ''}
           </li>
         ))}
       </ul>
@@ -1291,13 +1369,39 @@ function safeParse(s: string | undefined): Record<string, any> | null {
   try { return JSON.parse(s) } catch { return null }
 }
 
-function toolIcon(name: string): string {
-  const map: Record<string, string> = {
-    Bash: '$', Read: '📄', Write: '✏️', Edit: '✂', MultiEdit: '✂',
-    Grep: '🔍', Glob: '📁', WebSearch: '🔎', WebFetch: '🌐',
-    Agent: '🤖', Task: '🤖', TodoWrite: '☑', NotebookEdit: '📓',
+/// Lucide icon component for a given tool name. Renders a small (size:12)
+/// icon. Pass `name` lowercased or as recorded — case-sensitive against the
+/// Claude CLI tool registry (Bash, Read, Edit, MultiEdit, Write, Grep, Glob,
+/// WebFetch, WebSearch, Agent / Task, TodoWrite, NotebookEdit). Unknown
+/// tools fall back to ToolFallbackIcon.
+function ToolIcon({ name, size = 12 }: { name: string; size?: number }) {
+  const props = { size, 'aria-hidden': true } as const
+  switch (name) {
+    case 'Bash':
+    case 'BashOutput':
+      return <TerminalIcon {...props} />
+    case 'Read':
+      return <FileText {...props} />
+    case 'Edit':
+    case 'MultiEdit':
+    case 'Write':
+    case 'NotebookEdit':
+      return <Pencil {...props} />
+    case 'Grep':
+    case 'WebSearch':
+      return <Search {...props} />
+    case 'Glob':
+      return <Folder {...props} />
+    case 'WebFetch':
+      return <Globe {...props} />
+    case 'Agent':
+    case 'Task':
+      return <Bot {...props} />
+    case 'TodoWrite':
+      return <ListTodo {...props} />
+    default:
+      return <ToolFallbackIcon {...props} />
   }
-  return map[name] ?? '⚙'
 }
 
 function summarizeToolInput(name: string, input: Record<string, any>): string {
@@ -1313,11 +1417,17 @@ function summarizeToolInput(name: string, input: Record<string, any>): string {
   return ''
 }
 
-function todoGlyph(status: string): string {
+/// Lucide icon for a todo entry. Used in TodoWrite tool result rendering.
+/// Returns a sized React node so it can be inline-prefixed to the text.
+function TodoGlyph({ status }: { status: string }) {
+  const props = { size: 11, 'aria-hidden': true } as const
   switch (status) {
-    case 'completed': return '☑'
-    case 'in_progress': return '◐'
-    default: return '☐'
+    case 'completed':
+      return <CheckSquare {...props} />
+    case 'in_progress':
+      return <CircleDashed {...props} />
+    default:
+      return <Square {...props} />
   }
 }
 

@@ -87,8 +87,71 @@ public final class AgentInboxShell {
         }
     }
 
+    // MARK: - Explicit "Push to Desktop" path
+
+    /// 显式触发：把 inbox 里所有消息通过 ClaudeDesktopInputStream（AppleScript
+    /// keystroke）立刻送进 Claude.app 当前 focused 输入框。**只为 explicit
+    /// user-initiated push 设计**（webui Dock 的 ⚡ 按钮）—— 默认 inject 流
+    /// 不调这个，避免抢焦点。
+    ///
+    /// 行为：
+    ///   1. 拒绝非 Desktop session（CLI 走 typeIn 已经够用）
+    ///   2. 串行（ClaudeDesktopInputStream 内部 actor 已经保证）
+    ///   3. 每条 keystroke 成功就 removeFromInbox + ConversationContext.recordInbound
+    ///   4. 失败的留 inbox 兜底（下个 Stop hook 再 drain）
+    /// 返回 (delivered: 成功推送条数, error: nil 全成功 / 描述失败原因)
+    @discardableResult
+    public func pushDesktopNow(sessionId: String) async -> (delivered: Int, error: String?) {
+        guard let target = Self.deliveryTarget(for: sessionId) else {
+            return (0, "session not found")
+        }
+        // 当前不强制 desktop-only —— 但 CLI session 没必要走这条
+        // （typeIn 已经无焦干扰直推），caller (BoardAPI) 自己 gate
+        let messages = MessageRouter.shared.peekInbox(sessionId: sessionId)
+        guard !messages.isEmpty else {
+            return (0, nil)
+        }
+
+        var delivered = 0
+        var lastErr: String?
+        for msg in messages {
+            // 跟 deliverIfResting 一样走 policy 格式化（[meee2 a2a] 前缀等）
+            let policy = Self.snapshotPolicy(for: sessionId)
+            let view = Self.inboundView(of: msg)
+            guard let payload = policy.format(view) else {
+                MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
+                continue
+            }
+            do {
+                try await ClaudeDesktopInputStream().sendTextThrowing(sid: sessionId, text: payload)
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) ok=true")
+                delivered += 1
+                MessageRouter.shared.removeFromInbox(sessionId: sessionId, messageId: msg.id)
+                ConversationContext.shared.recordInbound(sessionId: sessionId, message: msg)
+            } catch let err as ClaudeDesktopInputStream.SendError {
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) failed: \(err.errorDescription ?? "")")
+                lastErr = err.errorDescription
+                // accessibilityNotGranted 是 user-actionable，提示 webui
+                // 用专门的 toast；其它错误一条失败就停，避免连环抢焦点。
+                break
+            } catch {
+                NSLog("[AgentInboxShell] pushDesktopNow sid=\(sessionId.prefix(8)) msg=\(msg.id) failed: \(error.localizedDescription)")
+                lastErr = error.localizedDescription
+                break
+            }
+            _ = target  // silence warning
+        }
+        return (delivered, lastErr)
+    }
+
     /// target 是否能选到一个 dispatcher（Ghostty / iTerm / Apple Terminal）。
     /// 与 deliverIfResting 里的判断保持一致 —— 改一处必须改另一处。
+    ///
+    /// **Desktop 故意不算 dispatcher**：ClaudeDesktopInputStream 虽然存在，
+    /// 但它会 activate Claude.app 抢焦点，对"webui 顺手发条消息"这种场景太
+    /// 打扰。Desktop session 走既有的 inbox + Stop hook drain 路径
+    /// （HookSocketServer.drainResponseForDesktopStop）—— 不立刻送达但不抢
+    /// 焦点。InputStream 留给将来的"显式 Push to Desktop"按钮使用。
     private static func targetHasDispatcher(_ target: DeliveryTarget) -> Bool {
         if let g = target.ghosttyTerminalId, !g.isEmpty { return true }
         if let i = target.iTermSessionId, !i.isEmpty { return true }
@@ -203,8 +266,14 @@ public final class AgentInboxShell {
         }
 
         // 选 terminal dispatcher：按 termProgram + 已捕获的 native session id 选路径。
-        // Ghostty (gtid) / iTerm2 (iTermSessionId) / Apple Terminal (tty)。三个都不
-        // 满足就放弃直推，留 inbox 让下次 flush 再试或等 Stop hook drain。
+        // Ghostty (gtid) / iTerm2 (iTermSessionId) / Apple Terminal (tty) /
+        // Claude Desktop（entrypoint=claude-desktop 或 metadata 命中）—— 不
+        // 命中就放弃直推，留 inbox 让下次 flush 再试或等 Stop hook drain。
+        //
+        // Desktop 分支放在最后：先优先 native terminal（即便用户也有
+        // Claude.app 在跑，meee2 已经知道 cwd 来自终端），只有真没 terminal
+        // 信号时才降到 keystroke 路径——避免 keystroke 抢了 Ghostty 用户的
+        // 焦点。
         let term = (target.terminalInfo?.termProgram ?? "").lowercased()
         let bareTty = target.terminalInfo?.tty ?? ""
         let dispatch: (() async -> Bool)?

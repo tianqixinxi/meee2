@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardState, ClientKind, Selection, Session } from '../types'
+import { isOlderSession } from '../types'
 import ChannelDetail from './ChannelDetail'
 import {
   SidebarFilterMenu,
@@ -19,6 +20,11 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
+import { Inbox, MoreHorizontal } from 'lucide-react'
+import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
+import { Tooltip } from './Tooltip'
+import { activateSession, closeSession, spawnSession } from '../api'
+import { useToast } from '../App'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -69,6 +75,40 @@ function persistCollapsedProjects(set: Set<string>) {
 }
 
 const CLAUDE_PLUGIN_ID = 'com.meee2.plugin.claude'
+const CODEX_PLUGIN_ID = 'com.meee2.plugin.codex'
+const CURSOR_PLUGIN_ID = 'com.meee2.plugin.cursor'
+const OPENCLAW_PLUGIN_ID = 'com.meee2.plugin.openclaw'
+
+/// 不同 plugin 的 row hover 强调色（hover 时一抹渐变背景）。frontend 默认值
+/// 覆盖 plugin metadata 里的 pluginColor —— 让品牌色保持稳定（用户在
+/// product spec 里点名 Claude 橙、Codex 蓝、Cursor 灰、OpenClaw 红）。
+function accentForPlugin(pluginId: string, fallback: string): string {
+  switch (pluginId) {
+    case CLAUDE_PLUGIN_ID: return '#FF9500'
+    case CODEX_PLUGIN_ID: return '#3B82F6'
+    case CURSOR_PLUGIN_ID: return '#9CA3AF'
+    case OPENCLAW_PLUGIN_ID: return '#EF4444'
+    default: return fallback
+  }
+}
+
+/// session 行左侧 status indicator 的 kind 判定：
+///   - `live`      —— thinking / tooling / active / compacting，三点 typing 动效（绿）
+///   - `attention` —— permissionRequired，单点橙色脉冲（用户需要点确认）
+///   - `pending`   —— unread（status 从工作态转到休息态，Claude 刚回完一轮，
+///                     待用户查看），单点蓝色脉冲。优先级低于 attention：
+///                     permissionRequired + unread 同时成立时仍走 attention。
+///   - `null`      —— idle / waitingForUser / completed / dead 等"无需关注"态
+function liveDotKind(
+  status: string,
+  unread: boolean,
+): 'live' | 'attention' | 'pending' | null {
+  if (status === 'thinking' || status === 'tooling' ||
+      status === 'active' || status === 'compacting') return 'live'
+  if (status === 'permissionRequired') return 'attention'
+  if (unread) return 'pending'
+  return null
+}
 
 /// 把 session.clientKind 规范化（缺字段 / 未知值 → 'cli'，因为 cli 是默认）
 function normalizeKind(k: string | null | undefined): ClientKind {
@@ -223,7 +263,7 @@ function EyeClosedIcon() {
 /// 桶的顺序是固定的（最近的在前）；空桶不返回。
 ///
 /// 注意：最后一桶用 "Earlier" 而不是 "Older"，避免和外层折叠区
-/// （`displayGroup === 'older'`，标签 "Older (N) 1h–24h"）字面撞车
+/// （`isOlderSession()` 派生，标签 "Older (N) 1h–24h"）字面撞车
 /// —— 那个折叠区是按 idle 时长分的、和这里按日期分桶语义不同。
 function groupSessionsByDate(list: Session[]): Array<[string, Session[]]> {
   const now = new Date()
@@ -280,7 +320,12 @@ function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
     if (f.status === 'all') return true
     const st = s.status
     if (f.status === 'idle') return st === 'idle'
-    if (f.status === 'waiting') return st === 'waitingForUser'
+    // waitingForUser 和 permissionRequired 都算 "在等用户" —— 漏掉
+    // permissionRequired 会让"等批 tool"的 session 在 waiting 视图里消失，
+    // 而那其实是用户最该看的一种 waiting。
+    if (f.status === 'waiting') {
+      return st === 'waitingForUser' || st === 'permissionRequired'
+    }
     if (f.status === 'active') {
       return st === 'thinking' || st === 'tooling' || st === 'spawning'
     }
@@ -337,6 +382,9 @@ interface Props {
   onSelectionChange: (s: Selection) => void
   /** Count of embeddable elements currently on the canvas, keyed by sid. */
   onCanvasCounts: Record<string, number>
+  /** sid → "刚从工作态转到休息态、还没被用户查看"。Sidebar 用它点亮蓝点，
+   *  和 SessionOverlay 的红点共享同一个 set —— 用户点 row 后由 App 清除。 */
+  unreadSids: Set<string>
   /** Request to insert a new embeddable card for this session. */
   onAddToCanvas: (sessionId: string) => void
   /** Request to remove all cards for this session from the canvas. */
@@ -366,6 +414,7 @@ export default function Sidebar({
   onClose,
   onSelectionChange,
   onCanvasCounts,
+  unreadSids,
   onAddToCanvas,
   onHideFromCanvas,
   onBulkVisibility,
@@ -374,6 +423,7 @@ export default function Sidebar({
   onCreateInProject,
   onRenameSession,
 }: Props) {
+  const toast = useToast()
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
   const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
@@ -411,6 +461,17 @@ export default function Sidebar({
     setRenamingSid(s.id)
     setRenameDraft(displayTitle(s))
   }, [displayTitle])
+
+  // ── Hover overlay menu ───────────────────────────────────────────
+  // 每行只露一个 ⋯ 按钮（hover 时浮现），点开覆盖菜单（Open in / Pin /
+  // Rename / Duplicate）。状态：当前打开菜单的 sid + anchor 按钮的 rect
+  // （给 overlay 定位用）。
+  const [menuForSid, setMenuForSid] = useState<string | null>(null)
+  const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null)
+  const closeMenu = useCallback(() => {
+    setMenuForSid(null)
+    setMenuAnchorRect(null)
+  }, [])
 
   const commitRename = useCallback(() => {
     if (!renamingSid) return
@@ -591,25 +652,29 @@ export default function Sidebar({
   // 28pt window-drag band. Update both files together if the position
   // ever changes.
   const floatingToggle = (
-    <button
-      key="floating-toggle"
-      className="sidebar-collapsed-toggle"
-      onClick={() => {
-        cancelClose()
-        setHoverPreview(false)
-        if (open) onClose()
-        else onOpen()
-      }}
-      onMouseEnter={!open ? openPreview : undefined}
-      onMouseLeave={!open ? scheduleClose : undefined}
-      title={open ? 'Collapse sidebar' : 'Expand sidebar (hover for preview)'}
-      aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+    <Tooltip
+      label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+      placement="bottom"
     >
-      <PanelLeftIcon />
-      {/* 只在折叠态挂 hover-active icon —— 展开时用户看到 sidebar 已经在那
-          没必要再用 chevron 暗示方向；hover 也保持静态。 */}
-      {!open && <PanelLeftOpenIcon />}
-    </button>
+      <button
+        key="floating-toggle"
+        className="sidebar-collapsed-toggle"
+        onClick={() => {
+          cancelClose()
+          setHoverPreview(false)
+          if (open) onClose()
+          else onOpen()
+        }}
+        onMouseEnter={!open ? openPreview : undefined}
+        onMouseLeave={!open ? scheduleClose : undefined}
+        aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+      >
+        <PanelLeftIcon />
+        {/* 只在折叠态挂 hover-active icon —— 展开时用户看到 sidebar 已经在那
+            没必要再用 chevron 暗示方向；hover 也保持静态。 */}
+        {!open && <PanelLeftOpenIcon />}
+      </button>
+    </Tooltip>
   )
 
   if (!open && !isPreview) {
@@ -628,6 +693,15 @@ export default function Sidebar({
       style={isPreview ? undefined : { width }}
       onMouseEnter={isPreview ? cancelClose : undefined}
       onMouseLeave={isPreview ? scheduleClose : undefined}
+      // Suppress the native context menu inside the sidebar so right-click is
+      // ours to define (the per-row handler turns it into the SessionRowMenu).
+      // 例外：rename input / 普通 input 上保留原生菜单，否则用户没法 paste。
+      onContextMenu={(e) => {
+        const t = e.target as HTMLElement | null
+        const tag = t?.tagName?.toLowerCase()
+        if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return
+        e.preventDefault()
+      }}
     >
       <div
         className="sidebar-resizer"
@@ -637,14 +711,16 @@ export default function Sidebar({
       <div className="sidebar-header row space" style={{ position: 'relative' }}>
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           {inDetail && (
-            <button
-              className="ghost"
-              style={{ padding: '2px 6px' }}
-              onClick={() => onSelectionChange({ kind: 'none' })}
-              title="Back to session list"
-            >
-              ‹
-            </button>
+            <Tooltip label="Back to session list">
+              <button
+                className="ghost"
+                style={{ padding: '2px 6px' }}
+                onClick={() => onSelectionChange({ kind: 'none' })}
+                aria-label="Back to session list"
+              >
+                ‹
+              </button>
+            </Tooltip>
           )}
           {/* In detail view we show the section label so the back button has
            * context; the default "Inspector" label is just chrome and Claude
@@ -708,18 +784,19 @@ export default function Sidebar({
                   }}
                 />
                 {searchQuery && (
-                  <button
-                    type="button"
-                    className="sidebar-search__clear"
-                    title="Clear search (Esc)"
-                    aria-label="Clear search"
-                    onClick={() => {
-                      setSearchQuery('')
-                      searchInputRef.current?.focus()
-                    }}
-                  >
-                    ×
-                  </button>
+                  <Tooltip label="Clear search" shortcut="Esc">
+                    <button
+                      type="button"
+                      className="sidebar-search__clear"
+                      aria-label="Clear search"
+                      onClick={() => {
+                        setSearchQuery('')
+                        searchInputRef.current?.focus()
+                      }}
+                    >
+                      ×
+                    </button>
+                  </Tooltip>
                 )}
               </div>
             )}
@@ -785,16 +862,17 @@ export default function Sidebar({
                     return title.includes(q) || proj.includes(q) || cwd.includes(q)
                   })
                 }
-                // displayGroup="older"（idle ≥ 1h）只在 groupBy=date 模式下
-                // 单独折叠成 "Older 1h–24h" 区。groupBy=project 时不再切分
-                // —— 用户按项目找东西时，stale 的 session 应该跟同项目其它
-                // session 在一起，而不是被单独抽到底部一个独立折叠区。
+                // older（idle ≥ 1h，前端从 lastActivity 派生，见
+                // types.ts:isOlderSession）只在 groupBy=date 模式下单独折叠
+                // 成 "Older 1h–24h" 区。groupBy=project 时不再切分 —— 用户按
+                // 项目找东西时，stale 的 session 应该跟同项目其它 session
+                // 在一起，而不是被单独抽到底部一个独立折叠区。
                 const partitionByDisplayGroup = filterState.groupBy === 'date'
                 const primary = partitionByDisplayGroup
-                  ? filtered.filter((s) => s.displayGroup !== 'older')
+                  ? filtered.filter((s) => !isOlderSession(s))
                   : filtered
                 const older = partitionByDisplayGroup
-                  ? filtered.filter((s) => s.displayGroup === 'older')
+                  ? filtered.filter((s) => isOlderSession(s))
                   : []
 
                 // 分组：依据 filterState.groupBy 选 project | date。
@@ -821,12 +899,38 @@ export default function Sidebar({
                   // 当前行用 .is-selected 加视觉反馈。
                   const selected =
                     selection.kind === 'session' && selection.sessionId === s.id
+                  const dot = liveDotKind(s.status, unreadSids.has(s.id))
+                  const accent = accentForPlugin(s.pluginId, s.pluginColor)
                   return (
                     <div
                       key={s.id}
                       className={
-                        'sidebar-session-row' + (selected ? ' is-selected' : '')
+                        'sidebar-session-row' +
+                        (selected ? ' is-selected' : '') +
+                        (menuForSid === s.id ? ' is-menu-open' : '')
                       }
+                      style={{ ['--row-accent' as any]: accent }}
+                      // Right-click 行为 = 点 ⋯ 按钮：打开 SessionRowMenu，定
+                      // 位到鼠标坐标。给 menu 一个零宽 synthetic DOMRect，于是
+                      // 它的 (top, left) 计算结果直接落在 (clientY+4, clientX)。
+                      // 跳过 input / textarea，让 rename 输入框保留原生菜单。
+                      onContextMenu={(e) => {
+                        const t = e.target as HTMLElement | null
+                        const tag = t?.tagName?.toLowerCase()
+                        if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const W = 220
+                        const x = e.clientX
+                        const y = e.clientY
+                        const rect = {
+                          top: y, bottom: y, left: x, right: x + W,
+                          x, y, width: W, height: 0,
+                          toJSON: () => ({}),
+                        } as DOMRect
+                        setMenuForSid(s.id)
+                        setMenuAnchorRect(rect)
+                      }}
                     >
                       <div
                         className="sidebar-session-row__main"
@@ -834,10 +938,25 @@ export default function Sidebar({
                           onSelectionChange({ kind: 'session', sessionId: s.id })
                         }
                       >
-                        <span
-                          className="color-dot"
-                          style={{ background: s.pluginColor }}
-                        />
+                        {dot === 'live' ? (
+                          // 三个 sequential bounce 的小点 —— 比单个 pulsing
+                          // 圆更直观传达"正在执行"。颜色复用 --live 的绿，
+                          // 时序参考 transcript 的 tx-thinking-dots 但拆成
+                          // 三个独立 dot 走 staggered delay。
+                          <span className="status-dots-live" aria-hidden>
+                            <span /><span /><span />
+                          </span>
+                        ) : (
+                          <span
+                            className={
+                              'status-dot' +
+                              (dot === 'attention' ? ' status-dot--attention' :
+                                dot === 'pending' ? ' status-dot--pending' :
+                                ' status-dot--off')
+                            }
+                            aria-hidden
+                          />
+                        )}
                         {(() => {
                           // Claude session 多 source（CLI/Desktop/Cowork）共用一个
                           // pluginColor，加 source icon 才能视觉上分清。其他 plugin
@@ -877,45 +996,153 @@ export default function Sidebar({
                             className="badge warn sidebar-session-row__inbox"
                             title={`${s.inboxPending} pending inbox message${s.inboxPending === 1 ? '' : 's'}`}
                           >
-                            📨 {s.inboxPending}
+                            <Inbox size={11} aria-hidden /> {s.inboxPending}
                           </span>
                         )}
+                        {/* Canvas 可见性 toggle —— 始终可见的状态指示器 + 一键
+                         *  toggle。on canvas 时 eye-open 实色，off canvas 时
+                         *  eye-off 半透明（hover 提亮）。比藏在 ⋯ 菜单深处的
+                         *  Hide / Show 一击即得。 */}
+                        <Tooltip label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}>
+                          <button
+                            className="sidebar-icon-btn sidebar-session-row__visibility"
+                            data-on-canvas={onCanvas ? 'true' : 'false'}
+                            aria-label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}
+                            aria-pressed={onCanvas}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (onCanvas) {
+                                onHideFromCanvas(s.id)
+                              } else {
+                                onAddToCanvas(s.id)
+                              }
+                            }}
+                          >
+                            {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                          </button>
+                        </Tooltip>
+                        {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
+                         *  overlay，里面集成原本的 pin / rename / canvas 三键
+                         *  + 新加的 Duplicate 与 Open in submenu。*/}
+                        <Tooltip label="Actions">
                         <button
-                          className="sidebar-icon-btn"
-                          title={pinned.has(s.id) ? 'Unpin' : 'Pin'}
+                          className="sidebar-icon-btn sidebar-session-row__more"
+                          aria-label="Open session actions menu"
                           onClick={(e) => {
                             e.stopPropagation()
-                            togglePinned(s.id)
+                            const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                            if (menuForSid === s.id) {
+                              closeMenu()
+                            } else {
+                              setMenuForSid(s.id)
+                              setMenuAnchorRect(rect)
+                            }
                           }}
                         >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill={pinned.has(s.id) ? 'currentColor' : 'none'}>
-                            <path d="M12 2v6m-3-1l3 3 3-3M5 13c0-2.5 2-5 7-5s7 2.5 7 5c0 1.5-1 2-3 2H8c-2 0-3-.5-3-2zM10 15v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
+                          <MoreHorizontal size={14} aria-hidden />
                         </button>
-                        <button
-                          className="sidebar-icon-btn"
-                          title="Rename"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            startRename(s)
-                          }}
-                        >
-                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </button>
-                        <button
-                          className="sidebar-icon-btn"
-                          title={onCanvas ? `Hide from canvas (${count})` : 'Show on canvas'}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (onCanvas) onHideFromCanvas(s.id)
-                            else onAddToCanvas(s.id)
-                          }}
-                        >
-                          {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
-                        </button>
+                        </Tooltip>
                       </div>
+                      {menuForSid === s.id && (
+                        <SessionRowMenu
+                          session={s}
+                          isPinned={pinned.has(s.id)}
+                          onClose={closeMenu}
+                          anchorRect={menuAnchorRect}
+                          onOpenInCanvas={() => {
+                            // 加到 canvas（如果还没在）+ 选中 session 让 dock
+                            // 弹出 + 默认展开。saveDockExpanded 让下次再切回
+                            // 同样保持展开；TranscriptPanel 会自动 mount。
+                            if (!onCanvas) onAddToCanvas(s.id)
+                            onSelectionChange({ kind: 'session', sessionId: s.id })
+                          }}
+                          onOpenInOriginal={() => {
+                            // claude desktop / cli session / codex session 全
+                            // 走 BoardAPI.activateSession —— 后端按 clientKind
+                            // dispatch（ClaudeDesktopActivator 走 claude://，
+                            // CLI 走 TerminalJumper）。
+                            activateSession(s.id).catch((err) => {
+                              toast.push(
+                                'error',
+                                `Open in original failed: ${(err as Error).message ?? 'unknown'}`
+                              )
+                            })
+                          }}
+                          onTogglePin={() => {
+                            const nowPinned = togglePinned(s.id)
+                            toast.push(
+                              'success',
+                              nowPinned
+                                ? `Pinned: ${displayTitle(s)}`
+                                : `Unpinned: ${displayTitle(s)}`
+                            )
+                          }}
+                          onRename={() => startRename(s)}
+                          onDuplicate={() => {
+                            // Duplicate = spawn 新 session in same cwd。
+                            // 用 SessionDTO.project（cwd 全路径）作为 cwd。
+                            const cwd = s.project
+                            if (!cwd) {
+                              toast.push('error', 'Cannot duplicate: source session has no cwd')
+                              return
+                            }
+                            const shortId = s.id.slice(0, 8)
+                            toast.push('info', `Duplicating session in ${cwd}…`)
+                            spawnSession({ cwd })
+                              .then(() => {
+                                toast.push(
+                                  'success',
+                                  `New session spawned in ${cwd} (from ${shortId})`
+                                )
+                              })
+                              .catch((err) => {
+                                toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
+                              })
+                          }}
+                          onHide={onCanvas ? () => {
+                            // 把 sid 加进 dismissed 集合 + 把 canvas 上的 rect
+                            // 删掉。下次状态刷新不会自动重建（Board.tsx:681）。
+                            onHideFromCanvas(s.id)
+                            toast.push('info', `Hidden: ${displayTitle(s)}`)
+                          } : undefined}
+                          onCloseSession={() => {
+                            // SIGTERM 真实进程。Desktop / Cowork / external 后端会拒
+                            // （没 pid），把 toast 翻译成"自己回宿主 app 关"。
+                            const shortId = s.id.slice(0, 8)
+                            const name = displayTitle(s)
+                            closeSession(s.id)
+                              .then((r) => {
+                                if (r.ok) {
+                                  toast.push(
+                                    'success',
+                                    r.alreadyDead
+                                      ? `${name} (${shortId}) was already gone — removed from board`
+                                      : `Closed ${name} (${shortId})`
+                                  )
+                                  return
+                                }
+                                if (r.errorCode === 'no_pid') {
+                                  // Desktop / Cowork / external — 提示用户回原 app 关
+                                  toast.push(
+                                    'error',
+                                    `Can't close ${name} from here — please close it in ${originalClientLabel(s)} yourself.`
+                                  )
+                                  return
+                                }
+                                toast.push(
+                                  'error',
+                                  `Couldn't close ${name} (${r.errorCode}): ${r.error ?? 'unknown error'}. Try closing it manually in ${originalClientLabel(s)}.`
+                                )
+                              })
+                              .catch((err) => {
+                                toast.push(
+                                  'error',
+                                  `Close failed: ${(err as Error).message ?? 'unknown'}. Close it manually in ${originalClientLabel(s)}.`
+                                )
+                              })
+                          }}
+                        />
+                      )}
                     </div>
                   )
                 }
@@ -966,19 +1193,20 @@ export default function Sidebar({
                         </svg>
                         <span className="sidebar-project-group__spacer" />
                         {sampleCwd && onCreateInProject && (
-                          <button
-                            className="sidebar-project-group__add"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onCreateInProject(sampleCwd)
-                            }}
-                            title={`New session in ${groupKey}`}
-                            aria-label={`New session in ${groupKey}`}
-                          >
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                              <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                            </svg>
-                          </button>
+                          <Tooltip label={`New session in ${groupKey}`}>
+                            <button
+                              className="sidebar-project-group__add"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onCreateInProject(sampleCwd)
+                              }}
+                              aria-label={`New session in ${groupKey}`}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                              </svg>
+                            </button>
+                          </Tooltip>
                         )}
                         {/* Global filter trigger lives only on the first project
                          * group's top-right; data layer is unchanged (filter is
@@ -989,24 +1217,25 @@ export default function Sidebar({
                             className="sidebar-project-group__filter-wrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              className={
-                                'sidebar-project-group__filter' +
-                                (filterMenuOpen || hasFilter ? ' is-active' : '')
-                              }
-                              onClick={() => setFilterMenuOpen((v) => !v)}
-                              title="Filter / Group / Sort"
-                              aria-label="Filter, group, sort"
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                                <path d="M4 6h16M7 12h10M10 18h4"
-                                      stroke="currentColor" strokeWidth="2"
-                                      strokeLinecap="round"/>
-                              </svg>
-                              {hasFilter && (
-                                <span className="filter-dot" aria-hidden />
-                              )}
-                            </button>
+                            <Tooltip label="Filter / Group / Sort">
+                              <button
+                                className={
+                                  'sidebar-project-group__filter' +
+                                  (filterMenuOpen || hasFilter ? ' is-active' : '')
+                                }
+                                onClick={() => setFilterMenuOpen((v) => !v)}
+                                aria-label="Filter, group, sort"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                  <path d="M4 6h16M7 12h10M10 18h4"
+                                        stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round"/>
+                                </svg>
+                                {hasFilter && (
+                                  <span className="filter-dot" aria-hidden />
+                                )}
+                              </button>
+                            </Tooltip>
                             {filterMenuOpen && (
                               <SidebarFilterMenu
                                 state={filterState}
@@ -1055,22 +1284,23 @@ export default function Sidebar({
                             className="sidebar-project-group__filter-wrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            <button
-                              className={
-                                'sidebar-project-group__filter is-pinned' +
-                                (filterMenuOpen || hasFilter ? ' is-active' : '')
-                              }
-                              onClick={() => setFilterMenuOpen((v) => !v)}
-                              title="Filter / Group / Sort"
-                              aria-label="Filter, group, sort"
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                                <path d="M4 6h16M7 12h10M10 18h4"
-                                      stroke="currentColor" strokeWidth="2"
-                                      strokeLinecap="round"/>
-                              </svg>
-                              {hasFilter && <span className="filter-dot" aria-hidden />}
-                            </button>
+                            <Tooltip label="Filter / Group / Sort">
+                              <button
+                                className={
+                                  'sidebar-project-group__filter is-pinned' +
+                                  (filterMenuOpen || hasFilter ? ' is-active' : '')
+                                }
+                                onClick={() => setFilterMenuOpen((v) => !v)}
+                                aria-label="Filter, group, sort"
+                              >
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                                  <path d="M4 6h16M7 12h10M10 18h4"
+                                        stroke="currentColor" strokeWidth="2"
+                                        strokeLinecap="round"/>
+                                </svg>
+                                {hasFilter && <span className="filter-dot" aria-hidden />}
+                              </button>
+                            </Tooltip>
                             {filterMenuOpen && (
                               <SidebarFilterMenu
                                 state={filterState}
@@ -1241,14 +1471,16 @@ export default function Sidebar({
           </span>
           <span>QC</span>
         </div>
-        <button className="sidebar-footer-icon" title="Account / settings" type="button">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-            <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-          </svg>
-        </button>
+        <Tooltip label="Account / settings" placement="top">
+          <button className="sidebar-footer-icon" type="button" aria-label="Account / settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
+              <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </Tooltip>
       </div>
     </aside>
     </>

@@ -63,9 +63,20 @@ export interface Session {
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
-  /** Optional presentation bucket. `older` sessions are shown collapsed and
-   * skipped by automatic canvas placement. */
-  displayGroup?: 'older' | string | null
+}
+
+/// "Older" / 折叠显示的判定：lastActivity ≥ 1h 前 → older。
+/// 这是纯 webui 的呈现规则 —— 后端不再下发 displayGroup 字段。Sidebar 的
+/// "Older" 分组、Board 的"默认不自动建卡片"过滤都用这个 helper。
+/// `permissionRequired` 的 session 永远不算 older（阻塞用户响应的弹框就算
+/// 挂超 1h 也得让用户能找到）。
+export const OLDER_IDLE_MS = 60 * 60 * 1000
+export function isOlderSession(s: Pick<Session, 'lastActivity' | 'status'>): boolean {
+  if (s.status === 'permissionRequired') return false
+  if (!s.lastActivity) return false
+  const ts = Date.parse(s.lastActivity)
+  if (Number.isNaN(ts)) return false
+  return Date.now() - ts >= OLDER_IDLE_MS
 }
 
 export type ClientKind = 'cli' | 'desktop' | 'cowork'

@@ -156,8 +156,20 @@ class CursorPlugin: SessionPlugin {
 
     // MARK: - Private
 
+    /// Cursor 客户端是否在跑 —— 关掉客户端后 transcript 文件还在磁盘上，
+    /// 不做这个检查的话 session 会永远显示。
+    private func isCursorAppRunning() -> Bool {
+        let bundleId = "com.todesktop.230313mzl4w4u92"
+        return !NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }.isEmpty
+    }
+
     /// 扫描 Cursor projects 目录
     private func scanCursorProjects() -> [PluginSession] {
+        // Cursor 没在跑就直接清空 —— 避免关掉客户端后 session 还挂着
+        guard isCursorAppRunning() else {
+            return []
+        }
+
         // 检查目录是否存在
         guard FileManager.default.fileExists(atPath: cursorProjectsPath.path) else {
             NSLog("[CursorPlugin] Projects directory not found: \(cursorProjectsPath.path)")
