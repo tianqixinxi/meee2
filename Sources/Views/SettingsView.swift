@@ -946,10 +946,19 @@ public struct SettingsView: View {
                     }
                 }
 
+                // "Check for Updates" 同时干两件事：
+                //   1. 跑自己的 appcast 拉取，刷 Settings 的 Current/Latest 显示
+                //   2. 发通知让 AppDelegate 调 SPUStandardUpdaterController 起
+                //      Sparkle 的标准 modal flow（找到新版 → Install/Skip/Later
+                //      用户对话框 → 下载 → 重启）。
+                // 数据源（appcast.xml）是一份的，这里只是把"显示新版本号"
+                // 跟"真去装"两个动作合到一个按钮上。
                 Button("Check for Updates") {
-                    Task {
-                        await versionChecker.checkForUpdate()
-                    }
+                    Task { await versionChecker.checkForUpdate() }
+                    NotificationCenter.default.post(
+                        name: Notification.Name("meee2.checkForUpdates"),
+                        object: nil
+                    )
                 }
                 .disabled(versionChecker.isChecking)
             }

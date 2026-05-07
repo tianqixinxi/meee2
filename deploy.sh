@@ -97,6 +97,13 @@ cp App/Info.plist /Applications/meee2.app/Contents/Info.plist
 if [ -n "${EXISTING_VERSION:-}" ] && command -v plutil >/dev/null 2>&1; then
     plutil -replace CFBundleShortVersionString -string "$EXISTING_VERSION" \
         /Applications/meee2.app/Contents/Info.plist 2>/dev/null || true
+    # CFBundleVersion 也跟着同步：原来源 plist 里硬编码 "1",会让 Sparkle
+    # 拿 "1" 跟 appcast 里 "0.3.0-rc4" 比版本,SUStandardVersionComparator
+    # 把 "1" 当 build number,排序常常跟 prerelease 字符串方向反着 →
+    # Settings 显示 "Current 1.0.0 / Latest 0.3.0",看起来"已经超新版" 不
+    # 弹更新。强制让两个版本字段一致,Sparkle 比的就是同一份语义版号。
+    plutil -replace CFBundleVersion -string "$EXISTING_VERSION" \
+        /Applications/meee2.app/Contents/Info.plist 2>/dev/null || true
 fi
 
 # Copy SwiftPM resource bundle (contains WebDist).

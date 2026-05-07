@@ -18,8 +18,14 @@
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>0.0.0-dev</string>
+    <!-- CFBundleVersion 必须跟 CFBundleShortVersionString 同步：Sparkle 比版本
+         时优先看 CFBundleVersion；不一致会让 Settings 的 VersionChecker 跟
+         Sparkle 的判断分裂（前者比 ShortVersion 字符串，后者比 Bundle build
+         number）。create-dmg.sh / deploy.sh 都把这两个字段一并 plutil 覆写
+         成同一个 VERSION 值。源里这个 0.0.0-dev 只是占位，dev 直接 swift
+         build 跑测试时不会生效到 Info.plist —— release 流程注入。 -->
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>0.0.0-dev</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
