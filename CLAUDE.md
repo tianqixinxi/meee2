@@ -39,7 +39,7 @@ Surfaces:
 - **Island** — SwiftUI `IslandView`, menubar overlay
 - **TUI** — `meee2 dashboard`, ncurses
 - **CLI** — `meee2 list / send / jump / note / channel / msg / board / whoami`
-- **Web Board** — React + Vite @ `localhost:5173` (dev) or `localhost:9876` (served by `BoardServer`)
+- **Web Board** — React + Vite @ `localhost:5002` (dev) or `localhost:9876` (served by `BoardServer`)
 
 Plugin SDK: `meee2-plugin-kit/` (shared dylib, defines `SessionPlugin` open class + public types).
 
@@ -189,7 +189,7 @@ For non-trivial behavior changes, also smoke these by hand:
 4. `meee2 msg send --channel __ops-<sid> --from operator --to session --human "ping"` — target session receives it within ~2s
 5. `curl /api/state` returns current sessions with correct `status`
 
-For UI changes, **hard-refresh** `localhost:5173` before evaluating (Vite HMR sometimes leaks stale chunks).
+For UI changes, **hard-refresh** `localhost:5002` before evaluating (Vite HMR sometimes leaks stale chunks).
 
 ## Common Pitfalls
 

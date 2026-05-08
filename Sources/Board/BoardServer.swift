@@ -373,6 +373,7 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
+        server.GET["/api/whoami"] = BoardServer.cors(BoardAPI.getWhoami)
         server.GET["/api/version"] = BoardServer.cors(BoardAPI.getVersion)
         server.POST["/api/version/check"] = BoardServer.cors(BoardAPI.checkVersion)
         server.POST["/api/update/install"] = BoardServer.cors(BoardAPI.installUpdate)
@@ -395,6 +396,7 @@ public final class BoardServer {
         server.POST["/api/channels/:name/members"] = BoardAPI.addMember
         server.DELETE["/api/channels/:name/members/:alias"] = BoardAPI.removeMember
         server.POST["/api/channels/:name/mode"] = BoardAPI.setChannelMode
+        server.POST["/api/channels/:name/rename"] = BoardAPI.renameChannel
         server.GET["/api/channels/:name/messages"] = BoardAPI.listMessages
         server.POST["/api/messages/send"] = BoardAPI.sendMessage
         server.POST["/api/messages/:id/hold"] = BoardAPI.holdMessage

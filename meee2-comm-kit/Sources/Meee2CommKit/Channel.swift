@@ -31,8 +31,13 @@ public struct ChannelMember: Codable, Sendable, Equatable {
 public struct Channel: Codable, Identifiable, Sendable {
     public var id: String { name }
 
-    /// 全局唯一的频道名（由人类指定）
+    /// 全局唯一的频道名（由人类指定，**immutable** —— 同时是 id 和持久化文件名,
+    /// 也是 ~/.meee2/messages/<channel>/ 目录名,改名等于丢历史消息）
     public var name: String
+    /// 可选的展示名 —— 给人看的友好名字，可随时改。nil/空 时 UI 退回展示 `name`。
+    /// 为什么和 `name` 分开：channel id 是 message envelope / member alias 的稳
+    /// 定锚点，display 改名应当 0 副作用（issue #24）。
+    public var displayName: String?
     /// 成员列表（alias 在 channel 内唯一）
     public var members: [ChannelMember]
     /// 当前投递模式
@@ -47,13 +52,23 @@ public struct Channel: Codable, Identifiable, Sendable {
         members: [ChannelMember] = [],
         mode: ChannelMode = .auto,
         createdAt: Date = Date(),
-        description: String? = nil
+        description: String? = nil,
+        displayName: String? = nil
     ) {
         self.name = name
         self.members = members
         self.mode = mode
         self.createdAt = createdAt
         self.description = description
+        self.displayName = displayName
+    }
+
+    /// 给人看的展示名 —— 有 displayName 用 displayName，否则退回 name。
+    public var effectiveDisplayName: String {
+        if let d = displayName?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty {
+            return d
+        }
+        return name
     }
 
     /// 按别名查找成员

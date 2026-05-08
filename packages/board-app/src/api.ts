@@ -51,6 +51,18 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+// -- whoami (system user running meee2) ------------------------------------
+
+export interface WhoamiInfo {
+  username: string
+  fullName: string
+  hostname: string
+}
+
+export function fetchWhoami(): Promise<WhoamiInfo> {
+  return jsonRequest<WhoamiInfo>('/api/whoami')
+}
+
 // -- app version / Sparkle update ------------------------------------------
 
 export interface VersionInfo {
@@ -141,6 +153,25 @@ export async function removeMember(
   const r = await jsonRequest<{ channel: Channel }>(
     `/api/channels/${encodeURIComponent(channel)}/members/${encodeURIComponent(alias)}`,
     { method: 'DELETE' },
+  )
+  return r.channel
+}
+
+/**
+ * Rename a channel's display label. The canonical id (`name`) stays put —
+ * passing `null` or empty string clears `displayName` and the UI falls back
+ * to showing the canonical name. See issue #24.
+ */
+export async function renameChannel(
+  name: string,
+  displayName: string | null,
+): Promise<Channel> {
+  const r = await jsonRequest<{ channel: Channel }>(
+    `/api/channels/${encodeURIComponent(name)}/rename`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ displayName }),
+    },
   )
   return r.channel
 }

@@ -24,6 +24,8 @@ public struct ChannelCommand {
             cmdLeave(rest)
         case "mode":
             cmdMode(rest)
+        case "rename":
+            cmdRename(rest)
         case "inspect", "show":
             cmdInspect(rest)
         case "help", "--help", "-h":
@@ -49,7 +51,11 @@ public struct ChannelCommand {
             let memberList = ch.members.isEmpty
                 ? "-"
                 : ch.members.map { $0.alias }.joined(separator: ",")
-            print("\(ch.name)  mode=\(ch.mode.rawValue)  members=[\(memberList)]  pending=\(pending)")
+            let displaySuffix: String = {
+                if let d = ch.displayName, !d.isEmpty, d != ch.name { return "  display='\(d)'" }
+                return ""
+            }()
+            print("\(ch.name)\(displaySuffix)  mode=\(ch.mode.rawValue)  members=[\(memberList)]  pending=\(pending)")
             if let d = ch.description, !d.isEmpty {
                 print("    \(d)")
             }
@@ -157,6 +163,40 @@ public struct ChannelCommand {
         }
     }
 
+    /// `meee2 channel rename <name> <new-display-name>` 或 `--clear` 清掉
+    /// display name 退回展示 canonical name。
+    /// canonical id（`name`）保持不变 —— 改 id 会丢历史消息（issue #24）。
+    private static func cmdRename(_ args: [String]) {
+        guard let name = args.first else {
+            print("Error: channel name required")
+            print("Usage: meee2 channel rename <name> <new-display-name>")
+            print("       meee2 channel rename <name> --clear")
+            return
+        }
+        let rest = Array(args.dropFirst())
+        let newDisplay: String?
+        if rest.first == "--clear" {
+            newDisplay = nil
+        } else if !rest.isEmpty {
+            // 多个 token 拼成一个 display name，方便不带引号传"My Review Channel"。
+            // 服务端再 trim + 空串 → nil，所以这里不重复处理。
+            newDisplay = rest.joined(separator: " ")
+        } else {
+            print("Error: new display name required (or pass --clear)")
+            return
+        }
+        do {
+            let ch = try ChannelRegistry.shared.rename(name, displayName: newDisplay)
+            if let d = ch.displayName, !d.isEmpty {
+                print("Renamed '\(ch.name)' -> displayName='\(d)'")
+            } else {
+                print("Cleared displayName on '\(ch.name)' (now displays as '\(ch.name)')")
+            }
+        } catch {
+            print("Error: \(error)")
+        }
+    }
+
     private static func cmdInspect(_ args: [String]) {
         // 支持 --follow / -f 标志，其余参数按位置解析出 channel name
         var follow = false
@@ -178,6 +218,9 @@ public struct ChannelCommand {
             return
         }
         print("Channel: \(ch.name)")
+        if let d = ch.displayName, !d.isEmpty, d != ch.name {
+            print("  Display name: \(d)")
+        }
         print("  Mode: \(ch.mode.rawValue)")
         if let d = ch.description, !d.isEmpty {
             print("  Description: \(d)")
@@ -334,6 +377,8 @@ public struct ChannelCommand {
           meee2 channel join <name> --as <alias> --session <sid-prefix>
           meee2 channel leave <name> --as <alias>
           meee2 channel mode <name> <auto|intercept|paused>
+          meee2 channel rename <name> <new-display-name>
+          meee2 channel rename <name> --clear
           meee2 channel inspect <name> [--follow|-f]
         """)
     }

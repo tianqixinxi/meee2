@@ -199,6 +199,8 @@ struct A2AConnectSheet: View {
                 return "Alias '\(a)' not found."
             case .invalidName(let n):
                 return "Invalid channel name '\(n)'. Use lowercase letters, digits, '-' or '_' (1–64 chars)."
+            case .invalidDisplayName:
+                return "Display name is too long (max 100 characters)."
             }
         }
         return error.localizedDescription

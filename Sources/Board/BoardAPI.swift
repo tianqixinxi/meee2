@@ -63,6 +63,8 @@ enum BoardAPI {
             return errorResponse("alias_not_found", "alias not found: \(a)", status: 404)
         case .invalidName(let n):
             return errorResponse("invalid_name", "invalid channel name: \(n) (allowed: [a-z0-9_-], 1..64 chars)", status: 400)
+        case .invalidDisplayName:
+            return errorResponse("invalid_display_name", "display name must be 1..100 characters", status: 400)
         }
     }
 
@@ -490,6 +492,27 @@ enum BoardAPI {
         #endif
     }
 
+    private struct WhoamiResponse: Encodable {
+        /// 系统短用户名（NSUserName，等价于 `whoami`）—— sidebar 底部默认显示这个
+        let username: String
+        /// 系统全名（NSFullUserName，"Account 用户全名" 字段）—— 可空字符串
+        let fullName: String
+        /// 主机名（用于 LAN 场景区分多台机器）
+        let hostname: String
+    }
+
+    /// GET /api/whoami
+    /// sidebar 底部用户行展示用 —— 绑定运行 meee2 的系统用户身份。
+    /// 没参数,无副作用,客户端拉一次缓存即可。
+    static func getWhoami(_ req: HttpRequest) -> HttpResponse {
+        let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        return jsonResponse(WhoamiResponse(
+            username: NSUserName(),
+            fullName: NSFullUserName(),
+            hostname: host
+        ))
+    }
+
     private struct VersionResponse: Encodable {
         let current: String
         let latest: String?
@@ -883,6 +906,27 @@ enum BoardAPI {
         }
         do {
             let channel = try ChannelRegistry.shared.leave(channel: name, alias: alias)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(ChannelEnvelope(channel: BoardDTOBuilder.channelDTO(channel)))
+        } catch let err as ChannelRegistryError {
+            return mapChannelError(err)
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// POST /api/channels/:name/rename
+    /// Body: {"displayName":"..."} — 传 null/空串/省略 → 清掉 displayName
+    /// 退回展示 canonical name。canonical name 本身保持不变（issue #24）。
+    static func renameChannel(_ req: HttpRequest) -> HttpResponse {
+        guard let name = req.params[":name"] else {
+            return errorResponse("bad_request", "missing channel name", status: 400)
+        }
+        // 允许 body 为空对象（视作清掉 displayName）
+        let json = parseJSONBody(req) ?? [:]
+        let displayName = json["displayName"] as? String
+        do {
+            let channel = try ChannelRegistry.shared.rename(name, displayName: displayName)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(ChannelEnvelope(channel: BoardDTOBuilder.channelDTO(channel)))
         } catch let err as ChannelRegistryError {
