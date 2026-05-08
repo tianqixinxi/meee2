@@ -87,7 +87,12 @@ export interface Member {
 }
 
 export interface Channel {
+  /// Canonical id — also the on-disk filename / message envelope channel /
+  /// member alias scope. Immutable; rename only changes `displayName`.
   name: string
+  /// Optional human-friendly label. UI shows this when set, otherwise falls
+  /// back to `name`. See issue #24.
+  displayName: string | null
   mode: Mode
   members: Member[]
   pendingCount: number

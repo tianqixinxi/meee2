@@ -395,6 +395,7 @@ public final class BoardServer {
         server.POST["/api/channels/:name/members"] = BoardAPI.addMember
         server.DELETE["/api/channels/:name/members/:alias"] = BoardAPI.removeMember
         server.POST["/api/channels/:name/mode"] = BoardAPI.setChannelMode
+        server.POST["/api/channels/:name/rename"] = BoardAPI.renameChannel
         server.GET["/api/channels/:name/messages"] = BoardAPI.listMessages
         server.POST["/api/messages/send"] = BoardAPI.sendMessage
         server.POST["/api/messages/:id/hold"] = BoardAPI.holdMessage

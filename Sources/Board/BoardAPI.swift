@@ -63,6 +63,8 @@ enum BoardAPI {
             return errorResponse("alias_not_found", "alias not found: \(a)", status: 404)
         case .invalidName(let n):
             return errorResponse("invalid_name", "invalid channel name: \(n) (allowed: [a-z0-9_-], 1..64 chars)", status: 400)
+        case .invalidDisplayName:
+            return errorResponse("invalid_display_name", "display name must be 1..100 characters", status: 400)
         }
     }
 
@@ -883,6 +885,27 @@ enum BoardAPI {
         }
         do {
             let channel = try ChannelRegistry.shared.leave(channel: name, alias: alias)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(ChannelEnvelope(channel: BoardDTOBuilder.channelDTO(channel)))
+        } catch let err as ChannelRegistryError {
+            return mapChannelError(err)
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// POST /api/channels/:name/rename
+    /// Body: {"displayName":"..."} — 传 null/空串/省略 → 清掉 displayName
+    /// 退回展示 canonical name。canonical name 本身保持不变（issue #24）。
+    static func renameChannel(_ req: HttpRequest) -> HttpResponse {
+        guard let name = req.params[":name"] else {
+            return errorResponse("bad_request", "missing channel name", status: 400)
+        }
+        // 允许 body 为空对象（视作清掉 displayName）
+        let json = parseJSONBody(req) ?? [:]
+        let displayName = json["displayName"] as? String
+        do {
+            let channel = try ChannelRegistry.shared.rename(name, displayName: displayName)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(ChannelEnvelope(channel: BoardDTOBuilder.channelDTO(channel)))
         } catch let err as ChannelRegistryError {
