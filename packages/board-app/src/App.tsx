@@ -133,6 +133,10 @@ export default function App() {
   // dock × 按钮关 dock：session 模式保留 selection；assistant 模式 reset
   // assistantRequested。
   const [dockOpen, setDockOpen] = useState(false)
+  // session-mode dock 绑定的 sessionId —— 跟 `selection` 解耦：用户点画板
+  // 空白处取消选中（selection → none）时 dock 不该收起，所以记一份 dock 自
+  // 己锚定的 id。explicit close（× / Esc / 切到不同 session）时才更新。
+  const [dockSessionId, setDockSessionId] = useState<string | null>(null)
   const dockSeedRef = useRef<string>('')
   const dockRef = useRef<DockHandle | null>(null)
   // Template cache: templateId → raw TSX source. Missing keys fall back to
@@ -310,10 +314,11 @@ export default function App() {
   const selectedSessionId =
     selection.kind === 'session' ? selection.sessionId : null
 
-  // 切换 session（包括取消选择）时重置 dock 可见性 + assistant 标记 ——
-  // 下次按键重新打开（mode 由新的 selection 决定）。
+  // 切到另一个 session 时把 dock 重新指向新 session（issue #21：点画板空白
+  // selection → none 不算切换，dock 保持打开 + 锚在原 session）。
   useEffect(() => {
-    setDockOpen(false)
+    if (!selectedSessionId) return
+    setDockSessionId(selectedSessionId)
     setAssistantRequested(false)
     dockSeedRef.current = ''
   }, [selectedSessionId])
@@ -532,10 +537,11 @@ export default function App() {
               Esc / × 关闭：session 模式保留 selection，assistant 模式清
               assistantRequested。下次再按键又能重开。 */}
           {dockOpen && boardState.state && (() => {
-            const sessionForDock =
-              selection.kind === 'session'
-                ? boardState.state.sessions.find((x) => x.id === selection.sessionId)
-                : undefined
+            // dockSessionId 是 dock 自己锚定的 session（不跟随 selection 清空），
+            // 这样画板空白点击不会让 transcript 收起。
+            const sessionForDock = dockSessionId
+              ? boardState.state.sessions.find((x) => x.id === dockSessionId)
+              : undefined
             const useAssistant = assistantRequested || !sessionForDock
             const mode: DockMode = useAssistant
               ? {
@@ -544,6 +550,7 @@ export default function App() {
                   setMessages: setAssistantMessages,
                   onSpawned: (cwd) => {
                     setDockOpen(false)
+                    setDockSessionId(null)
                     setAssistantRequested(false)
                     pushToast('success', `Spawning Claude in ${cwd}`)
                   },
@@ -561,6 +568,7 @@ export default function App() {
                 initialSeed={dockSeedRef.current}
                 onClose={() => {
                   setDockOpen(false)
+                  setDockSessionId(null)
                   if (useAssistant) setAssistantRequested(false)
                 }}
               />
