@@ -51,6 +51,18 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+// -- whoami (system user running meee2) ------------------------------------
+
+export interface WhoamiInfo {
+  username: string
+  fullName: string
+  hostname: string
+}
+
+export function fetchWhoami(): Promise<WhoamiInfo> {
+  return jsonRequest<WhoamiInfo>('/api/whoami')
+}
+
 // -- app version / Sparkle update ------------------------------------------
 
 export interface VersionInfo {

@@ -24,7 +24,7 @@ import { Inbox, MoreHorizontal } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
-import { activateSession, closeSession, spawnSession } from '../api'
+import { activateSession, closeSession, fetchWhoami, spawnSession } from '../api'
 import { useToast } from '../App'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
@@ -442,6 +442,21 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+
+  // 底部用户行 —— 绑定 meee2 host 上的系统身份，远程访问 LAN 时也能识别
+  // 是哪台机器的哪位用户。fetch 一次缓存即可；fallback 给空串避免 SSR 闪屏。
+  const [whoamiLabel, setWhoamiLabel] = useState<string>('')
+  useEffect(() => {
+    let alive = true
+    fetchWhoami()
+      .then((info) => {
+        if (!alive) return
+        const label = info.fullName?.trim() || info.username || ''
+        setWhoamiLabel(label)
+      })
+      .catch(() => { /* 静默失败：保持空 label */ })
+    return () => { alive = false }
+  }, [])
 
   // override / pin 改动时同步（本组件外的修改也会触发，跨组件一致）
   useEffect(() => {
@@ -1467,7 +1482,7 @@ export default function Sidebar({
           <ChannelDetail state={state} channelName={selection.channelName} />
         )}
       </div>
-      {/* ── 底部用户行（mirror Claude Code's "QC + icon"） ─────────────── */}
+      {/* ── 底部用户行：绑定 meee2 host 上的系统用户身份 ───────────────── */}
       <div className="sidebar-footer">
         <div className="sidebar-footer-user">
           <span className="sidebar-footer-user-avatar" aria-hidden>
@@ -1476,7 +1491,7 @@ export default function Sidebar({
               <path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
             </svg>
           </span>
-          <span>QC</span>
+          <span>{whoamiLabel}</span>
         </div>
         <Tooltip label="Account / settings" placement="top">
           <button className="sidebar-footer-icon" type="button" aria-label="Account / settings">

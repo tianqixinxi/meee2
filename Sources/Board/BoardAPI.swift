@@ -492,6 +492,27 @@ enum BoardAPI {
         #endif
     }
 
+    private struct WhoamiResponse: Encodable {
+        /// 系统短用户名（NSUserName，等价于 `whoami`）—— sidebar 底部默认显示这个
+        let username: String
+        /// 系统全名（NSFullUserName，"Account 用户全名" 字段）—— 可空字符串
+        let fullName: String
+        /// 主机名（用于 LAN 场景区分多台机器）
+        let hostname: String
+    }
+
+    /// GET /api/whoami
+    /// sidebar 底部用户行展示用 —— 绑定运行 meee2 的系统用户身份。
+    /// 没参数,无副作用,客户端拉一次缓存即可。
+    static func getWhoami(_ req: HttpRequest) -> HttpResponse {
+        let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        return jsonResponse(WhoamiResponse(
+            username: NSUserName(),
+            fullName: NSFullUserName(),
+            hostname: host
+        ))
+    }
+
     private struct VersionResponse: Encodable {
         let current: String
         let latest: String?

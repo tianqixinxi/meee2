@@ -373,6 +373,7 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
+        server.GET["/api/whoami"] = BoardServer.cors(BoardAPI.getWhoami)
         server.GET["/api/version"] = BoardServer.cors(BoardAPI.getVersion)
         server.POST["/api/version/check"] = BoardServer.cors(BoardAPI.checkVersion)
         server.POST["/api/update/install"] = BoardServer.cors(BoardAPI.installUpdate)
