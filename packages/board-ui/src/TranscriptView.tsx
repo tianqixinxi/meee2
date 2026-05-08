@@ -971,6 +971,31 @@ function summarizeSingleTool(b: TranscriptBlockForView): string {
   }
 }
 
+// 用户/injected/其它 role 不走 markdown（避免把用户原文里的 `**` / `_` / 反引号
+// 当格式化指令吃掉），但仍然要把裸 URL 渲染成可点的 <a>。这里手写一个最小切分
+// 器：把文本按 URL 正则拆 segment，URL 段渲染成 <a>，其余原样。trailing 标点
+// （`.,);!?]`）不算 URL 一部分——常见 case 是 "see https://x.com/foo." 这种。
+const URL_SPLIT_RE = /(https?:\/\/[^\s<>"']+)/g
+const TRAILING_PUNCT_RE = /[).,;:!?\]]+$/
+
+function autolinkText(text: string): ReactNode {
+  if (!text || !text.includes('http')) return text
+  const parts = text.split(URL_SPLIT_RE)
+  if (parts.length === 1) return text
+  return parts.map((part, i) => {
+    if (i % 2 === 0) return part
+    const m = part.match(TRAILING_PUNCT_RE)
+    const tail = m ? m[0] : ''
+    const href = tail ? part.slice(0, -tail.length) : part
+    return (
+      <span key={i}>
+        <a href={href} target="_blank" rel="noopener noreferrer">{href}</a>
+        {tail}
+      </span>
+    )
+  })
+}
+
 const TextBlock = memo(function TextBlock({
   role,
   text,
@@ -1021,7 +1046,7 @@ const TextBlock = memo(function TextBlock({
             {text}
           </ReactMarkdown>
         ) : (
-          text
+          autolinkText(text)
         )}
       </div>
     </div>
