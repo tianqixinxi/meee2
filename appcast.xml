@@ -7,6 +7,26 @@
         <description>meee2 release feed</description>
         <language>en</language>
         <item>
+            <title>meee2 v0.4.3</title>
+            <description><![CDATA[## What's Changed
+* fix(a2a): channel rename + whoami sidebar + docs by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/26
+
+
+**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/v0.4.2...v0.4.3]]></description>
+            <pubDate>Fri, 08 May 2026 23:31:31 +0000</pubDate>
+            <sparkle:version>0.4.3</sparkle:version>
+            <sparkle:shortVersionString>0.4.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/tianqixinxi/meee2/releases/download/v0.4.3/meee2-v0.4.3.dmg"
+                sparkle:version="0.4.3"
+                sparkle:shortVersionString="0.4.3"
+                type="application/octet-stream"
+                sparkle:edSignature="NFnXNQMt+uXEdtMzh8unZc5wnptn8LxhuQ2rcLa9+Ska78ILgDFLxPFcSTBpg1rIdWaBwd+SUuGCZOTIbjQzCg=="
+                length="12468249" />
+        </item>
+
+        <item>
             <title>meee2 v0.4.2</title>
             <description><![CDATA[## What's Changed
 * fix(sparkle): prepend new appcast items + parse latest by max version by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/18
