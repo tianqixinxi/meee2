@@ -22,6 +22,9 @@ export function useBoardState(): BoardStateHook {
   const [connected, setConnected] = useState(false)
   const inFlight = useRef(false)
   const pendingRefetch = useRef(false)
+  const pendingWhileHidden = useRef(false)
+  const debounceTimer = useRef<number | null>(null)
+  const hasState = useRef(false)
   // 上一次 setState 的 payload 指纹（JSON）。Claude 活跃时 WS 每秒 push 多次
   // state.changed，但绝大多数 tick 的内容没变——还是会让全 App 重渲一次。
   // 用 JSON.stringify 做快速 diff，不变就跳过 setState（新对象引用一旦进入
@@ -29,6 +32,10 @@ export function useBoardState(): BoardStateHook {
   const lastSigRef = useRef<string>('')
 
   const refresh = useCallback(async () => {
+    if (document.visibilityState === 'hidden' && hasState.current) {
+      pendingWhileHidden.current = true
+      return
+    }
     if (inFlight.current) {
       pendingRefetch.current = true
       return
@@ -41,6 +48,7 @@ export function useBoardState(): BoardStateHook {
       const sig = signatureFor(s)
       if (sig !== lastSigRef.current) {
         lastSigRef.current = sig
+        hasState.current = true
         setState(s)
       }
       setError(null)
@@ -52,20 +60,47 @@ export function useBoardState(): BoardStateHook {
       if (pendingRefetch.current) {
         pendingRefetch.current = false
         // queue a follow-up to collapse bursts
-        setTimeout(() => void refresh(), 0)
+        debounceTimer.current = window.setTimeout(() => void refresh(), 750)
       }
     }
   }, [])
+
+  const scheduleRefresh = useCallback(() => {
+    if (document.visibilityState === 'hidden' && hasState.current) {
+      pendingWhileHidden.current = true
+      return
+    }
+    if (debounceTimer.current) {
+      window.clearTimeout(debounceTimer.current)
+    }
+    debounceTimer.current = window.setTimeout(() => {
+      debounceTimer.current = null
+      void refresh()
+    }, 750)
+  }, [refresh])
 
   useEffect(() => {
     // initial fetch (WS will also fire one immediately on connect; that's fine)
     void refresh()
     const dispose = connectEvents(
-      () => void refresh(),
+      scheduleRefresh,
       (c) => setConnected(c),
     )
-    return dispose
-  }, [refresh])
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || !pendingWhileHidden.current) return
+      pendingWhileHidden.current = false
+      void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      dispose()
+      document.removeEventListener('visibilitychange', onVisible)
+      if (debounceTimer.current) {
+        window.clearTimeout(debounceTimer.current)
+        debounceTimer.current = null
+      }
+    }
+  }, [refresh, scheduleRefresh])
 
   return { state, loading, error, connected, refresh }
 }

@@ -98,6 +98,13 @@ enum BoardAPI {
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
+        let started = Date()
+        defer {
+            if ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1" {
+                let ms = Date().timeIntervalSince(started) * 1_000
+                MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
+            }
+        }
         // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
         // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
         // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动

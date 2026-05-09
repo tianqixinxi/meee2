@@ -16,6 +16,7 @@ class CursorPlugin: SessionPlugin {
 
     private var isRunning = false
     private var refreshTimer: Timer?
+    private var currentTimerInterval: TimeInterval = 0
     private var refreshInFlight = false
     private let refreshQueue = DispatchQueue(label: "com.meee2.plugin.cursor.refresh", qos: .utility)
 
@@ -70,7 +71,8 @@ class CursorPlugin: SessionPlugin {
 
     private func startTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        currentTimerInterval = refreshInterval
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: currentTimerInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -132,6 +134,17 @@ class CursorPlugin: SessionPlugin {
         }
 
         onSessionsUpdated?(sessions)
+        rescheduleTimer(active: sessions.contains { $0.status.isWorking || $0.status.needsUserAction })
+    }
+
+    private func rescheduleTimer(active: Bool) {
+        let targetInterval = active ? refreshInterval : max(refreshInterval, 30.0)
+        guard abs(targetInterval - currentTimerInterval) > 0.1 else { return }
+        refreshTimer?.invalidate()
+        currentTimerInterval = targetInterval
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: targetInterval, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
     }
 
     // MARK: - Terminal

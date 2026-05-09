@@ -43,6 +43,14 @@ class ClaudePlugin: SessionPlugin {
     private var sessionStatuses: [String: SessionStatus] = [:]
     private let sessionStatusesLock = NSLock()
 
+    private struct LastMessageCacheEntry {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+        let value: String?
+    }
+    private var lastMessageCache: [String: LastMessageCacheEntry] = [:]
+    private let lastMessageCacheLock = NSLock()
+
     /// Hook 带来的 Ghostty terminal id 暂存。
     /// 适用于 SessionStart hook 抢在 PID-scan 创建 SessionData 之前到达的竞态：
     /// 那时 `sessionStore.update(sid)` 是 no-op，ghosttyId 会丢；这里先 buffer，
@@ -964,14 +972,7 @@ class ClaudePlugin: SessionPlugin {
                     // session ID 匹配，正常更新
                     let transcriptPath = getTranscriptPath(for: realSessionId)
 
-                    var lastMessage: String?
-                    if let path = transcriptPath {
-                        let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
-                        if let last = msgs.last {
-                            let text = last.text.replacingOccurrences(of: "\n", with: " ")
-                            lastMessage = String(text.prefix(100))
-                        }
-                    }
+                    let lastMessage = transcriptPath.flatMap { cachedLastMessage(transcriptPath: $0) }
 
                     sessionStore.update(existingPidMatch.sessionId) { data in
                         data.project = aiSession.projectName
@@ -1030,16 +1031,7 @@ class ClaudePlugin: SessionPlugin {
             // 构建 SessionData（使用真实的 session ID）
             let transcriptPath = getTranscriptPath(for: realSessionId)
 
-            // 加载最后消息
-            var lastMessage: String?
-            if let path = transcriptPath {
-                let msgs = TranscriptParser.loadMessages(transcriptPath: path, count: 1)
-                if let last = msgs.last {
-                    // 截断到 100 字符
-                    let text = last.text.replacingOccurrences(of: "\n", with: " ")
-                    lastMessage = String(text.prefix(100))
-                }
-            }
+            let lastMessage = transcriptPath.flatMap { cachedLastMessage(transcriptPath: $0) }
 
             // Drain any buffered ghosttyTerminalId from earlier hook events that
             // arrived before this PID-scan got a chance to materialize the record.
@@ -1082,6 +1074,51 @@ class ClaudePlugin: SessionPlugin {
     private func notifySessionsUpdated() {
         let sessions = getSessions()
         onSessionsUpdated?(sessions)
+    }
+
+    private func cachedLastMessage(transcriptPath: String) -> String? {
+        guard let fingerprint = Self.fileFingerprint(path: transcriptPath) else {
+            return nil
+        }
+
+        lastMessageCacheLock.lock()
+        if let cached = lastMessageCache[transcriptPath],
+           cached.fileSize == fingerprint.fileSize,
+           cached.modifiedAt == fingerprint.modifiedAt {
+            lastMessageCacheLock.unlock()
+            return cached.value
+        }
+        lastMessageCacheLock.unlock()
+
+        let value: String?
+        let messages = TranscriptParser.loadMessages(transcriptPath: transcriptPath, count: 1)
+        if let last = messages.last {
+            let text = last.text.replacingOccurrences(of: "\n", with: " ")
+            value = String(text.prefix(100))
+        } else {
+            value = nil
+        }
+
+        lastMessageCacheLock.lock()
+        lastMessageCache[transcriptPath] = LastMessageCacheEntry(
+            fileSize: fingerprint.fileSize,
+            modifiedAt: fingerprint.modifiedAt,
+            value: value
+        )
+        if lastMessageCache.count > 512 {
+            lastMessageCache.removeAll(keepingCapacity: true)
+        }
+        lastMessageCacheLock.unlock()
+        return value
+    }
+
+    private static func fileFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = (attrs[.size] as? NSNumber)?.uint64Value,
+              let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else {
+            return nil
+        }
+        return (fileSize, modifiedAt)
     }
 
     // MARK: - 终端信息现场推导（回退路径）

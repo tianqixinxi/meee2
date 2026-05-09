@@ -40,16 +40,35 @@ public enum BackgroundAgentResolver {
     private static let cacheTTL: TimeInterval = 3.0
     private struct CacheEntry {
         let at: Date
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
         let agents: [BackgroundAgent]
     }
+
+    private static let isoWithFrac: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let isoBase = ISO8601DateFormatter()
 
     // MARK: - Public
 
     public static func resolve(transcriptPath: String?) -> [BackgroundAgent] {
         guard let path = transcriptPath, !path.isEmpty else { return [] }
+        guard let fingerprint = fileFingerprint(path: path) else { return [] }
+        let now = Date()
 
         cacheLock.lock()
-        if let c = cache[path], Date().timeIntervalSince(c.at) < cacheTTL {
+        if let c = cache[path],
+           c.fileSize == fingerprint.fileSize,
+           c.modifiedAt == fingerprint.modifiedAt {
+            cacheLock.unlock()
+            return c.agents
+        }
+        if let c = cache[path],
+           now.timeIntervalSince(c.at) < cacheTTL {
             cacheLock.unlock()
             return c.agents
         }
@@ -58,7 +77,12 @@ public enum BackgroundAgentResolver {
         let agents = resolveUncached(path: path)
 
         cacheLock.lock()
-        cache[path] = CacheEntry(at: Date(), agents: agents)
+        cache[path] = CacheEntry(
+            at: now,
+            fileSize: fingerprint.fileSize,
+            modifiedAt: fingerprint.modifiedAt,
+            agents: agents
+        )
         cacheLock.unlock()
         return agents
     }
@@ -89,10 +113,6 @@ public enum BackgroundAgentResolver {
         var running: [String: BackgroundAgent] = [:]
         // 完成的 taskId（来自 <task-notification>…<status>completed</status>）
         var completed: Set<String> = []
-
-        let isoWithFrac = ISO8601DateFormatter()
-        isoWithFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let isoBase = ISO8601DateFormatter()
 
         for rawLine in tail.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let lineData = rawLine.data(using: .utf8),
@@ -177,6 +197,17 @@ public enum BackgroundAgentResolver {
             .filter { isStillYoung($0) }
             .filter { isOutputFresh($0) }
         return active.sorted { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
+    }
+
+    private static func fileFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+            return nil
+        }
+        guard let fileSize = (attrs[.size] as? NSNumber)?.uint64Value,
+              let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else {
+            return nil
+        }
+        return (fileSize, modifiedAt)
     }
 
     // MARK: - helpers

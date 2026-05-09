@@ -210,10 +210,37 @@ enum BoardDTOBuilder {
         let entries: [TranscriptEntryDTO]
     }
 
+    private struct CountCacheEntry {
+        let cachedAt: Date
+        let value: Int
+    }
+
+    private struct EntrypointCacheEntry {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+        let cachedAt: Date
+        let value: String?
+    }
+
+    private struct FingerprintCacheEntry {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+        let cachedAt: Date
+    }
+
     private static let transcriptPreviewCacheLock = NSLock()
     private static var transcriptPreviewCache: [TranscriptPreviewCacheKey: TranscriptPreviewCacheEntry] = [:]
     private static let transcriptPreviewCacheMaxEntries = 256
     private static let transcriptPreviewCacheFreshSeconds: TimeInterval = 1.0
+    private static let countCacheLock = NSLock()
+    private static var countCache: [String: CountCacheEntry] = [:]
+    private static let countCacheFreshSeconds: TimeInterval = 1.0
+    private static let entrypointCacheLock = NSLock()
+    private static var entrypointCache: [String: EntrypointCacheEntry] = [:]
+    private static let fingerprintCacheLock = NSLock()
+    private static var fingerprintCache: [String: FingerprintCacheEntry] = [:]
+    private static let fingerprintCacheFreshSeconds: TimeInterval = 1.0
+    private static let perfLoggingEnabled = ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1"
 
     static func iso(_ date: Date) -> String { iso8601.string(from: date) }
     static func iso(_ date: Date?) -> String? {
@@ -223,9 +250,11 @@ enum BoardDTOBuilder {
 
     /// 按 channel 统计 pending + held 计数
     static func pendingCount(for channelName: String) -> Int {
-        MessageRouter.shared
-            .listMessages(channel: channelName, statuses: [.pending, .held])
-            .count
+        cachedCount(key: "channel:\(channelName)") {
+            MessageRouter.shared
+                .listMessages(channel: channelName, statuses: [.pending, .held])
+                .count
+        }
     }
 
     static func channelDTO(_ channel: Channel) -> ChannelDTO {
@@ -257,6 +286,10 @@ enum BoardDTOBuilder {
 
     /// 把 PluginSession 转成 SessionDTO；pluginInfo 可能为 nil（插件未加载）
     static func sessionDTO(_ session: PluginSession) -> SessionDTO {
+        let started = Date()
+        defer {
+            perfLog("sessionDTO", started: started, extra: "sid=\(session.id.prefix(8)),plugin=\(session.pluginId)")
+        }
         let info = PluginManager.shared.getPluginInfo(for: session.pluginId)
         let displayName = info?.displayName ?? session.pluginId
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#808080"
@@ -271,8 +304,8 @@ enum BoardDTOBuilder {
             : session.id
         let channelPending = pendingInboxCount(for: session.id)
             + (realSessionId == session.id ? 0 : pendingInboxCount(for: realSessionId))
-        let directPending = MessageRouter.shared.peekInbox(sessionId: session.id).count
-            + (realSessionId == session.id ? 0 : MessageRouter.shared.peekInbox(sessionId: realSessionId).count)
+        let directPending = directInboxCount(for: session.id)
+            + (realSessionId == session.id ? 0 : directInboxCount(for: realSessionId))
         let pending = channelPending + directPending
 
         // 丰富字段：transcript / currentTool / cost —— 都从底层 SessionStore 拿
@@ -379,7 +412,7 @@ enum BoardDTOBuilder {
         //   - desktopMeta 命中 → "desktop"
         //   - 否则按 entrypoint 推断："claude-desktop" → "desktop"，sdk-* → 透传
         //   - 都没有 → "cli"
-        let entrypoint = ClaudeEntrypointReader.read(
+        let entrypoint = cachedEntrypoint(
             transcriptPath: sessionData?.transcriptPath ?? session.transcriptPath
         )
         let clientKind: String = {
@@ -578,6 +611,15 @@ enum BoardDTOBuilder {
     }
 
     private static func transcriptPreviewFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {
+        let now = Date()
+        fingerprintCacheLock.lock()
+        if let cached = fingerprintCache[path],
+           now.timeIntervalSince(cached.cachedAt) < fingerprintCacheFreshSeconds {
+            fingerprintCacheLock.unlock()
+            return (cached.fileSize, cached.modifiedAt)
+        }
+        fingerprintCacheLock.unlock()
+
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
             return nil
         }
@@ -586,6 +628,17 @@ enum BoardDTOBuilder {
         guard let fileSize = fileSize, let modifiedAt = modifiedAt else {
             return nil
         }
+
+        fingerprintCacheLock.lock()
+        fingerprintCache[path] = FingerprintCacheEntry(
+            fileSize: fileSize,
+            modifiedAt: modifiedAt,
+            cachedAt: now
+        )
+        if fingerprintCache.count > 512 {
+            fingerprintCache.removeAll(keepingCapacity: true)
+        }
+        fingerprintCacheLock.unlock()
         return (fileSize, modifiedAt)
     }
 
@@ -599,31 +652,101 @@ enum BoardDTOBuilder {
 
     /// 计算一个 sessionId 的待投递消息数（对其名下所有 alias 的 pending/held 合计）
     private static func pendingInboxCount(for sessionId: String) -> Int {
-        let channels = ChannelRegistry.shared.list()
-        // 构造 channel -> [alias] 映射（该 session 在各频道里的所有 alias）
-        var matches: [(channel: String, alias: String)] = []
-        for ch in channels {
-            for m in ch.members where m.sessionId == sessionId {
-                matches.append((ch.name, m.alias))
-            }
-        }
-        guard !matches.isEmpty else { return 0 }
-
-        var count = 0
-        for (channelName, alias) in matches {
-            let msgs = MessageRouter.shared.listMessages(
-                channel: channelName,
-                statuses: [.pending, .held]
-            )
-            // 面向该 alias 的消息：要么是 "*"（广播，排除自己作为发送方），要么是点名
-            for m in msgs {
-                if m.fromAlias == alias { continue }
-                if m.toAlias == alias || m.toAlias == "*" {
-                    count += 1
+        cachedCount(key: "inbox:\(sessionId)") {
+            let channels = ChannelRegistry.shared.list()
+            // 构造 channel -> [alias] 映射（该 session 在各频道里的所有 alias）
+            var matches: [(channel: String, alias: String)] = []
+            for ch in channels {
+                for m in ch.members where m.sessionId == sessionId {
+                    matches.append((ch.name, m.alias))
                 }
             }
+            guard !matches.isEmpty else { return 0 }
+
+            var count = 0
+            for (channelName, alias) in matches {
+                let msgs = MessageRouter.shared.listMessages(
+                    channel: channelName,
+                    statuses: [.pending, .held]
+                )
+                // 面向该 alias 的消息：要么是 "*"（广播，排除自己作为发送方），要么是点名
+                for m in msgs {
+                    if m.fromAlias == alias { continue }
+                    if m.toAlias == alias || m.toAlias == "*" {
+                        count += 1
+                    }
+                }
+            }
+            return count
         }
-        return count
+    }
+
+    private static func directInboxCount(for sessionId: String) -> Int {
+        cachedCount(key: "direct-inbox:\(sessionId)") {
+            MessageRouter.shared.peekInbox(sessionId: sessionId).count
+        }
+    }
+
+    private static func cachedCount(key: String, load: () -> Int) -> Int {
+        let now = Date()
+        countCacheLock.lock()
+        if let cached = countCache[key],
+           now.timeIntervalSince(cached.cachedAt) < countCacheFreshSeconds {
+            let value = cached.value
+            countCacheLock.unlock()
+            return value
+        }
+        countCacheLock.unlock()
+
+        let value = load()
+
+        countCacheLock.lock()
+        countCache[key] = CountCacheEntry(cachedAt: now, value: value)
+        if countCache.count > 512 {
+            countCache.removeAll(keepingCapacity: true)
+        }
+        countCacheLock.unlock()
+        return value
+    }
+
+    private static func cachedEntrypoint(transcriptPath: String?) -> String? {
+        guard let path = transcriptPath else { return nil }
+        guard let fingerprint = transcriptPreviewFingerprint(path: path) else {
+            return ClaudeEntrypointReader.read(transcriptPath: path)
+        }
+
+        let now = Date()
+        entrypointCacheLock.lock()
+        if let cached = entrypointCache[path],
+           cached.fileSize == fingerprint.fileSize,
+           cached.modifiedAt == fingerprint.modifiedAt {
+            let value = cached.value
+            entrypointCacheLock.unlock()
+            return value
+        }
+        entrypointCacheLock.unlock()
+
+        let value = ClaudeEntrypointReader.read(transcriptPath: path)
+        entrypointCacheLock.lock()
+        entrypointCache[path] = EntrypointCacheEntry(
+            fileSize: fingerprint.fileSize,
+            modifiedAt: fingerprint.modifiedAt,
+            cachedAt: now,
+            value: value
+        )
+        if entrypointCache.count > 256,
+           let oldest = entrypointCache.min(by: { $0.value.cachedAt < $1.value.cachedAt })?.key {
+            entrypointCache.removeValue(forKey: oldest)
+        }
+        entrypointCacheLock.unlock()
+        return value
+    }
+
+    private static func perfLog(_ name: String, started: Date, extra: String = "") {
+        guard perfLoggingEnabled else { return }
+        let ms = Date().timeIntervalSince(started) * 1_000
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        MLog(String(format: "[Perf][BoardDTO] %@ %.1fms%@", name, ms, suffix))
     }
 
     /// 把 SwiftUI Color 转成 "#RRGGBB" hex 字符串

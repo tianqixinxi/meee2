@@ -133,6 +133,20 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     saveTranscriptVerbosity(v)
   }
 
+  const sessionRefreshKey = mode.kind === 'session'
+    ? [
+        mode.session.id,
+        mode.session.lastActivity ?? '',
+        mode.session.status ?? '',
+        mode.session.currentTool ?? '',
+        mode.session.currentTask ?? '',
+      ].join('|')
+    : undefined
+  const sessionPollMs = mode.kind === 'session' &&
+    ['active', 'thinking', 'tooling', 'waitingForUser'].includes(mode.session.status ?? '')
+    ? 5_000
+    : 30_000
+
   // 命令式：转发到 ChatComposer
   useImperativeHandle(
     ref,
@@ -369,7 +383,8 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             key={mode.session.id}
             sessionId={mode.session.id}
             limit={200}
-            refreshTrigger={mode.state}
+            pollMs={sessionPollMs}
+            refreshTrigger={sessionRefreshKey}
             liveStatus={mode.session.status ?? null}
             liveCurrentTool={mode.session.currentTool ?? null}
             liveCurrentTask={mode.session.currentTask ?? null}

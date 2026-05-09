@@ -21,23 +21,41 @@ public final class Meee360Pusher: @unchecked Sendable {
     private let syncQueue = DispatchQueue(label: "com.meee2.meee360-pusher", qos: .utility)
     private let heartbeatInterval: TimeInterval = 60.0
     private let metadataDebounceInterval: TimeInterval = 0.5
+    private let settingsCacheFreshSeconds: TimeInterval = 1.0
 
-    // Settings from AppStorage (read on activation)
-    private var isConnected: Bool { UserDefaults.standard.bool(forKey: "meee360Connected") }
-    private var defaultSyncEnabled: Bool { UserDefaults.standard.bool(forKey: "meee360Online") }
-    private var disabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360DisabledSessionIds") }
-    private var enabledSessionIds: Set<String> { Self.sessionIdSet(forKey: "meee360EnabledSessionIds") }
-    private var sessionTeamIds: [String: String] { Self.sessionIdMap(forKey: "meee360SessionTeamIds") }
-    private var teamId: String { UserDefaults.standard.string(forKey: "meee360TeamId") ?? "" }
-    private var userId: String { UserDefaults.standard.string(forKey: "meee360UserId") ?? "" }
-    private var supabaseUrl: String { UserDefaults.standard.string(forKey: "meee360SupabaseUrl") ?? "" }
-    private var normalizedSupabaseUrl: String {
-        let raw = supabaseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let decoded = raw.removingPercentEncoding ?? raw
-        return decoded.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    private struct SettingsSnapshot {
+        var isConnected: Bool
+        var defaultSyncEnabled: Bool
+        var disabledSessionIds: Set<String>
+        var enabledSessionIds: Set<String>
+        var sessionTeamIds: [String: String]
+        var teamId: String
+        var userId: String
+        var normalizedSupabaseUrl: String
+        var supabaseKey: String
+        var machineId: String
     }
-    private var supabaseKey: String { UserDefaults.standard.string(forKey: "meee360SupabaseKey") ?? "" }
-    private var machineId: String { UserDefaults.standard.string(forKey: "meee360MachineId") ?? "unknown" }
+
+    private struct TranscriptFingerprint: Equatable {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+    }
+
+    private struct PendingCountCacheEntry {
+        let at: Date
+        let value: Int
+    }
+
+    private let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private let settingsLock = NSLock()
+    private var cachedSettings: SettingsSnapshot?
+    private var cachedSettingsAt: Date?
+    private let perfLoggingEnabled = ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1"
 
     // Track last pushed message count per session to avoid duplicate pushes
     private var lastPushedCount: [String: Int] = [:]
@@ -46,11 +64,15 @@ public final class Meee360Pusher: @unchecked Sendable {
     private var pendingSessionUpdateWorkItems: [String: DispatchWorkItem] = [:]
     private var lastSessionUpsertSignatures: [String: String] = [:]
     private var lastPluginUpsertSignatures: [String: String] = [:]
+    private var lastPluginTranscriptFingerprints: [String: TranscriptFingerprint] = [:]
+    private var inboxPendingCache: [String: PendingCountCacheEntry] = [:]
+    private let inboxPendingCacheFreshSeconds: TimeInterval = 1.0
 
     // MARK: - Activation
 
     /// Start listening to SessionEventBus and periodic heartbeat
     public func activate() {
+        _ = settingsSnapshot(force: true)
         guard shouldStayActive else {
             MLog("[Meee360Pusher] Not connected or no sync targets, skipping activation")
             return
@@ -108,6 +130,7 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     public func refreshActivation() {
+        _ = settingsSnapshot(force: true)
         if shouldStayActive {
             activate()
         } else {
@@ -116,7 +139,47 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     private var shouldStayActive: Bool {
-        isConnected && (defaultSyncEnabled || !enabledSessionIds.isEmpty)
+        let settings = settingsSnapshot()
+        return settings.isConnected && (settings.defaultSyncEnabled || !settings.enabledSessionIds.isEmpty)
+    }
+
+    private var userId: String { settingsSnapshot().userId }
+    private var normalizedSupabaseUrl: String { settingsSnapshot().normalizedSupabaseUrl }
+    private var supabaseKey: String { settingsSnapshot().supabaseKey }
+    private var machineId: String { settingsSnapshot().machineId }
+
+    private func settingsSnapshot(force: Bool = false) -> SettingsSnapshot {
+        let now = Date()
+        settingsLock.lock()
+        defer { settingsLock.unlock() }
+
+        if !force,
+           let cached = cachedSettings,
+           let cachedAt = cachedSettingsAt,
+           now.timeIntervalSince(cachedAt) < settingsCacheFreshSeconds {
+            return cached
+        }
+
+        let defaults = UserDefaults.standard
+        let rawSupabaseUrl = defaults.string(forKey: "meee360SupabaseUrl") ?? ""
+        let decodedSupabaseUrl = rawSupabaseUrl.removingPercentEncoding ?? rawSupabaseUrl
+        let snapshot = SettingsSnapshot(
+            isConnected: defaults.bool(forKey: "meee360Connected"),
+            defaultSyncEnabled: defaults.bool(forKey: "meee360Online"),
+            disabledSessionIds: Self.sessionIdSet(forKey: "meee360DisabledSessionIds"),
+            enabledSessionIds: Self.sessionIdSet(forKey: "meee360EnabledSessionIds"),
+            sessionTeamIds: Self.sessionIdMap(forKey: "meee360SessionTeamIds"),
+            teamId: defaults.string(forKey: "meee360TeamId") ?? "",
+            userId: defaults.string(forKey: "meee360UserId") ?? "",
+            normalizedSupabaseUrl: decodedSupabaseUrl
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+            supabaseKey: defaults.string(forKey: "meee360SupabaseKey") ?? "",
+            machineId: defaults.string(forKey: "meee360MachineId") ?? "unknown"
+        )
+        cachedSettings = snapshot
+        cachedSettingsAt = now
+        return snapshot
     }
 
     // MARK: - Event handling
@@ -193,7 +256,10 @@ public final class Meee360Pusher: @unchecked Sendable {
 
     private func pushSessionUpdate(sessionId: String) {
         guard let session = SessionStore.shared.get(sessionId) else { return }
-        pushSessionUpsert(session: session)
+        pushSessionUpsert(
+            session: session,
+            hydrateTranscriptFields: shouldHydrateTranscriptFields(for: session)
+        )
     }
 
     private func pushSessionCreate(sessionId: String) {
@@ -202,15 +268,25 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     private func sendHeartbeatForActiveSessions() {
+        let started = Date()
         let activeSessions = SessionStore.shared.listActive()
         for session in activeSessions where shouldSyncSessionId(session.sessionId) {
-            pushSessionUpsert(session: session, force: true)
+            pushSessionUpsert(session: session, force: true, hydrateTranscriptFields: false)
         }
 
         pushPluginSessions(PluginManager.shared.sessions, force: true)
+        perfLog("heartbeat", started: started, extra: "sessions=\(activeSessions.count),plugins=\(PluginManager.shared.sessions.count)")
     }
 
-    private func pushSessionUpsert(session: SessionData, force: Bool = false) {
+    private func pushSessionUpsert(
+        session: SessionData,
+        force: Bool = false,
+        hydrateTranscriptFields: Bool = true
+    ) {
+        let started = Date()
+        defer {
+            perfLog("session-upsert-build", started: started, extra: "sid=\(session.sessionId.prefix(8)),force=\(force),hydrate=\(hydrateTranscriptFields)")
+        }
         // Build payload with full summary data for meee360 dashboard
         let status = mapStatus(session.status)
 
@@ -233,7 +309,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
 
         // Current tool from transcript
-        if let transcriptPath = session.transcriptPath {
+        if hydrateTranscriptFields, let transcriptPath = session.transcriptPath {
             let currentTool = TranscriptStatusResolver.resolveCurrentTool(
                 transcriptPath: transcriptPath,
                 currentTool: session.currentTool
@@ -287,7 +363,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
 
         // Background agents from transcript
-        if let transcriptPath = session.transcriptPath {
+        if hydrateTranscriptFields, let transcriptPath = session.transcriptPath {
             let bgAgents = BackgroundAgentResolver.resolve(transcriptPath: transcriptPath)
             if !bgAgents.isEmpty {
                 summary["backgroundAgents"] = bgAgents.map { a in
@@ -305,7 +381,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
 
         // Latest recap (away summary)
-        if let transcriptPath = session.transcriptPath {
+        if hydrateTranscriptFields, let transcriptPath = session.transcriptPath {
             if let recap = RecapResolver.resolve(transcriptPath: transcriptPath) {
                 summary["latestRecap"] = [
                     "content": String(recap.content.prefix(500)),
@@ -358,11 +434,13 @@ public final class Meee360Pusher: @unchecked Sendable {
     private func pushPluginSessions(_ sessions: [PluginSession], force: Bool = false) {
         guard shouldStayActive else { return }
 
+        let started = Date()
         for session in sessions where shouldSyncPluginSession(session) {
-            pushPluginSessionUpsert(session: session, force: force) { [weak self] in
+            pushPluginSessionUpsert(session: session, force: force, hydrateSummary: !force) { [weak self] in
                 self?.pushLatestPluginMessageIfNeeded(session: session)
             }
         }
+        perfLog("plugin-sessions", started: started, extra: "sessions=\(sessions.count),force=\(force)")
     }
 
     private func shouldSyncPluginSession(_ session: PluginSession) -> Bool {
@@ -373,42 +451,55 @@ public final class Meee360Pusher: @unchecked Sendable {
     }
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {
+        let settings = settingsSnapshot()
         let aliases = Self.sessionIdAliases(sessionId)
-        if !aliases.isDisjoint(with: disabledSessionIds) {
+        if !aliases.isDisjoint(with: settings.disabledSessionIds) {
             return false
         }
 
-        if defaultSyncEnabled {
+        if settings.defaultSyncEnabled {
             return true
         }
 
-        return !aliases.isDisjoint(with: enabledSessionIds)
+        return !aliases.isDisjoint(with: settings.enabledSessionIds)
     }
 
     private func teamIdForSession(_ sessionId: String) -> String {
-        let map = sessionTeamIds
+        let settings = settingsSnapshot()
+        let map = settings.sessionTeamIds
         for alias in Self.sessionIdAliases(sessionId) {
             if let mapped = map[alias], !mapped.isEmpty {
                 return mapped
             }
         }
-        return teamId
+        return settings.teamId
     }
 
     private func pushLatestPluginMessageIfNeeded(session: PluginSession) {
         guard let transcriptPath = session.transcriptPath else { return }
         let targetTeamId = teamIdForSession(session.id)
         guard !targetTeamId.isEmpty else { return }
+        guard let fingerprint = transcriptFingerprint(path: transcriptPath) else { return }
+
+        let started = Date()
+        let fingerprintKey = "\(targetTeamId):\(session.id):\(transcriptPath)"
+        if lastPluginTranscriptFingerprints[fingerprintKey] == fingerprint {
+            return
+        }
 
         let entries = FullTranscriptReader.read(transcriptPath: transcriptPath, limit: 20)
+        var exportedCount = 0
+        var queuedCount = 0
         for entry in entries {
             for exported in pluginTranscriptExports(from: entry) {
+                exportedCount += 1
                 let key = "\(targetTeamId):\(session.id):\(exported.sourceId)"
                 if pushedPluginMessageKeys.contains(key) || inFlightPluginMessageKeys.contains(key) {
                     continue
                 }
 
                 inFlightPluginMessageKeys.insert(key)
+                queuedCount += 1
                 let payload: [String: Any] = [
                     "machine_id": machineId,
                     "session_key": session.id,
@@ -433,6 +524,10 @@ public final class Meee360Pusher: @unchecked Sendable {
                 }
             }
         }
+        if queuedCount == 0 {
+            lastPluginTranscriptFingerprints[fingerprintKey] = fingerprint
+        }
+        perfLog("plugin-transcript-export", started: started, extra: "sid=\(session.id.prefix(8)),entries=\(entries.count),exports=\(exportedCount),queued=\(queuedCount)")
     }
 
     private func pluginTranscriptExports(from entry: FullTranscriptEntry) -> [(sourceId: String, role: String, text: String)] {
@@ -495,28 +590,26 @@ public final class Meee360Pusher: @unchecked Sendable {
         return aliases
     }
 
-    private func pushPluginSessionUpsert(session: PluginSession, force: Bool = false, completion: (() -> Void)? = nil) {
-        let dto = BoardDTOBuilder.sessionDTO(session)
+    private func pushPluginSessionUpsert(
+        session: PluginSession,
+        force: Bool = false,
+        hydrateSummary: Bool = true,
+        completion: (() -> Void)? = nil
+    ) {
+        let started = Date()
+        let summaryAndStatus = pluginSummaryAndStatus(session: session, hydrateSummary: hydrateSummary)
+        var summary = summaryAndStatus.summary
 
-        var summary: [String: Any] = [
-            "title": dto.title,
-            "project": dto.project,
-            "pluginId": dto.pluginId,
-            "pluginDisplayName": dto.pluginDisplayName,
-            "pluginColor": dto.pluginColor,
-            "inboxPending": dto.inboxPending
-        ]
-
-        if let startedAt = dto.startedAt {
+        if let startedAt = summaryAndStatus.startedAt {
             summary["startedAt"] = startedAt
         }
-        if let lastActivity = dto.lastActivity {
+        if let lastActivity = summaryAndStatus.lastActivity {
             summary["lastActivity"] = lastActivity
         }
-        if let currentTool = dto.currentTool {
+        if let currentTool = summaryAndStatus.currentTool {
             summary["currentTool"] = currentTool
         }
-        if let usage = dto.usageStats {
+        if let usage = summaryAndStatus.usageStats {
             summary["usageStats"] = [
                 "inputTokens": usage.inputTokens,
                 "outputTokens": usage.outputTokens,
@@ -526,44 +619,28 @@ public final class Meee360Pusher: @unchecked Sendable {
                 "model": usage.model
             ]
         }
-        if !dto.tasks.isEmpty {
-            summary["tasks"] = dto.tasks.map {
-                ["id": $0.id, "name": $0.name, "status": $0.status]
-            }
+        if !summaryAndStatus.tasks.isEmpty {
+            summary["tasks"] = summaryAndStatus.tasks
         }
-        if let currentTask = dto.currentTask {
+        if let currentTask = summaryAndStatus.currentTask {
             summary["currentTask"] = currentTask
         }
-        if let pendingPermissionTool = dto.pendingPermissionTool {
+        if let pendingPermissionTool = summaryAndStatus.pendingPermissionTool {
             summary["pendingPermissionTool"] = pendingPermissionTool
         }
-        if let pendingPermissionMessage = dto.pendingPermissionMessage {
+        if let pendingPermissionMessage = summaryAndStatus.pendingPermissionMessage {
             summary["pendingPermissionMessage"] = pendingPermissionMessage
         }
-        if let tty = dto.tty {
+        if let tty = summaryAndStatus.tty {
             summary["tty"] = tty
         }
-        if let termProgram = dto.termProgram {
+        if let termProgram = summaryAndStatus.termProgram {
             summary["termProgram"] = termProgram
         }
-        if !dto.backgroundAgents.isEmpty {
-            summary["backgroundAgents"] = dto.backgroundAgents.map {
-                var agent: [String: Any] = [
-                    "id": $0.id,
-                    "kind": $0.kind,
-                    "description": $0.description ?? ""
-                ]
-                if let startedAt = $0.startedAt {
-                    agent["startedAt"] = startedAt
-                }
-                return agent
-            }
+        if !summaryAndStatus.backgroundAgents.isEmpty {
+            summary["backgroundAgents"] = summaryAndStatus.backgroundAgents
         }
-        if let recap = dto.latestRecap {
-            var latestRecap: [String: Any] = ["content": recap.content]
-            if let timestamp = recap.timestamp {
-                latestRecap["timestamp"] = timestamp
-            }
+        if let latestRecap = summaryAndStatus.latestRecap {
             summary["latestRecap"] = latestRecap
         }
 
@@ -571,11 +648,11 @@ public final class Meee360Pusher: @unchecked Sendable {
             "machine_id": machineId,
             "session_key": session.id,
             "session_type": "other",
-            "status": dto.status,
+            "status": summaryAndStatus.status,
             "summary": summary
         ]
 
-        let signature = upsertSignature(status: dto.status, summary: summary)
+        let signature = upsertSignature(status: summaryAndStatus.status, summary: summary)
         if !force, lastPluginUpsertSignatures[session.id] == signature {
             completion?()
             return
@@ -592,12 +669,121 @@ public final class Meee360Pusher: @unchecked Sendable {
                 MLog("[Meee360Pusher] plugin upsert failed for \(session.id.prefix(8)): \(err)")
             }
         }
+        perfLog("plugin-upsert-build", started: started, extra: "sid=\(session.id.prefix(8)),force=\(force),hydrate=\(hydrateSummary)")
     }
 
     // MARK: - Helper methods
 
+    private func pluginSummaryAndStatus(
+        session: PluginSession,
+        hydrateSummary: Bool
+    ) -> (
+        status: String,
+        summary: [String: Any],
+        startedAt: String?,
+        lastActivity: String?,
+        currentTool: String?,
+        usageStats: UsageStatsDTO?,
+        tasks: [[String: Any]],
+        currentTask: String?,
+        pendingPermissionTool: String?,
+        pendingPermissionMessage: String?,
+        tty: String?,
+        termProgram: String?,
+        backgroundAgents: [[String: Any]],
+        latestRecap: [String: Any]?
+    ) {
+        if hydrateSummary {
+            let dto = BoardDTOBuilder.sessionDTO(session)
+            var latestRecap: [String: Any]?
+            if let recap = dto.latestRecap {
+                var value: [String: Any] = ["content": recap.content]
+                if let timestamp = recap.timestamp {
+                    value["timestamp"] = timestamp
+                }
+                latestRecap = value
+            }
+            return (
+                status: dto.status,
+                summary: [
+                    "title": dto.title,
+                    "project": dto.project,
+                    "pluginId": dto.pluginId,
+                    "pluginDisplayName": dto.pluginDisplayName,
+                    "pluginColor": dto.pluginColor,
+                    "inboxPending": dto.inboxPending
+                ],
+                startedAt: dto.startedAt,
+                lastActivity: dto.lastActivity,
+                currentTool: dto.currentTool,
+                usageStats: dto.usageStats,
+                tasks: dto.tasks.map { ["id": $0.id, "name": $0.name, "status": $0.status] },
+                currentTask: dto.currentTask,
+                pendingPermissionTool: dto.pendingPermissionTool,
+                pendingPermissionMessage: dto.pendingPermissionMessage,
+                tty: dto.tty,
+                termProgram: dto.termProgram,
+                backgroundAgents: dto.backgroundAgents.map {
+                    var agent: [String: Any] = [
+                        "id": $0.id,
+                        "kind": $0.kind,
+                        "description": $0.description ?? ""
+                    ]
+                    if let startedAt = $0.startedAt {
+                        agent["startedAt"] = startedAt
+                    }
+                    return agent
+                },
+                latestRecap: latestRecap
+            )
+        }
+
+        let info = PluginManager.shared.getPluginInfo(for: session.pluginId)
+        let displayName = info?.displayName ?? session.pluginId
+        let colorHex = info.map { hexColorString($0.themeColor) } ?? "#808080"
+        let usageStats = session.usageStats.map {
+            UsageStatsDTO(
+                inputTokens: $0.inputTokens,
+                outputTokens: $0.outputTokens,
+                cacheCreateTokens: $0.cacheCreateTokens,
+                cacheReadTokens: $0.cacheReadTokens,
+                turns: $0.turns,
+                model: $0.model
+            )
+        }
+
+        return (
+            status: session.status.rawValue,
+            summary: [
+                "title": session.title,
+                "project": session.cwd ?? session.title,
+                "pluginId": session.pluginId,
+                "pluginDisplayName": displayName,
+                "pluginColor": colorHex
+            ],
+            startedAt: BoardDTOBuilder.iso(Optional(session.startedAt)),
+            lastActivity: BoardDTOBuilder.iso(session.lastUpdated),
+            currentTool: session.toolName,
+            usageStats: usageStats,
+            tasks: (session.tasks ?? []).map { ["id": $0.id, "name": $0.name, "status": $0.status.rawValue] },
+            currentTask: session.subtitle,
+            pendingPermissionTool: nil,
+            pendingPermissionMessage: nil,
+            tty: session.terminalInfo?.tty,
+            termProgram: session.terminalInfo?.termProgram,
+            backgroundAgents: [],
+            latestRecap: nil
+        )
+    }
+
     /// Compute pending inbox count for a session (mirrors BoardDTO.pendingInboxCount)
     private func computeInboxPending(sessionId: String) -> Int {
+        let now = Date()
+        if let cached = inboxPendingCache[sessionId],
+           now.timeIntervalSince(cached.at) < inboxPendingCacheFreshSeconds {
+            return cached.value
+        }
+
         let channels = ChannelRegistry.shared.list()
         // Build channel -> alias mapping for this session
         var matches: [(channel: String, alias: String)] = []
@@ -606,9 +792,11 @@ public final class Meee360Pusher: @unchecked Sendable {
                 matches.append((ch.name, m.alias))
             }
         }
+        let result: Int
         guard !matches.isEmpty else {
-            // Fall back to direct inbox
-            return MessageRouter.shared.peekInbox(sessionId: sessionId).count
+            result = MessageRouter.shared.peekInbox(sessionId: sessionId).count
+            inboxPendingCache[sessionId] = PendingCountCacheEntry(at: now, value: result)
+            return result
         }
 
         var count = 0
@@ -626,13 +814,21 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
         // Add direct inbox messages
         count += MessageRouter.shared.peekInbox(sessionId: sessionId).count
-        return count
+        result = count
+        inboxPendingCache[sessionId] = PendingCountCacheEntry(at: now, value: result)
+        if inboxPendingCache.count > 512 {
+            inboxPendingCache.removeAll(keepingCapacity: true)
+        }
+        return result
     }
 
     private func iso8601String(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        isoFormatter.string(from: date)
+    }
+
+    private func shouldHydrateTranscriptFields(for session: SessionData) -> Bool {
+        guard session.transcriptPath != nil else { return false }
+        return session.status.isWorking || session.status.needsUserAction
     }
 
     private func hexColorString(_ color: Color?) -> String {
@@ -672,6 +868,22 @@ public final class Meee360Pusher: @unchecked Sendable {
             return array.map { normalizedForSignature($0, droppingKeys: droppingKeys) }
         }
         return value
+    }
+
+    private func transcriptFingerprint(path: String) -> TranscriptFingerprint? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = (attrs[.size] as? NSNumber)?.uint64Value,
+              let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else {
+            return nil
+        }
+        return TranscriptFingerprint(fileSize: fileSize, modifiedAt: modifiedAt)
+    }
+
+    private func perfLog(_ name: String, started: Date, extra: String = "") {
+        guard perfLoggingEnabled else { return }
+        let ms = Date().timeIntervalSince(started) * 1_000
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        MLog(String(format: "[Perf][Meee360Pusher] %@ %.1fms%@", name, ms, suffix))
     }
 
     // MARK: - HTTP helper

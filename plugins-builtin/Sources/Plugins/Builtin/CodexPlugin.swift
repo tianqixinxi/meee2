@@ -16,15 +16,24 @@ class CodexPlugin: SessionPlugin {
 
     private var isRunning = false
     private var refreshTimer: Timer?
+    private var currentTimerInterval: TimeInterval = 0
     private var refreshInFlight = false
     private let refreshQueue = DispatchQueue(label: "com.meee2.plugin.codex.refresh", qos: .utility)
     private let sqliteQueryTimeout: TimeInterval = 3.0
+    private let perfLoggingEnabled = ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1"
     private static let autoReviewModel = "codex-auto-review"
     private static let autoReviewPromptPrefix = "The following is the Codex agent history whose request action you are assessing."
 
     // 追踪上次的消息，用于检测新消息
     private var lastMessages: [String: String] = [:]  // sessionId -> lastMessageHash
     private var lastStatuses: [String: SessionStatus] = [:]
+    private var transcriptSnapshotCache: [String: (fingerprint: FileFingerprint, snapshot: CodexTranscriptSnapshot)] = [:]
+    private var codexRunningCache: (checkedAt: Date, value: Bool)?
+
+    private struct FileFingerprint: Equatable {
+        let fileSize: UInt64
+        let modifiedAt: TimeInterval
+    }
 
     // 刷新间隔（秒）- 可通过 AppStorage 配置
     @AppStorage("codexRefreshInterval") private var refreshInterval: Double = 10.0
@@ -63,7 +72,8 @@ class CodexPlugin: SessionPlugin {
 
     private func startTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        currentTimerInterval = refreshInterval
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: currentTimerInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
     }
@@ -124,6 +134,17 @@ class CodexPlugin: SessionPlugin {
         }
 
         onSessionsUpdated?(sessions)
+        rescheduleTimer(active: sessions.contains { $0.status.isWorking || $0.status.needsUserAction })
+    }
+
+    private func rescheduleTimer(active: Bool) {
+        let targetInterval = active ? refreshInterval : max(refreshInterval, 30.0)
+        guard abs(targetInterval - currentTimerInterval) > 0.1 else { return }
+        refreshTimer?.invalidate()
+        currentTimerInterval = targetInterval
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: targetInterval, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
     }
 
     // MARK: - Terminal
@@ -208,6 +229,8 @@ class CodexPlugin: SessionPlugin {
 
     /// 扫描 Codex threads 表
     private func scanCodexThreads() -> [PluginSession] {
+        let started = Date()
+        defer { perfLog("scanCodexThreads", started: started) }
         let dbPath = stateDatabasePath
         guard FileManager.default.fileExists(atPath: dbPath.path) else {
             NSLog("[CodexPlugin] Database not found: \(dbPath.path)")
@@ -329,6 +352,11 @@ class CodexPlugin: SessionPlugin {
 
     /// 检查 Codex 进程是否在运行
     private func isCodexProcessRunning() -> Bool {
+        if let cached = codexRunningCache,
+           Date().timeIntervalSince(cached.checkedAt) < 5.0 {
+            return cached.value
+        }
+
         // 使用 pgrep 更简单更快，避免 ps aux 管道问题
         let task = Process()
         task.launchPath = "/usr/bin/pgrep"
@@ -343,11 +371,30 @@ class CodexPlugin: SessionPlugin {
             task.waitUntilExit()
 
             // pgrep 返回 0 表示找到进程
-            return task.terminationStatus == 0
+            let running = task.terminationStatus == 0
+            codexRunningCache = (checkedAt: Date(), value: running)
+            return running
         } catch {
             NSLog("[CodexPlugin] pgrep error: \(error)")
+            codexRunningCache = (checkedAt: Date(), value: false)
             return false
         }
+    }
+
+    private func fileFingerprint(path: String) -> FileFingerprint? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let fileSize = (attrs[.size] as? NSNumber)?.uint64Value,
+              let modifiedAt = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else {
+            return nil
+        }
+        return FileFingerprint(fileSize: fileSize, modifiedAt: modifiedAt)
+    }
+
+    private func perfLog(_ name: String, started: Date, extra: String = "") {
+        guard perfLoggingEnabled else { return }
+        let ms = Date().timeIntervalSince(started) * 1_000
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(String(format: "[Perf][CodexPlugin] %@ %.1fms%@", name, ms, suffix))
     }
 
     private static func date(seconds: Int, milliseconds: Int?) -> Date {
@@ -378,6 +425,11 @@ class CodexPlugin: SessionPlugin {
         guard let path = path,
               FileManager.default.fileExists(atPath: path) else {
             return CodexTranscriptSnapshot()
+        }
+        if let fingerprint = fileFingerprint(path: path),
+           let cached = transcriptSnapshotCache[path],
+           cached.fingerprint == fingerprint {
+            return cached.snapshot
         }
 
         var snapshot = CodexTranscriptSnapshot()
@@ -419,6 +471,12 @@ class CodexPlugin: SessionPlugin {
             }
         }
 
+        if let fingerprint = fileFingerprint(path: path) {
+            transcriptSnapshotCache[path] = (fingerprint: fingerprint, snapshot: snapshot)
+            if transcriptSnapshotCache.count > 128 {
+                transcriptSnapshotCache.removeAll(keepingCapacity: true)
+            }
+        }
         return snapshot
     }
 
