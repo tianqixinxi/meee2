@@ -459,6 +459,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func createSettingsWindow() {
         let contentView = NSHostingView(rootView: SettingsView())
         contentView.frame = NSRect(x: 0, y: 0, width: 520, height: 450)
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1).cgColor
 
         settingsWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 450),
@@ -467,6 +469,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         settingsWindow?.title = "meee2 Settings"
+        settingsWindow?.appearance = NSAppearance(named: .darkAqua)
+        settingsWindow?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1)
         settingsWindow?.contentView = contentView
         settingsWindow?.center()
         settingsWindow?.isReleasedWhenClosed = false
