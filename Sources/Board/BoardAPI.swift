@@ -100,6 +100,13 @@ enum BoardAPI {
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
+        let started = Date()
+        defer {
+            if ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1" {
+                let ms = Date().timeIntervalSince(started) * 1_000
+                MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
+            }
+        }
         // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
         // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
         // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
@@ -117,6 +124,7 @@ enum BoardAPI {
             return set
         }()
         let realSessions = PluginManager.shared.sessions
+            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
             .filter { $0.status != .dead }
             .filter { session in
                 let realSid = session.id.hasPrefix("\(session.pluginId)-")
@@ -139,6 +147,7 @@ enum BoardAPI {
         let syntheticDesktopSessions: [SessionDTO] = ClaudeDesktopMetadataReader.shared
             .allCliSessionIds()
             .compactMap { cliSid -> SessionDTO? in
+                guard PluginManager.shared.isPluginEnabled("com.meee2.plugin.claude") else { return nil }
                 guard let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: cliSid),
                       !m.isArchived,
                       !realSids.contains(cliSid) else { return nil }
@@ -152,6 +161,144 @@ enum BoardAPI {
             .map { BoardDTOBuilder.channelDTO($0) }
         let state = StateDTO(sessions: sessions, channels: channels)
         return jsonResponse(state)
+    }
+
+    // MARK: - GET /api/user-profile
+
+    static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
+        let settings = readMeee360Settings()
+        let defaults = UserDefaults.standard
+        let connected = defaults.bool(forKey: "meee360Connected")
+        let userName = connected
+            ? defaultString(defaults, key: "meee360UserName", fallback: settings["userName"])
+            : ""
+        let userEmail = connected
+            ? defaultString(defaults, key: "meee360UserEmail", fallback: settings["userEmail"])
+            : ""
+        let userAvatarUrl = connected
+            ? defaultString(defaults, key: "meee360UserAvatarUrl", fallback: settings["userAvatarUrl"])
+            : ""
+        let displayName: String
+        if !userName.isEmpty {
+            displayName = userName
+        } else if !userEmail.isEmpty {
+            displayName = userEmail.components(separatedBy: "@").first ?? userEmail
+        } else {
+            displayName = connected ? "meee360 user" : "Not connected"
+        }
+
+        return jsonResponse(UserProfileDTO(
+            connected: connected,
+            displayName: displayName,
+            userName: userName,
+            userEmail: userEmail,
+            userAvatarUrl: userAvatarUrl,
+            initials: initials(for: displayName, connected: connected),
+            dashboardUrl: Meee360Config.appURL(path: "dashboard").absoluteString,
+            connectUrl: meee360ConnectUrl().absoluteString
+        ))
+    }
+
+    static func openMeee360Connect(_ req: HttpRequest) -> HttpResponse {
+        NSWorkspace.shared.open(meee360ConnectUrl())
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    static func openMeee360Dashboard(_ req: HttpRequest) -> HttpResponse {
+        NSWorkspace.shared.open(Meee360Config.appURL(path: "dashboard"))
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    static func openMeee2Settings(_ req: HttpRequest) -> HttpResponse {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: Notification.Name("openSettings"), object: nil)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    static func disconnectMeee360(_ req: HttpRequest) -> HttpResponse {
+        clearMeee360Settings()
+        Meee360Pusher.shared.refreshActivation()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func readMeee360Settings() -> [String: Any] {
+        let file = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2/settings.json")
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let meee360 = root["meee360"] as? [String: Any] else {
+            return [:]
+        }
+        return meee360
+    }
+
+    private static func stringSetting(_ value: Any?) -> String {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func defaultString(_ defaults: UserDefaults, key: String, fallback: Any?) -> String {
+        let value = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? stringSetting(fallback) : value
+    }
+
+    private static func initials(for displayName: String, connected: Bool) -> String {
+        guard connected else { return "?" }
+        let parts = displayName.split { ch in
+            ch == " " || ch == "." || ch == "_" || ch == "-" || ch == "@"
+        }
+        let value = parts.prefix(2).compactMap { $0.first?.uppercased() }.joined()
+        return value.isEmpty ? "U" : value
+    }
+
+    private static func meee360ConnectUrl() -> URL {
+        var components = URLComponents(url: Meee360Config.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [
+            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee360/callback")
+        ]
+        return components.url!
+    }
+
+    private static func clearMeee360Settings() {
+        let defaults = UserDefaults.standard
+        for key in [
+            "meee360Connected",
+            "meee360Online",
+            "meee360TeamId",
+            "meee360TeamName",
+            "meee360Teams",
+            "meee360SessionTeamIds",
+            "meee360UserId",
+            "meee360UserName",
+            "meee360UserEmail",
+            "meee360UserAvatarUrl",
+            "meee360SupabaseUrl",
+            "meee360SupabaseKey",
+            "meee360EnabledSessionIds",
+            "meee360DisabledSessionIds"
+        ] {
+            defaults.removeObject(forKey: key)
+        }
+
+        let settings: [String: Any] = [
+            "meee360": [
+                "enabled": false,
+                "online": false,
+                "teams": [],
+                "sessionTeamIds": [:],
+                "defaultSyncEnabled": false,
+                "enabledSessionIds": [],
+                "disabledSessionIds": [],
+                "machineId": Host.current().name ?? "unknown",
+                "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
+            ]
+        ]
+        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
+        let file = dir.appendingPathComponent("settings.json")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: file, options: .atomic)
+        }
     }
 
     // MARK: - Sessions

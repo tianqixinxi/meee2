@@ -561,8 +561,8 @@ textarea {
    * padding/border 显式归零盖掉全局 `button { padding: 5px 12px;
    * border: 1px solid; }`（否则 box-sizing: border-box 下 24px 横向
    * padding 把 width 撑到 24px）。 */
-  left: calc(var(--titlebar-lights-right, 72px) + 8px);
-  top: calc(var(--titlebar-btn-center-y, 13px) - 10px);  /* 10 = button height / 2 */
+  left: 14px;
+  top: 12px;
   z-index: 50;
   width: 20px;
   height: 20px;
@@ -590,14 +590,19 @@ textarea {
 }
 .sidebar-collapsed-toggle .icon-rest { opacity: 1; }
 .sidebar-collapsed-toggle .icon-active { opacity: 0; }
-.sidebar-collapsed-toggle:hover .icon-rest { opacity: 0; }
-.sidebar-collapsed-toggle:hover .icon-active { opacity: 1; }
+.sidebar-collapsed-toggle--collapsed:hover .icon-rest { opacity: 0; }
+.sidebar-collapsed-toggle--collapsed:hover .icon-active { opacity: 1; }
 .sidebar-collapsed-toggle:hover {
   /* 不叠 hover 背景 —— 之前用 rgba(0,0,0,0.25) 黑方块跟 titlebar 暗色重叠，
    * 折叠态的 active chevron 跟黑底糊在一起看不清。改成单纯把 icon 颜色
    * 从 70% 白提到全白做反馈，靠对比度变化提示 hover，干净不抢戏。 */
   background: transparent;
   color: #FFFFFF;
+}
+
+.meee2-board-shell .sidebar-collapsed-toggle {
+  left: calc(var(--titlebar-lights-right, 72px) + 8px);
+  top: calc(var(--titlebar-btn-center-y, 13px) - 10px);  /* 10 = button height / 2 */
 }
 
 /* ── Hover preview: sidebar floats below the collapsed icon ─────────
@@ -3577,6 +3582,10 @@ textarea {
   background: transparent;
 }
 
+html:not(.meee2-board-shell) .sidebar .sidebar-header {
+  padding: 12px 12px 8px;
+}
+
 /* ─── Top nav（tabs + actions），重新平衡尺寸 ──────────────────────────── */
 .sidebar .sidebar-topnav {
   padding: 8px 4px 4px;
@@ -3957,17 +3966,33 @@ textarea {
 
 /* ─── 底部用户行 ────────────────────────────────────────────────────────── */
 .sidebar-footer {
+  position: relative;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
+  align-items: stretch;
+  padding: 8px 10px 10px;
   font-size: 13px;
   color: rgba(255, 255, 255, 0.78);
 }
 .sidebar-footer-user {
-  display: inline-flex;
+  appearance: none;
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  padding: 0 9px;
+  color: rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.sidebar-footer-user:hover,
+.sidebar-footer-user--open {
+  color: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.075);
 }
 .sidebar-footer-user-avatar {
   width: 18px;
@@ -3976,22 +4001,111 @@ textarea {
   align-items: center;
   justify-content: center;
   color: rgba(255, 255, 255, 0.55);
+  flex: 0 0 18px;
+  overflow: hidden;
+  border-radius: 50%;
 }
-.sidebar-footer-icon {
+.sidebar-footer-user-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sidebar-footer-user-initials {
+  width: 100%;
+  height: 100%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  color: rgba(255, 255, 255, 0.4);
-  cursor: pointer;
-  border-radius: 4px;
-  background: transparent;
-  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
 }
-.sidebar-footer-icon:hover {
-  color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.04);
+.sidebar-footer-user-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.sidebar-account-menu {
+  position: absolute;
+  left: 10px;
+  bottom: 50px;
+  z-index: 80;
+  width: min(260px, calc(100vw - 32px));
+  padding: 4px;
+  border-radius: 8px;
+  color: #D1D5DB;
+  background: #16181F;
+  border: 1px solid #2A3040;
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.4),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+  user-select: none;
+  animation: srm-fade-in 0.08s ease-out;
+}
+.sidebar-account-menu-user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 8px;
+  min-width: 0;
+  color: #8B94A7;
+}
+.sidebar-account-menu-user .sidebar-footer-user-avatar {
+  color: #6B7488;
+}
+.sidebar-account-menu-user .sidebar-footer-user-initials {
+  background: rgba(255, 255, 255, 0.08);
+  color: #CBD5E1;
+}
+.sidebar-account-menu-user-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.sidebar-account-menu-separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: #2A3040;
+}
+.sidebar-account-menu-item {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  color: #D1D5DB;
+  cursor: pointer;
+  border-radius: 5px;
+  background: transparent;
+  border: 0;
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.10s ease, color 0.10s ease;
+}
+.sidebar-account-menu-item:hover {
+  background: #1F2330;
+  color: #F3F4F6;
+}
+.sidebar-account-menu-item > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  color: #94A3B8;
+}
+.sidebar-account-menu-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 老的 "Sessions (N)" h4 行：现在被 SidebarTopNav 取代，藏掉 */
@@ -4007,6 +4121,12 @@ textarea {
 .sidebar .sidebar-body {
   flex: 1;
   min-height: 0;
+  scrollbar-width: none;
+}
+.sidebar .sidebar-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
 }
 
 /* ─── Session row icon buttons (pin / rename / canvas-toggle) ───────── */

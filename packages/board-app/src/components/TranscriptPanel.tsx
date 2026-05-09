@@ -48,6 +48,9 @@ export default function TranscriptPanel({
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const loadedRef = useRef(false)
+  const inFlightRef = useRef(false)
+  const sawRefreshTriggerRef = useRef(false)
 
   // Reset on session switch — board-ui's TranscriptView handles cache via
   // its own module-level Map keyed on cacheKey, so the transition is
@@ -55,10 +58,14 @@ export default function TranscriptPanel({
   useEffect(() => {
     setEntries([])
     setLoaded(false)
+    loadedRef.current = false
     setError(null)
   }, [sessionId])
 
   const load = useCallback(async () => {
+    if (inFlightRef.current) return
+    if (document.visibilityState === 'hidden' && loadedRef.current) return
+    inFlightRef.current = true
     const slowTimer = window.setTimeout(() => setRefreshing(true), 500)
     try {
       const r = await fetchTranscript(sessionId, { limit })
@@ -67,12 +74,15 @@ export default function TranscriptPanel({
       setEntries(r.entries as unknown as TranscriptEntryForView[])
       setError(null)
       setLoaded(true)
+      loadedRef.current = true
     } catch (e) {
       setError((e as Error).message || 'Failed to load transcript')
       setLoaded(true)
+      loadedRef.current = true
     } finally {
       window.clearTimeout(slowTimer)
       setRefreshing(false)
+      inFlightRef.current = false
     }
   }, [sessionId, limit])
 
@@ -88,6 +98,10 @@ export default function TranscriptPanel({
   const debounceRef = useRef<number | null>(null)
   useEffect(() => {
     if (refreshTrigger === undefined) return
+    if (!sawRefreshTriggerRef.current) {
+      sawRefreshTriggerRef.current = true
+      return
+    }
     if (debounceRef.current) window.clearTimeout(debounceRef.current)
     debounceRef.current = window.setTimeout(load, 1500)
     return () => {

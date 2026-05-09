@@ -1,6 +1,23 @@
 import SwiftUI
 import Meee2PluginKit
 
+private enum SettingsTheme {
+    static let background = Color(red: 0.055, green: 0.058, blue: 0.070)
+    static let card = Color(red: 0.086, green: 0.094, blue: 0.122)
+    static let cardBorder = Color.white.opacity(0.08)
+    static let accent = Color(red: 0.38, green: 0.48, blue: 0.95)
+}
+
+private extension View {
+    func meee2SettingsForm() -> some View {
+        self
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .background(SettingsTheme.background)
+            .tint(SettingsTheme.accent)
+    }
+}
+
 /// 设置面板视图
 public struct SettingsView: View {
     private static let meee360NoSyncTarget = "__meee360_no_sync__"
@@ -98,29 +115,35 @@ public struct SettingsView: View {
     // MARK: - Body
 
     public var body: some View {
-        TabView {
-            generalSettings
-                .tabItem {
-                    Label("General", systemImage: "gearshape")
-                }
+        ZStack {
+            SettingsTheme.background.ignoresSafeArea()
+            TabView {
+                generalSettings
+                    .tabItem {
+                        Label("General", systemImage: "gearshape")
+                    }
 
-            userSettings
-                .tabItem {
-                    Label("User", systemImage: "person")
-                }
+                userSettings
+                    .tabItem {
+                        Label("User", systemImage: "person")
+                    }
 
-            pluginsSettings
-                .tabItem {
-                    Label("Plugins", systemImage: "puzzlepiece.extension")
-                }
+                pluginsSettings
+                    .tabItem {
+                        Label("Plugins", systemImage: "puzzlepiece.extension")
+                    }
 
-            aboutSettings
-                .tabItem {
-                    Label("About", systemImage: "info.circle")
-                }
+                aboutSettings
+                    .tabItem {
+                        Label("About", systemImage: "info.circle")
+                    }
+            }
+            .tint(SettingsTheme.accent)
         }
         .frame(width: 520, height: 520)
         .padding()
+        .background(SettingsTheme.background)
+        .preferredColorScheme(.dark)
         .onChange(of: meee360Connected) { _ in updateMeee360SyncActivation() }
         .onChange(of: meee360Online) { _ in updateMeee360SyncActivation() }
         .onChange(of: meee360SupabaseUrl) { _ in writeMeee360Settings() }
@@ -257,7 +280,7 @@ public struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .meee2SettingsForm()
     }
 
     // MARK: - Display Settings (保留用于向后兼容)
@@ -371,7 +394,7 @@ public struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .meee2SettingsForm()
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("meee360.connected")).receive(on: RunLoop.main)) { notification in
             // Handle callback from browser
             if let userInfo = notification.userInfo {
@@ -824,7 +847,7 @@ public struct SettingsView: View {
                     .foregroundColor(.secondary)
             }
         }
-        .formStyle(.grouped)
+        .meee2SettingsForm()
     }
 
     private func showPluginGuide() {
@@ -994,7 +1017,7 @@ public struct SettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
+        .meee2SettingsForm()
         .onAppear {
             versionChecker.startBackgroundCheck()
         }
@@ -1141,6 +1164,16 @@ struct PluginRowView: View {
         .onAppear {
             versionChecker.startBackgroundCheck()
         }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(SettingsTheme.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(SettingsTheme.cardBorder, lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -1160,17 +1193,8 @@ struct PluginRowView: View {
     }
 
     private func updatePluginConfig(enabled: Bool) {
-        var config = plugin.config
-        config.enabled = enabled
-        plugin.config = config
-
-        if enabled {
-            _ = plugin.start()
-            NSLog("[Settings] Enabled plugin: \(plugin.pluginId)")
-        } else {
-            plugin.stop()
-            NSLog("[Settings] Disabled plugin: \(plugin.pluginId)")
-        }
+        PluginManager.shared.setPluginEnabled(plugin.pluginId, enabled: enabled)
+        NSLog("[Settings] \(enabled ? "Enabled" : "Disabled") plugin: \(plugin.pluginId)")
     }
 }
 
@@ -1254,6 +1278,15 @@ struct FailedPluginRowView: View {
             }
         }
         .padding(.vertical, 8)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(SettingsTheme.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(SettingsTheme.cardBorder, lineWidth: 1)
+        )
     }
 }
 

@@ -250,6 +250,7 @@ public class SessionStore: ObservableObject {
     private let sessionsDir: URL
     private let queuesDir: URL
     private let unreadDir: URL
+    private let perfLoggingEnabled = ProcessInfo.processInfo.environment["MEEE2_PERF_LOG"] == "1"
 
     // MARK: - 初始化
 
@@ -298,9 +299,17 @@ public class SessionStore: ObservableObject {
     /// 更新会话 (自动更新 @Published sessions)
     public func update(_ sessionId: String, _ changes: (inout SessionData) -> Void) {
         guard let idx = sessions.firstIndex(where: { $0.sessionId == sessionId }) else { return }
-        changes(&sessions[idx])
-        sessions[idx].lastActivity = Date()
-        saveToDisk(sessions[idx])
+        let previous = sessions[idx]
+        var updated = previous
+        changes(&updated)
+        guard hasSessionChanged(previous, updated, allowLastActivityOnly: false) else {
+            return
+        }
+        if updated.lastActivity == previous.lastActivity {
+            updated.lastActivity = Date()
+        }
+        sessions[idx] = updated
+        saveToDisk(updated)
         SessionEventBus.shared.publish(.sessionMetadataChanged(sessionId: sessionId))
     }
 
@@ -356,6 +365,10 @@ public class SessionStore: ObservableObject {
         }
 
         let existed = existing != nil
+        if let existing = existing,
+           !hasSessionChanged(existing, merged, allowLastActivityOnly: false) {
+            return
+        }
         if let idx = sessions.firstIndex(where: { $0.sessionId == session.sessionId }) {
             sessions[idx] = merged
         } else {
@@ -520,6 +533,7 @@ public class SessionStore: ObservableObject {
     }
 
     private func saveToDisk(_ session: SessionData) {
+        let started = Date()
         let path = sessionPath(session.sessionId)
 
         // 原子写入：先写临时文件，再重命名
@@ -531,9 +545,45 @@ public class SessionStore: ObservableObject {
             try data.write(to: tmpPath)
             try? fileManager.removeItem(at: path)  // 删除旧文件
             try fileManager.moveItem(at: tmpPath, to: path)
+            perfLog("saveToDisk", started: started, extra: "sid=\(session.sessionId.prefix(8)),bytes=\(data.count)")
         } catch {
             MLog("[SessionStore] Failed to save session: \(error)")
         }
+    }
+
+    private func hasSessionChanged(
+        _ old: SessionData,
+        _ new: SessionData,
+        allowLastActivityOnly: Bool
+    ) -> Bool {
+        if old.schemaVersion != new.schemaVersion { return true }
+        if old.sessionId != new.sessionId { return true }
+        if old.project != new.project { return true }
+        if old.cwd != new.cwd { return true }
+        if old.pid != new.pid { return true }
+        if old.ghosttyTerminalId != new.ghosttyTerminalId { return true }
+        if old.iTermSessionId != new.iTermSessionId { return true }
+        if old.appleTerminalSessionId != new.appleTerminalSessionId { return true }
+        if old.transcriptPath != new.transcriptPath { return true }
+        if old.startedAt != new.startedAt { return true }
+        if old.status != new.status { return true }
+        if old.currentTool != new.currentTool { return true }
+        if old.description != new.description { return true }
+        if old.tasks != new.tasks { return true }
+        if old.currentTask != new.currentTask { return true }
+        if old.terminalInfo != new.terminalInfo { return true }
+        if old.usageStats != new.usageStats { return true }
+        if old.lastMessage != new.lastMessage { return true }
+        if old.pendingPermissionTool != new.pendingPermissionTool { return true }
+        if old.pendingPermissionMessage != new.pendingPermissionMessage { return true }
+        return allowLastActivityOnly && old.lastActivity != new.lastActivity
+    }
+
+    private func perfLog(_ name: String, started: Date, extra: String = "") {
+        guard perfLoggingEnabled else { return }
+        let ms = Date().timeIntervalSince(started) * 1_000
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        MLog(String(format: "[Perf][SessionStore] %@ %.1fms%@", name, ms, suffix))
     }
 
     private func deleteFromDisk(_ sessionId: String) {

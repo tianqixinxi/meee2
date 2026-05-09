@@ -368,6 +368,11 @@ public final class BoardServer {
             ]))
         }
         server.GET["/api/state"]   = BoardServer.cors(BoardAPI.getState)
+        server.GET["/api/user-profile"] = BoardServer.cors(BoardAPI.getUserProfile)
+        server.POST["/api/user-profile/connect"] = BoardServer.cors(BoardAPI.openMeee360Connect)
+        server.POST["/api/user-profile/dashboard"] = BoardServer.cors(BoardAPI.openMeee360Dashboard)
+        server.POST["/api/user-profile/settings"] = BoardServer.cors(BoardAPI.openMeee2Settings)
+        server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee360)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)

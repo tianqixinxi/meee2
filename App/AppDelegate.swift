@@ -68,6 +68,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // 初始化日志管理器
         _ = LogManager.shared
+        AppIconProvider.installApplicationIcon()
 
         // 启动诊断头 —— 用户报"open board 不行"时第一眼要看的版本/路径/
         // 是否被 Gatekeeper translocated。必须在所有其他启动逻辑之前打。
@@ -444,6 +445,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             MInfo("[AppDelegate] Reusing existing BoardWebWindowController")
         }
         NSApp.setActivationPolicy(.regular)
+        AppIconProvider.installDockTileIcon()
         boardWindowController?.show()
     }
 
@@ -457,6 +459,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func createSettingsWindow() {
         let contentView = NSHostingView(rootView: SettingsView())
         contentView.frame = NSRect(x: 0, y: 0, width: 520, height: 450)
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1).cgColor
 
         settingsWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 450),
@@ -465,6 +469,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             defer: false
         )
         settingsWindow?.title = "meee2 Settings"
+        settingsWindow?.appearance = NSAppearance(named: .darkAqua)
+        settingsWindow?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1)
         settingsWindow?.contentView = contentView
         settingsWindow?.center()
         settingsWindow?.isReleasedWhenClosed = false
