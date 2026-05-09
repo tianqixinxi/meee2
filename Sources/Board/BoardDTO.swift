@@ -142,6 +142,18 @@ struct StateDTO: Encodable {
     let channels: [ChannelDTO]
 }
 
+/// Settings/User tab mirrored user profile for the board sidebar footer.
+struct UserProfileDTO: Encodable {
+    let connected: Bool
+    let displayName: String
+    let userName: String
+    let userEmail: String
+    let userAvatarUrl: String
+    let initials: String
+    let dashboardUrl: String
+    let connectUrl: String
+}
+
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body
 struct ErrorDTO: Encodable {
     struct Inner: Encodable {

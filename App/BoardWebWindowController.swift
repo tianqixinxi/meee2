@@ -239,6 +239,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         window.title = "meee2 Board"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        window.miniwindowImage = AppIconProvider.loadIcon() ?? NSApp.applicationIconImage
         window.minSize = NSSize(width: 900, height: 620)
         window.center()
 
@@ -386,6 +387,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         let js = """
         (function(){
+          document.documentElement.classList.add('meee2-board-shell');
           const r = document.documentElement.style;
           r.setProperty('--titlebar-btn-center-y', '\(centerY)px');
           r.setProperty('--titlebar-lights-right', '\(rightEdge)px');

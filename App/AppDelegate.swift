@@ -68,6 +68,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // 初始化日志管理器
         _ = LogManager.shared
+        AppIconProvider.installApplicationIcon()
 
         // 启动诊断头 —— 用户报"open board 不行"时第一眼要看的版本/路径/
         // 是否被 Gatekeeper translocated。必须在所有其他启动逻辑之前打。
@@ -444,6 +445,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             MInfo("[AppDelegate] Reusing existing BoardWebWindowController")
         }
         NSApp.setActivationPolicy(.regular)
+        AppIconProvider.installDockTileIcon()
         boardWindowController?.show()
     }
 

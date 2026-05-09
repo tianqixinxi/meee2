@@ -20,11 +20,21 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { Inbox, MoreHorizontal } from 'lucide-react'
+import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
-import { activateSession, closeSession, spawnSession } from '../api'
+import {
+  activateSession,
+  closeSession,
+  disconnectMeee360,
+  fetchUserProfile,
+  openMeee2Settings,
+  openMeee360Connect,
+  openMeee360Dashboard,
+  spawnSession,
+  type UserProfile,
+} from '../api'
 import { useToast } from '../App'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
@@ -440,8 +450,17 @@ export default function Sidebar({
   // substring match 过滤 session list（client-side，立刻见效）。
   const [searchOpen, setSearchOpen] = useState<boolean>(false)
   const [searchQuery, setSearchQuery] = useState<string>('')
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+
+  const loadUserProfile = useCallback(() => {
+    fetchUserProfile()
+      .then(setUserProfile)
+      .catch(() => setUserProfile(null))
+  }, [])
 
   // override / pin 改动时同步（本组件外的修改也会触发，跨组件一致）
   useEffect(() => {
@@ -587,6 +606,58 @@ export default function Sidebar({
     document.documentElement.style.setProperty('--sidebar-width', px)
   }, [open, width])
 
+  useEffect(() => {
+    loadUserProfile()
+    window.addEventListener('focus', loadUserProfile)
+    return () => window.removeEventListener('focus', loadUserProfile)
+  }, [loadUserProfile])
+
+  useEffect(() => {
+    if (!accountMenuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const node = accountMenuRef.current
+      if (node && event.target instanceof Node && node.contains(event.target)) return
+      setAccountMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [accountMenuOpen])
+
+  const openDashboard = useCallback(async () => {
+    try {
+      await openMeee360Dashboard()
+    } catch (err) {
+      toast.push('error', (err as Error).message || 'Failed to open meee360')
+    }
+  }, [toast])
+
+  const toggleMeee360Connection = useCallback(async () => {
+    try {
+      if (userProfile?.connected) {
+        await disconnectMeee360()
+        loadUserProfile()
+        toast.push('success', 'Disconnected from meee360')
+      } else {
+        await openMeee360Connect()
+      }
+    } catch (err) {
+      toast.push('error', (err as Error).message || 'Failed to update meee360 connection')
+    }
+  }, [loadUserProfile, toast, userProfile?.connected])
+
+  const openSettings = useCallback(async () => {
+    try {
+      await openMeee2Settings()
+    } catch (err) {
+      toast.push('error', (err as Error).message || 'Failed to open settings')
+    }
+  }, [toast])
+
+  const runAccountAction = useCallback((action: () => void | Promise<void>) => {
+    setAccountMenuOpen(false)
+    void action()
+  }, [])
+
   // ── Collapsed-icon hover preview ───────────────────────────────────
   // Hover 折叠图标 → sidebar 以 fixed overlay 形式浮在 icon 下方（不进
   // grid 流，不挤画板）。鼠标移到 preview 上不消失；离开有 ~180ms 缓冲让
@@ -659,7 +730,7 @@ export default function Sidebar({
     >
       <button
         key="floating-toggle"
-        className="sidebar-collapsed-toggle"
+        className={'sidebar-collapsed-toggle' + (!open ? ' sidebar-collapsed-toggle--collapsed' : '')}
         onClick={() => {
           cancelClose()
           setHoverPreview(false)
@@ -1461,27 +1532,99 @@ export default function Sidebar({
           <ChannelDetail state={state} channelName={selection.channelName} />
         )}
       </div>
-      {/* ── 底部用户行（mirror Claude Code's "QC + icon"） ─────────────── */}
-      <div className="sidebar-footer">
-        <div className="sidebar-footer-user">
+      {/* ── 底部用户行（mirror Settings > User meee360 identity） ───────── */}
+      <div className="sidebar-footer" ref={accountMenuRef}>
+        {accountMenuOpen && (
+          <div className="sidebar-account-menu" role="menu">
+            <div className="sidebar-account-menu-user">
+              <span className="sidebar-footer-user-avatar" aria-hidden>
+                {userProfile?.userAvatarUrl ? (
+                  <img
+                    className="sidebar-footer-user-avatar-img"
+                    src={userProfile.userAvatarUrl}
+                    alt=""
+                  />
+                ) : (
+                  <span className="sidebar-footer-user-initials">
+                    {userProfile?.initials ?? '?'}
+                  </span>
+                )}
+              </span>
+              <span className="sidebar-account-menu-user-text">
+                {userProfile?.connected ? (userProfile.userEmail || userProfile.displayName) : 'Not connected'}
+              </span>
+            </div>
+            <div className="sidebar-account-menu-separator" />
+            {userProfile?.connected ? (
+              <button
+                className="sidebar-account-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={() => runAccountAction(openDashboard)}
+              >
+                <ExternalLink size={17} strokeWidth={1.75} aria-hidden />
+                <span>meee360</span>
+              </button>
+            ) : (
+              <button
+                className="sidebar-account-menu-item"
+                type="button"
+                role="menuitem"
+                onClick={() => runAccountAction(toggleMeee360Connection)}
+              >
+                <LogIn size={17} strokeWidth={1.75} aria-hidden />
+                <span>Login</span>
+              </button>
+            )}
+            <button
+              className="sidebar-account-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => runAccountAction(openSettings)}
+            >
+              <SettingsIcon size={17} strokeWidth={1.75} aria-hidden />
+              <span>Settings</span>
+            </button>
+            {userProfile?.connected && (
+              <>
+                <div className="sidebar-account-menu-separator" />
+                <button
+                  className="sidebar-account-menu-item"
+                  type="button"
+                  role="menuitem"
+                  onClick={() => runAccountAction(toggleMeee360Connection)}
+                >
+                  <LogOut size={17} strokeWidth={1.75} aria-hidden />
+                  <span>Logout</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        <button
+          className={'sidebar-footer-user' + (accountMenuOpen ? ' sidebar-footer-user--open' : '')}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={accountMenuOpen}
+          onClick={() => setAccountMenuOpen((prev) => !prev)}
+        >
           <span className="sidebar-footer-user-avatar" aria-hidden>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6"/>
-              <path d="M4 21c0-4 4-7 8-7s8 3 8 7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-            </svg>
+            {userProfile?.userAvatarUrl ? (
+              <img
+                className="sidebar-footer-user-avatar-img"
+                src={userProfile.userAvatarUrl}
+                alt=""
+              />
+            ) : (
+              <span className="sidebar-footer-user-initials">
+                {userProfile?.initials ?? '?'}
+              </span>
+            )}
           </span>
-          <span>QC</span>
-        </div>
-        <Tooltip label="Account / settings" placement="top">
-          <button className="sidebar-footer-icon" type="button" aria-label="Account / settings">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="6" r="2" stroke="currentColor" strokeWidth="1.6"/>
-              <circle cx="6" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-              <circle cx="18" cy="18" r="2" stroke="currentColor" strokeWidth="1.6"/>
-              <path d="M12 8v3.5m0 0l-5 4m5-4l5 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
-            </svg>
-          </button>
-        </Tooltip>
+          <span className="sidebar-footer-user-name">
+            {userProfile?.connected ? userProfile.displayName : 'Not connected'}
+          </span>
+        </button>
       </div>
     </aside>
     </>

@@ -1160,17 +1160,8 @@ struct PluginRowView: View {
     }
 
     private func updatePluginConfig(enabled: Bool) {
-        var config = plugin.config
-        config.enabled = enabled
-        plugin.config = config
-
-        if enabled {
-            _ = plugin.start()
-            NSLog("[Settings] Enabled plugin: \(plugin.pluginId)")
-        } else {
-            plugin.stop()
-            NSLog("[Settings] Disabled plugin: \(plugin.pluginId)")
-        }
+        PluginManager.shared.setPluginEnabled(plugin.pluginId, enabled: enabled)
+        NSLog("[Settings] \(enabled ? "Enabled" : "Disabled") plugin: \(plugin.pluginId)")
     }
 }
 

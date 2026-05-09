@@ -51,6 +51,37 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+export interface UserProfile {
+  connected: boolean
+  displayName: string
+  userName: string
+  userEmail: string
+  userAvatarUrl: string
+  initials: string
+  dashboardUrl: string
+  connectUrl: string
+}
+
+export function fetchUserProfile(): Promise<UserProfile> {
+  return jsonRequest<UserProfile>('/api/user-profile')
+}
+
+export function openMeee360Connect(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/user-profile/connect', { method: 'POST' })
+}
+
+export function openMeee360Dashboard(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/user-profile/dashboard', { method: 'POST' })
+}
+
+export function openMeee2Settings(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/user-profile/settings', { method: 'POST' })
+}
+
+export function disconnectMeee360(): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>('/api/user-profile', { method: 'DELETE' })
+}
+
 // -- app version / Sparkle update ------------------------------------------
 
 export interface VersionInfo {

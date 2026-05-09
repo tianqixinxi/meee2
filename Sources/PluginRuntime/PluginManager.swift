@@ -62,6 +62,7 @@ public class PluginManager: ObservableObject {
             MLog("[PluginManager] Failed to initialize plugin: \(plugin.pluginId)")
             return
         }
+        applyPersistedEnabledState(to: plugin)
 
         plugin.onSessionsUpdated = { [weak self] sessions in
             guard let self = self else { return }
@@ -87,6 +88,9 @@ public class PluginManager: ObservableObject {
             if plugin.config.enabled {
                 _ = plugin.start()  // Result intentionally unused
                 MLog("[PluginManager] Started plugin: \(pluginId)")
+            } else {
+                removeSessions(forPluginId: pluginId)
+                MLog("[PluginManager] Skipped disabled plugin: \(pluginId)")
             }
         }
     }
@@ -116,6 +120,7 @@ public class PluginManager: ObservableObject {
         for plugin in externalPlugins {
             MLog("[PluginManager] Processing external plugin: \(plugin.pluginId)")
             if plugin.initialize() {
+                self.applyPersistedEnabledState(to: plugin)
                 MLog("[PluginManager] Plugin \(plugin.pluginId) initialized successfully")
 
                 // 设置回调
@@ -148,6 +153,11 @@ public class PluginManager: ObservableObject {
 
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            guard self.isPluginEnabled(pluginId) else {
+                self.sessions.removeAll { $0.pluginId == pluginId }
+                MLog("[PluginManager] Ignored sessions from disabled plugin: \(pluginId)")
+                return
+            }
 
             // 保存该 plugin 的旧 sessions 的 urgentEvent 状态
             var existingUrgentEvents: [String: UrgentEventInfo] = [:]
@@ -230,6 +240,51 @@ public class PluginManager: ObservableObject {
                 ]
             )
         }
+    }
+
+    public func isPluginEnabled(_ pluginId: String) -> Bool {
+        if let plugin = loadedPlugins[pluginId] {
+            return plugin.config.enabled
+        }
+        if let stored = UserDefaults.standard.object(forKey: enabledDefaultsKey(pluginId)) as? Bool {
+            return stored
+        }
+        return true
+    }
+
+    public func setPluginEnabled(_ pluginId: String, enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: enabledDefaultsKey(pluginId))
+        guard let plugin = loadedPlugins[pluginId] else { return }
+        var config = plugin.config
+        config.enabled = enabled
+        plugin.config = config
+
+        if enabled {
+            _ = plugin.start()
+            MLog("[PluginManager] Enabled plugin: \(pluginId)")
+        } else {
+            plugin.stop()
+            removeSessions(forPluginId: pluginId)
+            MLog("[PluginManager] Disabled plugin: \(pluginId)")
+        }
+    }
+
+    private func applyPersistedEnabledState(to plugin: SessionPlugin) {
+        let key = enabledDefaultsKey(plugin.pluginId)
+        guard let stored = UserDefaults.standard.object(forKey: key) as? Bool else { return }
+        var config = plugin.config
+        config.enabled = stored
+        plugin.config = config
+    }
+
+    private func removeSessions(forPluginId pluginId: String) {
+        DispatchQueue.main.async { [weak self] in
+            self?.sessions.removeAll { $0.pluginId == pluginId }
+        }
+    }
+
+    private func enabledDefaultsKey(_ pluginId: String) -> String {
+        "plugin_\(pluginId)_enabled"
     }
 
     // MARK: - Terminal Activation
