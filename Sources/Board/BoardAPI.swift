@@ -167,10 +167,17 @@ enum BoardAPI {
 
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
         let settings = readMeee360Settings()
-        let connected = settings["enabled"] as? Bool ?? false
-        let userName = stringSetting(settings["userName"])
-        let userEmail = stringSetting(settings["userEmail"])
-        let userAvatarUrl = stringSetting(settings["userAvatarUrl"])
+        let defaults = UserDefaults.standard
+        let connected = defaults.bool(forKey: "meee360Connected")
+        let userName = connected
+            ? defaultString(defaults, key: "meee360UserName", fallback: settings["userName"])
+            : ""
+        let userEmail = connected
+            ? defaultString(defaults, key: "meee360UserEmail", fallback: settings["userEmail"])
+            : ""
+        let userAvatarUrl = connected
+            ? defaultString(defaults, key: "meee360UserAvatarUrl", fallback: settings["userAvatarUrl"])
+            : ""
         let displayName: String
         if !userName.isEmpty {
             displayName = userName
@@ -228,6 +235,11 @@ enum BoardAPI {
 
     private static func stringSetting(_ value: Any?) -> String {
         (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func defaultString(_ defaults: UserDefaults, key: String, fallback: Any?) -> String {
+        let value = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? stringSetting(fallback) : value
     }
 
     private static func initials(for displayName: String, connected: Bool) -> String {
