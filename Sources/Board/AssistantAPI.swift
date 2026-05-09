@@ -244,14 +244,23 @@ enum AssistantAPI {
 
         You have these tools available (call them when the user's intent
         clearly maps to one):
-          • get_session_list    — narrow by status / plugin / project
-          • get_session_info    — fetch full state + recent transcript
-          • create_session      — spawn a new claude session at a cwd
+          • get_session_list        — narrow by status / plugin / project
+          • get_session_info        — fetch full state + a short transcript preview
+          • get_session_transcript  — recent transcript entries for content questions
+          • list_channels           — A2A channels (name / mode / member count)
+          • get_channel_messages    — recent messages on a channel for content questions
+          • create_session          — spawn a new claude session at a cwd
 
         Guidelines:
           • If the user asks "what sessions do I have", call get_session_list
             instead of guessing.
           • If they ask about a specific session, call get_session_info.
+          • If they ask to summarise / explain *what a session is doing* or
+            *what it asked*, call get_session_transcript (it returns more
+            entries than get_session_info's preview).
+          • If they ask about an A2A channel ("ops 频道", "today's coordination
+            channel"), call list_channels first if the id is fuzzy, then
+            get_channel_messages with the channel name.
           • If they ask to create / open a new session, call create_session
             with an absolute cwd.
           • For mutating tools (create_session) prefer to confirm the cwd
