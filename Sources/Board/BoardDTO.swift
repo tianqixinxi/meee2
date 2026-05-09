@@ -259,8 +259,14 @@ enum BoardDTOBuilder {
         }
     }
 
+    /// issue #25 诊断：缓存上一次 emit 时各 channel 的 memberCount。
+    /// 当一个之前有成员的 channel 这次 emit 出 0 时，写一条 MWarn —— 用来抓
+    /// "DTO 层在 leave 半途读到空成员快照然后推给前端导致 board flash" 的现场。
+    private static var lastEmittedMemberCount: [String: Int] = [:]
+    private static let lastEmittedMemberCountLock = NSLock()
+
     static func channelDTO(_ channel: Channel) -> ChannelDTO {
-        ChannelDTO(
+        let dto = ChannelDTO(
             name: channel.name,
             displayName: channel.displayName,
             mode: channel.mode.rawValue,
@@ -269,6 +275,15 @@ enum BoardDTOBuilder {
             description: channel.description,
             createdAt: iso(channel.createdAt)
         )
+        let count = channel.members.count
+        lastEmittedMemberCountLock.lock()
+        let previous = lastEmittedMemberCount[channel.name]
+        lastEmittedMemberCount[channel.name] = count
+        lastEmittedMemberCountLock.unlock()
+        if count == 0, let prev = previous, prev > 0 {
+            MWarn("[StateTrace][channelDTO] channel='\(channel.name)' memberCount=0 (was \(prev) last emission)")
+        }
+        return dto
     }
 
     static func messageDTO(_ msg: A2AMessage) -> MessageDTO {

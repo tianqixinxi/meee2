@@ -43,6 +43,14 @@ export function useBoardState(): BoardStateHook {
     inFlight.current = true
     try {
       const s = await fetchState()
+      // issue #25 诊断：抓 fetched state 的形状，配合服务端
+      // [StateTrace][channelDTO] 判断 0-member 是否真的来自 server。
+      const zeroMembers = s.channels.filter((c) => c.members.length === 0).length
+      console.log(
+        '[StateTrace][board-state] fetched: sessions=' + s.sessions.length +
+        ' channels=' + s.channels.length +
+        ', channels-with-zero-members=' + zeroMembers,
+      )
       // 快速指纹：排除频繁变但 UI 不直接看的字段（lastActivity 每秒都可能
       // bump）。如果 sessions 的关键字段 + channels 都没变，视作同态。
       const sig = signatureFor(s)
