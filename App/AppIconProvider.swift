@@ -20,10 +20,6 @@ enum AppIconProvider {
     }
 
     static func loadIcon() -> NSImage? {
-        if let icon = renderStatusBarSymbolIcon() {
-            return icon
-        }
-
         if let icon = NSImage(named: "AppIcon") {
             return icon
         }
@@ -32,6 +28,10 @@ enum AppIconProvider {
             if let icon = NSImage(contentsOf: url) {
                 return icon
             }
+        }
+
+        if let icon = renderStatusBarSymbolIcon() {
+            return icon
         }
 
         return nil

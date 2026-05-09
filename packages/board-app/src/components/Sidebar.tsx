@@ -20,10 +20,11 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
+import { ExternalLink, GitBranch, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
+import { AutomationsPanel } from './AutomationsPanel'
 import {
   activateSession,
   closeSession,
@@ -452,6 +453,7 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [automationsOpen, setAutomationsOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
@@ -1583,6 +1585,18 @@ export default function Sidebar({
               </button>
             )}
             <button
+              className="sidebar-account-menu-item sidebar-account-menu-item--desktop-only"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false)
+                setAutomationsOpen(true)
+              }}
+            >
+              <GitBranch size={17} strokeWidth={1.75} aria-hidden />
+              <span>Automations</span>
+            </button>
+            <button
               className="sidebar-account-menu-item"
               type="button"
               role="menuitem"
@@ -1633,6 +1647,7 @@ export default function Sidebar({
         </button>
       </div>
     </aside>
+    {automationsOpen && <AutomationsPanel onClose={() => setAutomationsOpen(false)} />}
     </>
   )
 }

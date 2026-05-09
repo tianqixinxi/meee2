@@ -268,6 +268,83 @@ enum AssistantAPI {
         """
     }
 
+    static func runAutomation(title: String, prompt: String, settings: AssistantSettings) async -> (output: String, error: String?) {
+        let systemPrompt = """
+        You are the meee2 automation runner. Execute the user's saved automation
+        against the current local board state. Use tools when they are useful,
+        especially for session inventory and session details. Be factual: only
+        claim evidence you observed through tools or current context. If a
+        requested action is unsafe or ambiguous, explain the missing input
+        instead of pretending it was completed.
+
+        Return a concise markdown result with:
+        - result
+        - evidence
+        - recommended next actions
+
+        \(buildSystemPrompt(settings: settings))
+        """
+        var transcript = [
+            ChatMessage(role: .user, content: "Automation: \(title)\n\n\(prompt)")
+        ]
+        let tools = AssistantTools.filter(settings.enabledTools)
+        var finalText = ""
+
+        for _ in 0..<maxToolIterations {
+            let provider = AssistantProviderFactory.make(settings.provider)
+            var pendingCalls: [ToolCallRef] = []
+            var assistantText = ""
+
+            do {
+                for try await ev in provider.runTurn(
+                    systemPrompt: systemPrompt,
+                    messages: transcript,
+                    tools: tools,
+                    settings: settings
+                ) {
+                    switch ev {
+                    case .textDelta(let text):
+                        assistantText += text
+                    case .toolCall(let id, let name, let argsJSON):
+                        pendingCalls.append(ToolCallRef(id: id, name: name, argsJSON: argsJSON))
+                    case .turnDone:
+                        break
+                    case .error(let message):
+                        return (finalText.isEmpty ? assistantText : finalText, message)
+                    }
+                }
+            } catch {
+                return (finalText.isEmpty ? assistantText : finalText, error.localizedDescription)
+            }
+
+            finalText = assistantText
+            if pendingCalls.isEmpty {
+                return (assistantText.trimmingCharacters(in: .whitespacesAndNewlines), nil)
+            }
+
+            transcript.append(ChatMessage(role: .assistant, content: assistantText, toolCalls: pendingCalls))
+            for call in pendingCalls {
+                let argsObj = (try? JSONSerialization.jsonObject(with: Data(call.argsJSON.utf8))) as? [String: Any] ?? [:]
+                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools)
+                let resultJSON: String
+                switch result {
+                case .success(let payload):
+                    if let data = try? JSONSerialization.data(withJSONObject: payload),
+                       let string = String(data: data, encoding: .utf8) {
+                        resultJSON = string
+                    } else {
+                        resultJSON = "{}"
+                    }
+                case .failure(let message):
+                    resultJSON = encodeJSON(["error": message])
+                }
+                transcript.append(ChatMessage(role: .tool, content: resultJSON, toolCallId: call.id))
+            }
+        }
+
+        return (finalText, "max tool iterations reached (\(maxToolIterations))")
+    }
+
     private static func currentSessionSummary() -> String {
         let sessions = PluginManager.shared.sessions
             .filter { $0.status != .dead }

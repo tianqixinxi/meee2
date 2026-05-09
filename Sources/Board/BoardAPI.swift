@@ -301,6 +301,86 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Automations
+
+    static func listAutomations(_ req: HttpRequest) -> HttpResponse {
+        return jsonResponse(AutomationsEnvelope(
+            templates: AutomationStore.shared.templates,
+            automations: AutomationStore.shared.list()
+        ))
+    }
+
+    static func createAutomation(_ req: HttpRequest) -> HttpResponse {
+        guard let body = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "expected JSON body", status: 400)
+        }
+        do {
+            let automation = try AutomationStore.shared.create(input: body)
+            return jsonResponse(AutomationEnvelope(automation: automation), status: 201, reason: "Created")
+        } catch AutomationStoreError.validation(let message) {
+            return errorResponse("validation_error", message, status: 400)
+        } catch {
+            return errorResponse("automation_store_error", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func deleteAutomation(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing automation id", status: 400)
+        }
+        do {
+            try AutomationStore.shared.delete(id: id)
+            return jsonResponse(OkEnvelope(ok: true))
+        } catch AutomationStoreError.notFound {
+            return errorResponse("not_found", "automation not found: \(id)", status: 404)
+        } catch {
+            return errorResponse("automation_store_error", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func runAutomation(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing automation id", status: 400)
+        }
+        guard let automation = AutomationStore.shared.get(id: id) else {
+            return errorResponse("not_found", "automation not found: \(id)", status: 404)
+        }
+        let body = parseJSONBody(req) ?? [:]
+        let settings = AssistantAPI.parseSettings(body["settings"] as? [String: Any])
+        let startedAt = BoardDTOBuilder.iso(Date())
+
+        let group = DispatchGroup()
+        group.enter()
+        var output = ""
+        var runError: String?
+        Task.detached {
+            let result = await AssistantAPI.runAutomation(
+                title: automation.title,
+                prompt: automation.prompt,
+                settings: settings
+            )
+            output = result.output
+            runError = result.error
+            group.leave()
+        }
+        if group.wait(timeout: .now() + 180) == .timedOut {
+            runError = "automation timed out after 180 seconds"
+        }
+
+        do {
+            let envelope = try AutomationStore.shared.recordRun(
+                automationId: id,
+                status: runError == nil ? "succeeded" : "failed",
+                output: output,
+                error: runError,
+                startedAt: startedAt
+            )
+            return jsonResponse(envelope)
+        } catch {
+            return errorResponse("automation_store_error", error.localizedDescription, status: 500)
+        }
+    }
+
     // MARK: - Sessions
 
     /// POST /api/sessions/:id/activate

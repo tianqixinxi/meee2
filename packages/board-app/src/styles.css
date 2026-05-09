@@ -4188,6 +4188,9 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
   background: #1F2330;
   color: #F3F4F6;
 }
+html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
+  display: none;
+}
 .sidebar-account-menu-item > svg {
   width: 16px;
   height: 16px;
@@ -4325,4 +4328,192 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
 @keyframes mee-tooltip-fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* ─── Automations modal ─────────────────────────────────────────────── */
+.automations-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(10px);
+}
+.automations-modal {
+  width: min(1180px, 96vw);
+  max-height: min(820px, 92vh);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.22), transparent 34%),
+    linear-gradient(135deg, rgba(25, 27, 34, 0.98), rgba(10, 10, 12, 0.98));
+  color: #f8fafc;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.48);
+  padding: 24px;
+}
+.automations-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+}
+.automations-header h2 {
+  margin: 0;
+  font-size: 34px;
+  letter-spacing: -0.04em;
+}
+.automations-header p {
+  margin: 6px 0 0;
+  color: rgba(248, 250, 252, 0.62);
+}
+.automations-eyebrow {
+  margin: 0 !important;
+  color: #93c5fd !important;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.automations-close {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  cursor: pointer;
+  font-size: 22px;
+}
+.automations-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.9fr) minmax(280px, 1fr) minmax(260px, 1fr);
+  gap: 16px;
+}
+.automations-column {
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 14px;
+}
+.automations-column h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.automation-template-group__title {
+  margin: 14px 0 8px;
+  color: rgba(248, 250, 252, 0.54);
+  font-size: 12px;
+}
+.automation-template-card {
+  display: flex;
+  width: 100%;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.automation-template-card:hover {
+  border-color: rgba(147, 197, 253, 0.5);
+  background: rgba(59, 130, 246, 0.14);
+}
+.automation-template-card__icon {
+  font-size: 20px;
+}
+.automation-template-card small,
+.automation-row small,
+.automation-row p,
+.automations-muted {
+  display: block;
+  margin-top: 5px;
+  color: rgba(248, 250, 252, 0.58);
+  line-height: 1.4;
+}
+.automations-column--editor label {
+  display: block;
+  margin-bottom: 12px;
+}
+.automations-column--editor label span {
+  display: block;
+  margin-bottom: 6px;
+  color: rgba(248, 250, 252, 0.68);
+  font-size: 12px;
+}
+.automations-column--editor input,
+.automations-column--editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  color: #fff;
+  font: inherit;
+  padding: 10px 12px;
+  outline: none;
+}
+.automations-column--editor textarea {
+  resize: vertical;
+}
+.automations-primary,
+.automation-row__actions button {
+  border: 0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #0f172a;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 9px 13px;
+}
+.automations-primary:disabled,
+.automation-row__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.automation-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.automation-row__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.automation-run-output,
+.automations-error {
+  margin-top: 16px;
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.26);
+}
+.automations-error {
+  color: #fecdd3;
+}
+.automation-run-output__title {
+  margin-bottom: 8px;
+  color: rgba(248, 250, 252, 0.68);
+  font-size: 12px;
+}
+.automation-run-output pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: rgba(248, 250, 252, 0.9);
+}
+@media (max-width: 900px) {
+  .automations-grid {
+    grid-template-columns: 1fr;
+  }
 }
