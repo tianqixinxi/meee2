@@ -516,8 +516,12 @@ public final class BoardServer {
     private func wsAttach(_ ws: WebSocketSession) {
         wsLock.lock()
         wsSessions.append(ws)
+        let total = wsSessions.count
         wsLock.unlock()
-        MInfo("[BoardServer] ws connected (total=\(wsSessions.count))")
+        MInfo("[BoardServer] ws connected (total=\(total))")
+        // issue #25 诊断：与 client 端的 [StateTrace][board-ws] reconnected 配对，
+        // 用来确认 board flash 之前是否伴随一次 WS reconnect。
+        MInfo("[StateTrace][ws-connect] /api/events client connected (total clients=\(total))")
 
         // 连上立即发一条初始 state.changed，让客户端主动拉 /api/state
         let payload: [String: Any] = [
@@ -536,6 +540,8 @@ public final class BoardServer {
         let remaining = wsSessions.count
         wsLock.unlock()
         MInfo("[BoardServer] ws disconnected (total=\(remaining))")
+        // issue #25 诊断：与 client 端 [StateTrace][board-ws] disconnected 配对。
+        MInfo("[StateTrace][ws-disconnect] /api/events client disconnected (total clients=\(remaining))")
     }
 
     // MARK: - Event bus subscription

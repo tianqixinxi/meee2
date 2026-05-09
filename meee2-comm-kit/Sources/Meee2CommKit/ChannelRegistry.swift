@@ -138,10 +138,17 @@ public final class ChannelRegistry {
             guard let leaving = ch.members.first(where: { $0.alias == alias }) else {
                 throw ChannelRegistryError.aliasNotFound(alias)
             }
+            // issue #25 诊断：记录 mutation 前后的 members.count，方便对照
+            // BoardDTOBuilder 这一头是不是在 leave 中途读到了空 members 快照。
+            let countBefore = ch.members.count
             ch.members.removeAll { $0.alias == alias }
+            let countAfter = ch.members.count
             try persist(ch)
             cache[channel] = ch
-            commLog(.info, "[ChannelRegistry] Leave '\(channel)' alias=\(alias)")
+            commLog(
+                .info,
+                "[ChannelRegistry] Leave '\(channel)' alias=\(alias) members.count_before=\(countBefore) members.count_after=\(countAfter)"
+            )
             return (leaving, ch)
         }
         SessionEventBus.shared.publish(.channelMutated(name: channel))

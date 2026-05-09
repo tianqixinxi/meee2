@@ -677,7 +677,12 @@ export function connectEvents(
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const url = `${proto}://${location.host}/api/events`
     ws = new WebSocket(url)
-    ws.onopen = () => onStatus(true)
+    ws.onopen = () => {
+      // issue #25 诊断：记录每一次 (re)connect。Board flash 时如果紧跟一次
+      // 'reconnected'，说明是断线触发的初始 fetch 撞上了 server 半态。
+      console.log('[StateTrace][board-ws] reconnected')
+      onStatus(true)
+    }
     ws.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data)
@@ -689,6 +694,7 @@ export function connectEvents(
       }
     }
     ws.onclose = () => {
+      console.log('[StateTrace][board-ws] disconnected')
       onStatus(false)
       if (!stopped) {
         reconnectTimer = window.setTimeout(connect, 1500)
