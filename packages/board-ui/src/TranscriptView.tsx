@@ -757,8 +757,28 @@ function EntryRow({
     return out
   })()
 
+  // Per-entry sticky header — only first entry of a same-role run gets
+  // it (consecutive same-role merges hide their own header so two
+  // adjacent assistant turns read as one). Live placeholder skips it
+  // entirely; the live tint already signals "this is in flight".
+  const showHeader = !hideRoleChip && !isLive && (
+    entry.type === 'user' || entry.type === 'assistant' || entry.type === 'injected'
+  )
+  const roleLabel =
+    entry.type === 'user' ? 'You' :
+    entry.type === 'assistant' ? 'Claude' :
+    entry.type === 'injected' ? 'Injected' :
+    entry.type
+  const ts = formatEntryTimestamp(entry.timestamp)
+
   return (
     <div className={`tx-entry tx-entry--${entry.type}${hideRoleChip ? ' tx-entry--merged' : ''}${isLive ? ' tx-entry--live' : ''}`}>
+      {showHeader && (
+        <div className="tx-entry__header" aria-hidden={false}>
+          <span className={`tx-entry__role tx-entry__role--${entry.type}`}>{roleLabel}</span>
+          {ts && <time className="tx-entry__time" dateTime={entry.timestamp ?? undefined}>{ts}</time>}
+        </div>
+      )}
       {renderItems.map((item, idx) => {
         if (item.kind === 'tool-group') {
           return (
@@ -1460,4 +1480,16 @@ function TodoGlyph({ status }: { status: string }) {
 function truncateForPreview(s: string, max: number): string {
   if (s.length <= max) return s
   return s.slice(0, max) + '\n…(truncated, ' + (s.length - max) + ' more chars)'
+}
+
+/// Render an entry timestamp as a short HH:MM (24h) label. Falls back to
+/// the raw string if Date parsing fails — better to show *something*
+/// than to leave the slot blank when we got non-ISO input.
+function formatEntryTimestamp(ts: string | null | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ts
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mm = d.getMinutes().toString().padStart(2, '0')
+  return `${hh}:${mm}`
 }

@@ -183,9 +183,11 @@
 
 .tx-tool--orphan { opacity: 0.6; }
 
-/* Claude Code Desktop 风格的最小 tool 行：透明背景、无边框、纯单行
- * `Edited a file ›` / `Ran 2 commands ›`，hover 才有一抹微亮底。展开
- * 时 body 单独有个浅缩进 + 微背景区分，但 header 本身保持 plain。 */
+/* Tool / tool-group header: clickable button that toggles the body.
+ * Visually subtle but gives an obvious hover + focus affordance + a
+ * leading chevron that flips on open. The chevron sits at the start so
+ * the click target reads "expand this row" instead of being mistaken
+ * for a static label. */
 .tx-tool__header,
 .tx-tool-group__header {
   appearance: none;
@@ -193,7 +195,7 @@
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 1px 6px;
+  padding: 3px 8px 3px 6px;
   background: transparent;
   border: none;
   color: #9CA3B3;
@@ -207,22 +209,35 @@
 
 .tx-tool__header:hover,
 .tx-tool-group__header:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #C4CBD7;
+  background: rgba(255, 255, 255, 0.05);
+  color: #D4D8E1;
+}
+
+.tx-tool__header:focus-visible,
+.tx-tool-group__header:focus-visible {
+  outline: 1px solid rgba(204, 120, 92, 0.55);
+  outline-offset: 1px;
 }
 
 .tx-tool--open > .tx-tool__header,
 .tx-tool-group--open > .tx-tool-group__header {
-  color: #C4CBD7;
+  color: #D4D8E1;
 }
 
 .tx-tool__chevron,
 .tx-tool-group__chevron {
+  display: inline-flex;
+  align-items: center;
   margin-left: 6px;
-  font-size: 11px;
   color: #6B7488;
   flex: 0 0 auto;
   line-height: 1;
+  transition: color 0.12s ease;
+}
+
+.tx-tool__header:hover .tx-tool__chevron,
+.tx-tool-group__header:hover .tx-tool-group__chevron {
+  color: #C4CBD7;
 }
 
 .tx-tool__body,
