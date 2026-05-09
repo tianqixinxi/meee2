@@ -280,7 +280,8 @@ Web frontend (hot-reloads, no Swift restart needed):
 
 ```bash
 pnpm install
-pnpm dev:web                 # Vite at localhost:5173, talks to BoardServer at :9876
+pnpm dev:shell               # Desktop Board shell; does not start the Vite browser server
+pnpm dev:web                 # Optional browser-only Vite debug server
 pnpm typecheck               # TS typecheck across all packages
 pnpm build                   # Production build → Sources/Board/WebDist
 ```

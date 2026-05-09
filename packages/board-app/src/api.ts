@@ -94,6 +94,84 @@ export function fetchWhoami(): Promise<WhoamiInfo> {
   return jsonRequest<WhoamiInfo>('/api/whoami')
 }
 
+// -- automations -----------------------------------------------------------
+
+export interface AutomationTemplate {
+  id: string
+  product: 'meee2' | string
+  category: string
+  icon: string
+  title: string
+  description: string
+  prompt: string
+  cadence: string
+}
+
+export interface AutomationDefinition {
+  id: string
+  title: string
+  description: string
+  prompt: string
+  cadence: string
+  scope: string
+  templateId: string | null
+  enabled: boolean
+  createdAt: string
+  updatedAt: string
+  lastRunAt: string | null
+  lastRunStatus: 'succeeded' | 'failed' | string | null
+  lastRunSummary: string | null
+}
+
+export interface AutomationRun {
+  id: string
+  automationId: string
+  status: 'succeeded' | 'failed' | string
+  output: string
+  error: string | null
+  startedAt: string
+  finishedAt: string
+}
+
+export async function fetchAutomations(): Promise<{
+  templates: AutomationTemplate[]
+  automations: AutomationDefinition[]
+}> {
+  return jsonRequest('/api/automations')
+}
+
+export async function createAutomation(input: {
+  title?: string
+  description?: string
+  prompt?: string
+  cadence?: string
+  scope?: string
+  templateId?: string
+  enabled?: boolean
+}): Promise<AutomationDefinition> {
+  const response = await jsonRequest<{ automation: AutomationDefinition }>('/api/automations', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return response.automation
+}
+
+export async function deleteAutomation(id: string): Promise<void> {
+  await jsonRequest<{ ok: boolean }>(`/api/automations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function runAutomation(id: string): Promise<{
+  automation: AutomationDefinition
+  run: AutomationRun
+}> {
+  return jsonRequest(`/api/automations/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ settings: { provider: 'local' } }),
+  })
+}
+
 // -- app version / Sparkle update ------------------------------------------
 
 export interface VersionInfo {

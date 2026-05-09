@@ -303,11 +303,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
-        #if DEBUG
-        let boardDevItem = NSMenuItem(title: "Open Board Dev (Vite)", action: #selector(openBoardDevMenu), keyEquivalent: "")
-        boardDevItem.target = self
-        menu.addItem(boardDevItem)
-        #endif
         let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -448,13 +443,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         AppIconProvider.installDockTileIcon()
         boardWindowController?.show()
     }
-
-    #if DEBUG
-    @objc private func openBoardDevMenu() {
-        guard let url = URL(string: "http://127.0.0.1:5002") else { return }
-        NSWorkspace.shared.open(url)
-    }
-    #endif
 
     private func createSettingsWindow() {
         let contentView = NSHostingView(rootView: SettingsView())
