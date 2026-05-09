@@ -159,7 +159,7 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
     """
 }
 
-final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
+final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
@@ -248,6 +248,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         window.delegate = self
         window.contentView = webView
         webView.navigationDelegate = self
+        webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
         // 入口（或菜单栏 / 上下文菜单），title bar 干净一片。
     }
@@ -428,6 +429,21 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         MError("[BoardWebWindow] WebContent process terminated; reloading")
         reload()
+    }
+
+    /// `<a target="_blank">` 在嵌入式 WKWebView 里默认是哑的：WebKit 调
+    /// `createWebViewWith` 让宿主决定怎么开新窗口，宿主不实现这个方法时
+    /// 点击就一片寂静。这里把所有 target=_blank（以及 JS `window.open`）的
+    /// http(s) 链接都丢给系统浏览器；返回 nil 不在嵌入 webview 里再起一个
+    /// 嵌套 view（meee2 的 board shell 不打算变多窗口浏览器）。
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url, url.scheme == "http" || url.scheme == "https" {
+            NSWorkspace.shared.open(url)
+        }
+        return nil
     }
 
     private func showLoadError(_ error: Error) {

@@ -114,6 +114,8 @@ struct MemberDTO: Encodable {
 /// 频道 DTO
 struct ChannelDTO: Encodable {
     let name: String
+    /// 可选 display name —— UI 渲染时优先用这个，nil 时退回 `name`。
+    let displayName: String?
     let mode: String  // "auto" / "intercept" / "paused"
     let members: [MemberDTO]
     let pendingCount: Int
@@ -260,6 +262,7 @@ enum BoardDTOBuilder {
     static func channelDTO(_ channel: Channel) -> ChannelDTO {
         ChannelDTO(
             name: channel.name,
+            displayName: channel.displayName,
             mode: channel.mode.rawValue,
             members: channel.members.map { MemberDTO(alias: $0.alias, sessionId: $0.sessionId) },
             pendingCount: pendingCount(for: channel.name),

@@ -135,6 +135,52 @@ final class A2ATests: XCTestCase {
         }
     }
 
+    /// issue #24: rename only touches `displayName`, never the canonical id /
+    /// member roster / on-disk filename. Empty / whitespace clears the field.
+    func testRenameDisplayName() throws {
+        let name = uniqueChannelName("rename")
+        defer { try? ChannelRegistry.shared.delete(name) }
+
+        _ = try ChannelRegistry.shared.create(name: name)
+        let sid = fakeSessionId("alice")
+        _ = try ChannelRegistry.shared.join(channel: name, alias: "alice", sessionId: sid)
+
+        // Set a friendly display name. Canonical id + members are untouched.
+        let renamed = try ChannelRegistry.shared.rename(name, displayName: "  My Review Channel  ")
+        XCTAssertEqual(renamed.name, name, "canonical id must stay stable")
+        XCTAssertEqual(renamed.displayName, "My Review Channel", "displayName should be trimmed")
+        XCTAssertEqual(renamed.members.count, 1)
+        XCTAssertEqual(renamed.effectiveDisplayName, "My Review Channel")
+
+        // Persistence: a fresh `get` reads it back.
+        XCTAssertEqual(ChannelRegistry.shared.get(name)?.displayName, "My Review Channel")
+
+        // Clear via nil → falls back to canonical name.
+        let cleared = try ChannelRegistry.shared.rename(name, displayName: nil)
+        XCTAssertNil(cleared.displayName)
+        XCTAssertEqual(cleared.effectiveDisplayName, name)
+
+        // Whitespace-only string is treated as clear.
+        _ = try ChannelRegistry.shared.rename(name, displayName: "renamed-again")
+        let cleared2 = try ChannelRegistry.shared.rename(name, displayName: "   ")
+        XCTAssertNil(cleared2.displayName)
+
+        // Over-long display name throws.
+        let tooLong = String(repeating: "x", count: 101)
+        XCTAssertThrowsError(try ChannelRegistry.shared.rename(name, displayName: tooLong)) { error in
+            guard case ChannelRegistryError.invalidDisplayName = error else {
+                return XCTFail("expected .invalidDisplayName, got \(error)")
+            }
+        }
+
+        // Renaming a non-existent channel throws .notFound.
+        XCTAssertThrowsError(try ChannelRegistry.shared.rename("definitely-not-real-xyz", displayName: "x")) { error in
+            guard case ChannelRegistryError.notFound = error else {
+                return XCTFail("expected .notFound, got \(error)")
+            }
+        }
+    }
+
     func testInvalidNameThrows() {
         let invalids = ["", "Has Space", "UPPER", String(repeating: "a", count: 65)]
         for bad in invalids {

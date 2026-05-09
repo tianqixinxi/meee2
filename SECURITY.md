@@ -7,6 +7,7 @@ If you believe you've found a security issue in meee2 — especially anything in
 - The Unix domain socket at `/tmp/meee2.sock` and the hook bridge protocol
 - The dynamic plugin loader (`DynamicPluginLoader` / `PluginManager`) — entitlements disable library validation, so a malicious dylib in `~/.meee2/plugins/` runs with full app privileges
 - Custom card templates (`Sources/Board/CardTemplateStore.swift` + `web/src/cardCompile.ts`) — user code is compiled via Babel and rendered in the board
+- The global Web Board assistant (`Sources/Board/AssistantTools.swift` + `AssistantAPI.swift`) — when the user enables a hosted provider (OpenAI / Anthropic) and invokes content tools (`get_session_transcript`, `get_channel_messages`), redacted previews of session transcripts and A2A channel messages are sent to that provider as `tool_result` payloads. Each tool can be opted out per-request via the `enabledTools` setting; previews are capped (~16 KB total per call, per-string truncation at 1 KB), and raw tool input/output is never returned in full. Operators who don't want any assistant-side egress should leave the assistant on the `local` provider or disable the content tools entirely.
 - Permission-request handling in `HookSocketServer` (the allow/deny/ask decision path)
 - The local HTTP server (`BoardServer`) that exposes `/api/state` and related endpoints
 - Anything that could lead to arbitrary code execution, sandbox escape, or exposure of data under `~/.meee2/`

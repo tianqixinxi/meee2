@@ -8,6 +8,8 @@ public enum ChannelRegistryError: Error, CustomStringConvertible {
     case aliasNotFound(String)
     /// 合法名：小写字母数字 + `-` + `_`，长度 1..64
     case invalidName(String)
+    /// displayName 长度超出限制（>100 字符）
+    case invalidDisplayName(String)
 
     public var description: String {
         switch self {
@@ -16,6 +18,7 @@ public enum ChannelRegistryError: Error, CustomStringConvertible {
         case .aliasTaken(let a): return "alias already taken in channel: \(a)"
         case .aliasNotFound(let a): return "alias not found in channel: \(a)"
         case .invalidName(let n): return "invalid channel name: \(n) (allowed: [a-z0-9_-], 1..64 chars)"
+        case .invalidDisplayName(let d): return "invalid display name (max 100 chars): \(d.prefix(40))…"
         }
     }
 }
@@ -149,6 +152,32 @@ public final class ChannelRegistry {
                 otherMembers: result.members
             )
         }
+        return result
+    }
+
+    /// 重命名频道的展示名（**不动 canonical id**）。
+    ///
+    /// `name` 是 message envelope / member alias / on-disk 文件名的稳定锚点，
+    /// 改 id 等于丢历史 + 让 in-flight 消息找不到 channel；issue #24 的需求是
+    /// "rename = 改 displayName"。传 nil 或全空白回到 fallback（UI 显示 `name`）。
+    @discardableResult
+    public func rename(_ name: String, displayName: String?) throws -> Channel {
+        let normalized = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stored: String? = (normalized?.isEmpty ?? true) ? nil : normalized
+        if let s = stored, s.count > 100 {
+            throw ChannelRegistryError.invalidDisplayName(s)
+        }
+        let result: Channel = try queue.sync {
+            guard var ch = cache[name] else {
+                throw ChannelRegistryError.notFound(name)
+            }
+            ch.displayName = stored
+            try persist(ch)
+            cache[name] = ch
+            commLog(.info, "[ChannelRegistry] rename '\(name)' displayName=\(stored ?? "<nil>")")
+            return ch
+        }
+        SessionEventBus.shared.publish(.channelMutated(name: name))
         return result
     }
 

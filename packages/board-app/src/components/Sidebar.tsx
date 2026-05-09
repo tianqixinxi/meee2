@@ -1505,22 +1505,28 @@ export default function Sidebar({
                     {visibleChannels.length === 0 && (
                       <div className="muted">No channels yet.</div>
                     )}
-                    {visibleChannels.map((ch) => (
-                      <div
-                        key={ch.name}
-                        className="row space"
-                        style={{ marginBottom: 4, cursor: 'pointer' }}
-                        onClick={() =>
-                          onSelectionChange({ kind: 'channel', channelName: ch.name })
-                        }
-                      >
-                        <span>{ch.name}</span>
-                        <span className="mono muted">
-                          {ch.members.length}m · {ch.mode}
-                          {ch.pendingCount > 0 ? ` ·⏳${ch.pendingCount}` : ''}
-                        </span>
-                      </div>
-                    ))}
+                    {visibleChannels.map((ch) => {
+                      // displayName 是 issue #24 加的"友好名"，UI 优先展示它，
+                      // 但 canonical name 还是 channel id（hover 上去能看到原名）
+                      const label = ch.displayName?.trim() || ch.name
+                      return (
+                        <div
+                          key={ch.name}
+                          className="row space"
+                          style={{ marginBottom: 4, cursor: 'pointer' }}
+                          title={label !== ch.name ? `id: ${ch.name}` : undefined}
+                          onClick={() =>
+                            onSelectionChange({ kind: 'channel', channelName: ch.name })
+                          }
+                        >
+                          <span>{label}</span>
+                          <span className="mono muted">
+                            {ch.members.length}m · {ch.mode}
+                            {ch.pendingCount > 0 ? ` ·⏳${ch.pendingCount}` : ''}
+                          </span>
+                        </div>
+                      )
+                    })}
                   </>
                 )
               })()}

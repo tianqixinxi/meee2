@@ -7,6 +7,7 @@ import {
   dropMessage,
   listChannelMessages,
   removeMember,
+  renameChannel,
   sendMessage,
   setChannelMode,
 } from '../api'
@@ -36,6 +37,14 @@ export default function ChannelDetail({ state, channelName }: Props) {
   const [sendFrom, setSendFrom] = useState<string>('operator')
   const [sendTo, setSendTo] = useState<string>('*')
   const [sendContent, setSendContent] = useState('')
+  // Inline rename UI (issue #24). Reset whenever the selected channel
+  // changes so we don't bleed a draft from one channel into another.
+  const [renaming, setRenaming] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  useEffect(() => {
+    setRenaming(false)
+    setRenameDraft(channel?.displayName ?? '')
+  }, [channelName, channel?.displayName])
 
   // Load recent messages on channel change / state version.
   useEffect(() => {
@@ -138,6 +147,17 @@ export default function ChannelDetail({ state, channelName }: Props) {
     }
   }
 
+  const handleRenameSubmit = async () => {
+    const next = renameDraft.trim()
+    // Treat "same as canonical name" as a clear so we don't store redundant data.
+    const payload = next && next !== channel.name ? next : null
+    const r = await wrap(() => renameChannel(channel.name, payload))
+    if (r) {
+      setRenaming(false)
+      toast.push('success', payload ? `Renamed to "${payload}"` : 'Display name cleared')
+    }
+  }
+
   const handleDelete = async () => {
     if (!confirm(`Delete channel "${channel.name}"? This cannot be undone.`)) {
       return
@@ -159,10 +179,52 @@ export default function ChannelDetail({ state, channelName }: Props) {
     return state.sessions.find((s) => s.id === sid)?.title ?? sid.slice(0, 8)
   }
 
+  const displayLabel = channel.displayName?.trim() || channel.name
+  const hasCustomDisplay = !!(channel.displayName?.trim() && channel.displayName.trim() !== channel.name)
+
   return (
     <div className="col" style={{ gap: 12 }}>
       <div>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>#{channel.name}</div>
+        {!renaming && (
+          <div className="row space" style={{ alignItems: 'baseline' }}>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>#{displayLabel}</div>
+            <button
+              className="ghost"
+              type="button"
+              onClick={() => {
+                setRenameDraft(channel.displayName ?? '')
+                setRenaming(true)
+              }}
+              title="Rename channel (display name only — id stays as-is)"
+              style={{ fontSize: 12 }}
+            >
+              Rename
+            </button>
+          </div>
+        )}
+        {renaming && (
+          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+            <input
+              autoFocus
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              placeholder={channel.name}
+              maxLength={100}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void handleRenameSubmit()
+                if (e.key === 'Escape') setRenaming(false)
+              }}
+              style={{ flex: 1 }}
+            />
+            <button className="primary" onClick={handleRenameSubmit}>Save</button>
+            <button onClick={() => setRenaming(false)}>Cancel</button>
+          </div>
+        )}
+        {hasCustomDisplay && !renaming && (
+          <div className="muted mono" style={{ marginTop: 2, fontSize: 11 }}>
+            id: {channel.name}
+          </div>
+        )}
         {channel.description && (
           <div className="muted" style={{ marginTop: 4 }}>
             {channel.description}
