@@ -275,13 +275,14 @@ export function TranscriptView({
   // 按 verbosity 过滤 blocks + 丢弃纯 tool_result 的 user entry（orphan）。
   //
   // 三档语义（和 Claude Code 自带视图对齐）：
-  //   normal:   text + tool_use（折叠成 summary 一行，点 ▸ 展开）
-  //   thinking: 同 normal，再加 thinking 块（默认折叠）
-  //   verbose:  全部块都保留 + tool_use 默认展开（点击可手动收起）
+  //   normal:   只渲染 text/markdown
+  //   thinking: text + thinking 块
+  //   verbose:  全部块（text + thinking + tool_use + tool_result）+ tool_use
+  //             默认展开（点击可手动收起）
   //
-  // tool_use 在所有模式都展示——只是默认展开 / 折叠状态不一样（由
-  // EntryRow 渲染时根据 verbosity 决定）。tool_result 也都保留（极少落
-  // 在 assistant entry 上，但保留以备 orphan 渲染）。
+  // 注意：把 tool_use 也按 verbosity 过滤掉之后，下面的 cross-entry
+  // tool-run 拼接逻辑（要求接缝两侧都是 tool_use）在非 verbose 档自然
+  // 不会触发——这是想要的，因为整段 tool run 都被藏起来了。
   //
   // 末尾根据 liveStatus 合成一条 in-flight 占位 entry（实时 toolcall 进度，
   // 模仿 Claude Code 自带的 streaming 渲染）。覆盖三种状态：
@@ -298,8 +299,8 @@ export function TranscriptView({
       const kept = e.blocks.filter((b) => {
         if (b.type === 'text') return true
         if (b.type === 'thinking') return verbosity !== 'normal'
-        if (b.type === 'tool_use') return true
-        if (b.type === 'tool_result') return true
+        if (b.type === 'tool_use') return verbosity === 'verbose'
+        if (b.type === 'tool_result') return verbosity === 'verbose'
         return false
       })
       if (kept.length === 0) continue
