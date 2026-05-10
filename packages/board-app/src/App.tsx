@@ -15,6 +15,7 @@ import { NewSessionDialog } from './components/NewSessionDialog'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
+import type { CanvasList, CanvasScope } from './types'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
@@ -23,6 +24,13 @@ import type {
   PersistedViewport,
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
+import {
+  addSessionToCanvas,
+  createCanvas,
+  fetchCanvases,
+  removeSessionFromCanvas,
+  updateCanvas,
+} from './api'
 
 interface HydratedState {
   sessionLayout: LayoutMap
@@ -47,15 +55,39 @@ const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
 
 export default function App() {
+  const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
+  const activeCanvasId = canvasList?.activeCanvasId ?? 'personal-default'
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
   // meee2 走 HTTP / localStorage 双层实现，meee2 改用 SupabaseCanvasPersistence。
-  const persistence = useMemo<CanvasPersistence>(() => new HttpCanvasPersistence(), [])
+  const persistence = useMemo<CanvasPersistence>(
+    () => new HttpCanvasPersistence(activeCanvasId),
+    [activeCanvasId],
+  )
   // 启动时一次性把所有 storage slot 拉好再 mount Board。
   // 历史上 Board 在 useRef 初值里同步 loadXxx() 拿 localStorage —— 现在改成
   // async 接口后必须先 hydrate 完才能渲染（否则 useRef 拿不到值）。
   const [hydrated, setHydrated] = useState<HydratedState | null>(null)
   useEffect(() => {
     let cancelled = false
+    fetchCanvases()
+      .then((list) => { if (!cancelled) setCanvasList(list) })
+      .catch((err) => {
+        console.warn('[App] fetchCanvases failed:', (err as Error).message)
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  const refreshCanvases = useCallback(() => {
+    return fetchCanvases()
+      .then((list) => {
+        setCanvasList(list)
+        return list
+      })
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setHydrated(null)
     Promise.all([
       persistence.loadSessionLayout(),
       persistence.loadChannelLayout(),
@@ -224,15 +256,52 @@ export default function App() {
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
 
   const handleAddToCanvas = useCallback((sessionId: string) => {
+    addSessionToCanvas(activeCanvasId, sessionId)
+      .then(setCanvasList)
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to add session to canvas'))
     setAddToCanvasRequest({ sessionId, bump: Date.now() })
-  }, [])
+  }, [activeCanvasId, pushToast])
 
   const handleHideFromCanvas = useCallback((sessionId: string) => {
+    removeSessionFromCanvas(activeCanvasId, sessionId)
+      .then(setCanvasList)
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to hide session from canvas'))
     setHideFromCanvasRequest({ sessionId, bump: Date.now() })
-  }, [])
+  }, [activeCanvasId, pushToast])
 
   const handleBulkVisibility = useCallback((mode: 'show' | 'hide', sids?: string[]) => {
+    const targetSids = sids ?? boardState.state?.sessions.map((s) => s.id) ?? []
+    if (targetSids.length > 0) {
+      Promise.all(
+        targetSids.map((sid) =>
+          mode === 'show'
+            ? addSessionToCanvas(activeCanvasId, sid)
+            : removeSessionFromCanvas(activeCanvasId, sid),
+        ),
+      )
+        .then((results) => setCanvasList(results[results.length - 1]))
+        .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas sessions'))
+    }
     setBulkVisibilityRequest({ mode, bump: Date.now(), sids })
+  }, [activeCanvasId, boardState.state, pushToast])
+
+  const handleSetActiveCanvas = useCallback((canvasId: string) => {
+    updateCanvas(canvasId, { active: true })
+      .then((list) => {
+        setSelection({ kind: 'none' })
+        setOnCanvasCounts({})
+        setCanvasList(list)
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
+  }, [pushToast])
+
+  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
+    return createCanvas({ name, scope })
+      .then((list) => {
+        setSelection({ kind: 'none' })
+        setOnCanvasCounts({})
+        setCanvasList(list)
+      })
   }, [])
 
   const handleCountsChange = useCallback(
@@ -486,7 +555,23 @@ export default function App() {
 
   // 等到所有 storage slot hydrate 完才渲染 Board —— Board 内部用 useRef 一次性
   // 接住 initial 值，hydrate 之前给它就只能拿空状态 / 闪屏。
-  if (!hydrated) {
+  const canvasSessionIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const membership of canvasList?.memberships ?? []) {
+      if (membership.canvasId === activeCanvasId && membership.visible) ids.add(membership.sessionId)
+    }
+    return ids
+  }, [activeCanvasId, canvasList])
+
+  const canvasBoardState = useMemo(() => {
+    if (!boardState.state) return null
+    return {
+      ...boardState.state,
+      sessions: boardState.state.sessions.filter((s) => canvasSessionIds.has(s.id)),
+    }
+  }, [boardState.state, canvasSessionIds])
+
+  if (!hydrated || !canvasList) {
     return (
       <div className="app boot">
         <div className="boot-spinner" />
@@ -499,9 +584,10 @@ export default function App() {
       <div className="app">
         <div className="board-area">
           <Board
+            key={activeCanvasId}
             persistence={persistence}
             initial={hydrated}
-            state={boardState.state}
+            state={canvasBoardState}
             selection={selection}
             onSelectionChange={setSelection}
             fitSignal={fitSignal}
@@ -513,7 +599,10 @@ export default function App() {
             templateCache={templateCache}
             onNeedTemplate={ensureTemplate}
             unreadSids={unreadSids}
-            onRefresh={() => boardState.refresh()}
+            onRefresh={() => {
+              boardState.refresh()
+              void refreshCanvases()
+            }}
             onNewChannel={() => setNewChannelOpen(true)}
             placeChannelRequest={placeChannelRequest}
             onNewSession={() => setNewSessionOpen(true)}
@@ -577,6 +666,10 @@ export default function App() {
         </div>
         <Sidebar
           state={boardState.state}
+          canvases={canvasList.canvases}
+          activeCanvasId={activeCanvasId}
+          onActiveCanvasChange={handleSetActiveCanvas}
+          onCreateCanvas={handleCreateCanvas}
           selection={selection}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}

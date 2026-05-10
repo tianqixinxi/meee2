@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BoardState, ClientKind, Selection, Session } from '../types'
+import type { BoardState, CanvasInfo, CanvasScope, ClientKind, Selection, Session } from '../types'
 import { isOlderSession } from '../types'
 import ChannelDetail from './ChannelDetail'
 import {
@@ -20,7 +20,7 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
+import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Plus, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
@@ -391,6 +391,10 @@ interface Props {
   onOpen: () => void
   onClose: () => void
   onSelectionChange: (s: Selection) => void
+  canvases?: CanvasInfo[]
+  activeCanvasId?: string
+  onActiveCanvasChange?: (canvasId: string) => void
+  onCreateCanvas?: (name: string, scope: CanvasScope) => Promise<void> | void
   /** Count of embeddable elements currently on the canvas, keyed by sid. */
   onCanvasCounts: Record<string, number>
   /** sid → "刚从工作态转到休息态、还没被用户查看"。Sidebar 用它点亮蓝点，
@@ -424,6 +428,10 @@ export default function Sidebar({
   onOpen,
   onClose,
   onSelectionChange,
+  canvases = [],
+  activeCanvasId,
+  onActiveCanvasChange,
+  onCreateCanvas,
   onCanvasCounts,
   unreadSids,
   onAddToCanvas,
@@ -452,6 +460,9 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [creatingCanvas, setCreatingCanvas] = useState(false)
+  const [canvasNameDraft, setCanvasNameDraft] = useState('')
+  const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
@@ -658,6 +669,21 @@ export default function Sidebar({
     void action()
   }, [])
 
+  const teamCanvasEnabled = Boolean(userProfile?.connected)
+  const submitCanvas = useCallback(() => {
+    const name = canvasNameDraft.trim()
+    if (!name || !onCreateCanvas) return
+    Promise.resolve(onCreateCanvas(name, canvasScopeDraft))
+      .then(() => {
+        setCanvasNameDraft('')
+        setCanvasScopeDraft('personal')
+        setCreatingCanvas(false)
+      })
+      .catch((err) => {
+        toast.push('error', (err as Error).message || 'Failed to create canvas')
+      })
+  }, [canvasNameDraft, canvasScopeDraft, onCreateCanvas, toast])
+
   // ── Collapsed-icon hover preview ───────────────────────────────────
   // Hover 折叠图标 → sidebar 以 fixed overlay 形式浮在 icon 下方（不进
   // grid 流，不挤画板）。鼠标移到 preview 上不消失；离开有 ~180ms 缓冲让
@@ -815,6 +841,64 @@ export default function Sidebar({
           const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
           return (
           <div className="col" style={{ gap: 4 }}>
+            {canvases.length > 0 && (
+              <div className="sidebar-canvas-switcher">
+                <div className="sidebar-canvas-switcher__row">
+                  <select
+                    className="sidebar-canvas-switcher__select"
+                    value={activeCanvasId ?? canvases[0]?.id}
+                    onChange={(e) => onActiveCanvasChange?.(e.target.value)}
+                    aria-label="Canvas"
+                  >
+                    {canvases.map((canvas) => (
+                      <option key={canvas.id} value={canvas.id}>
+                        {canvas.scope === 'team' ? 'Team' : 'Personal'} · {canvas.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Tooltip label="New canvas">
+                    <button
+                      type="button"
+                      className="sidebar-icon-btn"
+                      aria-label="New canvas"
+                      onClick={() => setCreatingCanvas((v) => !v)}
+                    >
+                      <Plus size={14} aria-hidden />
+                    </button>
+                  </Tooltip>
+                </div>
+                {creatingCanvas && (
+                  <div className="sidebar-canvas-switcher__form">
+                    <input
+                      value={canvasNameDraft}
+                      onChange={(e) => setCanvasNameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') submitCanvas()
+                        if (e.key === 'Escape') setCreatingCanvas(false)
+                      }}
+                      placeholder="Canvas name"
+                      autoFocus
+                    />
+                    <select
+                      value={canvasScopeDraft}
+                      onChange={(e) => setCanvasScopeDraft(e.target.value as CanvasScope)}
+                      aria-label="Canvas scope"
+                    >
+                      <option value="personal">Personal</option>
+                      <option value="team" disabled={!teamCanvasEnabled}>Team</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={submitCanvas}
+                      disabled={!canvasNameDraft.trim()}
+                    >
+                      Create
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             <SidebarTopNav
               tabs={tabs}
               activeTabId={activeTab?.id ?? 'all'}

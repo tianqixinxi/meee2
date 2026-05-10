@@ -123,6 +123,31 @@ export interface BoardState {
   channels: Channel[]
 }
 
+export type CanvasScope = 'personal' | 'team'
+
+export interface CanvasInfo {
+  id: string
+  name: string
+  scope: CanvasScope
+  isDefault: boolean
+  teamId?: string | null
+  ownerUserId?: string | null
+}
+
+export interface CanvasSessionMembership {
+  canvasId: string
+  sessionId: string
+  visible: boolean
+  layout?: { x: number; y: number } | null
+}
+
+export interface CanvasList {
+  canvases: CanvasInfo[]
+  activeCanvasId: string
+  defaultCanvasIds: string[]
+  memberships: CanvasSessionMembership[]
+}
+
 export interface ApiError {
   error: { code: string; message: string }
 }

@@ -159,6 +159,7 @@ enum BoardAPI {
         let channels = ChannelRegistry.shared.list()
             .filter { !$0.name.hasPrefix("__") }
             .map { BoardDTOBuilder.channelDTO($0) }
+        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: sessions.map { $0.id })
         let state = StateDTO(sessions: sessions, channels: channels)
         return jsonResponse(state)
     }
@@ -1401,14 +1402,138 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Canvases
+
+    static func listCanvases(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        return jsonResponse(canvasEnvelope(BoardLayoutStore.shared.snapshot()))
+    }
+
+    static func createCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let name = json["name"] as? String else {
+            return errorResponse("bad_request", "missing canvas name", status: 400)
+        }
+        guard let rawScope = json["scope"] as? String,
+              let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+        do {
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope)
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func updateCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        do {
+            let snapshot = try BoardLayoutStore.shared.updateCanvas(
+                id: id,
+                name: json["name"] as? String,
+                active: json["active"] as? Bool
+            )
+            return jsonResponse(canvasEnvelope(snapshot))
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func deleteCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let snapshot = try BoardLayoutStore.shared.deleteCanvas(id: id)
+            return jsonResponse(canvasEnvelope(snapshot))
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func addSessionToCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"] else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let sessionId = json["sessionId"] as? String, !sessionId.isEmpty else {
+            return errorResponse("bad_request", "missing sessionId", status: 400)
+        }
+        do {
+            let snapshot = try BoardLayoutStore.shared.addSession(sessionId, to: canvasId)
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func removeSessionFromCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"],
+              let sessionId = req.params[":sessionId"] else {
+            return errorResponse("bad_request", "missing canvas id or session id", status: 400)
+        }
+        do {
+            let snapshot = try BoardLayoutStore.shared.removeSession(sessionId, from: canvasId)
+            return jsonResponse(canvasEnvelope(snapshot))
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
+        let canvases = snapshot.canvases.map {
+            CanvasInfoDTO(
+                id: $0.id,
+                name: $0.name,
+                scope: $0.scope.rawValue,
+                isDefault: $0.isDefault,
+                teamId: $0.teamId,
+                ownerUserId: $0.ownerUserId
+            )
+        }
+        let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }
+        let layouts: [String: BoardLayoutStore.Layout] = Dictionary(
+            uniqueKeysWithValues: snapshot.canvases.map { canvas in
+                (canvas.id, BoardLayoutStore.shared.load(canvasId: canvas.id))
+            }
+        )
+        let memberships = snapshot.memberships.map {
+            CanvasSessionMembershipDTO(
+                canvasId: $0.canvasId,
+                sessionId: $0.sessionId,
+                visible: $0.visible,
+                layout: layouts[$0.canvasId]?.sessions[$0.sessionId]
+            )
+        }
+        return CanvasListEnvelope(
+            canvases: canvases,
+            activeCanvasId: snapshot.activeCanvasId,
+            defaultCanvasIds: defaultIds,
+            memberships: memberships
+        )
+    }
+
+    private static func canvasId(from req: HttpRequest) -> String? {
+        req.queryParams.first(where: { $0.0 == "canvasId" })?.1.removingPercentEncoding
+    }
+
     // MARK: - Board Layout
 
     /// GET /api/board/layout
     /// 200 `{"layout":{"sessions":{sid:{x,y}},"channels":{name:{x,y}},"updatedAt":ISO}}`
     /// 文件不存在时 `sessions` / `channels` 为空对象。
     static func getBoardLayout(_ req: HttpRequest) -> HttpResponse {
-        _ = req
-        let layout = BoardLayoutStore.shared.load()
+        let layout = BoardLayoutStore.shared.load(canvasId: canvasId(from: req))
         return jsonResponse(BoardLayoutEnvelope(layout: layout))
     }
 
@@ -1419,7 +1544,8 @@ enum BoardAPI {
         guard let json = parseJSONBody(req) else {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
         }
-        let current = BoardLayoutStore.shared.load()
+        let selectedCanvasId = canvasId(from: req)
+        let current = BoardLayoutStore.shared.load(canvasId: selectedCanvasId)
         let sessions = parsePointMap(json["sessions"])
         let channels = parsePointMap(json["channels"])
         let layout = BoardLayoutStore.Layout(
@@ -1432,7 +1558,7 @@ enum BoardAPI {
             updatedAt: Date()
         )
         do {
-            let saved = try BoardLayoutStore.shared.save(layout)
+            let saved = try BoardLayoutStore.shared.save(layout, canvasId: selectedCanvasId)
             // 不直接 broadcast：BoardLayoutStore.save 已经 publish .boardLayoutChanged，
             // BoardServer 订阅会 debounce 200ms 后 broadcastStateChanged。
             // 之前这里又调一次直接广播，每次 PUT 触发 2 次 WS 推送（一次直接 +

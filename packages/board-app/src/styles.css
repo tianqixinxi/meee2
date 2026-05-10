@@ -3590,6 +3590,46 @@ textarea {
   gap: 8px;
 }
 
+.sidebar-canvas-switcher {
+  margin: 0 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-canvas-switcher__row {
+  display: grid;
+  grid-template-columns: 1fr 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.sidebar-canvas-switcher__select,
+.sidebar-canvas-switcher__form input,
+.sidebar-canvas-switcher__form select {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #2A3040;
+  border-radius: 6px;
+  background: #10131B;
+  color: #E5E7EB;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
+.sidebar-canvas-switcher__form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.sidebar-canvas-switcher__form .ghost {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
 /* Plugin category pills */
 .stn-tabs {
   display: flex;

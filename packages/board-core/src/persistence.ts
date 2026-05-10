@@ -9,6 +9,24 @@ export interface PersistedViewport {
   zoom: number
 }
 
+export type CanvasScope = 'personal' | 'team'
+
+export interface CanvasInfo {
+  id: string
+  name: string
+  scope: CanvasScope
+  isDefault: boolean
+  teamId?: string | null
+  ownerUserId?: string | null
+}
+
+export interface CanvasSessionMembership {
+  canvasId: string
+  sessionId: string
+  layout?: { x: number; y: number } | null
+  visible: boolean
+}
+
 export interface CanvasPersistence {
   loadViewport(): Promise<PersistedViewport | null>
   saveViewport(v: PersistedViewport): Promise<void>
