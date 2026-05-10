@@ -48,7 +48,7 @@ export const useToast = () => useContext(ToastContext)
 
 export default function App() {
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
-  // meee2 走 HTTP / localStorage 双层实现，meee360 改用 SupabaseCanvasPersistence。
+  // meee2 走 HTTP / localStorage 双层实现，meee2 改用 SupabaseCanvasPersistence。
   const persistence = useMemo<CanvasPersistence>(() => new HttpCanvasPersistence(), [])
   // 启动时一次性把所有 storage slot 拉好再 mount Board。
   // 历史上 Board 在 useRef 初值里同步 loadXxx() 拿 localStorage —— 现在改成

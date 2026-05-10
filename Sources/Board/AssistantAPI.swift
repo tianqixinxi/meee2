@@ -207,12 +207,14 @@ enum AssistantAPI {
         let model = (dict["model"] as? String) ?? ""
         let enabledList = dict["enabledTools"] as? [String]
         let enabled: Set<String>? = enabledList.map { Set($0) }
+        let scope = (dict["scope"] as? String) ?? "this-mac"
         return AssistantSettings(
             provider: provider,
             apiKey: apiKey,
             baseUrl: baseUrl,
             model: model,
-            enabledTools: enabled
+            enabledTools: enabled,
+            scope: scope
         )
     }
 
@@ -225,6 +227,7 @@ enum AssistantAPI {
             : cwds.prefix(20).map { "- \($0)" }.joined(separator: "\n")
 
         let sessionSummary = currentSessionSummary()
+        let scopeSummary = assistantScopeSummary(settings.scope)
 
         return """
         You are the meee2 board assistant. The user can see a canvas of
@@ -232,6 +235,9 @@ enum AssistantAPI {
         summarise, or spawn new ones.
 
         Be concise. Respond in the user's language (often Chinese).
+
+        Current assistant scope:
+        \(scopeSummary)
 
         Current sessions on the board:
         \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
@@ -266,6 +272,15 @@ enum AssistantAPI {
           • For mutating tools (create_session) prefer to confirm the cwd
             briefly with the user first if there's any ambiguity.
         """
+    }
+
+    private static func assistantScopeSummary(_ scope: String) -> String {
+        let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "this-mac" {
+            return "This Mac. Use local meee2 tools and local session context."
+        }
+        let teamName = BoardDTOBuilder.meee2OnlineTeams().first(where: { $0.id == trimmed })?.name ?? trimmed
+        return "Team: \(teamName). Prefer team-scoped wording, but any action that changes this Mac must still use local meee2 tools."
     }
 
     static func runAutomation(title: String, prompt: String, settings: AssistantSettings) async -> (output: String, error: String?) {

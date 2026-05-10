@@ -1,6 +1,6 @@
 // Structural types consumed by @meee1/board-ui's <SessionInspector>.
 //
-// Both meee2's `Session` (from BoardDTO) and a meee360 derived view
+// Both meee2's `Session` (from BoardDTO) and a meee2 derived view
 // (TeamSession + summary) satisfy these structurally — apps map their
 // native session shape into `SessionForInspector` at the call site.
 

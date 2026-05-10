@@ -14,7 +14,7 @@
 // 相比 CursorPlugin（pull-based 扫文件夹），这个 plugin 是 push-based —
 // `getSessions()` 直接返回内存数组；start/stop 没有 timer；refresh 是 noop。
 // 数据由外部 REST 调用驱动，每次 mutate 后调 onSessionsUpdated 让
-// PluginManager 推到 BoardServer / Meee360Pusher。
+// PluginManager 推到 BoardServer / Meee2OnlinePusher。
 
 import Foundation
 import SwiftUI

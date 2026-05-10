@@ -1,7 +1,7 @@
-// Meee360Pusher - 推送 session 状态和 transcript 消息到 meee360 cloud dashboard
+// Meee2OnlinePusher - 推送 session 状态和 transcript 消息到 meee2 cloud dashboard
 //
 // 监听 SessionEventBus，当 transcriptAppended / sessionMetadataChanged 时，
-// 调用 meee360 REST API 同步数据。默认同步打开，或至少一个 session 被
+// 调用 meee2 REST API 同步数据。默认同步打开，或至少一个 session 被
 // 单独 opt-in 时激活。
 
 import Foundation
@@ -11,14 +11,14 @@ import Meee2PluginKit
 import Meee2CommKit
 
 /// 推送器单例，生命周期随 AppDelegate
-public final class Meee360Pusher: @unchecked Sendable {
-    public static let shared = Meee360Pusher()
+public final class Meee2OnlinePusher: @unchecked Sendable {
+    public static let shared = Meee2OnlinePusher()
     private init() {}
 
     private var subscription: AnyCancellable?
     private var pluginSessionsSubscription: AnyCancellable?
     private var heartbeatTimer: Timer?
-    private let syncQueue = DispatchQueue(label: "com.meee2.meee360-pusher", qos: .utility)
+    private let syncQueue = DispatchQueue(label: "com.meee2.meee2-pusher", qos: .utility)
     private let heartbeatInterval: TimeInterval = 60.0
     private let metadataDebounceInterval: TimeInterval = 0.5
     private let settingsCacheFreshSeconds: TimeInterval = 1.0
@@ -34,6 +34,17 @@ public final class Meee360Pusher: @unchecked Sendable {
         var normalizedSupabaseUrl: String
         var supabaseKey: String
         var machineId: String
+    }
+
+    private struct DesktopCommand {
+        var id: String
+        var type: String
+        var sessionKey: String
+        var payload: [String: Any]
+
+        var content: String? {
+            payload["content"] as? String
+        }
     }
 
     private struct TranscriptFingerprint: Equatable {
@@ -74,7 +85,7 @@ public final class Meee360Pusher: @unchecked Sendable {
     public func activate() {
         _ = settingsSnapshot(force: true)
         guard shouldStayActive else {
-            MLog("[Meee360Pusher] Not connected or no sync targets, skipping activation")
+            MLog("[Meee2OnlinePusher] Not connected or no sync targets, skipping activation")
             return
         }
         guard subscription == nil,
@@ -109,7 +120,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         RunLoop.main.add(timer, forMode: .common)
         heartbeatTimer = timer
 
-        MLog("[Meee360Pusher] Activated - listening to events, heartbeat every 60s")
+        MLog("[Meee2OnlinePusher] Activated - listening to events, heartbeat every 60s")
         syncQueue.async { [weak self] in
             self?.sendHeartbeatForActiveSessions()
         }
@@ -126,7 +137,7 @@ public final class Meee360Pusher: @unchecked Sendable {
             self?.pendingSessionUpdateWorkItems.values.forEach { $0.cancel() }
             self?.pendingSessionUpdateWorkItems.removeAll()
         }
-        MLog("[Meee360Pusher] Deactivated")
+        MLog("[Meee2OnlinePusher] Deactivated")
     }
 
     public func refreshActivation() {
@@ -161,21 +172,21 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
 
         let defaults = UserDefaults.standard
-        let rawSupabaseUrl = defaults.string(forKey: "meee360SupabaseUrl") ?? ""
+        let rawSupabaseUrl = defaults.string(forKey: "meee2SupabaseUrl") ?? ""
         let decodedSupabaseUrl = rawSupabaseUrl.removingPercentEncoding ?? rawSupabaseUrl
         let snapshot = SettingsSnapshot(
-            isConnected: defaults.bool(forKey: "meee360Connected"),
-            defaultSyncEnabled: defaults.bool(forKey: "meee360Online"),
-            disabledSessionIds: Self.sessionIdSet(forKey: "meee360DisabledSessionIds"),
-            enabledSessionIds: Self.sessionIdSet(forKey: "meee360EnabledSessionIds"),
-            sessionTeamIds: Self.sessionIdMap(forKey: "meee360SessionTeamIds"),
-            teamId: defaults.string(forKey: "meee360TeamId") ?? "",
-            userId: defaults.string(forKey: "meee360UserId") ?? "",
+            isConnected: defaults.bool(forKey: "meee2Connected"),
+            defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
+            disabledSessionIds: Self.sessionIdSet(forKey: "meee2DisabledSessionIds"),
+            enabledSessionIds: Self.sessionIdSet(forKey: "meee2EnabledSessionIds"),
+            sessionTeamIds: Self.sessionIdMap(forKey: "meee2SessionTeamIds"),
+            teamId: defaults.string(forKey: "meee2TeamId") ?? "",
+            userId: defaults.string(forKey: "meee2UserId") ?? "",
             normalizedSupabaseUrl: decodedSupabaseUrl
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            supabaseKey: defaults.string(forKey: "meee360SupabaseKey") ?? "",
-            machineId: defaults.string(forKey: "meee360MachineId") ?? "unknown"
+            supabaseKey: defaults.string(forKey: "meee2SupabaseKey") ?? "",
+            machineId: defaults.string(forKey: "meee2MachineId") ?? "unknown"
         )
         cachedSettings = snapshot
         cachedSettingsAt = now
@@ -249,7 +260,7 @@ public final class Meee360Pusher: @unchecked Sendable {
 
         post(endpoint: "/api/v1/sessions/append-message", payload: payload) { result in
             if case .failure(let err) = result {
-                MLog("[Meee360Pusher] append-message failed: \(err)")
+                MLog("[Meee2OnlinePusher] append-message failed: \(err)")
             }
         }
     }
@@ -275,6 +286,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         }
 
         pushPluginSessions(PluginManager.shared.sessions, force: true)
+        pollDesktopCommands()
         perfLog("heartbeat", started: started, extra: "sessions=\(activeSessions.count),plugins=\(PluginManager.shared.sessions.count)")
     }
 
@@ -287,7 +299,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         defer {
             perfLog("session-upsert-build", started: started, extra: "sid=\(session.sessionId.prefix(8)),force=\(force),hydrate=\(hydrateTranscriptFields)")
         }
-        // Build payload with full summary data for meee360 dashboard
+        // Build payload with full summary data for meee2 dashboard
         let status = mapStatus(session.status)
 
         var payload: [String: Any] = [
@@ -426,7 +438,7 @@ public final class Meee360Pusher: @unchecked Sendable {
                     self.lastSessionUpsertSignatures[session.sessionId] = signature
                 }
             case .failure(let err):
-                MLog("[Meee360Pusher] upsert failed for \(session.sessionId.prefix(8)): \(err)")
+                MLog("[Meee2OnlinePusher] upsert failed for \(session.sessionId.prefix(8)): \(err)")
             }
         }
     }
@@ -472,6 +484,8 @@ public final class Meee360Pusher: @unchecked Sendable {
                 return mapped
             }
         }
+        // `meee2TeamId` is the explicit default sync team selected in
+        // Settings. New sessions use it unless a per-session override exists.
         return settings.teamId
     }
 
@@ -518,7 +532,7 @@ public final class Meee360Pusher: @unchecked Sendable {
                         case .success:
                             self.pushedPluginMessageKeys.insert(key)
                         case .failure(let err):
-                            MLog("[Meee360Pusher] plugin append-message failed for \(session.id.prefix(8)): \(err)")
+                            MLog("[Meee2OnlinePusher] plugin append-message failed for \(session.id.prefix(8)): \(err)")
                         }
                     }
                 }
@@ -666,7 +680,7 @@ public final class Meee360Pusher: @unchecked Sendable {
                     completion?()
                 }
             case .failure(let err):
-                MLog("[Meee360Pusher] plugin upsert failed for \(session.id.prefix(8)): \(err)")
+                MLog("[Meee2OnlinePusher] plugin upsert failed for \(session.id.prefix(8)): \(err)")
             }
         }
         perfLog("plugin-upsert-build", started: started, extra: "sid=\(session.id.prefix(8)),force=\(force),hydrate=\(hydrateSummary)")
@@ -883,10 +897,190 @@ public final class Meee360Pusher: @unchecked Sendable {
         guard perfLoggingEnabled else { return }
         let ms = Date().timeIntervalSince(started) * 1_000
         let suffix = extra.isEmpty ? "" : " \(extra)"
-        MLog(String(format: "[Perf][Meee360Pusher] %@ %.1fms%@", name, ms, suffix))
+        MLog(String(format: "[Perf][Meee2OnlinePusher] %@ %.1fms%@", name, ms, suffix))
     }
 
     // MARK: - HTTP helper
+
+    private func pollDesktopCommands() {
+        let currentUserId = userId
+        let currentMachineId = machineId
+        guard !normalizedSupabaseUrl.isEmpty,
+              !supabaseKey.isEmpty,
+              !currentUserId.isEmpty,
+              !currentMachineId.isEmpty else {
+            return
+        }
+
+        rpcDataRequest(
+            name: "meee2_poll_desktop_commands",
+            payload: [
+                "p_user_id": currentUserId,
+                "p_machine_id": currentMachineId,
+                "p_limit": 10
+            ]
+        ) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let data):
+                for command in Self.parseDesktopCommands(data) {
+                    self.executeDesktopCommand(command, userId: currentUserId, machineId: currentMachineId)
+                }
+            case .failure(let error):
+                MLog("[Meee2OnlinePusher] desktop command poll failed: \(error)")
+            }
+        }
+    }
+
+    private static func parseDesktopCommands(_ data: Data) -> [DesktopCommand] {
+        guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let type = row["command_type"] as? String,
+                  let sessionKey = row["session_key"] as? String,
+                  let payload = row["payload"] as? [String: Any] else {
+                return nil
+            }
+            return DesktopCommand(id: id, type: type, sessionKey: sessionKey, payload: payload)
+        }
+    }
+
+    private func executeDesktopCommand(_ command: DesktopCommand, userId: String, machineId: String) {
+        guard command.type == "message_session",
+              let content = command.content,
+              !content.isEmpty else {
+            completeDesktopCommand(
+                commandId: command.id,
+                userId: userId,
+                machineId: machineId,
+                status: "failed",
+                result: [:],
+                error: "Unsupported or invalid desktop command"
+            )
+            return
+        }
+
+        injectLocalMessage(sessionKey: command.sessionKey, content: content) { [weak self] result in
+            switch result {
+            case .success:
+                self?.completeDesktopCommand(
+                    commandId: command.id,
+                    userId: userId,
+                    machineId: machineId,
+                    status: "succeeded",
+                    result: ["delivery": "queued_to_local_session"],
+                    error: nil
+                )
+            case .failure(let error):
+                self?.completeDesktopCommand(
+                    commandId: command.id,
+                    userId: userId,
+                    machineId: machineId,
+                    status: "failed",
+                    result: [:],
+                    error: error.localizedDescription
+                )
+            }
+        }
+    }
+
+    private func injectLocalMessage(sessionKey: String, content: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let encodedSessionKey = sessionKey.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionKey
+        guard let url = URL(string: "\(BoardServer.shared.url)/api/sessions/\(encodedSessionKey)/inject") else {
+            completion(.failure(URLError(.badURL)))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["content": content])
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            completion(.success(()))
+        }.resume()
+    }
+
+    private func completeDesktopCommand(
+        commandId: String,
+        userId: String,
+        machineId: String,
+        status: String,
+        result: [String: Any],
+        error: String?
+    ) {
+        var payload: [String: Any] = [
+            "p_command_id": commandId,
+            "p_user_id": userId,
+            "p_machine_id": machineId,
+            "p_status": status,
+            "p_result": result
+        ]
+        if let error {
+            payload["p_error"] = error
+        }
+        rpcDataRequest(name: "meee2_complete_desktop_command", payload: payload) { completeResult in
+            if case .failure(let err) = completeResult {
+                MLog("[Meee2OnlinePusher] desktop command complete failed: \(err)")
+            }
+        }
+    }
+
+    private func rpcDataRequest(
+        name: String,
+        payload: [String: Any],
+        completion: @escaping (Result<Data, Error>) -> Void
+    ) {
+        let baseUrl = normalizedSupabaseUrl
+        guard !baseUrl.isEmpty,
+              !supabaseKey.isEmpty,
+              let url = URL(string: "\(baseUrl)/rest/v1/rpc/\(name)") else {
+            completion(.failure(URLError(.badURL)))
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(supabaseKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error {
+                completion(.failure(error))
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            completion(.success(data ?? Data()))
+        }.resume()
+    }
 
     private func post(endpoint: String, payload: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
         let baseUrl = normalizedSupabaseUrl
@@ -938,7 +1132,7 @@ public final class Meee360Pusher: @unchecked Sendable {
         switch endpoint {
         case "/api/v1/sessions/upsert":
             return (
-                "meee360_upsert_session",
+                "meee2_upsert_session",
                 [
                     "p_team_id": targetTeamId,
                     "p_user_id": userId,
@@ -957,7 +1151,7 @@ public final class Meee360Pusher: @unchecked Sendable {
             }
             if let sourceId = message["source_id"] as? String, !sourceId.isEmpty {
                 return (
-                    "meee360_append_recent_message_v2",
+                    "meee2_append_recent_message_v2",
                     [
                         "p_team_id": targetTeamId,
                         "p_user_id": userId,
@@ -970,7 +1164,7 @@ public final class Meee360Pusher: @unchecked Sendable {
                 )
             }
             return (
-                "meee360_append_recent_message",
+                "meee2_append_recent_message",
                 [
                     "p_team_id": targetTeamId,
                     "p_user_id": userId,

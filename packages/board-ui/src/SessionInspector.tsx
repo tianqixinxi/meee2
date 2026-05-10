@@ -1,9 +1,9 @@
 // Headless right-side detail panel — visual + layout from meee2's
 // SessionDetail, abstracted via SessionForInspector and slot props so
-// meee360 (or any consumer) can drop in custom buttons / blocks.
+// meee2 (or any consumer) can drop in custom buttons / blocks.
 //
 // Capability gating: any optional handler that's not provided just hides
-// the corresponding button. e.g. meee360 only passes onOpenTerminal when
+// the corresponding button. e.g. meee2 only passes onOpenTerminal when
 // the session belongs to the current user (and the user has meee2 running
 // on this machine), otherwise the button is invisible.
 //
@@ -36,12 +36,12 @@ export interface SessionInspectorProps {
   memberships?: ChannelMembershipForInspector[]
   /** Render slot for the transcript area. Each app passes its own
    *  TranscriptPanel component (data sources differ — meee2 reads from
-   *  Swift backend, meee360 reads from Supabase). */
+   *  Swift backend, meee2 reads from Supabase). */
   transcriptSlot: ReactNode
   /** Anything to render between live-strip and transcript — e.g.
-   *  meee360's Archive / Move-to-team controls. */
+   *  meee2's Archive / Move-to-team controls. */
   extraSections?: ReactNode
-  /** Anything to render *after* the transcript section — e.g. meee360's
+  /** Anything to render *after* the transcript section — e.g. meee2's
    *  Sync-history / Card-style controls that the user reaches less often. */
   extraSectionsAfterTranscript?: ReactNode
 
@@ -188,7 +188,7 @@ export function SessionInspector({
       {/* ── 3. recap ── */}
       {session.latestRecap && <Recap recap={session.latestRecap} />}
 
-      {/* ── 3b. app-specific blocks (e.g. meee360 Archive / Move) ── */}
+      {/* ── 3b. app-specific blocks (e.g. meee2 Archive / Move) ── */}
       {extraSections}
 
       {/* ── 4. transcript (main) ── */}
@@ -197,7 +197,7 @@ export function SessionInspector({
         {transcriptSlot}
       </section>
 
-      {/* ── 4b. app-specific blocks placed under the transcript — meee360
+      {/* ── 4b. app-specific blocks placed under the transcript — meee2
               uses this for Sync history / Card style (less-frequent ops). ── */}
       {extraSectionsAfterTranscript}
 

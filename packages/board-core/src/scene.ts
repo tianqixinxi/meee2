@@ -15,7 +15,7 @@
 // Excalidraw's `convertToExcalidrawElements` helper at the call site.
 //
 // Type design: this module is consumed by both meee2 (rich BoardState/Session/
-// Channel) and meee360 (slimmer TeamSession-derived types). The exported
+// Channel) and meee2 (slimmer TeamSession-derived types). The exported
 // functions therefore accept *structural* shapes — the minimum each function
 // actually reads — so both apps' types satisfy them without adapter glue.
 
@@ -69,7 +69,7 @@ export const DM_LINE_STROKE_WIDTH_PENDING = 3
 export type ChannelMode = 'auto' | 'intercept' | 'paused'
 
 /** Just enough of a session for the scene builder. Both meee2's `Session`
- *  and meee360's `TeamSession` satisfy this structurally. */
+ *  and meee2's `TeamSession` satisfy this structurally. */
 export interface SessionForScene {
   id: string
 }
@@ -124,7 +124,7 @@ export function channelHubId(channelName: string): string {
  * Minimal duck-typed slice of Excalidraw's imperative API needed to pan/scroll
  * the canvas onto a managed element. Kept here (instead of importing
  * `@excalidraw/excalidraw` types) so board-core stays framework-free and
- * meee360 can call this without pulling Excalidraw types into its core paths.
+ * meee2 can call this without pulling Excalidraw types into its core paths.
  */
 export interface BoardPanAPI {
   getSceneElements(): readonly { id?: string; type?: string }[]
@@ -142,7 +142,7 @@ export interface BoardPanAPI {
  * should re-invoke after the next scene rebuild (typically by depending on
  * the board state in the surrounding effect).
  *
- * Both meee2's board-app and meee360 wire this from a `useEffect` that
+ * Both meee2's board-app and meee2 wire this from a `useEffect` that
  * fires when the sidebar selection switches to a channel.
  */
 export function panToChannelHub(
@@ -330,7 +330,7 @@ export function statusLabel(status: string): string {
  *  rendering happens in a DOM overlay above the canvas. Stroke + bg should
  *  match the host app's background color so any pixel-rounding gap between
  *  the overlay and the rect doesn't leak a contrasting halo. Defaults match
- *  meee2's --bg (#262624). meee360 (or other hosts with darker themes) can
+ *  meee2's --bg (#262624). meee2 (or other hosts with darker themes) can
  *  pass overrides via buildScene's `rectStyle` opt. */
 export interface SessionRectStyle {
   strokeColor?: string
@@ -470,7 +470,7 @@ export function buildScene(
     /**
      * Override the rect's stroke / background / strokeWidth / roundness so
      * the host app's canvas background can flush the rect cleanly. meee2
-     * uses the default (#262624 to match its --bg). meee360 with a darker
+     * uses the default (#262624 to match its --bg). meee2 with a darker
      * Tailwind theme should pass e.g. `{ strokeColor: '#0a0a0a',
      * backgroundColor: '#141414', strokeWidth: 0, roundness: null }`.
      */

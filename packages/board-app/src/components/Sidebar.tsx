@@ -20,19 +20,18 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, GitBranch, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
+import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
-import { AutomationsPanel } from './AutomationsPanel'
 import {
   activateSession,
   closeSession,
-  disconnectMeee360,
+  disconnectMeee2Online,
   fetchUserProfile,
   openMeee2Settings,
-  openMeee360Connect,
-  openMeee360Dashboard,
+  openMeee2OnlineConnect,
+  openMeee2OnlineDashboard,
   spawnSession,
   type UserProfile,
 } from '../api'
@@ -406,10 +405,10 @@ interface Props {
    *  - pass `sids` → operates only on that subset (per-category toggle) */
   onBulkVisibility: (mode: 'show' | 'hide', sids?: string[]) => void
   /** "+ New session" 顶部按钮 —— 默认打开全局 AI assistant
-   *  （meee360 风格：可询问全部 session 的整体问题，也能在某个目录下创建新 session）。 */
+   *  （meee2 风格：可询问全部 session 的整体问题，也能在某个目录下创建新 session）。 */
   onNewSession?: () => void
   /** 顶部 plugin 分类胶囊；不传 → 从当前 sessions 自动推导（按 plugin 分）。
-   *  比如 meee360 可以传"按归属人"分类的 tabs 完全覆盖。 */
+   *  比如 meee2 可以传"按归属人"分类的 tabs 完全覆盖。 */
   tabsOverride?: SidebarTab[]
   /** project 分组 header 上的 + 按钮：在某个项目目录下起新 session。
    *  cwd 是该 project group 内任意一个 session 的 cwd 路径。 */
@@ -453,7 +452,6 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
-  const [automationsOpen, setAutomationsOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
@@ -627,23 +625,23 @@ export default function Sidebar({
 
   const openDashboard = useCallback(async () => {
     try {
-      await openMeee360Dashboard()
+      await openMeee2OnlineDashboard()
     } catch (err) {
-      toast.push('error', (err as Error).message || 'Failed to open meee360')
+      toast.push('error', (err as Error).message || 'Failed to open meee2')
     }
   }, [toast])
 
-  const toggleMeee360Connection = useCallback(async () => {
+  const toggleMeee2OnlineConnection = useCallback(async () => {
     try {
       if (userProfile?.connected) {
-        await disconnectMeee360()
+        await disconnectMeee2Online()
         loadUserProfile()
-        toast.push('success', 'Disconnected from meee360')
+        toast.push('success', 'Disconnected from meee2')
       } else {
-        await openMeee360Connect()
+        await openMeee2OnlineConnect()
       }
     } catch (err) {
-      toast.push('error', (err as Error).message || 'Failed to update meee360 connection')
+      toast.push('error', (err as Error).message || 'Failed to update meee2 connection')
     }
   }, [loadUserProfile, toast, userProfile?.connected])
 
@@ -811,7 +809,8 @@ export default function Sidebar({
       <div className="sidebar-body">
         {!state && <div className="muted">Loading…</div>}
         {state && selection.kind !== 'channel' && (() => {
-          const tabs: SidebarTab[] = tabsOverride ?? defaultTabsFromSessions(state.sessions)
+          const visibleState: BoardState = state
+          const tabs: SidebarTab[] = tabsOverride ?? defaultTabsFromSessions(visibleState.sessions)
           // 找当前 active tab（防止 sessions 变了之后 activeTabId 没对应的 tab）
           const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0]
           return (
@@ -882,17 +881,17 @@ export default function Sidebar({
                 className="row space sidebar-legacy-h4-row"
                 style={{ marginBottom: 6, alignItems: 'baseline' }}
               >
-                <h4 style={{ margin: 0 }}>Sessions ({state.sessions.length})</h4>
+                <h4 style={{ margin: 0 }}>Sessions ({visibleState.sessions.length})</h4>
                 {(() => {
-                  const total = state.sessions.length
+                  const total = visibleState.sessions.length
                   if (total === 0) return null
                   // Top button respects the active category filter — when a
                   // filter is set, "Hide all" only hides sessions in that
                   // category. "All" → unscoped (legacy behaviour).
                   const scopedSessions =
                     categoryFilter === 'all'
-                      ? state.sessions
-                      : state.sessions.filter((s) => categoryKey(s) === categoryFilter)
+                      ? visibleState.sessions
+                      : visibleState.sessions.filter((s) => categoryKey(s) === categoryFilter)
                   if (scopedSessions.length === 0) return null
                   const anyOnCanvas = scopedSessions.some(
                     (s) => (onCanvasCounts[s.id] ?? 0) > 0,
@@ -919,8 +918,8 @@ export default function Sidebar({
               </div>
               {(() => {
                 const tabFiltered = activeTab?.match
-                  ? state.sessions.filter(activeTab.match)
-                  : state.sessions
+                  ? visibleState.sessions.filter(activeTab.match)
+                  : visibleState.sessions
                 let filtered = applyFilterMenu(
                   filterByCategory(tabFiltered),
                   filterState,
@@ -1315,10 +1314,10 @@ export default function Sidebar({
                                 state={filterState}
                                 onChange={setFilterState}
                                 projects={Array.from(
-                                  new Set(state.sessions.map(projectGroupKey)),
+                                  new Set(visibleState.sessions.map(projectGroupKey)),
                                 ).sort()}
                                 plugins={Array.from(
-                                  state.sessions.reduce((m, s) => {
+                                  visibleState.sessions.reduce((m, s) => {
                                     if (!m.has(s.pluginId))
                                       m.set(s.pluginId, s.pluginDisplayName)
                                     return m
@@ -1380,10 +1379,10 @@ export default function Sidebar({
                                 state={filterState}
                                 onChange={setFilterState}
                                 projects={Array.from(
-                                  new Set(state.sessions.map(projectGroupKey)),
+                                  new Set(visibleState.sessions.map(projectGroupKey)),
                                 ).sort()}
                                 plugins={Array.from(
-                                  state.sessions.reduce((m, s) => {
+                                  visibleState.sessions.reduce((m, s) => {
                                     if (!m.has(s.pluginId))
                                       m.set(s.pluginId, s.pluginDisplayName)
                                     return m
@@ -1416,7 +1415,7 @@ export default function Sidebar({
                     : groupSessions(older)
                 // Pinned: 从全部 sessions 里按 pin 顺序拿（不受 tab/filter 限制——
                 // pinned 就是用户长期关注，全局展示更合理）
-                const pinnedSessions = state.sessions.filter((s) => pinned.has(s.id))
+                const pinnedSessions = visibleState.sessions.filter((s) => pinned.has(s.id))
                 return (
                   <>
                     <div className="sidebar-pinned-section">Pinned</div>
@@ -1540,7 +1539,7 @@ export default function Sidebar({
           <ChannelDetail state={state} channelName={selection.channelName} />
         )}
       </div>
-      {/* ── 底部用户行（mirror Settings > User meee360 identity） ───────── */}
+      {/* ── 底部用户行（mirror Settings > User meee2 identity） ───────── */}
       <div className="sidebar-footer" ref={accountMenuRef}>
         {accountMenuOpen && (
           <div className="sidebar-account-menu" role="menu">
@@ -1563,6 +1562,15 @@ export default function Sidebar({
               </span>
             </div>
             <div className="sidebar-account-menu-separator" />
+            {userProfile?.connected && userProfile.defaultSyncTeamName && (
+              <>
+                <div className="sidebar-account-menu-meta">
+                  <span>Team</span>
+                  <strong>{userProfile.defaultSyncTeamName || 'Not set'}</strong>
+                </div>
+                <div className="sidebar-account-menu-separator" />
+              </>
+            )}
             {userProfile?.connected ? (
               <button
                 className="sidebar-account-menu-item"
@@ -1571,31 +1579,19 @@ export default function Sidebar({
                 onClick={() => runAccountAction(openDashboard)}
               >
                 <ExternalLink size={17} strokeWidth={1.75} aria-hidden />
-                <span>meee360</span>
+                <span>meee2</span>
               </button>
             ) : (
               <button
                 className="sidebar-account-menu-item"
                 type="button"
                 role="menuitem"
-                onClick={() => runAccountAction(toggleMeee360Connection)}
+                onClick={() => runAccountAction(toggleMeee2OnlineConnection)}
               >
                 <LogIn size={17} strokeWidth={1.75} aria-hidden />
                 <span>Login</span>
               </button>
             )}
-            <button
-              className="sidebar-account-menu-item sidebar-account-menu-item--desktop-only"
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setAccountMenuOpen(false)
-                setAutomationsOpen(true)
-              }}
-            >
-              <GitBranch size={17} strokeWidth={1.75} aria-hidden />
-              <span>Automations</span>
-            </button>
             <button
               className="sidebar-account-menu-item"
               type="button"
@@ -1612,7 +1608,7 @@ export default function Sidebar({
                   className="sidebar-account-menu-item"
                   type="button"
                   role="menuitem"
-                  onClick={() => runAccountAction(toggleMeee360Connection)}
+                  onClick={() => runAccountAction(toggleMeee2OnlineConnection)}
                 >
                   <LogOut size={17} strokeWidth={1.75} aria-hidden />
                   <span>Logout</span>
@@ -1642,12 +1638,14 @@ export default function Sidebar({
             )}
           </span>
           <span className="sidebar-footer-user-name">
-            {userProfile?.connected ? userProfile.displayName : 'Not connected'}
+            <span>{userProfile?.connected ? userProfile.displayName : 'Not connected'}</span>
+            {userProfile?.connected && (
+              <small>{userProfile.defaultSyncTeamName || 'This Mac'}</small>
+            )}
           </span>
         </button>
       </div>
     </aside>
-    {automationsOpen && <AutomationsPanel onClose={() => setAutomationsOpen(false)} />}
     </>
   )
 }

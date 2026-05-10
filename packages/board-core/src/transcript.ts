@@ -1,8 +1,8 @@
 // Structural types consumed by @meee1/board-ui's <TranscriptView>.
 //
 // Mirrors meee2's `FullTranscriptEntry` / `FullTranscriptBlock` from the
-// Swift backend, since that is the richer of the two app schemas. meee360
-// derives entries from `meee360_transcript_messages` rows by mapping the
+// Swift backend, since that is the richer of the two app schemas. meee2
+// derives entries from `meee2_transcript_messages` rows by mapping the
 // stored `content` JSON (which can be raw `{text}` or full block array)
 // into this shape.
 

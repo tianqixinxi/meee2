@@ -14,7 +14,7 @@ import Foundation
 /// paste 出来的内容和用户输入完全一样，Claude 没法判断要不要走 send_message
 /// 回复，多轮 A2A 通讯就走不下去。
 ///
-/// 标签协议（**meee2 + meee360 共享约定**，跨 host 实现都该遵守）：
+/// 标签协议（**meee2 + meee2 共享约定**，跨 host 实现都该遵守）：
 ///   - agent → agent:    `[meee2 a2a] from @<fromAlias> on #<channel>:\n<content>`
 ///   - operator → agent: `[meee2 a2a] from operator on #<channel>:\n<content>`
 public protocol InboxShellPolicy: Sendable {
@@ -42,7 +42,7 @@ public struct PassthroughPolicy: InboxShellPolicy {
 ///     就知道这是路由进来的、不是用户键盘输入，应当用 `send_message` 回复。
 ///   - operator 注入（`injectedByHuman == true`）走 `from operator` 而不是
 ///     `from @<alias>`，因为 operator 在 channel 成员表外，没有稳定的 alias。
-///   - 跨 host 复用：meee360 未来如果实现自己的 A2A 推送通道，只要遵守
+///   - 跨 host 复用：meee2 未来如果实现自己的 A2A 推送通道，只要遵守
 ///     上面 InboxShellPolicy doc 的标签格式，两边 agent 行为就一致。
 public struct LabeledSenderPolicy: InboxShellPolicy {
     public init() {}

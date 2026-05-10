@@ -63,6 +63,10 @@ export interface Session {
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
+  /** meee2 Online connected-mode sync metadata. Local board remains primary. */
+  syncEnabled: boolean
+  syncTeamId: string | null
+  syncTeamName: string | null
 }
 
 /// "Older" / 折叠显示的判定：lastActivity ≥ 1h 前 → older。

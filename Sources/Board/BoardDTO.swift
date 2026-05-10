@@ -64,6 +64,12 @@ struct SessionDTO: Encodable {
     /// 这个字段供前端区分卡片图标 / 跳转目标。
     let clientKind: String?
 
+    /// meee2 Online connected-mode sync state. Local Board remains the source
+    /// of truth; these fields only describe which team receives cloud sync.
+    let syncEnabled: Bool
+    let syncTeamId: String?
+    let syncTeamName: String?
+
     // 注：旧版本曾下发 `displayGroup: "older"` 字段（idle ≥ 1h）。这是 webui
     // 呈现规则，已挪到前端从 lastActivity 派生（see board-app/types.ts
     // isOlderSession）—— DTO 不再扛这个职责。
@@ -145,6 +151,13 @@ struct StateDTO: Encodable {
 }
 
 /// Settings/User tab mirrored user profile for the board sidebar footer.
+struct SyncTeamDTO: Encodable {
+    let id: String
+    let name: String
+    let role: String?
+    let isDefault: Bool
+}
+
 struct UserProfileDTO: Encodable {
     let connected: Bool
     let displayName: String
@@ -154,6 +167,10 @@ struct UserProfileDTO: Encodable {
     let initials: String
     let dashboardUrl: String
     let connectUrl: String
+    let defaultSyncEnabled: Bool
+    let defaultSyncTeamId: String
+    let defaultSyncTeamName: String
+    let teams: [SyncTeamDTO]
 }
 
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body
@@ -193,6 +210,18 @@ struct BoardLayoutEnvelope: Encodable { let layout: BoardLayoutStore.Layout }
 // MARK: - 转换工具
 
 enum BoardDTOBuilder {
+    private struct Meee2TeamRecord: Codable {
+        let id: String
+        let name: String
+        let role: String?
+    }
+
+    private struct SyncInfo {
+        let enabled: Bool
+        let teamId: String?
+        let teamName: String?
+    }
+
     /// 缓存 ISO8601 formatter（带毫秒精度）
     static let iso8601: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -248,6 +277,79 @@ enum BoardDTOBuilder {
     static func iso(_ date: Date?) -> String? {
         guard let d = date else { return nil }
         return iso8601.string(from: d)
+    }
+
+    static func meee2OnlineTeams() -> [SyncTeamDTO] {
+        let defaults = UserDefaults.standard
+        let defaultTeamId = defaults.string(forKey: "meee2TeamId") ?? ""
+        let defaultTeamName = defaults.string(forKey: "meee2TeamName") ?? ""
+        let stored: [Meee2TeamRecord] = {
+            guard let data = defaults.data(forKey: "meee2Teams"),
+                  let decoded = try? JSONDecoder().decode([Meee2TeamRecord].self, from: data),
+                  !decoded.isEmpty else {
+                return []
+            }
+            return decoded
+        }()
+
+        if let team = stored.first {
+            return [
+                SyncTeamDTO(
+                    id: team.id,
+                    name: team.name,
+                    role: team.role,
+                    isDefault: true
+                )
+            ]
+        }
+
+        guard !defaultTeamId.isEmpty else { return [] }
+        return [
+            SyncTeamDTO(
+                id: defaultTeamId,
+                name: defaultTeamName.isEmpty ? "Default team" : defaultTeamName,
+                role: nil,
+                isDefault: true
+            )
+        ]
+    }
+
+    static func meee2DefaultSyncTeamName() -> String {
+        let defaults = UserDefaults.standard
+        let defaultTeamId = defaults.string(forKey: "meee2TeamId") ?? ""
+        guard !defaultTeamId.isEmpty else { return "" }
+        return meee2OnlineTeams().first(where: { $0.id == defaultTeamId })?.name
+            ?? defaults.string(forKey: "meee2TeamName")
+            ?? ""
+    }
+
+    private static func syncInfo(forSessionId sessionId: String) -> SyncInfo {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        }
+
+        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
+        if !aliases.isDisjoint(with: disabled) {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        }
+
+        let enabledByDefault = defaults.bool(forKey: "meee2Online")
+        let explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
+        guard enabledByDefault || !aliases.isDisjoint(with: explicitlyEnabled) else {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        }
+
+        let teams = meee2OnlineTeams()
+        let teamId = teams.first?.id ?? defaults.string(forKey: "meee2TeamId") ?? ""
+        guard !teamId.isEmpty else {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        }
+        let teamName = teams.first(where: { $0.id == teamId })?.name
+            ?? defaults.string(forKey: "meee2TeamName")
+            ?? "Default team"
+        return SyncInfo(enabled: true, teamId: teamId, teamName: teamName)
     }
 
     /// 按 channel 统计 pending + held 计数
@@ -467,6 +569,8 @@ enum BoardDTOBuilder {
             return u
         }()
 
+        let sync = syncInfo(forSessionId: session.id)
+
         return SessionDTO(
             id: session.id,
             title: displayTitle,
@@ -490,7 +594,10 @@ enum BoardDTOBuilder {
             termProgram: termProgram,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
-            clientKind: clientKind
+            clientKind: clientKind,
+            syncEnabled: sync.enabled,
+            syncTeamId: sync.teamId,
+            syncTeamName: sync.teamName
         )
     }
 
@@ -520,6 +627,8 @@ enum BoardDTOBuilder {
             )
         }
 
+        let sync = syncInfo(forSessionId: m.cliSessionId)
+
         return SessionDTO(
             id: m.cliSessionId,
             title: m.title,
@@ -543,7 +652,10 @@ enum BoardDTOBuilder {
             termProgram: nil,
             backgroundAgents: [],
             latestRecap: nil,
-            clientKind: "desktop"
+            clientKind: "desktop",
+            syncEnabled: sync.enabled,
+            syncTeamId: sync.teamId,
+            syncTeamName: sync.teamName
         )
     }
 

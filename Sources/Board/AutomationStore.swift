@@ -107,14 +107,14 @@ final class AutomationStore {
             cadence: "Before tagging a release"
         ),
         AutomationTemplateDTO(
-            id: "meee2-meee360-sync-audit",
+            id: "meee2-meee2-sync-audit",
             product: "meee2",
             category: "Operations",
             icon: "🔁",
-            title: "meee360 sync audit",
-            description: "Check whether local sessions are ready to sync to meee360 and list reporting gaps.",
+            title: "meee2 sync audit",
+            description: "Check whether local sessions are ready to sync to meee2 and list reporting gaps.",
             prompt: """
-            Audit meee2 sessions for meee360 synchronization readiness.
+            Audit meee2 sessions for meee2 synchronization readiness.
             Rules:
             - Identify active projects, plugins, and sessions useful on the team board.
             - Call out sessions with thin metadata, no recent messages, or unclear status.

@@ -180,8 +180,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 发送使用统计（异步，不阻塞启动）
         UsageTracker.shared.trackLaunch()
 
-        // 启动 meee360 推送器（如果已连接且在线）
-        Meee360Pusher.shared.activate()
+        // 启动 meee2 推送器（如果已连接且在线）
+        Meee2OnlinePusher.shared.activate()
 
         // 监听屏幕变化 (处理多显示器)
         NotificationCenter.default.addObserver(
@@ -278,7 +278,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationWillTerminate(_ notification: Notification) {
         statusManager.stop()
         BoardServer.shared.stop()
-        Meee360Pusher.shared.deactivate()
+        Meee2OnlinePusher.shared.deactivate()
         NotificationCenter.default.removeObserver(self)
     }
 

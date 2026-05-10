@@ -2,7 +2,7 @@
 
 Chrome / Edge extension that mirrors your ChatGPT (and soon Claude.ai)
 web conversations into the **local meee2 board**, which then propagates
-them to **meee360** through the existing push pipeline.
+them to **meee2** through the existing push pipeline.
 
 ## How it works
 
@@ -20,7 +20,7 @@ chatgpt.com tab
        │
        ├─ ExternalChatPlugin keeps in-memory store
        ├─ broadcastStateChanged → meee2 webui card appears
-       └─ Meee360Pusher → meee360 supabase row
+       └─ Meee2OnlinePusher → meee2 supabase row
 ```
 
 The extension **never** talks to OpenAI / Anthropic / Supabase directly.

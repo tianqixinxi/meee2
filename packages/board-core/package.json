@@ -1,7 +1,7 @@
 {
   "name": "@meee1/board-core",
   "version": "0.1.0",
-  "description": "Pure logic for the meee2 / meee360 Excalidraw board: scene mapping, layout, channel layout, persistence interface.",
+  "description": "Pure logic for the meee2 / meee2 Excalidraw board: scene mapping, layout, channel layout, persistence interface.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

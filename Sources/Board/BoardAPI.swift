@@ -166,17 +166,17 @@ enum BoardAPI {
     // MARK: - GET /api/user-profile
 
     static func getUserProfile(_ req: HttpRequest) -> HttpResponse {
-        let settings = readMeee360Settings()
+        let settings = readMeee2OnlineSettings()
         let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee360Connected")
+        let connected = defaults.bool(forKey: "meee2Connected")
         let userName = connected
-            ? defaultString(defaults, key: "meee360UserName", fallback: settings["userName"])
+            ? defaultString(defaults, key: "meee2UserName", fallback: settings["userName"])
             : ""
         let userEmail = connected
-            ? defaultString(defaults, key: "meee360UserEmail", fallback: settings["userEmail"])
+            ? defaultString(defaults, key: "meee2UserEmail", fallback: settings["userEmail"])
             : ""
         let userAvatarUrl = connected
-            ? defaultString(defaults, key: "meee360UserAvatarUrl", fallback: settings["userAvatarUrl"])
+            ? defaultString(defaults, key: "meee2UserAvatarUrl", fallback: settings["userAvatarUrl"])
             : ""
         let displayName: String
         if !userName.isEmpty {
@@ -184,7 +184,7 @@ enum BoardAPI {
         } else if !userEmail.isEmpty {
             displayName = userEmail.components(separatedBy: "@").first ?? userEmail
         } else {
-            displayName = connected ? "meee360 user" : "Not connected"
+            displayName = connected ? "meee2 user" : "Not connected"
         }
 
         return jsonResponse(UserProfileDTO(
@@ -194,18 +194,22 @@ enum BoardAPI {
             userEmail: userEmail,
             userAvatarUrl: userAvatarUrl,
             initials: initials(for: displayName, connected: connected),
-            dashboardUrl: Meee360Config.appURL(path: "dashboard").absoluteString,
-            connectUrl: meee360ConnectUrl().absoluteString
+            dashboardUrl: Meee2OnlineConfig.appURL(path: "dashboard").absoluteString,
+            connectUrl: meee2ConnectUrl().absoluteString,
+            defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
+            defaultSyncTeamId: defaults.string(forKey: "meee2TeamId") ?? "",
+            defaultSyncTeamName: BoardDTOBuilder.meee2DefaultSyncTeamName(),
+            teams: BoardDTOBuilder.meee2OnlineTeams()
         ))
     }
 
-    static func openMeee360Connect(_ req: HttpRequest) -> HttpResponse {
-        NSWorkspace.shared.open(meee360ConnectUrl())
+    static func openMeee2OnlineConnect(_ req: HttpRequest) -> HttpResponse {
+        NSWorkspace.shared.open(meee2ConnectUrl())
         return jsonResponse(OkEnvelope(ok: true))
     }
 
-    static func openMeee360Dashboard(_ req: HttpRequest) -> HttpResponse {
-        NSWorkspace.shared.open(Meee360Config.appURL(path: "dashboard"))
+    static func openMeee2OnlineDashboard(_ req: HttpRequest) -> HttpResponse {
+        NSWorkspace.shared.open(Meee2OnlineConfig.appURL(path: "dashboard"))
         return jsonResponse(OkEnvelope(ok: true))
     }
 
@@ -216,21 +220,21 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
-    static func disconnectMeee360(_ req: HttpRequest) -> HttpResponse {
-        clearMeee360Settings()
-        Meee360Pusher.shared.refreshActivation()
+    static func disconnectMeee2Online(_ req: HttpRequest) -> HttpResponse {
+        clearMeee2OnlineSettings()
+        Meee2OnlinePusher.shared.refreshActivation()
         return jsonResponse(OkEnvelope(ok: true))
     }
 
-    private static func readMeee360Settings() -> [String: Any] {
+    private static func readMeee2OnlineSettings() -> [String: Any] {
         let file = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".meee2/settings.json")
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let meee360 = root["meee360"] as? [String: Any] else {
+              let meee2 = root["meee2"] as? [String: Any] else {
             return [:]
         }
-        return meee360
+        return meee2
     }
 
     private static func stringSetting(_ value: Any?) -> String {
@@ -251,37 +255,37 @@ enum BoardAPI {
         return value.isEmpty ? "U" : value
     }
 
-    private static func meee360ConnectUrl() -> URL {
-        var components = URLComponents(url: Meee360Config.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
+    private static func meee2ConnectUrl() -> URL {
+        var components = URLComponents(url: Meee2OnlineConfig.appURL(path: "connect"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
-            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee360/callback")
+            URLQueryItem(name: "callback", value: "\(BoardServer.shared.url)/meee2/callback")
         ]
         return components.url!
     }
 
-    private static func clearMeee360Settings() {
+    private static func clearMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         for key in [
-            "meee360Connected",
-            "meee360Online",
-            "meee360TeamId",
-            "meee360TeamName",
-            "meee360Teams",
-            "meee360SessionTeamIds",
-            "meee360UserId",
-            "meee360UserName",
-            "meee360UserEmail",
-            "meee360UserAvatarUrl",
-            "meee360SupabaseUrl",
-            "meee360SupabaseKey",
-            "meee360EnabledSessionIds",
-            "meee360DisabledSessionIds"
+            "meee2Connected",
+            "meee2Online",
+            "meee2TeamId",
+            "meee2TeamName",
+            "meee2Teams",
+            "meee2SessionTeamIds",
+            "meee2UserId",
+            "meee2UserName",
+            "meee2UserEmail",
+            "meee2UserAvatarUrl",
+            "meee2SupabaseUrl",
+            "meee2SupabaseKey",
+            "meee2EnabledSessionIds",
+            "meee2DisabledSessionIds"
         ] {
             defaults.removeObject(forKey: key)
         }
 
         let settings: [String: Any] = [
-            "meee360": [
+            "meee2": [
                 "enabled": false,
                 "online": false,
                 "teams": [],

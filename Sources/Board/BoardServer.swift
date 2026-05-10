@@ -29,7 +29,7 @@ public final class BoardServer {
     public private(set) var isRunning: Bool = false
     public private(set) var port: UInt16 = BoardServer.defaultPort
 
-    /// Loopback URL —— 内部回调（meee360 OAuth callback / CLI 提示）始终用这个，
+    /// Loopback URL —— 内部回调（meee2 OAuth callback / CLI 提示）始终用这个，
     /// 即使 server 暴露到 0.0.0.0，浏览器在本机访问 `127.0.0.1` 一样能命中。
     public var url: String { "http://127.0.0.1:\(port)" }
 
@@ -259,7 +259,7 @@ public final class BoardServer {
 
     // MARK: - 路由注册
 
-    /// CORS 头：允许 meee360 (localhost:3000 / Vercel deploy) 跨域 fetch
+    /// CORS 头：允许 meee2 (localhost:3000 / Vercel deploy) 跨域 fetch
     /// `/api/*`。无 wildcard scope 限制——所有 origin 都允许，因为这个
     /// server 已经只 bind 到 127.0.0.1，只能从同机访问。
     private static let corsHeaders: [String: String] = [
@@ -331,7 +331,7 @@ public final class BoardServer {
     }
 
     private func registerRoutes(on server: HttpServer) {
-        // CORS preflight (OPTIONS) — meee360 browser sends a preflight before
+        // CORS preflight (OPTIONS) — meee2 browser sends a preflight before
         // POSTs with custom Content-Type / Authorization. Middleware short-
         // circuits with 204 + the CORS headers so the actual request goes
         // through. Any non-OPTIONS falls through to the route handlers below.
@@ -356,7 +356,7 @@ public final class BoardServer {
         )
 
         // --- REST API ---
-        // CORS-wrapped: meee360 in the browser hits these cross-origin.
+        // CORS-wrapped: meee2 in the browser hits these cross-origin.
         server.GET["/api/health"] = BoardServer.cors { [weak self] _ in
             guard let self = self else { return .raw(503, "Service Unavailable", [:]) { _ in } }
             return .ok(.json([
@@ -369,10 +369,10 @@ public final class BoardServer {
         }
         server.GET["/api/state"]   = BoardServer.cors(BoardAPI.getState)
         server.GET["/api/user-profile"] = BoardServer.cors(BoardAPI.getUserProfile)
-        server.POST["/api/user-profile/connect"] = BoardServer.cors(BoardAPI.openMeee360Connect)
-        server.POST["/api/user-profile/dashboard"] = BoardServer.cors(BoardAPI.openMeee360Dashboard)
+        server.POST["/api/user-profile/connect"] = BoardServer.cors(BoardAPI.openMeee2OnlineConnect)
+        server.POST["/api/user-profile/dashboard"] = BoardServer.cors(BoardAPI.openMeee2OnlineDashboard)
         server.POST["/api/user-profile/settings"] = BoardServer.cors(BoardAPI.openMeee2Settings)
-        server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee360)
+        server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee2Online)
         server.GET["/api/automations"] = BoardServer.cors(BoardAPI.listAutomations)
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
@@ -425,8 +425,8 @@ public final class BoardServer {
         server.GET["/api/board/layout"] = BoardAPI.getBoardLayout
         server.PUT["/api/board/layout"] = BoardAPI.putBoardLayout
 
-        // --- meee360 callback (OAuth-style auto-connect) ---
-        server.GET["/meee360/callback"] = Meee360CallbackAPI.handleCallback
+        // --- meee2 callback (OAuth-style auto-connect) ---
+        server.GET["/meee2/callback"] = Meee2OnlineCallbackAPI.handleCallback
 
         // --- 静态文件（SPA） ---
         // `GET /` -> index.html；其他路径尝试 WebDist 内的文件；未匹配时回 404

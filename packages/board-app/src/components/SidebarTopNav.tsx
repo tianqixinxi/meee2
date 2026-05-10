@@ -14,7 +14,7 @@ import { Tooltip } from './Tooltip'
  *   └─────────────────────────────┘
  *
  * tabs 可配置：父组件传一个 `tabs` 数组，每个 tab 自带 predicate（match 哪些
- * session）。默认 tabs 从 board state 的 plugin 列表自动生成；调用方（meee360
+ * session）。默认 tabs 从 board state 的 plugin 列表自动生成；调用方（meee2
  * 等）可以覆盖成"按归属人"等自定义维度。
  */
 
@@ -31,7 +31,7 @@ interface Props {
   tabs: SidebarTab[]
   activeTabId: string
   onTabChange: (id: string) => void
-  /** + New session：默认打开 global AI assistant（meee360 风格） */
+  /** + New session：默认打开 global AI assistant（meee2 风格） */
   onNewSession: () => void
   /** Search action —— toggle 一个 inline 搜索 input（父组件管 visibility + query state） */
   onToggleSearch?: () => void
@@ -148,7 +148,7 @@ export function SidebarTopNav({
 /// 默认从 board state 的 plugin 列表自动生成 tabs：
 ///   - "All"（match all）
 ///   - 每个 plugin 一个 tab
-/// 调用方可以传自己的 tabs 完全覆盖（例如 meee360 按归属人分类）。
+/// 调用方可以传自己的 tabs 完全覆盖（例如 meee2 按归属人分类）。
 export function defaultTabsFromSessions(sessions: Session[]): SidebarTab[] {
   const plugins = new Map<string, string>()
   for (const s of sessions) {
