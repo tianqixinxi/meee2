@@ -9,6 +9,7 @@ import {
 } from 'react'
 import Board from './components/Board'
 import Sidebar from './components/Sidebar'
+import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -303,6 +304,14 @@ export default function App() {
         setCanvasList(list)
       })
   }, [])
+
+  const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
+    return updateCanvas(canvasId, { name })
+      .then((list) => {
+        setCanvasList(list)
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to rename canvas'))
+  }, [pushToast])
 
   const handleCountsChange = useCallback(
     (counts: Record<string, number>) => {
@@ -615,6 +624,16 @@ export default function App() {
             onPreferences={() => setPreferencesOpen(true)}
             onFit={() => setFitSignal((x) => x + 1)}
           />
+          <CanvasToolbar
+            canvases={canvasList.canvases}
+            activeCanvasId={activeCanvasId}
+            sessions={boardState.state?.sessions ?? []}
+            canvasSessionIds={canvasSessionIds}
+            onActiveCanvasChange={handleSetActiveCanvas}
+            onCreateCanvas={handleCreateCanvas}
+            onRenameCanvas={handleRenameCanvas}
+            onAddSession={handleAddToCanvas}
+          />
           {boardState.error && (
             <div className="inline-error" style={{ position: 'absolute', bottom: 8, left: 12 }}>
               {boardState.error}
@@ -666,10 +685,6 @@ export default function App() {
         </div>
         <Sidebar
           state={boardState.state}
-          canvases={canvasList.canvases}
-          activeCanvasId={activeCanvasId}
-          onActiveCanvasChange={handleSetActiveCanvas}
-          onCreateCanvas={handleCreateCanvas}
           selection={selection}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
