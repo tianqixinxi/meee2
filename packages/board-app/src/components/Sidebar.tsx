@@ -20,7 +20,7 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Plus, Settings as SettingsIcon } from 'lucide-react'
+import { Check, ChevronDown, ExternalLink, Inbox, Layers, LogIn, LogOut, MoreHorizontal, Plus, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
@@ -460,6 +460,7 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [canvasMenuOpen, setCanvasMenuOpen] = useState(false)
   const [creatingCanvas, setCreatingCanvas] = useState(false)
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
@@ -736,6 +737,7 @@ export default function Sidebar({
   useEffect(() => () => cancelClose(), [])
 
   const isPreview = !open && hoverPreview
+  const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
 
   // session 选中后 sidebar 不再切到 detail 模式（transcript 现在浮在画板上）。
   // 只有 channel 选中才走 detail 视图。
@@ -844,29 +846,69 @@ export default function Sidebar({
             {canvases.length > 0 && (
               <div className="sidebar-canvas-switcher">
                 <div className="sidebar-canvas-switcher__row">
-                  <select
-                    className="sidebar-canvas-switcher__select"
-                    value={activeCanvasId ?? canvases[0]?.id}
-                    onChange={(e) => onActiveCanvasChange?.(e.target.value)}
-                    aria-label="Canvas"
+                  <button
+                    type="button"
+                    className="sidebar-canvas-trigger"
+                    aria-haspopup="menu"
+                    aria-expanded={canvasMenuOpen}
+                    onClick={() => {
+                      setCreatingCanvas(false)
+                      setCanvasMenuOpen((value) => !value)
+                    }}
                   >
-                    {canvases.map((canvas) => (
-                      <option key={canvas.id} value={canvas.id}>
-                        {canvas.scope === 'team' ? 'Team' : 'Personal'} · {canvas.name}
-                      </option>
-                    ))}
-                  </select>
+                    <Layers size={14} aria-hidden />
+                    <span className="sidebar-canvas-trigger__label">
+                      {activeCanvas?.scope === 'team' ? 'Team' : 'Personal'}
+                    </span>
+                    <span className="sidebar-canvas-trigger__name">
+                      {activeCanvas?.name ?? 'Default canvas'}
+                    </span>
+                    <ChevronDown size={14} aria-hidden />
+                  </button>
                   <Tooltip label="New canvas">
                     <button
                       type="button"
-                      className="sidebar-icon-btn"
+                      className="sidebar-canvas-new"
                       aria-label="New canvas"
-                      onClick={() => setCreatingCanvas((v) => !v)}
+                      onClick={() => {
+                        setCanvasMenuOpen(false)
+                        setCreatingCanvas((v) => !v)
+                      }}
                     >
                       <Plus size={14} aria-hidden />
                     </button>
                   </Tooltip>
                 </div>
+                {canvasMenuOpen && (
+                  <div className="sidebar-canvas-menu" role="menu">
+                    {canvases.map((canvas) => {
+                      const selected = canvas.id === activeCanvasId
+                      return (
+                        <button
+                          key={canvas.id}
+                          type="button"
+                          className={'sidebar-canvas-menu__item' + (selected ? ' is-selected' : '')}
+                          role="menuitemradio"
+                          aria-checked={selected}
+                          onClick={() => {
+                            setCanvasMenuOpen(false)
+                            onActiveCanvasChange?.(canvas.id)
+                          }}
+                        >
+                          <span className="sidebar-canvas-menu__check">
+                            {selected && <Check size={13} aria-hidden />}
+                          </span>
+                          <span className="sidebar-canvas-menu__text">
+                            <span className="sidebar-canvas-menu__name">{canvas.name}</span>
+                            <span className="sidebar-canvas-menu__scope">
+                              {canvas.scope === 'team' ? 'Team' : 'Personal'}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
                 {creatingCanvas && (
                   <div className="sidebar-canvas-switcher__form">
                     <input
@@ -1160,24 +1202,36 @@ export default function Sidebar({
                          *  toggle。on canvas 时 eye-open 实色，off canvas 时
                          *  eye-off 半透明（hover 提亮）。比藏在 ⋯ 菜单深处的
                          *  Hide / Show 一击即得。 */}
-                        <Tooltip label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}>
+                        {!onCanvas ? (
+                          <Tooltip label="Add to current canvas">
+                            <button
+                              className="sidebar-session-row__canvas-add"
+                              aria-label="Add to current canvas"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                onAddToCanvas(s.id)
+                              }}
+                            >
+                              <Plus size={12} aria-hidden />
+                              Add
+                            </button>
+                          </Tooltip>
+                        ) : (
+                        <Tooltip label="Hide from current canvas">
                           <button
                             className="sidebar-icon-btn sidebar-session-row__visibility"
                             data-on-canvas={onCanvas ? 'true' : 'false'}
-                            aria-label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}
+                            aria-label="Hide from current canvas"
                             aria-pressed={onCanvas}
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (onCanvas) {
-                                onHideFromCanvas(s.id)
-                              } else {
-                                onAddToCanvas(s.id)
-                              }
+                              onHideFromCanvas(s.id)
                             }}
                           >
-                            {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                            <EyeOpenIcon />
                           </button>
                         </Tooltip>
+                        )}
                         {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
                          *  overlay，里面集成原本的 pin / rename / canvas 三键
                          *  + 新加的 Duplicate 与 Open in submenu。*/}
