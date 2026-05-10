@@ -323,7 +323,7 @@ interface Props {
   onFit: () => void
   /** 未读通知的 session id 集合（Claude 刚回复完、用户还没点） */
   unreadSids: Set<string>
-  /** Async storage interface (HTTP + localStorage in meee2; Supabase in meee360). */
+  /** Async storage interface (HTTP + localStorage in meee2; Supabase in meee2). */
   persistence: CanvasPersistence
   /** Hydrated initial values for every persisted slot — App.tsx has already
    *  resolved these via persistence.loadXxx() so Board can take them in
@@ -1234,7 +1234,7 @@ export default function Board({
   // -- Pan board to the channel hub when sidebar selects a channel ----
   // The hub element may not exist on the very first state delivery; depending
   // on `state` re-runs the effect after the scene-rebuild adds the ellipse.
-  // The helper itself is in @meee1/board-core so meee360 can wire the
+  // The helper itself is in @meee1/board-core so meee2 can wire the
   // identical effect against its own Sidebar selection.
   useEffect(() => {
     if (!api) return

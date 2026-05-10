@@ -5,10 +5,10 @@
 // viewport / user-shape persistence, selection sync. Does NOT yet handle
 // channels (arrows, hub ellipses, member-arrow detection) — meee2's Board
 // keeps its own implementation for now and will adopt this incrementally
-// once channels are abstracted. meee360 can consume this as-is in Phase 7.
+// once channels are abstracted. meee2 can consume this as-is in Phase 7.
 //
-// Why headless: meee2 and meee360 need different chrome around the canvas —
-// meee2 has a CardHost / SessionOverlay / ChannelDetail, meee360 has a
+// Why headless: meee2 and meee2 need different chrome around the canvas —
+// meee2 has a CardHost / SessionOverlay / ChannelDetail, meee2 has a
 // TeamSidebar / Inspector / BoardChatPanel. Trying to ship a "complete board"
 // would force one app's UI patterns onto the other. Slot-based composition
 // keeps the shared piece (canvas plumbing) shared and lets each app render
@@ -56,7 +56,7 @@ export interface BoardCanvasProps {
    *  ChannelForScene[]) and structural typing handles the rest. */
   state: BoardStateForScene
   /** Async storage interface — implementations live in
-   *  @meee1/board-persistence-http (meee2) / a Supabase impl (meee360). */
+   *  @meee1/board-persistence-http (meee2) / a Supabase impl (meee2). */
   persistence: CanvasPersistence
   /** Hydrated initial values for every persisted slot. */
   initial: BoardCanvasInitial

@@ -15,7 +15,7 @@
 // Compared to the previous separate boardLayoutRemote.ts / boardPersistence.ts
 // / dismissed.ts modules: same wire behaviour, repackaged behind the
 // CanvasPersistence interface from @meee1/board-core so the same Board UI can
-// also accept e.g. a SupabaseCanvasPersistence (meee360).
+// also accept e.g. a SupabaseCanvasPersistence (meee2).
 
 import type {
   CanvasPersistence,

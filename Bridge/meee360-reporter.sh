@@ -1,5 +1,5 @@
 #!/bin/bash
-# meee360-reporter.sh
+# meee2-reporter.sh
 # Read ~/.meee2/settings.json and POST heartbeat to Supabase when enabled && online
 # Called by claude-hook-bridge.sh after sending data to meee2 Unix socket
 
@@ -9,31 +9,31 @@ SETTINGS_FILE="$HOME/.meee2/settings.json"
 
 # Check if settings file exists
 if [[ ! -f "$SETTINGS_FILE" ]]; then
-    echo "$(date +%H:%M:%S) [meee360] No settings file at $SETTINGS_FILE" >> /tmp/meee360-reporter.log
+    echo "$(date +%H:%M:%S) [meee2] No settings file at $SETTINGS_FILE" >> /tmp/meee2-reporter.log
     exit 0
 fi
 
-# Read meee360 config using jq
-MEEE360_ENABLED=$(jq -r '.meee360.enabled // false' "$SETTINGS_FILE" 2>/dev/null)
-MEEE360_ONLINE=$(jq -r '.meee360.online // false' "$SETTINGS_FILE" 2>/dev/null)
+# Read meee2 config using jq
+MEEE2_ENABLED=$(jq -r '.meee2.enabled // false' "$SETTINGS_FILE" 2>/dev/null)
+MEEE2_ONLINE=$(jq -r '.meee2.online // false' "$SETTINGS_FILE" 2>/dev/null)
 
 # Skip if not enabled or not online
-if [[ "$MEEE360_ENABLED" != "true" || "$MEEE360_ONLINE" != "true" ]]; then
-    echo "$(date +%H:%M:%S) [meee360] Skip: enabled=$MEEE360_ENABLED online=$MEEE360_ONLINE" >> /tmp/meee360-reporter.log
+if [[ "$MEEE2_ENABLED" != "true" || "$MEEE2_ONLINE" != "true" ]]; then
+    echo "$(date +%H:%M:%S) [meee2] Skip: enabled=$MEEE2_ENABLED online=$MEEE2_ONLINE" >> /tmp/meee2-reporter.log
     exit 0
 fi
 
 # Read credentials
-SUPABASE_URL=$(jq -r '.meee360.supabaseUrl // empty' "$SETTINGS_FILE" 2>/dev/null)
-SUPABASE_KEY=$(jq -r '.meee360.supabaseKey // empty' "$SETTINGS_FILE" 2>/dev/null)
-TEAM_ID=$(jq -r '.meee360.teamId // empty' "$SETTINGS_FILE" 2>/dev/null)
-USER_ID=$(jq -r '.meee360.userId // empty' "$SETTINGS_FILE" 2>/dev/null)
-MACHINE_ID=$(jq -r '.meee360.machineId // "unknown"' "$SETTINGS_FILE" 2>/dev/null)
-SESSION_KEY=$(jq -r '.meee360.sessionKey // "default"' "$SETTINGS_FILE" 2>/dev/null)
+SUPABASE_URL=$(jq -r '.meee2.supabaseUrl // empty' "$SETTINGS_FILE" 2>/dev/null)
+SUPABASE_KEY=$(jq -r '.meee2.supabaseKey // empty' "$SETTINGS_FILE" 2>/dev/null)
+TEAM_ID=$(jq -r '.meee2.teamId // empty' "$SETTINGS_FILE" 2>/dev/null)
+USER_ID=$(jq -r '.meee2.userId // empty' "$SETTINGS_FILE" 2>/dev/null)
+MACHINE_ID=$(jq -r '.meee2.machineId // "unknown"' "$SETTINGS_FILE" 2>/dev/null)
+SESSION_KEY=$(jq -r '.meee2.sessionKey // "default"' "$SETTINGS_FILE" 2>/dev/null)
 
 # Validate required fields
 if [[ -z "$SUPABASE_URL" || -z "$SUPABASE_KEY" || -z "$TEAM_ID" || -z "$USER_ID" ]]; then
-    echo "$(date +%H:%M:%S) [meee360] Missing required config fields" >> /tmp/meee360-reporter.log
+    echo "$(date +%H:%M:%S) [meee2] Missing required config fields" >> /tmp/meee2-reporter.log
     exit 0
 fi
 
@@ -71,7 +71,7 @@ EOF
 )
 
 # Call Supabase RPC function (safer than direct REST API)
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/rest/v1/rpc/meee360_upsert_session" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$SUPABASE_URL/rest/v1/rpc/meee2_upsert_session" \
     -H "apikey: $SUPABASE_KEY" \
     -H "Authorization: Bearer $SUPABASE_KEY" \
     -H "Content-Type: application/json" \
@@ -92,9 +92,9 @@ HTTP_CODE=$(echo "$RESPONSE" | tail -1 | grep -oE '[0-9]{3}' || echo "000")
 BODY=$(echo "$RESPONSE" | sed '$ d')
 
 if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
-    echo "$(date +%H:%M:%S) [meee360] OK: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE" >> /tmp/meee360-reporter.log
+    echo "$(date +%H:%M:%S) [meee2] OK: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE" >> /tmp/meee2-reporter.log
 else
-    echo "$(date +%H:%M:%S) [meee360] FAIL: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE body=$BODY" >> /tmp/meee360-reporter.log
+    echo "$(date +%H:%M:%S) [meee2] FAIL: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE body=$BODY" >> /tmp/meee2-reporter.log
 fi
 
 exit 0

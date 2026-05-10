@@ -253,7 +253,7 @@ packages/                     pnpm workspace (TypeScript)
   board-persistence-http/     HTTP-backed state store
   board-ui/                   Design system primitives
 
-Bridge/                       claude-hook-bridge.sh, mcp-meee2, meee360-reporter.sh
+Bridge/                       claude-hook-bridge.sh, mcp-meee2, meee2-reporter.sh
 extension/                    Companion browser extension (Chrome MV3)
 landingpage/                  Marketing site
 Resources/                    App assets (icons, plist fragments)

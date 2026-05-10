@@ -105,7 +105,8 @@ final class AssistantAPITests: XCTestCase {
                 apiKey: "",
                 baseUrl: "",
                 model: "",
-                enabledTools: nil)
+                enabledTools: nil,
+                scope: "this-mac")
             let prompt = AssistantAPI.buildSystemPrompt(settings: s)
             XCTAssertFalse(prompt.isEmpty, "empty prompt for provider=\(kind)")
         }

@@ -139,7 +139,7 @@ export interface CardBoardLike {
 export interface CardHostProps {
   sessionId: string
   /** Session payload passed to the template. Apps can pass meee2's `Session`,
-   *  or a meee360-mapped equivalent — the template decides what to read. */
+   *  or a meee2-mapped equivalent — the template decides what to read. */
   session: any
   board: CardBoardLike | null
   /** User-authored TSX source (raw text, pre-compile). */

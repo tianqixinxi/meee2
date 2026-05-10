@@ -58,6 +58,7 @@ struct AssistantSettings {
     let baseUrl: String       // empty for local
     let model: String         // empty for local → claude default
     let enabledTools: Set<String>?  // nil = all
+    let scope: String         // "this-mac" or a meee2 team id
 }
 
 /// Common interface across hosted (OpenAI / Anthropic) and local (claude -p)

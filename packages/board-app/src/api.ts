@@ -60,17 +60,26 @@ export interface UserProfile {
   initials: string
   dashboardUrl: string
   connectUrl: string
+  defaultSyncEnabled: boolean
+  defaultSyncTeamId: string
+  defaultSyncTeamName: string
+  teams: Array<{
+    id: string
+    name: string
+    role: string | null
+    isDefault: boolean
+  }>
 }
 
 export function fetchUserProfile(): Promise<UserProfile> {
   return jsonRequest<UserProfile>('/api/user-profile')
 }
 
-export function openMeee360Connect(): Promise<{ ok: boolean }> {
+export function openMeee2OnlineConnect(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/connect', { method: 'POST' })
 }
 
-export function openMeee360Dashboard(): Promise<{ ok: boolean }> {
+export function openMeee2OnlineDashboard(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/dashboard', { method: 'POST' })
 }
 
@@ -78,7 +87,7 @@ export function openMeee2Settings(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/settings', { method: 'POST' })
 }
 
-export function disconnectMeee360(): Promise<{ ok: boolean }> {
+export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile', { method: 'DELETE' })
 }
 
@@ -382,6 +391,7 @@ export interface AssistantChatSettings {
   baseUrl?: string
   model?: string
   enabledTools?: string[]
+  scope?: string
 }
 
 /**

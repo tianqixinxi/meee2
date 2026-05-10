@@ -1981,6 +1981,27 @@ textarea {
   border-radius: 6px;
   background: #1A1E2B;
 }
+.cc-scope-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #8B93A7;
+  font-size: 11px;
+}
+.cc-scope-select select {
+  max-width: 180px;
+  border: 1px solid #26303F;
+  border-radius: 6px;
+  background: #11141C;
+  color: #D1D5DB;
+  font: inherit;
+  padding: 3px 7px;
+  outline: none;
+}
+.cc-scope-select select:focus {
+  border-color: #3B82F6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
 .cc-model {
   display: inline-flex;
   align-items: center;
@@ -4117,10 +4138,23 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
   line-height: 1;
 }
 .sidebar-footer-user-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow: hidden;
+  min-width: 0;
+}
+.sidebar-footer-user-name > span,
+.sidebar-footer-user-name > small {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+}
+.sidebar-footer-user-name > small {
+  color: #6B7488;
+  font-size: 10.5px;
+  line-height: 1.1;
 }
 .sidebar-account-menu {
   position: absolute;
@@ -4161,6 +4195,24 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
   white-space: nowrap;
   min-width: 0;
   font-size: 12.5px;
+}
+.sidebar-account-menu-meta {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px 4px;
+}
+.sidebar-account-menu-meta span {
+  color: #6B7488;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.sidebar-account-menu-meta strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #E5E7EB;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sidebar-account-menu-separator {
   height: 1px;

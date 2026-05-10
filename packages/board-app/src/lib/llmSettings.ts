@@ -1,4 +1,4 @@
-// LLM provider settings for the global assistant chatbox. Mirrors meee360's
+// LLM provider settings for the global assistant chatbox. Mirrors meee2's
 // `llm-settings.ts` shape (apiKey + baseUrl + model in localStorage), plus
 // a `provider` discriminator and a per-tool enable map specific to meee2.
 //

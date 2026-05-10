@@ -240,14 +240,14 @@ if [ -S "$PEER_ISLAND_SOCKET" ]; then
     esac
 fi
 
-# ─── meee360 legacy 上报 ──────────────────────────────────────────────────
-# meee360 sync now runs through the in-app Meee360Pusher. Keep the old hook
+# ─── meee2 legacy 上报 ──────────────────────────────────────────────────
+# meee2 sync now runs through the in-app Meee2OnlinePusher. Keep the old hook
 # reporter as an explicit escape hatch only, otherwise hook events double-write.
-if [ "${MEEE360_LEGACY_HOOK_REPORTER:-}" = "1" ]; then
+if [ "${MEEE2_LEGACY_HOOK_REPORTER:-}" = "1" ]; then
     BRIDGE_DIR="$(dirname "$0")"
-    MEEE360_REPORTER="$BRIDGE_DIR/meee360-reporter.sh"
-    if [[ -x "$MEEE360_REPORTER" ]]; then
-        echo "$INPUT" | "$MEEE360_REPORTER" &
+    MEEE2_REPORTER="$BRIDGE_DIR/meee2-reporter.sh"
+    if [[ -x "$MEEE2_REPORTER" ]]; then
+        echo "$INPUT" | "$MEEE2_REPORTER" &
     fi
 fi
 

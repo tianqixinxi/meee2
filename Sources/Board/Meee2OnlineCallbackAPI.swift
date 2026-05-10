@@ -1,13 +1,13 @@
 import Foundation
 import Swifter
 
-/// Meee360CallbackAPI - 处理 meee360 OAuth-style 回调
+/// Meee2OnlineCallbackAPI - 处理 meee2 OAuth-style 回调
 ///
-/// 当用户在浏览器完成登录后，meee360 redirect到此endpoint带上配置参数：
-///   /meee360/callback?team_id=...&team_name=...&user_id=...&supabase_url=...&supabase_key=...
+/// 当用户在浏览器完成登录后，meee2 redirect到此endpoint带上配置参数：
+///   /meee2/callback?team_id=...&team_name=...&user_id=...&supabase_url=...&supabase_key=...
 ///
 /// 此API保存配置到 ~/.meee2/settings.json 并返回成功页面
-public struct Meee360CallbackAPI {
+public struct Meee2OnlineCallbackAPI {
 
     public static func handleCallback(request: HttpRequest) -> HttpResponse {
         // 解析 query parameters
@@ -70,11 +70,11 @@ public struct Meee360CallbackAPI {
                 userInfo["teamsData"] = teamsData
             }
             NotificationCenter.default.post(
-                name: Notification.Name("meee360.connected"),
+                name: Notification.Name("meee2.connected"),
                 object: nil,
                 userInfo: userInfo
             )
-            Meee360Pusher.shared.refreshActivation()
+            Meee2OnlinePusher.shared.refreshActivation()
 
             return successResponse(teamName: teamName)
         } else {
@@ -95,22 +95,22 @@ public struct Meee360CallbackAPI {
         teamsData: Data?
     ) -> Bool {
         let defaults = UserDefaults.standard
-        defaults.set(true, forKey: "meee360Connected")
-        defaults.set(true, forKey: "meee360Online")
-        defaults.set(teamId, forKey: "meee360TeamId")
-        defaults.set(teamName, forKey: "meee360TeamName")
-        defaults.set(userId, forKey: "meee360UserId")
-        defaults.set(userName, forKey: "meee360UserName")
-        defaults.set(userEmail, forKey: "meee360UserEmail")
-        defaults.set(userAvatarUrl, forKey: "meee360UserAvatarUrl")
-        defaults.set(supabaseUrl, forKey: "meee360SupabaseUrl")
-        defaults.set(supabaseKey, forKey: "meee360SupabaseKey")
+        defaults.set(true, forKey: "meee2Connected")
+        defaults.set(true, forKey: "meee2Online")
+        defaults.set(teamId, forKey: "meee2TeamId")
+        defaults.set(teamName, forKey: "meee2TeamName")
+        defaults.set(userId, forKey: "meee2UserId")
+        defaults.set(userName, forKey: "meee2UserName")
+        defaults.set(userEmail, forKey: "meee2UserEmail")
+        defaults.set(userAvatarUrl, forKey: "meee2UserAvatarUrl")
+        defaults.set(supabaseUrl, forKey: "meee2SupabaseUrl")
+        defaults.set(supabaseKey, forKey: "meee2SupabaseKey")
         if let teamsData {
-            defaults.set(teamsData, forKey: "meee360Teams")
+            defaults.set(teamsData, forKey: "meee2Teams")
         }
 
         let settings: [String: Any] = [
-            "meee360": [
+            "meee2": [
                 "enabled": true,
                 "online": true,
                 "teamId": teamId,
@@ -138,10 +138,10 @@ public struct Meee360CallbackAPI {
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
             do {
                 try data.write(to: file, options: .atomic)
-                MInfo("[Meee360Callback] Saved config to \(file.path)")
+                MInfo("[Meee2OnlineCallback] Saved config to \(file.path)")
                 return true
             } catch {
-                MError("[Meee360Callback] Failed to write config: \(error)")
+                MError("[Meee2OnlineCallback] Failed to write config: \(error)")
                 return false
             }
         }
@@ -182,7 +182,7 @@ public struct Meee360CallbackAPI {
         <html>
         <head>
             <meta charset="utf-8">
-            <title>Connected to meee360</title>
+            <title>Connected to meee2</title>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; text-align: center; padding: 50px; }
                 .success { color: #22c55e; font-size: 48px; }
@@ -199,7 +199,7 @@ public struct Meee360CallbackAPI {
             <div class="success">✓</div>
             <h1>Connected!</h1>
             <p>You are now connected to <strong>\(teamName)</strong></p>
-            <p>Your Claude sessions will sync to meee360 dashboard.</p>
+            <p>Your Claude sessions will sync to meee2 dashboard.</p>
             <div class="close-hint">This window will close automatically...</div>
         </body>
         </html>

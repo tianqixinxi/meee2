@@ -1,16 +1,18 @@
 import Foundation
 
-enum Meee360Config {
+enum Meee2OnlineConfig {
     static var appBaseURL: URL {
-        if let raw = ProcessInfo.processInfo.environment["MEEE360_APP_BASE_URL"],
-           let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
-            return url
+        for key in ["MEEE2_ONLINE_APP_BASE_URL", "MEEE2_APP_BASE_URL", "MEEE360_APP_BASE_URL"] {
+            if let raw = ProcessInfo.processInfo.environment[key],
+               let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                return url
+            }
         }
 
         #if DEBUG
         return URL(string: "http://localhost:3000")!
         #else
-        return URL(string: "https://meee360-meee1.vercel.app")!
+        return URL(string: "https://meee2-online-meee1.vercel.app")!
         #endif
     }
 
