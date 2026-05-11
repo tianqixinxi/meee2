@@ -1,5 +1,6 @@
 import {
   createContext,
+  type SetStateAction,
   useCallback,
   useContext,
   useEffect,
@@ -119,7 +120,7 @@ export default function App() {
   const [assistantRequested, setAssistantRequested] = useState(false)
   // Assistant 模式 chat 历史 lift 到 App level，跨 dock 开关持久化。只有
   // 用户在 dock 里打 `/new-session`（或 /clear / /reset）才会清空。
-  const [assistantMessages, setAssistantMessages] = useState<DisplayMessage[]>([])
+  const [assistantMessagesByCanvas, setAssistantMessagesByCanvas] = useState<Record<string, DisplayMessage[]>>({})
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
   // 用户点击 session card 时移除。持久化通过 persistence.saveUnreadSids。
@@ -623,6 +624,17 @@ export default function App() {
     }
   }, [boardState.state, canvasSessionIds])
 
+  const assistantMessages = assistantMessagesByCanvas[activeCanvasId] ?? []
+  const setAssistantMessages = useCallback((next: SetStateAction<DisplayMessage[]>) => {
+    setAssistantMessagesByCanvas((prev) => {
+      const current = prev[activeCanvasId] ?? []
+      const value = typeof next === 'function'
+        ? (next as (prev: DisplayMessage[]) => DisplayMessage[])(current)
+        : next
+      return { ...prev, [activeCanvasId]: value }
+    })
+  }, [activeCanvasId])
+
   if (!hydrated || !canvasList) {
     return (
       <div className="app boot">
@@ -630,6 +642,8 @@ export default function App() {
       </div>
     )
   }
+
+  const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -696,6 +710,8 @@ export default function App() {
                   kind: 'assistant',
                   messages: assistantMessages,
                   setMessages: setAssistantMessages,
+                  canvasName: activeCanvas?.name ?? 'Canvas',
+                  workspacePath: activeCanvas?.workspacePath ?? '',
                   onSpawned: (cwd) => {
                     setDockOpen(false)
                     setDockSessionId(null)

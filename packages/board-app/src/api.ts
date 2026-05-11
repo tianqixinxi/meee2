@@ -454,6 +454,8 @@ export interface AssistantChatSettings {
   model?: string
   enabledTools?: string[]
   scope?: string
+  workspacePath?: string
+  canvasName?: string
 }
 
 /**

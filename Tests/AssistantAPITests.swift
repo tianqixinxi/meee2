@@ -106,7 +106,9 @@ final class AssistantAPITests: XCTestCase {
                 baseUrl: "",
                 model: "",
                 enabledTools: nil,
-                scope: "this-mac")
+                scope: "this-mac",
+                workspacePath: "",
+                canvasName: "Canvas")
             let prompt = AssistantAPI.buildSystemPrompt(settings: s)
             XCTAssertFalse(prompt.isEmpty, "empty prompt for provider=\(kind)")
         }

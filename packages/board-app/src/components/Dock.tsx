@@ -32,9 +32,7 @@ import {
   uploadAttachment,
   spawnSession,
   streamAssistantChat,
-  fetchUserProfile,
   type AssistantMessage,
-  type UserProfile,
 } from '../api'
 import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 import { readLlmSettings, activeTools } from '../lib/llmSettings'
@@ -71,6 +69,8 @@ export type DockMode =
       /** Assistant chat 历史。lifted 到 App 才能跨 dock 开关持久化。 */
       messages: DisplayMessage[]
       setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>
+      canvasName: string
+      workspacePath: string
     }
 
 export interface DockHandle {
@@ -169,10 +169,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     mode.kind === 'assistant' ? mode.setMessages : (() => { /* noop */ })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  const [assistantScope, setAssistantScope] = useState('this-mac')
-  const onlineTeamId = userProfile?.defaultSyncTeamId || ''
-  const onlineTeamName = userProfile?.defaultSyncTeamName || 'Team'
   const logRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -183,30 +179,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [messages, busy, mode.kind])
-
-  useEffect(() => {
-    if (mode.kind !== 'assistant') return
-    let cancelled = false
-    fetchUserProfile()
-      .then((profile) => {
-        if (cancelled) return
-        setUserProfile(profile)
-        if (!profile.connected) setAssistantScope('this-mac')
-      })
-      .catch(() => {
-        if (cancelled) return
-        setUserProfile(null)
-        setAssistantScope('this-mac')
-      })
-    return () => { cancelled = true }
-  }, [mode.kind])
-
-  useEffect(() => {
-    if (assistantScope === 'this-mac') return
-    if (!userProfile?.connected || assistantScope !== userProfile.defaultSyncTeamId) {
-      setAssistantScope('this-mac')
-    }
-  }, [assistantScope, userProfile])
 
   // assistant busy 时按 Esc → cancel stream（textarea 已 disabled，键盘事件
   // 不会落到 textarea，走 window-level）
@@ -273,7 +245,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       baseUrl: settings.baseUrl,
       model: settings.model,
       enabledTools: activeTools(settings),
-      scope: assistantScope,
+      scope: 'this-mac',
+      workspacePath: mode.kind === 'assistant' ? mode.workspacePath : undefined,
+      canvasName: mode.kind === 'assistant' ? mode.canvasName : undefined,
     }
     const wireMessages: AssistantMessage[] = next.slice(0, assistantIndex).map((m) => ({
       role: m.role,
@@ -368,7 +342,11 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   // ── render ────────────────────────────────────────────────────────
   return (
     <div
-      className={'session-dock' + (expanded ? '' : ' session-dock--collapsed')}
+      className={
+        'session-dock' +
+        (mode.kind === 'assistant' ? ' session-dock--assistant' : '') +
+        (expanded ? '' : ' session-dock--collapsed')
+      }
       role={mode.kind === 'assistant' ? 'dialog' : undefined}
       aria-modal={mode.kind === 'assistant' ? 'true' : undefined}
       aria-label={mode.kind === 'assistant' ? 'Ask the assistant' : undefined}
@@ -430,9 +408,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
           // 时代的"⚡ Spawn here"功能 —— TranscriptView 不认这个 fence）。
           <div className="col" style={{ flex: 1, minHeight: 0, gap: 8 }}>
             {messages.length === 0 && !busy ? (
-              <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 4px' }}>
-                Ask anything — summarise local sessions, draft a prompt, or describe
-                a project to spawn a new session in.
+              <div className="assistant-empty">
+                Ask about this canvas. I can summarize sessions, explain what changed,
+                or help draft the next prompt.
               </div>
             ) : (
               <TranscriptView
@@ -475,6 +453,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       <ChatComposer
         ref={composerRef}
         initialValue={initialSeed}
+        placeholder={mode.kind === 'assistant' ? 'Ask about this canvas…' : 'Type a message…'}
         onSend={handleSend}
         onEscape={onClose}
         externalBusy={mode.kind === 'assistant' ? busy : undefined}
@@ -577,19 +556,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
               </div>
             </>
           ) : (
-            <label className="cc-scope-select">
-              <span>Scope</span>
-              <select
-                value={assistantScope}
-                onChange={(event) => setAssistantScope(event.target.value)}
-                aria-label="Assistant scope"
-              >
-                <option value="this-mac">This Mac</option>
-                {userProfile?.connected && onlineTeamId && (
-                  <option value={onlineTeamId}>Team: {onlineTeamName}</option>
-                )}
-              </select>
-            </label>
+            <span className="assistant-context-chip" title={mode.workspacePath || undefined}>
+              This canvas · {mode.canvasName}
+            </span>
           )
         }
         bottomRight={
@@ -629,13 +598,12 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             </>
           ) : (
             <>
-              <span className="cc-plugin-tag">Assistant</span>
-              <span className="cc-model">
+              {busy && <span className="cc-model">
                 <span className={busy ? 'cc-model-state cc-model-state--active' : 'cc-model-state'}>
-                  {busy ? 'streaming' : 'temporary'}
+                  Thinking
                 </span>
-                {busy && <span className="cc-spinner-mini" aria-hidden />}
-              </span>
+                <span className="cc-spinner-mini" aria-hidden />
+              </span>}
             </>
           )
         }

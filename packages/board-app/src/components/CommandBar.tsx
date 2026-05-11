@@ -154,7 +154,7 @@ export function CommandBar({
           </span>
         )}
         <span className="cb-spacer" />
-        <span className="cb-chip cb-chip--ghost" title="Default spawn command">
+        <span className="cb-chip cb-chip--ghost" title="New session provider">
           <span className="cb-chip__glyph"><Diamond size={11} aria-hidden /></span>
           {spawnProviderLabel(spawnProvider)}
         </span>

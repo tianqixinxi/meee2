@@ -417,6 +417,11 @@ textarea {
   transform: translateX(-50%);
 }
 
+.session-dock--assistant.session-dock--collapsed {
+  width: min(760px, calc(100% - 28px));
+  max-height: min(54vh, 420px);
+}
+
 @keyframes session-dock-slide {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -604,6 +609,24 @@ textarea {
 }
 .session-dock__input-box:focus-within {
   border-color: rgba(255, 255, 255, 0.2);
+}
+
+.session-dock--assistant .session-dock__transcript {
+  min-height: 72px;
+  padding: 42px 16px 4px;
+}
+
+.session-dock--assistant .session-dock__input-box {
+  margin-top: 4px;
+  background: rgba(8, 10, 15, 0.52);
+}
+
+.assistant-empty {
+  margin: auto 4px 8px;
+  max-width: 560px;
+  color: rgba(229, 231, 235, 0.7);
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .session-dock__bottombar {
@@ -2223,6 +2246,20 @@ textarea {
 .cc-scope-select select:focus {
   border-color: #3B82F6;
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+.assistant-context-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 320px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.08);
+  color: rgba(209, 213, 219, 0.82);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cc-model {
   display: inline-flex;

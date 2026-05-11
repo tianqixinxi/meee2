@@ -20,7 +20,9 @@ import Meee2PluginKit
 ///     apiKey?: string,        // required for openai/anthropic, ignored for local
 ///     baseUrl?: string,       // optional override for hosted endpoints
 ///     model?: string,         // optional, sane defaults per provider
-///     enabledTools?: string[] // omit = all tools enabled
+///     enabledTools?: string[],// omit = all tools enabled
+///     workspacePath?: string, // current canvas workspace for local assistant
+///     canvasName?: string
 ///   }
 ///
 /// Tool catalogue lives in `AssistantTools` and is enforced server-side —
@@ -208,13 +210,17 @@ enum AssistantAPI {
         let enabledList = dict["enabledTools"] as? [String]
         let enabled: Set<String>? = enabledList.map { Set($0) }
         let scope = (dict["scope"] as? String) ?? "this-mac"
+        let workspacePath = ((dict["workspacePath"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let canvasName = ((dict["canvasName"] as? String) ?? "Canvas").trimmingCharacters(in: .whitespacesAndNewlines)
         return AssistantSettings(
             provider: provider,
             apiKey: apiKey,
             baseUrl: baseUrl,
             model: model,
             enabledTools: enabled,
-            scope: scope
+            scope: scope,
+            workspacePath: workspacePath,
+            canvasName: canvasName.isEmpty ? "Canvas" : canvasName
         )
     }
 
@@ -239,6 +245,14 @@ enum AssistantAPI {
         Current assistant scope:
         \(scopeSummary)
 
+        Current canvas:
+        - Name: \(settings.canvasName)
+        - Workspace: \(settings.workspacePath.isEmpty ? "(not set)" : settings.workspacePath)
+
+        Treat this chat as a temporary assistant bound to the current canvas.
+        It does not create a board session card by itself. For local file/path
+        work, use the current canvas workspace as the working directory.
+
         Current sessions on the board:
         \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
 
@@ -255,7 +269,7 @@ enum AssistantAPI {
           • get_session_transcript  — recent transcript entries for content questions
           • list_channels           — A2A channels (name / mode / member count)
           • get_channel_messages    — recent messages on a channel for content questions
-          • create_session          — spawn a new claude session at a cwd
+          • create_session          — spawn a new local session at a cwd
 
         Guidelines:
           • If the user asks "what sessions do I have", call get_session_list
@@ -267,8 +281,11 @@ enum AssistantAPI {
           • If they ask about an A2A channel ("ops 频道", "today's coordination
             channel"), call list_channels first if the id is fuzzy, then
             get_channel_messages with the channel name.
-          • If they ask to create / open a new session, call create_session
-            with an absolute cwd.
+          • Do not create a new session unless the user explicitly asks to
+            create or open one. For normal questions, answer in this temporary
+            canvas assistant.
+          • If they explicitly ask to create / open a new session, call
+            create_session with an absolute cwd.
           • For mutating tools (create_session) prefer to confirm the cwd
             briefly with the user first if there's any ambiguity.
         """
