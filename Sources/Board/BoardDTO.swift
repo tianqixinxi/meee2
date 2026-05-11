@@ -171,6 +171,15 @@ struct UserProfileDTO: Encodable {
     let defaultSyncTeamId: String
     let defaultSyncTeamName: String
     let teams: [SyncTeamDTO]
+    let sessionSync: [UserProfileSessionSyncDTO]
+}
+
+struct UserProfileSessionSyncDTO: Encodable {
+    let sessionId: String
+    let title: String
+    let pluginDisplayName: String
+    let project: String
+    let enabled: Bool
 }
 
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body

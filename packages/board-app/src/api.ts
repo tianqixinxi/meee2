@@ -131,6 +131,13 @@ export interface UserProfile {
     role: string | null
     isDefault: boolean
   }>
+  sessionSync: Array<{
+    sessionId: string
+    title: string
+    pluginDisplayName: string
+    project: string
+    enabled: boolean
+  }>
 }
 
 export function fetchUserProfile(): Promise<UserProfile> {
@@ -147,6 +154,16 @@ export function openMeee2OnlineDashboard(): Promise<{ ok: boolean }> {
 
 export function openMeee2Settings(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/settings', { method: 'POST' })
+}
+
+export function updateUserProfile(input: {
+  defaultSyncEnabled?: boolean
+  sessionSync?: { sessionId: string; enabled: boolean }
+}): Promise<UserProfile> {
+  return jsonRequest<UserProfile>('/api/user-profile', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
 }
 
 export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
@@ -746,13 +763,13 @@ function fileToBase64(file: File): Promise<string> {
  * 成功返回 true；失败 toast 错误并返回 false。
  */
 export async function activateSession(id: string): Promise<boolean> {
-  console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
+  // console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
   try {
     await jsonRequest<{ ok: boolean }>(
       `/api/sessions/${encodeURIComponent(id)}/activate`,
       { method: 'POST' },
     )
-    console.log('[activateSession] OK for', id.slice(0, 8))
+    // console.log('[activateSession] OK for', id.slice(0, 8))
     return true
   } catch (e) {
     console.error('[activateSession] FAILED for', id.slice(0, 8), e)
@@ -833,7 +850,7 @@ export function connectEvents(
     ws.onopen = () => {
       // issue #25 诊断：记录每一次 (re)connect。Board flash 时如果紧跟一次
       // 'reconnected'，说明是断线触发的初始 fetch 撞上了 server 半态。
-      console.log('[StateTrace][board-ws] reconnected')
+      // console.log('[StateTrace][board-ws] reconnected')
       onStatus(true)
     }
     ws.onmessage = (e) => {
@@ -847,7 +864,7 @@ export function connectEvents(
       }
     }
     ws.onclose = () => {
-      console.log('[StateTrace][board-ws] disconnected')
+      // console.log('[StateTrace][board-ws] disconnected')
       onStatus(false)
       if (!stopped) {
         reconnectTimer = window.setTimeout(connect, 1500)

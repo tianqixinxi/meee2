@@ -189,7 +189,7 @@ function MessageRow({ entry, isLatest }) {
   // 能完整显示 ~6 行，超出再 clip。
   const bodyStyle = isLatest
     ? {
-        color: '#E8E5DC',
+        color: '#EDEAE2',
         fontSize: 11,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
@@ -198,7 +198,7 @@ function MessageRow({ entry, isLatest }) {
         minWidth: 0,
       }
     : {
-        color: '#E8E5DC',
+        color: '#BEB9AE',
         fontSize: 11,
         overflow: 'hidden',
         textOverflow: 'ellipsis',
@@ -245,7 +245,7 @@ function EmptyState({ session }) {
   if (session.latestRecap && session.latestRecap.content) {
     return (
       <div style={{ color: '#A8A59B', fontSize: 11, lineHeight: 1.45 }}>
-        <div style={{ color: '#7A7670', textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.5, marginBottom: 3 }}>
+        <div style={{ color: '#8D897F', textTransform: 'uppercase', fontSize: 9, letterSpacing: 0.5, marginBottom: 3 }}>
           Recap
         </div>
         <div style={{ display: '-webkit-box', WebkitLineClamp: 5, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -265,12 +265,18 @@ function EmptyState({ session }) {
     else agoText = Math.floor(minutes / (60 * 24)) + 'd ago'
   }
   return (
-    <div style={{ color: '#7A7670', fontSize: 11, lineHeight: 1.5 }}>
-      <div style={{ fontStyle: 'italic', marginBottom: 4 }}>
+    <div style={{
+      color: '#8D897F',
+      fontSize: 11,
+      lineHeight: 1.5,
+      padding: '12px 0',
+      borderTop: '1px solid rgba(245,244,239,0.06)',
+    }}>
+      <div style={{ color: '#B4B0A6', fontWeight: 550, marginBottom: 4 }}>
         Session ready, no activity yet
       </div>
       {agoText && (
-        <div style={{ color: '#5B5853', fontSize: 10 }}>
+        <div style={{ color: '#6F6B62', fontSize: 10 }}>
           Started {agoText}
         </div>
       )}
@@ -318,24 +324,25 @@ function SessionCard({ session, board, helpers }) {
     ? '✖ dead'
     : '● ' + session.status
 
-  // Claude 风：休息态用柔和暖褐边，活跃态才用 haloColor。
-  const borderColor = live.haloColor || '#3A3A38'
+  // Default card is a product UI surface, not an Excalidraw shape. Keep the
+  // shell flat, dark, and crisp; the canvas rectangle underneath is only an
+  // interaction anchor.
+  const borderColor = live.haloColor || '#34332F'
   const outerStyle = {
     position: 'relative',
     width: '100%',
     height: '100%',
-    // 暖褐"纸页"底色渐变 —— 上浅下深一点点，像一张被灯光斜照的信纸
-    background: 'linear-gradient(180deg, #2E2D2B 0%, #262624 100%)',
+    background: 'linear-gradient(180deg, #20201D 0%, #171715 100%)',
     border: '1px solid ' + borderColor,
-    borderRadius: 12,
-    padding: '11px 14px 9px',
+    borderRadius: 10,
+    padding: '12px 14px 10px',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    opacity: live.dim ? 0.78 : 1,
+    opacity: live.dim ? 0.84 : 1,
     boxShadow: live.halo === 'active'
-      ? '0 0 14px ' + live.haloColor + '33, 0 1px 2px rgba(0,0,0,0.25)'
-      : '0 1px 2px rgba(0,0,0,0.22)',
+      ? '0 0 0 1px ' + live.haloColor + '44, 0 14px 34px rgba(0,0,0,0.28)'
+      : '0 14px 30px rgba(0,0,0,0.22)',
     fontFamily: "-apple-system, 'Inter', BlinkMacSystemFont, 'Segoe UI', sans-serif",
     color: '#F5F4EF',
   }
@@ -348,9 +355,9 @@ function SessionCard({ session, board, helpers }) {
           top: 0,
           left: 0,
           right: 0,
-          height: 2,
+          height: 3,
           background: bar,
-          opacity: dot.pulse ? 0.85 : 1,
+          opacity: dot.pulse ? 0.9 : 1,
         }} />
       )}
 
@@ -363,7 +370,7 @@ function SessionCard({ session, board, helpers }) {
           fontWeight: 700,
           letterSpacing: 0.6,
           color: live.haloColor,
-          background: 'rgba(0,0,0,0.35)',
+          background: 'rgba(0,0,0,0.42)',
           border: '1px solid ' + live.haloColor,
           padding: '1px 6px',
           borderRadius: 4,
@@ -386,12 +393,9 @@ function SessionCard({ session, board, helpers }) {
           background: dot.color,
           flexShrink: 0,
         }} />
-        {/* session 标题 —— Claude 风：serif + 略大，像章节标题。 */}
         <span style={{
-          fontFamily: "ui-serif, 'Iowan Old Style', 'Palatino', 'Charter', Georgia, serif",
-          fontWeight: 500,
+          fontWeight: 650,
           fontSize: 14,
-          letterSpacing: '-0.01em',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -403,10 +407,10 @@ function SessionCard({ session, board, helpers }) {
         <span style={{ color: '#6B6862', fontSize: 10 }}>·</span>
         <span style={{
           fontSize: 9.5,
-          color: '#A8A59B',
-          fontWeight: 500,
+          color: '#B4B0A6',
+          fontWeight: 650,
           textTransform: 'uppercase',
-          letterSpacing: 0.8,
+          letterSpacing: 0.65,
           flexShrink: 0,
         }}>
           {session.pluginDisplayName}
@@ -438,7 +442,7 @@ function SessionCard({ session, board, helpers }) {
 
       <div style={{
         fontSize: 10,
-        color: '#7A7670',
+        color: '#8D897F',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
@@ -472,7 +476,7 @@ function SessionCard({ session, board, helpers }) {
         paddingTop: 6,
         borderTop: '1px solid rgba(255,255,255,0.06)',
         fontSize: 10,
-        color: '#A8A59B',
+        color: '#B4B0A6',
       }}>
         <span style={{ color: dot.color, fontWeight: 600 }}>{footerStatus}</span>
         {/* 后台子 agent / task 胶囊——和主 status 正交，主 idle 时也应该可见 */}

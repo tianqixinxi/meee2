@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   DEFAULT_SPAWN_PROVIDER,
+  loadBoardGridEnabled,
   loadSpawnProvider,
+  saveBoardGridEnabled,
   saveSpawnProvider,
   spawnProviderLabel,
 } from '../preferences'
@@ -17,10 +19,19 @@ import {
   type LlmProvider,
   type ToolName,
 } from '../lib/llmSettings'
+import {
+  disconnectMeee2Online,
+  fetchUserProfile,
+  openMeee2OnlineConnect,
+  openMeee2OnlineDashboard,
+  updateUserProfile,
+  type UserProfile,
+} from '../api'
 
 interface Props {
   onClose: () => void
   onSaved?: (provider: SpawnProvider) => void
+  onToast?: (kind: 'info' | 'error' | 'success', text: string) => void
 }
 
 /**
@@ -29,12 +40,30 @@ interface Props {
  *   2. Global assistant 的 LLM 设置：provider / apiKey / baseUrl / model /
  *      enabled tools。默认 provider='local' 走 `claude -p`（不需要 key）。
  */
-export function PreferencesDialog({ onClose, onSaved }: Props) {
+export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
+  const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+  const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
+    onToast?.(kind, text)
+  }, [onToast])
+
+  const loadProfile = useCallback(() => {
+    fetchUserProfile()
+      .then(setProfile)
+      .catch(() => setProfile(null))
+  }, [])
+
+  useEffect(() => {
+    loadProfile()
+    window.addEventListener('focus', loadProfile)
+    return () => window.removeEventListener('focus', loadProfile)
+  }, [loadProfile])
 
   const save = () => {
     saveSpawnProvider(spawnProvider)
+    saveBoardGridEnabled(boardGridEnabled)
     writeLlmSettings(llm)
     onSaved?.(spawnProvider)
     onClose()
@@ -49,6 +78,50 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
     setLlm((s) => ({ ...s, enabledTools: { ...s.enabledTools, [t]: on } }))
   }
 
+  const setDefaultSync = async (enabled: boolean) => {
+    try {
+      setProfile(await updateUserProfile({ defaultSyncEnabled: enabled }))
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to update sync setting')
+    }
+  }
+
+  const setSessionSync = async (sessionId: string, enabled: boolean) => {
+    try {
+      setProfile(await updateUserProfile({ sessionSync: { sessionId, enabled } }))
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to update session sync')
+    }
+  }
+
+  const connectOnline = async () => {
+    try {
+      await openMeee2OnlineConnect()
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to open meee2 Online')
+    }
+  }
+
+  const openOnline = async () => {
+    try {
+      await openMeee2OnlineDashboard()
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to open meee2 Online')
+    }
+  }
+
+  const logoutOnline = async () => {
+    try {
+      await disconnectMeee2Online()
+      loadProfile()
+      notify('success', 'Disconnected from meee2 Online')
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to disconnect')
+    }
+  }
+
+  const sessionSync = profile?.sessionSync ?? []
+
   return (
     <div
       className="modal-backdrop"
@@ -57,19 +130,128 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
       }}
     >
       <div
-        className="modal"
+        className="modal settings-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Preferences"
-        style={{ width: 540, maxWidth: '92vw' }}
+        aria-label="Board Settings"
       >
-        <div className="modal-header">Preferences</div>
-        <div className="modal-body col" style={{ gap: 16 }}>
-          {/* ── Spawn command ─────────────────────────────────────── */}
-          <div className="col" style={{ gap: 4 }}>
-            <label className="muted" style={{ fontSize: 11 }}>
-              New session provider
+        <div className="modal-header">
+          <div className="modal-title">Board Settings</div>
+          <div className="modal-subtitle">Canvas, sync, and assistant behavior for this board.</div>
+        </div>
+        <div className="modal-body settings-body">
+          {/* ── meee2 Online account + sync ───────────────────────── */}
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">meee2 Online</div>
+                <div className="settings-section-caption">Choose what local work is visible online.</div>
+              </div>
+            </div>
+            <div className="settings-panel settings-account-panel">
+              <div className="row" style={{ gap: 10 }}>
+                <span className="settings-avatar" aria-hidden>
+                  {profile?.userAvatarUrl ? (
+                    <img src={profile.userAvatarUrl} alt="" />
+                  ) : (
+                    <span>{profile?.initials ?? '?'}</span>
+                  )}
+                </span>
+                <div className="col" style={{ gap: 2, minWidth: 0, flex: 1 }}>
+                  <strong className="truncate">
+                    {profile?.connected ? profile.displayName : 'Not connected'}
+                  </strong>
+                  <span className="muted truncate" style={{ fontSize: 11 }}>
+                    {profile?.connected
+                      ? (profile.userEmail || profile.defaultSyncTeamName || 'meee2 Online')
+                      : 'Connect to sync local sessions to meee2 Online'}
+                  </span>
+                </div>
+                {profile?.connected ? (
+                  <>
+                    <button className="ghost" type="button" onClick={() => void openOnline()}>
+                      Open meee2 Online
+                    </button>
+                    <button className="ghost" type="button" onClick={() => void logoutOnline()}>
+                      Logout
+                    </button>
+                  </>
+                ) : (
+                  <button className="primary" type="button" onClick={() => void connectOnline()}>
+                    Connect
+                  </button>
+                )}
+              </div>
+              {profile?.connected && (
+                <div className="col" style={{ gap: 8, marginTop: 10 }}>
+                  {profile.defaultSyncTeamName && (
+                    <div className="settings-meta-row">
+                      <span>Team</span>
+                      <strong>{profile.defaultSyncTeamName}</strong>
+                    </div>
+                  )}
+                  <label className="settings-toggle-row">
+                    <span>
+                      <strong>Sync new sessions by default</strong>
+                      <small>Off means only explicitly enabled sessions sync.</small>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={profile.defaultSyncEnabled}
+                      onChange={(event) => void setDefaultSync(event.target.checked)}
+                    />
+                  </label>
+                  {sessionSync.length > 0 && (
+                    <div className="settings-session-sync-list">
+                      {sessionSync.map((session) => (
+                        <label key={session.sessionId} className="settings-session-sync-row">
+                          <span>
+                            <strong>{session.title}</strong>
+                            <small>{session.pluginDisplayName}{session.project ? ` · ${session.project}` : ''}</small>
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={session.enabled}
+                            onChange={(event) => void setSessionSync(session.sessionId, event.target.checked)}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ── Canvas display ─────────────────────────────────────── */}
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">Canvas Display</div>
+                <div className="settings-section-caption">Visual guides only; saved card positions stay unchanged.</div>
+              </div>
+            </div>
+            <label className="settings-toggle-row settings-panel">
+              <span>
+                <strong>Show grid</strong>
+                <small>Only changes the canvas background guide; session positions stay unchanged.</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={boardGridEnabled}
+                onChange={(event) => setBoardGridEnabled(event.target.checked)}
+              />
             </label>
+          </section>
+
+          {/* ── Spawn command ─────────────────────────────────────── */}
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">Default Spawn Provider</div>
+                <div className="settings-section-caption">Used by assistant-created local sessions.</div>
+              </div>
+            </div>
             <div className="segment">
               {(['claude', 'codex'] as SpawnProvider[]).map((provider) => (
                 <button
@@ -92,13 +274,16 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
             >
               Reset to default
             </button>
-          </div>
+          </section>
 
           {/* ── LLM provider for the global assistant ─────────────── */}
-          <div className="col" style={{ gap: 8 }}>
-            <label className="muted" style={{ fontSize: 11 }}>
-              Assistant LLM
-            </label>
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">Assistant LLM</div>
+                <div className="settings-section-caption">Controls the board assistant and enabled tools.</div>
+              </div>
+            </div>
 
             {/* Provider segmented control */}
             <div className="segment">
@@ -189,7 +374,7 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
                 ))}
               </div>
             </div>
-          </div>
+          </section>
         </div>
         <div className="modal-footer">
           <span style={{ flex: 1 }} />

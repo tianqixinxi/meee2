@@ -40,6 +40,8 @@ export interface CanvasPersistence {
   loadChannelLayout(): Promise<LayoutMap>
   saveChannelLayout(map: LayoutMap): Promise<void>
 
+  flushPendingWrites?(): Promise<void>
+
   loadDismissed(): Promise<Set<string>>
   saveDismissed(s: Set<string>): Promise<void>
 

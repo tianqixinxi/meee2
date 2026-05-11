@@ -13,11 +13,14 @@ import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
-import { NewSessionDialog } from './components/NewSessionDialog'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type { CanvasList, CanvasPatchProposal, CanvasPatchRequest, CanvasScope, Selection } from './types'
-import { loadSpawnProvider, spawnProviderLabel } from './preferences'
+import {
+  BOARD_PREFERENCES_CHANGED,
+  loadBoardGridEnabled,
+  spawnProviderLabel,
+} from './preferences'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
@@ -29,13 +32,14 @@ import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
   addSessionToCanvas,
   createCanvas,
+  deleteCanvas,
   fetchCanvases,
   removeSessionFromCanvas,
-  spawnGlobalSession,
   updateCanvas,
 } from './api'
 
 interface HydratedState {
+  canvasId: string
   sessionLayout: LayoutMap
   channelLayout: LayoutMap
   viewport: PersistedViewport | null
@@ -45,6 +49,49 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
+const MIN_CANVAS_LOADING_MS = 3000
+
+async function loadCanvasHydratedState(
+  canvasId: string,
+  persistence: CanvasPersistence = new HttpCanvasPersistence(canvasId),
+): Promise<HydratedState> {
+  const [
+    sessionLayout,
+    channelLayout,
+    viewport,
+    userElements,
+    dismissed,
+    unreadSids,
+  ] = await Promise.all([
+    persistence.loadSessionLayout(),
+    persistence.loadChannelLayout(),
+    persistence.loadViewport(),
+    persistence.loadUserElements(),
+    persistence.loadDismissed(),
+    persistence.loadUnreadSids(),
+  ])
+  return {
+    canvasId,
+    sessionLayout,
+    channelLayout,
+    viewport,
+    userElements,
+    dismissed,
+    unreadSids,
+  }
+}
+
+function emptyHydratedState(canvasId: string): HydratedState {
+  return {
+    canvasId,
+    sessionLayout: {},
+    channelLayout: {},
+    viewport: null,
+    userElements: [],
+    dismissed: new Set(),
+    unreadSids: new Set(),
+  }
+}
 
 function fallbackCanvasList(): CanvasList {
   return {
@@ -89,6 +136,8 @@ export default function App() {
   // 历史上 Board 在 useRef 初值里同步 loadXxx() 拿 localStorage —— 现在改成
   // async 接口后必须先 hydrate 完才能渲染（否则 useRef 拿不到值）。
   const [hydrated, setHydrated] = useState<HydratedState | null>(null)
+  const canvasSceneCacheRef = useRef<Record<string, HydratedState>>({})
+  const [canvasLoading, setCanvasLoading] = useState(true)
   useEffect(() => {
     let cancelled = false
     let retryTimer: number | null = null
@@ -121,28 +170,95 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false
-    setHydrated(null)
-    Promise.all([
-      persistence.loadSessionLayout(),
-      persistence.loadChannelLayout(),
-      persistence.loadViewport(),
-      persistence.loadUserElements(),
-      persistence.loadDismissed(),
-      persistence.loadUnreadSids(),
-    ]).then(([sessionLayout, channelLayout, viewport, userElements, dismissed, unreadSids]) => {
+    let loadingTimer: number | null = null
+    const cached = canvasSceneCacheRef.current[activeCanvasId]
+    const loadingStartedAt = performance.now()
+    if (cached) {
+      setHydrated(cached)
+      setCanvasLoading(false)
+    } else {
+      setCanvasLoading(true)
+    }
+
+    const rememberCanvasState = (next: HydratedState) => {
+      const updated = {
+        ...canvasSceneCacheRef.current,
+        [next.canvasId]: next,
+      }
+      canvasSceneCacheRef.current = updated
+    }
+    const finishLoading = (next: HydratedState) => {
+      const remainingMs = Math.max(0, MIN_CANVAS_LOADING_MS - (performance.now() - loadingStartedAt))
+      const apply = () => {
+        if (cancelled) return
+        setHydrated(next)
+        setCanvasLoading(false)
+      }
+      if (cached) {
+        apply()
+      } else {
+        loadingTimer = window.setTimeout(apply, remainingMs)
+      }
+    }
+
+    loadCanvasHydratedState(activeCanvasId, persistence).then((next) => {
       if (cancelled) return
-      setHydrated({ sessionLayout, channelLayout, viewport, userElements, dismissed, unreadSids })
+      rememberCanvasState(next)
+      finishLoading(next)
+    }).catch((err) => {
+      console.warn('[App] hydrate canvas failed:', (err as Error).message)
+      if (cancelled) return
+      const next = emptyHydratedState(activeCanvasId)
+      rememberCanvasState(next)
+      finishLoading(next)
     })
-    return () => { cancelled = true }
-  }, [persistence])
+    return () => {
+      cancelled = true
+      if (loadingTimer !== null) window.clearTimeout(loadingTimer)
+    }
+  }, [activeCanvasId, persistence])
+
+  useEffect(() => {
+    if (!canvasList) return
+    let cancelled = false
+    const ids = canvasList.canvases
+      .map((canvas) => canvas.id)
+      .filter((canvasId) => canvasId !== activeCanvasId && !canvasSceneCacheRef.current[canvasId])
+
+    for (const canvasId of ids) {
+      loadCanvasHydratedState(canvasId)
+        .then((next) => {
+          if (cancelled) return
+          if (canvasSceneCacheRef.current[canvasId]) return
+          const updated = {
+            ...canvasSceneCacheRef.current,
+            [canvasId]: next,
+          }
+          canvasSceneCacheRef.current = updated
+        })
+        .catch(() => {
+          // Prefetch is opportunistic; active canvas loading still reports errors.
+        })
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeCanvasId, canvasList])
+
+  const handleSceneSnapshotChange = useCallback((snapshot: HydratedState) => {
+    const updated = {
+      ...canvasSceneCacheRef.current,
+      [snapshot.canvasId]: snapshot,
+    }
+    canvasSceneCacheRef.current = updated
+  }, [])
 
   const boardState = useBoardState()
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newChannelOpen, setNewChannelOpen] = useState(false)
-  const [newSessionOpen, setNewSessionOpen] = useState(false)
-  const [newSessionDefaultCwd, setNewSessionDefaultCwd] = useState<string | undefined>(undefined)
-  // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮 / sidebar New session
+  // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
   // assistantRequested=false → mode='session'；assistantRequested=true → mode='assistant'。
   // 键盘 hijack 在画板空白时也会 setAssistantRequested(true)。
@@ -152,6 +268,16 @@ export default function App() {
   // 用户在 dock 里打 `/new-session`（或 /clear / /reset）才会清空。
   const [assistantMessagesByCanvas, setAssistantMessagesByCanvas] = useState<Record<string, DisplayMessage[]>>({})
   const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
+  useEffect(() => {
+    const handler = () => setBoardGridEnabled(loadBoardGridEnabled())
+    window.addEventListener(BOARD_PREFERENCES_CHANGED, handler)
+    window.addEventListener('storage', handler)
+    return () => {
+      window.removeEventListener(BOARD_PREFERENCES_CHANGED, handler)
+      window.removeEventListener('storage', handler)
+    }
+  }, [])
   // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
   // 用户点击 session card 时移除。持久化通过 persistence.saveUnreadSids。
   // 初值在 hydrate 完成前是空集合 —— 但 hydrate 不完成就不渲染（return null 保护），
@@ -163,6 +289,7 @@ export default function App() {
   // 上一次看到的每个 session 的 status，用来检测转换
   const prevStatusRef = useRef<Record<string, string>>({})
   const [fitSignal, setFitSignal] = useState(0)
+  const [arrangeSignal, setArrangeSignal] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [addToCanvasRequest, setAddToCanvasRequest] = useState<
     { sessionId: string; bump: number } | null
@@ -196,7 +323,7 @@ export default function App() {
   //   - dockOpen + selection.kind === 'session' + !assistantRequested → mode='session'
   //   - dockOpen + (assistantRequested || no session)                  → mode='assistant'
   // 用户在画板上按可打印键 / 粘贴会触发 dock 挂载（mode 由当前 selection
-  // 决定）。Click Ask AI / New session / group `+` → assistantRequested=true。
+  // 决定）。Click Ask AI → assistantRequested=true。
   // dock × 按钮关 dock：session 模式保留 selection；assistant 模式 reset
   // assistantRequested。
   const [dockOpen, setDockOpen] = useState(false)
@@ -365,17 +492,19 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to rename canvas'))
   }, [pushToast])
 
-  const handleSpawnGlobalSession = useCallback(() => {
-    const provider = loadSpawnProvider()
-    return spawnGlobalSession(activeCanvasId, provider)
-      .then((result) => {
-        pushToast('success', `Spawning ${spawnProviderLabel(provider)} in ${result.cwd}`)
-        void refreshCanvases()
+  const handleDeleteCanvas = useCallback((canvasId: string) => {
+    return deleteCanvas(canvasId)
+      .then((list) => {
+        setSelection({ kind: 'none' })
+        setOnCanvasCounts({})
+        const nextCache = { ...canvasSceneCacheRef.current }
+        delete nextCache[canvasId]
+        canvasSceneCacheRef.current = nextCache
+        setCanvasList(list)
+        pushToast('success', 'Canvas deleted')
       })
-      .catch((err) => {
-        pushToast('error', (err as Error).message || 'Failed to spawn session')
-      })
-  }, [activeCanvasId, pushToast, refreshCanvases])
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to delete canvas'))
+  }, [pushToast])
 
   const handleCountsChange = useCallback(
     (counts: Record<string, number>) => {
@@ -441,15 +570,15 @@ export default function App() {
     (templateId: string, source: string) => {
       setTemplateCache((prev) => {
         if (prev[templateId] === source) {
-          console.log('[App] applyTemplate noop (same) templateId=%s', templateId)
+          // console.log('[App] applyTemplate noop (same) templateId=%s', templateId)
           return prev
         }
-        console.log(
-          '[App] applyTemplate templateId=%s prevLen=%d nextLen=%d',
-          templateId,
-          prev[templateId]?.length ?? 0,
-          source.length,
-        )
+        // console.log(
+        //   '[App] applyTemplate templateId=%s prevLen=%d nextLen=%d',
+        //   templateId,
+        //   prev[templateId]?.length ?? 0,
+        //   source.length,
+        // )
         return { ...prev, [templateId]: source }
       })
     },
@@ -677,11 +806,8 @@ export default function App() {
 
   const canvasBoardState = useMemo(() => {
     if (!boardState.state) return null
-    return {
-      ...boardState.state,
-      sessions: boardState.state.sessions.filter((s) => canvasSessionIds.has(s.id)),
-    }
-  }, [boardState.state, canvasSessionIds])
+    return boardState.state
+  }, [boardState.state])
 
   const assistantMessages = assistantMessagesByCanvas[activeCanvasId] ?? []
   const setAssistantMessages = useCallback((next: SetStateAction<DisplayMessage[]>) => {
@@ -703,13 +829,17 @@ export default function App() {
   }
 
   const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
+  const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
 
   return (
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
         <div className="board-area">
           <Board
-            key={activeCanvasId}
+            canvasId={activeCanvasId}
+            canvasLoading={activeCanvasLoading}
+            gridModeEnabled={boardGridEnabled}
+            currentCanvasSessionIds={canvasSessionIds}
             persistence={persistence}
             initial={hydrated}
             state={canvasBoardState}
@@ -723,6 +853,7 @@ export default function App() {
             canvasPatchRequest={canvasPatchRequest}
             onCanvasPatchApplied={handleCanvasPatchApplied}
             onCountsChange={handleCountsChange}
+            onSceneSnapshotChange={handleSceneSnapshotChange}
             templateCache={templateCache}
             onNeedTemplate={ensureTemplate}
             unreadSids={unreadSids}
@@ -732,7 +863,6 @@ export default function App() {
             }}
             onNewChannel={() => setNewChannelOpen(true)}
             placeChannelRequest={placeChannelRequest}
-            onNewSession={handleSpawnGlobalSession}
             onAskAndSpawn={() => {
               setSelection({ kind: 'none' })
               setAssistantRequested(true)
@@ -741,6 +871,7 @@ export default function App() {
             }}
             onPreferences={() => setPreferencesOpen(true)}
             onFit={() => setFitSignal((x) => x + 1)}
+            arrangeSignal={arrangeSignal}
           />
           <CanvasToolbar
             canvases={canvasList.canvases}
@@ -748,7 +879,15 @@ export default function App() {
             onActiveCanvasChange={handleSetActiveCanvas}
             onCreateCanvas={handleCreateCanvas}
             onRenameCanvas={handleRenameCanvas}
+            onDeleteCanvas={handleDeleteCanvas}
+            onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
           />
+          {activeCanvasLoading && (
+            <div className="canvas-global-loading" role="status" aria-live="polite">
+              <div className="canvas-global-loading__ring" aria-hidden />
+              <div className="canvas-global-loading__label">Switching canvas</div>
+            </div>
+          )}
           {boardState.error && (
             <div className="inline-error" style={{ position: 'absolute', bottom: 8, left: 12 }}>
               {boardState.error}
@@ -818,11 +957,7 @@ export default function App() {
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}
-          onNewSession={handleSpawnGlobalSession}
-          onCreateInProject={(cwd) => {
-            setNewSessionDefaultCwd(cwd)
-            setNewSessionOpen(true)
-          }}
+          onPreferences={() => setPreferencesOpen(true)}
         />
         {newChannelOpen && boardState.state && (
           <NewChannelDialog
@@ -836,26 +971,12 @@ export default function App() {
             }}
           />
         )}
-        {newSessionOpen && (
-          <NewSessionDialog
-            defaultCwd={newSessionDefaultCwd}
-            onClose={() => {
-              setNewSessionOpen(false)
-              setNewSessionDefaultCwd(undefined)
-            }}
-            onSpawned={(cwd) => {
-              setNewSessionOpen(false)
-              setNewSessionDefaultCwd(undefined)
-              pushToast('success', `Spawning session in ${cwd}`)
-            }}
-            onError={(msg) => pushToast('error', msg)}
-          />
-        )}
         {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}
         {preferencesOpen && (
           <PreferencesDialog
             onClose={() => setPreferencesOpen(false)}
-            onSaved={(provider) => pushToast('success', `New session provider: ${spawnProviderLabel(provider)}`)}
+            onSaved={(provider) => pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)}
+            onToast={pushToast}
           />
         )}
         <div className="toasts">

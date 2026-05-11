@@ -6,10 +6,15 @@
 set -e
 
 SETTINGS_FILE="$HOME/.meee2/settings.json"
+REPORTER_DEBUG="${MEEE2_REPORTER_DEBUG:-}"
+
+debug_log() {
+    [[ "$REPORTER_DEBUG" == "1" ]] && echo "$(date +%H:%M:%S) [meee2] $*" >> /tmp/meee2-reporter.log
+}
 
 # Check if settings file exists
 if [[ ! -f "$SETTINGS_FILE" ]]; then
-    echo "$(date +%H:%M:%S) [meee2] No settings file at $SETTINGS_FILE" >> /tmp/meee2-reporter.log
+    debug_log "No settings file at $SETTINGS_FILE"
     exit 0
 fi
 
@@ -19,7 +24,7 @@ MEEE2_ONLINE=$(jq -r '.meee2.online // false' "$SETTINGS_FILE" 2>/dev/null)
 
 # Skip if not enabled or not online
 if [[ "$MEEE2_ENABLED" != "true" || "$MEEE2_ONLINE" != "true" ]]; then
-    echo "$(date +%H:%M:%S) [meee2] Skip: enabled=$MEEE2_ENABLED online=$MEEE2_ONLINE" >> /tmp/meee2-reporter.log
+    debug_log "Skip: enabled=$MEEE2_ENABLED online=$MEEE2_ONLINE"
     exit 0
 fi
 
@@ -92,7 +97,7 @@ HTTP_CODE=$(echo "$RESPONSE" | tail -1 | grep -oE '[0-9]{3}' || echo "000")
 BODY=$(echo "$RESPONSE" | sed '$ d')
 
 if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
-    echo "$(date +%H:%M:%S) [meee2] OK: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE" >> /tmp/meee2-reporter.log
+    debug_log "OK: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE"
 else
     echo "$(date +%H:%M:%S) [meee2] FAIL: event=$HOOK_EVENT status=$STATUS http=$HTTP_CODE body=$BODY" >> /tmp/meee2-reporter.log
 fi

@@ -32,8 +32,22 @@ public class VersionChecker: ObservableObject {
         currentVersion = Self.getCurrentAppVersion()
     }
 
-    public func startBackgroundCheck() {
-        Task { await checkVersion() }
+    public func startBackgroundCheck(initialDelay: TimeInterval = 0) {
+        guard timer == nil else {
+            NSLog("[VersionChecker] Background check already started")
+            return
+        }
+
+        if initialDelay > 0 {
+            Task {
+                let nanoseconds = UInt64(initialDelay * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                await checkVersion()
+            }
+        } else {
+            Task { await checkVersion() }
+        }
+
         timer = Timer.scheduledTimer(withTimeInterval: checkInterval, repeats: true) { [weak self] _ in
             Task { await self?.checkVersion() }
         }

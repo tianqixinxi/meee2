@@ -172,12 +172,12 @@ struct PluginSessionRowView: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .onAppear {
-            NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) APPEAR status=\(session.status.rawValue) displayName=\(effectiveDetailedStatus.displayName) color=\(colorName(effectiveDetailedStatus))")
-        }
-        .onChange(of: session.status) { newValue in
-            NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) CHANGE → \(newValue.rawValue) displayName=\(newValue.displayName) color=\(colorName(newValue))")
-        }
+        // .onAppear {
+        //     NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) APPEAR status=\(session.status.rawValue) displayName=\(effectiveDetailedStatus.displayName) color=\(colorName(effectiveDetailedStatus))")
+        // }
+        // .onChange(of: session.status) { newValue in
+        //     NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) CHANGE → \(newValue.rawValue) displayName=\(newValue.displayName) color=\(colorName(newValue))")
+        // }
         .contextMenu {
             if otherActiveSessions.isEmpty {
                 // 没有其他 session 时，展示一个 disabled 提示

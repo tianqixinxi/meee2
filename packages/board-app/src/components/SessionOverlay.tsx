@@ -13,12 +13,13 @@
 // Keying: each overlay item is keyed on element.id so copied rects get their
 // own overlay instance — same session data via customData.sessionId.
 
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { sceneCoordsToViewportCoords } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 
 import type { BoardState, Session } from '../types'
-import { parseSessionFromElement, RECT_W, RECT_H } from '@meee1/board-core'
+import { parseSessionFromElement, RECT_W, RECT_H, shortenProject } from '@meee1/board-core'
 import { CardHost } from '@meee1/board-ui'
 import { DEFAULT_TEMPLATE, templateIdForSession } from '@meee1/board-cards'
 
@@ -29,6 +30,9 @@ interface Props {
   onNeedTemplate: (pluginId: string) => void
   /** 未读通知的 session id 集合 */
   unreadSids: Set<string>
+  currentCanvasSessionIds: Set<string>
+  /** Bumped after Board mutates the Excalidraw scene programmatically. */
+  sceneRevision: number
 }
 
 // De-dup log tracker keyed by sid. Only fires when the source length changes
@@ -38,14 +42,21 @@ function logSourceForSid(sid: string, tplId: string, source: string) {
   const prev = _lastLoggedSrcLen.get(sid)
   if (prev === source.length) return
   _lastLoggedSrcLen.set(sid, source.length)
-  console.log(
-    '[SessionOverlay] source resolved sid=%s tpl=%s len=%d firstLine=%s',
-    sid.slice(0, 8),
-    tplId,
-    source.length,
-    source.split('\n', 1)[0]?.slice(0, 60),
-  )
+  // console.log(
+  //   '[SessionOverlay] source resolved sid=%s tpl=%s len=%d firstLine=%s',
+  //   sid.slice(0, 8),
+  //   tplId,
+  //   source.length,
+  //   source.split('\n', 1)[0]?.slice(0, 60),
+  // )
 }
+
+const MemoCardHost = memo(CardHost, (prev, next) =>
+  prev.sessionId === next.sessionId &&
+  prev.session === next.session &&
+  prev.board === next.board &&
+  prev.source === next.source,
+)
 
 interface OverlayItem {
   elementId: string
@@ -55,6 +66,7 @@ interface OverlayItem {
   top: number
   width: number
   height: number
+  isCurrentCanvasSession: boolean
 }
 
 export function SessionOverlay({
@@ -63,15 +75,30 @@ export function SessionOverlay({
   templateCache,
   onNeedTemplate,
   unreadSids,
+  currentCanvasSessionIds,
+  sceneRevision: _sceneRevision,
 }: Props) {
+  void _sceneRevision
   const [, setTick] = useState(0)
+  const rafRef = useRef<number | null>(null)
   useEffect(() => {
     if (!excalidrawAPI) return
+    const requestOverlayTick = () => {
+      if (rafRef.current !== null) return
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null
+        setTick((t) => (t + 1) & 0x7fffffff)
+      })
+    }
     const unsub = excalidrawAPI.onChange(() => {
-      setTick((t) => (t + 1) & 0x7fffffff)
+      requestOverlayTick()
     })
     return () => {
       try { unsub() } catch { /* noop */ }
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
     }
   }, [excalidrawAPI])
 
@@ -128,8 +155,16 @@ export function SessionOverlay({
       top,
       width,
       height,
+      isCurrentCanvasSession: currentCanvasSessionIds.has(session.id),
     })
   }
+
+  overlayItems.sort((a, b) => {
+    if (a.isCurrentCanvasSession !== b.isCurrentCanvasSession) {
+      return a.isCurrentCanvasSession ? 1 : -1
+    }
+    return a.top - b.top || a.left - b.left
+  })
 
   return (
     <div
@@ -155,7 +190,12 @@ export function SessionOverlay({
         return (
           <div
             key={it.elementId}
-            className="session-overlay__item"
+            className={
+              'session-overlay__item' +
+              (it.isCurrentCanvasSession
+                ? ' session-overlay__item--current'
+                : ' session-overlay__item--secondary')
+            }
             style={{
               position: 'absolute',
               left: it.left,
@@ -174,17 +214,40 @@ export function SessionOverlay({
               width: RECT_W,
               height: RECT_H,
             }}>
-              <CardHost
-                sessionId={it.session.id}
-                session={it.session}
-                board={state}
-                source={it.source}
-              />
+              {it.isCurrentCanvasSession ? (
+                <div className="session-overlay__card-shell">
+                  <MemoCardHost
+                    sessionId={it.session.id}
+                    session={it.session}
+                    board={state}
+                    source={it.source}
+                  />
+                </div>
+              ) : (
+                <SecondarySessionCard session={it.session} />
+              )}
             </div>
             {urgent && <NotificationDot />}
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function SecondarySessionCard({ session }: { session: Session }) {
+  const detail = session.currentTool || session.status
+  return (
+    <div
+      className="secondary-session-card"
+      style={{ '--card-accent': session.pluginColor } as CSSProperties}
+    >
+      <div className="secondary-session-card__top">
+        <span className="secondary-session-card__plugin">{session.pluginDisplayName}</span>
+        <span className="secondary-session-card__status">{detail}</span>
+      </div>
+      <div className="secondary-session-card__title">{session.title}</div>
+      <div className="secondary-session-card__project">{shortenProject(session.project)}</div>
     </div>
   )
 }

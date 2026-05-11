@@ -63,9 +63,8 @@ class ClaudePlugin: SessionPlugin {
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
 
-    /// 已 start 标记 — start() 必须 idempotent。AppDelegate 现在按"加载外部
-    /// plugin → startAll → register ClaudePlugin → 再 startAll"的顺序跑，会
-    /// 把 ClaudePlugin.start() 暴露给二次调用；不守卫的话 sessionMonitor
+    /// 已 start 标记 — start() 必须 idempotent。AppDelegate 会先启动
+    /// ClaudePlugin，再延迟加载外部 plugin 并再次 startAll；不守卫的话 sessionMonitor
     /// 的 .sink {}.store(in: &cancellables) 会**追加一份订阅**，导致
     /// syncToStore + notifySessionsUpdated 每次 session 变化触发两次。
     /// 跟 CodexPlugin 的 isRunning 守卫对齐。

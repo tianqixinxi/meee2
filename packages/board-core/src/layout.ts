@@ -4,6 +4,8 @@
 export interface Point {
   x: number
   y: number
+  width?: number
+  height?: number
 }
 
 export type LayoutMap = Record<string, Point>
@@ -12,7 +14,7 @@ const CARD_W = 360
 const CARD_H = 260
 const GAP_X = 40
 const GAP_Y = 40
-const COLS = 3
+const COLS = 4
 const COL_W = CARD_W + GAP_X
 const ROW_H = CARD_H + GAP_Y
 const ORIGIN_X = 80

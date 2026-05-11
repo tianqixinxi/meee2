@@ -412,8 +412,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             liveStatus={mode.session.status ?? null}
             liveCurrentTool={mode.session.currentTool ?? null}
             liveCurrentTask={mode.session.currentTask ?? null}
-            verbosity={verbosity}
-            onVerbosityChange={setVerbosity}
+            assistantLabel={mode.session.pluginDisplayName || 'Assistant'}
+            verbosity="normal"
+            onVerbosityChange={() => undefined}
           />
         ) : (
           // Assistant 模式复用 TranscriptView —— 跟 session 模式视觉同源
@@ -545,38 +546,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
                   </svg>
                 </button>
               </Tooltip>
-              {/* Transcript verbosity segmented pill —— 跟 input 同行的左下，
-                  user 期待 filter 跟 input box 在一起。同 storage key
-                  跟 TranscriptView uncontrolled fallback 共享，保留以前的
-                  user 偏好。*/}
-              <div
-                className="cc-verbosity"
-                role="radiogroup"
-                aria-label="Transcript verbosity"
-              >
-                {(['normal', 'thinking', 'verbose'] as TranscriptVerbosity[]).map((level) => (
-                  <button
-                    key={level}
-                    type="button"
-                    role="radio"
-                    aria-checked={verbosity === level}
-                    className={
-                      'cc-verbosity-btn' +
-                      (verbosity === level ? ' cc-verbosity-btn--active' : '')
-                    }
-                    title={
-                      level === 'normal'
-                        ? 'Normal — text only'
-                        : level === 'thinking'
-                        ? 'Thinking — text + thinking blocks'
-                        : 'Verbose — full transcript with tool inputs/outputs'
-                    }
-                    onClick={() => setVerbosity(level)}
-                  >
-                    {level}
-                  </button>
-                ))}
-              </div>
             </>
           ) : (
             <span className="assistant-context-chip" title={mode.workspacePath || undefined}>

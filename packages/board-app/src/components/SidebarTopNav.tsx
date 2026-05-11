@@ -7,8 +7,7 @@ import { Tooltip } from './Tooltip'
  *   ┌─────────────────────────────┐
  *   │  [Tab]  [Tab]  [Tab]   ←tabs (可配置 plugin 分类胶囊)
  *   ├─────────────────────────────┤
- *   │  + New session              ←action 列表
- *   │  ⚡ Routines
+ *   │  Search / Routines / Customize / More
  *   │  📦 Customize
  *   │  ▾ More
  *   └─────────────────────────────┘
@@ -31,8 +30,6 @@ interface Props {
   tabs: SidebarTab[]
   activeTabId: string
   onTabChange: (id: string) => void
-  /** + New session：在当前 canvas workspace 启动一个本地 session。 */
-  onNewSession: () => Promise<void> | void
   /** Search action —— toggle 一个 inline 搜索 input（父组件管 visibility + query state） */
   onToggleSearch?: () => void
   onRoutines?: () => void
@@ -44,7 +41,6 @@ export function SidebarTopNav({
   tabs,
   activeTabId,
   onTabChange,
-  onNewSession,
   onToggleSearch,
   onRoutines,
   onCustomize,
@@ -77,16 +73,6 @@ export function SidebarTopNav({
 
       {/* ── Action items ────────────────────────────────────────── */}
       <div className="stn-actions">
-        <Tooltip label="Start session in current canvas">
-          <button className="stn-action stn-action--primary" onClick={onNewSession}>
-            <span className="stn-action-icon" aria-hidden>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </span>
-            New session
-          </button>
-        </Tooltip>
         {onToggleSearch && (
           <Tooltip label="Search sessions (filter by title / project)">
             <button className="stn-action" onClick={onToggleSearch}>

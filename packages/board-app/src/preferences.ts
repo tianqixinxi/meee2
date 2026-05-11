@@ -5,6 +5,8 @@ import type { SpawnProvider } from './types'
 
 const KEY_SPAWN_PROVIDER = 'meee2.spawn.provider.v1'
 const LEGACY_KEY_SPAWN_COMMAND = 'meee2.spawn.defaultCommand.v1'
+const KEY_BOARD_GRID = 'meee2.board.gridMode.v1'
+export const BOARD_PREFERENCES_CHANGED = 'meee2:board-preferences-changed'
 
 export const DEFAULT_SPAWN_PROVIDER: SpawnProvider = 'claude'
 
@@ -35,6 +37,24 @@ export function saveSpawnProvider(value: SpawnProvider): void {
     } else {
       localStorage.setItem(KEY_SPAWN_PROVIDER, value)
     }
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadBoardGridEnabled(): boolean {
+  try {
+    return localStorage.getItem(KEY_BOARD_GRID) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveBoardGridEnabled(value: boolean): void {
+  try {
+    if (value) localStorage.setItem(KEY_BOARD_GRID, '1')
+    else localStorage.removeItem(KEY_BOARD_GRID)
+    window.dispatchEvent(new Event(BOARD_PREFERENCES_CHANGED))
   } catch {
     /* ignore */
   }

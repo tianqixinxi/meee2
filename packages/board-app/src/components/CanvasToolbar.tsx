@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, ChevronDown, Layers, Pencil, Plus } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, Layers, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
 
 interface Props {
@@ -8,6 +8,8 @@ interface Props {
   onActiveCanvasChange: (canvasId: string) => void
   onCreateCanvas: (name: string, scope: CanvasScope) => Promise<void> | void
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
+  onDeleteCanvas: (canvasId: string) => Promise<void> | void
+  onArrangeSessions: () => void
 }
 
 export function CanvasToolbar({
@@ -16,10 +18,14 @@ export function CanvasToolbar({
   onActiveCanvasChange,
   onCreateCanvas,
   onRenameCanvas,
+  onDeleteCanvas,
+  onArrangeSessions,
 }: Props) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
 
@@ -28,7 +34,20 @@ export function CanvasToolbar({
   const closePanels = () => {
     setCreating(false)
     setRenaming(false)
+    setDeleteConfirming(false)
   }
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const node = rootRef.current
+      if (node && event.target instanceof Node && node.contains(event.target)) return
+      setMenuOpen(false)
+      closePanels()
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [menuOpen])
 
   const submitCreate = () => {
     const name = canvasNameDraft.trim()
@@ -51,10 +70,18 @@ export function CanvasToolbar({
     })
   }
 
+  const submitDelete = () => {
+    if (!activeCanvas || activeCanvas.isDefault) return
+    Promise.resolve(onDeleteCanvas(activeCanvas.id)).then(() => {
+      setDeleteConfirming(false)
+      setMenuOpen(false)
+    })
+  }
+
   if (!activeCanvas) return null
 
   return (
-    <div className="canvas-toolbar">
+    <div className="canvas-toolbar" ref={rootRef}>
       <div className="canvas-toolbar__main">
         <button
           type="button"
@@ -113,8 +140,10 @@ export function CanvasToolbar({
               type="button"
               onClick={() => {
                 setCanvasNameDraft('')
-                setCreating((value) => !value)
+                setCreating(true)
+                setMenuOpen(false)
                 setRenaming(false)
+                setDeleteConfirming(false)
               }}
             >
               <Plus size={13} aria-hidden /> New canvas
@@ -122,49 +151,39 @@ export function CanvasToolbar({
             <button
               type="button"
               onClick={() => {
+                closePanels()
+                setMenuOpen(false)
+                onArrangeSessions()
+              }}
+            >
+              <LayoutGrid size={13} aria-hidden /> Arrange
+            </button>
+            <button
+              type="button"
+              onClick={() => {
                 setCanvasNameDraft(activeCanvas.name)
                 setRenaming((value) => !value)
                 setCreating(false)
+                setDeleteConfirming(false)
               }}
             >
               <Pencil size={13} aria-hidden /> Rename
             </button>
+            <button
+              type="button"
+              className="canvas-toolbar__danger-action"
+              onClick={() => {
+                setDeleteConfirming(true)
+                setMenuOpen(false)
+                setCreating(false)
+                setRenaming(false)
+              }}
+              disabled={activeCanvas.isDefault}
+              title={activeCanvas.isDefault ? 'Default canvas cannot be deleted' : 'Delete canvas'}
+            >
+              <Trash2 size={13} aria-hidden /> Delete
+            </button>
           </div>
-          {creating && (
-            <div className="canvas-toolbar__form">
-              <input
-                value={canvasNameDraft}
-                onChange={(event) => setCanvasNameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submitCreate()
-                  if (event.key === 'Escape') setCreating(false)
-                }}
-                placeholder="Canvas name"
-                autoFocus
-              />
-              <button
-                type="button"
-                className="canvas-toolbar__submit"
-                onClick={submitCreate}
-                disabled={!canvasNameDraft.trim()}
-              >
-                Create
-              </button>
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas scope">
-                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={canvasScopeDraft === scope ? 'is-selected' : ''}
-                    aria-pressed={canvasScopeDraft === scope}
-                    onClick={() => setCanvasScopeDraft(scope)}
-                  >
-                    {scope === 'team' ? 'Team' : 'Personal'}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
           {renaming && (
             <div className="canvas-toolbar__form canvas-toolbar__form--rename">
               <input
@@ -190,6 +209,82 @@ export function CanvasToolbar({
         </div>
       )}
 
+      {creating && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCreating(false)
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Create canvas">
+            <div className="modal-header">
+              <div className="modal-title">Create canvas</div>
+              <div className="modal-subtitle">Name it and choose where it lives.</div>
+            </div>
+            <div className="modal-body col" style={{ gap: 10 }}>
+              <input
+                value={canvasNameDraft}
+                onChange={(event) => setCanvasNameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submitCreate()
+                  if (event.key === 'Escape') setCreating(false)
+                }}
+                placeholder="Canvas name"
+                autoFocus
+              />
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas scope">
+                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={canvasScopeDraft === scope ? 'is-selected' : ''}
+                    aria-pressed={canvasScopeDraft === scope}
+                    onClick={() => setCanvasScopeDraft(scope)}
+                  >
+                    {scope === 'team' ? 'Team' : 'Personal'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={() => setCreating(false)}>Cancel</button>
+              <button
+                className="primary"
+                type="button"
+                onClick={submitCreate}
+                disabled={!canvasNameDraft.trim()}
+              >
+                Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deleteConfirming && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setDeleteConfirming(false)
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Delete canvas">
+            <div className="modal-header">
+              <div className="modal-title">Delete canvas</div>
+              <div className="modal-subtitle">This only removes the canvas container.</div>
+            </div>
+            <div className="modal-body col" style={{ gap: 8 }}>
+              <strong>{activeCanvas.name}</strong>
+              <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
+                This removes the canvas layout and memberships. Sessions are not deleted.
+              </span>
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={() => setDeleteConfirming(false)}>Cancel</button>
+              <button className="danger" type="button" onClick={submitDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

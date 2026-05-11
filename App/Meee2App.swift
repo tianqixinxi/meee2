@@ -21,5 +21,8 @@ struct meee2App: App {
         Settings {
             EmptyView()
         }
+        .commands {
+            CommandGroup(replacing: .appSettings) { }
+        }
     }
 }

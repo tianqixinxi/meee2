@@ -8,7 +8,6 @@
 //               Codex.app …)
 //   Pin / Unpin                                                              [P]
 //   Rename                                                                   [R]
-//   Duplicate                                                                [D]
 //
 // 不在 PR 里：Archive / Delete / Mark as unread —— 后续单独实现。
 
@@ -19,7 +18,6 @@ import {
   Pin,
   PinOff,
   Pencil,
-  Copy,
   MonitorSmartphone,
   Layout as CanvasIcon,
   Terminal as TerminalIcon,
@@ -41,7 +39,6 @@ export interface SessionRowMenuProps {
   onOpenInOriginal: () => void
   onTogglePin: () => void
   onRename: () => void
-  onDuplicate: () => void
   canvases?: CanvasInfo[]
   selectedCanvasIds?: string[]
   onSetCanvasMembership?: (canvasId: string, present: boolean) => void
@@ -142,7 +139,6 @@ export function SessionRowMenu({
   onOpenInOriginal,
   onTogglePin,
   onRename,
-  onDuplicate,
   canvases = [],
   selectedCanvasIds = [],
   onSetCanvasMembership,
@@ -169,7 +165,7 @@ export function SessionRowMenu({
         onClose()
         return
       }
-      // 字母快捷键 P / R / D 不能在 input/textarea 里触发，否则用户重命名
+      // 字母快捷键 P / R 不能在 input/textarea 里触发，否则用户重命名
       // 中敲 'p' 会被吞，CommandBar 打字也会被吞。
       const ae = document.activeElement as HTMLElement | null
       if (ae) {
@@ -179,12 +175,11 @@ export function SessionRowMenu({
       const k = e.key.toLowerCase()
       if (k === 'p') { e.preventDefault(); onTogglePin(); onClose() }
       else if (k === 'r') { e.preventDefault(); onRename(); onClose() }
-      else if (k === 'd') { e.preventDefault(); onDuplicate(); onClose() }
       else if (k === 'h' && onHide) { e.preventDefault(); onHide(); onClose() }
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [onClose, onTogglePin, onRename, onDuplicate, onHide])
+  }, [onClose, onTogglePin, onRename, onHide])
 
   // 默认贴在 anchor 右下；如果右侧出屏就翻转到左侧
   const style: React.CSSProperties = {}
@@ -245,12 +240,6 @@ export function SessionRowMenu({
         label="Rename"
         shortcut="R"
         onClick={() => { onRename(); onClose() }}
-      />
-      <MenuItem
-        icon={<Copy size={13} aria-hidden />}
-        label="Duplicate"
-        shortcut="D"
-        onClick={() => { onDuplicate(); onClose() }}
       />
       {onSetCanvasMembership && canvases.length > 0 && (
         <>

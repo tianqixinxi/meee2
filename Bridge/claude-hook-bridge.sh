@@ -12,11 +12,17 @@ HOOK_EVENT="${CLAUDE_HOOK_EVENT_NAME:-}"
 # 读取 stdin 数据
 INPUT=$(cat)
 
-# 无条件 debug：确认 bridge 被调用 + 看到的 event 是啥
-echo "$(date +%H:%M:%S) ENTER pid=$$ env_event=${CLAUDE_HOOK_EVENT_NAME:-none} claude_sid=${CLAUDE_SESSION_ID:-none} stdin_len=${#INPUT}" >> /tmp/meee2-bridge-debug.log
+# Debug tap is intentionally opt-in. The hook fires often, and unconditional
+# logging here quickly makes /tmp/meee2-bridge-debug.log noisy.
+BRIDGE_DEBUG="${MEEE2_BRIDGE_DEBUG:-}"
+if [ "$BRIDGE_DEBUG" = "1" ]; then
+    echo "$(date +%H:%M:%S) ENTER pid=$$ env_event=${CLAUDE_HOOK_EVENT_NAME:-none} claude_sid=${CLAUDE_SESSION_ID:-none} stdin_len=${#INPUT}" >> /tmp/meee2-bridge-debug.log
+fi
 if [ -n "$INPUT" ] && command -v jq &> /dev/null; then
     _peek=$(echo "$INPUT" | jq -r '.hook_event_name // "MISSING"' 2>/dev/null)
-    echo "  json.hook_event_name=$_peek" >> /tmp/meee2-bridge-debug.log
+    if [ "$BRIDGE_DEBUG" = "1" ]; then
+        echo "  json.hook_event_name=$_peek" >> /tmp/meee2-bridge-debug.log
+    fi
     # Temporary tap：dump full payload of Notification + PermissionRequest
     # so we can see the exact message field shape. Remove once we've captured.
     if [ "$_peek" = "Notification" ] || [ "$_peek" = "PermissionRequest" ]; then
@@ -131,14 +137,16 @@ EOF
                         GHOSTTY_TERMINAL_ID_VAL="$_CANDIDATE"
                         _GHOSTTY_STRATEGY="focused+cwd"
                     else
-                        echo "$(date +%H:%M:%S) GHOSTTY_REJECT sid=${CLAUDE_SESSION_ID:-?} candidate=$_CANDIDATE cwd_mine='$_MY_CWD' cwd_cand='$_CAND_CWD' (focus race)" >> /tmp/meee2-bridge-debug.log
+                        if [ "$BRIDGE_DEBUG" = "1" ]; then
+                            echo "$(date +%H:%M:%S) GHOSTTY_REJECT sid=${CLAUDE_SESSION_ID:-?} candidate=$_CANDIDATE cwd_mine='$_MY_CWD' cwd_cand='$_CAND_CWD' (focus race)" >> /tmp/meee2-bridge-debug.log
+                        fi
                     fi
                 fi
                 ;;
         esac
     fi
     # 落一行调试日志（带 strategy 标签便于看哪条路径成功）
-    if [ -n "$GHOSTTY_TERMINAL_ID_VAL" ]; then
+    if [ "$BRIDGE_DEBUG" = "1" ] && [ -n "$GHOSTTY_TERMINAL_ID_VAL" ]; then
         echo "$(date +%H:%M:%S) event=$_HOOK_EVENT_FOR_CAPTURE sid=${CLAUDE_SESSION_ID:-?} tty=$TTY_VAL ghosttyId=$GHOSTTY_TERMINAL_ID_VAL strategy=$_GHOSTTY_STRATEGY" >> /tmp/meee2-bridge-debug.log
     fi
 fi

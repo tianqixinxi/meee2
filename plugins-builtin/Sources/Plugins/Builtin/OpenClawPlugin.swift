@@ -68,7 +68,7 @@ class OpenClawPlugin: SessionPlugin {
         startTimer()
         refresh()
 
-        NSLog("[OpenClawPlugin] Started, watching: \(openclawAgentsPath.path), interval: \(refreshInterval)s")
+        // NSLog("[OpenClawPlugin] Started, watching: \(openclawAgentsPath.path), interval: \(refreshInterval)s")
         return true
     }
 
@@ -85,7 +85,7 @@ class OpenClawPlugin: SessionPlugin {
         refreshInFlight = false
         refreshTimer?.invalidate()
         refreshTimer = nil
-        NSLog("[OpenClawPlugin] Stopped")
+        // NSLog("[OpenClawPlugin] Stopped")
     }
 
     override func cleanup() {
@@ -116,7 +116,7 @@ class OpenClawPlugin: SessionPlugin {
     }
 
     private func handleRefreshResult(_ sessions: [PluginSession]) {
-        NSLog("[OpenClawPlugin] Refresh: found \(sessions.count) sessions")
+        // NSLog("[OpenClawPlugin] Refresh: found \(sessions.count) sessions")
 
         // 检测新消息 - 使用 lastMessage 而不是 subtitle
         for session in sessions {
@@ -127,10 +127,10 @@ class OpenClawPlugin: SessionPlugin {
             if let msg = newMessage, previousMessage != msg {
                 if previousMessage != nil,
                    shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: msg) {
-                    NSLog("[OpenClawPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
+                    // NSLog("[OpenClawPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
                     onUrgentEvent?(session, msg, nil)
                 } else {
-                    NSLog("[OpenClawPlugin] First load, skipping urgent for \(session.title)")
+                    // NSLog("[OpenClawPlugin] First load, skipping urgent for \(session.title)")
                 }
                 lastMessages[session.id] = msg
             }
@@ -243,7 +243,7 @@ class OpenClawPlugin: SessionPlugin {
         // 按更新时间排序
         sessions.sort { $0.startedAt > $1.startedAt }
 
-        NSLog("[OpenClawPlugin] Found \(sessions.count) active agents")
+        // NSLog("[OpenClawPlugin] Found \(sessions.count) active agents")
         return sessions
     }
 

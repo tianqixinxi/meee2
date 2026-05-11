@@ -11,7 +11,7 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
-import type { BoardState, CanvasPatchOperation, CanvasPatchRequest, Selection } from '../types'
+import type { BoardState, CanvasPatchOperation, CanvasPatchRequest, Selection, Session } from '../types'
 import {
   buildChannelHub,
   buildScene,
@@ -120,8 +120,22 @@ function FitIcon() {
     </svg>
   )
 }
+function GridIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M4 10h16M4 16h16M10 4v16M16 4v16" />
+    </svg>
+  )
+}
 
 const SIDEBAR_FOCUS_ZOOM = 1.25
+const SESSION_GRID_COLS = 4
+const SESSION_GRID_GAP_X = 40
+const SESSION_GRID_GAP_Y = 40
+const SESSION_GRID_COL_W = RECT_W + SESSION_GRID_GAP_X
+const SESSION_GRID_ROW_H = RECT_H + SESSION_GRID_GAP_Y
 
 /** Annotation written into a card-to-card arrow's customData so we can
  *  recognise it as a "DM line" across refreshes -- Excalidraw can briefly
@@ -129,6 +143,330 @@ const SIDEBAR_FOCUS_ZOOM = 1.25
  *  and without a persisted hint the arrow temporarily looks like a vanilla
  *  shape. */
 const DM_ARROW_META_KEY = 'dmArrow'
+
+function appStateFromViewport(
+  viewport: { scrollX: number; scrollY: number; zoom: number } | null,
+): any {
+  return viewport
+    ? {
+        scrollX: viewport.scrollX,
+        scrollY: viewport.scrollY,
+        zoom: { value: viewport.zoom },
+      }
+    : undefined
+}
+
+function sortSessionsForCanvas(
+  sessions: readonly Session[],
+  currentCanvasSessionIds: ReadonlySet<string>,
+): Session[] {
+  return [...sessions].sort((a, b) => {
+    const aCurrent = currentCanvasSessionIds.has(a.id)
+    const bCurrent = currentCanvasSessionIds.has(b.id)
+    if (aCurrent !== bCurrent) return aCurrent ? -1 : 1
+    const aTime = Date.parse(a.lastActivity || '')
+    const bTime = Date.parse(b.lastActivity || '')
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0)
+  })
+}
+
+function gridPointAt(origin: { x: number; y: number }, index: number): { x: number; y: number } {
+  return {
+    x: origin.x + (index % SESSION_GRID_COLS) * SESSION_GRID_COL_W,
+    y: origin.y + Math.floor(index / SESSION_GRID_COLS) * SESSION_GRID_ROW_H,
+  }
+}
+
+function sameLayoutMap(a: LayoutMap, b: LayoutMap): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)])
+  for (const key of keys) {
+    const left = a[key]
+    const right = b[key]
+    if (!left || !right) return false
+    if (Math.abs((left.x ?? 0) - (right.x ?? 0)) >= 0.5) return false
+    if (Math.abs((left.y ?? 0) - (right.y ?? 0)) >= 0.5) return false
+    if (Math.abs((left.width ?? 0) - (right.width ?? 0)) >= 0.5) return false
+    if (Math.abs((left.height ?? 0) - (right.height ?? 0)) >= 0.5) return false
+  }
+  return true
+}
+
+function layoutMapSignature(map: LayoutMap): string {
+  return Object.keys(map).sort().map((key) => {
+    const item = map[key]
+    if (!item) return `${key}:nil`
+    const x = Math.round((item.x ?? 0) * 10)
+    const y = Math.round((item.y ?? 0) * 10)
+    const w = Math.round((item.width ?? 0) * 10)
+    const h = Math.round((item.height ?? 0) * 10)
+    return `${key}:${x},${y},${w},${h}`
+  }).join('|')
+}
+
+function viewportSignature(viewport: { scrollX: number; scrollY: number; zoom: number } | null): string {
+  if (!viewport) return 'nil'
+  return [
+    Math.round(viewport.scrollX * 10),
+    Math.round(viewport.scrollY * 10),
+    Math.round(viewport.zoom * 1000),
+  ].join(',')
+}
+
+function bindingSignature(binding: any): unknown {
+  if (!binding) return null
+  return {
+    elementId: binding.elementId ?? null,
+    focus: binding.focus ?? null,
+    gap: binding.gap ?? null,
+  }
+}
+
+function sceneElementSignature(el: ExcalidrawElement): unknown {
+  const anyEl = el as any
+  return {
+    id: el.id,
+    type: el.type,
+    isDeleted: Boolean(anyEl.isDeleted),
+    x: Math.round((anyEl.x ?? 0) * 10) / 10,
+    y: Math.round((anyEl.y ?? 0) * 10) / 10,
+    width: Math.round((anyEl.width ?? 0) * 10) / 10,
+    height: Math.round((anyEl.height ?? 0) * 10) / 10,
+    angle: anyEl.angle ?? 0,
+    strokeColor: anyEl.strokeColor ?? null,
+    backgroundColor: anyEl.backgroundColor ?? null,
+    fillStyle: anyEl.fillStyle ?? null,
+    strokeWidth: anyEl.strokeWidth ?? null,
+    strokeStyle: anyEl.strokeStyle ?? null,
+    roughness: anyEl.roughness ?? null,
+    roundness: anyEl.roundness ?? null,
+    opacity: anyEl.opacity ?? null,
+    frameId: anyEl.frameId ?? null,
+    name: anyEl.name ?? null,
+    text: anyEl.text ?? null,
+    link: anyEl.link ?? null,
+    startArrowhead: anyEl.startArrowhead ?? null,
+    endArrowhead: anyEl.endArrowhead ?? null,
+    points: anyEl.points ?? null,
+    startBinding: bindingSignature(anyEl.startBinding),
+    endBinding: bindingSignature(anyEl.endBinding),
+    customData: anyEl.customData ?? null,
+  }
+}
+
+function sceneElementsNeedUpdate(
+  current: readonly ExcalidrawElement[],
+  next: readonly ExcalidrawElement[],
+): boolean {
+  if (current.length !== next.length) return true
+  for (let i = 0; i < next.length; i += 1) {
+    if (JSON.stringify(sceneElementSignature(current[i])) !== JSON.stringify(sceneElementSignature(next[i]))) {
+      return true
+    }
+  }
+  return false
+}
+
+function interactiveElementsSignature(elements: readonly ExcalidrawElement[]): string {
+  let out = ''
+  for (const el of elements) {
+    const anyEl = el as any
+    out += el.id
+    out += '|'
+    out += el.type
+    out += '|'
+    out += anyEl.isDeleted ? '1' : '0'
+    out += '|'
+    out += Math.round((anyEl.x ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.y ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.width ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.height ?? 0) * 10)
+    out += '|'
+    out += anyEl.frameId ?? ''
+    out += '|'
+    out += parseSessionFromElement(el) ?? parseChannelFromElement(el) ?? ''
+    out += ';'
+  }
+  return out
+}
+
+function sessionCountSignature(
+  elements: readonly ExcalidrawElement[],
+  currentCanvasSessionIds: ReadonlySet<string>,
+): string {
+  const counts: Record<string, number> = {}
+  for (const el of elements) {
+    if (el.type !== 'rectangle') continue
+    if ((el as any).isDeleted) continue
+    const sid = parseSessionFromElement(el)
+    if (!sid || !currentCanvasSessionIds.has(sid)) continue
+    counts[sid] = (counts[sid] ?? 0) + 1
+  }
+  return Object.keys(counts).sort().map((sid) => `${sid}:${counts[sid]}`).join('|')
+}
+
+function frameMembershipSignature(elements: readonly ExcalidrawElement[]): string {
+  let out = ''
+  for (const el of elements) {
+    const anyEl = el as any
+    if (el.type === 'rectangle') {
+      const sid = parseSessionFromElement(el)
+      if (!sid) continue
+      out += `r:${sid}:${anyEl.isDeleted ? 1 : 0}:${anyEl.frameId ?? ''};`
+      continue
+    }
+    if (anyEl.type === 'frame') {
+      const name = parseChannelFromElement(el)
+      if (!name) continue
+      out += `f:${el.id}:${name}:${anyEl.isDeleted ? 1 : 0};`
+    }
+  }
+  return out
+}
+
+function dmStructureSignature(elements: readonly ExcalidrawElement[]): string {
+  let out = ''
+  for (const el of elements) {
+    if (el.type !== 'arrow') continue
+    const anyEl = el as any
+    const start = anyEl.startBinding?.elementId ?? ''
+    const end = anyEl.endBinding?.elementId ?? ''
+    const meta = anyEl.customData?.dmArrow?.channel ?? ''
+    out += `${el.id}:${anyEl.isDeleted ? 1 : 0}:${start}:${end}:${meta};`
+  }
+  return out
+}
+
+function persistedUserElementsSignature(elements: readonly ExcalidrawElement[]): string {
+  let out = ''
+  for (const el of elements) {
+    if (el.type === 'rectangle' && parseSessionFromElement(el)) continue
+    const anyEl = el as any
+    out += el.id
+    out += '|'
+    out += el.type
+    out += '|'
+    out += anyEl.isDeleted ? '1' : '0'
+    out += '|'
+    out += Math.round((anyEl.x ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.y ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.width ?? 0) * 10)
+    out += ','
+    out += Math.round((anyEl.height ?? 0) * 10)
+    out += '|'
+    out += anyEl.frameId ?? ''
+    out += '|'
+    out += anyEl.text ?? ''
+    out += '|'
+    out += JSON.stringify(anyEl.customData ?? null)
+    out += ';'
+  }
+  return out
+}
+
+function rectsIntersect(
+  a: { x: number; y: number; width?: number; height?: number },
+  b: { x: number; y: number; width?: number; height?: number },
+): boolean {
+  const aw = a.width ?? RECT_W
+  const ah = a.height ?? RECT_H
+  const bw = b.width ?? RECT_W
+  const bh = b.height ?? RECT_H
+  return a.x < b.x + bw && a.x + aw > b.x && a.y < b.y + bh && a.y + ah > b.y
+}
+
+function liveSessionRectElements(elements: readonly ExcalidrawElement[]): ExcalidrawElement[] {
+  return elements.filter((el) =>
+    el.type === 'rectangle' &&
+    !(el as any).isDeleted &&
+    Boolean(parseSessionFromElement(el)),
+  )
+}
+
+function sessionLayoutFromRect(el: ExcalidrawElement): LayoutMap[string] {
+  return {
+    x: el.x,
+    y: el.y,
+    width: typeof el.width === 'number' && el.width > 0 ? el.width : undefined,
+    height: typeof el.height === 'number' && el.height > 0 ? el.height : undefined,
+  }
+}
+
+function applyStoredSessionSize<T extends ExcalidrawElement>(
+  el: T,
+  stored: LayoutMap[string] | null | undefined,
+): T {
+  if (!stored) return el
+  const width = typeof stored.width === 'number' && stored.width > 0 ? stored.width : undefined
+  const height = typeof stored.height === 'number' && stored.height > 0 ? stored.height : undefined
+  if (!width && !height) return el
+  return {
+    ...el,
+    width: width ?? el.width,
+    height: height ?? el.height,
+  } as T
+}
+
+function enforceSingleSessionCard(
+  elements: readonly ExcalidrawElement[],
+): { elements: readonly ExcalidrawElement[]; changed: boolean } {
+  const seen = new Set<string>()
+  let changed = false
+  const next = elements.map((el) => {
+    if (el.type !== 'rectangle' || (el as any).isDeleted) return el
+    const sid = parseSessionFromElement(el)
+    if (!sid) return el
+    if (!seen.has(sid)) {
+      seen.add(sid)
+      return el
+    }
+    changed = true
+    return { ...el, isDeleted: true } as ExcalidrawElement
+  })
+  return changed ? { elements: next, changed } : { elements, changed: false }
+}
+
+function originFromRectsOrViewport(
+  rects: readonly ExcalidrawElement[],
+  api: ExcalidrawImperativeAPI,
+): { x: number; y: number } {
+  if (rects.length > 0) {
+    return {
+      x: Math.round(Math.min(...rects.map((el) => el.x))),
+      y: Math.round(Math.min(...rects.map((el) => el.y))),
+    }
+  }
+  const appState = api.getAppState()
+  const viewW = appState.width ?? 800
+  const viewH = appState.height ?? 600
+  const zoom = appState.zoom.value || 1
+  return {
+    x: Math.round(-appState.scrollX + viewW / zoom / 2 - RECT_W / 2),
+    y: Math.round(-appState.scrollY + viewH / zoom / 2 - RECT_H / 2),
+  }
+}
+
+function findOpenSessionGridPoint(
+  api: ExcalidrawImperativeAPI,
+  elements: readonly ExcalidrawElement[],
+  preferred?: { x: number; y: number } | null,
+): { x: number; y: number } {
+  const rects = liveSessionRectElements(elements)
+  const isOpen = (point: { x: number; y: number }) =>
+    !rects.some((rect) => rectsIntersect(point, rect))
+  if (preferred && isOpen(preferred)) return preferred
+
+  const origin = originFromRectsOrViewport(rects, api)
+  for (let index = 0; index < 400; index += 1) {
+    const point = gridPointAt(origin, index)
+    if (isOpen(point)) return point
+  }
+  return preferred ?? gridPointAt(origin, rects.length)
+}
 
 interface DmMeta {
   channel: string
@@ -269,11 +607,17 @@ function frameIdToChannelName(
 
 
 interface Props {
+  canvasId: string
+  canvasLoading: boolean
+  gridModeEnabled: boolean
+  currentCanvasSessionIds: Set<string>
   state: BoardState | null
   selection: Selection
   onSelectionChange: (s: Selection) => void
   /** Increments each time Fit button is pressed. */
   fitSignal: number
+  /** Increments each time Arrange sessions is requested outside Board. */
+  arrangeSignal: number
   /**
    * Requests inserting a new embeddable for the given session id. The bump
    * counter changes on each request so the same session id can be inserted
@@ -302,6 +646,15 @@ interface Props {
    * Used by the sidebar to show "on canvas / off canvas" indicators.
    */
   onCountsChange: (counts: Record<string, number>) => void
+  onSceneSnapshotChange: (snapshot: {
+    canvasId: string
+    sessionLayout: LayoutMap
+    channelLayout: LayoutMap
+    viewport: { scrollX: number; scrollY: number; zoom: number } | null
+    userElements: any[]
+    dismissed: Set<string>
+    unreadSids: Set<string>
+  }) => void
   /** templateId → raw TSX source. App-level cache. */
   templateCache: Record<string, string>
   /** Fires on first render for a pluginId we haven't fetched yet. */
@@ -318,8 +671,6 @@ interface Props {
    * Excalidraw API, which only Board owns.
    */
   placeChannelRequest: { channelName: string; bump: number } | null
-  /** Invoked from the <MainMenu> "New session" item. */
-  onNewSession: () => void
   /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
   onAskAndSpawn: () => void
   /** Invoked from the <MainMenu> "Preferences…" item. */
@@ -343,10 +694,15 @@ interface Props {
 }
 
 export default function Board({
+  canvasId,
+  canvasLoading,
+  gridModeEnabled,
+  currentCanvasSessionIds,
   state,
   selection,
   onSelectionChange,
   fitSignal,
+  arrangeSignal,
   addToCanvasRequest,
   hideFromCanvasRequest,
   bulkVisibilityRequest,
@@ -354,12 +710,12 @@ export default function Board({
   canvasPatchRequest,
   onCanvasPatchApplied,
   onCountsChange,
+  onSceneSnapshotChange,
   templateCache,
   onNeedTemplate,
   onRefresh,
   onNewChannel,
   placeChannelRequest,
-  onNewSession,
   onAskAndSpawn,
   onPreferences,
   onFit,
@@ -368,6 +724,8 @@ export default function Board({
   initial,
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  const [arrangeConfirmOpen, setArrangeConfirmOpen] = useState(false)
+  const [sceneRevision, setSceneRevision] = useState(0)
   // 把 Create channel / DM line 两个按钮 portal 到 Excalidraw 自己的
   // 横向 shape tool 行 (`.App-toolbar .Stack_horizontal`) 里 ——
   // Excalidraw 不暴露添加 shape tool 的公开 API（issue #7583 / #6697 已
@@ -410,13 +768,7 @@ export default function Board({
   // 只读一次 —— Excalidraw 的 initialData 只在首次挂载生效。
   const initialDataRef = useRef<{ elements: any[]; appState: any }>({
     elements: initial.userElements,
-    appState: initial.viewport
-      ? {
-          scrollX: initial.viewport.scrollX,
-          scrollY: initial.viewport.scrollY,
-          zoom: { value: initial.viewport.zoom },
-        }
-      : undefined,
+    appState: appStateFromViewport(initial.viewport),
   })
   const saveAppStateDebounced = useMemo(
     () => debounce((s: { scrollX: number; scrollY: number; zoom: number }) => { void persistence.saveViewport(s) }, 400),
@@ -430,6 +782,8 @@ export default function Board({
   // Persisted via persistence.saveDismissed so auto-re-add doesn't fight the
   // user across WS ticks / reloads.
   const dismissedRef = useRef<Set<string>>(initial.dismissed)
+  const currentCanvasSessionIdsRef = useRef(currentCanvasSessionIds)
+  currentCanvasSessionIdsRef.current = currentCanvasSessionIds
   // Previous per-sid card count, used to detect >0 → 0 transitions in onChange.
   const prevCountsRef = useRef<Record<string, number>>({})
   const lastAddBumpRef = useRef<number>(-1)
@@ -461,6 +815,12 @@ export default function Board({
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
   const prevSelSigRef = useRef<string>('')
+  const prevInteractiveElementsSigRef = useRef<string>('')
+  const prevCountSigRef = useRef<string>('')
+  const prevFrameMembershipSigRef = useRef<string>('')
+  const prevDmStructureSigRef = useRef<string>('')
+  const prevPersistedUserElementsSigRef = useRef<string>('')
+  const prevSceneSnapshotSigRef = useRef<string>('')
   // Tracks the last embeddable id we saw `activeEmbeddable.state === 'active'`
   // for. Prevents re-firing `activateSession` every frame while the embeddable
   // stays active.
@@ -470,6 +830,22 @@ export default function Board({
   // our effects don't capture stale callbacks across React re-renders.
   const onCountsChangeRef = useRef(onCountsChange)
   onCountsChangeRef.current = onCountsChange
+  const onSceneSnapshotChangeRef = useRef(onSceneSnapshotChange)
+  onSceneSnapshotChangeRef.current = onSceneSnapshotChange
+  const publishSceneSnapshotDebounced = useMemo(
+    () => debounce((snapshot: {
+      canvasId: string
+      sessionLayout: LayoutMap
+      channelLayout: LayoutMap
+      viewport: { scrollX: number; scrollY: number; zoom: number } | null
+      userElements: any[]
+      dismissed: Set<string>
+      unreadSids: Set<string>
+    }) => {
+      onSceneSnapshotChangeRef.current(snapshot)
+    }, 120),
+    [],
+  )
   const reportCountsRef = useRef(
     (elements: readonly ExcalidrawElement[]) => {
       const counts: Record<string, number> = {}
@@ -479,6 +855,7 @@ export default function Board({
         if ((el as any).isDeleted) continue
         const sid = parseSessionFromElement(el)
         if (!sid) continue
+        if (!currentCanvasSessionIdsRef.current.has(sid)) continue
         counts[sid] = (counts[sid] ?? 0) + 1
       }
 
@@ -511,20 +888,57 @@ export default function Board({
           }
         }
       }
-      if (dropped.length || appeared.length) {
-        console.log(
-          '[Board.counts]',
-          'dropped=', dropped.map(s => s.slice(0, 8)),
-          'appeared=', appeared.map(s => s.slice(0, 8)),
-          'dismissed=', [...dismissedRef.current].map(s => s.slice(0, 8)),
-        )
-      }
+      // if (dropped.length || appeared.length) {
+      //   console.log(
+      //     '[Board.counts]',
+      //     'dropped=', dropped.map(s => s.slice(0, 8)),
+      //     'appeared=', appeared.map(s => s.slice(0, 8)),
+      //     'dismissed=', [...dismissedRef.current].map(s => s.slice(0, 8)),
+      //   )
+      // }
       if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
       prevCountsRef.current = counts
 
       onCountsChangeRef.current(counts)
     },
   )
+
+  useEffect(() => {
+    const appState = appStateFromViewport(initial.viewport)
+    initialDataRef.current = {
+      elements: initial.userElements,
+      appState,
+    }
+    layoutRef.current = initial.sessionLayout
+    channelLayoutRef.current = initial.channelLayout
+    dismissedRef.current = initial.dismissed
+    prevCountsRef.current = {}
+    knownFrameMembershipsRef.current = new Map()
+    knownDmChannelsRef.current = new Map()
+    knownChannelFramesRef.current = new Set()
+    pendingDmOpsRef.current.clear()
+    pendingFrameOpsRef.current.clear()
+    initialFitDoneRef.current = false
+    prevSelSigRef.current = ''
+    prevInteractiveElementsSigRef.current = ''
+    prevCountSigRef.current = ''
+    prevFrameMembershipSigRef.current = ''
+    prevDmStructureSigRef.current = ''
+    prevPersistedUserElementsSigRef.current = ''
+    prevSceneSnapshotSigRef.current = ''
+    lastActivatedElementIdRef.current = null
+    onSelectionChange({ kind: 'none' })
+    if (!api) return
+    api.updateScene({
+      elements: initial.userElements as any,
+      appState: {
+        ...(appState ?? {}),
+        selectedElementIds: {},
+      } as any,
+    })
+    setSceneRevision((x) => (x + 1) & 0x7fffffff)
+    reportCountsRef.current(initial.userElements as any)
+  }, [api, canvasId, initial, onSelectionChange])
 
   // -- Always-allow validator for our custom link scheme ------------------
   // Excalidraw normally checks embeddable links against an allowlist (known
@@ -546,11 +960,19 @@ export default function Board({
   // rects -- they don't get their own managed shape; styling is normalised
   // here so a refreshed DM arrow keeps the violet/dashed look.
   useEffect(() => {
-    if (!api || !state) return
+    if (!api || !state || canvasLoading) return
 
-    const ids = state.sessions.map((s) => s.id)
-    layoutRef.current = ensurePositions(ids, layoutRef.current)
-    saveLayoutDebounced(layoutRef.current)
+    const sceneState: BoardState = {
+      ...state,
+      sessions: sortSessionsForCanvas(state.sessions, currentCanvasSessionIds),
+    }
+
+    const ids = sceneState.sessions.map((s) => s.id)
+    const nextLayout = ensurePositions(ids, layoutRef.current)
+    if (!sameLayoutMap(layoutRef.current, nextLayout)) {
+      layoutRef.current = nextLayout
+      saveLayoutDebounced(nextLayout)
+    }
 
     // Channel names (filter out operator '__…' defensively; backend already
     // strips them but guard anyway). DM channels get filtered separately
@@ -559,21 +981,24 @@ export default function Board({
       .map((c) => c.name)
       .filter((n) => !n.startsWith('__'))
     const frameChannelNames = channelNames.filter((n) => !isDmChannelName(n))
-    channelLayoutRef.current = ensureChannelPositions(
+    const nextChannelLayout = ensureChannelPositions(
       frameChannelNames,
       channelLayoutRef.current,
     )
-    saveChannelLayoutDebounced(channelLayoutRef.current)
+    if (!sameLayoutMap(channelLayoutRef.current, nextChannelLayout)) {
+      channelLayoutRef.current = nextChannelLayout
+      saveChannelLayoutDebounced(nextChannelLayout)
+    }
 
     const sessionById = new Map(
-      state.sessions.map((s) => [s.id, { id: s.id, title: s.title }]),
+      sceneState.sessions.map((s) => [s.id, { id: s.id, title: s.title }]),
     )
     const liveChannelByName = new Map(
       state.channels
         .filter((c) => !c.name.startsWith('__'))
         .map((c) => [c.name, c]),
     )
-    const sessionIdsArr = state.sessions.map((s) => s.id)
+    const sessionIdsArr = sceneState.sessions.map((s) => s.id)
 
     // -- Bucket existing elements --------------------------------------
     const existing = api.getSceneElements()
@@ -631,12 +1056,26 @@ export default function Board({
     })
 
     // Session rects.
-    const existingEmbeddables = existing.filter(
+    const existingEmbeddablesRaw = existing.filter(
       (e) =>
         e.type === 'rectangle' &&
         !(e as any).isDeleted &&
         parseSessionFromElement(e) !== null,
     )
+    const existingEmbeddables: ExcalidrawElement[] = []
+    const duplicateEmbeddables: ExcalidrawElement[] = []
+    {
+      const seenSessionRects = new Set<string>()
+      for (const el of existingEmbeddablesRaw) {
+        const sid = parseSessionFromElement(el)
+        if (!sid || !seenSessionRects.has(sid)) {
+          if (sid) seenSessionRects.add(sid)
+          existingEmbeddables.push(el)
+        } else {
+          duplicateEmbeddables.push({ ...el, isDeleted: true } as ExcalidrawElement)
+        }
+      }
+    }
 
     // Current channel frames (the new shape) + legacy hubs/labels/spokes
     // that we tombstone on this rebuild.
@@ -692,13 +1131,14 @@ export default function Board({
     // admitted into this canvas, otherwise a checked canvas membership can
     // still render as a hidden row/card after older local state is restored.
     let clearedMembershipDismissal = false
-    for (const s of state.sessions) {
+    for (const s of sceneState.sessions) {
+      if (!currentCanvasSessionIds.has(s.id)) continue
       if (dismissedRef.current.delete(s.id)) clearedMembershipDismissal = true
     }
     if (clearedMembershipDismissal) void persistence.saveDismissed(dismissedRef.current)
 
     const newSessionIds: string[] = []
-    for (const s of state.sessions) {
+    for (const s of sceneState.sessions) {
       // In multi-canvas mode, App.tsx already filters state.sessions to the
       // active canvas membership. Membership means visible on this canvas, so
       // older sessions must still get a card instead of being silently hidden.
@@ -706,31 +1146,31 @@ export default function Board({
       newSessionIds.push(s.id)
     }
 
-    if (newSessionIds.length > 0 || dismissedRef.current.size > 0) {
-      console.log(
-        '[Board.scene] new=%d dismissed=%d',
-        newSessionIds.length,
-        dismissedRef.current.size,
-      )
-    }
+    // if (newSessionIds.length > 0 || dismissedRef.current.size > 0) {
+    //   console.log(
+    //     '[Board.scene] new=%d dismissed=%d',
+    //     newSessionIds.length,
+    //     dismissedRef.current.size,
+    //   )
+    // }
 
     // Channels needing a fresh frame: every non-DM channel that hasn't been
     // built yet.
     const newChannelNames = frameChannelNames.filter(
       (n) => !knownFrameChannelNames.has(n),
     )
-    if (newChannelNames.length > 0) {
-      console.log(
-        '[Board] rebuilding missing channel frames:',
-        newChannelNames,
-        '(known:',
-        Array.from(knownFrameChannelNames),
-        ')',
-      )
-    }
+    // if (newChannelNames.length > 0) {
+    //   console.log(
+    //     '[Board] rebuilding missing channel frames:',
+    //     newChannelNames,
+    //     '(known:',
+    //     Array.from(knownFrameChannelNames),
+    //     ')',
+    //   )
+    // }
 
     const { newEmbeddables, newChannelHubs } = buildScene(
-      state,
+      sceneState,
       layoutRef.current,
       channelLayoutRef.current,
       {
@@ -778,9 +1218,12 @@ export default function Board({
       }
       const next: any = {
         ...el,
-        strokeColor: '#262624',
-        backgroundColor: '#262624',
+        strokeColor: 'transparent',
+        backgroundColor: 'transparent',
         fillStyle: 'solid',
+        strokeWidth: 0,
+        roughness: 0,
+        roundness: null,
       }
       if (sid && !sidHasPendingFrameOp(sid)) {
         const expectedChannel = stateFrameMembershipBySid.get(sid) ?? null
@@ -826,6 +1269,7 @@ export default function Board({
     const preservedExisting = [
       ...userShapes,
       ...normalizedExisting,
+      ...duplicateEmbeddables,
       ...normalizedChannelFrames,
       ...tombstonedLegacyHubs,
       ...tombstonedLegacyHubLabels,
@@ -834,9 +1278,12 @@ export default function Board({
     ]
 
     const finalElements = [...preservedExisting, ...converted]
-    api.updateScene({
-      elements: finalElements as any,
-    })
+    if (sceneElementsNeedUpdate(existing, finalElements)) {
+      api.updateScene({
+        elements: finalElements as any,
+      })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
+    }
     reportCountsRef.current(finalElements)
     if (!initialFitDoneRef.current) {
       const visibleContent = finalElements.filter((el) => !(el as any).isDeleted)
@@ -851,7 +1298,7 @@ export default function Board({
         })
       }
     }
-  }, [api, state, persistence, saveLayoutDebounced, saveChannelLayoutDebounced])
+  }, [api, state, canvasId, canvasLoading, currentCanvasSessionIds, persistence, saveLayoutDebounced, saveChannelLayoutDebounced])
 
   // -- Fit-to-content --------------------------------------------------
   useEffect(() => {
@@ -862,30 +1309,20 @@ export default function Board({
     }
   }, [api, fitSignal])
 
-  // -- Sync sessions → Excalidraw library panel ------------------------
-  // 让用户按 `9` 打开 library → 看到每个 session 作为 library item → 拖到画布
-  // 就是一个新的 embeddable 实例。相当于原生的"Add to canvas"交互。
-  // 每次 state 变化 replace 整个 library（`merge: false`），保证列表和 state
-  // 同步（dead session 从 library 里消失，新 session 自动出现）。
   useEffect(() => {
-    if (!api || !state) return
-    const items = state.sessions.map((s) => {
-      const skeleton = buildSessionEmbeddable(s, 0, 0, sessionRectId(s.id))
-      const [el] = convertToExcalidrawElements([skeleton] as any, {
-        regenerateIds: false,
-      })
-      return {
-        id: `lib-session-${s.id}`,
-        status: 'unpublished' as const,
-        elements: [el] as any,
-        created: Date.now(),
-        name: `${s.title} · ${s.pluginDisplayName}`,
-      }
-    })
-    api.updateLibrary({ libraryItems: items, merge: false }).catch((e) => {
+    if (arrangeSignal === 0) return
+    setArrangeConfirmOpen(true)
+  }, [arrangeSignal])
+
+  // -- Keep Excalidraw library free of session cards -------------------
+  // Session cards are one-per-session on a canvas. Leaving managed cards in
+  // Excalidraw's library would let drag/drop bypass that invariant.
+  useEffect(() => {
+    if (!api) return
+    api.updateLibrary({ libraryItems: [], merge: false }).catch((e) => {
       console.warn('[Board] updateLibrary failed', e)
     })
-  }, [api, state])
+  }, [api])
 
   // -- Add-to-canvas from sidebar -------------------------------------
   useEffect(() => {
@@ -897,6 +1334,12 @@ export default function Board({
       (s) => s.id === addToCanvasRequest.sessionId,
     )
     if (!session) return
+
+    const visible = liveSessionRects(api.getSceneElements(), session.id)[0]
+    if (visible) {
+      api.scrollToContent([visible], { fitToContent: false, animate: true })
+      return
+    }
 
     // User explicitly brought this session back — undo any prior dismissal.
     if (dismissedRef.current.delete(session.id)) {
@@ -915,9 +1358,21 @@ export default function Board({
         parseSessionFromElement(el) === session.id,
     )
     if (prior) {
-      const restored = { ...prior, isDeleted: false } as ExcalidrawElement
+      const point = findOpenSessionGridPoint(api, all.filter((el) => el !== prior), prior)
+      const restored = {
+        ...prior,
+        x: point.x,
+        y: point.y,
+        isDeleted: false,
+      } as ExcalidrawElement
       const nextAll = all.map((el) => (el === prior ? restored : el))
+      layoutRef.current = {
+        ...layoutRef.current,
+        [session.id]: sessionLayoutFromRect(restored),
+      }
+      saveLayoutDebounced(layoutRef.current)
       api.updateScene({ elements: nextAll as any })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
       reportCountsRef.current(nextAll)
       api.scrollToContent([restored], { fitToContent: false, animate: true })
       return
@@ -926,38 +1381,37 @@ export default function Board({
     // 优先级 2：layoutRef 里有上次记录的位置（用户之前移动过 / scene rebuild
     // 曾给它分过格子）→ 复用那个位置。否则才落到 viewport center + jitter。
     const saved = layoutRef.current[session.id]
-    let x: number, y: number
-    if (saved) {
-      x = saved.x
-      y = saved.y
-    } else {
-      const appState = api.getAppState()
-      const viewW = appState.width ?? 800
-      const viewH = appState.height ?? 600
-      const zoom = appState.zoom.value || 1
-      const cx = -appState.scrollX + viewW / zoom / 2
-      const cy = -appState.scrollY + viewH / zoom / 2
-      const jitter = () => Math.round((Math.random() - 0.5) * 60)
-      x = Math.round(cx - 180) + jitter()
-      y = Math.round(cy - 130) + jitter()
+    const point = findOpenSessionGridPoint(api, api.getSceneElements(), saved ?? null)
+    const { x, y } = point
+    layoutRef.current = {
+      ...layoutRef.current,
+      [session.id]: {
+        x,
+        y,
+        width: saved?.width,
+        height: saved?.height,
+      },
     }
+    saveLayoutDebounced(layoutRef.current)
 
-    // Generate a unique id so this is an independent instance alongside any
-    // existing embeddable for the same session.
+    // Generate a collision-free id; the scene-level invariant still keeps
+    // only one live card per session.
     const newId = `session-${session.id}-${Date.now().toString(36)}`
     const skeleton = buildSessionEmbeddable(session, x, y, newId)
     const [built] = convertToExcalidrawElements([skeleton] as any, {
       regenerateIds: false,
     })
     if (!built) return
+    const sized = applyStoredSessionSize(built as ExcalidrawElement, layoutRef.current[session.id])
 
-    const next = [...api.getSceneElements(), built]
+    const next = [...api.getSceneElements(), sized]
     api.updateScene({ elements: next as any })
+    setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(next)
 
     // Scroll the new element into view.
-    api.scrollToContent([built], { fitToContent: false, animate: true })
-  }, [api, state, addToCanvasRequest])
+    api.scrollToContent([sized], { fitToContent: false, animate: true })
+  }, [api, state, addToCanvasRequest, persistence, saveLayoutDebounced])
 
   // -- Hide-from-canvas from sidebar (eye 👁 toggle off) ---------------
   // Deletes all rects with customData.sessionId === sid. The
@@ -978,6 +1432,7 @@ export default function Board({
       return { ...el, isDeleted: true }
     })
     api.updateScene({ elements: next as any })
+    setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(next)
   }, [api, hideFromCanvasRequest])
 
@@ -1013,6 +1468,7 @@ export default function Board({
         return { ...el, isDeleted: true }
       })
       api.updateScene({ elements: next as any })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
       reportCountsRef.current(next)
       return
     }
@@ -1060,18 +1516,23 @@ export default function Board({
     }
     if (needCreate.length > 0) {
       layoutRef.current = ensurePositions(state.sessions.map((s) => s.id), layoutRef.current)
+      for (const sid of needCreate) {
+        const sess = state.sessions.find((x) => x.id === sid)
+        if (!sess) continue
+        const saved = layoutRef.current[sid]
+        const point = findOpenSessionGridPoint(api, next, saved ?? null)
+        layoutRef.current[sid] = {
+          x: point.x,
+          y: point.y,
+          width: saved?.width,
+          height: saved?.height,
+        }
+        const newId = `session-${sid}-${Date.now().toString(36)}`
+        const skeleton = buildSessionEmbeddable(sess, point.x, point.y, newId)
+        const [built] = convertToExcalidrawElements([skeleton] as any, { regenerateIds: false })
+        if (built) next.push(applyStoredSessionSize(built as ExcalidrawElement, layoutRef.current[sid]))
+      }
       saveLayoutDebounced(layoutRef.current)
-      const skeletons = needCreate
-        .map((sid) => {
-          const sess = state.sessions.find((x) => x.id === sid)
-          if (!sess) return null
-          const pos = layoutRef.current[sid] ?? { x: 80, y: 80 }
-          const newId = `session-${sid}-${Date.now().toString(36)}`
-          return buildSessionEmbeddable(sess, pos.x, pos.y, newId)
-        })
-        .filter((x): x is NonNullable<typeof x> => x != null)
-      const built = convertToExcalidrawElements(skeletons as any, { regenerateIds: false })
-      next.push(...built)
     }
 
     // 清 dismissed 标记 —— 仅 scope 内的，scope 外的 session 保持原 dismiss 状态
@@ -1083,6 +1544,7 @@ export default function Board({
     if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
 
     api.updateScene({ elements: next as any })
+    setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(next)
   }, [api, state, bulkVisibilityRequest, saveLayoutDebounced])
 
@@ -1132,6 +1594,7 @@ export default function Board({
         return el
       })
       api.updateScene({ elements: next as any })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
       api.scrollToContent([frameEl], { fitToContent: false, animate: true })
     } else {
       // Build and insert immediately using whatever channel snapshot we
@@ -1145,6 +1608,7 @@ export default function Board({
         if (built.length > 0) {
           const next = [...api.getSceneElements(), ...built]
           api.updateScene({ elements: next as any })
+          setSceneRevision((x) => (x + 1) & 0x7fffffff)
           api.scrollToContent([built[0]], { fitToContent: false, animate: true })
         }
       }
@@ -1172,7 +1636,13 @@ export default function Board({
       if (prior) {
         const restored = { ...prior, isDeleted: false } as ExcalidrawElement
         const nextAll = all.map((el) => (el === prior ? restored : el))
+        layoutRef.current = {
+          ...layoutRef.current,
+          [sid]: sessionLayoutFromRect(restored),
+        }
+        saveLayoutDebounced(layoutRef.current)
         api.updateScene({ elements: nextAll as any })
+        setSceneRevision((x) => (x + 1) & 0x7fffffff)
         reportCountsRef.current(nextAll)
         target = restored
       } else {
@@ -1180,21 +1650,18 @@ export default function Board({
         if (!session) return
 
         const saved = layoutRef.current[sid]
-        let x: number
-        let y: number
-        if (saved) {
-          x = saved.x
-          y = saved.y
-        } else {
-          const appState = api.getAppState()
-          const viewW = appState.width ?? 800
-          const viewH = appState.height ?? 600
-          const zoom = appState.zoom.value || 1
-          const cx = -appState.scrollX + viewW / zoom / 2
-          const cy = -appState.scrollY + viewH / zoom / 2
-          x = Math.round(cx - RECT_W / 2)
-          y = Math.round(cy - RECT_H / 2)
+        const point = findOpenSessionGridPoint(api, api.getSceneElements(), saved ?? null)
+        const { x, y } = point
+        layoutRef.current = {
+          ...layoutRef.current,
+          [sid]: {
+            x,
+            y,
+            width: saved?.width,
+            height: saved?.height,
+          },
         }
+        saveLayoutDebounced(layoutRef.current)
 
         const allIds = new Set(
           (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements()).map((el) => el.id),
@@ -1209,9 +1676,10 @@ export default function Board({
         })
         if (!built) return
 
-        target = built
-        const next = [...api.getSceneElements(), built]
+        target = applyStoredSessionSize(built as ExcalidrawElement, layoutRef.current[sid])
+        const next = [...api.getSceneElements(), target]
         api.updateScene({ elements: next as any })
+        setSceneRevision((x) => (x + 1) & 0x7fffffff)
         reportCountsRef.current(next)
       }
     }
@@ -1228,7 +1696,7 @@ export default function Board({
     requestAnimationFrame(() => {
       focusSceneElement(api, targetEl)
     })
-  }, [api, state, focusSessionRequest, persistence])
+  }, [api, state, focusSessionRequest, persistence, saveLayoutDebounced])
 
   // -- Assistant canvas patch Apply -----------------------------------
   // Chatbox proposals are intentionally preview-only. Once the user clicks
@@ -1312,9 +1780,10 @@ export default function Board({
           regenerateIds: false,
         })
         if (!built) throw new Error(`Could not create session card: ${op.sessionId.slice(0, 8)}`)
-        nextLayout = { ...nextLayout, [op.sessionId]: { x: pos.x, y: pos.y } }
+        const sized = applyStoredSessionSize(built as ExcalidrawElement, nextLayout[op.sessionId])
+        nextLayout = { ...nextLayout, [op.sessionId]: sessionLayoutFromRect(sized) }
         sessionLayoutChanged = true
-        nextElements = [...nextElements, built as ExcalidrawElement]
+        nextElements = [...nextElements, sized]
       }
       const addTextNote = (op: Extract<CanvasPatchOperation, { type: 'add_note' }>) => {
         const id = `canvas-note-${Date.now().toString(36)}-${nextElements.length}`
@@ -1347,7 +1816,11 @@ export default function Board({
             nextElements = nextElements.map((el, i) =>
               i === idx ? ({ ...el, x: op.x, y: op.y } as ExcalidrawElement) : el,
             )
-            nextLayout = { ...nextLayout, [op.sessionId]: { x: op.x, y: op.y } }
+            const moved = nextElements[idx]
+            nextLayout = {
+              ...nextLayout,
+              [op.sessionId]: moved ? sessionLayoutFromRect(moved) : { x: op.x, y: op.y },
+            }
             sessionLayoutChanged = true
             break
           }
@@ -1385,7 +1858,17 @@ export default function Board({
                 createSessionRect(op)
               }
             }
-            nextLayout = { ...nextLayout, [op.sessionId]: { x: pos.x, y: pos.y } }
+            const visibleIdxAfter = visibleSessionRectIndex(op.sessionId)
+            const visibleRect = visibleIdxAfter >= 0 ? nextElements[visibleIdxAfter] : null
+            nextLayout = {
+              ...nextLayout,
+              [op.sessionId]: visibleRect ? sessionLayoutFromRect(visibleRect) : {
+                x: pos.x,
+                y: pos.y,
+                width: nextLayout[op.sessionId]?.width,
+                height: nextLayout[op.sessionId]?.height,
+              },
+            }
             sessionLayoutChanged = true
             if (dismissedRef.current.delete(op.sessionId)) dismissedChanged = true
             membershipOps.push(addSessionToCanvas(proposal.canvasId, op.sessionId))
@@ -1435,6 +1918,7 @@ export default function Board({
       }
 
       api.updateScene({ elements: nextElements as any })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
       reportCountsRef.current(nextElements)
       if (sessionLayoutChanged) {
         layoutRef.current = nextLayout
@@ -1489,12 +1973,12 @@ export default function Board({
       if (parseSessionFromElement(el) !== sid) continue
       matchIds.push(el.id)
     }
-    console.log(
-      '[SelectionTrace] push-back effect sid=%s matchIds=%o stateTick=%s',
-      sid.slice(0, 8),
-      matchIds,
-      !!state,
-    )
+    // console.log(
+    //   '[SelectionTrace] push-back effect sid=%s matchIds=%o stateTick=%s',
+    //   sid.slice(0, 8),
+    //   matchIds,
+    //   !!state,
+    // )
     if (matchIds.length === 0) return
     const selected: Record<string, true> = {}
     for (const id of matchIds) selected[id] = true
@@ -1522,6 +2006,72 @@ export default function Board({
   const handleChange = useMemo(() => {
     return (elements: readonly ExcalidrawElement[], appState: AppState) => {
       if (!state) return
+      if (canvasLoading) return
+
+      const viewport = {
+        scrollX: appState.scrollX ?? 0,
+        scrollY: appState.scrollY ?? 0,
+        zoom: appState.zoom?.value ?? 1,
+      }
+      const publishSnapshotIfNeeded = (
+        snapshotElements: readonly ExcalidrawElement[],
+        currentViewport: { scrollX: number; scrollY: number; zoom: number },
+      ) => {
+        const userElementsSig = persistedUserElementsSignature(snapshotElements)
+        if (userElementsSig !== prevPersistedUserElementsSigRef.current) {
+          prevPersistedUserElementsSigRef.current = userElementsSig
+          saveShapesDebounced(snapshotElements)
+        }
+
+        const snapshotSig = [
+          layoutMapSignature(layoutRef.current),
+          layoutMapSignature(channelLayoutRef.current),
+          viewportSignature(currentViewport),
+          userElementsSig,
+          [...dismissedRef.current].sort().join(','),
+          [...unreadSids].sort().join(','),
+        ].join('||')
+        if (snapshotSig === prevSceneSnapshotSigRef.current) return
+        prevSceneSnapshotSigRef.current = snapshotSig
+
+        publishSceneSnapshotDebounced({
+          canvasId,
+          sessionLayout: { ...layoutRef.current },
+          channelLayout: { ...channelLayoutRef.current },
+          viewport: {
+            scrollX: currentViewport.scrollX,
+            scrollY: currentViewport.scrollY,
+            zoom: currentViewport.zoom,
+          },
+          userElements: [...snapshotElements] as any[],
+          dismissed: new Set(dismissedRef.current),
+          unreadSids: new Set(unreadSids),
+        })
+      }
+      const selIds = Object.keys(appState.selectedElementIds ?? {})
+      const selSig = selIds.slice().sort().join(',')
+      const selectionChanged = selSig !== prevSelSigRef.current
+      const elementsSig = interactiveElementsSignature(elements)
+      const elementsChanged = elementsSig !== prevInteractiveElementsSigRef.current
+      prevInteractiveElementsSigRef.current = elementsSig
+
+      // Pan / zoom floods onChange while scene elements stay untouched. Keep
+      // viewport persistence, but skip the expensive scene diff, membership
+      // reconciliation, counts, shape snapshots, and channel checks.
+      if (!elementsChanged && !selectionChanged) {
+        saveAppStateDebounced(viewport)
+        publishSnapshotIfNeeded(elements, viewport)
+        return
+      }
+
+      const singleCardScene = enforceSingleSessionCard(elements)
+      if (singleCardScene.changed && api) {
+        api.updateScene({ elements: singleCardScene.elements as any })
+        setSceneRevision((x) => (x + 1) & 0x7fffffff)
+        reportCountsRef.current(singleCardScene.elements)
+        return
+      }
+
       let elementsForPersistence: readonly ExcalidrawElement[] = elements
 
       // -- Double-click → activate (terminal jump) --------------------------
@@ -1546,7 +2096,7 @@ export default function Board({
         const sid = el ? parseSessionFromElement(el) : null
         if (sid) {
           lastActivatedElementIdRef.current = activeElId
-          console.log('[Board] activateSession via embeddable double-click', sid.slice(0, 8))
+          // console.log('[Board] activateSession via embeddable double-click', sid.slice(0, 8))
           void activateSession(sid)
           // Clear active state so the same card can be re-activated, and so
           // Excalidraw doesn't keep a no-op "activated" embeddable in memory.
@@ -1573,9 +2123,7 @@ export default function Board({
       //
       // We guard with a signature ref so WS ticks that don't actually change
       // the selection don't thrash the sidebar (see prevSelSigRef init).
-      const selIds = Object.keys(appState.selectedElementIds ?? {})
-      const selSig = selIds.slice().sort().join(',')
-      if (selSig !== prevSelSigRef.current) {
+      if (selectionChanged) {
         prevSelSigRef.current = selSig
 
         // Classify selection
@@ -1631,16 +2179,16 @@ export default function Board({
           (cur.kind === 'none' && next.kind === 'none') ||
           (cur.kind === 'session' && next.kind === 'session' && cur.sessionId === next.sessionId) ||
           (cur.kind === 'channel' && next.kind === 'channel' && cur.channelName === next.channelName)
-        console.log(
-          '[SelectionTrace] onChange selIds=%s selSig=%s cur=%o next=%o same=%s',
-          selIds.length,
-          selSig || '(empty)',
-          cur,
-          next,
-          same,
-        )
+        // console.log(
+        //   '[SelectionTrace] onChange selIds=%s selSig=%s cur=%o next=%o same=%s',
+        //   selIds.length,
+        //   selSig || '(empty)',
+        //   cur,
+        //   next,
+        //   same,
+        // )
         if (!same) {
-          console.log('[SelectionTrace] → firing onSelectionChange to', next)
+          // console.log('[SelectionTrace] → firing onSelectionChange to', next)
           onSelectionChange(next)
         }
       }
@@ -1662,6 +2210,12 @@ export default function Board({
         host.classList.toggle('board--hide-shape-actions', onlyManaged)
       }
 
+      if (!elementsChanged) {
+        saveAppStateDebounced(viewport)
+        publishSnapshotIfNeeded(elements, viewport)
+        return
+      }
+
       // Movement tracking. For layout persistence we save position *per
       // session id*, keyed to the first embeddable we see for that sid.
       //
@@ -1681,8 +2235,15 @@ export default function Board({
           if (!sid || seen.has(sid)) continue
           seen.add(sid)
           const prev = next[sid]
-          if (!prev || prev.x !== el.x || prev.y !== el.y) {
-            next[sid] = { x: el.x, y: el.y }
+          const current = sessionLayoutFromRect(el)
+          if (
+            !prev ||
+            prev.x !== current.x ||
+            prev.y !== current.y ||
+            prev.width !== current.width ||
+            prev.height !== current.height
+          ) {
+            next[sid] = current
             changed = true
           }
         }
@@ -1722,6 +2283,13 @@ export default function Board({
       // frames, the lexically smallest channel name wins so the choice is
       // deterministic.
       {
+        const frameSig = frameMembershipSignature(elements)
+        const frameMembershipChanged = frameSig !== prevFrameMembershipSigRef.current
+        prevFrameMembershipSigRef.current = frameSig
+        if (!frameMembershipChanged) {
+          // Plain card moves update layout above; membership only matters when
+          // frameId/frame structure changes.
+        } else {
         const channelNamesLocal = state.channels
           .map((c) => c.name)
           .filter((n) => !n.startsWith('__') && !isDmChannelName(n))
@@ -1775,7 +2343,7 @@ export default function Board({
               const aliases = ch
                 ? ch.members.filter((m) => m.sessionId === sid).map((m) => m.alias)
                 : [alias]
-              console.log('[Board.frame] removeMember', { channel: have, sid, aliases })
+              // console.log('[Board.frame] removeMember', { channel: have, sid, aliases })
               void Promise.all(aliases.map((a) => removeMember(have, a)))
                 .then(() => {
                   pendingFrameOpsRef.current.delete(opKey)
@@ -1791,7 +2359,7 @@ export default function Board({
             const opKey = `join|${want}|${sid}`
             if (!pendingFrameOpsRef.current.has(opKey)) {
               pendingFrameOpsRef.current.add(opKey)
-              console.log('[Board.frame] addMember', { channel: want, sid, alias })
+              // console.log('[Board.frame] addMember', { channel: want, sid, alias })
               void addMember(want, alias, sid)
                 .then(() => {
                   pendingFrameOpsRef.current.delete(opKey)
@@ -1805,6 +2373,7 @@ export default function Board({
           }
         }
         knownFrameMembershipsRef.current = desiredFrameMembership
+        }
       }
 
       // -- DM channel via card-to-card arrow ------------------------------
@@ -1812,6 +2381,13 @@ export default function Board({
       // rects -> ensure a `dm-<a>-<b>` channel exists with those two
       // members. When the arrow is deleted, delete the channel.
       {
+        const dmSig = dmStructureSignature(elements)
+        const dmStructureChanged = dmSig !== prevDmStructureSigRef.current
+        prevDmStructureSigRef.current = dmSig
+        if (!dmStructureChanged) {
+          // Card position changes do not alter DM membership. Bound arrows can
+          // move visually without changing their start/end binding ids.
+        } else {
         const elementsByIdLocal = new Map(elements.map((el) => [el.id, el]))
         const sessionIdsLocal = state.sessions.map((s) => s.id)
         const presentDmChannels = new Map<string, { sidA: string; sidB: string }>()
@@ -1847,7 +2423,7 @@ export default function Board({
           const aliasA = aliasFromSession(sessionA.title, sessionA.id)
           const aliasB = aliasFromSession(sessionB.title, sessionB.id)
           pendingDmOpsRef.current.add(channel)
-          console.log('[Board.dm] createChannel', channel, info)
+          // console.log('[Board.dm] createChannel', channel, info)
           void createChannel({ name: channel })
             .then(() =>
               Promise.all([
@@ -1871,7 +2447,7 @@ export default function Board({
           if (!stateDmChannels.has(channel)) continue
           if (pendingDmOpsRef.current.has(channel)) continue
           pendingDmOpsRef.current.add(channel)
-          console.log('[Board.dm] deleteChannel', channel)
+          // console.log('[Board.dm] deleteChannel', channel)
           void deleteChannel(channel)
             .then(() => {
               pendingDmOpsRef.current.delete(channel)
@@ -1883,6 +2459,7 @@ export default function Board({
             })
         }
         knownDmChannelsRef.current = presentDmChannels
+        }
       }
 
       // -- 非-DM channel frames：用户在画板上删 frame ⇔ 删 channel ----
@@ -1908,7 +2485,7 @@ export default function Board({
           if (!stateChannelNames.has(name)) continue
           if (pendingDmOpsRef.current.has(name)) continue
           pendingDmOpsRef.current.add(name)
-          console.log('[Board.channelFrame] deleteChannel', name)
+          // console.log('[Board.channelFrame] deleteChannel', name)
           void deleteChannel(name)
             .then(() => {
               pendingDmOpsRef.current.delete(name)
@@ -1924,7 +2501,13 @@ export default function Board({
 
       // Report counts on every change so sidebar stays in sync with
       // copy/paste/delete performed natively by Excalidraw.
-      reportCountsRef.current(elements)
+      {
+        const countSig = sessionCountSignature(elements, currentCanvasSessionIdsRef.current)
+        if (countSig !== prevCountSigRef.current) {
+          prevCountSigRef.current = countSig
+          reportCountsRef.current(elements)
+        }
+      }
 
       // 强制等比例缩放：session card 的 aspect ratio 锁成 RECT_W:RECT_H。
       // 用户拖任意 handle 时 Excalidraw 会允许宽高独立变，这里检测到比例偏离
@@ -1949,6 +2532,7 @@ export default function Board({
       if (aspectNeedsFix && api) {
         try {
           api.updateScene({ elements: fixedElements as any })
+          setSceneRevision((x) => (x + 1) & 0x7fffffff)
         } catch (e) {
           console.warn('[Board] aspect-ratio clamp updateScene failed', e)
         }
@@ -1956,13 +2540,14 @@ export default function Board({
 
       // 持久化 viewport + 用户画的非 session 元素
       saveAppStateDebounced({
-        scrollX: appState.scrollX ?? 0,
-        scrollY: appState.scrollY ?? 0,
-        zoom: appState.zoom?.value ?? 1,
+        scrollX: viewport.scrollX,
+        scrollY: viewport.scrollY,
+        zoom: viewport.zoom,
       })
-      saveShapesDebounced(elementsForPersistence)
+      const snapshotElements = aspectNeedsFix ? fixedElements : elementsForPersistence
+      publishSnapshotIfNeeded(snapshotElements, viewport)
     }
-  }, [state, selection, onSelectionChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced, onRefresh])
+  }, [state, canvasId, canvasLoading, selection, onSelectionChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced, publishSceneSnapshotDebounced, unreadSids, onRefresh])
 
   // -- Minimal UI options --------------------------------------------
   const uiOptions = useMemo(
@@ -1979,6 +2564,73 @@ export default function Board({
     }),
     [],
   )
+
+  const arrangeCurrentCanvasSessions = () => {
+    if (!api || !state) return
+    const currentIds = new Set(currentCanvasSessionIds)
+    const sessionOrder = new Map(
+      sortSessionsForCanvas(state.sessions, currentIds).map((session, index) => [session.id, index]),
+    )
+    const elements = api.getSceneElements()
+    const sessionRects = elements
+      .filter((el) => {
+        if (el.type !== 'rectangle') return false
+        if ((el as any).isDeleted) return false
+        const sid = parseSessionFromElement(el)
+        return Boolean(sid && currentIds.has(sid))
+      })
+      .sort((a, b) => {
+        const sidA = parseSessionFromElement(a) ?? ''
+        const sidB = parseSessionFromElement(b) ?? ''
+        const orderA = sessionOrder.get(sidA) ?? Number.MAX_SAFE_INTEGER
+        const orderB = sessionOrder.get(sidB) ?? Number.MAX_SAFE_INTEGER
+        return orderA - orderB || a.y - b.y || a.x - b.x
+      })
+
+    if (sessionRects.length === 0) {
+      setArrangeConfirmOpen(false)
+      return
+    }
+
+    const origin = originFromRectsOrViewport(sessionRects, api)
+    const positionByElementId = new Map(
+      sessionRects.map((el, index) => [el.id, gridPointAt(origin, index)]),
+    )
+    const firstSeenForSession = new Set<string>()
+    const nextLayout: LayoutMap = { ...layoutRef.current }
+    const next = elements.map((el) => {
+      const point = positionByElementId.get(el.id)
+      if (!point) return el
+      const sid = parseSessionFromElement(el)
+      if (sid && !firstSeenForSession.has(sid)) {
+        firstSeenForSession.add(sid)
+        nextLayout[sid] = {
+          ...sessionLayoutFromRect(el),
+          x: point.x,
+          y: point.y,
+        }
+      }
+      return { ...el, x: point.x, y: point.y }
+    })
+
+    layoutRef.current = nextLayout
+    saveLayoutDebounced.cancel()
+    void persistence.saveSessionLayout(nextLayout)
+      .then(() => persistence.flushPendingWrites?.())
+      .catch((e) => {
+        console.warn('[Board] arrange layout save failed:', (e as Error).message)
+      })
+    api.updateScene({ elements: next as any })
+    setSceneRevision((x) => (x + 1) & 0x7fffffff)
+    reportCountsRef.current(next)
+    requestAnimationFrame(() => {
+      api.scrollToContent(sessionRects.map((el) => ({
+        ...el,
+        ...(positionByElementId.get(el.id) ?? {}),
+      })) as any, { fitToContent: true, animate: true })
+    })
+    setArrangeConfirmOpen(false)
+  }
 
   // -- renderEmbeddable: Wave 18 — the real card is rendered by
   // `<SessionOverlay>` (a sibling overlay div). We still need to pass
@@ -2000,23 +2652,23 @@ export default function Board({
         onChange={handleChange}
         UIOptions={uiOptions as any}
         viewModeEnabled={false}
-        gridModeEnabled={false}
+        gridModeEnabled={gridModeEnabled}
       >
         <MainMenu>
-          <MainMenu.Item onSelect={onNewSession} icon={<TerminalIcon />}>
-            New session…
-          </MainMenu.Item>
           <MainMenu.Item onSelect={onAskAndSpawn} icon={<TerminalIcon />}>
             Ask AI to spawn…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onPreferences} icon={<PlusSquareIcon />}>
-            Preferences…
+            Board Settings…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onNewChannel} icon={<PlusSquareIcon />}>
             New channel
           </MainMenu.Item>
           <MainMenu.Item onSelect={onFit} icon={<FitIcon />}>
             Fit to content
+          </MainMenu.Item>
+          <MainMenu.Item onSelect={() => setArrangeConfirmOpen(true)} icon={<GridIcon />}>
+            Arrange sessions
           </MainMenu.Item>
           <MainMenu.Item onSelect={onRefresh} icon={<RefreshIcon />}>
             Refresh
@@ -2041,6 +2693,31 @@ export default function Board({
             undo/redo 旁边）。WS state.changed 已经把状态推到位，按用户
             要求去掉了。MainMenu 里的 "Refresh" 入口保留作为兜底。 */}
       </Excalidraw>
+      {arrangeConfirmOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setArrangeConfirmOpen(false)
+          }}
+        >
+          <div className="modal arrange-confirm-modal" role="dialog" aria-modal="true" aria-label="Arrange sessions">
+            <div className="modal-header">
+              <div className="modal-title">Arrange sessions</div>
+              <div className="modal-subtitle">Reflow cards into the saved grid.</div>
+            </div>
+            <div className="modal-body col" style={{ gap: 8 }}>
+              <strong>Arrange current canvas sessions into a grid?</strong>
+              <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
+                Session cards on this canvas will be aligned to a grid with 4 cards per row. This updates their saved positions.
+              </span>
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={() => setArrangeConfirmOpen(false)}>Cancel</button>
+              <button className="primary" type="button" onClick={arrangeCurrentCanvasSessions}>Arrange</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Channel actions —— portal 进 Excalidraw 自己的 .App-toolbar，
           作为 shape tool 旁边的两个图标按钮，视觉上完全融合。
           Excalidraw 没暴露 shape tool 注册 API（社区 issue #7583 / #6697
@@ -2116,6 +2793,8 @@ export default function Board({
       <SessionOverlay
         excalidrawAPI={api}
         state={state}
+        currentCanvasSessionIds={currentCanvasSessionIds}
+        sceneRevision={sceneRevision}
         templateCache={templateCache}
         onNeedTemplate={onNeedTemplate}
         unreadSids={unreadSids}

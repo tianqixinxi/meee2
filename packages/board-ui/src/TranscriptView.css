@@ -29,7 +29,12 @@
   flex-direction: column;
   gap: 3px;
   padding: 2px 0;
+  align-items: flex-start;
 }
+
+.tx-entry--user { align-items: flex-end; }
+.tx-entry--assistant,
+.tx-entry--injected { align-items: flex-start; }
 
 .tx-entry--merged {
   padding-top: 0;
@@ -786,9 +791,15 @@
  * 改成纯 padding-left（不偏移），live entry 内容比常规 entry 内缩 8px，可
  * 接受的视觉差。 */
 .tx-entry--live {
-  border-left: 2px solid rgba(34, 197, 94, 0.45);
-  padding-left: 6px;
+  border-left: 2px solid rgba(34, 197, 94, 0.55);
+  padding-left: 8px;
   animation: tx-live-fade-in 0.18s ease-out;
+}
+
+.tx-entry--live .tx-text--assistant {
+  background: transparent;
+  border-left: none;
+  padding-left: 10px;
 }
 
 @keyframes tx-live-fade-in {

@@ -253,12 +253,12 @@ export default function TemplateEditor({
           }
           onRequestCustom={() => setCustomModalOpen(true)}
           onSelect={(preset) => {
-            console.log(
-              '[TemplateEditor] preset click id=%s templateId=%s srcLen=%d',
-              preset.id,
-              templateId,
-              preset.source.length,
-            )
+            // console.log(
+            //   '[TemplateEditor] preset click id=%s templateId=%s srcLen=%d',
+            //   preset.id,
+            //   templateId,
+            //   preset.source.length,
+            // )
             setSource(preset.source)
             setStatus('saving')
             setErrorMsg(null)

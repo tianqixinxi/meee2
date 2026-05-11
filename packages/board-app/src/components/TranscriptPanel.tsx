@@ -26,6 +26,8 @@ interface Props {
   /** SessionDTO.currentTask —— optional one-line description of the
    *  active step (used when liveStatus === 'thinking'). */
   liveCurrentTask?: string | null
+  /** Assistant turn label. For plugin sessions this should be Claude/Codex/etc. */
+  assistantLabel?: string
   /** When provided, TranscriptView runs in controlled-verbosity mode
    *  and hides its in-search-bar pill — the parent renders the pill
    *  elsewhere (e.g. Dock's ChatComposer bottomLeft slot). */
@@ -41,6 +43,7 @@ export default function TranscriptPanel({
   liveStatus = null,
   liveCurrentTool = null,
   liveCurrentTask = null,
+  assistantLabel,
   verbosity,
   onVerbosityChange,
 }: Props) {
@@ -122,6 +125,8 @@ export default function TranscriptPanel({
       liveCurrentTask={liveCurrentTask}
       verbosity={verbosity}
       onVerbosityChange={onVerbosityChange}
+      assistantLabel={assistantLabel}
+      startAtLatest
     />
   )
 }

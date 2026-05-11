@@ -259,6 +259,14 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     this.schedulePush()
   }
 
+  async flushPendingWrites(): Promise<void> {
+    if (this.pushTimer !== null) {
+      window.clearTimeout(this.pushTimer)
+      this.pushTimer = null
+    }
+    await this.doPush()
+  }
+
   // -- Internals --------------------------------------------------------
 
   private async fetchRemote(): Promise<RemoteLayout | null> {
