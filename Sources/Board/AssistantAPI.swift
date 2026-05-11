@@ -20,7 +20,10 @@ import Meee2PluginKit
 ///     apiKey?: string,        // required for openai/anthropic, ignored for local
 ///     baseUrl?: string,       // optional override for hosted endpoints
 ///     model?: string,         // optional, sane defaults per provider
-///     enabledTools?: string[] // omit = all tools enabled
+///     enabledTools?: string[],// omit = all tools enabled
+///     canvasId?: string,      // current canvas id for canvas tools
+///     workspacePath?: string, // current canvas workspace for local assistant
+///     canvasName?: string
 ///   }
 ///
 /// Tool catalogue lives in `AssistantTools` and is enforced server-side —
@@ -164,7 +167,7 @@ enum AssistantAPI {
             ))
             for call in pendingCalls {
                 let argsObj = (try? JSONSerialization.jsonObject(with: Data(call.argsJSON.utf8))) as? [String: Any] ?? [:]
-                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools)
+                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools, settings: settings)
                 let resultJSON: String
                 switch result {
                 case .success(let payload):
@@ -208,13 +211,19 @@ enum AssistantAPI {
         let enabledList = dict["enabledTools"] as? [String]
         let enabled: Set<String>? = enabledList.map { Set($0) }
         let scope = (dict["scope"] as? String) ?? "this-mac"
+        let canvasId = ((dict["canvasId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspacePath = ((dict["workspacePath"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let canvasName = ((dict["canvasName"] as? String) ?? "Canvas").trimmingCharacters(in: .whitespacesAndNewlines)
         return AssistantSettings(
             provider: provider,
             apiKey: apiKey,
             baseUrl: baseUrl,
             model: model,
             enabledTools: enabled,
-            scope: scope
+            scope: scope,
+            canvasId: canvasId,
+            workspacePath: workspacePath,
+            canvasName: canvasName.isEmpty ? "Canvas" : canvasName
         )
     }
 
@@ -239,6 +248,15 @@ enum AssistantAPI {
         Current assistant scope:
         \(scopeSummary)
 
+        Current canvas:
+        - ID: \(settings.canvasId.isEmpty ? "(not set)" : settings.canvasId)
+        - Name: \(settings.canvasName)
+        - Workspace: \(settings.workspacePath.isEmpty ? "(not set)" : settings.workspacePath)
+
+        Treat this chat as a temporary assistant bound to the current canvas.
+        It does not create a board session card by itself. For local file/path
+        work, use the current canvas workspace as the working directory.
+
         Current sessions on the board:
         \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
 
@@ -255,7 +273,9 @@ enum AssistantAPI {
           • get_session_transcript  — recent transcript entries for content questions
           • list_channels           — A2A channels (name / mode / member count)
           • get_channel_messages    — recent messages on a channel for content questions
-          • create_session          — spawn a new claude session at a cwd
+          • get_canvas_context      — read the current canvas layout and visible items
+          • propose_canvas_patch    — propose a low-risk canvas layout/note change; user applies it
+          • create_session          — spawn a new local session at a cwd
 
         Guidelines:
           • If the user asks "what sessions do I have", call get_session_list
@@ -267,8 +287,19 @@ enum AssistantAPI {
           • If they ask about an A2A channel ("ops 频道", "today's coordination
             channel"), call list_channels first if the id is fuzzy, then
             get_channel_messages with the channel name.
-          • If they ask to create / open a new session, call create_session
-            with an absolute cwd.
+          • If they ask what is on this canvas, how things are laid out, or
+            whether you can rearrange the canvas, call get_canvas_context.
+          • If they explicitly ask to tidy, move, hide, show, or add/update a
+            note on the canvas, call propose_canvas_patch. This only produces
+            an Apply card in the UI; do not claim the canvas changed until the
+            user clicks Apply.
+          • Do not generate arbitrary Excalidraw JSON. Use only the supported
+            proposal operations.
+          • Do not create a new session unless the user explicitly asks to
+            create or open one. For normal questions, answer in this temporary
+            canvas assistant.
+          • If they explicitly ask to create / open a new session, call
+            create_session with an absolute cwd.
           • For mutating tools (create_session) prefer to confirm the cwd
             briefly with the user first if there's any ambiguity.
         """
@@ -340,7 +371,7 @@ enum AssistantAPI {
             transcript.append(ChatMessage(role: .assistant, content: assistantText, toolCalls: pendingCalls))
             for call in pendingCalls {
                 let argsObj = (try? JSONSerialization.jsonObject(with: Data(call.argsJSON.utf8))) as? [String: Any] ?? [:]
-                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools)
+                let result = AssistantTools.dispatch(name: call.name, args: argsObj, enabled: settings.enabledTools, settings: settings)
                 let resultJSON: String
                 switch result {
                 case .success(let payload):

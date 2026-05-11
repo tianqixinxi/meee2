@@ -207,6 +207,30 @@ struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entr
 /// 响应 `GET /api/board/layout`。
 struct BoardLayoutEnvelope: Encodable { let layout: BoardLayoutStore.Layout }
 
+struct CanvasInfoDTO: Encodable {
+    let id: String
+    let name: String
+    let scope: String
+    let isDefault: Bool
+    let workspacePath: String
+    let teamId: String?
+    let ownerUserId: String?
+}
+
+struct CanvasSessionMembershipDTO: Encodable {
+    let canvasId: String
+    let sessionId: String
+    let visible: Bool
+    let layout: BoardLayoutStore.Point?
+}
+
+struct CanvasListEnvelope: Encodable {
+    let canvases: [CanvasInfoDTO]
+    let activeCanvasId: String
+    let defaultCanvasIds: [String]
+    let memberships: [CanvasSessionMembershipDTO]
+}
+
 // MARK: - 转换工具
 
 enum BoardDTOBuilder {

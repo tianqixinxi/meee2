@@ -4,6 +4,9 @@ import type {
   Message,
   MessageStatus,
   Mode,
+  CanvasList,
+  CanvasScope,
+  SpawnProvider,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -49,6 +52,65 @@ async function jsonRequest<T>(
 
 export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
+}
+
+// -- canvases --------------------------------------------------------------
+
+export function fetchCanvases(): Promise<CanvasList> {
+  return jsonRequest<CanvasList>('/api/canvases')
+}
+
+export function createCanvas(input: { name: string; scope: CanvasScope }): Promise<CanvasList> {
+  return jsonRequest<CanvasList>('/api/canvases', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateCanvas(
+  id: string,
+  input: { name?: string; active?: boolean },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function deleteCanvas(id: string): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function addSessionToCanvas(canvasId: string, sessionId: string): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(canvasId)}/sessions`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId }),
+  })
+}
+
+export function removeSessionFromCanvas(
+  canvasId: string,
+  sessionId: string,
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(
+    `/api/canvases/${encodeURIComponent(canvasId)}/sessions/${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function spawnGlobalSession(
+  canvasId: string,
+  provider: SpawnProvider,
+): Promise<{ ok: boolean; cwd: string; command: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+    `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    },
+  )
 }
 
 export interface UserProfile {
@@ -392,6 +454,9 @@ export interface AssistantChatSettings {
   model?: string
   enabledTools?: string[]
   scope?: string
+  canvasId?: string
+  workspacePath?: string
+  canvasName?: string
 }
 
 /**

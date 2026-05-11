@@ -123,6 +123,56 @@ export interface BoardState {
   channels: Channel[]
 }
 
+export type CanvasScope = 'personal' | 'team'
+export type SpawnProvider = 'claude' | 'codex'
+
+export interface CanvasInfo {
+  id: string
+  name: string
+  scope: CanvasScope
+  isDefault: boolean
+  workspacePath: string
+  teamId?: string | null
+  ownerUserId?: string | null
+}
+
+export interface CanvasSessionMembership {
+  canvasId: string
+  sessionId: string
+  visible: boolean
+  layout?: { x: number; y: number } | null
+}
+
+export type CanvasPatchOperation =
+  | { type: 'move_session'; sessionId: string; x: number; y: number }
+  | { type: 'move_channel'; channelName: string; x: number; y: number }
+  | { type: 'show_session'; sessionId: string; x?: number; y?: number }
+  | { type: 'hide_session'; sessionId: string }
+  | { type: 'add_note'; text: string; x: number; y: number }
+  | { type: 'update_note'; elementId: string; text?: string; x?: number; y?: number }
+
+export interface CanvasPatchProposal {
+  type: 'canvas_patch_proposal'
+  canvasId: string
+  canvasName?: string
+  summary: string
+  operations: CanvasPatchOperation[]
+  operationCount?: number
+  requiresApply?: boolean
+}
+
+export interface CanvasPatchRequest {
+  proposal: CanvasPatchProposal
+  bump: number
+}
+
+export interface CanvasList {
+  canvases: CanvasInfo[]
+  activeCanvasId: string
+  defaultCanvasIds: string[]
+  memberships: CanvasSessionMembership[]
+}
+
 export interface ApiError {
   error: { code: string; message: string }
 }

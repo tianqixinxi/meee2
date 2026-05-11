@@ -26,12 +26,12 @@ import { parseSessionFromElement } from '@meee1/board-core'
 
 const ENDPOINT = '/api/board/layout'
 
-const VIEWPORT_KEY = 'meee2.board.appstate.v1'
-const USER_SHAPES_KEY = 'meee2.board.user-shapes.v1'
-const SESSION_LAYOUT_KEY = 'meee2.board.layout.v1'
-const CHANNEL_LAYOUT_KEY = 'meee2.board.channel-layout.v1'
-const DISMISSED_KEY = 'meee2.board.dismissed.v1'
-const UNREAD_KEY = 'meee2.board.unreadSids.v1'
+const VIEWPORT_KEY = 'appstate'
+const USER_SHAPES_KEY = 'user-shapes'
+const SESSION_LAYOUT_KEY = 'layout'
+const CHANNEL_LAYOUT_KEY = 'channel-layout'
+const DISMISSED_KEY = 'dismissed'
+const UNREAD_KEY = 'unreadSids'
 
 interface LayoutEnvelope {
   layout: {
@@ -100,16 +100,18 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   private pushTimer: number | null = null
   private lastPushError: string | null = null
 
+  constructor(private readonly canvasId: string = 'personal-default') {}
+
   // -- Viewport (localStorage + backend) --------------------------------
 
   async loadViewport(): Promise<PersistedViewport | null> {
-    const local = readValidViewport()
+    const local = readValidViewport(this.key(VIEWPORT_KEY))
     this.shadowViewport = local
     this.loadedViewport = true
     const remote = await this.fetchRemote()
     if (remote?.viewport) {
       this.shadowViewport = remote.viewport
-      writeJSON(VIEWPORT_KEY, remote.viewport)
+      writeJSON(this.key(VIEWPORT_KEY), remote.viewport)
       return remote.viewport
     }
     return local
@@ -118,21 +120,21 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   async saveViewport(v: PersistedViewport): Promise<void> {
     this.shadowViewport = v
     this.loadedViewport = true
-    writeJSON(VIEWPORT_KEY, v)
+    writeJSON(this.key(VIEWPORT_KEY), v)
     this.schedulePush()
   }
 
   // -- User elements (localStorage + backend) ---------------------------
 
   async loadUserElements(): Promise<any[]> {
-    const local = readJSON<unknown>(USER_SHAPES_KEY)
+    const local = readJSON<unknown>(this.key(USER_SHAPES_KEY))
     const localElements = Array.isArray(local) ? local : []
     this.shadowUserElements = localElements
     this.loadedUserElements = true
     const remote = await this.fetchRemote()
     if (remote && remote.userElements.length > 0) {
       this.shadowUserElements = remote.userElements
-      writeJSON(USER_SHAPES_KEY, remote.userElements)
+      writeJSON(this.key(USER_SHAPES_KEY), remote.userElements)
       return remote.userElements
     }
     return localElements
@@ -162,14 +164,14 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     })
     this.shadowUserElements = [...keep]
     this.loadedUserElements = true
-    writeJSON(USER_SHAPES_KEY, keep)
+    writeJSON(this.key(USER_SHAPES_KEY), keep)
     this.schedulePush()
   }
 
   // -- Layout: session + channel share one PUT envelope -----------------
 
   async loadSessionLayout(): Promise<LayoutMap> {
-    const local = readJSON<LayoutMap>(SESSION_LAYOUT_KEY) ?? {}
+    const local = readJSON<LayoutMap>(this.key(SESSION_LAYOUT_KEY)) ?? {}
     this.shadowSessions = local
     this.loadedSessions = true
     const remote = await this.fetchRemote()
@@ -179,7 +181,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
       // server was reachable.
       const merged = { ...local, ...remote.sessions }
       this.shadowSessions = merged
-      writeJSON(SESSION_LAYOUT_KEY, merged)
+      writeJSON(this.key(SESSION_LAYOUT_KEY), merged)
       return merged
     }
     return local
@@ -188,19 +190,19 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   async saveSessionLayout(map: LayoutMap): Promise<void> {
     this.shadowSessions = map
     this.loadedSessions = true
-    writeJSON(SESSION_LAYOUT_KEY, map)
+    writeJSON(this.key(SESSION_LAYOUT_KEY), map)
     this.schedulePush()
   }
 
   async loadChannelLayout(): Promise<LayoutMap> {
-    const local = readJSON<LayoutMap>(CHANNEL_LAYOUT_KEY) ?? {}
+    const local = readJSON<LayoutMap>(this.key(CHANNEL_LAYOUT_KEY)) ?? {}
     this.shadowChannels = local
     this.loadedChannels = true
     const remote = await this.fetchRemote()
     if (remote) {
       const merged = { ...local, ...remote.channels }
       this.shadowChannels = merged
-      writeJSON(CHANNEL_LAYOUT_KEY, merged)
+      writeJSON(this.key(CHANNEL_LAYOUT_KEY), merged)
       return merged
     }
     return local
@@ -209,20 +211,20 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   async saveChannelLayout(map: LayoutMap): Promise<void> {
     this.shadowChannels = map
     this.loadedChannels = true
-    writeJSON(CHANNEL_LAYOUT_KEY, map)
+    writeJSON(this.key(CHANNEL_LAYOUT_KEY), map)
     this.schedulePush()
   }
 
   // -- Dismissed sids (localStorage + backend) --------------------------
 
   async loadDismissed(): Promise<Set<string>> {
-    const local = readStringSet(DISMISSED_KEY)
+    const local = readStringSet(this.key(DISMISSED_KEY))
     this.shadowDismissedSids = [...local]
     this.loadedDismissedSids = true
     const remote = await this.fetchRemote()
     if (remote && remote.dismissedSids.length > 0) {
       this.shadowDismissedSids = remote.dismissedSids
-      writeJSON(DISMISSED_KEY, remote.dismissedSids)
+      writeJSON(this.key(DISMISSED_KEY), remote.dismissedSids)
       return new Set(remote.dismissedSids)
     }
     return local
@@ -231,20 +233,20 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   async saveDismissed(s: Set<string>): Promise<void> {
     this.shadowDismissedSids = [...s]
     this.loadedDismissedSids = true
-    writeJSON(DISMISSED_KEY, this.shadowDismissedSids)
+    writeJSON(this.key(DISMISSED_KEY), this.shadowDismissedSids)
     this.schedulePush()
   }
 
   // -- Unread sids (localStorage + backend) -----------------------------
 
   async loadUnreadSids(): Promise<Set<string>> {
-    const local = readStringSet(UNREAD_KEY)
+    const local = readStringSet(this.key(UNREAD_KEY))
     this.shadowUnreadSids = [...local]
     this.loadedUnreadSids = true
     const remote = await this.fetchRemote()
     if (remote && remote.unreadSids.length > 0) {
       this.shadowUnreadSids = remote.unreadSids
-      writeJSON(UNREAD_KEY, remote.unreadSids)
+      writeJSON(this.key(UNREAD_KEY), remote.unreadSids)
       return new Set(remote.unreadSids)
     }
     return local
@@ -253,7 +255,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
   async saveUnreadSids(s: Set<string>): Promise<void> {
     this.shadowUnreadSids = [...s]
     this.loadedUnreadSids = true
-    writeJSON(UNREAD_KEY, this.shadowUnreadSids)
+    writeJSON(this.key(UNREAD_KEY), this.shadowUnreadSids)
     this.schedulePush()
   }
 
@@ -270,7 +272,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
 
   private async fetchRemoteUncached(): Promise<RemoteLayout | null> {
     try {
-      const r = await fetch(ENDPOINT, { method: 'GET' })
+      const r = await fetch(this.endpoint(), { method: 'GET' })
       if (!r.ok) return null
       const body = (await r.json()) as LayoutEnvelope
       return {
@@ -304,7 +306,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     if (this.loadedDismissedSids) payload.dismissedSids = this.shadowDismissedSids
     if (this.loadedUnreadSids) payload.unreadSids = this.shadowUnreadSids
     try {
-      const r = await fetch(ENDPOINT, {
+      const r = await fetch(this.endpoint(), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -334,10 +336,18 @@ export class HttpCanvasPersistence implements CanvasPersistence {
       }
     }
   }
+
+  private endpoint(): string {
+    return `${ENDPOINT}?canvasId=${encodeURIComponent(this.canvasId)}`
+  }
+
+  private key(slot: string): string {
+    return `meee2.board.canvas.${this.canvasId}.${slot}.v1`
+  }
 }
 
-function readValidViewport(): PersistedViewport | null {
-  const p = readJSON<{ scrollX: unknown; scrollY: unknown; zoom: unknown }>(VIEWPORT_KEY)
+function readValidViewport(key: string): PersistedViewport | null {
+  const p = readJSON<{ scrollX: unknown; scrollY: unknown; zoom: unknown }>(key)
   if (
     p &&
     typeof p.scrollX === 'number' &&

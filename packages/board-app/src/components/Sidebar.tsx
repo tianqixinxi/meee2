@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BoardState, ClientKind, Selection, Session } from '../types'
+import type { BoardState, CanvasInfo, ClientKind, Selection, Session } from '../types'
 import { isOlderSession } from '../types'
 import ChannelDetail from './ChannelDetail'
 import {
@@ -36,6 +36,7 @@ import {
   type UserProfile,
 } from '../api'
 import { useToast } from '../App'
+import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -386,6 +387,9 @@ function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
 
 interface Props {
   state: BoardState | null
+  canvases?: CanvasInfo[]
+  activeCanvasId?: string | null
+  sessionCanvasIds?: Record<string, string[]>
   selection: Selection
   open: boolean
   onOpen: () => void
@@ -400,6 +404,8 @@ interface Props {
   onAddToCanvas: (sessionId: string) => void
   /** Request to remove all cards for this session from the canvas. */
   onHideFromCanvas: (sessionId: string) => void
+  /** Update a session's membership in a specific canvas. */
+  onSetSessionCanvasMembership?: (sessionId: string, canvasId: string, present: boolean) => void
   /** Bulk show / hide sessions on the canvas in one shot.
    *  - omit `sids` → operates on every session (top "Hide all" button)
    *  - pass `sids` → operates only on that subset (per-category toggle) */
@@ -419,6 +425,9 @@ interface Props {
 
 export default function Sidebar({
   state,
+  canvases = [],
+  activeCanvasId = null,
+  sessionCanvasIds = {},
   selection,
   open,
   onOpen,
@@ -428,6 +437,7 @@ export default function Sidebar({
   unreadSids,
   onAddToCanvas,
   onHideFromCanvas,
+  onSetSessionCanvasMembership,
   onBulkVisibility,
   onNewSession,
   tabsOverride,
@@ -476,6 +486,23 @@ export default function Sidebar({
     (s: Session) => titleOverrides[s.id] || s.title,
     [titleOverrides],
   )
+
+  const sessionHoverDetail = useCallback((s: Session, canvasIds: string[], onCanvas: boolean) => {
+    const project = s.project || '(no cwd)'
+    const last = s.lastActivity
+      ? new Date(s.lastActivity).toLocaleString()
+      : 'No activity yet'
+    const canvasState = onCanvas ? 'On current canvas' : 'Not on current canvas'
+    return [
+      displayTitle(s),
+      `${s.pluginDisplayName} · ${originalClientLabel(s)}`,
+      `Status: ${s.status}`,
+      `Project: ${project}`,
+      `Last activity: ${last}`,
+      `Canvases: ${canvasIds.length}`,
+      canvasState,
+    ].join('\n')
+  }, [displayTitle])
 
   const startRename = useCallback((s: Session) => {
     setRenamingSid(s.id)
@@ -657,6 +684,7 @@ export default function Sidebar({
     setAccountMenuOpen(false)
     void action()
   }, [])
+
 
   // ── Collapsed-icon hover preview ───────────────────────────────────
   // Hover 折叠图标 → sidebar 以 fixed overlay 形式浮在 icon 下方（不进
@@ -893,9 +921,10 @@ export default function Sidebar({
                       ? visibleState.sessions
                       : visibleState.sessions.filter((s) => categoryKey(s) === categoryFilter)
                   if (scopedSessions.length === 0) return null
-                  const anyOnCanvas = scopedSessions.some(
-                    (s) => (onCanvasCounts[s.id] ?? 0) > 0,
-                  )
+                  const anyOnCanvas = scopedSessions.some((s) => {
+                    if (!activeCanvasId) return (onCanvasCounts[s.id] ?? 0) > 0
+                    return (sessionCanvasIds[s.id] ?? []).includes(activeCanvasId)
+                  })
                   const mode: 'show' | 'hide' = anyOnCanvas ? 'hide' : 'show'
                   const scopeLabel = categoryFilter === 'all' ? 'all' : 'category'
                   const sidsArg =
@@ -935,7 +964,7 @@ export default function Sidebar({
                     return title.includes(q) || proj.includes(q) || cwd.includes(q)
                   })
                 }
-                // older（idle ≥ 1h，前端从 lastActivity 派生，见
+                // older（idle >= 1h，前端从 lastActivity 派生，见
                 // types.ts:isOlderSession）只在 groupBy=date 模式下单独折叠
                 // 成 "Older 1h–24h" 区。groupBy=project 时不再切分 —— 用户按
                 // 项目找东西时，stale 的 session 应该跟同项目其它 session
@@ -952,6 +981,9 @@ export default function Sidebar({
                 // - project: 按 cwd basename 分组，组内保留传入顺序，组间按字母序
                 // - date: 按 lastActivity 分到 Today / Yesterday / This week / Older 桶
                 const groupSessions = (list: Session[]): Array<[string, Session[]]> => {
+                  if (filterState.groupBy === 'none') {
+                    return [['Recents', list]]
+                  }
                   if (filterState.groupBy === 'date') {
                     return groupSessionsByDate(list)
                   }
@@ -967,7 +999,11 @@ export default function Sidebar({
 
                 const renderSessionRow = (s: Session) => {
                   const count = onCanvasCounts[s.id] ?? 0
-                  const onCanvas = count > 0
+                  const canvasIds = sessionCanvasIds[s.id] ?? []
+                  const onCanvas = activeCanvasId
+                    ? canvasIds.includes(activeCanvasId)
+                    : count > 0
+                  const hoverDetail = sessionHoverDetail(s, canvasIds, onCanvas)
                   // 选中 session 时 sidebar 仍然展示列表（transcript 浮在画板上），
                   // 当前行用 .is-selected 加视觉反馈。
                   const selected =
@@ -983,6 +1019,8 @@ export default function Sidebar({
                         (menuForSid === s.id ? ' is-menu-open' : '')
                       }
                       style={{ ['--row-accent' as any]: accent }}
+                      title={hoverDetail}
+                      aria-label={hoverDetail}
                       // Right-click 行为 = 点 ⋯ 按钮：打开 SessionRowMenu，定
                       // 位到鼠标坐标。给 menu 一个零宽 synthetic DOMRect，于是
                       // 它的 (top, left) 计算结果直接落在 (clientY+4, clientX)。
@@ -1060,7 +1098,16 @@ export default function Sidebar({
                             onBlur={commitRename}
                           />
                         ) : (
-                          <span className="sidebar-session-row__title">{displayTitle(s)}</span>
+                          <span className="sidebar-session-row__title">
+                            <span className="sidebar-session-row__title-text">
+                              {displayTitle(s)}
+                            </span>
+                            {filterState.groupBy !== 'project' && (
+                              <span className="sidebar-session-row__project">
+                                {projectGroupKey(s)}
+                              </span>
+                            )}
+                          </span>
                         )}
                       </div>
                       <div className="sidebar-session-row__actions">
@@ -1076,19 +1123,16 @@ export default function Sidebar({
                          *  toggle。on canvas 时 eye-open 实色，off canvas 时
                          *  eye-off 半透明（hover 提亮）。比藏在 ⋯ 菜单深处的
                          *  Hide / Show 一击即得。 */}
-                        <Tooltip label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}>
+                        <Tooltip label={onCanvas ? 'Hide from current canvas' : 'Add to current canvas'}>
                           <button
                             className="sidebar-icon-btn sidebar-session-row__visibility"
                             data-on-canvas={onCanvas ? 'true' : 'false'}
-                            aria-label={onCanvas ? 'Hide from canvas' : 'Show on canvas'}
+                            aria-label={onCanvas ? 'Hide from current canvas' : 'Add to current canvas'}
                             aria-pressed={onCanvas}
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (onCanvas) {
-                                onHideFromCanvas(s.id)
-                              } else {
-                                onAddToCanvas(s.id)
-                              }
+                              if (onCanvas) onHideFromCanvas(s.id)
+                              else onAddToCanvas(s.id)
                             }}
                           >
                             {onCanvas ? <EyeOpenIcon /> : <EyeClosedIcon />}
@@ -1126,7 +1170,7 @@ export default function Sidebar({
                             // 加到 canvas（如果还没在）+ 选中 session 让 dock
                             // 弹出 + 默认展开。saveDockExpanded 让下次再切回
                             // 同样保持展开；TranscriptPanel 会自动 mount。
-                            if (!onCanvas) onAddToCanvas(s.id)
+                            if (!onCanvas || count === 0) onAddToCanvas(s.id)
                             onSelectionChange({ kind: 'session', sessionId: s.id })
                           }}
                           onOpenInOriginal={() => {
@@ -1161,7 +1205,10 @@ export default function Sidebar({
                             }
                             const shortId = s.id.slice(0, 8)
                             toast.push('info', `Duplicating session in ${cwd}…`)
-                            spawnSession({ cwd })
+                            spawnSession({
+                              cwd,
+                              command: commandForSpawnProvider(loadSpawnProvider()),
+                            })
                               .then(() => {
                                 toast.push(
                                   'success',
@@ -1172,6 +1219,11 @@ export default function Sidebar({
                                 toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
                               })
                           }}
+                          canvases={canvases}
+                          selectedCanvasIds={sessionCanvasIds[s.id] ?? []}
+                          onSetCanvasMembership={onSetSessionCanvasMembership
+                            ? (canvasId, present) => onSetSessionCanvasMembership(s.id, canvasId, present)
+                            : undefined}
                           onHide={onCanvas ? () => {
                             // 把 sid 加进 dismissed 集合 + 把 canvas 上的 rect
                             // 删掉。下次状态刷新不会自动重建（Board.tsx:681）。

@@ -65,20 +65,21 @@ public enum BoardJSONValue: Codable, Equatable {
     }
 }
 
-/// BoardLayoutStore —— 看板上的 canvas 持久化状态
+/// BoardLayoutStore —— 多 canvas 的本地持久化状态。
 ///
-/// 布局：`~/.meee2/board-layout.json`（单文件，原子覆写）
+/// 文件：`~/.meee2/board-canvases.json`（单文件，原子覆写）。旧的
+/// `board-layout.json` 不再读写；产品未 release，这里按 breaking reset 处理。
 ///
-/// 搬到服务端的动机：之前只在浏览器 localStorage，换浏览器 / 清 storage 都丢；
-/// 也没法在多个 tab 之间同步。现在：
-///   - 所有 web 客户端 `GET /api/board/layout` 拿到同一份坐标、viewport、
-///     用户自绘元素、dismissed/unread 集合
-///   - 任一 tab `PUT` 后，server 存盘 + 通过 WS `state.changed` 广播，其他 tab
-///     下一次拉 state 时顺便刷新画布（或单独重新 GET layout）
-///
-/// 线程安全：通过串行队列互斥。
+/// 模型：Canvas 和 Session 是 N2N。每个 canvas 拥有自己的 viewport、
+/// user elements、channel layout、session positions，以及 session membership。
+/// 删除当前 canvas 中的 session 只删除 membership，不归档 session。
 public final class BoardLayoutStore {
     public static let shared = BoardLayoutStore()
+
+    public enum CanvasScope: String, Codable, Equatable {
+        case personal
+        case team
+    }
 
     public struct Point: Codable, Equatable {
         public let x: Double
@@ -152,10 +153,87 @@ public final class BoardLayoutStore {
         }
     }
 
+    public struct Canvas: Codable, Equatable {
+        public var id: String
+        public var name: String
+        public var scope: CanvasScope
+        public var ownerUserId: String?
+        public var teamId: String?
+        public var isDefault: Bool
+        public var workspaceFolderName: String?
+        public var createdBy: String?
+        public var createdAt: Date
+        public var updatedAt: Date
+
+        public init(
+            id: String,
+            name: String,
+            scope: CanvasScope,
+            ownerUserId: String?,
+            teamId: String?,
+            isDefault: Bool,
+            workspaceFolderName: String? = nil,
+            createdBy: String?,
+            createdAt: Date,
+            updatedAt: Date
+        ) {
+            self.id = id
+            self.name = name
+            self.scope = scope
+            self.ownerUserId = ownerUserId
+            self.teamId = teamId
+            self.isDefault = isDefault
+            self.workspaceFolderName = workspaceFolderName
+            self.createdBy = createdBy
+            self.createdAt = createdAt
+            self.updatedAt = updatedAt
+        }
+    }
+
+    public struct SpawnIntent: Codable, Equatable {
+        public var canvasId: String
+        public var cwd: String
+        public var command: String
+        public var createdAt: Date
+    }
+
+    public struct CanvasSession: Codable, Equatable {
+        public var canvasId: String
+        public var sessionId: String
+        public var visible: Bool
+        public var addedBy: String?
+        public var addedAt: Date
+        public var updatedAt: Date
+    }
+
+    public struct Snapshot: Codable, Equatable {
+        public var activeCanvasId: String
+        public var canvases: [Canvas]
+        public var memberships: [CanvasSession]
+    }
+
+    private struct StoreData: Codable, Equatable {
+        var activeCanvasId: String?
+        var canvases: [Canvas]
+        var layouts: [String: Layout]
+        var memberships: [String: [String: CanvasSession]]
+        var spawnIntents: [SpawnIntent]?
+        var sessionHomeCanvasIds: [String: String]?
+
+        static let empty = StoreData(
+            activeCanvasId: nil,
+            canvases: [],
+            layouts: [:],
+            memberships: [:],
+            spawnIntents: nil,
+            sessionHomeCanvasIds: nil
+        )
+    }
+
     private let fileManager = FileManager.default
     private let fileURL: URL
     private let queue = DispatchQueue(label: "com.meee2.BoardLayoutStore", qos: .utility)
-    private var cached: Layout?
+    private var cached: StoreData?
 
     private init() {
         let home = NSHomeDirectory()
@@ -165,25 +243,34 @@ public final class BoardLayoutStore {
         } catch {
             MWarn("[BoardLayoutStore] failed to create dir \(dir.path): \(error)")
         }
-        self.fileURL = dir.appendingPathComponent("board-layout.json")
+        self.fileURL = dir.appendingPathComponent("board-canvases.json")
     }
 
     // MARK: - Public API
 
-    /// 读取当前 layout；文件不存在返回 `.empty`
+    /// 读取当前 active canvas 的 layout；保留给旧调用点。
     public func load() -> Layout {
+        load(canvasId: nil)
+    }
+
+    public func load(canvasId requestedCanvasId: String?) -> Layout {
         queue.sync {
-            if let cached = cached { return cached }
-            let loaded = loadFromDiskLocked()
-            cached = loaded
-            return loaded
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let canvasId = resolveCanvasIdLocked(store, requestedCanvasId)
+            cached = store
+            return store.layouts[canvasId] ?? .empty
         }
     }
 
-    /// 整体替换 layout（web 客户端 PUT 的典型路径）。成功后发布
-    /// `.boardLayoutChanged` 到事件总线。
+    /// 整体替换 active canvas 的 layout；保留给旧调用点。
     @discardableResult
     public func save(_ layout: Layout) throws -> Layout {
+        try save(layout, canvasId: nil)
+    }
+
+    @discardableResult
+    public func save(_ layout: Layout, canvasId requestedCanvasId: String?) throws -> Layout {
         let stamped = Layout(
             sessions: layout.sessions,
             channels: layout.channels,
@@ -194,8 +281,13 @@ public final class BoardLayoutStore {
             updatedAt: Date()
         )
         try queue.sync {
-            try writeToDiskLocked(stamped)
-            cached = stamped
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let canvasId = resolveCanvasIdLocked(store, requestedCanvasId)
+            store.layouts[canvasId] = stamped
+            ensureMembershipsLocked(&store, canvasId: canvasId, sessionIds: Array(stamped.sessions.keys))
+            try writeToDiskLocked(store)
+            cached = store
         }
         SessionEventBus.shared.publish(.boardLayoutChanged)
         return stamped
@@ -205,8 +297,16 @@ public final class BoardLayoutStore {
     /// 目前不公开暴露到 API，仅作为未来 partial-update 扩展点保留。
     @discardableResult
     public func merge(sessions: [String: Point]?, channels: [String: Point]?) throws -> Layout {
+        try merge(canvasId: nil, sessions: sessions, channels: channels)
+    }
+
+    @discardableResult
+    public func merge(canvasId requestedCanvasId: String?, sessions: [String: Point]?, channels: [String: Point]?) throws -> Layout {
         let merged: Layout = try queue.sync {
-            let current = cached ?? loadFromDiskLocked()
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let canvasId = resolveCanvasIdLocked(store, requestedCanvasId)
+            let current = store.layouts[canvasId] ?? .empty
             var nextSessions = current.sessions
             var nextChannels = current.channels
             if let s = sessions {
@@ -224,34 +324,288 @@ public final class BoardLayoutStore {
                 unreadSids: current.unreadSids,
                 updatedAt: Date()
             )
-            try writeToDiskLocked(next)
-            cached = next
+            store.layouts[canvasId] = next
+            ensureMembershipsLocked(&store, canvasId: canvasId, sessionIds: Array(nextSessions.keys))
+            try writeToDiskLocked(store)
+            cached = store
             return next
         }
         SessionEventBus.shared.publish(.boardLayoutChanged)
         return merged
     }
 
+    @discardableResult
+    public func ensureDefaults(sessionIds: [String]) -> Snapshot {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            let before = store
+            ensureDefaultCanvasesLocked(&store, sessionIds: sessionIds)
+            if store != before {
+                do {
+                    try writeToDiskLocked(store)
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist default canvases: \(error)")
+                }
+            }
+            cached = store
+            return snapshotLocked(store)
+        }
+    }
+
+    public func snapshot() -> Snapshot {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            cached = store
+            return snapshotLocked(store)
+        }
+    }
+
+    public func workspacePath(canvasId: String) throws -> String {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
+                throw storeError("canvas not found: \(canvasId)")
+            }
+            ensureWorkspaceFolderNamesLocked(&store)
+            let folder = store.canvases.first(where: { $0.id == canvasId })?.workspaceFolderName
+                ?? workspaceFolderName(forName: "canvas", id: canvasId, existing: Set<String>())
+            try writeToDiskLocked(store)
+            cached = store
+            return workspaceRootURL().appendingPathComponent(folder, isDirectory: true).path
+        }
+    }
+
+    public func recordSpawnIntent(canvasId: String, cwd: String, command: String) throws {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
+                throw storeError("canvas not found: \(canvasId)")
+            }
+            let normalizedCwd = (cwd as NSString).standardizingPath
+            let cutoff = Date().addingTimeInterval(-10 * 60)
+            var intents = (store.spawnIntents ?? []).filter { $0.createdAt >= cutoff }
+            intents.append(SpawnIntent(canvasId: canvasId, cwd: normalizedCwd, command: command, createdAt: Date()))
+            store.spawnIntents = intents
+            try writeToDiskLocked(store)
+            cached = store
+        }
+    }
+
+    public func applySpawnIntents(sessionCwds: [String: String]) {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let cutoff = Date().addingTimeInterval(-10 * 60)
+            var intents = (store.spawnIntents ?? []).filter { $0.createdAt >= cutoff }
+            var changed = intents.count != (store.spawnIntents ?? []).count
+            guard !intents.isEmpty else {
+                if changed {
+                    store.spawnIntents = intents
+                    try? writeToDiskLocked(store)
+                    cached = store
+                }
+                return
+            }
+
+            var homeCanvasIds = store.sessionHomeCanvasIds ?? [:]
+            for (sessionId, rawCwd) in sessionCwds {
+                let cwd = (rawCwd as NSString).standardizingPath
+                guard !cwd.isEmpty,
+                      let idx = intents.firstIndex(where: { $0.cwd == cwd }),
+                      store.canvases.contains(where: { $0.id == intents[idx].canvasId }) else {
+                    continue
+                }
+                let intent = intents.remove(at: idx)
+                ensureMembershipsLocked(&store, canvasId: intent.canvasId, sessionIds: [sessionId])
+                homeCanvasIds[sessionId] = intent.canvasId
+                for canvas in store.canvases where canvas.isDefault && canvas.id != intent.canvasId {
+                    store.memberships[canvas.id]?[sessionId] = nil
+                    if var layout = store.layouts[canvas.id] {
+                        layout.sessions.removeValue(forKey: sessionId)
+                        layout.dismissedSids.removeAll { $0 == sessionId }
+                        layout.updatedAt = Date()
+                        store.layouts[canvas.id] = layout
+                    }
+                }
+                changed = true
+            }
+
+            if changed {
+                store.spawnIntents = intents
+                store.sessionHomeCanvasIds = homeCanvasIds
+                do {
+                    try writeToDiskLocked(store)
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist spawn intents: \(error)")
+                }
+                cached = store
+                SessionEventBus.shared.publish(.boardLayoutChanged)
+            }
+        }
+    }
+
+    @discardableResult
+    public func createCanvas(name rawName: String, scope: CanvasScope) throws -> Snapshot {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw storeError("canvas name is required")
+        }
+        return try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let context = currentContext()
+            if scope == .team && context.teamId.isEmpty {
+                throw storeError("team canvas requires meee2 Online connection")
+            }
+            let now = Date()
+            let canvas = Canvas(
+                id: UUID().uuidString.lowercased(),
+                name: name,
+                scope: scope,
+                ownerUserId: scope == .personal ? context.userId : nil,
+                teamId: scope == .team ? context.teamId : nil,
+                isDefault: false,
+                workspaceFolderName: nil,
+                createdBy: context.userId,
+                createdAt: now,
+                updatedAt: now
+            )
+            store.canvases.append(canvas)
+            store.layouts[canvas.id] = .empty
+            store.memberships[canvas.id] = [:]
+            store.activeCanvasId = canvas.id
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
+    @discardableResult
+    public func updateCanvas(id: String, name rawName: String?, active: Bool?) throws -> Snapshot {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard let idx = store.canvases.firstIndex(where: { $0.id == id }) else {
+                throw storeError("canvas not found: \(id)")
+            }
+            guard visibleCanvasesLocked(store).contains(where: { $0.id == id }) else {
+                throw storeError("canvas not accessible: \(id)")
+            }
+            if let rawName {
+                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { throw storeError("canvas name is required") }
+                store.canvases[idx].name = name
+                store.canvases[idx].updatedAt = Date()
+            }
+            if active == true {
+                store.activeCanvasId = id
+            }
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
+    @discardableResult
+    public func deleteCanvas(id: String) throws -> Snapshot {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard let canvas = store.canvases.first(where: { $0.id == id }) else {
+                throw storeError("canvas not found: \(id)")
+            }
+            guard visibleCanvasesLocked(store).contains(where: { $0.id == id }) else {
+                throw storeError("canvas not accessible: \(id)")
+            }
+            guard !canvas.isDefault else {
+                throw storeError("default canvas cannot be deleted")
+            }
+            store.canvases.removeAll { $0.id == id }
+            store.layouts.removeValue(forKey: id)
+            store.memberships.removeValue(forKey: id)
+            store.spawnIntents = (store.spawnIntents ?? []).filter { $0.canvasId != id }
+            store.sessionHomeCanvasIds = (store.sessionHomeCanvasIds ?? [:]).filter { $0.value != id }
+            if store.activeCanvasId == id {
+                store.activeCanvasId = defaultCanvasIdLocked(store, scope: .personal) ?? store.canvases.first?.id
+            }
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
+    @discardableResult
+    public func addSession(_ sessionId: String, to canvasId: String) throws -> Snapshot {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
+                throw storeError("canvas not found: \(canvasId)")
+            }
+            ensureMembershipsLocked(&store, canvasId: canvasId, sessionIds: [sessionId])
+            var layout = store.layouts[canvasId] ?? .empty
+            layout.dismissedSids.removeAll { $0 == sessionId }
+            store.layouts[canvasId] = layout
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
+    @discardableResult
+    public func removeSession(_ sessionId: String, from canvasId: String) throws -> Snapshot {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
+                throw storeError("canvas not found: \(canvasId)")
+            }
+            store.memberships[canvasId]?[sessionId] = nil
+            var homeCanvasIds = store.sessionHomeCanvasIds ?? [:]
+            homeCanvasIds[sessionId] = homeCanvasIds[sessionId] ?? canvasId
+            store.sessionHomeCanvasIds = homeCanvasIds
+            var layout = store.layouts[canvasId] ?? .empty
+            layout.sessions.removeValue(forKey: sessionId)
+            layout.dismissedSids.removeAll { $0 == sessionId }
+            store.layouts[canvasId] = layout
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
     // MARK: - Disk I/O（must be called inside `queue`）
 
-    private func loadFromDiskLocked() -> Layout {
+    private func loadFromDiskLocked() -> StoreData {
         guard fileManager.fileExists(atPath: fileURL.path) else { return .empty }
         guard let data = try? Data(contentsOf: fileURL) else { return .empty }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
-            return try decoder.decode(Layout.self, from: data)
+            return try decoder.decode(StoreData.self, from: data)
         } catch {
             MWarn("[BoardLayoutStore] failed to decode \(fileURL.path): \(error); starting empty")
             return .empty
         }
     }
 
-    private func writeToDiskLocked(_ layout: Layout) throws {
+    private func writeToDiskLocked(_ store: StoreData) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(layout)
+        let data = try encoder.encode(store)
         // 原子写：先写 .tmp.<pid>，再用 replaceItemAt（背后是 POSIX rename(2)，
         // 同一文件系统下原子；旧版本是 remove + move，崩在中间会只剩 .tmp.<pid>，
         // 而正式文件不存在）。
@@ -265,5 +619,190 @@ public final class BoardLayoutStore {
             // 文件还不存在：replaceItemAt 在原 URL 不存在时会抛错；走 moveItem。
             try fileManager.moveItem(at: tmp, to: fileURL)
         }
+    }
+
+    private func snapshotLocked(_ store: StoreData) -> Snapshot {
+        let active = resolveCanvasIdLocked(store, store.activeCanvasId)
+        let visibleCanvases = visibleCanvasesLocked(store)
+        let visibleCanvasIds = Set(visibleCanvases.map { $0.id })
+        let memberships = store.memberships
+            .filter { visibleCanvasIds.contains($0.key) }
+            .values
+            .flatMap { $0.values }
+        return Snapshot(activeCanvasId: active, canvases: visibleCanvases, memberships: memberships)
+    }
+
+    private func resolveCanvasIdLocked(_ store: StoreData, _ requested: String?) -> String {
+        let visible = visibleCanvasesLocked(store)
+        if let requested, visible.contains(where: { $0.id == requested }) {
+            return requested
+        }
+        if let active = store.activeCanvasId, visible.contains(where: { $0.id == active }) {
+            return active
+        }
+        return visible.first(where: { $0.scope == .personal && $0.isDefault })?.id
+            ?? visible.first?.id
+            ?? "personal-default"
+    }
+
+    private func visibleCanvasesLocked(_ store: StoreData) -> [Canvas] {
+        let context = currentContext()
+        return store.canvases.filter { canvas in
+            switch canvas.scope {
+            case .personal:
+                return true
+            case .team:
+                return !context.teamId.isEmpty && canvas.teamId == context.teamId
+            }
+        }
+    }
+
+    private func ensureWorkspaceFolderNamesLocked(_ store: inout StoreData) {
+        var existing = Set(store.canvases.compactMap { $0.workspaceFolderName }.filter { !$0.isEmpty })
+        for idx in store.canvases.indices {
+            if let folder = store.canvases[idx].workspaceFolderName, !folder.isEmpty {
+                continue
+            }
+            let folder = workspaceFolderName(forName: store.canvases[idx].name, id: store.canvases[idx].id, existing: existing)
+            store.canvases[idx].workspaceFolderName = folder
+            existing.insert(folder)
+        }
+    }
+
+    private func workspaceFolderName(forName name: String, id: String, existing: Set<String>) -> String {
+        let slug = slugify(name).isEmpty ? "canvas" : slugify(name)
+        let shortId = String(id.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+        let suffix = shortId.isEmpty ? "local" : shortId
+        let base = "\(slug)-\(suffix)"
+        if !existing.contains(base) { return base }
+        var i = 2
+        while existing.contains("\(base)-\(i)") { i += 1 }
+        return "\(base)-\(i)"
+    }
+
+    private func slugify(_ raw: String) -> String {
+        var out = ""
+        var lastWasDash = false
+        for scalar in raw.lowercased().unicodeScalars {
+            let isAlphaNum = CharacterSet.alphanumerics.contains(scalar) && scalar.isASCII
+            if isAlphaNum {
+                out.unicodeScalars.append(scalar)
+                lastWasDash = false
+            } else if !lastWasDash {
+                out.append("-")
+                lastWasDash = true
+            }
+        }
+        return out.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    private func workspaceRootURL() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("workspaces", isDirectory: true)
+            .appendingPathComponent("global", isDirectory: true)
+    }
+
+    private func defaultCanvasIdLocked(_ store: StoreData, scope: CanvasScope) -> String? {
+        store.canvases.first(where: { $0.scope == scope && $0.isDefault })?.id
+    }
+
+    private func ensureDefaultCanvasesLocked(_ store: inout StoreData, sessionIds: [String]) {
+        let context = currentContext()
+        let now = Date()
+        let personalId = "personal-default"
+        let removedTeamDefaultIds = store.canvases
+            .filter { $0.scope == .team && $0.isDefault }
+            .map(\.id)
+        if !removedTeamDefaultIds.isEmpty {
+            let removed = Set(removedTeamDefaultIds)
+            store.canvases.removeAll { removed.contains($0.id) }
+            for canvasId in removed {
+                store.layouts.removeValue(forKey: canvasId)
+                store.memberships.removeValue(forKey: canvasId)
+            }
+            if removed.contains(store.activeCanvasId ?? "") {
+                store.activeCanvasId = personalId
+            }
+            if var homeCanvasIds = store.sessionHomeCanvasIds {
+                let sessionIdsToClear = homeCanvasIds.compactMap { sessionId, canvasId in
+                    removed.contains(canvasId) ? sessionId : nil
+                }
+                for sessionId in sessionIdsToClear {
+                    homeCanvasIds.removeValue(forKey: sessionId)
+                }
+                store.sessionHomeCanvasIds = homeCanvasIds
+            }
+        }
+        if !store.canvases.contains(where: { $0.id == personalId }) {
+            store.canvases.append(Canvas(
+                id: personalId,
+                name: "Default canvas",
+                scope: .personal,
+                ownerUserId: context.userId,
+                teamId: nil,
+                isDefault: true,
+                workspaceFolderName: nil,
+                createdBy: context.userId,
+                createdAt: now,
+                updatedAt: now
+            ))
+            store.layouts[personalId] = store.layouts[personalId] ?? .empty
+            store.memberships[personalId] = store.memberships[personalId] ?? [:]
+        }
+        ensureWorkspaceFolderNamesLocked(&store)
+        let defaultSessionIds = sessionIds.filter { (store.sessionHomeCanvasIds ?? [:])[$0] == nil }
+        ensureMembershipsLocked(&store, canvasId: personalId, sessionIds: defaultSessionIds)
+
+        let visible = visibleCanvasesLocked(store)
+        if store.activeCanvasId == nil
+            || !visible.contains(where: { $0.id == (store.activeCanvasId ?? "") }) {
+            store.activeCanvasId = personalId
+        }
+    }
+
+    private func ensureMembershipsLocked(_ store: inout StoreData, canvasId: String, sessionIds: [String]) {
+        guard !sessionIds.isEmpty else {
+            store.memberships[canvasId] = store.memberships[canvasId] ?? [:]
+            return
+        }
+        var bySession = store.memberships[canvasId] ?? [:]
+        let now = Date()
+        let actor = currentContext().userId
+        for sessionId in sessionIds {
+            if var existing = bySession[sessionId] {
+                if !existing.visible {
+                    existing.visible = true
+                    existing.updatedAt = now
+                    bySession[sessionId] = existing
+                }
+            } else {
+                bySession[sessionId] = CanvasSession(
+                    canvasId: canvasId,
+                    sessionId: sessionId,
+                    visible: true,
+                    addedBy: actor,
+                    addedAt: now,
+                    updatedAt: now
+                )
+            }
+        }
+        store.memberships[canvasId] = bySession
+    }
+
+    private func currentContext() -> (userId: String, teamId: String) {
+        let defaults = UserDefaults.standard
+        let connected = defaults.bool(forKey: "meee2Connected")
+        let userId = connected
+            ? (defaults.string(forKey: "meee2UserId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            : ""
+        let teamId = connected
+            ? (defaults.string(forKey: "meee2TeamId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            : ""
+        return (userId.isEmpty ? "local-user" : userId, teamId)
+    }
+
+    private func storeError(_ message: String) -> NSError {
+        NSError(domain: "BoardLayoutStore", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 }

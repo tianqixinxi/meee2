@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardState, Selection, Session } from '../types'
-import { injectToSession, spawnSession } from '../api'
-import { loadDefaultSpawnCommand } from '../preferences'
+import { injectToSession } from '../api'
+import { loadSpawnProvider, spawnProviderLabel } from '../preferences'
 import { useToast } from '../App'
 import { Zap, Inbox, FolderOpen, Diamond } from 'lucide-react'
 
@@ -10,7 +10,7 @@ interface Props {
   selection: Selection
   connected: boolean
   unreadCount: number
-  onNewSession: () => void
+  onNewSession: () => Promise<void> | void
   onAskAndSpawn: () => void
   onPreferences: () => void
   onNewChannel: () => void
@@ -78,7 +78,7 @@ export function CommandBar({
     return 'no project'
   }, [selectedSession, distinctProjects])
 
-  const defaultModel = 'claude'  // Maps to spawn command. Just shown as a hint.
+  const spawnProvider = loadSpawnProvider()
 
   const handleSubmit = async () => {
     const body = value.trim()
@@ -90,13 +90,7 @@ export function CommandBar({
         toast.push('success', `Sent to ${selectedSession.title}`)
         setValue('')
       } else {
-        // 没选中 session → 按用户输入的内容当作 prompt 起一个新的 session。
-        // cwd 用第一个 distinctProjects 作 fallback；用户给的就是文本，daemon
-        // 会按默认 spawn command 启动。
-        const cmd = loadDefaultSpawnCommand() || 'claude'
-        const cwd = sessions[0]?.project || '~/'
-        await spawnSession({ cwd, command: cmd, createIfMissing: false })
-        toast.push('success', `Spawning new session in ${cwd}`)
+        await onNewSession()
         setValue('')
       }
     } catch (e) {
@@ -160,9 +154,9 @@ export function CommandBar({
           </span>
         )}
         <span className="cb-spacer" />
-        <span className="cb-chip cb-chip--ghost" title="Default spawn command">
+        <span className="cb-chip cb-chip--ghost" title="New session provider">
           <span className="cb-chip__glyph"><Diamond size={11} aria-hidden /></span>
-          {defaultModel}
+          {spawnProviderLabel(spawnProvider)}
         </span>
       </div>
       <div className="command-bar__input-row">
@@ -186,7 +180,7 @@ export function CommandBar({
         </button>
       </div>
       <div className="command-bar__actions">
-        <button className="cb-action" onClick={onNewSession} title="New Claude session">
+        <button className="cb-action" onClick={onNewSession} title="New session">
           <span className="cb-action__glyph">+</span>
           New session
         </button>

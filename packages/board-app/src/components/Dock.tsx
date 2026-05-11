@@ -23,7 +23,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { BoardState, Session } from '../types'
+import type { BoardState, CanvasPatchProposal, Session } from '../types'
 import {
   activateSession,
   injectToSession,
@@ -32,11 +32,9 @@ import {
   uploadAttachment,
   spawnSession,
   streamAssistantChat,
-  fetchUserProfile,
   type AssistantMessage,
-  type UserProfile,
 } from '../api'
-import { loadDefaultSpawnCommand } from '../preferences'
+import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 import { readLlmSettings, activeTools } from '../lib/llmSettings'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
@@ -71,6 +69,10 @@ export type DockMode =
       /** Assistant chat 历史。lifted 到 App 才能跨 dock 开关持久化。 */
       messages: DisplayMessage[]
       setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>
+      canvasId: string
+      canvasName: string
+      workspacePath: string
+      onApplyCanvasPatch: (proposal: CanvasPatchProposal) => void
     }
 
 export interface DockHandle {
@@ -169,10 +171,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     mode.kind === 'assistant' ? mode.setMessages : (() => { /* noop */ })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  const [assistantScope, setAssistantScope] = useState('this-mac')
-  const onlineTeamId = userProfile?.defaultSyncTeamId || ''
-  const onlineTeamName = userProfile?.defaultSyncTeamName || 'Team'
   const logRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -183,30 +181,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [messages, busy, mode.kind])
-
-  useEffect(() => {
-    if (mode.kind !== 'assistant') return
-    let cancelled = false
-    fetchUserProfile()
-      .then((profile) => {
-        if (cancelled) return
-        setUserProfile(profile)
-        if (!profile.connected) setAssistantScope('this-mac')
-      })
-      .catch(() => {
-        if (cancelled) return
-        setUserProfile(null)
-        setAssistantScope('this-mac')
-      })
-    return () => { cancelled = true }
-  }, [mode.kind])
-
-  useEffect(() => {
-    if (assistantScope === 'this-mac') return
-    if (!userProfile?.connected || assistantScope !== userProfile.defaultSyncTeamId) {
-      setAssistantScope('this-mac')
-    }
-  }, [assistantScope, userProfile])
 
   // assistant busy 时按 Esc → cancel stream（textarea 已 disabled，键盘事件
   // 不会落到 textarea，走 window-level）
@@ -273,7 +247,10 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       baseUrl: settings.baseUrl,
       model: settings.model,
       enabledTools: activeTools(settings),
-      scope: assistantScope,
+      scope: 'this-mac',
+      canvasId: mode.kind === 'assistant' ? mode.canvasId : undefined,
+      workspacePath: mode.kind === 'assistant' ? mode.workspacePath : undefined,
+      canvasName: mode.kind === 'assistant' ? mode.canvasName : undefined,
     }
     const wireMessages: AssistantMessage[] = next.slice(0, assistantIndex).map((m) => ({
       role: m.role,
@@ -341,7 +318,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     try {
       await spawnSession({
         cwd,
-        command: loadDefaultSpawnCommand(),
+        command: commandForSpawnProvider(loadSpawnProvider()),
         createIfMissing,
       })
       mode.onSpawned(cwd)
@@ -365,10 +342,26 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     }
   }, [mode])
 
+  const canvasPatchProposals = useMemo(() => {
+    if (mode.kind !== 'assistant') return []
+    const rows: Array<{ key: string; proposal: CanvasPatchProposal }> = []
+    messages.forEach((message, messageIndex) => {
+      for (const event of message.toolEvents ?? []) {
+        const proposal = canvasPatchProposalFromToolEvent(event)
+        if (proposal) rows.push({ key: `${messageIndex}-${event.id}`, proposal })
+      }
+    })
+    return rows
+  }, [messages, mode])
+
   // ── render ────────────────────────────────────────────────────────
   return (
     <div
-      className={'session-dock' + (expanded ? '' : ' session-dock--collapsed')}
+      className={
+        'session-dock' +
+        (mode.kind === 'assistant' ? ' session-dock--assistant' : '') +
+        (expanded ? '' : ' session-dock--collapsed')
+      }
       role={mode.kind === 'assistant' ? 'dialog' : undefined}
       aria-modal={mode.kind === 'assistant' ? 'true' : undefined}
       aria-label={mode.kind === 'assistant' ? 'Ask the assistant' : undefined}
@@ -430,9 +423,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
           // 时代的"⚡ Spawn here"功能 —— TranscriptView 不认这个 fence）。
           <div className="col" style={{ flex: 1, minHeight: 0, gap: 8 }}>
             {messages.length === 0 && !busy ? (
-              <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 4px' }}>
-                Ask anything — summarise local sessions, draft a prompt, or describe
-                a project to spawn a new Claude session in.
+              <div className="assistant-empty">
+                Ask about this canvas. I can summarize sessions, explain what changed,
+                or help draft the next prompt.
               </div>
             ) : (
               <TranscriptView
@@ -466,6 +459,14 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
                 </div>
               )
             })}
+            {mode.kind === 'assistant' && canvasPatchProposals.map(({ key, proposal }) => (
+              <CanvasPatchCard
+                key={`patch-${key}`}
+                proposal={proposal}
+                activeCanvasId={mode.canvasId}
+                onApply={() => mode.onApplyCanvasPatch(proposal)}
+              />
+            ))}
             {err && <div className="inline-error" style={{ margin: '4px 4px 0' }}>{err}</div>}
           </div>
         )}
@@ -475,6 +476,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       <ChatComposer
         ref={composerRef}
         initialValue={initialSeed}
+        placeholder={mode.kind === 'assistant' ? 'Ask about this canvas…' : 'Type a message…'}
         onSend={handleSend}
         onEscape={onClose}
         externalBusy={mode.kind === 'assistant' ? busy : undefined}
@@ -577,19 +579,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
               </div>
             </>
           ) : (
-            <label className="cc-scope-select">
-              <span>Scope</span>
-              <select
-                value={assistantScope}
-                onChange={(event) => setAssistantScope(event.target.value)}
-                aria-label="Assistant scope"
-              >
-                <option value="this-mac">This Mac</option>
-                {userProfile?.connected && onlineTeamId && (
-                  <option value={onlineTeamId}>Team: {onlineTeamName}</option>
-                )}
-              </select>
-            </label>
+            <span className="assistant-context-chip" title={mode.workspacePath || undefined}>
+              This canvas · {mode.canvasName}
+            </span>
           )
         }
         bottomRight={
@@ -629,13 +621,12 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             </>
           ) : (
             <>
-              <span className="cc-plugin-tag">Assistant</span>
-              <span className="cc-model">
+              {busy && <span className="cc-model">
                 <span className={busy ? 'cc-model-state cc-model-state--active' : 'cc-model-state'}>
-                  {busy ? 'streaming' : 'temporary'}
+                  Thinking
                 </span>
-                {busy && <span className="cc-spinner-mini" aria-hidden />}
-              </span>
+                <span className="cc-spinner-mini" aria-hidden />
+              </span>}
             </>
           )
         }
@@ -725,6 +716,85 @@ function ToolChip({ event }: { event: ToolEvent }) {
   )
 }
 
+function CanvasPatchCard({
+  proposal,
+  activeCanvasId,
+  onApply,
+}: {
+  proposal: CanvasPatchProposal
+  activeCanvasId: string
+  onApply: () => void
+}) {
+  const isCurrentCanvas = proposal.canvasId === activeCanvasId
+  const count = proposal.operationCount ?? proposal.operations.length
+  return (
+    <div className="canvas-patch-card">
+      <div className="canvas-patch-card__body">
+        <div className="canvas-patch-card__title">Canvas changes ready</div>
+        <div className="canvas-patch-card__summary">{proposal.summary}</div>
+        <div className="canvas-patch-card__meta">
+          {count} change{count === 1 ? '' : 's'} · Apply only changes this canvas
+        </div>
+        <ul className="canvas-patch-card__ops">
+          {proposal.operations.slice(0, 4).map((op, index) => (
+            <li key={index}>{operationLabel(op)}</li>
+          ))}
+          {proposal.operations.length > 4 && (
+            <li>{proposal.operations.length - 4} more</li>
+          )}
+        </ul>
+      </div>
+      <button
+        className="primary canvas-patch-card__apply"
+        onClick={onApply}
+        disabled={!isCurrentCanvas}
+        title={isCurrentCanvas ? 'Apply to this canvas' : 'Switch back to this canvas first'}
+      >
+        Apply
+      </button>
+    </div>
+  )
+}
+
+function canvasPatchProposalFromToolEvent(event: ToolEvent): CanvasPatchProposal | null {
+  if (event.name !== 'propose_canvas_patch') return null
+  const raw = event.result
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  if (obj.type !== 'canvas_patch_proposal') return null
+  if (typeof obj.canvasId !== 'string') return null
+  if (!Array.isArray(obj.operations)) return null
+  return {
+    type: 'canvas_patch_proposal',
+    canvasId: obj.canvasId,
+    canvasName: typeof obj.canvasName === 'string' ? obj.canvasName : undefined,
+    summary: typeof obj.summary === 'string' ? obj.summary : 'Canvas changes ready.',
+    operations: obj.operations as CanvasPatchProposal['operations'],
+    operationCount: typeof obj.operationCount === 'number' ? obj.operationCount : undefined,
+    requiresApply: obj.requiresApply === true,
+  }
+}
+
+function operationLabel(op: CanvasPatchProposal['operations'][number]): string {
+  switch (op.type) {
+    case 'move_session': return `Move session ${shortId(op.sessionId)}`
+    case 'move_channel': return `Move channel ${op.channelName}`
+    case 'show_session': return `Show session ${shortId(op.sessionId)}`
+    case 'hide_session': return `Hide session ${shortId(op.sessionId)}`
+    case 'add_note': return `Add note "${op.text.slice(0, 36)}${op.text.length > 36 ? '…' : ''}"`
+    case 'update_note': return `Update note ${shortId(op.elementId)}`
+  }
+}
+
+function shortId(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8)
+}
+
+const HIDDEN_ASSISTANT_TOOL_BLOCKS = new Set([
+  'get_canvas_context',
+  'propose_canvas_patch',
+])
+
 /** 扫 assistant 回复里有没有 ```spawn\n{...}\n``` fence；有的话解析出 cwd。 */
 /// LLM 流式回复时，tool-call 的 JSON 经常跟着 delta text 一起进 content
 /// 字符串（"{"name": "X", "args": {...}}"），同时又另有结构化 tool_call
@@ -765,6 +835,7 @@ function assistantMessagesToTranscriptEntries(
       blocks.push({ type: 'text', text: cleanedBody })
     }
     for (const te of m.toolEvents ?? []) {
+      if (HIDDEN_ASSISTANT_TOOL_BLOCKS.has(te.name)) continue
       const argsJSON = (() => {
         if (typeof te.args === 'string') return te.args
         try { return JSON.stringify(te.args ?? {}, null, 2) } catch { return '{}' }

@@ -264,7 +264,7 @@ public final class BoardServer {
     /// server 已经只 bind 到 127.0.0.1，只能从同机访问。
     private static let corsHeaders: [String: String] = [
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "600"
     ]
@@ -393,6 +393,13 @@ public final class BoardServer {
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)
         server.POST["/api/sessions/spawn"] = BoardServer.cors(BoardAPI.spawnSession)
+        server.GET["/api/canvases"] = BoardServer.cors(BoardAPI.listCanvases)
+        server.POST["/api/canvases"] = BoardServer.cors(BoardAPI.createCanvas)
+        server.PATCH["/api/canvases/:id"] = BoardServer.cors(BoardAPI.updateCanvas)
+        server.DELETE["/api/canvases/:id"] = BoardServer.cors(BoardAPI.deleteCanvas)
+        server.POST["/api/canvases/:id/sessions"] = BoardServer.cors(BoardAPI.addSessionToCanvas)
+        server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
+        server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
 
         // External chat session push (browser extension content scripts at
         // chatgpt.com / claude.ai). All CORS-wrapped — they hit localhost

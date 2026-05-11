@@ -20,7 +20,7 @@ import { useEffect, useRef, useState } from 'react'
 export type StatusFilterValue = 'all' | 'active' | 'idle' | 'waiting'
 export type LastActivityValue = 'all' | '1h' | '24h' | '7d'
 export type SortByValue = 'lastActivity' | 'createdTime' | 'title'
-export type GroupByValue = 'project' | 'date'
+export type GroupByValue = 'none' | 'project' | 'date'
 
 export interface FilterState {
   status: StatusFilterValue
@@ -62,6 +62,7 @@ const LAST_ACTIVITY_OPTIONS: Array<{ value: LastActivityValue; label: string }> 
 ]
 
 const GROUP_BY_OPTIONS: Array<{ value: GroupByValue; label: string }> = [
+  { value: 'none', label: 'None' },
   { value: 'project', label: 'Project' },
   { value: 'date', label: 'Date (last activity)' },
 ]
@@ -116,7 +117,7 @@ export function SidebarFilterMenu({
       case 'lastActivity':
         return LAST_ACTIVITY_OPTIONS.find((o) => o.value === v)?.label ?? 'All'
       case 'groupBy':
-        return GROUP_BY_OPTIONS.find((o) => o.value === v)?.label ?? 'Project'
+        return GROUP_BY_OPTIONS.find((o) => o.value === v)?.label ?? 'None'
       case 'sortBy':
         return SORT_BY_OPTIONS.find((o) => o.value === v)?.label ?? 'Last activity'
       default:
@@ -220,11 +221,11 @@ export const DEFAULT_FILTER_STATE: FilterState = {
   project: 'all',
   plugin: 'all',
   lastActivity: 'all',
-  groupBy: 'project',
+  groupBy: 'none',
   sortBy: 'lastActivity',
 }
 
-const STORAGE_KEY = 'meee2.sidebar.filterState.v1'
+const STORAGE_KEY = 'meee2.sidebar.filterState.v2'
 
 export function loadFilterState(): FilterState {
   try {

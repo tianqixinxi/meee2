@@ -43,6 +43,17 @@ final class AssistantAPITests: XCTestCase {
         XCTAssertEqual(s.model, "gpt-4o-mini")
     }
 
+    func testParseSettingsCarriesCanvasContext() {
+        let s = AssistantAPI.parseSettings([
+            "canvasId": "canvas-a",
+            "canvasName": "Planning",
+            "workspacePath": " /tmp/meee2-canvas ",
+        ])
+        XCTAssertEqual(s.canvasId, "canvas-a")
+        XCTAssertEqual(s.canvasName, "Planning")
+        XCTAssertEqual(s.workspacePath, "/tmp/meee2-canvas")
+    }
+
     func testParseSettingsParsesEnabledToolsAsSet() {
         let s = AssistantAPI.parseSettings([
             "enabledTools": ["get_session_list", "create_session"],
@@ -106,9 +117,90 @@ final class AssistantAPITests: XCTestCase {
                 baseUrl: "",
                 model: "",
                 enabledTools: nil,
-                scope: "this-mac")
+                scope: "this-mac",
+                canvasId: "personal-default",
+                workspacePath: "",
+                canvasName: "Canvas")
             let prompt = AssistantAPI.buildSystemPrompt(settings: s)
             XCTAssertFalse(prompt.isEmpty, "empty prompt for provider=\(kind)")
         }
+    }
+
+    // MARK: - canvas tools
+
+    func testProposeCanvasPatchRejectsUnknownOperation() {
+        let settings = AssistantAPI.parseSettings(["canvasId": "personal-default"])
+        let result = AssistantTools.dispatch(
+            name: "propose_canvas_patch",
+            args: [
+                "operations": [
+                    ["type": "delete_canvas"]
+                ]
+            ],
+            enabled: nil,
+            settings: settings
+        )
+        guard case .failure(let message) = result else {
+            return XCTFail("expected failure for unsupported operation")
+        }
+        XCTAssertTrue(message.contains("unsupported type"))
+    }
+
+    func testProposeCanvasPatchRejectsMissingRequiredId() {
+        let settings = AssistantAPI.parseSettings(["canvasId": "personal-default"])
+        let result = AssistantTools.dispatch(
+            name: "propose_canvas_patch",
+            args: [
+                "operations": [
+                    ["type": "hide_session"]
+                ]
+            ],
+            enabled: nil,
+            settings: settings
+        )
+        guard case .failure(let message) = result else {
+            return XCTFail("expected failure for missing sessionId")
+        }
+        XCTAssertTrue(message.contains("missing sessionId"))
+    }
+
+    func testProposeCanvasPatchAcceptsLowRiskNoteOperation() {
+        let settings = AssistantAPI.parseSettings(["canvasId": "personal-default"])
+        let result = AssistantTools.dispatch(
+            name: "propose_canvas_patch",
+            args: [
+                "summary": "Add a note",
+                "operations": [
+                    ["type": "add_note", "text": "Follow up", "x": 120, "y": 240]
+                ]
+            ],
+            enabled: nil,
+            settings: settings
+        )
+        guard case .success(let payload) = result,
+              let dict = payload as? [String: Any] else {
+            return XCTFail("expected successful proposal")
+        }
+        XCTAssertEqual(dict["type"] as? String, "canvas_patch_proposal")
+        XCTAssertEqual(dict["canvasId"] as? String, "personal-default")
+        XCTAssertEqual(dict["operationCount"] as? Int, 1)
+    }
+
+    func testGetCanvasContextUsesRequestedCanvas() {
+        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
+        let settings = AssistantAPI.parseSettings(["canvasId": "personal-default"])
+        let result = AssistantTools.dispatch(
+            name: "get_canvas_context",
+            args: [:],
+            enabled: nil,
+            settings: settings
+        )
+        guard case .success(let payload) = result,
+              let dict = payload as? [String: Any],
+              let canvas = dict["canvas"] as? [String: Any] else {
+            return XCTFail("expected canvas context")
+        }
+        XCTAssertEqual(canvas["id"] as? String, "personal-default")
+        XCTAssertNotNil(dict["sessions"])
     }
 }

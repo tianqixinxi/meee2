@@ -11,8 +11,7 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
-import type { BoardState, Selection } from '../types'
-import { isOlderSession } from '../types'
+import type { BoardState, CanvasPatchOperation, CanvasPatchRequest, Selection } from '../types'
 import {
   buildChannelHub,
   buildScene,
@@ -44,9 +43,11 @@ import {
 } from '@meee1/board-core'
 import {
   activateSession,
+  addSessionToCanvas,
   addMember,
   createChannel,
   deleteChannel,
+  removeSessionFromCanvas,
   removeMember,
 } from '../api'
 import { SessionOverlay } from './SessionOverlay'
@@ -292,6 +293,10 @@ interface Props {
   bulkVisibilityRequest: { mode: 'show' | 'hide'; bump: number; sids?: string[] } | null
   /** Sidebar session click: select, center, and zoom onto the matching card. */
   focusSessionRequest: { sessionId: string; bump: number } | null
+  /** Assistant-generated canvas patch proposal. Consumed after the user clicks Apply. */
+  canvasPatchRequest: CanvasPatchRequest | null
+  /** Emits a toast-level result after applying an assistant canvas patch. */
+  onCanvasPatchApplied: (result: { ok: boolean; message: string }) => void
   /**
    * Reports how many embeddable instances exist per sessionId on the canvas.
    * Used by the sidebar to show "on canvas / off canvas" indicators.
@@ -313,7 +318,7 @@ interface Props {
    * Excalidraw API, which only Board owns.
    */
   placeChannelRequest: { channelName: string; bump: number } | null
-  /** Invoked from the <MainMenu> "New Claude session" item. */
+  /** Invoked from the <MainMenu> "New session" item. */
   onNewSession: () => void
   /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
   onAskAndSpawn: () => void
@@ -346,6 +351,8 @@ export default function Board({
   hideFromCanvasRequest,
   bulkVisibilityRequest,
   focusSessionRequest,
+  canvasPatchRequest,
+  onCanvasPatchApplied,
   onCountsChange,
   templateCache,
   onNeedTemplate,
@@ -368,10 +375,13 @@ export default function Board({
   // 必须挂到 .Stack_horizontal 而不是 .App-toolbar 本身，否则会成为
   // toolbar 的另一行子元素，被 wrap 到第二行去（实测过）。
   const [toolbarRowEl, setToolbarRowEl] = useState<HTMLElement | null>(null)
+  const [zoomActionsEl, setZoomActionsEl] = useState<HTMLElement | null>(null)
   useEffect(() => {
     const find = () => {
-      const el = document.querySelector('.excalidraw .App-toolbar .Stack_horizontal') as HTMLElement | null
-      setToolbarRowEl((prev) => (prev === el ? prev : el))
+      const toolbarEl = document.querySelector('.excalidraw .App-toolbar .Stack_horizontal') as HTMLElement | null
+      const zoomEl = document.querySelector('.excalidraw .zoom-actions > .Stack_horizontal') as HTMLElement | null
+      setToolbarRowEl((prev) => (prev === toolbarEl ? prev : toolbarEl))
+      setZoomActionsEl((prev) => (prev === zoomEl ? prev : zoomEl))
     }
     find()
     const obs = new MutationObserver(find)
@@ -426,6 +436,7 @@ export default function Board({
   const lastHideBumpRef = useRef<number>(-1)
   const lastBulkBumpRef = useRef<number>(-1)
   const lastFocusSessionBumpRef = useRef<number>(-1)
+  const lastCanvasPatchBumpRef = useRef<number>(-1)
   // Frame-membership snapshot from the previous tick: sid -> channel name.
   // Used to detect a card moving between frames so we can issue the right
   // addMember/removeMember pair against the backend.
@@ -446,6 +457,7 @@ export default function Board({
   // In-flight frame-membership mutations, keyed by `${channel}|${sid}`.
   const pendingFrameOpsRef = useRef<Set<string>>(new Set())
   const lastPlaceChannelBumpRef = useRef<number>(-1)
+  const initialFitDoneRef = useRef(false)
   // Last Excalidraw selection signature we processed. Used to skip re-firing
   // sidebar updates on WS ticks where selection didn't actually change.
   const prevSelSigRef = useRef<string>('')
@@ -675,14 +687,22 @@ export default function Board({
       if (name) knownFrameChannelNames.add(name)
     }
 
+    // The active canvas membership is now the visibility source of truth.
+    // Clear legacy local dismissal tombstones for sessions App.tsx has already
+    // admitted into this canvas, otherwise a checked canvas membership can
+    // still render as a hidden row/card after older local state is restored.
+    let clearedMembershipDismissal = false
+    for (const s of state.sessions) {
+      if (dismissedRef.current.delete(s.id)) clearedMembershipDismissal = true
+    }
+    if (clearedMembershipDismissal) void persistence.saveDismissed(dismissedRef.current)
+
     const newSessionIds: string[] = []
     for (const s of state.sessions) {
-      // 「自动建卡」的两条隐藏规则全部由前端决定 (types.ts:isOlderSession +
-      // dismissedRef)。后端不再下发 displayGroup —— Board / Sidebar 共用同
-      // 一个 helper 保持一致。
-      if (isOlderSession(s)) continue
+      // In multi-canvas mode, App.tsx already filters state.sessions to the
+      // active canvas membership. Membership means visible on this canvas, so
+      // older sessions must still get a card instead of being silently hidden.
       if (knownSessionIds.has(s.id)) continue
-      if (dismissedRef.current.has(s.id)) continue
       newSessionIds.push(s.id)
     }
 
@@ -818,12 +838,25 @@ export default function Board({
       elements: finalElements as any,
     })
     reportCountsRef.current(finalElements)
-  }, [api, state, saveLayoutDebounced, saveChannelLayoutDebounced])
+    if (!initialFitDoneRef.current) {
+      const visibleContent = finalElements.filter((el) => !(el as any).isDeleted)
+      if (visibleContent.length > 0) {
+        initialFitDoneRef.current = true
+        requestAnimationFrame(() => {
+          try {
+            api.scrollToContent(visibleContent, { fitToContent: true, animate: false })
+          } catch (e) {
+            console.warn('[Board] initial fit-to-content failed', e)
+          }
+        })
+      }
+    }
+  }, [api, state, persistence, saveLayoutDebounced, saveChannelLayoutDebounced])
 
   // -- Fit-to-content --------------------------------------------------
   useEffect(() => {
     if (!api || fitSignal === 0) return
-    const elements = api.getSceneElements()
+    const elements = api.getSceneElements().filter((el) => !(el as any).isDeleted)
     if (elements.length > 0) {
       api.scrollToContent(elements, { fitToContent: true, animate: true })
     }
@@ -1196,6 +1229,249 @@ export default function Board({
       focusSceneElement(api, targetEl)
     })
   }, [api, state, focusSessionRequest, persistence])
+
+  // -- Assistant canvas patch Apply -----------------------------------
+  // Chatbox proposals are intentionally preview-only. Once the user clicks
+  // Apply, Board owns the live Excalidraw scene update so the visible canvas,
+  // localStorage shadow cache, and Swift JSON persistence stay in sync.
+  useEffect(() => {
+    if (!api || !state || !canvasPatchRequest) return
+    if (canvasPatchRequest.bump === lastCanvasPatchBumpRef.current) return
+    lastCanvasPatchBumpRef.current = canvasPatchRequest.bump
+
+    const { proposal } = canvasPatchRequest
+    const sessionById = new Map(state.sessions.map((s) => [s.id, s]))
+    const channelNames = new Set(
+      state.channels
+        .map((c) => c.name)
+        .filter((name) => !name.startsWith('__')),
+    )
+
+    try {
+      const all = (api.getSceneElementsIncludingDeleted?.() ?? api.getSceneElements()) as readonly ExcalidrawElement[]
+      let nextElements: ExcalidrawElement[] = [...all]
+      let nextLayout: LayoutMap = { ...layoutRef.current }
+      let nextChannelLayout: LayoutMap = { ...channelLayoutRef.current }
+      let sessionLayoutChanged = false
+      let channelLayoutChanged = false
+      let userElementsChanged = false
+      let dismissedChanged = false
+      const membershipOps: Array<Promise<unknown>> = []
+
+      const requireSession = (sid: string) => {
+        const session = sessionById.get(sid)
+        if (!session) throw new Error(`Session is not on this canvas: ${sid.slice(0, 8)}`)
+        return session
+      }
+      const requireChannel = (name: string) => {
+        if (!channelNames.has(name)) throw new Error(`Channel is not on this canvas: ${name}`)
+      }
+      const visibleSessionRectIndex = (sid: string) =>
+        nextElements.findIndex((el) =>
+          el.type === 'rectangle' &&
+          !(el as any).isDeleted &&
+          parseSessionFromElement(el) === sid,
+        )
+      const deletedSessionRectIndex = (sid: string) =>
+        nextElements.findIndex((el) =>
+          el.type === 'rectangle' &&
+          (el as any).isDeleted === true &&
+          parseSessionFromElement(el) === sid,
+        )
+      const viewportCenter = () => {
+        const appState = api.getAppState()
+        const viewW = appState.width ?? 800
+        const viewH = appState.height ?? 600
+        const zoom = appState.zoom.value || 1
+        return {
+          x: -appState.scrollX + viewW / zoom / 2,
+          y: -appState.scrollY + viewH / zoom / 2,
+        }
+      }
+      const sessionPosition = (sid: string, op: Partial<{ x: number; y: number }>) => {
+        const saved = nextLayout[sid]
+        if (typeof op.x === 'number' && typeof op.y === 'number') return { x: op.x, y: op.y }
+        if (saved) {
+          return {
+            x: typeof op.x === 'number' ? op.x : saved.x,
+            y: typeof op.y === 'number' ? op.y : saved.y,
+          }
+        }
+        const center = viewportCenter()
+        return {
+          x: typeof op.x === 'number' ? op.x : Math.round(center.x - RECT_W / 2),
+          y: typeof op.y === 'number' ? op.y : Math.round(center.y - RECT_H / 2),
+        }
+      }
+      const createSessionRect = (op: Extract<CanvasPatchOperation, { type: 'show_session' }>) => {
+        const session = requireSession(op.sessionId)
+        const pos = sessionPosition(op.sessionId, op)
+        const id = `session-${op.sessionId}-${Date.now().toString(36)}-${nextElements.length}`
+        const skeleton = buildSessionEmbeddable(session, pos.x, pos.y, id)
+        const [built] = convertToExcalidrawElements([skeleton] as any, {
+          regenerateIds: false,
+        })
+        if (!built) throw new Error(`Could not create session card: ${op.sessionId.slice(0, 8)}`)
+        nextLayout = { ...nextLayout, [op.sessionId]: { x: pos.x, y: pos.y } }
+        sessionLayoutChanged = true
+        nextElements = [...nextElements, built as ExcalidrawElement]
+      }
+      const addTextNote = (op: Extract<CanvasPatchOperation, { type: 'add_note' }>) => {
+        const id = `canvas-note-${Date.now().toString(36)}-${nextElements.length}`
+        const [built] = convertToExcalidrawElements([{
+          id,
+          type: 'text',
+          x: op.x,
+          y: op.y,
+          text: op.text,
+          originalText: op.text,
+          fontSize: 20,
+          fontFamily: 1,
+          textAlign: 'left',
+          verticalAlign: 'top',
+          strokeColor: '#E5E7EB',
+          backgroundColor: 'transparent',
+          customData: { meee2Kind: 'note' },
+        }] as any, { regenerateIds: false })
+        if (!built) throw new Error('Could not create note')
+        nextElements = [...nextElements, built as ExcalidrawElement]
+        userElementsChanged = true
+      }
+
+      for (const op of proposal.operations) {
+        switch (op.type) {
+          case 'move_session': {
+            requireSession(op.sessionId)
+            const idx = visibleSessionRectIndex(op.sessionId)
+            if (idx < 0) throw new Error(`Session card is hidden: ${op.sessionId.slice(0, 8)}`)
+            nextElements = nextElements.map((el, i) =>
+              i === idx ? ({ ...el, x: op.x, y: op.y } as ExcalidrawElement) : el,
+            )
+            nextLayout = { ...nextLayout, [op.sessionId]: { x: op.x, y: op.y } }
+            sessionLayoutChanged = true
+            break
+          }
+          case 'move_channel': {
+            requireChannel(op.channelName)
+            let moved = false
+            nextElements = nextElements.map((el) => {
+              const name = parseChannelFromElement(el)
+              if (name !== op.channelName) return el
+              if ((el as any).isDeleted) return el
+              if ((el as any).type !== 'frame' && el.type !== 'ellipse') return el
+              moved = true
+              return { ...el, x: op.x, y: op.y } as ExcalidrawElement
+            })
+            if (!moved) throw new Error(`Channel frame is hidden: ${op.channelName}`)
+            nextChannelLayout = { ...nextChannelLayout, [op.channelName]: { x: op.x, y: op.y } }
+            channelLayoutChanged = true
+            break
+          }
+          case 'show_session': {
+            requireSession(op.sessionId)
+            const pos = sessionPosition(op.sessionId, op)
+            const visibleIdx = visibleSessionRectIndex(op.sessionId)
+            if (visibleIdx >= 0) {
+              nextElements = nextElements.map((el, i) =>
+                i === visibleIdx ? ({ ...el, x: pos.x, y: pos.y } as ExcalidrawElement) : el,
+              )
+            } else {
+              const deletedIdx = deletedSessionRectIndex(op.sessionId)
+              if (deletedIdx >= 0) {
+                nextElements = nextElements.map((el, i) =>
+                  i === deletedIdx ? ({ ...el, isDeleted: false, x: pos.x, y: pos.y } as ExcalidrawElement) : el,
+                )
+              } else {
+                createSessionRect(op)
+              }
+            }
+            nextLayout = { ...nextLayout, [op.sessionId]: { x: pos.x, y: pos.y } }
+            sessionLayoutChanged = true
+            if (dismissedRef.current.delete(op.sessionId)) dismissedChanged = true
+            membershipOps.push(addSessionToCanvas(proposal.canvasId, op.sessionId))
+            break
+          }
+          case 'hide_session': {
+            requireSession(op.sessionId)
+            nextElements = nextElements.map((el) => {
+              if (el.type !== 'rectangle') return el
+              if (parseSessionFromElement(el) !== op.sessionId) return el
+              if ((el as any).isDeleted) return el
+              return { ...el, isDeleted: true } as ExcalidrawElement
+            })
+            if (!dismissedRef.current.has(op.sessionId)) {
+              dismissedRef.current.add(op.sessionId)
+              dismissedChanged = true
+            }
+            const { [op.sessionId]: _removed, ...restLayout } = nextLayout
+            nextLayout = restLayout
+            sessionLayoutChanged = true
+            membershipOps.push(removeSessionFromCanvas(proposal.canvasId, op.sessionId))
+            break
+          }
+          case 'add_note': {
+            addTextNote(op)
+            break
+          }
+          case 'update_note': {
+            let found = false
+            nextElements = nextElements.map((el) => {
+              if (el.id !== op.elementId || el.type !== 'text' || (el as any).isDeleted) return el
+              found = true
+              const text = typeof op.text === 'string' ? op.text : (el as any).text
+              return {
+                ...el,
+                x: typeof op.x === 'number' ? op.x : el.x,
+                y: typeof op.y === 'number' ? op.y : el.y,
+                text,
+                originalText: text,
+              } as ExcalidrawElement
+            })
+            if (!found) throw new Error(`Note not found: ${op.elementId.slice(0, 8)}`)
+            userElementsChanged = true
+            break
+          }
+        }
+      }
+
+      api.updateScene({ elements: nextElements as any })
+      reportCountsRef.current(nextElements)
+      if (sessionLayoutChanged) {
+        layoutRef.current = nextLayout
+        saveLayoutDebounced(nextLayout)
+      }
+      if (channelLayoutChanged) {
+        channelLayoutRef.current = nextChannelLayout
+        saveChannelLayoutDebounced(nextChannelLayout)
+      }
+      if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
+      if (userElementsChanged) saveShapesDebounced(nextElements)
+
+      Promise.all(membershipOps)
+        .then(() => onCanvasPatchApplied({
+          ok: true,
+          message: `Applied ${proposal.operations.length} canvas change${proposal.operations.length === 1 ? '' : 's'}`,
+        }))
+        .catch((err) => onCanvasPatchApplied({
+          ok: false,
+          message: (err as Error).message || 'Canvas changed locally, but membership sync failed',
+        }))
+    } catch (err) {
+      onCanvasPatchApplied({
+        ok: false,
+        message: (err as Error).message || 'Failed to apply canvas changes',
+      })
+    }
+  }, [
+    api,
+    state,
+    canvasPatchRequest,
+    onCanvasPatchApplied,
+    persistence,
+    saveChannelLayoutDebounced,
+    saveLayoutDebounced,
+    saveShapesDebounced,
+  ])
 
   // -- Multi-select all cards for the sidebar-selected session --------
   // When sidebar selects a session, highlight every rect on canvas with
@@ -1728,7 +2004,7 @@ export default function Board({
       >
         <MainMenu>
           <MainMenu.Item onSelect={onNewSession} icon={<TerminalIcon />}>
-            New Claude session…
+            New session…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onAskAndSpawn} icon={<TerminalIcon />}>
             Ask AI to spawn…
@@ -1816,6 +2092,26 @@ export default function Board({
           </Tooltip>
         </>,
         toolbarRowEl,
+      )}
+      {zoomActionsEl && createPortal(
+        <Tooltip label="Fit canvas to content">
+          <button
+            className="zoom-button board-fit-content-zoom-button"
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onFit()
+            }}
+            type="button"
+            aria-label="Fit canvas to content"
+            title="Fit canvas to content"
+          >
+            <div className="ToolIcon__icon" tabIndex={-1}>
+              <FitIcon />
+            </div>
+          </button>
+        </Tooltip>,
+        zoomActionsEl,
       )}
       <SessionOverlay
         excalidrawAPI={api}

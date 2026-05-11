@@ -59,6 +59,9 @@ struct AssistantSettings {
     let model: String         // empty for local → claude default
     let enabledTools: Set<String>?  // nil = all
     let scope: String         // "this-mac" or a meee2 team id
+    let canvasId: String      // current canvas id for canvas-aware tools
+    let workspacePath: String // current canvas workspace for local temporary assistant
+    let canvasName: String
 }
 
 /// Common interface across hosted (OpenAI / Anthropic) and local (claude -p)
@@ -479,6 +482,7 @@ struct LocalClaudeProvider: AssistantProvider {
                     try runProcess(
                         systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
                         messages: messages,
+                        workspacePath: settings.workspacePath,
                         continuation: continuation
                     )
                 } catch {
@@ -510,6 +514,7 @@ struct LocalClaudeProvider: AssistantProvider {
     private func runProcess(
         systemPrompt: String,
         messages: [ChatMessage],
+        workspacePath rawWorkspacePath: String,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
         let claudePath = resolveClaudeBinary()
@@ -534,6 +539,14 @@ struct LocalClaudeProvider: AssistantProvider {
             process.arguments = ["claude"] + args
         }
         process.environment = ProcessInfo.processInfo.environment
+        let workspacePath = (rawWorkspacePath as NSString).standardizingPath
+        if !workspacePath.isEmpty {
+            try FileManager.default.createDirectory(
+                atPath: workspacePath,
+                withIntermediateDirectories: true
+            )
+            process.currentDirectoryURL = URL(fileURLWithPath: workspacePath, isDirectory: true)
+        }
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
