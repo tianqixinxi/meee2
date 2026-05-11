@@ -905,9 +905,6 @@ public struct IslandView: View {
         let tableData = parseMarkdownTable(lines: lines)
 
         if let table = tableData {
-            // 调试日志 - 在渲染前输出
-            // swiftlint:disable:next redundant_discardable_let
-            // let _ = NSLog("[IslandView] Table parsed: headers=\(table.headers.count), rows=\(table.rows.count)")
             // 渲染表格
             markdownTableView(table)
         } else {

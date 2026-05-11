@@ -191,6 +191,27 @@ function sameLayoutMap(a: LayoutMap, b: LayoutMap): boolean {
   return true
 }
 
+function layoutMapSignature(map: LayoutMap): string {
+  return Object.keys(map).sort().map((key) => {
+    const item = map[key]
+    if (!item) return `${key}:nil`
+    const x = Math.round((item.x ?? 0) * 10)
+    const y = Math.round((item.y ?? 0) * 10)
+    const w = Math.round((item.width ?? 0) * 10)
+    const h = Math.round((item.height ?? 0) * 10)
+    return `${key}:${x},${y},${w},${h}`
+  }).join('|')
+}
+
+function viewportSignature(viewport: { scrollX: number; scrollY: number; zoom: number } | null): string {
+  if (!viewport) return 'nil'
+  return [
+    Math.round(viewport.scrollX * 10),
+    Math.round(viewport.scrollY * 10),
+    Math.round(viewport.zoom * 1000),
+  ].join(',')
+}
+
 function bindingSignature(binding: any): unknown {
   if (!binding) return null
   return {
@@ -799,6 +820,7 @@ export default function Board({
   const prevFrameMembershipSigRef = useRef<string>('')
   const prevDmStructureSigRef = useRef<string>('')
   const prevPersistedUserElementsSigRef = useRef<string>('')
+  const prevSceneSnapshotSigRef = useRef<string>('')
   // Tracks the last embeddable id we saw `activeEmbeddable.state === 'active'`
   // for. Prevents re-firing `activateSession` every frame while the embeddable
   // stays active.
@@ -903,6 +925,7 @@ export default function Board({
     prevFrameMembershipSigRef.current = ''
     prevDmStructureSigRef.current = ''
     prevPersistedUserElementsSigRef.current = ''
+    prevSceneSnapshotSigRef.current = ''
     lastActivatedElementIdRef.current = null
     onSelectionChange({ kind: 'none' })
     if (!api) return
@@ -1990,6 +2013,41 @@ export default function Board({
         scrollY: appState.scrollY ?? 0,
         zoom: appState.zoom?.value ?? 1,
       }
+      const publishSnapshotIfNeeded = (
+        snapshotElements: readonly ExcalidrawElement[],
+        currentViewport: { scrollX: number; scrollY: number; zoom: number },
+      ) => {
+        const userElementsSig = persistedUserElementsSignature(snapshotElements)
+        if (userElementsSig !== prevPersistedUserElementsSigRef.current) {
+          prevPersistedUserElementsSigRef.current = userElementsSig
+          saveShapesDebounced(snapshotElements)
+        }
+
+        const snapshotSig = [
+          layoutMapSignature(layoutRef.current),
+          layoutMapSignature(channelLayoutRef.current),
+          viewportSignature(currentViewport),
+          userElementsSig,
+          [...dismissedRef.current].sort().join(','),
+          [...unreadSids].sort().join(','),
+        ].join('||')
+        if (snapshotSig === prevSceneSnapshotSigRef.current) return
+        prevSceneSnapshotSigRef.current = snapshotSig
+
+        publishSceneSnapshotDebounced({
+          canvasId,
+          sessionLayout: { ...layoutRef.current },
+          channelLayout: { ...channelLayoutRef.current },
+          viewport: {
+            scrollX: currentViewport.scrollX,
+            scrollY: currentViewport.scrollY,
+            zoom: currentViewport.zoom,
+          },
+          userElements: [...snapshotElements] as any[],
+          dismissed: new Set(dismissedRef.current),
+          unreadSids: new Set(unreadSids),
+        })
+      }
       const selIds = Object.keys(appState.selectedElementIds ?? {})
       const selSig = selIds.slice().sort().join(',')
       const selectionChanged = selSig !== prevSelSigRef.current
@@ -2002,6 +2060,7 @@ export default function Board({
       // reconciliation, counts, shape snapshots, and channel checks.
       if (!elementsChanged && !selectionChanged) {
         saveAppStateDebounced(viewport)
+        publishSnapshotIfNeeded(elements, viewport)
         return
       }
 
@@ -2153,6 +2212,7 @@ export default function Board({
 
       if (!elementsChanged) {
         saveAppStateDebounced(viewport)
+        publishSnapshotIfNeeded(elements, viewport)
         return
       }
 
@@ -2485,24 +2545,7 @@ export default function Board({
         zoom: viewport.zoom,
       })
       const snapshotElements = aspectNeedsFix ? fixedElements : elementsForPersistence
-      const persistedSig = persistedUserElementsSignature(snapshotElements)
-      if (persistedSig !== prevPersistedUserElementsSigRef.current) {
-        prevPersistedUserElementsSigRef.current = persistedSig
-        saveShapesDebounced(snapshotElements)
-        publishSceneSnapshotDebounced({
-          canvasId,
-          sessionLayout: { ...layoutRef.current },
-          channelLayout: { ...channelLayoutRef.current },
-          viewport: {
-            scrollX: viewport.scrollX,
-            scrollY: viewport.scrollY,
-            zoom: viewport.zoom,
-          },
-          userElements: [...snapshotElements] as any[],
-          dismissed: new Set(dismissedRef.current),
-          unreadSids: new Set(unreadSids),
-        })
-      }
+      publishSnapshotIfNeeded(snapshotElements, viewport)
     }
   }, [state, canvasId, canvasLoading, selection, onSelectionChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced, publishSceneSnapshotDebounced, unreadSids, onRefresh])
 
