@@ -286,6 +286,24 @@ export default function App() {
     setBulkVisibilityRequest({ mode, bump: Date.now(), sids })
   }, [activeCanvasId, boardState.state, pushToast])
 
+  const handleSetSessionCanvasMembership = useCallback((
+    sessionId: string,
+    canvasId: string,
+    present: boolean,
+  ) => {
+    const request = present
+      ? addSessionToCanvas(canvasId, sessionId)
+      : removeSessionFromCanvas(canvasId, sessionId)
+    request
+      .then(setCanvasList)
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas membership'))
+
+    if (canvasId === activeCanvasId) {
+      if (present) setAddToCanvasRequest({ sessionId, bump: Date.now() })
+      else setHideFromCanvasRequest({ sessionId, bump: Date.now() })
+    }
+  }, [activeCanvasId, pushToast])
+
   const handleSetActiveCanvas = useCallback((canvasId: string) => {
     updateCanvas(canvasId, { active: true })
       .then((list) => {
@@ -572,6 +590,17 @@ export default function App() {
     return ids
   }, [activeCanvasId, canvasList])
 
+  const sessionCanvasIds = useMemo(() => {
+    const out: Record<string, string[]> = {}
+    for (const membership of canvasList?.memberships ?? []) {
+      if (!membership.visible) continue
+      const arr = out[membership.sessionId] ?? []
+      arr.push(membership.canvasId)
+      out[membership.sessionId] = arr
+    }
+    return out
+  }, [canvasList])
+
   const canvasBoardState = useMemo(() => {
     if (!boardState.state) return null
     return {
@@ -627,12 +656,9 @@ export default function App() {
           <CanvasToolbar
             canvases={canvasList.canvases}
             activeCanvasId={activeCanvasId}
-            sessions={boardState.state?.sessions ?? []}
-            canvasSessionIds={canvasSessionIds}
             onActiveCanvasChange={handleSetActiveCanvas}
             onCreateCanvas={handleCreateCanvas}
             onRenameCanvas={handleRenameCanvas}
-            onAddSession={handleAddToCanvas}
           />
           {boardState.error && (
             <div className="inline-error" style={{ position: 'absolute', bottom: 8, left: 12 }}>
@@ -685,6 +711,9 @@ export default function App() {
         </div>
         <Sidebar
           state={boardState.state}
+          canvases={canvasList.canvases}
+          sessionCanvasIds={sessionCanvasIds}
+          onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
           selection={selection}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}

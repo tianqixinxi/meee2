@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { BoardState, ClientKind, Selection, Session } from '../types'
+import type { BoardState, CanvasInfo, ClientKind, Selection, Session } from '../types'
 import { isOlderSession } from '../types'
 import ChannelDetail from './ChannelDetail'
 import {
@@ -386,6 +386,8 @@ function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
 
 interface Props {
   state: BoardState | null
+  canvases?: CanvasInfo[]
+  sessionCanvasIds?: Record<string, string[]>
   selection: Selection
   open: boolean
   onOpen: () => void
@@ -400,6 +402,8 @@ interface Props {
   onAddToCanvas: (sessionId: string) => void
   /** Request to remove all cards for this session from the canvas. */
   onHideFromCanvas: (sessionId: string) => void
+  /** Update a session's membership in a specific canvas. */
+  onSetSessionCanvasMembership?: (sessionId: string, canvasId: string, present: boolean) => void
   /** Bulk show / hide sessions on the canvas in one shot.
    *  - omit `sids` → operates on every session (top "Hide all" button)
    *  - pass `sids` → operates only on that subset (per-category toggle) */
@@ -419,6 +423,8 @@ interface Props {
 
 export default function Sidebar({
   state,
+  canvases = [],
+  sessionCanvasIds = {},
   selection,
   open,
   onOpen,
@@ -428,6 +434,7 @@ export default function Sidebar({
   unreadSids,
   onAddToCanvas,
   onHideFromCanvas,
+  onSetSessionCanvasMembership,
   onBulkVisibility,
   onNewSession,
   tabsOverride,
@@ -1170,6 +1177,11 @@ export default function Sidebar({
                                 toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
                               })
                           }}
+                          canvases={canvases}
+                          selectedCanvasIds={sessionCanvasIds[s.id] ?? []}
+                          onSetCanvasMembership={onSetSessionCanvasMembership
+                            ? (canvasId, present) => onSetSessionCanvasMembership(s.id, canvasId, present)
+                            : undefined}
                           onHide={onCanvas ? () => {
                             // 把 sid 加进 dismissed 集合 + 把 canvas 上的 rect
                             // 删掉。下次状态刷新不会自动重建（Board.tsx:681）。

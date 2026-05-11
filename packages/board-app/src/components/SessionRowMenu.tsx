@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
+  Check,
   ChevronRight,
   Pin,
   PinOff,
@@ -26,7 +27,7 @@ import {
   EyeOff,
   Power,
 } from 'lucide-react'
-import type { Session } from '../types'
+import type { CanvasInfo, Session } from '../types'
 
 export interface SessionRowMenuProps {
   session: Session
@@ -41,6 +42,9 @@ export interface SessionRowMenuProps {
   onTogglePin: () => void
   onRename: () => void
   onDuplicate: () => void
+  canvases?: CanvasInfo[]
+  selectedCanvasIds?: string[]
+  onSetCanvasMembership?: (canvasId: string, present: boolean) => void
   /** "Hide from canvas"：把该 session sid 加进 dismissed 集合，下次刷新不再
    *  自动建卡片。仅在 session 已经在 canvas 上时才显示这一项 —— 不在的话
    *  Hide 无意义。父组件传 undefined 即不渲染该 menu item。 */
@@ -126,6 +130,10 @@ function MenuItem({
   )
 }
 
+function canvasLabel(canvas: CanvasInfo): string {
+  return `${canvas.scope === 'team' ? 'Team' : 'Personal'} · ${canvas.name}`
+}
+
 export function SessionRowMenu({
   session,
   isPinned,
@@ -135,12 +143,16 @@ export function SessionRowMenu({
   onTogglePin,
   onRename,
   onDuplicate,
+  canvases = [],
+  selectedCanvasIds = [],
+  onSetCanvasMembership,
   onHide,
   onCloseSession,
   anchorRect,
 }: SessionRowMenuProps) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [submenuOpen, setSubmenuOpen] = useState(false)
+  const selectedCanvasIdSet = new Set(selectedCanvasIds)
 
   // 关闭逻辑：
   //   - 点击 backdrop（fixed inset:0 透明覆盖层）→ onClose
@@ -240,6 +252,23 @@ export function SessionRowMenu({
         shortcut="D"
         onClick={() => { onDuplicate(); onClose() }}
       />
+      {onSetCanvasMembership && canvases.length > 0 && (
+        <>
+          <div className="srm-divider" aria-hidden />
+          <div className="srm-section-label">Show on canvases</div>
+          {canvases.map((canvas) => {
+            const selected = selectedCanvasIdSet.has(canvas.id)
+            return (
+              <MenuItem
+                key={canvas.id}
+                icon={selected ? <Check size={13} aria-hidden /> : <span aria-hidden />}
+                label={canvasLabel(canvas)}
+                onClick={() => onSetCanvasMembership(canvas.id, !selected)}
+              />
+            )
+          })}
+        </>
+      )}
       {onHide && (
         <>
           <div className="srm-divider" aria-hidden />

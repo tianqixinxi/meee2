@@ -172,10 +172,8 @@ textarea {
 }
 
 .canvas-toolbar__trigger,
-.canvas-toolbar__icon,
 .canvas-toolbar__actions button,
-.canvas-toolbar__form button,
-.canvas-toolbar__session {
+.canvas-toolbar__form button {
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -197,9 +195,7 @@ textarea {
 }
 
 .canvas-toolbar__trigger:hover,
-.canvas-toolbar__icon:hover,
-.canvas-toolbar__actions button:hover,
-.canvas-toolbar__session:hover {
+.canvas-toolbar__actions button:hover {
   background: #1A1E2B;
   color: #F3F4F6;
 }
@@ -217,14 +213,6 @@ textarea {
   font-size: 13px;
 }
 
-.canvas-toolbar__icon {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .canvas-toolbar__panel {
   width: 360px;
   margin-top: 6px;
@@ -235,8 +223,7 @@ textarea {
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.38);
 }
 
-.canvas-toolbar__list,
-.canvas-toolbar__session-list {
+.canvas-toolbar__list {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -324,8 +311,7 @@ textarea {
 }
 
 .canvas-toolbar__form input,
-.canvas-toolbar__form select,
-.canvas-toolbar__search input {
+.canvas-toolbar__form select {
   min-width: 0;
   height: 30px;
   border: 1px solid #2A3040;
@@ -338,7 +324,7 @@ textarea {
 }
 
 .canvas-toolbar__form input:focus,
-.canvas-toolbar__search input:focus {
+.canvas-toolbar__form select:focus {
   border-color: rgba(96, 165, 250, 0.68);
 }
 
@@ -352,61 +338,6 @@ textarea {
 .canvas-toolbar__form button:disabled {
   opacity: 0.45;
   cursor: default;
-}
-
-.canvas-toolbar__panel--sessions {
-  width: 380px;
-}
-
-.canvas-toolbar__search {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  gap: 6px;
-  align-items: center;
-  padding: 2px 4px 8px;
-  color: #6B7488;
-}
-
-.canvas-toolbar__search input {
-  width: 100%;
-}
-
-.canvas-toolbar__session {
-  width: 100%;
-  min-height: 38px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 18px;
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  text-align: left;
-}
-
-.canvas-toolbar__session > span {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.canvas-toolbar__session > span span:first-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #E5E7EB;
-  font-size: 12px;
-}
-
-.canvas-toolbar__session > span span:last-child {
-  color: #6B7488;
-  font-size: 10px;
-}
-
-.canvas-toolbar__empty {
-  padding: 16px 8px;
-  text-align: center;
-  color: #6B7488;
-  font-size: 12px;
 }
 
 /* SessionDock：选中 session 后画板上的合体浮窗。
@@ -4221,6 +4152,15 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
   margin: 4px 2px;
 }
 
+.srm-section-label {
+  padding: 5px 8px 3px;
+  color: #6B7488;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
 .srm-item-wrap {
   position: relative;
 }
@@ -4273,6 +4213,9 @@ html:not(.meee2-board-shell) .sidebar .sidebar-header {
 .srm-item__label {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .srm-item__chevron {

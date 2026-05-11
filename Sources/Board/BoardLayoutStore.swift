@@ -388,6 +388,9 @@ public final class BoardLayoutStore {
             guard let idx = store.canvases.firstIndex(where: { $0.id == id }) else {
                 throw storeError("canvas not found: \(id)")
             }
+            guard visibleCanvasesLocked(store).contains(where: { $0.id == id }) else {
+                throw storeError("canvas not accessible: \(id)")
+            }
             if let rawName {
                 let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { throw storeError("canvas name is required") }
@@ -412,6 +415,9 @@ public final class BoardLayoutStore {
             guard let canvas = store.canvases.first(where: { $0.id == id }) else {
                 throw storeError("canvas not found: \(id)")
             }
+            guard visibleCanvasesLocked(store).contains(where: { $0.id == id }) else {
+                throw storeError("canvas not accessible: \(id)")
+            }
             guard !canvas.isDefault else {
                 throw storeError("default canvas cannot be deleted")
             }
@@ -433,7 +439,8 @@ public final class BoardLayoutStore {
         try queue.sync {
             var store = cached ?? loadFromDiskLocked()
             ensureDefaultCanvasesLocked(&store, sessionIds: [])
-            guard store.canvases.contains(where: { $0.id == canvasId }) else {
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
                 throw storeError("canvas not found: \(canvasId)")
             }
             ensureMembershipsLocked(&store, canvasId: canvasId, sessionIds: [sessionId])
@@ -452,7 +459,8 @@ public final class BoardLayoutStore {
         try queue.sync {
             var store = cached ?? loadFromDiskLocked()
             ensureDefaultCanvasesLocked(&store, sessionIds: [])
-            guard store.canvases.contains(where: { $0.id == canvasId }) else {
+            guard store.canvases.contains(where: { $0.id == canvasId }),
+                  visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
                 throw storeError("canvas not found: \(canvasId)")
             }
             store.memberships[canvasId]?[sessionId] = nil
@@ -504,18 +512,38 @@ public final class BoardLayoutStore {
 
     private func snapshotLocked(_ store: StoreData) -> Snapshot {
         let active = resolveCanvasIdLocked(store, store.activeCanvasId)
-        let memberships = store.memberships.values.flatMap { $0.values }
-        return Snapshot(activeCanvasId: active, canvases: store.canvases, memberships: memberships)
+        let visibleCanvases = visibleCanvasesLocked(store)
+        let visibleCanvasIds = Set(visibleCanvases.map { $0.id })
+        let memberships = store.memberships
+            .filter { visibleCanvasIds.contains($0.key) }
+            .values
+            .flatMap { $0.values }
+        return Snapshot(activeCanvasId: active, canvases: visibleCanvases, memberships: memberships)
     }
 
     private func resolveCanvasIdLocked(_ store: StoreData, _ requested: String?) -> String {
-        if let requested, store.canvases.contains(where: { $0.id == requested }) {
+        let visible = visibleCanvasesLocked(store)
+        if let requested, visible.contains(where: { $0.id == requested }) {
             return requested
         }
-        if let active = store.activeCanvasId, store.canvases.contains(where: { $0.id == active }) {
+        if let active = store.activeCanvasId, visible.contains(where: { $0.id == active }) {
             return active
         }
-        return defaultCanvasIdLocked(store, scope: .personal) ?? store.canvases.first?.id ?? "personal-default"
+        return visible.first(where: { $0.scope == .personal && $0.isDefault })?.id
+            ?? visible.first?.id
+            ?? "personal-default"
+    }
+
+    private func visibleCanvasesLocked(_ store: StoreData) -> [Canvas] {
+        let context = currentContext()
+        return store.canvases.filter { canvas in
+            switch canvas.scope {
+            case .personal:
+                return true
+            case .team:
+                return !context.teamId.isEmpty && canvas.teamId == context.teamId
+            }
+        }
     }
 
     private func defaultCanvasIdLocked(_ store: StoreData, scope: CanvasScope) -> String? {
@@ -563,8 +591,9 @@ public final class BoardLayoutStore {
             ensureMembershipsLocked(&store, canvasId: teamId, sessionIds: sessionIds)
         }
 
+        let visible = visibleCanvasesLocked(store)
         if store.activeCanvasId == nil
-            || !store.canvases.contains(where: { $0.id == (store.activeCanvasId ?? "") }) {
+            || !visible.contains(where: { $0.id == (store.activeCanvasId ?? "") }) {
             store.activeCanvasId = personalId
         }
     }
