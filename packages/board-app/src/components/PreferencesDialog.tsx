@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import {
-  loadDefaultSpawnCommand,
-  saveDefaultSpawnCommand,
-  DEFAULT_SPAWN_COMMAND,
+  DEFAULT_SPAWN_PROVIDER,
+  loadSpawnProvider,
+  saveSpawnProvider,
+  spawnProviderLabel,
 } from '../preferences'
+import type { SpawnProvider } from '../types'
 import {
   readLlmSettings,
   writeLlmSettings,
@@ -18,33 +20,27 @@ import {
 
 interface Props {
   onClose: () => void
-  onSaved?: (cmd: string) => void
+  onSaved?: (provider: SpawnProvider) => void
 }
 
 /**
  * 偏好设置面板。两个 section：
- *   1. 新 session 的默认启动命令（Ghostty 里跑啥）。
+ *   1. 新 session 的默认 provider（Claude / Codex）。
  *   2. Global assistant 的 LLM 设置：provider / apiKey / baseUrl / model /
  *      enabled tools。默认 provider='local' 走 `claude -p`（不需要 key）。
  */
 export function PreferencesDialog({ onClose, onSaved }: Props) {
-  const [command, setCommand] = useState<string>(loadDefaultSpawnCommand)
+  const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
-  const inputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-    inputRef.current?.select()
-  }, [])
 
   const save = () => {
-    saveDefaultSpawnCommand(command)
+    saveSpawnProvider(spawnProvider)
     writeLlmSettings(llm)
-    onSaved?.(command.trim() || DEFAULT_SPAWN_COMMAND)
+    onSaved?.(spawnProvider)
     onClose()
   }
 
-  const resetSpawn = () => setCommand(DEFAULT_SPAWN_COMMAND)
+  const resetSpawn = () => setSpawnProvider(DEFAULT_SPAWN_PROVIDER)
 
   const setProvider = (p: LlmProvider) => {
     setLlm((s) => ({ ...s, provider: p }))
@@ -72,22 +68,22 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
           {/* ── Spawn command ─────────────────────────────────────── */}
           <div className="col" style={{ gap: 4 }}>
             <label className="muted" style={{ fontSize: 11 }}>
-              Default command for new sessions
+              New session provider
             </label>
-            <input
-              ref={inputRef}
-              className="mono"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder={DEFAULT_SPAWN_COMMAND}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-            />
+            <div className="segment">
+              {(['claude', 'codex'] as SpawnProvider[]).map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  className={spawnProvider === provider ? 'active' : ''}
+                  onClick={() => setSpawnProvider(provider)}
+                >
+                  {spawnProviderLabel(provider)}
+                </button>
+              ))}
+            </div>
             <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
-              runs in the new Ghostty tab after it opens in the chosen cwd.
-              examples: <code>claude</code> · <code>claude --model opus</code> ·{' '}
-              <code>aider --model gpt-4o</code>
+              Global sessions start in the active canvas workspace with the selected local CLI.
             </div>
             <button
               className="ghost"

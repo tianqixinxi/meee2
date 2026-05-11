@@ -398,6 +398,7 @@ public final class BoardServer {
         server.PATCH["/api/canvases/:id"] = BoardServer.cors(BoardAPI.updateCanvas)
         server.DELETE["/api/canvases/:id"] = BoardServer.cors(BoardAPI.deleteCanvas)
         server.POST["/api/canvases/:id/sessions"] = BoardServer.cors(BoardAPI.addSessionToCanvas)
+        server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
         server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
 
         // External chat session push (browser extension content scripts at

@@ -36,6 +36,7 @@ import {
   type UserProfile,
 } from '../api'
 import { useToast } from '../App'
+import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
@@ -1166,7 +1167,10 @@ export default function Sidebar({
                             }
                             const shortId = s.id.slice(0, 8)
                             toast.push('info', `Duplicating session in ${cwd}…`)
-                            spawnSession({ cwd })
+                            spawnSession({
+                              cwd,
+                              command: commandForSpawnProvider(loadSpawnProvider()),
+                            })
                               .then(() => {
                                 toast.push(
                                   'success',

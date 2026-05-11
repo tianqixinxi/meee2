@@ -36,7 +36,7 @@ import {
   type AssistantMessage,
   type UserProfile,
 } from '../api'
-import { loadDefaultSpawnCommand } from '../preferences'
+import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 import { readLlmSettings, activeTools } from '../lib/llmSettings'
 import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
@@ -341,7 +341,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     try {
       await spawnSession({
         cwd,
-        command: loadDefaultSpawnCommand(),
+        command: commandForSpawnProvider(loadSpawnProvider()),
         createIfMissing,
       })
       mode.onSpawned(cwd)
@@ -432,7 +432,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             {messages.length === 0 && !busy ? (
               <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, padding: '8px 4px' }}>
                 Ask anything — summarise local sessions, draft a prompt, or describe
-                a project to spawn a new Claude session in.
+                a project to spawn a new session in.
               </div>
             ) : (
               <TranscriptView

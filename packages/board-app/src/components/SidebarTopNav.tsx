@@ -31,8 +31,8 @@ interface Props {
   tabs: SidebarTab[]
   activeTabId: string
   onTabChange: (id: string) => void
-  /** + New session：默认打开 global AI assistant（meee2 风格） */
-  onNewSession: () => void
+  /** + New session：在当前 canvas workspace 启动一个本地 session。 */
+  onNewSession: () => Promise<void> | void
   /** Search action —— toggle 一个 inline 搜索 input（父组件管 visibility + query state） */
   onToggleSearch?: () => void
   onRoutines?: () => void
@@ -77,7 +77,7 @@ export function SidebarTopNav({
 
       {/* ── Action items ────────────────────────────────────────── */}
       <div className="stn-actions">
-        <Tooltip label="Open global AI assistant">
+        <Tooltip label="Start session in current canvas">
           <button className="stn-action stn-action--primary" onClick={onNewSession}>
             <span className="stn-action-icon" aria-hidden>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none">

@@ -313,7 +313,7 @@ interface Props {
    * Excalidraw API, which only Board owns.
    */
   placeChannelRequest: { channelName: string; bump: number } | null
-  /** Invoked from the <MainMenu> "New Claude session" item. */
+  /** Invoked from the <MainMenu> "New session" item. */
   onNewSession: () => void
   /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
   onAskAndSpawn: () => void
@@ -1728,7 +1728,7 @@ export default function Board({
       >
         <MainMenu>
           <MainMenu.Item onSelect={onNewSession} icon={<TerminalIcon />}>
-            New Claude session…
+            New session…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onAskAndSpawn} icon={<TerminalIcon />}>
             Ask AI to spawn…

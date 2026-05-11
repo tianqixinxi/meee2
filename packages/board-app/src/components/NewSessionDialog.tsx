@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { spawnSession } from '../api'
-import { loadDefaultSpawnCommand, saveDefaultSpawnCommand } from '../preferences'
+import {
+  commandForSpawnProvider,
+  loadSpawnProvider,
+  saveSpawnProvider,
+  spawnProviderLabel,
+} from '../preferences'
+import type { SpawnProvider } from '../types'
 
 interface Props {
   onClose: () => void
@@ -11,17 +17,16 @@ interface Props {
 }
 
 /**
- * "New Claude session" 对话框。
+ * "New session" 对话框。
  *
  * 用户给出目录（支持 ~、相对路径会被 meee2 daemon 规范化），可选勾选"目录
  * 不存在就 mkdir"。点 Spawn 会让 daemon 启一个新 Ghostty 窗口、落在 cwd
- * 并自动跑 `claude`——沿用本地 OAuth，不需要再登录。
+ * 并自动跑用户选择的 provider CLI。
  */
 export function NewSessionDialog({ onClose, onSpawned, onError, defaultCwd }: Props) {
   const [cwd, setCwd] = useState(defaultCwd || '~/')
   const [createIfMissing, setCreateIfMissing] = useState(false)
-  // 默认 command 从 Preferences 里读；用户改了又改 & 点 Spawn 后顺手存回，下次打开记住
-  const [command, setCommand] = useState<string>(loadDefaultSpawnCommand)
+  const [provider, setProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [busy, setBusy] = useState(false)
   const [localErr, setLocalErr] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -37,14 +42,13 @@ export function NewSessionDialog({ onClose, onSpawned, onError, defaultCwd }: Pr
     setBusy(true)
     setLocalErr(null)
     try {
-      const finalCmd = command.trim() || 'claude'
+      const finalCmd = commandForSpawnProvider(provider)
       await spawnSession({
         cwd: v,
         command: finalCmd,
         createIfMissing,
       })
-      // 成功 spawn 后把当前 command 写回 Preferences —— "最近用的" 就是下次的默认
-      saveDefaultSpawnCommand(finalCmd)
+      saveSpawnProvider(provider)
       onSpawned(v)
     } catch (e) {
       const msg = (e as Error).message || 'Spawn failed'
@@ -61,8 +65,8 @@ export function NewSessionDialog({ onClose, onSpawned, onError, defaultCwd }: Pr
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label="New Claude session">
-        <div className="modal-header">New Claude session</div>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="New session">
+        <div className="modal-header">New session</div>
         <div className="modal-body col" style={{ gap: 12 }}>
           <div className="col" style={{ gap: 4 }}>
             <label className="muted" style={{ fontSize: 11 }}>Folder</label>
@@ -95,16 +99,19 @@ export function NewSessionDialog({ onClose, onSpawned, onError, defaultCwd }: Pr
             </label>
           </div>
           <div className="col" style={{ gap: 4 }}>
-            <label className="muted" style={{ fontSize: 11 }}>Command (runs in the new terminal)</label>
-            <input
-              className="mono"
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-              placeholder="claude"
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-            />
+            <label className="muted" style={{ fontSize: 11 }}>Provider</label>
+            <div className="segment">
+              {(['claude', 'codex'] as SpawnProvider[]).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  className={provider === item ? 'active' : ''}
+                  onClick={() => setProvider(item)}
+                >
+                  {spawnProviderLabel(item)}
+                </button>
+              ))}
+            </div>
           </div>
           {localErr && <div className="inline-error">{localErr}</div>}
         </div>

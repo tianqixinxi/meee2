@@ -17,6 +17,7 @@ import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type { Selection } from './types'
 import type { CanvasList, CanvasScope } from './types'
+import { loadSpawnProvider, spawnProviderLabel } from './preferences'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
@@ -30,6 +31,7 @@ import {
   createCanvas,
   fetchCanvases,
   removeSessionFromCanvas,
+  spawnGlobalSession,
   updateCanvas,
 } from './api'
 
@@ -330,6 +332,18 @@ export default function App() {
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to rename canvas'))
   }, [pushToast])
+
+  const handleSpawnGlobalSession = useCallback(() => {
+    const provider = loadSpawnProvider()
+    return spawnGlobalSession(activeCanvasId, provider)
+      .then((result) => {
+        pushToast('success', `Spawning ${spawnProviderLabel(provider)} in ${result.cwd}`)
+        void refreshCanvases()
+      })
+      .catch((err) => {
+        pushToast('error', (err as Error).message || 'Failed to spawn session')
+      })
+  }, [activeCanvasId, pushToast, refreshCanvases])
 
   const handleCountsChange = useCallback(
     (counts: Record<string, number>) => {
@@ -643,7 +657,7 @@ export default function App() {
             }}
             onNewChannel={() => setNewChannelOpen(true)}
             placeChannelRequest={placeChannelRequest}
-            onNewSession={() => setNewSessionOpen(true)}
+            onNewSession={handleSpawnGlobalSession}
             onAskAndSpawn={() => {
               setSelection({ kind: 'none' })
               setAssistantRequested(true)
@@ -724,19 +738,10 @@ export default function App() {
           onAddToCanvas={handleAddToCanvas}
           onHideFromCanvas={handleHideFromCanvas}
           onBulkVisibility={handleBulkVisibility}
-          onNewSession={() => {
-            // New session 入口 = 打开 Dock 的 assistant 模式（无 seed）
-            setSelection({ kind: 'none' })
-            setAssistantRequested(true)
-            dockSeedRef.current = ''
-            setDockOpen(true)
-          }}
+          onNewSession={handleSpawnGlobalSession}
           onCreateInProject={(cwd) => {
-            // 同一个入口，只是 seed 里把 cwd 写死，AI 直接出 spawn fence
-            setSelection({ kind: 'none' })
-            setAssistantRequested(true)
-            dockSeedRef.current = `在 ${cwd} 下新建一个 session，`
-            setDockOpen(true)
+            setNewSessionDefaultCwd(cwd)
+            setNewSessionOpen(true)
           }}
         />
         {newChannelOpen && boardState.state && (
@@ -761,7 +766,7 @@ export default function App() {
             onSpawned={(cwd) => {
               setNewSessionOpen(false)
               setNewSessionDefaultCwd(undefined)
-              pushToast('success', `Spawning Claude in ${cwd}`)
+              pushToast('success', `Spawning session in ${cwd}`)
             }}
             onError={(msg) => pushToast('error', msg)}
           />
@@ -770,7 +775,7 @@ export default function App() {
         {preferencesOpen && (
           <PreferencesDialog
             onClose={() => setPreferencesOpen(false)}
-            onSaved={(cmd) => pushToast('success', `Default spawn command: ${cmd}`)}
+            onSaved={(provider) => pushToast('success', `New session provider: ${spawnProviderLabel(provider)}`)}
           />
         )}
         <div className="toasts">

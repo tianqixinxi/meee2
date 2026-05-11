@@ -154,6 +154,11 @@ enum BoardAPI {
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
             }
         let sessions = realSessions + syntheticDesktopSessions
+        var sessionCwds: [String: String] = [:]
+        for session in sessions where !session.project.isEmpty {
+            sessionCwds[session.id] = session.project
+        }
+        BoardLayoutStore.shared.applySpawnIntents(sessionCwds: sessionCwds)
         // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
         // 不在 UI 里显示，保持 channel 列表干净
         let channels = ChannelRegistry.shared.list()
@@ -988,10 +993,48 @@ enum BoardAPI {
         // 转 URL-绝对路径
         cwd = (cwd as NSString).standardizingPath
 
-        let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
         let command = (json["command"] as? String) ?? "claude"
         let termProgram = (json["termProgram"] as? String)
+        let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
 
+        return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: createIfMissing, termProgram: termProgram)
+    }
+
+    /// POST /api/canvases/:id/sessions/spawn-global
+    /// Body: `{"provider": "claude" | "codex", "termProgram": "ghostty"}`
+    /// 行为：在当前 canvas 的 meee2-managed workspace 里启动 provider 对应的 session。
+    static func spawnGlobalSession(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"] else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let json = parseJSONBody(req) ?? [:]
+        let provider = ((json["provider"] as? String) ?? "claude").lowercased()
+        let command: String
+        switch provider {
+        case "claude":
+            command = "claude"
+        case "codex":
+            command = "codex"
+        default:
+            return errorResponse("bad_request", "provider must be 'claude' or 'codex'", status: 400)
+        }
+        let termProgram = json["termProgram"] as? String
+        do {
+            let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+            try BoardLayoutStore.shared.recordSpawnIntent(canvasId: canvasId, cwd: cwd, command: command)
+            return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: termProgram)
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func spawnTerminalSession(
+        cwd rawCwd: String,
+        command: String,
+        createIfMissing: Bool,
+        termProgram: String?
+    ) -> HttpResponse {
+        let cwd = rawCwd
         // Ensure dir exists / create if requested
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
@@ -1492,11 +1535,13 @@ enum BoardAPI {
 
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
         let canvases = snapshot.canvases.map {
-            CanvasInfoDTO(
+            let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: $0.id)) ?? ""
+            return CanvasInfoDTO(
                 id: $0.id,
                 name: $0.name,
                 scope: $0.scope.rawValue,
                 isDefault: $0.isDefault,
+                workspacePath: workspacePath,
                 teamId: $0.teamId,
                 ownerUserId: $0.ownerUserId
             )

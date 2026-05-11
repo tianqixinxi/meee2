@@ -212,6 +212,7 @@ struct CanvasInfoDTO: Encodable {
     let name: String
     let scope: String
     let isDefault: Bool
+    let workspacePath: String
     let teamId: String?
     let ownerUserId: String?
 }

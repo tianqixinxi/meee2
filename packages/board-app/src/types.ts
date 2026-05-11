@@ -124,12 +124,14 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
+export type SpawnProvider = 'claude' | 'codex'
 
 export interface CanvasInfo {
   id: string
   name: string
   scope: CanvasScope
   isDefault: boolean
+  workspacePath: string
   teamId?: string | null
   ownerUserId?: string | null
 }

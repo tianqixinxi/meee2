@@ -502,8 +502,8 @@ enum AssistantTools {
         ToolDef(
             name: "create_session",
             description:
-                "Spawn a new Claude session in a Ghostty terminal at the given cwd. " +
-                "Reuses the user's local Claude OAuth (no API key needed). " +
+                "Spawn a new local session in a Ghostty terminal at the given cwd. " +
+                "Reuses the user's local CLI auth (no API key needed). " +
                 "Set createIfMissing=true to mkdir -p the cwd if absent.",
             inputSchema: [
                 "type": "object",

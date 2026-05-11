@@ -6,6 +6,7 @@ import type {
   Mode,
   CanvasList,
   CanvasScope,
+  SpawnProvider,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -96,6 +97,19 @@ export function removeSessionFromCanvas(
   return jsonRequest<CanvasList>(
     `/api/canvases/${encodeURIComponent(canvasId)}/sessions/${encodeURIComponent(sessionId)}`,
     { method: 'DELETE' },
+  )
+}
+
+export function spawnGlobalSession(
+  canvasId: string,
+  provider: SpawnProvider,
+): Promise<{ ok: boolean; cwd: string; command: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+    `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    },
   )
 }
 
