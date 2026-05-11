@@ -173,7 +173,7 @@ textarea {
 
 .canvas-toolbar__trigger,
 .canvas-toolbar__actions button,
-.canvas-toolbar__form button {
+.canvas-toolbar__submit {
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -195,7 +195,8 @@ textarea {
 }
 
 .canvas-toolbar__trigger:hover,
-.canvas-toolbar__actions button:hover {
+.canvas-toolbar__actions button:hover,
+.canvas-toolbar__submit:hover:not(:disabled) {
   background: #1A1E2B;
   color: #F3F4F6;
 }
@@ -299,7 +300,7 @@ textarea {
 
 .canvas-toolbar__form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   padding-top: 6px;
   margin-top: 6px;
@@ -310,8 +311,7 @@ textarea {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.canvas-toolbar__form input,
-.canvas-toolbar__form select {
+.canvas-toolbar__form input {
   min-width: 0;
   height: 30px;
   border: 1px solid #2A3040;
@@ -323,21 +323,52 @@ textarea {
   outline: none;
 }
 
-.canvas-toolbar__form input:focus,
-.canvas-toolbar__form select:focus {
+.canvas-toolbar__form input:focus {
   border-color: rgba(96, 165, 250, 0.68);
 }
 
-.canvas-toolbar__form button {
+.canvas-toolbar__submit {
   height: 30px;
   padding: 0 10px;
   background: #1A1E2B;
   font-size: 12px;
 }
 
-.canvas-toolbar__form button:disabled {
+.canvas-toolbar__submit:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.canvas-toolbar__scope-toggle {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid #232838;
+  border-radius: 6px;
+  background: #0B0E14;
+}
+
+.canvas-toolbar__scope-toggle button {
+  height: 26px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #8B93A7;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.canvas-toolbar__scope-toggle button:hover {
+  color: #E5E7EB;
+  background: #151A26;
+}
+
+.canvas-toolbar__scope-toggle button.is-selected {
+  color: #F3F4F6;
+  background: #1A1E2B;
 }
 
 /* SessionDock：选中 session 后画板上的合体浮窗。

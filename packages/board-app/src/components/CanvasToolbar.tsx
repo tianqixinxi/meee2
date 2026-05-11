@@ -136,17 +136,27 @@ export function CanvasToolbar({
                 placeholder="Canvas name"
                 autoFocus
               />
-              <select
-                value={canvasScopeDraft}
-                onChange={(event) => setCanvasScopeDraft(event.target.value as CanvasScope)}
-                aria-label="Canvas scope"
+              <button
+                type="button"
+                className="canvas-toolbar__submit"
+                onClick={submitCreate}
+                disabled={!canvasNameDraft.trim()}
               >
-                <option value="personal">Personal</option>
-                <option value="team">Team</option>
-              </select>
-              <button type="button" onClick={submitCreate} disabled={!canvasNameDraft.trim()}>
                 Create
               </button>
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas scope">
+                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={canvasScopeDraft === scope ? 'is-selected' : ''}
+                    aria-pressed={canvasScopeDraft === scope}
+                    onClick={() => setCanvasScopeDraft(scope)}
+                  >
+                    {scope === 'team' ? 'Team' : 'Personal'}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {renaming && (
@@ -161,7 +171,12 @@ export function CanvasToolbar({
                 placeholder="Canvas name"
                 autoFocus
               />
-              <button type="button" onClick={submitRename} disabled={!canvasNameDraft.trim()}>
+              <button
+                type="button"
+                className="canvas-toolbar__submit"
+                onClick={submitRename}
+                disabled={!canvasNameDraft.trim()}
+              >
                 Save
               </button>
             </div>
