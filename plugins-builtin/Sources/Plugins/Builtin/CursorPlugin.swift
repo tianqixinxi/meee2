@@ -65,7 +65,7 @@ class CursorPlugin: SessionPlugin {
         startTimer()
         refresh()
 
-        NSLog("[CursorPlugin] Started, watching: \(cursorProjectsPath.path), interval: \(refreshInterval)s")
+        // NSLog("[CursorPlugin] Started, watching: \(cursorProjectsPath.path), interval: \(refreshInterval)s")
         return true
     }
 
@@ -82,7 +82,7 @@ class CursorPlugin: SessionPlugin {
         refreshInFlight = false
         refreshTimer?.invalidate()
         refreshTimer = nil
-        NSLog("[CursorPlugin] Stopped")
+        // NSLog("[CursorPlugin] Stopped")
     }
 
     override func cleanup() {
@@ -125,7 +125,7 @@ class CursorPlugin: SessionPlugin {
             if previousMessage != newMessage {
                 if previousMessage != nil,
                    shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: newMessage) {
-                    NSLog("[CursorPlugin] New message detected for \(session.title): \(newMessage.prefix(50))...")
+                    // NSLog("[CursorPlugin] New message detected for \(session.title): \(newMessage.prefix(50))...")
                     onUrgentEvent?(session, newMessage, nil)
                 }
                 lastMessages[session.id] = newMessage
@@ -235,7 +235,7 @@ class CursorPlugin: SessionPlugin {
         // 按活动时间排序，最近的在前
         sessions.sort { $0.startedAt > $1.startedAt }
 
-        NSLog("[CursorPlugin] Found \(sessions.count) active projects")
+        // NSLog("[CursorPlugin] Found \(sessions.count) active projects")
         return sessions
     }
 

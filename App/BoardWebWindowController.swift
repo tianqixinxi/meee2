@@ -160,6 +160,8 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
 }
 
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
+    private static let frameAutosaveName = "meee2.board.window"
+
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
@@ -217,7 +219,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 840),
+            contentRect: Self.defaultContentRect(),
             styleMask: [
                 .titled,
                 .closable,
@@ -240,8 +242,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.miniwindowImage = AppIconProvider.loadIcon() ?? NSApp.applicationIconImage
-        window.minSize = NSSize(width: 900, height: 620)
-        window.center()
+        window.minSize = NSSize(width: 1040, height: 680)
+        if !window.setFrameUsingName(Self.frameAutosaveName) {
+            window.center()
+        }
+        _ = window.setFrameAutosaveName(Self.frameAutosaveName)
 
         super.init(window: window)
 
@@ -256,6 +261,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    private static func defaultContentRect() -> NSRect {
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width = min(max(1440, visible.width * 0.9), max(1040, visible.width - 48))
+        let height = min(max(900, visible.height * 0.88), max(680, visible.height - 48))
+        return NSRect(
+            x: visible.midX - width / 2,
+            y: visible.midY - height / 2,
+            width: width,
+            height: height
+        ).integral
     }
 
     func show() {

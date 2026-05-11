@@ -372,6 +372,7 @@ public final class BoardServer {
         server.POST["/api/user-profile/connect"] = BoardServer.cors(BoardAPI.openMeee2OnlineConnect)
         server.POST["/api/user-profile/dashboard"] = BoardServer.cors(BoardAPI.openMeee2OnlineDashboard)
         server.POST["/api/user-profile/settings"] = BoardServer.cors(BoardAPI.openMeee2Settings)
+        server.PATCH["/api/user-profile"] = BoardServer.cors(BoardAPI.updateUserProfile)
         server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee2Online)
         server.GET["/api/automations"] = BoardServer.cors(BoardAPI.listAutomations)
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)

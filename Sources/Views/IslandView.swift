@@ -281,27 +281,27 @@ public struct IslandView: View {
         .onAppear { startCarousel() }
         .onDisappear { stopCarousel() }
         .onChange(of: statusManager.hasUrgentSession) { needsAttention in
-            NSLog("[IslandView] hasUrgentSession changed to: \(needsAttention), isExpanded: \(isExpanded), autoExpand=\(autoExpandEnabled)")
+            // NSLog("[IslandView] hasUrgentSession changed to: \(needsAttention), isExpanded: \(isExpanded), autoExpand=\(autoExpandEnabled)")
             if needsAttention && !isExpanded {
                 // urgent 自动展开必须尊重用户设置（"Auto expand when needs attention"）。
                 // 关闭时仅在 compact 上做被动指示（颜色 / dot），不主动弹窗。
                 guard autoExpandEnabled else {
-                    NSLog("[IslandView] Auto expand suppressed by user setting")
+                    // NSLog("[IslandView] Auto expand suppressed by user setting")
                     return
                 }
-                NSLog("[IslandView] Auto expanding due to urgent session")
+                // NSLog("[IslandView] Auto expanding due to urgent session")
                 openExpanded()
             } else if !needsAttention && isExpanded && expandMode == .auto {
                 // urgent 消失且是自动展开模式时，收起视图
-                NSLog("[IslandView] Auto closing due to urgent session cleared")
+                // NSLog("[IslandView] Auto closing due to urgent session cleared")
                 closeExpanded()
             }
         }
         .onChange(of: statusManager.systemStatus) { newStatus in
-            NSLog("[IslandView] systemStatus changed to: \(newStatus), autoExpand=\(autoExpandEnabled)")
+            // NSLog("[IslandView] systemStatus changed to: \(newStatus), autoExpand=\(autoExpandEnabled)")
             if newStatus == .needsAttention && !isExpanded {
                 guard autoExpandEnabled else {
-                    NSLog("[IslandView] Auto expand suppressed by user setting (systemStatus path)")
+                    // NSLog("[IslandView] Auto expand suppressed by user setting (systemStatus path)")
                     return
                 }
                 openExpanded()
@@ -902,14 +902,12 @@ public struct IslandView: View {
         // 注意：`let _` 不是多余——在 @ViewBuilder 里 `_ = NSLog(...)` 会被当成
         // 一条 void 结果的表达式语句，SwiftUI 期望它是 View 就报 protocol 不符。
         // `let _` 是声明，ViewBuilder 会忽略它。
-        // swiftlint:disable:next redundant_discardable_let
-        let _ = NSLog("[IslandView] Message lines count: \(lines.count), first 3 lines: \(lines.prefix(3))")
         let tableData = parseMarkdownTable(lines: lines)
 
         if let table = tableData {
             // 调试日志 - 在渲染前输出
             // swiftlint:disable:next redundant_discardable_let
-            let _ = NSLog("[IslandView] Table parsed: headers=\(table.headers.count), rows=\(table.rows.count)")
+            // let _ = NSLog("[IslandView] Table parsed: headers=\(table.headers.count), rows=\(table.rows.count)")
             // 渲染表格
             markdownTableView(table)
         } else {
@@ -974,10 +972,10 @@ public struct IslandView: View {
         var rows: [[String]] = []
         while rowIndex < lines.count {
             let line = lines[rowIndex].trimmingCharacters(in: .whitespaces)
-            NSLog("[IslandView] Parsing row \(rowIndex): '\(line.prefix(50))...'")
+            // NSLog("[IslandView] Parsing row \(rowIndex): '\(line.prefix(50))...'")
 
             if line.isEmpty {
-                NSLog("[IslandView]   -> Empty line, skipping")
+                // NSLog("[IslandView]   -> Empty line, skipping")
                 rowIndex += 1
                 continue
             }
@@ -985,7 +983,7 @@ public struct IslandView: View {
             // 检查是否是分隔行（数据行之间的分隔）
             let separatorCount = line.filter { separatorChars.contains($0) }.count
             if separatorCount >= 3 {
-                NSLog("[IslandView]   -> Unicode separator (\(separatorCount) chars), skipping")
+                // NSLog("[IslandView]   -> Unicode separator (\(separatorCount) chars), skipping")
                 rowIndex += 1
                 continue
             }
@@ -995,22 +993,22 @@ public struct IslandView: View {
             let nonSeparatorChars = line.filter { c in
                 !separatorChars.contains(c) && c != "|" && c != "-" && c != " "
             }
-            NSLog("[IslandView]   -> nonSeparatorChars: '\(nonSeparatorChars)' (count: \(nonSeparatorChars.count))")
+            // NSLog("[IslandView]   -> nonSeparatorChars: '\(nonSeparatorChars)' (count: \(nonSeparatorChars.count))")
             if nonSeparatorChars.isEmpty && line.contains("-") && line.contains("|") {
-                NSLog("[IslandView]   -> Markdown separator, skipping")
+                // NSLog("[IslandView]   -> Markdown separator, skipping")
                 rowIndex += 1
                 continue
             }
 
             if line.contains("|") || line.contains("│") {
                 let row = parseTableRow(line)
-                NSLog("[IslandView]   -> Table row parsed: \(row)")
+                // NSLog("[IslandView]   -> Table row parsed: \(row)")
                 if !row.isEmpty {
                     rows.append(row)
                 }
             } else {
                 // 非表格行，停止解析
-                NSLog("[IslandView]   -> Non-table line, STOP parsing")
+                // NSLog("[IslandView]   -> Non-table line, STOP parsing")
                 break
             }
             rowIndex += 1

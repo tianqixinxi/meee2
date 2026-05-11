@@ -201,7 +201,8 @@ enum BoardAPI {
             defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
             defaultSyncTeamId: defaults.string(forKey: "meee2TeamId") ?? "",
             defaultSyncTeamName: BoardDTOBuilder.meee2DefaultSyncTeamName(),
-            teams: BoardDTOBuilder.meee2OnlineTeams()
+            teams: BoardDTOBuilder.meee2OnlineTeams(),
+            sessionSync: meee2OnlineSessionSyncList()
         ))
     }
 
@@ -220,6 +221,27 @@ enum BoardAPI {
             NotificationCenter.default.post(name: Notification.Name("openSettings"), object: nil)
         }
         return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    static func updateUserProfile(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+
+        let defaults = UserDefaults.standard
+        if let defaultSyncEnabled = json["defaultSyncEnabled"] as? Bool {
+            defaults.set(defaultSyncEnabled, forKey: "meee2Online")
+        }
+
+        if let sync = json["sessionSync"] as? [String: Any],
+           let sessionId = sync["sessionId"] as? String,
+           let enabled = sync["enabled"] as? Bool {
+            setMeee2OnlineSession(sessionId, enabled: enabled)
+        }
+
+        persistMeee2OnlineSettings()
+        Meee2OnlinePusher.shared.refreshActivation()
+        return getUserProfile(req)
     }
 
     static func disconnectMeee2Online(_ req: HttpRequest) -> HttpResponse {
@@ -299,6 +321,98 @@ enum BoardAPI {
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
         ]
+        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
+        let file = dir.appendingPathComponent("settings.json")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
+    private static func meee2OnlineSessionSyncList() -> [UserProfileSessionSyncDTO] {
+        PluginManager.shared.sessions.sorted {
+            if $0.pluginId != $1.pluginId {
+                return $0.pluginId < $1.pluginId
+            }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }.map { session in
+            let plugin = PluginManager.shared.getPluginInfo(for: session.pluginId)
+            return UserProfileSessionSyncDTO(
+                sessionId: session.id,
+                title: session.title,
+                pluginDisplayName: plugin?.displayName ?? session.pluginId,
+                project: session.cwd ?? "",
+                enabled: isMeee2OnlineSessionEnabled(session.id)
+            )
+        }
+    }
+
+    private static func isMeee2OnlineSessionEnabled(_ sessionId: String) -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else { return false }
+
+        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
+        if !aliases.isDisjoint(with: disabled) { return false }
+
+        if defaults.bool(forKey: "meee2Online") { return true }
+
+        let enabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
+        return !aliases.isDisjoint(with: enabled)
+    }
+
+    private static func setMeee2OnlineSession(_ sessionId: String, enabled: Bool) {
+        var disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
+        var explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
+        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+
+        if enabled {
+            disabled.subtract(aliases)
+            explicitlyEnabled.formUnion(aliases)
+        } else {
+            disabled.formUnion(aliases)
+            explicitlyEnabled.subtract(aliases)
+        }
+
+        Meee2OnlinePusher.storeSessionIdSet(disabled, forKey: "meee2DisabledSessionIds")
+        Meee2OnlinePusher.storeSessionIdSet(explicitlyEnabled, forKey: "meee2EnabledSessionIds")
+    }
+
+    private static func persistMeee2OnlineSettings() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else { return }
+        let rawSupabaseUrl = defaults.string(forKey: "meee2SupabaseUrl") ?? ""
+        let normalizedSupabaseUrl = (rawSupabaseUrl.removingPercentEncoding ?? rawSupabaseUrl)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let teams: [[String: Any]] = BoardDTOBuilder.meee2OnlineTeams().map { team in
+            return [
+                "id": team.id,
+                "name": team.name,
+                "role": team.role ?? ""
+            ]
+        }
+        let enabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds"))
+        let disabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds"))
+        let meee2Settings: [String: Any] = [
+            "enabled": true,
+            "online": defaults.bool(forKey: "meee2Online"),
+            "supabaseUrl": normalizedSupabaseUrl,
+            "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
+            "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
+            "userId": defaults.string(forKey: "meee2UserId") ?? "",
+            "userName": defaults.string(forKey: "meee2UserName") ?? "",
+            "userEmail": defaults.string(forKey: "meee2UserEmail") ?? "",
+            "userAvatarUrl": defaults.string(forKey: "meee2UserAvatarUrl") ?? "",
+            "teams": teams,
+            "sessionTeamIds": [String: String](),
+            "defaultSyncEnabled": defaults.bool(forKey: "meee2Online"),
+            "enabledSessionIds": enabledSessionIds,
+            "disabledSessionIds": disabledSessionIds,
+            "machineId": Host.current().name ?? "unknown",
+            "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
+        ]
+        let settings: [String: Any] = ["meee2": meee2Settings]
+
         let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
         let file = dir.appendingPathComponent("settings.json")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -1705,8 +1819,10 @@ enum BoardAPI {
             guard let obj = v as? [String: Any] else { continue }
             let x = (obj["x"] as? NSNumber)?.doubleValue ?? (obj["x"] as? Double)
             let y = (obj["y"] as? NSNumber)?.doubleValue ?? (obj["y"] as? Double)
+            let width = (obj["width"] as? NSNumber)?.doubleValue ?? (obj["width"] as? Double)
+            let height = (obj["height"] as? NSNumber)?.doubleValue ?? (obj["height"] as? Double)
             if let x = x, let y = y {
-                out[k] = BoardLayoutStore.Point(x: x, y: y)
+                out[k] = BoardLayoutStore.Point(x: x, y: y, width: width, height: height)
             }
         }
         return out

@@ -66,6 +66,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @AppStorage("selectedScreenId") private var selectedScreenId: String = "builtin"
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        let launchStartedAt = Date()
         // 初始化日志管理器
         _ = LogManager.shared
         AppIconProvider.installApplicationIcon()
@@ -91,16 +92,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 也不依赖 cwd 解析,符合现状)。
         A2AIdentity.resolver = SessionStoreIdentityResolver()
 
-        // AgentInboxShell 是 plugin 路径的 push delegate(把消息 paste 到
-        // 终端)。注册必须在 startAll() / bindChannelOrientationHook() 之前 ——
-        // plugin 启动 / orientation 推送都会触发 send → deliver → push,漏注册
-        // 会让首批消息缺失 push 通知。
-        // `_ = AgentInboxShell.shared` 一并完成强制 init —— 之前是 MessageRouter.init
-        // 里隐式触发的,现在改成在这里显式做,确保 SessionEventBus 订阅 +
-        // 1.5s flushAllInboxes 调度生效。
-        _ = AgentInboxShell.shared
-        MessageRouter.shared.registerPushDelegate(AgentInboxShell.shared)
-
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 
@@ -113,13 +104,85 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 创建灵动岛窗口
         setupIslandWindow()
 
-        // 确保 Claude CLI hooks 配置存在
-        SettingsConfigManager.shared.ensureHooksConfigured()
+        registerAppObservers()
 
-        // 自动在 `~/.claude.json` 注册 meee2 MCP server，让每个 Claude session
-        // 原生拿到 send_message / list_channels / read_inbox / list_sessions tool。
-        // 幂等：已注册且路径正确就 noop。
-        MCPConfigManager.shared.ensureRegistered()
+        // 把 silentDriver 的 staged 状态桥到 meee2Kit 模块。BoardAPI.getVersion
+        // 读这两个 → frontend UpdatePill 决定是否渲染 + dev panel 显示版本号。
+        SparkleStagedBridge.setSnapshot { [weak self] in
+            self?.silentDriver.isReadyToInstall ?? false
+        }
+        SparkleStagedBridge.setStagedVersionProvider { [weak self] in
+            self?.silentDriver.stagedVersion
+        }
+
+        // 到这里状态栏 + Island 已经可见。后面的磁盘扫描、动态 plugin 加载、
+        // MCP/Hook 配置收敛和更新检查都走 post-launch 阶段，避免拖慢首帧。
+        schedulePostLaunchStartup(launchStartedAt: launchStartedAt)
+    }
+
+    private func schedulePostLaunchStartup(launchStartedAt: Date) {
+        DispatchQueue.main.async { [weak self] in
+            self?.startSessionRuntime()
+            self?.startBoardServer()
+
+            if BoardCommand.shouldShowOnLaunch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.openBoardMenu()
+                }
+            }
+
+            // 发送使用统计（异步，不阻塞启动）
+            UsageTracker.shared.trackLaunch()
+
+            // 启动 meee2 推送器（如果已连接且在线）
+            Meee2OnlinePusher.shared.activate()
+
+            let elapsed = Date().timeIntervalSince(launchStartedAt) * 1_000
+            MInfo(String(format: "[Startup] post-launch runtime scheduled after %.1fms", elapsed))
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            // 确保 Claude CLI hooks 配置存在。可能读写 ~/.claude/settings.json，
+            // 不需要卡在 UI 首帧前。
+            SettingsConfigManager.shared.ensureHooksConfigured()
+
+            // 自动在 `~/.claude.json` / Codex config 注册 meee2 MCP server，让每个
+            // Claude/Codex session 原生拿到 send_message / list_channels 等 tool。
+            // 这里会跑 `which node` 并读写用户配置，放到后台收敛即可。
+            MCPConfigManager.shared.ensureRegistered()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self = self else { return }
+            // 强制 init Sparkle updater(lazy var,不主动 touch 永远不创建,
+            // 后台 24h 调度也跑不起来)。延后到首帧之后，避免 Sparkle 初始化影响
+            // 菜单栏/Island 出现速度。
+            _ = self.updater
+
+            // 启动后再 kick 一次 bg check。给 BoardServer / plugin 启动腾出时间,
+            // 然后触发一次完整 cycle:fetch appcast → 下载 → stage → halt。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+                self?.updater.checkForUpdatesInBackground()
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
+            // BoardServer 的 /api/version + Settings UI 都从 VersionChecker.shared 读。
+            // 延迟首次网络请求，避免启动时和 Sparkle / plugin 扫描争资源。
+            VersionChecker.shared.startBackgroundCheck(initialDelay: 2)
+        }
+    }
+
+    private func startSessionRuntime() {
+        // AgentInboxShell 是 plugin 路径的 push delegate(把消息 paste 到
+        // 终端)。注册必须在 startAll() / bindChannelOrientationHook() 之前 ——
+        // plugin 启动 / orientation 推送都会触发 send → deliver → push,漏注册
+        // 会让首批消息缺失 push 通知。
+        // `_ = AgentInboxShell.shared` 一并完成强制 init —— 之前是 MessageRouter.init
+        // 里隐式触发的,现在改成在这里显式做,确保 SessionEventBus 订阅 +
+        // 1.5s flushAllInboxes 调度生效。
+        _ = AgentInboxShell.shared
+        MessageRouter.shared.registerPushDelegate(AgentInboxShell.shared)
 
         // 把 host 实现注入 plugin-kit 的 A2AContext，**必须**在 plugin 加载之前。
         // Plugin 的 init/start 阶段（甚至 SessionPlugin 构造期间）就可能调
@@ -132,10 +195,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // via /api/external-sessions/* — must register *before* startAll so
         // PluginManager wires up onSessionsUpdated callbacks.
         PluginManager.shared.register(ExternalChatPlugin.shared)
-
-        // 加载外部 plugins
-        PluginManager.shared.loadExternalPlugins()
-        PluginManager.shared.startAll()
 
         // Claude Desktop session metadata 索引器：扫
         // ~/Library/Application Support/Claude/claude-code-sessions/
@@ -162,6 +221,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动状态监控
         statusManager.start()
 
+        // Codex / Cursor / OpenClaw 是 dylib 形式的外部 plugin，加载阶段会做文件
+        // 同步、dlopen 和 plugin.json 扫描。先让 Claude/ExternalChat 这些进程内
+        // plugin 出结果，再延后加载动态插件，避免它们拖慢启动后的首批可见 session。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            PluginManager.shared.loadExternalPlugins()
+            PluginManager.shared.startAll()
+        }
+    }
+
+    private func startBoardServer() {
         // 自动启动 Board HTTP/WS 服务器。9876 是首选端口；如果被占用，
         // BoardServer 会选择后续空闲端口并在本进程内保持稳定。
         do {
@@ -170,19 +239,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             MError("[AppDelegate] BoardServer failed to start: \(error)")
         }
+    }
 
-        if BoardCommand.shouldShowOnLaunch {
-            DispatchQueue.main.async { [weak self] in
-                self?.openBoardMenu()
-            }
-        }
-
-        // 发送使用统计（异步，不阻塞启动）
-        UsageTracker.shared.trackLaunch()
-
-        // 启动 meee2 推送器（如果已连接且在线）
-        Meee2OnlinePusher.shared.activate()
-
+    private func registerAppObservers() {
         // 监听屏幕变化 (处理多显示器)
         NotificationCenter.default.addObserver(
             self,
@@ -198,34 +257,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: .screenSelectionChanged,
             object: nil
         )
-
-        // 强制 init Sparkle updater(lazy var,不主动 touch 永远不创建,
-        // 后台 24h 调度也跑不起来)。`_ = updater` 触发 init → updater.start()
-        // → Sparkle 立即启动 schedule + 后续可被 pill / menubar 调用。
-        _ = updater
-
-        // 启动后 15s kick 一次 bg check —— Sparkle 自己的 schedule 要等
-        // SUScheduledCheckInterval(1h)才发起首次 check,在新启动 / 用户更新
-        // 心切的情况下太慢。15s 给 BoardServer / plugin 启动腾出时间,然后
-        // 触发一次完整 cycle:fetch appcast → 下载 → stage → halt。
-        // 后续每小时由 Sparkle schedule 重复跑。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            self?.updater.checkForUpdatesInBackground()
-        }
-
-        // 把 silentDriver 的 staged 状态桥到 meee2Kit 模块。BoardAPI.getVersion
-        // 读这两个 → frontend UpdatePill 决定是否渲染 + dev panel 显示版本号。
-        SparkleStagedBridge.setSnapshot { [weak self] in
-            self?.silentDriver.isReadyToInstall ?? false
-        }
-        SparkleStagedBridge.setStagedVersionProvider { [weak self] in
-            self?.silentDriver.stagedVersion
-        }
-
-        // 启动 VersionChecker shared 单例的后台轮询。BoardServer 的
-        // /api/version + Settings UI 都从 VersionChecker.shared 读,只跑一份
-        // 拉取避免 N 倍 raw.githubusercontent 流量。
-        VersionChecker.shared.startBackgroundCheck()
 
         // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
         // "Check for Updates" 通知 → 在这里桥到 SPUStandardUpdaterController。
@@ -298,14 +329,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 设置初始图标（无 session）
         updateStatusBarIcon(hasActiveSessions: false)
 
-        // 设置菜单（简化版：只有 Settings 和 Quit）
+        // 设置菜单（简化版：Open Board + diagnostics + Quit）。
         let menu = NSMenu()
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem.separator())
         // 诊断入口 —— 客户报问题时第一指引：菜单点 Reveal Log →
         // 拖 meee2.log 发我；或 Copy Diagnostic Info 把版本/BoardServer
@@ -506,11 +534,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(withTitle: "About meee2",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
-        appMenu.addItem(.separator())
-        let settingsItem = appMenu.addItem(withTitle: "Settings...",
-                                           action: #selector(openSettings),
-                                           keyEquivalent: ",")
-        settingsItem.target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Hide meee2",
                         action: #selector(NSApplication.hide(_:)),

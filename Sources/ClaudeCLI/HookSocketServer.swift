@@ -292,21 +292,21 @@ public class HookSocketServer {
         // flushInboxIfResting → Ghostty `input text` + send key enter → Claude
         // 看到一条**正常的** user prompt → transcript 写普通 `type=user`，Web
         // UI 自然显示为 user 气泡。所有消息只有一条入口、一种渲染。
-        NSLog("[StateTrace][hook-ingress][socket] sid=\(event.sessionId?.prefix(8) ?? "-") evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferred=\(event.inferredStatus.rawValue)")
+        // NSLog("[StateTrace][hook-ingress][socket] sid=\(event.sessionId?.prefix(8) ?? "-") evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferred=\(event.inferredStatus.rawValue)")
 
         // Handle permission requests
         if event.expectsResponse {
-            NSLog("[HookSocketServer] Permission request expects response")
-            NSLog("[HookSocketServer] event.toolUseId: \(event.toolUseId ?? "nil")")
-            NSLog("[HookSocketServer] event.sessionId: \(event.sessionId ?? "nil")")
+            // NSLog("[HookSocketServer] Permission request expects response")
+            // NSLog("[HookSocketServer] event.toolUseId: \(event.toolUseId ?? "nil")")
+            // NSLog("[HookSocketServer] event.sessionId: \(event.sessionId ?? "nil")")
 
             let toolUseId: String
             if let eventToolUseId = event.toolUseId {
                 toolUseId = eventToolUseId
-                NSLog("[HookSocketServer] Using toolUseId from event: \(toolUseId)")
+                // NSLog("[HookSocketServer] Using toolUseId from event: \(toolUseId)")
             } else if let cachedToolUseId = popCachedToolUseId(event: event) {
                 toolUseId = cachedToolUseId
-                NSLog("[HookSocketServer] Using cached toolUseId: \(toolUseId)")
+                // NSLog("[HookSocketServer] Using cached toolUseId: \(toolUseId)")
             } else {
                 logger.warning("Permission request missing tool_use_id for \(event.sessionId?.prefix(8) ?? "?", privacy: .public) - no cache hit")
                 NSLog("[HookSocketServer] ERROR: No toolUseId found, closing socket!")
@@ -315,7 +315,7 @@ public class HookSocketServer {
                 return
             }
 
-            NSLog("[HookSocketServer] Permission request - keeping socket open for \(event.sessionId?.prefix(8) ?? "?") tool:\(toolUseId.prefix(12))")
+            // NSLog("[HookSocketServer] Permission request - keeping socket open for \(event.sessionId?.prefix(8) ?? "?") tool:\(toolUseId.prefix(12))")
 
             // Update event with resolved toolUseId
             event.toolUseId = toolUseId
@@ -329,8 +329,8 @@ public class HookSocketServer {
             )
             permissionsLock.lock()
             pendingPermissions[toolUseId] = pending
-            NSLog("[HookSocketServer] Stored pending permission: toolUseId=\(toolUseId), sessionId=\(pending.sessionId)")
-            NSLog("[HookSocketServer] Total pending permissions: \(pendingPermissions.count)")
+            // NSLog("[HookSocketServer] Stored pending permission: toolUseId=\(toolUseId), sessionId=\(pending.sessionId)")
+            // NSLog("[HookSocketServer] Total pending permissions: \(pendingPermissions.count)")
             permissionsLock.unlock()
 
             scheduleAutoResponse(toolUseId: toolUseId)
@@ -345,10 +345,10 @@ public class HookSocketServer {
             // 消化。CLI / SDK / 其它 session 都走原 close 路径，不响应。
             if event.event == .stop, let sid = event.sessionId,
                let response = drainResponseForDesktopStop(sessionId: sid) {
-                NSLog("[HookSocketServer] Event Stop with desktop drain, writing decision=block then closing")
+                // NSLog("[HookSocketServer] Event Stop with desktop drain, writing decision=block then closing")
                 writeRawResponse(response, to: clientSocket)
             } else {
-                NSLog("[HookSocketServer] Event does NOT expect response, closing socket")
+                // NSLog("[HookSocketServer] Event does NOT expect response, closing socket")
             }
             close(clientSocket)
         }
@@ -396,7 +396,7 @@ public class HookSocketServer {
             ConversationContext.shared.recordInbound(sessionId: sessionId, message: msg)
         }
 
-        NSLog("[HookSocketServer] Desktop Stop drain: sid=\(sessionId.prefix(8)) drained=\(messages.count) msgs reason=\(formatted.count) chars")
+        // NSLog("[HookSocketServer] Desktop Stop drain: sid=\(sessionId.prefix(8)) drained=\(messages.count) msgs reason=\(formatted.count) chars")
         return PermissionResponse(decision: "block", reason: formatted)
     }
 
@@ -474,12 +474,12 @@ public class HookSocketServer {
     private func sendPermissionResponseBySession(sessionId: String, decision: String, reason: String?) {
         permissionsLock.lock()
 
-        // DEBUG: 打印所有 pending permissions
-        NSLog("[HookSocketServer] === PENDING PERMISSIONS DEBUG ===")
-        for (toolUseId, pending) in pendingPermissions {
-            NSLog("[HookSocketServer]   toolUseId: \(toolUseId.prefix(12)) -> sessionId: \(pending.sessionId.prefix(8))")
-        }
-        NSLog("[HookSocketServer] Looking for sessionId: \(sessionId.prefix(8))")
+        // DEBUG: enable temporarily when diagnosing permission routing.
+        // NSLog("[HookSocketServer] === PENDING PERMISSIONS DEBUG ===")
+        // for (toolUseId, pending) in pendingPermissions {
+        //     NSLog("[HookSocketServer]   toolUseId: \(toolUseId.prefix(12)) -> sessionId: \(pending.sessionId.prefix(8))")
+        // }
+        // NSLog("[HookSocketServer] Looking for sessionId: \(sessionId.prefix(8))")
 
         let matchingPending = pendingPermissions.values
             .filter { $0.sessionId == sessionId }

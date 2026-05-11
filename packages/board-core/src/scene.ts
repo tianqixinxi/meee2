@@ -327,31 +327,29 @@ export function statusLabel(status: string): string {
 // -- Element builders --------------------------------------------------
 
 /** Visual style of a session rect. The rect is a hit-test carrier — visual
- *  rendering happens in a DOM overlay above the canvas. Stroke + bg should
- *  match the host app's background color so any pixel-rounding gap between
- *  the overlay and the rect doesn't leak a contrasting halo. Defaults match
- *  meee2's --bg (#262624). meee2 (or other hosts with darker themes) can
- *  pass overrides via buildScene's `rectStyle` opt. */
+ *  rendering happens in a DOM overlay above the canvas. The rectangle is only
+ *  the Excalidraw interaction anchor for selection/drag/resize, so defaults
+ *  keep it visually transparent and non-rough. */
 export interface SessionRectStyle {
   strokeColor?: string
   backgroundColor?: string
   fillStyle?: string
   strokeWidth?: number
+  roughness?: number
   /** Excalidraw `roundness` — pass `null` for sharp corners. */
   roundness?: { type: number } | null
 }
 
 const DEFAULT_RECT_STYLE: Required<Omit<SessionRectStyle, 'roundness'>> & { roundness: { type: number } | null } = {
-  strokeColor: '#262624',
-  backgroundColor: '#262624',
+  strokeColor: 'transparent',
+  backgroundColor: 'transparent',
   fillStyle: 'solid',
-  strokeWidth: 1,
-  roundness: { type: 3 },
+  strokeWidth: 0,
+  roughness: 0,
+  roundness: null,
 }
 
-/** Build one rectangle skeleton for a session at (x, y). Pass `style` to
- *  override any of stroke/bg/strokeWidth/roundness for hosts with non-meee2
- *  background colors. */
+/** Build one rectangle skeleton for a session at (x, y). */
 export function buildSessionRect(
   session: SessionForScene | string,
   x: number,
@@ -375,6 +373,7 @@ export function buildSessionRect(
     backgroundColor: style.backgroundColor ?? DEFAULT_RECT_STYLE.backgroundColor,
     fillStyle: style.fillStyle ?? DEFAULT_RECT_STYLE.fillStyle,
     strokeWidth: style.strokeWidth ?? DEFAULT_RECT_STYLE.strokeWidth,
+    roughness: style.roughness ?? DEFAULT_RECT_STYLE.roughness,
     roundness: style.roundness === undefined ? DEFAULT_RECT_STYLE.roundness : style.roundness,
     locked: false,
     groupIds: [],
@@ -467,13 +466,7 @@ export function buildScene(
     newSessionIds: string[]
     /** Channels that need a fresh frame created. */
     newChannelNames: string[]
-    /**
-     * Override the rect's stroke / background / strokeWidth / roundness so
-     * the host app's canvas background can flush the rect cleanly. meee2
-     * uses the default (#262624 to match its --bg). meee2 with a darker
-     * Tailwind theme should pass e.g. `{ strokeColor: '#0a0a0a',
-     * backgroundColor: '#141414', strokeWidth: 0, roundness: null }`.
-     */
+    /** Override the otherwise transparent interaction-anchor rect style. */
     rectStyle?: SessionRectStyle
   },
 ): {
@@ -487,7 +480,12 @@ export function buildScene(
 
   for (const sid of opts.newSessionIds) {
     const pos = layout[sid] ?? { x: 80, y: 80 }
-    newRects.push(buildSessionRect(sid, pos.x, pos.y, opts.rectStyle))
+    const rect = buildSessionRect(sid, pos.x, pos.y, opts.rectStyle)
+    newRects.push({
+      ...rect,
+      width: typeof pos.width === 'number' ? pos.width : rect.width,
+      height: typeof pos.height === 'number' ? pos.height : rect.height,
+    })
   }
 
   const channelByName = new Map(state.channels.map((c) => [c.name, c]))

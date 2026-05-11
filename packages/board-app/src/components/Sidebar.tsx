@@ -20,7 +20,7 @@ import {
   togglePinned,
 } from '../sessionOverrides'
 import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Settings as SettingsIcon } from 'lucide-react'
+import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Pin, PinOff, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
@@ -29,17 +29,15 @@ import {
   closeSession,
   disconnectMeee2Online,
   fetchUserProfile,
-  openMeee2Settings,
   openMeee2OnlineConnect,
   openMeee2OnlineDashboard,
-  spawnSession,
   type UserProfile,
 } from '../api'
 import { useToast } from '../App'
-import { commandForSpawnProvider, loadSpawnProvider } from '../preferences'
 
 const CATEGORY_FILTER_KEY = 'meee2.sidebar.categoryFilter.v2'
 const OLDER_SESSIONS_KEY = 'meee2.sidebar.olderSessionsExpanded.v1'
+const OTHER_CANVAS_SESSIONS_KEY = 'meee2.sidebar.otherCanvasSessionsExpanded.v1'
 const COLLAPSED_PROJECTS_KEY = 'meee2.sidebar.collapsedProjects.v1'
 
 /// Session 分类 key —— 动态从 session 列表里推导。规则：
@@ -183,6 +181,17 @@ function readOlderExpanded(): boolean {
 
 function persistOlderExpanded(v: boolean) {
   try { localStorage.setItem(OLDER_SESSIONS_KEY, v ? '1' : '0') } catch {}
+}
+
+function readOtherCanvasExpanded(): boolean {
+  try {
+    return localStorage.getItem(OTHER_CANVAS_SESSIONS_KEY) === '1'
+  } catch {}
+  return false
+}
+
+function persistOtherCanvasExpanded(v: boolean) {
+  try { localStorage.setItem(OTHER_CANVAS_SESSIONS_KEY, v ? '1' : '0') } catch {}
 }
 
 const WIDTH_KEY = 'meee2.sidebar.width.v1'
@@ -410,17 +419,13 @@ interface Props {
    *  - omit `sids` → operates on every session (top "Hide all" button)
    *  - pass `sids` → operates only on that subset (per-category toggle) */
   onBulkVisibility: (mode: 'show' | 'hide', sids?: string[]) => void
-  /** "+ New session" 顶部按钮 —— 默认打开全局 AI assistant
-   *  （meee2 风格：可询问全部 session 的整体问题，也能在某个目录下创建新 session）。 */
-  onNewSession?: () => void
   /** 顶部 plugin 分类胶囊；不传 → 从当前 sessions 自动推导（按 plugin 分）。
    *  比如 meee2 可以传"按归属人"分类的 tabs 完全覆盖。 */
   tabsOverride?: SidebarTab[]
-  /** project 分组 header 上的 + 按钮：在某个项目目录下起新 session。
-   *  cwd 是该 project group 内任意一个 session 的 cwd 路径。 */
-  onCreateInProject?: (cwd: string) => void
   /** 重命名一个 session（pencil icon → input）。 */
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<void> | void
+  /** Open Board Settings. */
+  onPreferences: () => void
 }
 
 export default function Sidebar({
@@ -439,15 +444,15 @@ export default function Sidebar({
   onHideFromCanvas,
   onSetSessionCanvasMembership,
   onBulkVisibility,
-  onNewSession,
   tabsOverride,
-  onCreateInProject,
   onRenameSession,
+  onPreferences,
 }: Props) {
   const toast = useToast()
   const [width, setWidth] = useState<number>(readStoredWidth)
   const [categoryFilter, setCategoryFilter] = useState<CategoryKey | 'all'>(readStoredCategoryFilter)
   const [olderExpanded, setOlderExpanded] = useState<boolean>(readOlderExpanded)
+  const [otherCanvasExpanded, setOtherCanvasExpanded] = useState<boolean>(readOtherCanvasExpanded)
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(readCollapsedProjects)
   const [filterState, setFilterStateRaw] = useState<FilterState>(loadFilterState)
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
@@ -462,9 +467,30 @@ export default function Sidebar({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [sidebarScrolling, setSidebarScrolling] = useState(false)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
   const dragStartRef = useRef<{ x: number; w: number } | null>(null)
+  const sidebarScrollTimerRef = useRef<number | null>(null)
+
+  const markSidebarScrolling = useCallback(() => {
+    setSidebarScrolling(true)
+    if (sidebarScrollTimerRef.current !== null) {
+      window.clearTimeout(sidebarScrollTimerRef.current)
+    }
+    sidebarScrollTimerRef.current = window.setTimeout(() => {
+      sidebarScrollTimerRef.current = null
+      setSidebarScrolling(false)
+    }, 850)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (sidebarScrollTimerRef.current !== null) {
+        window.clearTimeout(sidebarScrollTimerRef.current)
+      }
+    }
+  }, [])
 
   const loadUserProfile = useCallback(() => {
     fetchUserProfile()
@@ -511,7 +537,7 @@ export default function Sidebar({
 
   // ── Hover overlay menu ───────────────────────────────────────────
   // 每行只露一个 ⋯ 按钮（hover 时浮现），点开覆盖菜单（Open in / Pin /
-  // Rename / Duplicate）。状态：当前打开菜单的 sid + anchor 按钮的 rect
+  // Rename）。状态：当前打开菜单的 sid + anchor 按钮的 rect
   // （给 overlay 定位用）。
   const [menuForSid, setMenuForSid] = useState<string | null>(null)
   const [menuAnchorRect, setMenuAnchorRect] = useState<DOMRect | null>(null)
@@ -631,6 +657,10 @@ export default function Sidebar({
   useEffect(() => {
     const px = open ? `${width}px` : '0px'
     document.documentElement.style.setProperty('--sidebar-width', px)
+    document.documentElement.classList.toggle('board-sidebar-collapsed', !open)
+    return () => {
+      document.documentElement.classList.remove('board-sidebar-collapsed')
+    }
   }, [open, width])
 
   useEffect(() => {
@@ -671,14 +701,6 @@ export default function Sidebar({
       toast.push('error', (err as Error).message || 'Failed to update meee2 connection')
     }
   }, [loadUserProfile, toast, userProfile?.connected])
-
-  const openSettings = useCallback(async () => {
-    try {
-      await openMeee2Settings()
-    } catch (err) {
-      toast.push('error', (err as Error).message || 'Failed to open settings')
-    }
-  }, [toast])
 
   const runAccountAction = useCallback((action: () => void | Promise<void>) => {
     setAccountMenuOpen(false)
@@ -808,7 +830,7 @@ export default function Sidebar({
         onMouseDown={onResizerMouseDown}
         title="Drag to resize"
       />
-      <div className="sidebar-header row space" style={{ position: 'relative' }}>
+      <div className={'sidebar-header row space' + (inDetail ? ' sidebar-header--detail' : '')}>
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           {inDetail && (
             <Tooltip label="Back to session list">
@@ -834,7 +856,10 @@ export default function Sidebar({
          * traffic-light 旁,header 右侧没东西竞争)。 */}
         <UpdatePill />
       </div>
-      <div className="sidebar-body">
+      <div
+        className={'sidebar-body' + (sidebarScrolling ? ' sidebar-body--scrolling' : '')}
+        onScroll={markSidebarScrolling}
+      >
         {!state && <div className="muted">Loading…</div>}
         {state && selection.kind !== 'channel' && (() => {
           const visibleState: BoardState = state
@@ -847,7 +872,6 @@ export default function Sidebar({
               tabs={tabs}
               activeTabId={activeTab?.id ?? 'all'}
               onTabChange={setActiveTabId}
-              onNewSession={onNewSession ?? (() => { /* no-op */ })}
               onToggleSearch={() => {
                 setSearchOpen((prev) => {
                   const next = !prev
@@ -964,6 +988,16 @@ export default function Sidebar({
                     return title.includes(q) || proj.includes(q) || cwd.includes(q)
                   })
                 }
+                const isOnActiveCanvas = (s: Session) => {
+                  if (!activeCanvasId) return (onCanvasCounts[s.id] ?? 0) > 0
+                  return (sessionCanvasIds[s.id] ?? []).includes(activeCanvasId)
+                }
+                const currentCanvasFiltered = activeCanvasId
+                  ? filtered.filter(isOnActiveCanvas)
+                  : filtered
+                const otherCanvasFiltered = activeCanvasId
+                  ? filtered.filter((s) => !isOnActiveCanvas(s))
+                  : []
                 // older（idle >= 1h，前端从 lastActivity 派生，见
                 // types.ts:isOlderSession）只在 groupBy=date 模式下单独折叠
                 // 成 "Older 1h–24h" 区。groupBy=project 时不再切分 —— 用户按
@@ -971,10 +1005,10 @@ export default function Sidebar({
                 // 在一起，而不是被单独抽到底部一个独立折叠区。
                 const partitionByDisplayGroup = filterState.groupBy === 'date'
                 const primary = partitionByDisplayGroup
-                  ? filtered.filter((s) => !isOlderSession(s))
-                  : filtered
+                  ? currentCanvasFiltered.filter((s) => !isOlderSession(s))
+                  : currentCanvasFiltered
                 const older = partitionByDisplayGroup
-                  ? filtered.filter((s) => isOlderSession(s))
+                  ? currentCanvasFiltered.filter((s) => isOlderSession(s))
                   : []
 
                 // 分组：依据 filterState.groupBy 选 project | date。
@@ -1016,7 +1050,8 @@ export default function Sidebar({
                       className={
                         'sidebar-session-row' +
                         (selected ? ' is-selected' : '') +
-                        (menuForSid === s.id ? ' is-menu-open' : '')
+                        (menuForSid === s.id ? ' is-menu-open' : '') +
+                        (!onCanvas ? ' is-off-current-canvas' : '')
                       }
                       style={{ ['--row-accent' as any]: accent }}
                       title={hoverDetail}
@@ -1119,6 +1154,30 @@ export default function Sidebar({
                             <Inbox size={11} aria-hidden /> {s.inboxPending}
                           </span>
                         )}
+                        <Tooltip label={pinned.has(s.id) ? 'Unpin session' : 'Pin session'}>
+                          <button
+                            className={
+                              'sidebar-icon-btn sidebar-session-row__pin' +
+                              (pinned.has(s.id) ? ' is-pinned' : '')
+                            }
+                            aria-label={pinned.has(s.id) ? 'Unpin session' : 'Pin session'}
+                            aria-pressed={pinned.has(s.id)}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              const nowPinned = togglePinned(s.id)
+                              toast.push(
+                                'success',
+                                nowPinned
+                                  ? `Pinned: ${displayTitle(s)}`
+                                  : `Unpinned: ${displayTitle(s)}`
+                              )
+                            }}
+                          >
+                            {pinned.has(s.id)
+                              ? <PinOff size={13} aria-hidden />
+                              : <Pin size={13} aria-hidden />}
+                          </button>
+                        </Tooltip>
                         {/* Canvas 可见性 toggle —— 始终可见的状态指示器 + 一键
                          *  toggle。on canvas 时 eye-open 实色，off canvas 时
                          *  eye-off 半透明（hover 提亮）。比藏在 ⋯ 菜单深处的
@@ -1140,7 +1199,7 @@ export default function Sidebar({
                         </Tooltip>
                         {/* hover 时唯一暴露 ⋯ 按钮。click 打开 SessionRowMenu
                          *  overlay，里面集成原本的 pin / rename / canvas 三键
-                         *  + 新加的 Duplicate 与 Open in submenu。*/}
+                         *  + Open in submenu。*/}
                         <Tooltip label="Actions">
                         <button
                           className="sidebar-icon-btn sidebar-session-row__more"
@@ -1195,30 +1254,6 @@ export default function Sidebar({
                             )
                           }}
                           onRename={() => startRename(s)}
-                          onDuplicate={() => {
-                            // Duplicate = spawn 新 session in same cwd。
-                            // 用 SessionDTO.project（cwd 全路径）作为 cwd。
-                            const cwd = s.project
-                            if (!cwd) {
-                              toast.push('error', 'Cannot duplicate: source session has no cwd')
-                              return
-                            }
-                            const shortId = s.id.slice(0, 8)
-                            toast.push('info', `Duplicating session in ${cwd}…`)
-                            spawnSession({
-                              cwd,
-                              command: commandForSpawnProvider(loadSpawnProvider()),
-                            })
-                              .then(() => {
-                                toast.push(
-                                  'success',
-                                  `New session spawned in ${cwd} (from ${shortId})`
-                                )
-                              })
-                              .catch((err) => {
-                                toast.push('error', `Spawn failed: ${(err as Error).message ?? 'unknown'}`)
-                              })
-                          }}
                           canvases={canvases}
                           selectedCanvasIds={sessionCanvasIds[s.id] ?? []}
                           onSetCanvasMembership={onSetSessionCanvasMembership
@@ -1284,11 +1319,6 @@ export default function Sidebar({
                   options?: { dimmed?: boolean; isFirst?: boolean },
                 ) => {
                   const collapsed = collapsedProjects.has(groupKey)
-                  // groupBy=project 时，从组内任一 session 拿 cwd 给 + 按钮用
-                  const sampleCwd =
-                    filterState.groupBy === 'project' && list[0]?.project
-                      ? list[0].project
-                      : null
                   return (
                     <div
                       key={groupKey}
@@ -1317,22 +1347,6 @@ export default function Sidebar({
                           />
                         </svg>
                         <span className="sidebar-project-group__spacer" />
-                        {sampleCwd && onCreateInProject && (
-                          <Tooltip label={`New session in ${groupKey}`}>
-                            <button
-                              className="sidebar-project-group__add"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onCreateInProject(sampleCwd)
-                              }}
-                              aria-label={`New session in ${groupKey}`}
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
-                                <path d="M12 5v14m-7-7h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-                              </svg>
-                            </button>
-                          </Tooltip>
-                        )}
                         {/* Global filter trigger lives only on the first project
                          * group's top-right; data layer is unchanged (filter is
                          * still global). Hover-only chrome — same opacity 0→1
@@ -1465,9 +1479,10 @@ export default function Sidebar({
                   filterState.groupBy === 'date'
                     ? []
                     : groupSessions(older)
+                const otherCanvasGroups = groupSessions(otherCanvasFiltered)
                 // Pinned: 从全部 sessions 里按 pin 顺序拿（不受 tab/filter 限制——
                 // pinned 就是用户长期关注，全局展示更合理）
-                const pinnedSessions = visibleState.sessions.filter((s) => pinned.has(s.id))
+                const pinnedSessions = visibleState.sessions.filter((s) => pinned.has(s.id) && isOnActiveCanvas(s))
                 return (
                   <>
                     <div className="sidebar-pinned-section">Pinned</div>
@@ -1476,7 +1491,7 @@ export default function Sidebar({
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
                           <path d="M12 2v6m-3-1l3 3 3-3M5 13c0-2.5 2-5 7-5s7 2.5 7 5c0 1.5-1 2-3 2H8c-2 0-3-.5-3-2zM10 15v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                         </svg>
-                        <span>Drag pin icon on a session to pin it</span>
+                        <span>Click the pin icon on a session to pin it</span>
                       </div>
                     ) : (
                       <div className="sidebar-project-group__body" style={{ marginBottom: 8 }}>
@@ -1536,6 +1551,50 @@ export default function Sidebar({
                               : olderGroups.map(([k, list]) =>
                                   renderProjectGroup(k, list, { dimmed: true }),
                                 )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {otherCanvasFiltered.length > 0 && (
+                      <div
+                        className={
+                          'sidebar-project-group is-dimmed sidebar-project-group--other-canvas' +
+                          (otherCanvasExpanded ? '' : ' is-collapsed')
+                        }
+                      >
+                        <div
+                          className="sidebar-project-group__header"
+                          onClick={() => {
+                            setOtherCanvasExpanded((v) => {
+                              persistOtherCanvasExpanded(!v)
+                              return !v
+                            })
+                          }}
+                          title="Sessions not on the current canvas"
+                          role="button"
+                        >
+                          <span className="sidebar-project-group__name">Other sessions</span>
+                          <svg
+                            className="sidebar-project-group__chevron"
+                            width="11" height="11" viewBox="0 0 12 12" fill="none"
+                            aria-hidden
+                          >
+                            <path
+                              d={otherCanvasExpanded ? 'M3 4.5l3 3 3-3' : 'M4.5 3l3 3-3 3'}
+                              stroke="currentColor" strokeWidth="1.6"
+                              strokeLinecap="round" strokeLinejoin="round"
+                            />
+                          </svg>
+                          <span className="sidebar-project-group__spacer" />
+                          <span className="sidebar-project-group__hint">
+                            {otherCanvasFiltered.length}
+                          </span>
+                        </div>
+                        {otherCanvasExpanded && (
+                          <div className="sidebar-project-group__body">
+                            {otherCanvasGroups.map(([k, list]) =>
+                              renderProjectGroup(k, list, { dimmed: true }),
+                            )}
                           </div>
                         )}
                       </div>
@@ -1631,7 +1690,7 @@ export default function Sidebar({
                 onClick={() => runAccountAction(openDashboard)}
               >
                 <ExternalLink size={17} strokeWidth={1.75} aria-hidden />
-                <span>meee2</span>
+                <span>meee2 Online</span>
               </button>
             ) : (
               <button
@@ -1648,7 +1707,7 @@ export default function Sidebar({
               className="sidebar-account-menu-item"
               type="button"
               role="menuitem"
-              onClick={() => runAccountAction(openSettings)}
+              onClick={() => runAccountAction(onPreferences)}
             >
               <SettingsIcon size={17} strokeWidth={1.75} aria-hidden />
               <span>Settings</span>

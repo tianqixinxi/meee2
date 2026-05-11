@@ -121,11 +121,6 @@ public struct SettingsView: View {
                         Label("General", systemImage: "gearshape")
                     }
 
-                userSettings
-                    .tabItem {
-                        Label("User", systemImage: "person")
-                    }
-
                 pluginsSettings
                     .tabItem {
                         Label("Plugins", systemImage: "puzzlepiece.extension")

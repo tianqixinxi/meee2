@@ -84,9 +84,13 @@ public final class BoardLayoutStore {
     public struct Point: Codable, Equatable {
         public let x: Double
         public let y: Double
-        public init(x: Double, y: Double) {
+        public let width: Double?
+        public let height: Double?
+        public init(x: Double, y: Double, width: Double? = nil, height: Double? = nil) {
             self.x = x
             self.y = y
+            self.width = width
+            self.height = height
         }
     }
 

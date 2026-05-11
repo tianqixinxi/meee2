@@ -81,6 +81,10 @@ export interface TranscriptViewProps {
    *  original self-managed behavior. */
   verbosity?: TranscriptVerbosity
   onVerbosityChange?: (v: TranscriptVerbosity) => void
+  /** Label shown for assistant turns. */
+  assistantLabel?: string
+  /** When true, first render for this cache key opens at the latest entry. */
+  startAtLatest?: boolean
 }
 
 // ─── module cache (cross-mount session memory) ───────────────────────────
@@ -171,6 +175,7 @@ function entrySignature(entries: TranscriptEntryForView[]): string {
 /// 稳定的合成 in-flight entry id —— 用 sentinel 不用 random，方便 virtualizer
 /// 跨 render 复用同一个测量结果，不闪烁。
 const LIVE_ENTRY_ID = '__live_in_flight__'
+const TAIL_ENTRY_BATCH_SIZE = 50
 
 export function TranscriptView({
   entries,
@@ -184,9 +189,15 @@ export function TranscriptView({
   liveCurrentTask = null,
   verbosity: controlledVerbosity,
   onVerbosityChange,
+  assistantLabel = 'Claude',
+  startAtLatest = false,
 }: TranscriptViewProps) {
   const initialCache = txCache.get(cacheKey)
   const [query, setQuery] = useState('')
+  const queryText = query.trim()
+  const [visibleEntryLimit, setVisibleEntryLimit] = useState(
+    startAtLatest ? TAIL_ENTRY_BATCH_SIZE : Number.POSITIVE_INFINITY,
+  )
   // Controlled vs uncontrolled verbosity. parent 既给 verbosity 又给
   // onVerbosityChange → 受控（隐藏自带 pill）。否则走 localStorage 自管。
   const isControlled = controlledVerbosity !== undefined && onVerbosityChange !== undefined
@@ -201,19 +212,23 @@ export function TranscriptView({
   }
 
   const parentRef = useRef<HTMLDivElement | null>(null)
-  const stickToBottomRef = useRef(initialCache?.stickyBottom ?? true)
+  const stickToBottomRef = useRef(startAtLatest ? true : (initialCache?.stickyBottom ?? true))
   const lastEntryIdRef = useRef<string | null>(initialCache?.lastSeenEntryId ?? null)
   const pendingScrollTopRef = useRef<number | null>(
-    initialCache ? initialCache.scrollTop : null,
+    startAtLatest ? null : (initialCache ? initialCache.scrollTop : null),
   )
   const lastSignatureRef = useRef<string>(initialCache?.signature ?? '')
+  const forceLatestOnFirstContentRef = useRef(startAtLatest)
+  const pendingPrependScrollHeightRef = useRef<number | null>(null)
 
   // Cache-key change → reset transient state
   useEffect(() => {
     setQuery('')
+    setVisibleEntryLimit(startAtLatest ? TAIL_ENTRY_BATCH_SIZE : Number.POSITIVE_INFINITY)
     lastEntryIdRef.current = null
     stickToBottomRef.current = true
     pendingScrollTopRef.current = null
+    forceLatestOnFirstContentRef.current = startAtLatest
     lastSignatureRef.current = txCache.get(cacheKey)?.signature ?? ''
 
     return () => {
@@ -226,7 +241,7 @@ export function TranscriptView({
         stickyBottom: stickToBottomRef.current,
       })
     }
-  }, [cacheKey])
+  }, [cacheKey, startAtLatest])
 
   // Persist verbosity (uncontrolled mode only — controlled mode的
   // 持久化由 parent 负责，避免双方同时往 localStorage 写造成 race)
@@ -254,12 +269,18 @@ export function TranscriptView({
     })
   }, [entries, cacheKey])
 
+  const windowedEntries = useMemo(() => {
+    if (!startAtLatest || queryText) return entries
+    if (entries.length <= visibleEntryLimit) return entries
+    return entries.slice(-visibleEntryLimit)
+  }, [entries, queryText, startAtLatest, visibleEntryLimit])
+
   // Filter
   const filteredEntries = useMemo(() => {
-    if (!query.trim()) return entries
+    if (!queryText) return windowedEntries
     const q = query.toLowerCase()
     return entries.filter((e) => e.blocks.some((b) => blockMatchesQuery(b, q)))
-  }, [entries, query])
+  }, [entries, query, queryText, windowedEntries])
 
   // Index tool_result by toolUseId for pairing
   const resultsByToolUseId = useMemo(() => {
@@ -417,7 +438,7 @@ export function TranscriptView({
   const virtualizer = useVirtualizer({
     count: visibleEntries.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 280,
+    estimateSize: () => 150,
     overscan: 6,
     measureElement: (el) => el.getBoundingClientRect().height,
     getItemKey: (index) => visibleEntries[index]?.id ?? `idx-${index}`,
@@ -443,6 +464,16 @@ export function TranscriptView({
   const handleScroll = () => {
     const el = parentRef.current
     if (!el) return
+    if (
+      startAtLatest &&
+      !queryText &&
+      el.scrollTop < 80 &&
+      visibleEntryLimit < entries.length &&
+      pendingPrependScrollHeightRef.current === null
+    ) {
+      pendingPrependScrollHeightRef.current = el.scrollHeight
+      setVisibleEntryLimit((n) => Math.min(entries.length, n + TAIL_ENTRY_BATCH_SIZE))
+    }
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight
     const isAtB = dist < 40
     stickToBottomRef.current = isAtB
@@ -528,6 +559,7 @@ export function TranscriptView({
 
   // Restore scrollTop on cache hit (1 frame after layout, 1 more after measurement)
   useEffect(() => {
+    if (startAtLatest) return
     const target = pendingScrollTopRef.current
     if (target == null) return
     pendingScrollTopRef.current = null
@@ -542,7 +574,21 @@ export function TranscriptView({
       })
     })
     return () => cancelAnimationFrame(r1)
-  }, [cacheKey])
+  }, [cacheKey, startAtLatest])
+
+  useLayoutEffect(() => {
+    const previousHeight = pendingPrependScrollHeightRef.current
+    if (previousHeight == null) return
+    pendingPrependScrollHeightRef.current = null
+    let raf = requestAnimationFrame(() => {
+      raf = requestAnimationFrame(() => {
+        const node = parentRef.current
+        if (!node) return
+        node.scrollTop += Math.max(0, node.scrollHeight - previousHeight)
+      })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [visibleEntryLimit, visibleEntries.length])
 
   // Auto-scroll on new entries
   useEffect(() => {
@@ -550,8 +596,10 @@ export function TranscriptView({
     const newestId = visibleEntries[visibleEntries.length - 1].id
     const isFirstLoad = lastEntryIdRef.current === null
     const isNewContent = newestId !== lastEntryIdRef.current
+    const forceLatest = forceLatestOnFirstContentRef.current
+    if (forceLatest) forceLatestOnFirstContentRef.current = false
     lastEntryIdRef.current = newestId
-    if (!(isFirstLoad || (isNewContent && stickToBottomRef.current))) return
+    if (!(forceLatest || isFirstLoad || (isNewContent && stickToBottomRef.current))) return
 
     const targetIndex = visibleEntries.length - 1
     const deadline = performance.now() + (isFirstLoad ? 2500 : 1200)
@@ -634,6 +682,8 @@ export function TranscriptView({
         <span className="transcript-search__count">
           {query
             ? `${filteredEntries.length}/${entries.length}`
+            : startAtLatest && windowedEntries.length < entries.length
+            ? `${windowedEntries.length}/${entries.length} entries`
             : `${entries.length} entries`}
         </span>
         {refreshing && (
@@ -683,6 +733,7 @@ export function TranscriptView({
                       resultsByToolUseId={resultsByToolUseId}
                       hideRoleChip={hideRoleChipFor.has(e.id)}
                       verbosity={verbosity}
+                      assistantLabel={assistantLabel}
                       isLive={e.id === LIVE_ENTRY_ID}
                     />
                   </div>
@@ -713,12 +764,14 @@ function EntryRow({
   resultsByToolUseId,
   hideRoleChip,
   verbosity,
+  assistantLabel,
   isLive = false,
 }: {
   entry: TranscriptEntryForView
   resultsByToolUseId: Map<string, TranscriptBlockForView>
   hideRoleChip: boolean
   verbosity: TranscriptVerbosity
+  assistantLabel: string
   /** Synthetic in-flight entry — render with pending visual state. */
   isLive?: boolean
 }) {
@@ -766,7 +819,7 @@ function EntryRow({
   )
   const roleLabel =
     entry.type === 'user' ? 'You' :
-    entry.type === 'assistant' ? 'Claude' :
+    entry.type === 'assistant' ? assistantLabel :
     entry.type === 'injected' ? 'Injected' :
     entry.type
   const ts = formatEntryTimestamp(entry.timestamp)

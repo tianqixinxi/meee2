@@ -29,6 +29,7 @@ class CodexPlugin: SessionPlugin {
     private var lastStatuses: [String: SessionStatus] = [:]
     private var transcriptSnapshotCache: [String: (fingerprint: FileFingerprint, snapshot: CodexTranscriptSnapshot)] = [:]
     private var codexRunningCache: (checkedAt: Date, value: Bool)?
+    private var deliveredInitialSnapshot = false
 
     private struct FileFingerprint: Equatable {
         let fileSize: UInt64
@@ -61,12 +62,13 @@ class CodexPlugin: SessionPlugin {
         guard !isRunning else { return true }
 
         isRunning = true
+        deliveredInitialSnapshot = false
 
         // 启动定时器
         startTimer()
         refresh()
 
-        NSLog("[CodexPlugin] Started, watching: \(stateDatabasePath.path), interval: \(refreshInterval)s")
+        // NSLog("[CodexPlugin] Started, watching: \(stateDatabasePath.path), interval: \(refreshInterval)s")
         return true
     }
 
@@ -81,9 +83,10 @@ class CodexPlugin: SessionPlugin {
     override func stop() {
         isRunning = false
         refreshInFlight = false
+        deliveredInitialSnapshot = false
         refreshTimer?.invalidate()
         refreshTimer = nil
-        NSLog("[CodexPlugin] Stopped")
+        // NSLog("[CodexPlugin] Stopped")
     }
 
     override func cleanup() {
@@ -93,7 +96,7 @@ class CodexPlugin: SessionPlugin {
     // MARK: - Session Management
 
     override func getSessions() -> [PluginSession] {
-        scanCodexThreads()
+        scanCodexThreads(parseTranscripts: true)
     }
 
     override func refresh() {
@@ -102,35 +105,53 @@ class CodexPlugin: SessionPlugin {
 
         refreshQueue.async { [weak self] in
             guard let self = self else { return }
-            let sessions = self.getSessions()
+            if !self.deliveredInitialSnapshot {
+                let quickSessions = self.scanCodexThreads(parseTranscripts: false)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    guard self.isRunning, !self.deliveredInitialSnapshot else { return }
+                    self.deliveredInitialSnapshot = true
+                    self.handleRefreshResult(quickSessions, detectUrgentEvents: false, rememberMessages: false)
+                }
+            }
+
+            let sessions = self.scanCodexThreads(parseTranscripts: true)
 
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.refreshInFlight = false
                 guard self.isRunning else { return }
+                self.deliveredInitialSnapshot = true
                 self.handleRefreshResult(sessions)
             }
         }
     }
 
-    private func handleRefreshResult(_ sessions: [PluginSession]) {
-        NSLog("[CodexPlugin] Refresh: found \(sessions.count) sessions")
+    private func handleRefreshResult(
+        _ sessions: [PluginSession],
+        detectUrgentEvents: Bool = true,
+        rememberMessages: Bool = true
+    ) {
+        // NSLog("[CodexPlugin] Refresh: found \(sessions.count) sessions")
 
         // 检测新消息
-        for session in sessions {
-            let newMessage = session.lastMessage
-            let previousMessage = lastMessages[session.id]
-            let previousStatus = lastStatuses[session.id]
+        if rememberMessages {
+            for session in sessions {
+                let newMessage = session.lastMessage
+                let previousMessage = lastMessages[session.id]
+                let previousStatus = lastStatuses[session.id]
 
-            if let msg = newMessage, previousMessage != msg {
-                if previousMessage != nil,
-                   shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: msg) {
-                    NSLog("[CodexPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
-                    onUrgentEvent?(session, msg, nil)
+                if let msg = newMessage, previousMessage != msg {
+                    if detectUrgentEvents,
+                       previousMessage != nil,
+                       shouldTriggerUrgentEvent(session: session, previousStatus: previousStatus, message: msg) {
+                        // NSLog("[CodexPlugin] *** TRIGGERING URGENT EVENT for \(session.title): \(msg.prefix(50))...")
+                        onUrgentEvent?(session, msg, nil)
+                    }
+                    lastMessages[session.id] = msg
                 }
-                lastMessages[session.id] = msg
+                lastStatuses[session.id] = session.status
             }
-            lastStatuses[session.id] = session.status
         }
 
         onSessionsUpdated?(sessions)
@@ -228,9 +249,9 @@ class CodexPlugin: SessionPlugin {
     }
 
     /// 扫描 Codex threads 表
-    private func scanCodexThreads() -> [PluginSession] {
+    private func scanCodexThreads(parseTranscripts: Bool) -> [PluginSession] {
         let started = Date()
-        defer { perfLog("scanCodexThreads", started: started) }
+        defer { perfLog("scanCodexThreads", started: started, extra: parseTranscripts ? "full" : "quick") }
         let dbPath = stateDatabasePath
         guard FileManager.default.fileExists(atPath: dbPath.path) else {
             NSLog("[CodexPlugin] Database not found: \(dbPath.path)")
@@ -279,7 +300,9 @@ class CodexPlugin: SessionPlugin {
                 let lastUpdate = Self.date(seconds: updatedAt, milliseconds: updatedAtMs)
                 let timeSinceUpdate = Date().timeIntervalSince(lastUpdate)
 
-                let transcript = parseCodexTranscript(path: rolloutPath)
+                let transcript = parseTranscripts
+                    ? parseCodexTranscript(path: rolloutPath)
+                    : CodexTranscriptSnapshot()
 
                 // 状态优先使用 rollout tail 推断；如果最近还在写且进程存在，
                 // 空闲态提升为 active，避免长推理期间只显示 idle。

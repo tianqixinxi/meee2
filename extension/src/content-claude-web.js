@@ -18,7 +18,9 @@ let observer = null
 let pollTimer = null
 
 function log(...args) {
-  console.log('[meee2-bridge]', ...args)
+  if (globalThis.MEEE2_BRIDGE_DEBUG === true) {
+    console.log('[meee2-bridge]', ...args)
+  }
 }
 
 function readConversationId() {

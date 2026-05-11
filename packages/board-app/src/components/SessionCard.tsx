@@ -95,16 +95,17 @@ export function SessionCard({
   // 同时决定 halo 的颜色（live-color CSS 变量）。
   const liveKind = classifyLive(session.status, urgent)
 
-  // [StateTrace] Web 端渲染日志
-  console.log(
-    '[StateTrace][web-card]',
-    'sid=' + session.id.slice(0, 8),
-    'status=' + session.status,
-    'urgent=' + urgent,
-    'badge=' + (liveKind.badge ?? '-'),
-    'haloColor=' + (liveKind.haloColor ?? '-'),
-    'dim=' + liveKind.dim
-  )
+  // [StateTrace] Web card render log. Enable temporarily when debugging card
+  // state classification; too noisy for normal use.
+  // console.log(
+  //   '[StateTrace][web-card]',
+  //   'sid=' + session.id.slice(0, 8),
+  //   'status=' + session.status,
+  //   'urgent=' + urgent,
+  //   'badge=' + (liveKind.badge ?? '-'),
+  //   'haloColor=' + (liveKind.haloColor ?? '-'),
+  //   'dim=' + liveKind.dim
+  // )
   const tokens = tokensText(session.usageStats)
   const messages = session.recentMessages ?? []
   // 卡片只展示 user input + assistant output 这两端的"对话"，过滤掉 tool
@@ -171,12 +172,12 @@ export function SessionCard({
       style={inlineStyle}
       onClick={(e) => {
         e.stopPropagation()
-        console.log('[SessionCard] onClick → select', session.id.slice(0, 8), session.title)
+        // console.log('[SessionCard] onClick → select', session.id.slice(0, 8), session.title)
         onSelect()
       }}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        console.log('[SessionCard] onDoubleClick → activate (jump terminal)', session.id.slice(0, 8), session.title)
+        // console.log('[SessionCard] onDoubleClick → activate (jump terminal)', session.id.slice(0, 8), session.title)
         onActivate()
       }}
       title="Double-click to jump to terminal"
