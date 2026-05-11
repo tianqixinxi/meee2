@@ -113,6 +113,23 @@ enum BoardAPI {
         // PluginManager 的全集。
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
+        let sessions = currentBoardSessions()
+        var sessionCwds: [String: String] = [:]
+        for session in sessions where !session.project.isEmpty {
+            sessionCwds[session.id] = session.project
+        }
+        BoardLayoutStore.shared.applySpawnIntents(sessionCwds: sessionCwds)
+        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
+        // 不在 UI 里显示，保持 channel 列表干净
+        let channels = ChannelRegistry.shared.list()
+            .filter { !$0.name.hasPrefix("__") }
+            .map { BoardDTOBuilder.channelDTO($0) }
+        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
+        let state = StateDTO(sessions: sessions, channels: channels)
+        return jsonResponse(state)
+    }
+
+    private static func currentBoardSessions() -> [SessionDTO] {
         let archivedDesktopSids: Set<String> = {
             var set = Set<String>()
             for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
@@ -134,15 +151,7 @@ enum BoardAPI {
             }
             .map { BoardDTOBuilder.sessionDTO($0) }
 
-        // ─── Desktop session 持久化合成 ───
-        // Desktop 的 session 生命周期是"请求级"——内嵌 claude 子进程只在用户
-        // 发消息时活几秒，结束后退出。ClaudePlugin（hook + PID 文件驱动）会
-        // 在子进程退出后把 session 标完成 / 移除，导致 desktop session 在 Web UI
-        // 上一闪而过。
-        //
-        // 解决：用 metadata 文件作为持久化 session 源，对 PluginManager 不知道
-        // 的 desktop cliSessionId 合成 SessionDTO。已经在 PluginManager 里活着
-        // 的 desktop session（用户刚发消息那几秒）走真实分支不被合成覆盖。
+        // Desktop 的 session 生命周期是"请求级"，所以用 metadata 合成持久展示。
         let realSids: Set<String> = Set(realSessions.map { $0.id })
         let syntheticDesktopSessions: [SessionDTO] = ClaudeDesktopMetadataReader.shared
             .allCliSessionIds()
@@ -153,20 +162,7 @@ enum BoardAPI {
                       !realSids.contains(cliSid) else { return nil }
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
             }
-        let sessions = realSessions + syntheticDesktopSessions
-        var sessionCwds: [String: String] = [:]
-        for session in sessions where !session.project.isEmpty {
-            sessionCwds[session.id] = session.project
-        }
-        BoardLayoutStore.shared.applySpawnIntents(sessionCwds: sessionCwds)
-        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
-        // 不在 UI 里显示，保持 channel 列表干净
-        let channels = ChannelRegistry.shared.list()
-            .filter { !$0.name.hasPrefix("__") }
-            .map { BoardDTOBuilder.channelDTO($0) }
-        _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: sessions.map { $0.id })
-        let state = StateDTO(sessions: sessions, channels: channels)
-        return jsonResponse(state)
+        return realSessions + syntheticDesktopSessions
     }
 
     // MARK: - GET /api/user-profile

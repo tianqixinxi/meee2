@@ -569,6 +569,9 @@ public final class BoardLayoutStore {
                 throw storeError("canvas not found: \(canvasId)")
             }
             store.memberships[canvasId]?[sessionId] = nil
+            var homeCanvasIds = store.sessionHomeCanvasIds ?? [:]
+            homeCanvasIds[sessionId] = homeCanvasIds[sessionId] ?? canvasId
+            store.sessionHomeCanvasIds = homeCanvasIds
             var layout = store.layouts[canvasId] ?? .empty
             layout.sessions.removeValue(forKey: sessionId)
             layout.dismissedSids.removeAll { $0 == sessionId }
@@ -705,6 +708,29 @@ public final class BoardLayoutStore {
         let context = currentContext()
         let now = Date()
         let personalId = "personal-default"
+        let removedTeamDefaultIds = store.canvases
+            .filter { $0.scope == .team && $0.isDefault }
+            .map(\.id)
+        if !removedTeamDefaultIds.isEmpty {
+            let removed = Set(removedTeamDefaultIds)
+            store.canvases.removeAll { removed.contains($0.id) }
+            for canvasId in removed {
+                store.layouts.removeValue(forKey: canvasId)
+                store.memberships.removeValue(forKey: canvasId)
+            }
+            if removed.contains(store.activeCanvasId ?? "") {
+                store.activeCanvasId = personalId
+            }
+            if var homeCanvasIds = store.sessionHomeCanvasIds {
+                let sessionIdsToClear = homeCanvasIds.compactMap { sessionId, canvasId in
+                    removed.contains(canvasId) ? sessionId : nil
+                }
+                for sessionId in sessionIdsToClear {
+                    homeCanvasIds.removeValue(forKey: sessionId)
+                }
+                store.sessionHomeCanvasIds = homeCanvasIds
+            }
+        }
         if !store.canvases.contains(where: { $0.id == personalId }) {
             store.canvases.append(Canvas(
                 id: personalId,
@@ -724,28 +750,6 @@ public final class BoardLayoutStore {
         ensureWorkspaceFolderNamesLocked(&store)
         let defaultSessionIds = sessionIds.filter { (store.sessionHomeCanvasIds ?? [:])[$0] == nil }
         ensureMembershipsLocked(&store, canvasId: personalId, sessionIds: defaultSessionIds)
-
-        if !context.teamId.isEmpty {
-            let teamId = "team-\(context.teamId)-default"
-            if !store.canvases.contains(where: { $0.id == teamId }) {
-                store.canvases.append(Canvas(
-                    id: teamId,
-                    name: "Default canvas",
-                    scope: .team,
-                    ownerUserId: nil,
-                    teamId: context.teamId,
-                    isDefault: true,
-                    workspaceFolderName: nil,
-                    createdBy: context.userId,
-                    createdAt: now,
-                    updatedAt: now
-                ))
-                store.layouts[teamId] = store.layouts[teamId] ?? .empty
-                store.memberships[teamId] = store.memberships[teamId] ?? [:]
-                ensureWorkspaceFolderNamesLocked(&store)
-            }
-            ensureMembershipsLocked(&store, canvasId: teamId, sessionIds: defaultSessionIds)
-        }
 
         let visible = visibleCanvasesLocked(store)
         if store.activeCanvasId == nil

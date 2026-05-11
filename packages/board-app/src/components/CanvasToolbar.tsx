@@ -71,6 +71,9 @@ export function CanvasToolbar({
             {activeCanvas.scope === 'team' ? 'Team' : 'Personal'}
           </span>
           <span className="canvas-toolbar__name">{activeCanvas.name}</span>
+          {activeCanvas.isDefault && (
+            <span className="canvas-toolbar__badge">Default</span>
+          )}
           <ChevronDown size={14} aria-hidden />
         </button>
       </div>
@@ -96,7 +99,10 @@ export function CanvasToolbar({
                   </span>
                   <span className="canvas-toolbar__item-text">
                     <span>{canvas.name}</span>
-                    <span>{canvas.scope === 'team' ? 'Team' : 'Personal'}</span>
+                    <span>
+                      {canvas.scope === 'team' ? 'Team' : 'Personal'}
+                      {canvas.isDefault ? ' · Default' : ''}
+                    </span>
                   </span>
                 </button>
               )

@@ -15,11 +15,13 @@ final class AssistantToolsTests: XCTestCase {
     func testCatalogContainsAllExpectedTools() {
         let names = AssistantTools.allNames
         XCTAssertEqual(names, [
+            "get_canvas_context",
             "get_session_list",
             "get_session_info",
             "get_session_transcript",
             "list_channels",
             "get_channel_messages",
+            "propose_canvas_patch",
             "create_session"
         ])
     }

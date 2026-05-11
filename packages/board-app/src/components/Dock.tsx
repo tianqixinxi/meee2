@@ -23,7 +23,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { BoardState, Session } from '../types'
+import type { BoardState, CanvasPatchProposal, Session } from '../types'
 import {
   activateSession,
   injectToSession,
@@ -69,8 +69,10 @@ export type DockMode =
       /** Assistant chat 历史。lifted 到 App 才能跨 dock 开关持久化。 */
       messages: DisplayMessage[]
       setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>
+      canvasId: string
       canvasName: string
       workspacePath: string
+      onApplyCanvasPatch: (proposal: CanvasPatchProposal) => void
     }
 
 export interface DockHandle {
@@ -246,6 +248,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       model: settings.model,
       enabledTools: activeTools(settings),
       scope: 'this-mac',
+      canvasId: mode.kind === 'assistant' ? mode.canvasId : undefined,
       workspacePath: mode.kind === 'assistant' ? mode.workspacePath : undefined,
       canvasName: mode.kind === 'assistant' ? mode.canvasName : undefined,
     }
@@ -338,6 +341,18 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       inboxCount: mode.session.inboxPending ?? 0,
     }
   }, [mode])
+
+  const canvasPatchProposals = useMemo(() => {
+    if (mode.kind !== 'assistant') return []
+    const rows: Array<{ key: string; proposal: CanvasPatchProposal }> = []
+    messages.forEach((message, messageIndex) => {
+      for (const event of message.toolEvents ?? []) {
+        const proposal = canvasPatchProposalFromToolEvent(event)
+        if (proposal) rows.push({ key: `${messageIndex}-${event.id}`, proposal })
+      }
+    })
+    return rows
+  }, [messages, mode])
 
   // ── render ────────────────────────────────────────────────────────
   return (
@@ -444,6 +459,14 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
                 </div>
               )
             })}
+            {mode.kind === 'assistant' && canvasPatchProposals.map(({ key, proposal }) => (
+              <CanvasPatchCard
+                key={`patch-${key}`}
+                proposal={proposal}
+                activeCanvasId={mode.canvasId}
+                onApply={() => mode.onApplyCanvasPatch(proposal)}
+              />
+            ))}
             {err && <div className="inline-error" style={{ margin: '4px 4px 0' }}>{err}</div>}
           </div>
         )}
@@ -693,6 +716,85 @@ function ToolChip({ event }: { event: ToolEvent }) {
   )
 }
 
+function CanvasPatchCard({
+  proposal,
+  activeCanvasId,
+  onApply,
+}: {
+  proposal: CanvasPatchProposal
+  activeCanvasId: string
+  onApply: () => void
+}) {
+  const isCurrentCanvas = proposal.canvasId === activeCanvasId
+  const count = proposal.operationCount ?? proposal.operations.length
+  return (
+    <div className="canvas-patch-card">
+      <div className="canvas-patch-card__body">
+        <div className="canvas-patch-card__title">Canvas changes ready</div>
+        <div className="canvas-patch-card__summary">{proposal.summary}</div>
+        <div className="canvas-patch-card__meta">
+          {count} change{count === 1 ? '' : 's'} · Apply only changes this canvas
+        </div>
+        <ul className="canvas-patch-card__ops">
+          {proposal.operations.slice(0, 4).map((op, index) => (
+            <li key={index}>{operationLabel(op)}</li>
+          ))}
+          {proposal.operations.length > 4 && (
+            <li>{proposal.operations.length - 4} more</li>
+          )}
+        </ul>
+      </div>
+      <button
+        className="primary canvas-patch-card__apply"
+        onClick={onApply}
+        disabled={!isCurrentCanvas}
+        title={isCurrentCanvas ? 'Apply to this canvas' : 'Switch back to this canvas first'}
+      >
+        Apply
+      </button>
+    </div>
+  )
+}
+
+function canvasPatchProposalFromToolEvent(event: ToolEvent): CanvasPatchProposal | null {
+  if (event.name !== 'propose_canvas_patch') return null
+  const raw = event.result
+  if (!raw || typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+  if (obj.type !== 'canvas_patch_proposal') return null
+  if (typeof obj.canvasId !== 'string') return null
+  if (!Array.isArray(obj.operations)) return null
+  return {
+    type: 'canvas_patch_proposal',
+    canvasId: obj.canvasId,
+    canvasName: typeof obj.canvasName === 'string' ? obj.canvasName : undefined,
+    summary: typeof obj.summary === 'string' ? obj.summary : 'Canvas changes ready.',
+    operations: obj.operations as CanvasPatchProposal['operations'],
+    operationCount: typeof obj.operationCount === 'number' ? obj.operationCount : undefined,
+    requiresApply: obj.requiresApply === true,
+  }
+}
+
+function operationLabel(op: CanvasPatchProposal['operations'][number]): string {
+  switch (op.type) {
+    case 'move_session': return `Move session ${shortId(op.sessionId)}`
+    case 'move_channel': return `Move channel ${op.channelName}`
+    case 'show_session': return `Show session ${shortId(op.sessionId)}`
+    case 'hide_session': return `Hide session ${shortId(op.sessionId)}`
+    case 'add_note': return `Add note "${op.text.slice(0, 36)}${op.text.length > 36 ? '…' : ''}"`
+    case 'update_note': return `Update note ${shortId(op.elementId)}`
+  }
+}
+
+function shortId(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8)
+}
+
+const HIDDEN_ASSISTANT_TOOL_BLOCKS = new Set([
+  'get_canvas_context',
+  'propose_canvas_patch',
+])
+
 /** 扫 assistant 回复里有没有 ```spawn\n{...}\n``` fence；有的话解析出 cwd。 */
 /// LLM 流式回复时，tool-call 的 JSON 经常跟着 delta text 一起进 content
 /// 字符串（"{"name": "X", "args": {...}}"），同时又另有结构化 tool_call
@@ -733,6 +835,7 @@ function assistantMessagesToTranscriptEntries(
       blocks.push({ type: 'text', text: cleanedBody })
     }
     for (const te of m.toolEvents ?? []) {
+      if (HIDDEN_ASSISTANT_TOOL_BLOCKS.has(te.name)) continue
       const argsJSON = (() => {
         if (typeof te.args === 'string') return te.args
         try { return JSON.stringify(te.args ?? {}, null, 2) } catch { return '{}' }

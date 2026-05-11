@@ -9,11 +9,24 @@
 
 export type LlmProvider = 'openai' | 'anthropic' | 'local'
 
-export type ToolName = 'get_session_list' | 'get_session_info' | 'create_session'
+export type ToolName =
+  | 'get_canvas_context'
+  | 'get_session_list'
+  | 'get_session_info'
+  | 'get_session_transcript'
+  | 'list_channels'
+  | 'get_channel_messages'
+  | 'propose_canvas_patch'
+  | 'create_session'
 
 export const ALL_TOOLS: ToolName[] = [
+  'get_canvas_context',
   'get_session_list',
   'get_session_info',
+  'get_session_transcript',
+  'list_channels',
+  'get_channel_messages',
+  'propose_canvas_patch',
   'create_session',
 ]
 
@@ -50,8 +63,13 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
   baseUrl: '',
   model: '',
   enabledTools: {
+    get_canvas_context: true,
     get_session_list: true,
     get_session_info: true,
+    get_session_transcript: true,
+    list_channels: true,
+    get_channel_messages: true,
+    propose_canvas_patch: true,
     create_session: true,
   },
 }

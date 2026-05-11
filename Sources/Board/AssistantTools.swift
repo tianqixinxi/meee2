@@ -21,11 +21,13 @@ enum AssistantTools {
     // MARK: - Catalog
 
     static let all: [ToolDef] = [
+        getCanvasContextDef(),
         getSessionListDef(),
         getSessionInfoDef(),
         getSessionTranscriptDef(),
         listChannelsDef(),
         getChannelMessagesDef(),
+        proposeCanvasPatchDef(),
         createSessionDef()
     ]
 
@@ -46,11 +48,18 @@ enum AssistantTools {
         case failure(String)
     }
 
-    static func dispatch(name: String, args: [String: Any], enabled: Set<String>?) -> DispatchResult {
+    static func dispatch(
+        name: String,
+        args: [String: Any],
+        enabled: Set<String>?,
+        settings: AssistantSettings = AssistantAPI.parseSettings(nil)
+    ) -> DispatchResult {
         if let enabled = enabled, !enabled.contains(name) {
             return .failure("tool '\(name)' is disabled in user settings")
         }
         switch name {
+        case "get_canvas_context":
+            return runGetCanvasContext(args: args, settings: settings)
         case "get_session_list":
             return runGetSessionList(args: args)
         case "get_session_info":
@@ -61,10 +70,113 @@ enum AssistantTools {
             return runListChannels(args: args)
         case "get_channel_messages":
             return runGetChannelMessages(args: args)
+        case "propose_canvas_patch":
+            return runProposeCanvasPatch(args: args, settings: settings)
         case "create_session":
             return runCreateSession(args: args)
         default:
             return .failure("unknown tool: \(name)")
+        }
+    }
+
+    // MARK: - get_canvas_context
+
+    private struct CanvasToolContext {
+        let canvas: BoardLayoutStore.Canvas
+        let layout: BoardLayoutStore.Layout
+        let snapshot: BoardLayoutStore.Snapshot
+        let workspacePath: String
+    }
+
+    private static func getCanvasContextDef() -> ToolDef {
+        ToolDef(
+            name: "get_canvas_context",
+            description:
+                "Read the current canvas context: visible sessions, channel frames, " +
+                "layout coordinates, viewport, and simple user note summaries. " +
+                "Use this before proposing canvas changes.",
+            inputSchema: [
+                "type": "object",
+                "properties": [:] as [String: Any]
+            ]
+        )
+    }
+
+    private static func runGetCanvasContext(args _: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let context = try loadCanvasToolContext(settings: settings)
+            let visibleMemberships = context.snapshot.memberships.filter {
+                $0.canvasId == context.canvas.id && $0.visible
+            }
+            let visibleSessionIds = Set(visibleMemberships.map { $0.sessionId })
+
+            var sessions: [[String: Any]] = []
+            for s in PluginManager.shared.sessions where s.status != .dead && visibleSessionIds.contains(s.id) {
+                var row: [String: Any] = [
+                    "id": s.id,
+                    "title": s.title,
+                    "project": s.cwd ?? "",
+                    "plugin": s.pluginId,
+                    "pluginDisplayName": PluginManager.shared.getPluginInfo(for: s.pluginId)?.displayName ?? s.pluginId,
+                    "status": statusName(s.status),
+                    "visible": true
+                ]
+                if let point = context.layout.sessions[s.id] {
+                    row["x"] = point.x
+                    row["y"] = point.y
+                }
+                sessions.append(row)
+            }
+
+            var channels: [[String: Any]] = []
+            for ch in ChannelRegistry.shared.list() where !ch.name.hasPrefix("__") {
+                var row: [String: Any] = [
+                    "name": ch.name,
+                    "displayName": ch.effectiveDisplayName,
+                    "mode": ch.mode.rawValue,
+                    "memberCount": ch.members.count,
+                    "pendingCount": MessageRouter.shared.listMessages(channel: ch.name, statuses: [.pending, .held]).count
+                ]
+                if let point = context.layout.channels[ch.name] {
+                    row["x"] = point.x
+                    row["y"] = point.y
+                }
+                channels.append(row)
+            }
+
+            let viewport: Any
+            if let vp = context.layout.viewport {
+                viewport = [
+                    "scrollX": vp.scrollX,
+                    "scrollY": vp.scrollY,
+                    "zoom": vp.zoom
+                ]
+            } else {
+                viewport = NSNull()
+            }
+
+            let notes = summarizeCanvasNotes(context.layout.userElements)
+
+            return .success([
+                "canvas": [
+                    "id": context.canvas.id,
+                    "name": context.canvas.name,
+                    "scope": context.canvas.scope.rawValue,
+                    "isDefault": context.canvas.isDefault,
+                    "workspacePath": context.workspacePath
+                ],
+                "viewport": viewport,
+                "sessions": sessions,
+                "channels": channels,
+                "notes": notes,
+                "counts": [
+                    "sessions": sessions.count,
+                    "channels": channels.count,
+                    "notes": notes.count
+                ]
+            ])
+        } catch {
+            return .failure(error.localizedDescription)
         }
     }
 
@@ -496,6 +608,105 @@ enum AssistantTools {
         return f.date(from: s)
     }
 
+    // MARK: - propose_canvas_patch
+
+    private static func proposeCanvasPatchDef() -> ToolDef {
+        ToolDef(
+            name: "propose_canvas_patch",
+            description:
+                "Return a structured, low-risk patch proposal for the current canvas. " +
+                "This does not apply anything; the UI renders an Apply card and the " +
+                "user must click Apply. Only supported operations are move_session, " +
+                "move_channel, show_session, hide_session, add_note, update_note.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "summary": [
+                        "type": "string",
+                        "description": "Short human-readable summary shown in the Apply card."
+                    ],
+                    "operations": [
+                        "type": "array",
+                        "description": "Canvas patch operations. Unknown operation types are rejected.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "type": ["type": "string"],
+                                "sessionId": ["type": "string"],
+                                "channelName": ["type": "string"],
+                                "elementId": ["type": "string"],
+                                "text": ["type": "string"],
+                                "x": ["type": "number"],
+                                "y": ["type": "number"]
+                            ],
+                            "required": ["type"]
+                        ]
+                    ]
+                ],
+                "required": ["operations"]
+            ]
+        )
+    }
+
+    private static func runProposeCanvasPatch(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let context = try loadCanvasToolContext(settings: settings)
+            guard let rawOperations = args["operations"] as? [[String: Any]] else {
+                return .failure("missing 'operations'")
+            }
+            guard !rawOperations.isEmpty else {
+                return .failure("operations must not be empty")
+            }
+            guard rawOperations.count <= 50 else {
+                return .failure("too many operations; max 50")
+            }
+
+            let currentCanvasSessionIds = Set(
+                context.snapshot.memberships
+                    .filter { $0.canvasId == context.canvas.id && $0.visible }
+                    .map { $0.sessionId }
+            )
+            let liveChannelNames = Set(
+                ChannelRegistry.shared.list()
+                    .filter { !$0.name.hasPrefix("__") }
+                    .map { $0.name }
+            )
+            let notesById = Set(
+                summarizeCanvasNotes(context.layout.userElements)
+                    .compactMap { $0["elementId"] as? String }
+            )
+
+            var operations: [[String: Any]] = []
+            for (idx, raw) in rawOperations.enumerated() {
+                let normalized = try normalizeCanvasPatchOperation(
+                    raw,
+                    index: idx,
+                    liveSessionIds: currentCanvasSessionIds,
+                    liveChannelNames: liveChannelNames,
+                    noteElementIds: notesById
+                )
+                operations.append(normalized)
+            }
+
+            let summaryArg = stringValue(args["summary"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let summary = (summaryArg?.isEmpty == false)
+                ? summaryArg!
+                : "Prepared \(operations.count) canvas change\(operations.count == 1 ? "" : "s")."
+
+            return .success([
+                "type": "canvas_patch_proposal",
+                "canvasId": context.canvas.id,
+                "canvasName": context.canvas.name,
+                "summary": summary,
+                "operations": operations,
+                "operationCount": operations.count,
+                "requiresApply": true
+            ])
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
     // MARK: - create_session
 
     private static func createSessionDef() -> ToolDef {
@@ -573,6 +784,175 @@ enum AssistantTools {
             "command": command,
             "note": "Spawn dispatched. Session will appear in get_session_list within a few seconds."
         ])
+    }
+
+    // MARK: - Canvas tool helpers
+
+    private static func loadCanvasToolContext(settings: AssistantSettings) throws -> CanvasToolContext {
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let requested = settings.canvasId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedId = requested.isEmpty ? snapshot.activeCanvasId : requested
+        guard let canvas = snapshot.canvases.first(where: { $0.id == resolvedId }) else {
+            throw toolError("canvas not found or not accessible: \(resolvedId)")
+        }
+        let layout = BoardLayoutStore.shared.load(canvasId: canvas.id)
+        let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: canvas.id)) ?? settings.workspacePath
+        return CanvasToolContext(
+            canvas: canvas,
+            layout: layout,
+            snapshot: snapshot,
+            workspacePath: workspacePath
+        )
+    }
+
+    private static func normalizeCanvasPatchOperation(
+        _ raw: [String: Any],
+        index: Int,
+        liveSessionIds: Set<String>,
+        liveChannelNames: Set<String>,
+        noteElementIds: Set<String>
+    ) throws -> [String: Any] {
+        guard let type = stringValue(raw["type"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !type.isEmpty else {
+            throw toolError("operation \(index) missing type")
+        }
+
+        func sessionId() throws -> String {
+            guard let sid = stringValue(raw["sessionId"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sid.isEmpty else {
+                throw toolError("operation \(index) missing sessionId")
+            }
+            guard liveSessionIds.contains(sid) else {
+                throw toolError("operation \(index) references unknown sessionId: \(sid)")
+            }
+            return sid
+        }
+
+        func channelName() throws -> String {
+            guard let name = stringValue(raw["channelName"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !name.isEmpty else {
+                throw toolError("operation \(index) missing channelName")
+            }
+            guard liveChannelNames.contains(name) else {
+                throw toolError("operation \(index) references unknown channelName: \(name)")
+            }
+            return name
+        }
+
+        func elementId(requiredKnown: Bool) throws -> String {
+            guard let id = stringValue(raw["elementId"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !id.isEmpty else {
+                throw toolError("operation \(index) missing elementId")
+            }
+            if requiredKnown, !noteElementIds.contains(id) {
+                throw toolError("operation \(index) references unknown note elementId: \(id)")
+            }
+            return id
+        }
+
+        func requiredCoordinate(_ key: String) throws -> Double {
+            guard let n = numberValue(raw[key]) else {
+                throw toolError("operation \(index) missing numeric \(key)")
+            }
+            return n
+        }
+
+        var out: [String: Any] = ["type": type]
+        switch type {
+        case "move_session":
+            out["sessionId"] = try sessionId()
+            out["x"] = try requiredCoordinate("x")
+            out["y"] = try requiredCoordinate("y")
+        case "move_channel":
+            out["channelName"] = try channelName()
+            out["x"] = try requiredCoordinate("x")
+            out["y"] = try requiredCoordinate("y")
+        case "show_session":
+            out["sessionId"] = try sessionId()
+            if let x = numberValue(raw["x"]) { out["x"] = x }
+            if let y = numberValue(raw["y"]) { out["y"] = y }
+        case "hide_session":
+            out["sessionId"] = try sessionId()
+        case "add_note":
+            guard let text = stringValue(raw["text"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else {
+                throw toolError("operation \(index) missing text")
+            }
+            out["text"] = text
+            out["x"] = try requiredCoordinate("x")
+            out["y"] = try requiredCoordinate("y")
+        case "update_note":
+            out["elementId"] = try elementId(requiredKnown: !noteElementIds.isEmpty)
+            var hasChange = false
+            if let text = stringValue(raw["text"]) {
+                out["text"] = text
+                hasChange = true
+            }
+            if let x = numberValue(raw["x"]) {
+                out["x"] = x
+                hasChange = true
+            }
+            if let y = numberValue(raw["y"]) {
+                out["y"] = y
+                hasChange = true
+            }
+            guard hasChange else {
+                throw toolError("operation \(index) update_note has no changes")
+            }
+        default:
+            throw toolError("operation \(index) has unsupported type: \(type)")
+        }
+        return out
+    }
+
+    private static func summarizeCanvasNotes(_ elements: [BoardJSONValue]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for value in elements {
+            guard out.count < 50,
+                  let obj = anyValue(from: value) as? [String: Any],
+                  stringValue(obj["type"]) == "text",
+                  (obj["isDeleted"] as? Bool) != true else {
+                continue
+            }
+            let text = stringValue(obj["text"]) ?? stringValue(obj["originalText"]) ?? ""
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            var row: [String: Any] = [
+                "elementId": stringValue(obj["id"]) ?? "",
+                "text": truncate(text, to: 500)
+            ]
+            if let x = numberValue(obj["x"]) { row["x"] = x }
+            if let y = numberValue(obj["y"]) { row["y"] = y }
+            out.append(row)
+        }
+        return out
+    }
+
+    private static func anyValue(from value: BoardJSONValue) -> Any? {
+        guard let data = try? JSONEncoder().encode(value) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func stringValue(_ raw: Any?) -> String? {
+        raw as? String
+    }
+
+    private static func numberValue(_ raw: Any?) -> Double? {
+        let value: Double?
+        if let n = raw as? NSNumber {
+            value = n.doubleValue
+        } else if let d = raw as? Double {
+            value = d
+        } else if let i = raw as? Int {
+            value = Double(i)
+        } else {
+            value = nil
+        }
+        guard let n = value, n.isFinite else { return nil }
+        return n
+    }
+
+    private static func toolError(_ message: String) -> NSError {
+        NSError(domain: "AssistantTools", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     // MARK: - Status helper (mirrors BoardDTO mapping but flat enough for tools)

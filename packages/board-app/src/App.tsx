@@ -16,8 +16,7 @@ import NewChannelDialog from './components/NewChannelDialog'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
-import type { Selection } from './types'
-import type { CanvasList, CanvasScope } from './types'
+import type { CanvasList, CanvasPatchProposal, CanvasPatchRequest, CanvasScope, Selection } from './types'
 import { loadSpawnProvider, spawnProviderLabel } from './preferences'
 import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
@@ -158,6 +157,7 @@ export default function App() {
   const [focusSessionRequest, setFocusSessionRequest] = useState<
     { sessionId: string; bump: number } | null
   >(null)
+  const [canvasPatchRequest, setCanvasPatchRequest] = useState<CanvasPatchRequest | null>(null)
   const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
     {},
   )
@@ -359,6 +359,22 @@ export default function App() {
     },
     [],
   )
+
+  const handleApplyCanvasPatch = useCallback((proposal: CanvasPatchProposal) => {
+    if (proposal.canvasId !== activeCanvasId) {
+      pushToast('error', 'Switch back to that canvas before applying changes')
+      return
+    }
+    setCanvasPatchRequest({ proposal, bump: Date.now() })
+  }, [activeCanvasId, pushToast])
+
+  const handleCanvasPatchApplied = useCallback((result: { ok: boolean; message: string }) => {
+    pushToast(result.ok ? 'success' : 'error', result.message)
+    if (result.ok) {
+      boardState.refresh()
+      void refreshCanvases()
+    }
+  }, [boardState, pushToast, refreshCanvases])
 
   const handleSidebarSelectionChange = useCallback((next: Selection) => {
     setSelection(next)
@@ -595,6 +611,18 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stateChangedTick])
 
+  const boardSessionSignature = useMemo(() => {
+    if (!boardState.state) return ''
+    return boardState.state.sessions.map((s) => s.id).sort().join('|')
+  }, [boardState.state])
+
+  useEffect(() => {
+    if (!boardSessionSignature) return
+    refreshCanvases().catch((err) => {
+      console.warn('[App] refreshCanvases after session update failed:', (err as Error).message)
+    })
+  }, [boardSessionSignature, refreshCanvases])
+
   // 等到所有 storage slot hydrate 完才渲染 Board —— Board 内部用 useRef 一次性
   // 接住 initial 值，hydrate 之前给它就只能拿空状态 / 闪屏。
   const canvasSessionIds = useMemo(() => {
@@ -661,6 +689,8 @@ export default function App() {
             hideFromCanvasRequest={hideFromCanvasRequest}
             bulkVisibilityRequest={bulkVisibilityRequest}
             focusSessionRequest={focusSessionRequest}
+            canvasPatchRequest={canvasPatchRequest}
+            onCanvasPatchApplied={handleCanvasPatchApplied}
             onCountsChange={handleCountsChange}
             templateCache={templateCache}
             onNeedTemplate={ensureTemplate}
@@ -710,8 +740,10 @@ export default function App() {
                   kind: 'assistant',
                   messages: assistantMessages,
                   setMessages: setAssistantMessages,
+                  canvasId: activeCanvasId,
                   canvasName: activeCanvas?.name ?? 'Canvas',
                   workspacePath: activeCanvas?.workspacePath ?? '',
+                  onApplyCanvasPatch: handleApplyCanvasPatch,
                   onSpawned: (cwd) => {
                     setDockOpen(false)
                     setDockSessionId(null)
@@ -742,6 +774,7 @@ export default function App() {
         <Sidebar
           state={boardState.state}
           canvases={canvasList.canvases}
+          activeCanvasId={activeCanvasId}
           sessionCanvasIds={sessionCanvasIds}
           onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
           selection={selection}

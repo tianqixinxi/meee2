@@ -143,6 +143,29 @@ export interface CanvasSessionMembership {
   layout?: { x: number; y: number } | null
 }
 
+export type CanvasPatchOperation =
+  | { type: 'move_session'; sessionId: string; x: number; y: number }
+  | { type: 'move_channel'; channelName: string; x: number; y: number }
+  | { type: 'show_session'; sessionId: string; x?: number; y?: number }
+  | { type: 'hide_session'; sessionId: string }
+  | { type: 'add_note'; text: string; x: number; y: number }
+  | { type: 'update_note'; elementId: string; text?: string; x?: number; y?: number }
+
+export interface CanvasPatchProposal {
+  type: 'canvas_patch_proposal'
+  canvasId: string
+  canvasName?: string
+  summary: string
+  operations: CanvasPatchOperation[]
+  operationCount?: number
+  requiresApply?: boolean
+}
+
+export interface CanvasPatchRequest {
+  proposal: CanvasPatchProposal
+  bump: number
+}
+
 export interface CanvasList {
   canvases: CanvasInfo[]
   activeCanvasId: string

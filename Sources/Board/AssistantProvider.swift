@@ -59,6 +59,7 @@ struct AssistantSettings {
     let model: String         // empty for local → claude default
     let enabledTools: Set<String>?  // nil = all
     let scope: String         // "this-mac" or a meee2 team id
+    let canvasId: String      // current canvas id for canvas-aware tools
     let workspacePath: String // current canvas workspace for local temporary assistant
     let canvasName: String
 }

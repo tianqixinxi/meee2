@@ -388,6 +388,7 @@ function applyFilterMenu(sessions: Session[], f: FilterState): Session[] {
 interface Props {
   state: BoardState | null
   canvases?: CanvasInfo[]
+  activeCanvasId?: string | null
   sessionCanvasIds?: Record<string, string[]>
   selection: Selection
   open: boolean
@@ -425,6 +426,7 @@ interface Props {
 export default function Sidebar({
   state,
   canvases = [],
+  activeCanvasId = null,
   sessionCanvasIds = {},
   selection,
   open,
@@ -484,6 +486,23 @@ export default function Sidebar({
     (s: Session) => titleOverrides[s.id] || s.title,
     [titleOverrides],
   )
+
+  const sessionHoverDetail = useCallback((s: Session, canvasIds: string[], onCanvas: boolean) => {
+    const project = s.project || '(no cwd)'
+    const last = s.lastActivity
+      ? new Date(s.lastActivity).toLocaleString()
+      : 'No activity yet'
+    const canvasState = onCanvas ? 'On current canvas' : 'Not on current canvas'
+    return [
+      displayTitle(s),
+      `${s.pluginDisplayName} · ${originalClientLabel(s)}`,
+      `Status: ${s.status}`,
+      `Project: ${project}`,
+      `Last activity: ${last}`,
+      `Canvases: ${canvasIds.length}`,
+      canvasState,
+    ].join('\n')
+  }, [displayTitle])
 
   const startRename = useCallback((s: Session) => {
     setRenamingSid(s.id)
@@ -902,9 +921,10 @@ export default function Sidebar({
                       ? visibleState.sessions
                       : visibleState.sessions.filter((s) => categoryKey(s) === categoryFilter)
                   if (scopedSessions.length === 0) return null
-                  const anyOnCanvas = scopedSessions.some(
-                    (s) => (onCanvasCounts[s.id] ?? 0) > 0,
-                  )
+                  const anyOnCanvas = scopedSessions.some((s) => {
+                    if (!activeCanvasId) return (onCanvasCounts[s.id] ?? 0) > 0
+                    return (sessionCanvasIds[s.id] ?? []).includes(activeCanvasId)
+                  })
                   const mode: 'show' | 'hide' = anyOnCanvas ? 'hide' : 'show'
                   const scopeLabel = categoryFilter === 'all' ? 'all' : 'category'
                   const sidsArg =
@@ -944,7 +964,7 @@ export default function Sidebar({
                     return title.includes(q) || proj.includes(q) || cwd.includes(q)
                   })
                 }
-                // older（idle ≥ 1h，前端从 lastActivity 派生，见
+                // older（idle >= 1h，前端从 lastActivity 派生，见
                 // types.ts:isOlderSession）只在 groupBy=date 模式下单独折叠
                 // 成 "Older 1h–24h" 区。groupBy=project 时不再切分 —— 用户按
                 // 项目找东西时，stale 的 session 应该跟同项目其它 session
@@ -961,6 +981,9 @@ export default function Sidebar({
                 // - project: 按 cwd basename 分组，组内保留传入顺序，组间按字母序
                 // - date: 按 lastActivity 分到 Today / Yesterday / This week / Older 桶
                 const groupSessions = (list: Session[]): Array<[string, Session[]]> => {
+                  if (filterState.groupBy === 'none') {
+                    return [['Recents', list]]
+                  }
                   if (filterState.groupBy === 'date') {
                     return groupSessionsByDate(list)
                   }
@@ -976,7 +999,11 @@ export default function Sidebar({
 
                 const renderSessionRow = (s: Session) => {
                   const count = onCanvasCounts[s.id] ?? 0
-                  const onCanvas = count > 0
+                  const canvasIds = sessionCanvasIds[s.id] ?? []
+                  const onCanvas = activeCanvasId
+                    ? canvasIds.includes(activeCanvasId)
+                    : count > 0
+                  const hoverDetail = sessionHoverDetail(s, canvasIds, onCanvas)
                   // 选中 session 时 sidebar 仍然展示列表（transcript 浮在画板上），
                   // 当前行用 .is-selected 加视觉反馈。
                   const selected =
@@ -992,6 +1019,8 @@ export default function Sidebar({
                         (menuForSid === s.id ? ' is-menu-open' : '')
                       }
                       style={{ ['--row-accent' as any]: accent }}
+                      title={hoverDetail}
+                      aria-label={hoverDetail}
                       // Right-click 行为 = 点 ⋯ 按钮：打开 SessionRowMenu，定
                       // 位到鼠标坐标。给 menu 一个零宽 synthetic DOMRect，于是
                       // 它的 (top, left) 计算结果直接落在 (clientY+4, clientX)。
@@ -1069,7 +1098,16 @@ export default function Sidebar({
                             onBlur={commitRename}
                           />
                         ) : (
-                          <span className="sidebar-session-row__title">{displayTitle(s)}</span>
+                          <span className="sidebar-session-row__title">
+                            <span className="sidebar-session-row__title-text">
+                              {displayTitle(s)}
+                            </span>
+                            {filterState.groupBy !== 'project' && (
+                              <span className="sidebar-session-row__project">
+                                {projectGroupKey(s)}
+                              </span>
+                            )}
+                          </span>
                         )}
                       </div>
                       <div className="sidebar-session-row__actions">
@@ -1132,7 +1170,7 @@ export default function Sidebar({
                             // 加到 canvas（如果还没在）+ 选中 session 让 dock
                             // 弹出 + 默认展开。saveDockExpanded 让下次再切回
                             // 同样保持展开；TranscriptPanel 会自动 mount。
-                            if (!onCanvas) onAddToCanvas(s.id)
+                            if (!onCanvas || count === 0) onAddToCanvas(s.id)
                             onSelectionChange({ kind: 'session', sessionId: s.id })
                           }}
                           onOpenInOriginal={() => {

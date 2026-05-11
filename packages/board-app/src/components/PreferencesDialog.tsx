@@ -203,8 +203,13 @@ export function PreferencesDialog({ onClose, onSaved }: Props) {
 
 function toolDesc(t: ToolName): string {
   switch (t) {
+    case 'get_canvas_context': return 'read the current canvas layout'
     case 'get_session_list': return 'list sessions on the board'
     case 'get_session_info': return 'fetch a session’s state + transcript'
+    case 'get_session_transcript': return 'read recent session transcript'
+    case 'list_channels': return 'list A2A channels'
+    case 'get_channel_messages': return 'read channel messages'
+    case 'propose_canvas_patch': return 'prepare Apply-only canvas changes'
     case 'create_session': return 'spawn a new claude session'
   }
 }
