@@ -338,11 +338,14 @@ public final class BoardLayoutStore {
     public func ensureDefaults(sessionIds: [String]) -> Snapshot {
         queue.sync {
             var store = cached ?? loadFromDiskLocked()
+            let before = store
             ensureDefaultCanvasesLocked(&store, sessionIds: sessionIds)
-            do {
-                try writeToDiskLocked(store)
-            } catch {
-                MWarn("[BoardLayoutStore] failed to persist default canvases: \(error)")
+            if store != before {
+                do {
+                    try writeToDiskLocked(store)
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist default canvases: \(error)")
+                }
             }
             cached = store
             return snapshotLocked(store)
@@ -768,9 +771,11 @@ public final class BoardLayoutStore {
         let actor = currentContext().userId
         for sessionId in sessionIds {
             if var existing = bySession[sessionId] {
-                existing.visible = true
-                existing.updatedAt = now
-                bySession[sessionId] = existing
+                if !existing.visible {
+                    existing.visible = true
+                    existing.updatedAt = now
+                    bySession[sessionId] = existing
+                }
             } else {
                 bySession[sessionId] = CanvasSession(
                     canvasId: canvasId,

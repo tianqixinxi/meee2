@@ -44,6 +44,25 @@ interface HydratedState {
   unreadSids: Set<string>
 }
 
+const FALLBACK_CANVAS_ID = 'personal-default'
+
+function fallbackCanvasList(): CanvasList {
+  return {
+    activeCanvasId: FALLBACK_CANVAS_ID,
+    defaultCanvasIds: [FALLBACK_CANVAS_ID],
+    memberships: [],
+    canvases: [{
+      id: FALLBACK_CANVAS_ID,
+      name: 'Default canvas',
+      scope: 'personal',
+      isDefault: true,
+      workspacePath: '',
+      ownerUserId: 'local-user',
+      teamId: null,
+    }],
+  }
+}
+
 // -- toast context ---------------------------------------------------------
 
 interface Toast {
@@ -59,7 +78,7 @@ export const useToast = () => useContext(ToastContext)
 
 export default function App() {
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
-  const activeCanvasId = canvasList?.activeCanvasId ?? 'personal-default'
+  const activeCanvasId = canvasList?.activeCanvasId ?? FALLBACK_CANVAS_ID
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
   // meee2 走 HTTP / localStorage 双层实现，meee2 改用 SupabaseCanvasPersistence。
   const persistence = useMemo<CanvasPersistence>(
@@ -72,12 +91,24 @@ export default function App() {
   const [hydrated, setHydrated] = useState<HydratedState | null>(null)
   useEffect(() => {
     let cancelled = false
-    fetchCanvases()
-      .then((list) => { if (!cancelled) setCanvasList(list) })
-      .catch((err) => {
-        console.warn('[App] fetchCanvases failed:', (err as Error).message)
-      })
-    return () => { cancelled = true }
+    let retryTimer: number | null = null
+    const load = (allowFallback: boolean) => {
+      fetchCanvases()
+        .then((list) => { if (!cancelled) setCanvasList(list) })
+        .catch((err) => {
+          console.warn('[App] fetchCanvases failed:', (err as Error).message)
+          if (cancelled) return
+          if (allowFallback) {
+            setCanvasList((current) => current ?? fallbackCanvasList())
+            retryTimer = window.setTimeout(() => load(false), 1500)
+          }
+        })
+    }
+    load(true)
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) window.clearTimeout(retryTimer)
+    }
   }, [])
 
   const refreshCanvases = useCallback(() => {
