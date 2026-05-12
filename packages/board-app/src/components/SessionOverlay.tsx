@@ -17,7 +17,6 @@
 
 import { memo, useEffect, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
-import { sceneCoordsToViewportCoords } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 
 import type { BoardState, Session } from '../types'
@@ -65,10 +64,13 @@ interface OverlayItem {
   elementId: string
   session: Session
   source: string
-  left: number
-  top: number
-  width: number
-  height: number
+  // 场景坐标（scene space）—— 跟 Excalidraw 元素本身一致。viewport 位置/缩放
+  // 由外层 .session-overlay__scene 的 transform 统一应用，pan/zoom 时不会触发
+  // 任何一项 inline style 重写，浏览器只需重新合成（composite）外层一层。
+  sceneX: number
+  sceneY: number
+  sceneW: number
+  sceneH: number
   isCurrentCanvasSession: boolean
 }
 
@@ -83,20 +85,60 @@ export function SessionOverlay({
   onSessionPointerDown,
 }: Props) {
   void _sceneRevision
-  const [overlayTick, setOverlayTick] = useState(0)
+  // overlayTick 仅用于触发 re-render，不读取它的值；setOverlayTick 在 onChange
+  // 里检测到 scene mutation 才递增。
+  const [, setOverlayTick] = useState(0)
   const rafRef = useRef<number | null>(null)
+  const sceneRef = useRef<HTMLDivElement | null>(null)
+  // Pan/zoom 的最新值 —— 直接写到 sceneRef 的 transform，不进 React。
+  // sceneSignature 用来判 elements 是否变了（add/remove/move/resize）。变了
+  // 才走 setOverlayTick 重渲；纯 pan/zoom 不重渲。
+  const lastSceneSigRef = useRef<string>('')
   useEffect(() => {
     if (!excalidrawAPI) return
-    const requestOverlayTick = () => {
+    const applyTransform = () => {
+      const s = excalidrawAPI.getAppState()
+      const zoom = s.zoom?.value || 1
+      // Excalidraw 的 sceneCoordsToViewportCoords 等价于
+      //   viewportXY = (sceneXY + scrollXY) * zoom (+ offsetLeft/Top)
+      // 所以外层 transform 用 translate(scrollX*zoom, scrollY*zoom) scale(zoom)
+      // —— 内层 item 直接用 sceneX/sceneY 作为 left/top 即可。
+      const tx = s.scrollX * zoom
+      const ty = s.scrollY * zoom
+      if (sceneRef.current) {
+        sceneRef.current.style.transform =
+          `translate3d(${tx}px, ${ty}px, 0) scale(${zoom})`
+      }
+    }
+    applyTransform()
+    const computeSceneSig = (): string => {
+      // 只把 session rect 的 id/x/y/w/h/customData.cardSource 拼起来；其他元素
+      // （线、文字）不影响 overlay。length 短，每帧算一次便宜。
+      const parts: string[] = []
+      for (const el of excalidrawAPI.getSceneElements()) {
+        if (el.type !== 'rectangle' || el.isDeleted) continue
+        const sid = parseSessionFromElement(el)
+        if (!sid) continue
+        const src = (el as any).customData?.cardSource ?? ''
+        parts.push(`${el.id}:${el.x}:${el.y}:${el.width}:${el.height}:${src.length}`)
+      }
+      return parts.join('|')
+    }
+    lastSceneSigRef.current = computeSceneSig()
+    const onChange = () => {
+      // pan/zoom 每帧都同步刷到 transform（DOM 写，不进 React）。
+      applyTransform()
+      // 真正的 scene mutation 才走 React。比对签名避免每个 onChange 都重渲。
+      const sig = computeSceneSig()
+      if (sig === lastSceneSigRef.current) return
+      lastSceneSigRef.current = sig
       if (rafRef.current !== null) return
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null
         setOverlayTick((t) => (t + 1) & 0x7fffffff)
       })
     }
-    const unsub = excalidrawAPI.onChange(() => {
-      requestOverlayTick()
-    })
+    const unsub = excalidrawAPI.onChange(onChange)
     return () => {
       try { unsub() } catch { /* noop */ }
       if (rafRef.current !== null) {
@@ -108,7 +150,6 @@ export function SessionOverlay({
 
   if (!excalidrawAPI || !state) return null
 
-  const appState = excalidrawAPI.getAppState()
   const elements = excalidrawAPI.getSceneElements()
 
   const overlayItems: OverlayItem[] = []
@@ -121,23 +162,10 @@ export function SessionOverlay({
     const session = state.sessions.find((s) => s.id === sid)
     if (!session) continue
 
-    // Official util for scene→viewport transform. Tracks pan + zoom correctly.
-    const { x: left, y: top } = sceneCoordsToViewportCoords(
-      { sceneX: el.x, sceneY: el.y },
-      {
-        zoom: appState.zoom,
-        offsetLeft: 0,
-        offsetTop: 0,
-        scrollX: appState.scrollX,
-        scrollY: appState.scrollY,
-      },
-    )
-
-    // Width/height ARE scaled by zoom — cards should zoom with the canvas for
-    // a true native-shape feel. User asked for this in Wave 19.
-    const zoom = appState.zoom?.value || 1
-    const width = (el.width || RECT_W) * zoom
-    const height = (el.height || RECT_H) * zoom
+    // 场景坐标 + 场景宽高。pan/zoom 不在这里算，由外层 .session-overlay__scene
+    // 的 transform: translate(scroll*zoom) scale(zoom) 统一应用。
+    const sceneW = el.width || RECT_W
+    const sceneH = el.height || RECT_H
 
     const overrideSource: string | undefined = (el as any).customData?.cardSource
     // 每张 card 独立 template（per-session），而不是整个 plugin 共用一份。
@@ -155,10 +183,10 @@ export function SessionOverlay({
       elementId: el.id,
       session,
       source,
-      left,
-      top,
-      width,
-      height,
+      sceneX: el.x,
+      sceneY: el.y,
+      sceneW,
+      sceneH,
       isCurrentCanvasSession: currentCanvasSessionIds.has(session.id),
     })
   }
@@ -167,7 +195,7 @@ export function SessionOverlay({
     if (a.isCurrentCanvasSession !== b.isCurrentCanvasSession) {
       return a.isCurrentCanvasSession ? 1 : -1
     }
-    return a.top - b.top || a.left - b.left
+    return a.sceneY - b.sceneY || a.sceneX - b.sceneX
   })
 
   return (
@@ -183,60 +211,78 @@ export function SessionOverlay({
         zIndex: 3,
       }}
     >
-      {overlayItems.map((it) => {
-        // 通知红点条件：
-        //  1. status === 'permissionRequired'（权限阻塞，必须用户点确认）
-        //  2. unreadSids 里有这个 sid（App 层检测到 status 从工作态转到休息态，
-        //     代表 Claude 刚完成一轮回复；用户点 session card 后会清掉）
-        const urgent =
-          it.session.status === 'permissionRequired' ||
-          unreadSids.has(it.session.id)
-        return (
-          <div
-            key={it.elementId}
-            className={
-              'session-overlay__item' +
-              (it.isCurrentCanvasSession
-                ? ' session-overlay__item--current'
-                : ' session-overlay__item--secondary')
-            }
-            onPointerDown={(event) => onSessionPointerDown?.(event, it.elementId, it.session.id)}
-            style={{
-              position: 'absolute',
-              left: it.left,
-              top: it.top,
-              width: it.width,
-              height: it.height,
-              pointerEvents: 'auto',
-            }}
-          >
-            <div style={{
-              pointerEvents: 'none',
-              position: 'relative',
-              // Render card at base 360x260, CSS-scale to match zoom.
-              // Font rendering stays crisp at any zoom level.
-              transform: `scale(${it.width / RECT_W})`,
-              transformOrigin: 'top left',
-              width: RECT_W,
-              height: RECT_H,
-            }}>
-              {it.isCurrentCanvasSession ? (
-                <div className="session-overlay__card-shell">
-                  <MemoCardHost
-                    sessionId={it.session.id}
-                    session={it.session}
-                    board={state}
-                    source={it.source}
-                  />
-                </div>
-              ) : (
-                  <SecondarySessionCard session={it.session} />
-                )}
-              {urgent && <NotificationDot />}
+      {/* Scene container：所有 card 用场景坐标定位，pan/zoom 由这一层 transform
+          统一应用。useEffect 里 onChange 直接写 ref.style.transform，绕开 React
+          render path，浏览器只做一次 composite。 */}
+      <div
+        ref={sceneRef}
+        className="session-overlay__scene"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          transformOrigin: '0 0',
+          // willChange 提示浏览器给这一层独立 layer，pan 时纯 GPU 合成。
+          willChange: 'transform',
+        }}
+      >
+        {overlayItems.map((it) => {
+          // 通知红点条件：
+          //  1. status === 'permissionRequired'（权限阻塞，必须用户点确认）
+          //  2. unreadSids 里有这个 sid（App 层检测到 status 从工作态转到休息态，
+          //     代表 Claude 刚完成一轮回复；用户点 session card 后会清掉）
+          const urgent =
+            it.session.status === 'permissionRequired' ||
+            unreadSids.has(it.session.id)
+          // 内层 card 的 base 尺寸是 RECT_W × RECT_H，rect 实际场景宽高可能不同
+          // （用户 resize 过）。用 scale 把 base 拉到场景宽高；canvas zoom 由
+          // 外层 scene transform 再叠一层。
+          const innerScale = it.sceneW / RECT_W
+          return (
+            <div
+              key={it.elementId}
+              className={
+                'session-overlay__item' +
+                (it.isCurrentCanvasSession
+                  ? ' session-overlay__item--current'
+                  : ' session-overlay__item--secondary')
+              }
+              onPointerDown={(event) => onSessionPointerDown?.(event, it.elementId, it.session.id)}
+              style={{
+                position: 'absolute',
+                left: it.sceneX,
+                top: it.sceneY,
+                width: it.sceneW,
+                height: it.sceneH,
+                pointerEvents: 'auto',
+              }}
+            >
+              <div style={{
+                pointerEvents: 'none',
+                position: 'relative',
+                transform: `scale(${innerScale})`,
+                transformOrigin: 'top left',
+                width: RECT_W,
+                height: RECT_H,
+              }}>
+                {it.isCurrentCanvasSession ? (
+                  <div className="session-overlay__card-shell">
+                    <MemoCardHost
+                      sessionId={it.session.id}
+                      session={it.session}
+                      board={state}
+                      source={it.source}
+                    />
+                  </div>
+                ) : (
+                    <SecondarySessionCard session={it.session} />
+                  )}
+                {urgent && <NotificationDot />}
+              </div>
             </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
     </div>
   )
 }

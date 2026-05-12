@@ -735,6 +735,16 @@
   padding-left: 10px;
 }
 
+/* tooling / running 状态下，内层 .tx-tool-pending 自身已经有醒目的圆角绿色
+ * 边框 + 淡绿底，外层 .tx-entry--live 的 2px 左竖线就成了重复信号——视觉上
+ * 一段 chip 旁挂一根竖线，多余且不平衡。当 live entry 内是 tool-pending chip
+ * 时撤掉外层 border + padding，让 chip 自己说话。"Thinking…" 文本占位
+ * (.tx-text--assistant) 不受影响——它本身没边框，外层竖线还是有意义的。 */
+.tx-entry--live:has(.tx-tool-pending) {
+  border-left: none;
+  padding-left: 0;
+}
+
 @keyframes tx-live-fade-in {
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 1; transform: translateY(0); }

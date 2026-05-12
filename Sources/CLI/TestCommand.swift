@@ -75,6 +75,19 @@ public struct TestCommand {
         }()
         let transcriptTail = redactHome(capTail(transcriptTailRaw, maxBytes: 16 * 1024))
 
+        // ── 计算 transcript 文件 mtime 距 capture 时刻的年龄（秒）。
+        // resolver 的 "transcript-mtime-stale" 兜底依赖这个数 —— replay 时
+        // tmp 文件的 mtime 会被设回 (now - age)，让 fixture 在任何机器、
+        // 任何时刻 replay 都能再现 capture 时的"文件多久没动"语义。
+        let transcriptFileAgeAtCapture: Double? = {
+            guard let path = session.transcriptPath,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let mtime = attrs[.modificationDate] as? Date else {
+                return nil
+            }
+            return Date().timeIntervalSince(mtime)
+        }()
+
         // ── 抓 /tmp/meee2.log 里跟该 sid 有关的 [StateTrace] 行
         let sid8 = String(session.sessionId.prefix(8))
         let logExcerpts = grepLog(path: "/tmp/meee2.log", needle: sid8, max: 100).map(redactHome)
@@ -102,6 +115,7 @@ public struct TestCommand {
             capturedAt: ISO8601DateFormatter().string(from: Date()),
             sessionData: sanitized,
             transcriptTail: transcriptTail,
+            transcriptFileAgeAtCaptureSeconds: transcriptFileAgeAtCapture,
             logExcerpts: logExcerpts,
             expectedResolvedStatus: resolved.rawValue,
             inputCurrentTool: session.currentTool,
@@ -184,6 +198,9 @@ public struct TestCommand {
             .appendingPathComponent("meee2-replay-\(fx.name).jsonl")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try? shiftedTail.data(using: .utf8)?.write(to: tmp)
+        // 把 mtime 设回 capture 时的 staleness，让 resolver 的
+        // "transcript-mtime-stale" 兜底规则能复现 capture 时的判定
+        fx.applyTranscriptFileMtime(at: tmp.path)
 
         var sd = fx.sessionData
         sd.transcriptPath = tmp.path
@@ -443,6 +460,11 @@ public struct TraceFixture: Codable {
     public let sessionData: SessionData
     /// 抓 fixture 时 transcript JSONL 的最后若干行
     public let transcriptTail: String
+    /// capture 时刻距 transcript 文件 mtime 的秒数。replay 时 harness 会把
+    /// 临时文件的 mtime 设回 (now - 此值)，复现"文件多久没动"语义。resolver
+    /// 的 "transcript-mtime-stale" 兜底规则依赖此字段。老 fixture 没这字段
+    /// → nil → replay 时不动 mtime（保持文件刚写完的 fresh mtime）。
+    public let transcriptFileAgeAtCaptureSeconds: Double?
     /// /tmp/meee2.log 里跟此 sid 相关的 [StateTrace] 等日志片段，纯供人读
     public let logExcerpts: [String]?
     /// 抓 fixture 时跑 `TranscriptStatusResolver.resolve(for:)` 得到的结果。
@@ -460,6 +482,7 @@ public struct TraceFixture: Codable {
         case capturedAt = "captured_at"
         case sessionData = "session_data"
         case transcriptTail = "transcript_tail"
+        case transcriptFileAgeAtCaptureSeconds = "transcript_file_age_at_capture_seconds"
         case logExcerpts = "log_excerpts"
         case expectedResolvedStatus = "expected_resolved_status"
         case inputCurrentTool = "input_current_tool"
@@ -472,6 +495,7 @@ public struct TraceFixture: Codable {
         capturedAt: String?,
         sessionData: SessionData,
         transcriptTail: String,
+        transcriptFileAgeAtCaptureSeconds: Double?,
         logExcerpts: [String]?,
         expectedResolvedStatus: String,
         inputCurrentTool: String?,
@@ -482,10 +506,23 @@ public struct TraceFixture: Codable {
         self.capturedAt = capturedAt
         self.sessionData = sessionData
         self.transcriptTail = transcriptTail
+        self.transcriptFileAgeAtCaptureSeconds = transcriptFileAgeAtCaptureSeconds
         self.logExcerpts = logExcerpts
         self.expectedResolvedStatus = expectedResolvedStatus
         self.inputCurrentTool = inputCurrentTool
         self.expectedCurrentToolOverride = expectedCurrentToolOverride
+    }
+
+    /// replay harness 共用：把临时 transcript 文件的 mtime 设回 capture 时
+    /// 看到的 staleness（如果 fixture 里有这个字段）。CLI 的 runReplay 和
+    /// XCTest 的 StateTraceFixtureTests.replay 都调它，避免两边写两遍逻辑。
+    public func applyTranscriptFileMtime(at path: String, now: Date = Date()) {
+        guard let age = transcriptFileAgeAtCaptureSeconds, age > 0 else { return }
+        let mtime = now.addingTimeInterval(-age)
+        try? FileManager.default.setAttributes(
+            [.modificationDate: mtime],
+            ofItemAtPath: path
+        )
     }
 
     /// 把 tail 里每条 `"timestamp":"<ISO8601>"` 平移 (`now - capturedAt`) 秒。
