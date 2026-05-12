@@ -52,11 +52,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         let modifiedAt: TimeInterval
     }
 
-    private struct PendingCountCacheEntry {
-        let at: Date
-        let value: Int
-    }
-
     private let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -76,8 +71,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private var lastSessionUpsertSignatures: [String: String] = [:]
     private var lastPluginUpsertSignatures: [String: String] = [:]
     private var lastPluginTranscriptFingerprints: [String: TranscriptFingerprint] = [:]
-    private var inboxPendingCache: [String: PendingCountCacheEntry] = [:]
-    private let inboxPendingCacheFreshSeconds: TimeInterval = 1.0
 
     // MARK: - Activation
 
@@ -411,12 +404,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         summary["pluginDisplayName"] = pluginInfo?.displayName ?? "Claude Code"
         summary["pluginColor"] = hexColorString(pluginInfo?.themeColor)
 
-        // Inbox pending count (from MessageRouter + ChannelRegistry)
-        let inboxPending = computeInboxPending(sessionId: session.sessionId)
-        if inboxPending > 0 {
-            summary["inboxPending"] = inboxPending
-        }
-
         // Terminal info
         if let termInfo = session.terminalInfo {
             summary["termProgram"] = termInfo.termProgram ?? ""
@@ -724,8 +711,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                     "project": dto.project,
                     "pluginId": dto.pluginId,
                     "pluginDisplayName": dto.pluginDisplayName,
-                    "pluginColor": dto.pluginColor,
-                    "inboxPending": dto.inboxPending
+                    "pluginColor": dto.pluginColor
                 ],
                 startedAt: dto.startedAt,
                 lastActivity: dto.lastActivity,
@@ -788,52 +774,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             backgroundAgents: [],
             latestRecap: nil
         )
-    }
-
-    /// Compute pending inbox count for a session (mirrors BoardDTO.pendingInboxCount)
-    private func computeInboxPending(sessionId: String) -> Int {
-        let now = Date()
-        if let cached = inboxPendingCache[sessionId],
-           now.timeIntervalSince(cached.at) < inboxPendingCacheFreshSeconds {
-            return cached.value
-        }
-
-        let channels = ChannelRegistry.shared.list()
-        // Build channel -> alias mapping for this session
-        var matches: [(channel: String, alias: String)] = []
-        for ch in channels {
-            for m in ch.members where m.sessionId == sessionId {
-                matches.append((ch.name, m.alias))
-            }
-        }
-        let result: Int
-        guard !matches.isEmpty else {
-            result = MessageRouter.shared.peekInbox(sessionId: sessionId).count
-            inboxPendingCache[sessionId] = PendingCountCacheEntry(at: now, value: result)
-            return result
-        }
-
-        var count = 0
-        for (channelName, alias) in matches {
-            let msgs = MessageRouter.shared.listMessages(
-                channel: channelName,
-                statuses: [.pending, .held]
-            )
-            for m in msgs {
-                if m.fromAlias == alias { continue }
-                if m.toAlias == alias || m.toAlias == "*" {
-                    count += 1
-                }
-            }
-        }
-        // Add direct inbox messages
-        count += MessageRouter.shared.peekInbox(sessionId: sessionId).count
-        result = count
-        inboxPendingCache[sessionId] = PendingCountCacheEntry(at: now, value: result)
-        if inboxPendingCache.count > 512 {
-            inboxPendingCache.removeAll(keepingCapacity: true)
-        }
-        return result
     }
 
     private func iso8601String(_ date: Date) -> String {
@@ -948,9 +888,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func executeDesktopCommand(_ command: DesktopCommand, userId: String, machineId: String) {
-        guard command.type == "message_session",
-              let content = command.content,
-              !content.isEmpty else {
+        guard command.type == "message_session" else {
             completeDesktopCommand(
                 commandId: command.id,
                 userId: userId,
@@ -962,28 +900,14 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             return
         }
 
-        injectLocalMessage(sessionKey: command.sessionKey, content: content) { [weak self] result in
-            switch result {
-            case .success:
-                self?.completeDesktopCommand(
-                    commandId: command.id,
-                    userId: userId,
-                    machineId: machineId,
-                    status: "succeeded",
-                    result: ["delivery": "queued_to_local_session"],
-                    error: nil
-                )
-            case .failure(let error):
-                self?.completeDesktopCommand(
-                    commandId: command.id,
-                    userId: userId,
-                    machineId: machineId,
-                    status: "failed",
-                    result: [:],
-                    error: error.localizedDescription
-                )
-            }
-        }
+        completeDesktopCommand(
+            commandId: command.id,
+            userId: userId,
+            machineId: machineId,
+            status: "failed",
+            result: [:],
+            error: "channel/inbox desktop commands are disabled"
+        )
     }
 
     private func injectLocalMessage(sessionKey: String, content: String, completion: @escaping (Result<Void, Error>) -> Void) {

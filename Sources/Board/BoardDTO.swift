@@ -528,19 +528,10 @@ enum BoardDTOBuilder {
         let displayName = info?.displayName ?? session.pluginId
         let colorHex = info.map { hexString(from: $0.themeColor) } ?? "#808080"
 
-        // inbox pending —— 把该 session 作为接收方的 pending/held 消息数量
-        // 包括两种来源：
-        //  1. A2A channel 消息（遍历该 session 参与的频道里 pending/held 消息）
-        //  2. Operator 直接 inject 的消息（写进 ~/.meee2/inbox/<sid>.jsonl，
-        //     由 HookSocketServer 在 Stop hook 时 drain）
         let realSessionId = session.id.hasPrefix("\(session.pluginId)-")
             ? String(session.id.dropFirst("\(session.pluginId)-".count))
             : session.id
-        let channelPending = pendingInboxCount(for: session.id)
-            + (realSessionId == session.id ? 0 : pendingInboxCount(for: realSessionId))
-        let directPending = directInboxCount(for: session.id)
-            + (realSessionId == session.id ? 0 : directInboxCount(for: realSessionId))
-        let pending = channelPending + directPending
+        let pending = 0
 
         // 丰富字段：transcript / currentTool / cost —— 都从底层 SessionStore 拿
         let sessionData = SessionStore.shared.get(session.id) ?? SessionStore.shared.get(realSessionId)

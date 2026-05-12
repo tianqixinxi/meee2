@@ -68,6 +68,8 @@ import {
 import { SessionOverlay } from './SessionOverlay'
 import { Tooltip } from './Tooltip'
 
+const CHANNELS_ENABLED = false
+
 /**
  * Derive a deterministic channel alias from a session's title + id so each
  * session gets a unique, stable alias when a user draws an arrow from the
@@ -864,16 +866,6 @@ interface Props {
   onNeedTemplate: (pluginId: string) => void
   /** Invoked from the <Footer> refresh button. */
   onRefresh: () => void
-  /** Invoked from the <MainMenu> "New channel" item. */
-  onNewChannel: () => void
-  /**
-   * Requests placing a newly created channel's hub at the current viewport
-   * center. Bumped once per create; the request is consumed in an effect that
-   * writes the position into `channelLayoutRef` + persists. We can't just
-   * compute the position in App.tsx because viewport math needs the imperative
-   * Excalidraw API, which only Board owns.
-   */
-  placeChannelRequest: { channelName: string; bump: number } | null
   /** Invoked from the <MainMenu> "Ask AI to spawn…" item (claude -p driven). */
   onAskAndSpawn: () => void
   /** Invoked from the <MainMenu> "Preferences…" item. */
@@ -918,8 +910,6 @@ export default function Board({
   templateCache,
   onNeedTemplate,
   onRefresh,
-  onNewChannel,
-  placeChannelRequest,
   onAskAndSpawn,
   onPreferences,
   onFit,
@@ -928,6 +918,7 @@ export default function Board({
   initial,
 }: Props) {
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
+  const onNewChannel = useCallback(() => {}, [])
   const [arrangeConfirmOpen, setArrangeConfirmOpen] = useState(false)
   const [sceneRevision, setSceneRevision] = useState(0)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
@@ -1841,73 +1832,6 @@ export default function Board({
     reportCountsRef.current(next)
   }, [api, state, bulkVisibilityRequest, persistence, saveLayoutDebounced, trackCanvasSave])
 
-  // -- Place a freshly-created channel frame at the current viewport center --
-  // The dialog calls onCreated(name) in App.tsx, which sets
-  // placeChannelRequest. We consume it here: compute viewport center (same
-  // math as add-to-canvas), write into channelLayoutRef + persist, then
-  // schedule a scene rebuild so the frame materialises at that point. The
-  // scene-rebuild effect above sees a new-channel-name and builds the frame
-  // from channelLayoutRef[name]. DM channels skip this path -- they're
-  // visualised as arrows and don't get a managed frame.
-  useEffect(() => {
-    if (!api || !state || !placeChannelRequest) return
-    if (placeChannelRequest.bump === lastPlaceChannelBumpRef.current) return
-    lastPlaceChannelBumpRef.current = placeChannelRequest.bump
-
-    const name = placeChannelRequest.channelName
-    if (!name || name.startsWith('__')) return
-    if (isDmChannelName(name)) return
-
-    const appState = api.getAppState()
-    const viewW = appState.width ?? 800
-    const viewH = appState.height ?? 600
-    const zoom = appState.zoom.value || 1
-    const cx = -appState.scrollX + viewW / zoom / 2
-    const cy = -appState.scrollY + viewH / zoom / 2
-    // Center the frame on viewport center.
-    const x = Math.round(cx - CHANNEL_FRAME_W / 2)
-    const y = Math.round(cy - CHANNEL_FRAME_H / 2)
-
-    channelLayoutRef.current = {
-      ...channelLayoutRef.current,
-      [name]: { x, y },
-    }
-    saveChannelLayoutDebounced(channelLayoutRef.current)
-
-    // If the frame already exists (e.g. the channel was re-created with the
-    // same name after a short delete), move it and re-scroll into view.
-    const frameEl = api.getSceneElements().find(
-      (el) => el.id === channelHubId(name) && (el as any).type === 'frame',
-    ) as any
-    if (frameEl) {
-      const next = api.getSceneElements().map((el) => {
-        if (el.id === channelHubId(name) && (el as any).type === 'frame') {
-          return { ...el, x, y } as any
-        }
-        return el
-      })
-      api.updateScene({ elements: next as any })
-      setSceneRevision((x) => (x + 1) & 0x7fffffff)
-      api.scrollToContent([frameEl], { fitToContent: false, animate: true })
-    } else {
-      // Build and insert immediately using whatever channel snapshot we
-      // have; the scene-rebuild effect will normalise it once state updates.
-      const ch = state.channels.find((c) => c.name === name)
-      if (ch) {
-        const skeletons = buildChannelHub(ch, x, y)
-        const built = convertToExcalidrawElements(skeletons as any, {
-          regenerateIds: false,
-        })
-        if (built.length > 0) {
-          const next = [...api.getSceneElements(), ...built]
-          api.updateScene({ elements: next as any })
-          setSceneRevision((x) => (x + 1) & 0x7fffffff)
-          api.scrollToContent([built[0]], { fitToContent: false, animate: true })
-        }
-      }
-    }
-  }, [api, state, placeChannelRequest, saveChannelLayoutDebounced])
-
   // -- Focus session card from sidebar click -----------------------------
   useEffect(() => {
     if (!api || !state || !focusSessionRequest) return
@@ -2815,7 +2739,7 @@ export default function Board({
       // channel: if a session has multiple rects spread across different
       // frames, the lexically smallest channel name wins so the choice is
       // deterministic.
-      {
+      if (CHANNELS_ENABLED) {
         const frameSig = frameMembershipSignature(elements)
         const frameMembershipChanged = frameSig !== prevFrameMembershipSigRef.current
         prevFrameMembershipSigRef.current = frameSig
@@ -2913,7 +2837,7 @@ export default function Board({
       // Detect every user-drawn arrow whose start AND end bind to session
       // rects -> ensure a `dm-<a>-<b>` channel exists with those two
       // members. When the arrow is deleted, delete the channel.
-      {
+      if (CHANNELS_ENABLED) {
         const dmSig = dmStructureSignature(elements)
         const dmStructureChanged = dmSig !== prevDmStructureSigRef.current
         prevDmStructureSigRef.current = dmSig
@@ -3001,7 +2925,7 @@ export default function Board({
       //   - frame 出现且 channel 也存在 → 不动（创建路径走 NewChannelDialog）
       //   - frame 消失但 channel 还在 → 用户按 Delete 删掉了 frame → 调
       //     deleteChannel 让 backend 同步删，否则下一次 scene 重建又冒回来
-      {
+      if (CHANNELS_ENABLED) {
         const presentChannelFrames = new Set<string>()
         for (const el of elements) {
           if ((el as any).type !== 'frame' || (el as any).isDeleted) continue
@@ -3318,9 +3242,6 @@ export default function Board({
           <MainMenu.Item onSelect={onPreferences} icon={<PlusSquareIcon />}>
             Board Settings…
           </MainMenu.Item>
-          <MainMenu.Item onSelect={onNewChannel} icon={<PlusSquareIcon />}>
-            New channel
-          </MainMenu.Item>
           <MainMenu.Item onSelect={onFit} icon={<FitIcon />}>
             Fit to content
           </MainMenu.Item>
@@ -3381,7 +3302,7 @@ export default function Board({
           确认只有 MainMenu/Footer/renderTopRightUI 三个公开口子），所以
           走 React Portal 直接 attach 到 toolbar DOM 节点，是目前唯一
           能做到"加一个图标按钮跟 rectangle/ellipse 同列"的办法。 */}
-      {toolbarRowEl && createPortal(
+      {CHANNELS_ENABLED && toolbarRowEl && createPortal(
         <>
           {/* className 跟 native shape tool 一致：`ToolIcon ToolIcon_size_medium`。
               不加 `ToolIcon_type_floating` —— 那条会让 .ToolIcon__icon 套一个

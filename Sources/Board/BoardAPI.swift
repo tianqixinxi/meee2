@@ -124,12 +124,8 @@ enum BoardAPI {
             ))
         }
         let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
-        deliverMatchedSpawnPrompts(matchedSpawnIntents)
-        // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
-        // 不在 UI 里显示，保持 channel 列表干净
-        let channels = ChannelRegistry.shared.list()
-            .filter { !$0.name.hasPrefix("__") }
-            .map { BoardDTOBuilder.channelDTO($0) }
+        dropMatchedSpawnPrompts(matchedSpawnIntents)
+        let channels: [ChannelDTO] = []
         _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
         let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
         let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
@@ -152,22 +148,11 @@ enum BoardAPI {
         return formatter.date(from: raw)
     }
 
-    private static func deliverMatchedSpawnPrompts(_ matches: [BoardLayoutStore.MatchedSpawnIntent]) {
+    private static func dropMatchedSpawnPrompts(_ matches: [BoardLayoutStore.MatchedSpawnIntent]) {
         for match in matches {
             guard let prompt = match.intent.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !prompt.isEmpty else { continue }
-            do {
-                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: match.sessionId)
-                _ = try MessageRouter.shared.send(
-                    channel: channelName,
-                    fromAlias: "operator",
-                    toAlias: "session",
-                    content: prompt,
-                    injectedByHuman: true
-                )
-            } catch {
-                MWarn("[BoardAPI] failed to inject spawn initial prompt sid=\(match.sessionId.prefix(8)): \(error)")
-            }
+            MWarn("[BoardAPI] dropping spawn initial prompt for sid=\(match.sessionId.prefix(8)); channel-based injection is disabled")
         }
     }
 
@@ -775,165 +760,25 @@ enum BoardAPI {
     }
 
     /// POST /api/sessions/:id/inject
-    /// 直接向某个 session 的 inbox 注入一条 human 消息。消息会在下一个
-    /// Stop hook 到达时由 HookSocketServer 拦截并塞给 Claude 作为下一轮输入。
-    /// Body: {"content": "..."}; 响应: {"message": MessageDTO}
+    /// Phase 0 disables channel/inbox-based session messaging. Workroom/Handoff
+    /// will introduce an explicit session-control path later.
     static func injectToSession(_ req: HttpRequest) -> HttpResponse {
-        guard let sid = req.params[":id"] else {
-            return errorResponse("bad_request", "missing session id", status: 400)
-        }
-        guard let json = parseJSONBody(req) else {
-            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
-        }
-        guard let content = json["content"] as? String, !content.isEmpty else {
-            return errorResponse("bad_request", "missing or empty 'content'", status: 400)
-        }
-
-        // Desktop synthetic session（PluginManager 不知道、只剩 metadata）没法
-        // 立刻 deliver——子进程已退，没 Stop hook 可以触发 inline drain。明确报错。
-        if resolveDesktopMetadataSid(sid) != nil
-            && resolvePluginSession(sid) == nil {
-            return errorResponse(
-                "unsupported_for_desktop",
-                "inject is only supported for live CLI / hook-driven sessions; this Desktop session has no running subprocess to deliver to",
-                status: 400
-            )
-        }
-
-        guard let session = resolvePluginSession(sid) else {
-            return errorResponse("not_found", "session not found: \(sid)", status: 404)
-        }
-
-        let targetSessionId = inboxSessionId(for: session)
-
-        // 统一路径（方案 B 全量）：operator 被看作 per-session 的一个
-        // 普通 channel member，走 MessageRouter.send() → audit → deliverPending
-        // → inbox 写入；resting session 的 Ghostty push 由 deliverPending
-        // 的钩子自动触发（见 MessageRouter.pushToRestingSessionIfNeeded）。
-        do {
-            let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
-            let written = try MessageRouter.shared.send(
-                channel: channelName,
-                fromAlias: "operator",
-                toAlias: "session",
-                content: content,
-                injectedByHuman: true
-            )
-            let sessionData = SessionStore.shared.get(targetSessionId)
-            let status = sessionData?.status.rawValue ?? session.status.rawValue
-            NSLog("[inject] via channel=\(channelName) msg=\(written.id) sid=\(targetSessionId.prefix(8)) status=\(status)")
-            BoardServer.shared.broadcastStateChanged()
-
-            // Delivery semantics 提示：Desktop session 没 terminal，立刻
-            // typeIn 走不通——只能等 Stop hook 把 inbox drain 进 block-
-            // decision reason。session 处于 idle 时尤其需要提醒：Stop 不
-            // 会自己 fire，消息会一直 queued 直到用户在 Desktop 里继续。
-            let isDesktop = ClaudeDesktopActivator.isDesktopBacked(
-                sid: targetSessionId,
-                transcriptPath: sessionData?.transcriptPath
-            )
-            let delivery: String? = isDesktop ? "queued_until_next_turn" : nil
-
-            return jsonResponse(
-                MessageEnvelope(
-                    message: BoardDTOBuilder.messageDTO(written),
-                    delivery: delivery
-                ),
-                status: 201,
-                reason: "Created"
-            )
-        } catch {
-            return errorResponse("bad_request", error.localizedDescription, status: 400)
-        }
+        errorResponse(
+            "channel_disabled",
+            "channel/inbox session messaging is disabled; use terminal/editor jump-back until Workroom/Handoff lands",
+            status: 410
+        )
     }
 
     /// POST /api/sessions/:id/push-now
-    /// 显式 "Push to Desktop" —— 把 content（如有）写进 inbox，然后立刻调
-    /// AgentInboxShell.pushDesktopNow 把 inbox 通过 AppleScript keystroke
-    /// 注入 Claude.app 当前 focused 输入框。会抢焦点，所以必须用户主动触
-    /// 发（webui Dock 的 ⚡ 按钮）—— 默认 inject path 不走这条。
-    ///
-    /// Body: {"content": "..."}（可空：如果 inbox 已有 pending msg，content
-    ///                         为空就只 drain 现有的）
-    /// 响应: {"delivered": N, "message": MessageDTO?, "error": "..."?}
+    /// Disabled with Phase 0 channel removal. The future Workroom/Handoff
+    /// control API must not reuse the channel inbox model.
     static func pushToDesktopNow(_ req: HttpRequest) -> HttpResponse {
-        guard let sid = req.params[":id"] else {
-            return errorResponse("bad_request", "missing session id", status: 400)
-        }
-        guard let session = resolvePluginSession(sid) else {
-            return errorResponse("not_found", "session not found: \(sid)", status: 404)
-        }
-        let targetSessionId = inboxSessionId(for: session)
-        let sessionData = SessionStore.shared.get(targetSessionId)
-        let isDesktop = ClaudeDesktopActivator.isDesktopBacked(
-            sid: targetSessionId,
-            transcriptPath: sessionData?.transcriptPath
+        errorResponse(
+            "channel_disabled",
+            "desktop inbox push is disabled with the channel capability; use jump-back until Workroom/Handoff lands",
+            status: 410
         )
-        guard isDesktop else {
-            return errorResponse(
-                "not_desktop",
-                "push-now only applies to Claude Desktop sessions; CLI sessions deliver immediately via terminal typeIn",
-                status: 400
-            )
-        }
-
-        // 可选 content：写 inbox。空 content = 只 drain 现有 pending。
-        var injectedMsg: MessageDTO?
-        if let json = parseJSONBody(req),
-           let content = json["content"] as? String, !content.isEmpty {
-            do {
-                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
-                let written = try MessageRouter.shared.send(
-                    channel: channelName,
-                    fromAlias: "operator",
-                    toAlias: "session",
-                    content: content,
-                    injectedByHuman: true
-                )
-                injectedMsg = BoardDTOBuilder.messageDTO(written)
-            } catch {
-                return errorResponse("bad_request", error.localizedDescription, status: 400)
-            }
-        }
-
-        // Drain 通过 keystroke。同步阻塞这条 HTTP request 的 thread —— 用
-        // semaphore 等 Task 完成。webui 用户体验：点 ⚡ 后 ~2s 看到 toast，
-        // 期间 Claude.app 弹起 + 输入框出现文字 + 自动回车。
-        let sem = DispatchSemaphore(value: 0)
-        var delivered = 0
-        var error: String?
-        Task {
-            let result = await AgentInboxShell.shared.pushDesktopNow(sessionId: targetSessionId)
-            delivered = result.delivered
-            error = result.error
-            sem.signal()
-        }
-        // 最多等 15s（resume + activate + keystroke + tail delay 约 2s/条，
-        // 留余量）。超时返回 partial 结果让 user 知道。
-        _ = sem.wait(timeout: .now() + 15.0)
-
-        BoardServer.shared.broadcastStateChanged()
-        // 把 error string 翻成 webui 可路由的 errorCode：
-        //   accessibility_denied → webui 提示 + 一键开 System Settings
-        //   claude_not_running   → 用户开 Claude.app 重试
-        //   其它                  → 普通 toast
-        let errorCode: String? = {
-            guard let err = error else { return nil }
-            if err.contains("Accessibility") || err.contains("不允许发送按键") {
-                return "accessibility_denied"
-            }
-            if err.contains("Claude.app is not running") || err.contains("claude_not_running") {
-                return "claude_not_running"
-            }
-            return "keystroke_failed"
-        }()
-        let payload = PushNowResponse(
-            delivered: delivered,
-            message: injectedMsg,
-            error: error,
-            errorCode: errorCode
-        )
-        return jsonResponse(payload)
     }
 
     /// POST /api/system/open-accessibility-settings

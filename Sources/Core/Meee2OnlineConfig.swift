@@ -12,7 +12,7 @@ enum Meee2OnlineConfig {
         #if DEBUG
         return URL(string: "http://localhost:3000")!
         #else
-        return URL(string: "https://meee2-online-meee1.vercel.app")!
+        return URL(string: "https://www.meee2.com")!
         #endif
     }
 

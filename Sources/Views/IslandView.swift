@@ -47,8 +47,6 @@ public struct IslandView: View {
     @State private var expandMode: ExpandMode = .manual
     @State private var isClosing = false  // 正在关闭动画中，保持内容显示
 
-    /// 右键 "Connect to..." 发起的 A2A 连接请求 —— 驱动 A2AConnectSheet
-    @State private var connectRequest: ConnectRequest?
     @State private var autoCloseTimer: Timer?
     @State private var carouselTimer: Timer?
     @State private var carouselIndex: Int = 0
@@ -305,11 +303,6 @@ public struct IslandView: View {
                     return
                 }
                 openExpanded()
-            }
-        }
-        .sheet(item: $connectRequest) { req in
-            A2AConnectSheet(request: req) {
-                connectRequest = nil
             }
         }
     }
@@ -609,11 +602,7 @@ public struct IslandView: View {
                                         PluginSessionRowView(
                                             session: session,
                                             pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
-                                            onOpenTerminal: { statusManager.activateTerminal(for: session) },
-                                            otherActiveSessions: visibleFilteredSessions.filter { $0.id != session.id },
-                                            onConnectRequest: { target in
-                                                connectRequest = ConnectRequest(fromSession: session, toSession: target)
-                                            }
+                                            onOpenTerminal: { statusManager.activateTerminal(for: session) }
                                         )
                                     }
 
@@ -651,11 +640,7 @@ public struct IslandView: View {
                                                 PluginSessionRowView(
                                                     session: session,
                                                     pluginInfo: statusManager.getPluginInfo(for: session.pluginId),
-                                                    onOpenTerminal: { statusManager.activateTerminal(for: session) },
-                                                    otherActiveSessions: visibleFilteredSessions.filter { $0.id != session.id },
-                                                    onConnectRequest: { target in
-                                                        connectRequest = ConnectRequest(fromSession: session, toSession: target)
-                                                    }
+                                                    onOpenTerminal: { statusManager.activateTerminal(for: session) }
                                                 )
                                             }
                                         }

@@ -1,8 +1,6 @@
 import Foundation
 
-/// 幂等地把 meee2 的 MCP server 写进 Claude 和 Codex 的全局 MCP 配置，
-/// 让任何 Claude Code / Codex session 都能原生调 `send_message` /
-/// `read_inbox` 等 tool。应用启动时调一次，无变化就是个 noop。
+/// 幂等地把 meee2 的 MCP server 写进 Claude 和 Codex 的全局 MCP 配置。
 ///
 /// 为什么不另外写一个 `~/.claude/mcp.json`：Claude Code 目前的 user-wide
 /// MCP 配置就是 `~/.claude.json` 里那个 `mcpServers` 顶级字段；单独的
@@ -18,19 +16,9 @@ public final class MCPConfigManager {
     private let subdir = "mcp-meee2"
 
     /// meee2 MCP server 暴露的全部 tool 名（必须跟 Bridge/mcp-meee2/server.js
-    /// 里 TOOLS 数组里的 name 字段保持同步——加新 tool 时两边都要改）。
-    /// 这些名字按 Claude Code 的 MCP 命名约定 `mcp__<server>__<tool>`，会被
-    /// 写进 `~/.claude/settings.json` 的 permissions.allow，让 agent 调用
-    /// 这些 tool 时不再触发 PermissionRequest 弹框（agent 间自治协作的关键
-    /// 一公里——否则每次 send_message 都要人审批）。
+    /// 里 TOOLS 数组里的 name 字段保持同步）。
     private let mcpToolNames: [String] = [
-        "mcp__meee2__send_message",
-        "mcp__meee2__list_channels",
-        "mcp__meee2__list_sessions",
-        "mcp__meee2__read_inbox",
-        "mcp__meee2__create_channel",
-        "mcp__meee2__add_member",
-        "mcp__meee2__leave_channel"
+        "mcp__meee2__list_sessions"
     ]
 
     private var configPath: URL {

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// meee2 MCP server — exposes A2A messaging to Claude/Codex sessions as
-// native tools. Transport is stdio (the host app spawns us as a subprocess and
-// speaks JSON-RPC over stdin/stdout).
+// meee2 MCP server — exposes read-only local session discovery to Claude/Codex
+// sessions as native tools. Transport is stdio.
 //
 // All tools are thin HTTP shims over the local BoardServer (127.0.0.1:9876
 // by default; override with MEEE2_API_URL). If the BoardServer isn't
@@ -23,157 +22,14 @@ const MAX_PORT = 9976
 let cachedAPI = null
 
 // ─── tool schemas ─────────────────────────────────────────────────────────
-// Descriptions are the first thing the model sees when deciding whether to
-// call; be specific about when to use, what fromAlias means, and how
-// broadcast works.
 const TOOLS = [
-  {
-    name: 'send_message',
-    description:
-      'Send a message on a meee2 A2A channel. `fromAlias` must be your own ' +
-      'session\'s alias in that channel (see list_channels). `toAlias` is ' +
-      'either a specific member alias or "*" for broadcast to everyone ' +
-      'else. On auto-mode channels the message is delivered immediately; ' +
-      'on intercept/paused channels it sits pending for human approval.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        channel: { type: 'string', description: 'Channel name.' },
-        fromAlias: {
-          type: 'string',
-          description: 'Your own alias on this channel.',
-        },
-        toAlias: {
-          type: 'string',
-          description: 'Recipient alias, or "*" to broadcast.',
-        },
-        content: { type: 'string', description: 'Message body.' },
-        replyTo: {
-          type: 'string',
-          description: 'Optional message id this is a reply to.',
-        },
-      },
-      required: ['channel', 'fromAlias', 'toAlias', 'content'],
-    },
-  },
-  {
-    name: 'list_channels',
-    description:
-      'List every non-operator meee2 channel with its mode, members ' +
-      '(alias + sessionId), and pending message count. Use this first to ' +
-      'find your own alias before calling send_message.',
-    inputSchema: { type: 'object', properties: {} },
-  },
   {
     name: 'list_sessions',
     description:
       'List every agent session meee2 currently tracks — id, title, ' +
       'project cwd, status. Useful to find a target session before asking ' +
-      'to add it to a channel.',
+      'the user to jump back to the real terminal or editor.',
     inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'read_inbox',
-    description:
-      'Read pending A2A messages addressed to a given session (i.e. the ' +
-      'union of delivered direct-inbox messages plus channel-pending messages ' +
-      'where the session is a member and the sender is someone else). If ' +
-      'sessionId is omitted, meee2 resolves the current Claude/Codex session ' +
-      'from environment variables. For Codex current sessions, direct inbox ' +
-      'messages are consumed by default because Codex has no Claude Stop hook.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        sessionId: {
-          type: 'string',
-          description:
-            'Optional full session id, or a prefix meee2 can resolve uniquely.',
-        },
-        consume: {
-          type: 'boolean',
-          description:
-            'When true, delivered direct-inbox messages are drained after reading. Defaults to true for the current Codex thread, false otherwise.',
-        },
-      },
-    },
-  },
-  {
-    name: 'create_channel',
-    description:
-      'Create a new A2A channel for ad-hoc multi-agent collaboration. Names ' +
-      'must match [a-z0-9_-]{1,64}. Channel starts empty — call add_member ' +
-      'next to bring sessions in. Use this when you need a fresh coordination ' +
-      'space (e.g. "the four of us reviewing PR #42") rather than reusing an ' +
-      'existing topic-mismatched channel. ' +
-      'NOTE: there is no delete_channel from MCP — channel cleanup is human-only.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: {
-          type: 'string',
-          description: 'Channel name (lowercase, digits, _ -, ≤ 64 chars).',
-        },
-        mode: {
-          type: 'string',
-          enum: ['auto', 'intercept', 'paused'],
-          description:
-            'auto: deliver immediately (default). intercept: hold for human ' +
-            'approval. paused: hold indefinitely.',
-        },
-        description: {
-          type: 'string',
-          description:
-            'Short explanation of what this channel is for. Visible in UI + ' +
-            'list_channels; helps other agents decide whether to join.',
-        },
-      },
-      required: ['name'],
-    },
-  },
-  {
-    name: 'add_member',
-    description:
-      'Add a session as a member of an existing channel. The added session ' +
-      'will receive an orientation message (synthetic operator → session) ' +
-      'announcing membership + teammates + how to use send_message; existing ' +
-      'members get a "<alias> joined" heads-up. So this IS visible to ' +
-      'everyone — use it when you actually want the session aware of the ' +
-      'collaboration. Pick an alias that disambiguates the session within ' +
-      'this channel (e.g. project basename + sid prefix).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        channel: { type: 'string', description: 'Existing channel name.' },
-        alias: {
-          type: 'string',
-          description:
-            'Alias for the joining session within this channel ([a-z0-9_-]{1,64}). ' +
-            'Must be unique within the channel.',
-        },
-        sessionId: {
-          type: 'string',
-          description:
-            'Full session id, or a unique prefix (resolve via list_sessions).',
-        },
-      },
-      required: ['channel', 'alias', 'sessionId'],
-    },
-  },
-  {
-    name: 'leave_channel',
-    description:
-      'Voluntarily leave a channel under your alias. Remaining members will ' +
-      'be notified ("<alias> left"). Use this when the collaboration is done ' +
-      'or no longer relevant to your task. NOTE: you can only remove ' +
-      'YOURSELF — there is no kick-other-agent operation from MCP.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        channel: { type: 'string', description: 'Channel name.' },
-        alias: { type: 'string', description: 'Your own alias on this channel.' },
-      },
-      required: ['channel', 'alias'],
-    },
   },
 ]
 
@@ -450,48 +306,16 @@ async function handleReadInbox(args) {
 
 // ─── server plumbing ──────────────────────────────────────────────────────
 
-// `instructions` 是 MCP 协议在 InitializeResult 里返回的 system-level hint
-// (spec 2024-11-05+)。Claude Code 把它合进 system prompt context，让 agent
-// 知道这套工具的存在意义和何时该主动用。没这段提示的话，Claude 默认是
-// 反应式的——只在用户明确问"帮我看一下 channel"才用工具，永远不会主动
-// 检查自己的 inbox 或回应别的 agent。
 const INSTRUCTIONS = [
-  'You are a member of a meee2 multi-agent runtime. Other Claude/Codex sessions',
-  '(and the operator / human user) can send you messages over named',
-  'channels via the seven tools below.',
-  '',
-  'READ / OBSERVE:',
-  '  - read_inbox     — pending messages addressed to you',
-  '  - list_channels  — all channels + members + your alias in each',
-  '  - list_sessions  — all live Claude sessions',
-  '',
-  'SEND:',
-  '  - send_message   — message a teammate (or "*" broadcast) on a channel',
-  '',
-  'BUILD COLLABORATION (constructive only — by design there is NO',
-  'delete_channel and NO remove_member; channel cleanup and kicking are',
-  'human-only operations):',
-  '  - create_channel — open a fresh coordination space',
-  '  - add_member     — pull a session in (they get a system orientation msg)',
-  '  - leave_channel  — voluntarily exit (only your own alias)',
+  'meee2 exposes local AI coding session visibility.',
+  'Available tool:',
+  '  - list_sessions — all live local Claude/Codex/etc. sessions tracked by meee2.',
   '',
   'Behavior expectations:',
-  '  - At the start of any new turn, briefly call read_inbox with no sessionId',
-  '    to see if you have unconsumed messages. If yes, prioritize processing',
-  '    them before continuing your previous task — incoming agent/operator',
-  '    messages are the highest-priority signal you can get.',
-  '  - When asked to coordinate with another agent or "send to <alias>", use',
-  '    send_message rather than asking the user to do it manually.',
-  '  - When you finish a unit of work that another agent might be waiting on,',
-  '    proactively send a status message on the relevant channel.',
   '  - If the user references "the other session" / "that session" / a',
   '    project name, use list_sessions to disambiguate before guessing.',
-  '  - When you spin up a new collaboration (e.g. "let me get session X to',
-  '    review this"), prefer create_channel + add_member over hand-waving',
-  '    "please tell session X". Adding a session triggers an orientation',
-  '    message so they immediately know about the channel + you.',
-  '  - When a collaboration ends or you no longer need to be in a channel,',
-  '    leave_channel keeps the noise down for everyone else.',
+  '  - Channel/inbox messaging is disabled. Do not try to send messages',
+  '    between sessions; ask the user to jump back to the real terminal/editor.',
   '',
   'Do not announce that you are about to use these tools — just use them.',
   'Do not ask the user "what do you want me to do" before calling the tools',
@@ -515,26 +339,8 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     let result
     switch (name) {
-      case 'send_message':
-        result = await handleSendMessage(args)
-        break
-      case 'list_channels':
-        result = await handleListChannels()
-        break
       case 'list_sessions':
         result = await handleListSessions()
-        break
-      case 'read_inbox':
-        result = await handleReadInbox(args)
-        break
-      case 'create_channel':
-        result = await handleCreateChannel(args)
-        break
-      case 'add_member':
-        result = await handleAddMember(args)
-        break
-      case 'leave_channel':
-        result = await handleLeaveChannel(args)
         break
       default:
         throw new Error(`unknown tool: ${name}`)

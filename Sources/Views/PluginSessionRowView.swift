@@ -1,6 +1,5 @@
 import SwiftUI
 import Meee2PluginKit
-import Meee2CommKit
 
 /// Plugin Session 行视图 - 展开状态下的单个 plugin session 显示
 /// 固定高度 56px（增加以显示 last message）
@@ -8,10 +7,6 @@ struct PluginSessionRowView: View {
     let session: PluginSession
     let pluginInfo: (displayName: String, icon: String, themeColor: Color)?
     let onOpenTerminal: () -> Void
-    /// 其他活跃 session（用于右键 "Connect to..." 列表）；默认为空以保持旧调用点兼容
-    var otherActiveSessions: [PluginSession] = []
-    /// 用户点击某个目标 session 时回调 —— 父视图负责打开 A2AConnectSheet
-    var onConnectRequest: ((PluginSession) -> Void)?
 
     @State private var isHovered = false
 
@@ -56,17 +51,6 @@ struct PluginSessionRowView: View {
     /// 第二行显示的消息：优先 lastMessage，fallback subtitle
     private var displayMessage: String? {
         session.lastMessage ?? session.subtitle
-    }
-
-    /// A2A inbox 待取消息数（0 时不显示徽章）
-    private var inboxCount: Int {
-        let direct = MessageRouter.shared.peekInbox(sessionId: session.id).count
-        let prefix = "\(session.pluginId)-"
-        if session.id.hasPrefix(prefix) {
-            let raw = String(session.id.dropFirst(prefix.count))
-            return direct + MessageRouter.shared.peekInbox(sessionId: raw).count
-        }
-        return direct
     }
 
     var body: some View {
@@ -150,13 +134,6 @@ struct PluginSessionRowView: View {
                                 .foregroundColor(.green.opacity(0.8))
                         }
 
-                        // A2A 收件箱徽章：仅在有待取消息时显示
-                        let count = inboxCount
-                        if count > 0 {
-                            Text("📨\(count)")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.white.opacity(0.75))
-                        }
                     }
                 }
             }
@@ -179,32 +156,8 @@ struct PluginSessionRowView: View {
         //     NSLog("[StateTrace][island-row] sid=\(session.id.prefix(8)) CHANGE → \(newValue.rawValue) displayName=\(newValue.displayName) color=\(colorName(newValue))")
         // }
         .contextMenu {
-            if otherActiveSessions.isEmpty {
-                // 没有其他 session 时，展示一个 disabled 提示
-                Text("Connect to... (no other sessions)")
-            } else {
-                Menu("Connect to...") {
-                    ForEach(otherActiveSessions, id: \.id) { other in
-                        Button(otherLabel(other)) {
-                            onConnectRequest?(other)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
             Button("Open terminal") { onOpenTerminal() }
         }
-    }
-
-    /// 子菜单项 label: "<title> · <short cwd>"
-    private func otherLabel(_ other: PluginSession) -> String {
-        let title = other.title
-        if let cwd = other.cwd, !cwd.isEmpty {
-            return "\(title) · \(shortCwd(cwd))"
-        }
-        return title
     }
 
     /// 把 "/Users/<user>/..." 折叠成 "~/..."
