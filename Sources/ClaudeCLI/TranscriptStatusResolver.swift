@@ -264,6 +264,27 @@ public enum TranscriptStatusResolver {
         }
 
         guard let last = findLastRelevantEntry(tail: tail) else {
+            // Step 1.5: 兜底——transcript tail 4KB 里找不到 user/assistant/system
+            // entry（末尾全是 last-prompt / hook_success 这类 meta 行，或文件被
+            // 截断在单条超长 entry 中间，三类 type 全 miss）。
+            //
+            // 典型病例：claude --resume <oldSid> 启动一个进程，但 disclaimer /
+            // resume 阶段卡住，Claude 没真正写新 transcript；hook 长期没新事件，
+            // SessionMonitor 只靠 PID 心跳刷 lastActivity（不动 status，注释见
+            // ClaudePlugin.swift:986-989），过期的 hookStatus（active/working）
+            // 就一直顶着 → UI 假亮。
+            //
+            // 守卫：transcript 文件 mtime 老于阈值 + hookStatus 是 working 态时
+            // 降级为 idle。文件 mtime 是"transcript 最后被写入的时刻"——hook 在
+            // working 态意味着 Claude 应该正在写 token / tool result，文件却长
+            // 期不动只能解释为 zombie session。
+            if let path = transcriptPath,
+               _workingHooks.contains(hookStatus),
+               let mtime = transcriptFileMtime(path: path),
+               Date().timeIntervalSince(mtime) > _staleTranscriptFileThreshold {
+                NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → idle (no-relevant-entry+transcript-mtime-stale(>\(Int(_staleTranscriptFileThreshold))s))")
+                return .idle
+            }
             NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no relevant entry)")
             return hookStatus
         }
@@ -498,6 +519,24 @@ private let _midTurnFreshnessWindow: TimeInterval = 30.0
 /// 不再 fallback 到 .active。30s 跟 mid-turn 窗对齐 —— first-token 一般
 /// 都在这之内，超过就该当 hook 是真相。
 private let _userRestingHandoffWindow: TimeInterval = 30.0
+
+/// "transcript 文件 mtime 多久没动就视为 zombie" 的阈值。仅在 resolver 找不到
+/// 任何 user/assistant/system entry（"no relevant entry" 兜底）+ hook 还停在
+/// working 态时配合使用。30 分钟：远超过任何合法 long-running 工具调用 / extended
+/// thinking 窗口（_staleSystemTailThreshold=90s, _staleAssistantTailThreshold=60s
+/// 这两个看 transcript 内最后 entry 年龄；本阈值看的是文件 mtime，更粗但更稳）。
+/// 不能取太小：早期 capture 时该值若小于"capture → swift test 之间正常间隔"会
+/// 在 replay 时误触发；30 min 给 fixture replay 留足缓冲。
+private let _staleTranscriptFileThreshold: TimeInterval = 1800.0
+
+/// 读取 transcript 文件的 modification date。只在 staleness 兜底里用。
+/// 文件不存在或不可读返回 nil（caller 视为 unknown，不做降级）。
+private func transcriptFileMtime(path: String) -> Date? {
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+        return nil
+    }
+    return attrs[.modificationDate] as? Date
+}
 
 /// "Hook 显式说还在干活" 的状态集合。三处规则共用：
 /// - user case：tail 久了但 hook working → trust hook (覆盖 extended thinking

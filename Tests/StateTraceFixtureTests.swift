@@ -62,6 +62,10 @@ final class StateTraceFixtureTests: XCTestCase {
             .appendingPathComponent("meee2-fixture-\(UUID().uuidString).jsonl")
         defer { try? FileManager.default.removeItem(at: tmp) }
         try shiftedTail.data(using: .utf8)?.write(to: tmp)
+        // 把 mtime 设回 capture 时的 staleness（fixture 里若记录了
+        // transcript_file_age_at_capture_seconds）。让 resolver 的
+        // "transcript-mtime-stale" 兜底规则在 replay 时仍能命中。
+        fx.applyTranscriptFileMtime(at: tmp.path)
 
         var sd = fx.sessionData
         sd.transcriptPath = tmp.path
