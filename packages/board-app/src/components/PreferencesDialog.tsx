@@ -347,7 +347,7 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
           <section className="settings-section">
             <div className="settings-section-header">
               <div>
-                <div className="settings-section-title">Work Map Display</div>
+                <div className="settings-section-title">Session Map Display</div>
                 <div className="settings-section-caption">Visual guides only; saved card positions stay unchanged.</div>
               </div>
             </div>

@@ -46,7 +46,9 @@ import {
   createCanvas,
   deleteCanvas,
   fetchCanvases,
+  fetchUserProfile,
   removeSessionFromCanvas,
+  type UserProfile,
   updateCanvas,
 } from './api'
 
@@ -63,6 +65,8 @@ interface HydratedState {
 const FALLBACK_CANVAS_ID = 'personal-default'
 const MIN_CANVAS_LOADING_MS = 3000
 const HOME_VIEW_STORAGE_KEY = 'meee2.homeView.v1'
+const DEFAULT_USER_AVATAR =
+  'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"%3E%3Cdefs%3E%3CradialGradient id="a" cx="31%25" cy="24%25" r="70%25"%3E%3Cstop offset="0%25" stop-color="%23f5d4c6"/%3E%3Cstop offset="52%25" stop-color="%23f4eee7"/%3E%3Cstop offset="100%25" stop-color="%23df6c48"/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width="64" height="64" rx="20" fill="url(%23a)"/%3E%3Ccircle cx="32" cy="25" r="10" fill="%239a3f2b"/%3E%3Cpath d="M16 54c2.8-10.5 8.2-15.7 16-15.7S45.2 43.5 48 54" fill="%239a3f2b"/%3E%3C/svg%3E'
 type HomeView = 'cockpit' | WorkLayerView | 'map'
 
 const WORK_SURFACES: Array<{
@@ -300,7 +304,8 @@ export default function App() {
   const boardState = useBoardState()
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
   // assistantRequested=false → mode='session'；assistantRequested=true → mode='assistant'。
@@ -328,6 +333,24 @@ export default function App() {
     return () => {
       window.removeEventListener(BOARD_PREFERENCES_CHANGED, handler)
       window.removeEventListener('storage', handler)
+    }
+  }, [])
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      fetchUserProfile()
+        .then((profile) => {
+          if (!cancelled) setUserProfile(profile)
+        })
+        .catch(() => {
+          if (!cancelled) setUserProfile(null)
+        })
+    }
+    load()
+    window.addEventListener('focus', load)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', load)
     }
   }, [])
   // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
@@ -940,6 +963,15 @@ export default function App() {
               <button className="ghost icon-only" type="button" onClick={() => setPreferencesOpen(true)} aria-label={t('action.settings')} title={t('action.settings')}>
                 <Settings size={15} aria-hidden />
               </button>
+              <button
+                className="surface-user-button"
+                type="button"
+                onClick={() => setPreferencesOpen(true)}
+                aria-label={userProfile?.connected ? userProfile.displayName : t('settings.title')}
+                title={userProfile?.connected ? userProfile.displayName : t('settings.title')}
+              >
+                <img src={userProfile?.userAvatarUrl || DEFAULT_USER_AVATAR} alt="" />
+              </button>
             </div>
           </div>
           {homeView === 'cockpit' ? (
@@ -964,13 +996,6 @@ export default function App() {
             />
           ) : (
             <main className="work-map-surface" aria-label={t('surface.map.label')}>
-              <header className="surface-page-header">
-                <div>
-                  <p className="cockpit-kicker">{t('workmap.kicker')}</p>
-                  <h1>{t('workmap.title')}</h1>
-                  <p className="cockpit-subtitle">{t('workmap.subtitle')}</p>
-                </div>
-              </header>
               <div className="work-map-canvas-frame">
               <Board
                 resolvedTheme={resolvedTheme}
@@ -1096,6 +1121,7 @@ export default function App() {
             onHideFromCanvas={handleHideFromCanvas}
             onBulkVisibility={handleBulkVisibility}
             onPreferences={() => setPreferencesOpen(true)}
+            showAccountFooter={false}
           />
         )}
         {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}

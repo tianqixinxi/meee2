@@ -706,7 +706,7 @@ function SessionTable({
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
             </select>
-            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Work Map">
+            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
               <Map size={15} aria-hidden />
             </button>
             <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Jump back">
@@ -741,7 +741,7 @@ function SessionPills({
           <div className="work-layer__pill-actions">
             {node.risks.length > 0 && <AlertTriangle size={15} aria-label="Has risk" />}
             {node.session.status === 'completed' && <CheckCircle2 size={15} aria-label="Completed" />}
-            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Work Map">
+            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
               <Map size={15} aria-hidden />
             </button>
             <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Jump back">
