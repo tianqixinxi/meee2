@@ -281,18 +281,44 @@ Web frontend (hot-reloads, no Swift restart needed):
 ```bash
 pnpm install
 pnpm dev:shell               # Desktop Board shell; does not start the Vite browser server
-pnpm dev:web                 # Optional browser-only Vite debug server
+pnpm dev:web                 # Optional browser-only Vite debug server (http://localhost:5002)
 pnpm typecheck               # TS typecheck across all packages
-pnpm build                   # Production build → Sources/Board/WebDist
+pnpm build                   # Production build of npm packages → Sources/Board/WebDist
+pnpm build:dev               # build + `swift build` (copies WebDist into SwiftPM resource bundle)
+pnpm restart:dev             # build:dev + kill old binary + nohup-restart with meee2-online env
 ```
+
+**Why both `pnpm build` and `swift build` matter:** `pnpm build` only updates the
+source `Sources/Board/WebDist/`. The running meee2 binary reads WebDist from
+the SwiftPM resource bundle at `.build/.../meee2_meee2Kit.bundle/WebDist/`,
+which is populated by `swift build`. So after editing the web app you need
+both — `pnpm build:dev` chains them. `pnpm dev:shell`, `swift run`, and
+`build.sh` already include the Swift step; only the manual nohup-restart flow
+skips it.
 
 After a Swift change, restart the running app:
 
 ```bash
+pnpm restart:dev             # one-shot: build:dev + kill + nohup-restart
+# Equivalent long form:
 kill $(pgrep -f '\.build/.*meee2$') 2>/dev/null; sleep 1
-nohup ./.build/arm64-apple-macosx/debug/meee2 >/tmp/meee2.log 2>&1 &
+MEEE2_ONLINE_APP_BASE_URL=https://meee2-online-meee1.vercel.app \
+  nohup ./.build/arm64-apple-macosx/debug/meee2 >/tmp/meee2.log 2>&1 &
 tail -F /tmp/meee2.log | grep -aE 'StateTrace|MessageRouter|TerminalJumper'
 ```
+
+**meee2-online backend selection.** Clicking "Login" in the Board redirects to
+the meee2-online web app. The backend URL resolves in this order:
+
+1. `MEEE2_ONLINE_APP_BASE_URL` env (then legacy `MEEE2_APP_BASE_URL` /
+   `MEEE360_APP_BASE_URL`)
+2. `#if DEBUG` → `http://localhost:3000` (assumes you're running meee2-online
+   locally)
+3. `#if RELEASE` → `https://meee2-online-meee1.vercel.app`
+
+`pnpm restart:dev` defaults the env to the Vercel deployment so Login works
+without running meee2-online locally. To work against a local meee2-online,
+export the env before invoking: `MEEE2_ONLINE_APP_BASE_URL=http://localhost:3000 pnpm restart:dev`.
 
 ### Conventions
 
