@@ -6,9 +6,7 @@ import {
   ExternalLink,
   Map,
   PlayCircle,
-  RefreshCw,
   Search,
-  Settings,
   Wrench,
 } from 'lucide-react'
 import type { BoardState } from '../types'
@@ -25,10 +23,8 @@ interface PersonalCockpitProps {
   state: BoardState | null
   loading: boolean
   error: string | null
-  onRefresh: () => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
-  onOpenPreferences: () => void
 }
 
 const PRIMARY_BUCKETS: SessionBucketId[] = [
@@ -52,10 +48,8 @@ export function PersonalCockpit({
   state,
   loading,
   error,
-  onRefresh,
   onOpenSession,
   onShowInMap,
-  onOpenPreferences,
 }: PersonalCockpitProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -83,16 +77,6 @@ export function PersonalCockpit({
           <p className="cockpit-subtitle">
             {t('cockpit.subtitle')}
           </p>
-        </div>
-        <div className="cockpit-actions">
-          <button className="ghost icon-label" type="button" onClick={onOpenPreferences}>
-            <Settings size={15} aria-hidden />
-            {t('action.settings')}
-          </button>
-          <button className="ghost icon-label" type="button" onClick={onRefresh} disabled={loading}>
-            <RefreshCw size={15} aria-hidden />
-            {t('action.refresh')}
-          </button>
         </div>
       </header>
 

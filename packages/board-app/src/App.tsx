@@ -299,7 +299,10 @@ export default function App() {
       [snapshot.canvasId]: snapshot,
     }
     canvasSceneCacheRef.current = updated
-  }, [])
+    if (snapshot.canvasId === activeCanvasId) {
+      setHydrated(snapshot)
+    }
+  }, [activeCanvasId])
 
   const boardState = useBoardState()
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
@@ -980,18 +983,14 @@ export default function App() {
               state={boardState.state}
               loading={boardState.loading}
               error={boardState.error}
-              onRefresh={refreshAll}
               onOpenSession={handleOpenSession}
               onShowInMap={handleShowSessionInMap}
-              onOpenPreferences={() => setPreferencesOpen(true)}
             />
           ) : isWorkLayerView(homeView) ? (
             <WorkLayerViews
               view={homeView}
               state={boardState.state}
-              loading={boardState.loading}
               error={boardState.error}
-              onRefresh={refreshAll}
               onOpenSession={handleOpenSession}
               onShowInMap={handleShowSessionInMap}
             />

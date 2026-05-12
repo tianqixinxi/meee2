@@ -7,7 +7,6 @@ import {
   History,
   Map,
   MessageSquare,
-  RefreshCw,
   Search,
   Shield,
   Users,
@@ -17,7 +16,6 @@ import {
   createFeishuDoc,
   fetchFeishuConfig,
   sendFeishuCard,
-  updateUserProfile,
   type FeishuConfig,
 } from '../api'
 import {
@@ -34,10 +32,8 @@ import {
   inferArtifacts,
   loadWorkrooms,
   saveWorkrooms,
-  SYNC_POLICY_OPTIONS,
   type Workroom,
 } from '../workLayer'
-import type { SyncPolicy } from '../types'
 import { useI18n } from '../i18n'
 
 export type WorkLayerView = 'team' | 'workrooms' | 'review' | 'memory'
@@ -45,9 +41,7 @@ export type WorkLayerView = 'team' | 'workrooms' | 'review' | 'memory'
 interface WorkLayerViewsProps {
   view: WorkLayerView
   state: BoardState | null
-  loading: boolean
   error: string | null
-  onRefresh: () => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }
@@ -55,9 +49,7 @@ interface WorkLayerViewsProps {
 export function WorkLayerViews({
   view,
   state,
-  loading,
   error,
-  onRefresh,
   onOpenSession,
   onShowInMap,
 }: WorkLayerViewsProps) {
@@ -78,16 +70,6 @@ export function WorkLayerViews({
       .catch(() => setFeishu(null))
   }, [])
 
-  const setPolicy = async (sessionId: string, policy: SyncPolicy) => {
-    if (
-      policy === 'fullTranscript' &&
-      !window.confirm('Full transcript sync can expose prompts, code, and tool output. Enable it for this session?')
-    ) {
-      return
-    }
-    await updateUserProfile({ sessionSync: { sessionId, syncPolicy: policy } })
-    onRefresh()
-  }
   const persistWorkrooms = (next: Workroom[]) => {
     setWorkrooms(saveWorkrooms(next))
   }
@@ -100,10 +82,6 @@ export function WorkLayerViews({
           <h1>{title.title}</h1>
           <p className="cockpit-subtitle">{title.subtitle}</p>
         </div>
-        <button className="ghost icon-label" type="button" onClick={onRefresh} disabled={loading}>
-          <RefreshCw size={15} aria-hidden />
-          {t('action.refresh')}
-        </button>
       </header>
 
       <div className="cockpit-search work-layer__search">
@@ -124,7 +102,6 @@ export function WorkLayerViews({
           nodes={nodes}
           feishu={feishu}
           deliveryMessage={deliveryMessage}
-          onPolicyChange={setPolicy}
           onDeliveryMessage={setDeliveryMessage}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
@@ -165,7 +142,6 @@ function TeamRadar({
   nodes,
   feishu,
   deliveryMessage,
-  onPolicyChange,
   onDeliveryMessage,
   onOpenSession,
   onShowInMap,
@@ -174,18 +150,20 @@ function TeamRadar({
   nodes: SessionGraphNode[]
   feishu: FeishuConfig | null
   deliveryMessage: string | null
-  onPolicyChange: (sessionId: string, policy: SyncPolicy) => Promise<void>
   onDeliveryMessage: (message: string | null) => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
   const visible = nodes.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
   const privateCount = nodes.length - visible.length
-  const firstVisible = visible[0]
-  const visibleBlockedCount = graph.buckets.needsAttention.filter((node) => effectiveSyncPolicy(node.session) !== 'private').length
-  const preview = firstVisible
-    ? buildSyncPayloadPreview(firstVisible, effectiveSyncPolicy(firstVisible.session))
-    : null
+  const needsAttention = visible.filter((node) => node.bucketIds.includes('needsAttention'))
+  const running = visible.filter((node) => node.bucketIds.includes('running'))
+  const reviewReady = visible.filter((node) => inferArtifacts(node).some((artifact) => artifact.type === 'pr' || artifact.type === 'diff'))
+  const done = visible.filter((node) => node.bucketIds.includes('recentlyCompleted'))
+  const ownerRows = groupCounts(visible, (node) => node.session.syncTeamName || 'Local team')
+  const repoRows = groupCounts(visible, (node) => node.repo)
+  const providerRows = groupCounts(visible, (node) => node.provider)
+  const hiddenAttention = graph.buckets.needsAttention.length - needsAttention.length
   const sendBlocked = async () => {
     const node = graph.buckets.needsAttention.find((candidate) => effectiveSyncPolicy(candidate.session) !== 'private')
     if (!node) return
@@ -211,38 +189,51 @@ function TeamRadar({
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Team-visible sessions</h2>
-            <p>{visible.length} visible · {privateCount} private · Full transcript requires explicit selection.</p>
+            <h2>Team AI Radar</h2>
+            <p>For CEO / PM / CTO: what is moving, what is blocked, what is ready for review, and what shipped.</p>
           </div>
-          <Shield size={18} aria-hidden />
+          <Users size={18} aria-hidden />
         </div>
-        <SessionTable
-          nodes={visible}
-          onPolicyChange={onPolicyChange}
+        <div className="work-layer__radar-stats">
+          <RadarStat label="Needs attention" value={needsAttention.length} tone="danger" />
+          <RadarStat label="Running" value={running.length} tone="info" />
+          <RadarStat label="Review-ready" value={reviewReady.length} tone="warning" />
+          <RadarStat label="Recently done" value={done.length} tone="success" />
+        </div>
+      </section>
+      <section className="work-layer__panel work-layer__wide">
+        <div className="work-layer__panel-head">
+          <div>
+            <h2>Needs attention</h2>
+            <p>Blocked, permission-required, stale, or failed work that needs a person.</p>
+          </div>
+          <AlertTriangle size={18} aria-hidden />
+        </div>
+        <RadarSessionList
+          nodes={needsAttention.slice(0, 8)}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
-          empty="No sessions are visible to the team yet. Promote a session from Private to Metadata only first."
+          empty={visible.length === 0 ? 'No team-visible sessions yet.' : 'No visible blockers right now.'}
         />
       </section>
       <section className="work-layer__panel">
-        <h2>Radar buckets</h2>
-        <MetricRows rows={[
-          ['Needs attention', graph.buckets.needsAttention.length],
-          ['Running', graph.buckets.running.length],
-          ['Waiting / blocked', graph.buckets.waitingBlocked.length],
-          ['Recently done', graph.buckets.recentlyCompleted.length],
-        ]} />
+        <h2>Active work</h2>
+        <RadarSessionList
+          nodes={running.slice(0, 5)}
+          onOpenSession={onOpenSession}
+          onShowInMap={onShowInMap}
+          empty="No team-visible running sessions."
+          compact
+        />
       </section>
       <section className="work-layer__panel">
-        <h2>Payload preview</h2>
-        {preview ? (
-          <>
-            <p className="work-layer__muted">{preview.policy} includes: {preview.fields.join(', ') || 'nothing'}</p>
-            <pre className="work-layer__payload">{JSON.stringify(preview.payload, null, 2)}</pre>
-          </>
-        ) : (
-          <p className="work-layer__muted">Select a non-private session to preview team payload shape.</p>
-        )}
+        <h2>Ready / done</h2>
+        <MetricRows rows={[
+          ['Review-ready', reviewReady.length],
+          ['Completed', done.length],
+          ['Visible sessions', visible.length],
+          ['Private local', privateCount],
+        ]} />
       </section>
       <section className="work-layer__panel">
         <h2>Feishu delivery</h2>
@@ -253,24 +244,37 @@ function TeamRadar({
           ['Last error', feishu?.lastError ?? 'none'],
         ]} />
         {deliveryMessage && <p className="work-layer__muted">{deliveryMessage}</p>}
-        <button className="ghost" type="button" onClick={() => void sendBlocked()} disabled={visibleBlockedCount === 0}>
+        <button className="ghost" type="button" onClick={() => void sendBlocked()} disabled={needsAttention.length === 0}>
           Send blocked alert
         </button>
+      </section>
+      <section className="work-layer__panel">
+        <div className="work-layer__panel-head">
+          <div>
+            <h2>Visibility boundary</h2>
+            <p>Radar only uses sessions allowed by sync policy.</p>
+          </div>
+          <Shield size={18} aria-hidden />
+        </div>
+        <StatusRows rows={[
+          ['Team-visible', `${visible.length}`],
+          ['Private local', `${privateCount}`],
+          ['Hidden blockers', `${Math.max(0, hiddenAttention)}`],
+          ['Full transcript', `${visible.filter((node) => effectiveSyncPolicy(node.session) === 'fullTranscript').length}`],
+        ]} />
       </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>All local sessions</h2>
-            <p>Per-session sync policy is local-first and stored on this Mac.</p>
+            <h2>Team slices</h2>
+            <p>Scan by team scope, repo, and provider without leaving the radar.</p>
           </div>
         </div>
-        <SessionTable
-          nodes={nodes}
-          onPolicyChange={onPolicyChange}
-          onOpenSession={onOpenSession}
-          onShowInMap={onShowInMap}
-          empty="No local sessions."
-        />
+        <div className="work-layer__slice-grid">
+          <MetricRows rows={ownerRows.length > 0 ? ownerRows : [['No team-visible sessions', 0]]} />
+          <MetricRows rows={repoRows.length > 0 ? repoRows : [['No repos', 0]]} />
+          <MetricRows rows={providerRows.length > 0 ? providerRows : [['No providers', 0]]} />
+        </div>
       </section>
     </div>
   )
@@ -675,37 +679,48 @@ function MemoryAudit({
   )
 }
 
-function SessionTable({
+function RadarStat({ label, value, tone }: { label: string; value: number; tone: 'danger' | 'info' | 'warning' | 'success' }) {
+  return (
+    <div className={`work-layer__radar-stat is-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+function RadarSessionList({
   nodes,
-  onPolicyChange,
   onOpenSession,
   onShowInMap,
   empty,
+  compact = false,
 }: {
   nodes: SessionGraphNode[]
-  onPolicyChange: (sessionId: string, policy: SyncPolicy) => Promise<void>
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
   empty: string
+  compact?: boolean
 }) {
   if (nodes.length === 0) return <p className="work-layer__muted">{empty}</p>
   return (
-    <div className="work-layer__table">
+    <div className={`work-layer__radar-list${compact ? ' is-compact' : ''}`}>
       {nodes.map((node) => {
         const policy = effectiveSyncPolicy(node.session)
+        const risk = node.risks[0]
         return (
-          <div key={node.session.id} className="work-layer__row">
+          <div key={node.session.id} className="work-layer__radar-row">
             <span className="work-layer__provider" style={{ '--provider-color': node.session.pluginColor } as CSSProperties}>
               {node.provider}
             </span>
-            <strong>{node.session.title}</strong>
+            <div className="work-layer__radar-main">
+              <strong>{node.session.title}</strong>
+              <span>{node.currentStep}</span>
+            </div>
             <span>{node.repo}</span>
-            <span>{node.session.status}</span>
-            <select value={policy} onChange={(event) => void onPolicyChange(node.session.id, event.target.value as SyncPolicy)}>
-              {SYNC_POLICY_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>{option.label}</option>
-              ))}
-            </select>
+            <span className={`work-layer__risk-chip ${risk ? `is-${risk.severity}` : ''}`}>
+              {risk?.label ?? node.session.status}
+            </span>
+            <span className="work-layer__policy-chip">{policy}</span>
             <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
               <Map size={15} aria-hidden />
             </button>
@@ -717,6 +732,17 @@ function SessionTable({
       })}
     </div>
   )
+}
+
+function groupCounts(nodes: SessionGraphNode[], labelFor: (node: SessionGraphNode) => string): Array<[string, number]> {
+  const counts = new globalThis.Map<string, number>()
+  for (const node of nodes) {
+    const label = labelFor(node).trim() || 'Unknown'
+    counts.set(label, (counts.get(label) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
 }
 
 function SessionPills({
