@@ -251,7 +251,7 @@ function SessionRadarCard({
       <div className="cockpit-card__actions">
         <button className="primary icon-label" type="button" onClick={() => onOpenSession(s.id)}>
           <ExternalLink size={14} aria-hidden />
-          {t('action.jumpBack')}
+          {t('action.openDetail')}
         </button>
         <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
@@ -284,7 +284,7 @@ function SessionHistoryRow({
         <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.jumpBack')}>
+        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')}>
           <ExternalLink size={15} aria-hidden />
         </button>
       </div>

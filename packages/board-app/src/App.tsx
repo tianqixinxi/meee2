@@ -12,6 +12,7 @@ import Board from './components/Board'
 import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
+import { SessionDetailModal } from './components/SessionDetailModal'
 import { Globe2, Moon, Monitor, RefreshCw, Settings, Sun } from 'lucide-react'
 import { PersonalCockpit } from './components/PersonalCockpit'
 import { WorkLayerViews, type WorkLayerView } from './components/WorkLayerViews'
@@ -41,7 +42,6 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-  activateSession,
   addSessionToCanvas,
   createCanvas,
   deleteCanvas,
@@ -891,10 +891,11 @@ export default function App() {
   }, [activeCanvasId])
 
   const handleOpenSession = useCallback((sessionId: string) => {
-    activateSession(sessionId).then((ok) => {
-      if (!ok) pushToast('error', 'Failed to jump back to that session')
-    })
-  }, [pushToast])
+    setDockSessionId(sessionId)
+    setAssistantRequested(false)
+    dockSeedRef.current = ''
+    setDockOpen(true)
+  }, [])
 
   const handleShowSessionInMap = useCallback((sessionId: string) => {
     setHomeView('map')
@@ -1051,57 +1052,68 @@ export default function App() {
                   {boardState.error}
                 </div>
               )}
-              {/* 统一 Dock 入口：mode 由 selection + assistantRequested 决定。
-                  session-mode：现有 session 的 transcript + injectToSession。
-                  assistant-mode：AI 对话 + spawnSession。
-                  Esc / × 关闭：session 模式保留 selection，assistant 模式清
-                  assistantRequested。下次再按键又能重开。 */}
-              {dockOpen && boardState.state && (() => {
-                // dockSessionId 是 dock 自己锚定的 session（不跟随 selection 清空），
-                // 这样画板空白点击不会让 transcript 收起。
-                const sessionForDock = dockSessionId
-                  ? boardState.state.sessions.find((x) => x.id === dockSessionId)
-                  : undefined
-                const useAssistant = assistantRequested || !sessionForDock
-                const mode: DockMode = useAssistant
-                  ? {
-                      kind: 'assistant',
-                      messages: assistantMessages,
-                      setMessages: setAssistantMessages,
-                      canvasId: activeCanvasId,
-                      canvasName: activeCanvas?.name ?? 'Canvas',
-                      workspacePath: activeCanvas?.workspacePath ?? '',
-                      selectedElements: selectedCanvasElements,
-                      onApplyCanvasPatch: handleApplyCanvasPatch,
-                      onSpawned: (cwd) => {
-                        setDockOpen(false)
-                        setDockSessionId(null)
-                        setAssistantRequested(false)
-                        pushToast('success', `Spawning Claude in ${cwd}`)
-                      },
-                      onError: (msg) => pushToast('error', msg),
-                    }
-                  : {
-                      kind: 'session',
-                      state: boardState.state,
-                      session: sessionForDock!,
-                    }
-                return (
-                  <Dock
-                    ref={dockRef}
-                    mode={mode}
-                    initialSeed={dockSeedRef.current}
-                    onClose={() => {
-                      setDockOpen(false)
-                      setDockSessionId(null)
-                      if (useAssistant) setAssistantRequested(false)
-                    }}
-                  />
-                )
-              })()}
               </div>
             </main>
           )}
+          {/* Global session detail: every work surface can open the same
+              overview-first modal. Assistant mode is still map-only because it
+              depends on canvas context and selected elements. */}
+          {dockOpen && boardState.state && (() => {
+            const sessionForDock = dockSessionId
+              ? boardState.state.sessions.find((x) => x.id === dockSessionId)
+              : undefined
+            const useAssistant = assistantRequested || !sessionForDock
+            if (useAssistant && homeView !== 'map') return null
+            const mode: DockMode = useAssistant
+              ? {
+                  kind: 'assistant',
+                  messages: assistantMessages,
+                  setMessages: setAssistantMessages,
+                  canvasId: activeCanvasId,
+                  canvasName: activeCanvas?.name ?? 'Canvas',
+                  workspacePath: activeCanvas?.workspacePath ?? '',
+                  selectedElements: selectedCanvasElements,
+                  onApplyCanvasPatch: handleApplyCanvasPatch,
+                  onSpawned: (cwd) => {
+                    setDockOpen(false)
+                    setDockSessionId(null)
+                    setAssistantRequested(false)
+                    pushToast('success', `Spawning Claude in ${cwd}`)
+                  },
+                  onError: (msg) => pushToast('error', msg),
+                }
+              : {
+                  kind: 'session',
+                  state: boardState.state,
+                  session: sessionForDock!,
+                }
+            if (mode.kind === 'session') {
+              return (
+                <SessionDetailModal
+                  ref={dockRef}
+                  state={mode.state}
+                  session={mode.session}
+                  initialSeed={dockSeedRef.current}
+                  onClose={() => {
+                    setDockOpen(false)
+                    setDockSessionId(null)
+                  }}
+                />
+              )
+            }
+            return (
+              <Dock
+                ref={dockRef}
+                mode={mode}
+                initialSeed={dockSeedRef.current}
+                onClose={() => {
+                  setDockOpen(false)
+                  setDockSessionId(null)
+                  if (useAssistant) setAssistantRequested(false)
+                }}
+              />
+            )
+          })()}
         </div>
         {homeView === 'map' && (
           <Sidebar

@@ -709,7 +709,7 @@ function SessionTable({
             <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
               <Map size={15} aria-hidden />
             </button>
-            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Jump back">
+            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Open session detail">
               <ExternalLink size={15} aria-hidden />
             </button>
           </div>
@@ -744,7 +744,7 @@ function SessionPills({
             <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
               <Map size={15} aria-hidden />
             </button>
-            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Jump back">
+            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Open session detail">
               <ExternalLink size={15} aria-hidden />
             </button>
           </div>

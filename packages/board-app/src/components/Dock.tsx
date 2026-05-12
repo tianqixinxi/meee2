@@ -12,8 +12,8 @@
 //   mode='session'   → overview-first detail + collapsed transcript + jump-back context
 //   mode='assistant' → 自渲 chat log + streamAssistantChat
 //
-// 所以 App.tsx 现在只挂一个 <Dock>（按 selection / assistantOpen 决定 mode），
-// 旧的 SessionDock.tsx / AssistantChat.tsx 都被它替代。
+// Session detail 的公共入口在 <SessionDetailModal>，它复用这里的
+// mode='session'。旧的 SessionDock.tsx / AssistantChat.tsx 都被它替代。
 
 import {
   forwardRef,
