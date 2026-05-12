@@ -126,11 +126,15 @@ public struct A2AMessage: Codable, Identifiable, Sendable {
         self.injectedByHuman = (try? c.decode(Bool.self, forKey: .injectedByHuman)) ?? false
     }
 
-    /// 投递到接收方时的渲染格式
-    /// A2A 消息：`[a2a from <alias> via <channel>] <content>`
-    /// 人类从 Web/CLI 直接注入的消息：不加任何前缀，原样投递
+    /// 投递到接收方时的渲染格式。
+    ///
+    /// 注入字段 `injectedByHuman` 表示这是用户通过 Web/CLI 直接发的消息，
+    /// 应该按"键盘输入"处理，不带任何前缀。所有 fromAlias（`__human__` /
+    /// `operator` / 其他）只要 injectedByHuman==true 都走无前缀分支——这与
+    /// LabeledSenderPolicy 行为一致，让"用户随手发的话"和"agent A2A 路由"
+    /// 在 inbox 渲染上有清晰差异。
     public func renderForInbox() -> String {
-        if injectedByHuman && fromAlias == "__human__" {
+        if injectedByHuman {
             return content
         }
         return "[a2a from \(fromAlias) via \(channel)] \(content)"
