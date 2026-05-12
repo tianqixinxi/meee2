@@ -12,7 +12,6 @@ import Board from './components/Board'
 import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
-import NewChannelDialog from './components/NewChannelDialog'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type {
@@ -265,7 +264,6 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
   // assistantRequested=false → mode='session'；assistantRequested=true → mode='assistant'。
@@ -313,12 +311,6 @@ export default function App() {
   // toggle 用）。
   const [bulkVisibilityRequest, setBulkVisibilityRequest] = useState<
     { mode: 'show' | 'hide'; bump: number; sids?: string[] } | null
-  >(null)
-  // Channel creation → Board places the hub at viewport center. App doesn't
-  // own the Excalidraw imperative API, so we can't compute viewport coords
-  // here — we fire this request and Board consumes it in an effect.
-  const [placeChannelRequest, setPlaceChannelRequest] = useState<
-    { channelName: string; bump: number } | null
   >(null)
   const [focusSessionRequest, setFocusSessionRequest] = useState<
     { sessionId: string; bump: number } | null
@@ -870,8 +862,6 @@ export default function App() {
               boardState.refresh()
               void refreshCanvases()
             }}
-            onNewChannel={() => setNewChannelOpen(true)}
-            placeChannelRequest={placeChannelRequest}
             onAskAndSpawn={() => {
               setAssistantRequested(true)
               dockSeedRef.current = ''
@@ -968,18 +958,6 @@ export default function App() {
           onBulkVisibility={handleBulkVisibility}
           onPreferences={() => setPreferencesOpen(true)}
         />
-        {newChannelOpen && boardState.state && (
-          <NewChannelDialog
-            state={boardState.state}
-            onClose={() => setNewChannelOpen(false)}
-            onCreated={(name) => {
-              setNewChannelOpen(false)
-              setSelection({ kind: 'channel', channelName: name })
-              setPlaceChannelRequest({ channelName: name, bump: Date.now() })
-              pushToast('success', `Channel "${name}" created`)
-            }}
-          />
-        )}
         {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}
         {preferencesOpen && (
           <PreferencesDialog

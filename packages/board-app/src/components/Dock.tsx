@@ -9,7 +9,7 @@
 //   - .session-dock CSS 类
 //
 // 区别只在中间区 + onSend 业务：
-//   mode='session'   → <TranscriptPanel /> + injectToSession
+//   mode='session'   → <TranscriptPanel /> + jump-back context only
 //   mode='assistant' → 自渲 chat log + streamAssistantChat
 //
 // 所以 App.tsx 现在只挂一个 <Dock>（按 selection / assistantOpen 决定 mode），
@@ -26,9 +26,6 @@ import {
 import type { BoardState, CanvasPatchProposal, SelectedCanvasElementContext, Session } from '../types'
 import {
   activateSession,
-  injectToSession,
-  openAccessibilitySettings,
-  pushToDesktopNow,
   uploadAttachment,
   spawnSession,
   streamAssistantChat,
@@ -233,20 +230,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   // ── handleSend：mode 分流业务 ────────────────────────────────────
   const handleSend = async (content: string) => {
     if (mode.kind === 'session') {
-      const shortId = mode.session.id.slice(0, 8)
-      const result = await injectToSession(mode.session.id, content)
-      // Desktop session 没 tty，消息得等下一个 Stop hook 才被 Claude.app
-      // 看到——idle 时尤其要提示用户"还没送达，需要 desktop 这条 turn
-      // 跑完才生效"，不然 user 觉得是丢消息了。CLI session 走立即 typeIn
-      // 路径，正常 success toast。
-      if (result.delivery === 'queued_until_next_turn') {
-        toast.push(
-          'info',
-          `Queued for ${mode.session.title} (${shortId}) — Desktop session will pick it up at the end of its current turn`
-        )
-      } else {
-        toast.push('success', `Sent to ${mode.session.title} (${shortId})`)
-      }
+      toast.push('info', 'Session messaging is disabled. Jump back to the terminal or editor to continue this session.')
       return
     }
 
@@ -374,7 +358,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       statusLabel: formatStatusLabel(mode.session.status ?? null),
       isActive: isStatusActive(mode.session.status ?? null),
       pluginDisplayName: mode.session.pluginDisplayName,
-      inboxCount: mode.session.inboxPending ?? 0,
     }
   }, [mode])
 
@@ -551,45 +534,8 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
             ? (f) => uploadAttachment(mode.session.id, f)
             : undefined
         }
-        // ⚡ Push button —— 只对 Desktop session 露出。Default Send 走 inject
-        // 写 inbox + 等下个 Stop drain（不抢焦点）；Push 立刻 keystroke 进
-        // Claude.app 的输入框（会抢焦点 + 自动回车）。是用户主动选择的快
-        // 速路径，避免 idle desktop session 卡 inbox 等很久的问题。
-        onPush={
-          mode.kind === 'session' && mode.session.clientKind === 'desktop'
-            ? async (content: string) => {
-                const shortId = mode.session.id.slice(0, 8)
-                const r = await pushToDesktopNow(mode.session.id, content)
-                if (!r.error) {
-                  toast.push(
-                    'success',
-                    `Pushed to Claude.app — ${r.delivered} message(s) delivered (${shortId})`
-                  )
-                  return
-                }
-                if (r.errorCode === 'accessibility_denied') {
-                  // 弹 toast 之外，立刻把 user 跳到 System Settings → Accessibility
-                  // 让授权流程一步到位（user 加 meee2 + 开关 ON 之后回 webui
-                  // 重试 ⚡）。
-                  await openAccessibilitySettings().catch(() => undefined)
-                  toast.push(
-                    'error',
-                    'Accessibility permission required — System Settings opened. Add /Applications/meee2.app and turn the toggle on, then retry ⚡.'
-                  )
-                  return
-                }
-                if (r.errorCode === 'claude_not_running') {
-                  toast.push(
-                    'error',
-                    'Claude.app is not running. Open it first, then retry ⚡.'
-                  )
-                  return
-                }
-                toast.push('error', `Push failed (${shortId}): ${r.error}`)
-              }
-            : undefined
-        }
-        pushTitle="Push to Desktop now — focuses Claude.app and types the message in directly (requires Accessibility permission)"
+        onPush={undefined}
+        pushTitle="Session messaging is disabled"
         bottomLeft={
           mode.kind === 'session' ? (
             <>
@@ -621,9 +567,6 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
         bottomRight={
           mode.kind === 'session' ? (
             <>
-              {sessionMeta!.inboxCount > 0 && (
-                <span className="cc-stat cc-stat--add">+{sessionMeta!.inboxCount}</span>
-              )}
               <span className="cc-plugin-tag">{sessionMeta!.pluginDisplayName}</span>
               <span className="cc-model">
                 {sessionMeta!.modelLabel ?? '—'}

@@ -48,8 +48,8 @@ enum AssistantContextBuilder {
         - If selected canvas elements are present, treat them as the user's
           current focus for this turn.
         - Hidden or other-canvas sessions are only included as a short index.
-        - For content-level questions, call transcript/channel tools instead
-          of guessing from previews.
+        - For content-level questions, call transcript tools instead of
+          guessing from previews.
 
         Current sessions on the board:
         \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
@@ -68,15 +68,11 @@ enum AssistantContextBuilder {
           - get_session_list        -- narrow by status / plugin / project
           - get_session_info        -- fetch full state + a short transcript preview
           - get_session_transcript  -- recent transcript entries for content questions
-          - list_channels           -- A2A channels (name / mode / member count)
-          - get_channel_messages    -- recent messages on a channel for content questions
           - get_canvas_context      -- read the current canvas layout and visible items
           - propose_canvas_patch    -- propose a low-risk canvas layout/note change; user applies it
           - create_session          -- spawn a new local session at a cwd
           - create_coordinator_session -- spawn a global coordinator session for selected sessions
           - get_coordination_state  -- read hybrid coordinator groups and compact member digests
-          - send_to_session         -- route a message through a session's operator inbox
-          - broadcast_to_members    -- route messages to a coordinator group's members
           - update_group_digest     -- maintain compact coordinator/member state
           - ask_coordinator         -- manually wake a global coordinator with compact context
           - pause_coordination / resume_coordination -- control automatic coordinator wake-ups
@@ -88,9 +84,8 @@ enum AssistantContextBuilder {
           - If they ask to summarise / explain what a session is doing or
             what it asked, call get_session_transcript (it returns more
             entries than get_session_info's preview).
-          - If they ask about an A2A channel ("ops channel", "today's coordination
-            channel"), call list_channels first if the id is fuzzy, then
-            get_channel_messages with the channel name.
+          - A2A channel and inbox routing tools are disabled. Do not promise
+            to send messages between sessions.
           - If they ask what is on this canvas, how things are laid out, or
             whether you can rearrange the canvas, call get_canvas_context.
           - If they explicitly ask to tidy, move, hide, show, or add/update a
@@ -102,8 +97,7 @@ enum AssistantContextBuilder {
             coordination, review, dependency, handoff, or group.
           - If the user says to create a lead/coordinator/组长/reviewer for
             selected sessions, call create_coordinator_session.
-          - Coordinators do not depend on channels. For routing work, use
-            send_to_session or broadcast_to_members. For state, use
+          - Coordinators do not depend on channels. For state, use
             get_coordination_state and update_group_digest.
           - Do not generate arbitrary Excalidraw JSON. Use only the supported
             proposal operations.

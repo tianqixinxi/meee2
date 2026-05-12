@@ -1,7 +1,6 @@
 import SwiftUI
 import meee2Kit
 import Meee2PluginKit
-import Meee2CommKit
 import Sparkle
 
 /// AppDelegate - 管理 macOS 特有的窗口和状态栏
@@ -75,23 +74,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 是否被 Gatekeeper translocated。必须在所有其他启动逻辑之前打。
         AppDiagnostics.logBootBanner()
 
-        // Comm-kit 用一个独立的 logHandler;这里把它桥到主仓的 MLog 家族,
-        // 让 MessageRouter / ChannelRegistry / AuditLogger 内部日志走同一管道。
-        // 必须在 MessageRouter 第一次被触碰之前完成。
-        commLogHandler = { level, msg in
-            switch level {
-            case .debug: MDebug(msg)
-            case .info: MInfo(msg)
-            case .warning: MWarn(msg)
-            case .error: MError(msg)
-            }
-        }
-
-        // 把 cwd → sessionId 的反查能力注入 comm-kit。Tests 不走 AppDelegate,
-        // 因此 A2AIdentity 在测试里默认无 resolver,cwd 路径返回 nil(测试本来
-        // 也不依赖 cwd 解析,符合现状)。
-        A2AIdentity.resolver = SessionStoreIdentityResolver()
-
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 
@@ -146,9 +128,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             // 不需要卡在 UI 首帧前。
             SettingsConfigManager.shared.ensureHooksConfigured()
 
-            // 自动在 `~/.claude.json` / Codex config 注册 meee2 MCP server，让每个
-            // Claude/Codex session 原生拿到 send_message / list_channels 等 tool。
-            // 这里会跑 `which node` 并读写用户配置，放到后台收敛即可。
+            // 收敛只读 meee2 MCP server。Phase 0 后这里只暴露 session discovery，
+            // 不再注册 channel / inbox messaging tools。
             MCPConfigManager.shared.ensureRegistered()
         }
 
@@ -174,22 +155,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startSessionRuntime() {
-        // AgentInboxShell 是 plugin 路径的 push delegate(把消息 paste 到
-        // 终端)。注册必须在 startAll() / bindChannelOrientationHook() 之前 ——
-        // plugin 启动 / orientation 推送都会触发 send → deliver → push,漏注册
-        // 会让首批消息缺失 push 通知。
-        // `_ = AgentInboxShell.shared` 一并完成强制 init —— 之前是 MessageRouter.init
-        // 里隐式触发的,现在改成在这里显式做,确保 SessionEventBus 订阅 +
-        // 1.5s flushAllInboxes 调度生效。
-        _ = AgentInboxShell.shared
-        MessageRouter.shared.registerPushDelegate(AgentInboxShell.shared)
-
-        // 把 host 实现注入 plugin-kit 的 A2AContext，**必须**在 plugin 加载之前。
-        // Plugin 的 init/start 阶段（甚至 SessionPlugin 构造期间）就可能调
-        // A2AContext.shared.* —— 如果 register 在 plugin 加载之后，那时 provider
-        // 还是 nil，所有查询返回 fallback（空数组 / nil），plugin 自治逻辑被静默废掉。
-        Meee2PluginKit.A2AContext.shared.register(A2AContextHostProvider())
-
         // Register builtin in-process plugins. ExternalChatPlugin receives
         // browser-extension pushed sessions (ChatGPT / Claude.ai web chats)
         // via /api/external-sessions/* — must register *before* startAll so
@@ -202,13 +167,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 装饰到现有 ClaudePlugin session 上。Hook 已经把 desktop session 钩
         // 进来了，这一步只是补 metadata。Claude.app 没装的机器是 noop。
         ClaudeDesktopMetadataReader.shared.start()
-
-        // 启用 channel join/leave 的 orientation 推送：当 session 加入 channel
-        // 时往该 session 的 inbox 推一条 synthetic 系统消息（teammates / 用法
-        // 提示），其他成员也会收到 "X joined" 通知。走现有 operator → session
-        // 路径 + Stop-hook drain，零新基础设施。**production-only**：tests 不
-        // 调这条，确保单测的 inbox 计数不被 orientation 污染。
-        MessageRouter.shared.bindChannelOrientationHook()
 
         // SessionStore 已经从 disk 载入。用 Ghostty PR #11922 提供的
         // tty AppleScript 属性反查每个 session 真正所在的 Ghostty terminal id，

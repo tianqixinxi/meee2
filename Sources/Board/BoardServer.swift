@@ -379,7 +379,7 @@ public final class BoardServer {
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
         server.DELETE["/api/automations/:id"] = BoardServer.cors(BoardAPI.deleteAutomation)
         server.POST["/api/sessions/:id/activate"] = BoardServer.cors(BoardAPI.activateSession)
-        server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
+        server.POST["/api/sessions/:id/inject"] = BoardServer.cors(BoardAPI.injectToSession)
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
         server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
@@ -391,7 +391,6 @@ public final class BoardServer {
         server.POST["/api/_dev/override-latest"] = BoardServer.cors(BoardAPI.devOverrideLatest)
         server.GET["/api/_dev/pill-click-plan"] = BoardServer.cors(BoardAPI.devPillClickPlan)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
-        server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)
         server.POST["/api/sessions/spawn"] = BoardServer.cors(BoardAPI.spawnSession)
         server.GET["/api/canvases"] = BoardServer.cors(BoardAPI.listCanvases)
@@ -414,18 +413,6 @@ public final class BoardServer {
         server.POST["/api/external-sessions/upsert"] = BoardServer.cors(BoardAPI.upsertExternalSession)
         server.POST["/api/external-sessions/:sid/append-message"] = BoardServer.cors(BoardAPI.appendExternalMessage)
         server.DELETE["/api/external-sessions/:sid"] = BoardServer.cors(BoardAPI.deleteExternalSession)
-        server.POST["/api/channels"] = BoardAPI.createChannel
-        server.DELETE["/api/channels/:name"] = BoardAPI.deleteChannel
-        server.POST["/api/channels/:name/members"] = BoardAPI.addMember
-        server.DELETE["/api/channels/:name/members/:alias"] = BoardAPI.removeMember
-        server.POST["/api/channels/:name/mode"] = BoardAPI.setChannelMode
-        server.POST["/api/channels/:name/rename"] = BoardAPI.renameChannel
-        server.GET["/api/channels/:name/messages"] = BoardAPI.listMessages
-        server.POST["/api/messages/send"] = BoardAPI.sendMessage
-        server.POST["/api/messages/:id/hold"] = BoardAPI.holdMessage
-        server.POST["/api/messages/:id/deliver"] = BoardAPI.deliverMessage
-        server.POST["/api/messages/:id/drop"] = BoardAPI.dropMessage
-
         // --- Global assistant (claude -p driven "ask & spawn") ---
         server.POST["/api/assistant/chat"] = AssistantAPI.chat
 

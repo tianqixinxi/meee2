@@ -1,7 +1,6 @@
 import Foundation
 import os.log
 import Meee2PluginKit
-import Meee2CommKit
 
 /// Logger for hook socket server
 private let logger = Logger(subsystem: "com.meee2", category: "Hooks")
@@ -280,18 +279,6 @@ public class HookSocketServer {
             cleanupCache(sessionId: sessionId)
         }
 
-        // A2A: Stop 事件不再做 inline drainInbox + block-decision 注入。
-        // 之前的设计：把 inbox 拼成一个 reason 字符串 → return decision=block →
-        // Claude 把这段当作下一轮 user prompt 内联消化。代价：transcript 里
-        // 写成 `type=user, isMeta=true`，Web UI 看不到（被当 !bash 回显丢掉）；
-        // 即便保留也是个"📨 Injected"特殊气泡，跟用户手打的真消息割裂。
-        //
-        // 现在统一走 Ghostty input 路径：让 Stop 自然关闭 → Claude 完整收尾
-        // 当前回合 → ClaudePlugin 处理 Stop 把 SessionStore 状态翻到 resting →
-        // SessionEventBus.sessionMetadataChanged → MessageRouter 订阅触发
-        // flushInboxIfResting → Ghostty `input text` + send key enter → Claude
-        // 看到一条**正常的** user prompt → transcript 写普通 `type=user`，Web
-        // UI 自然显示为 user 气泡。所有消息只有一条入口、一种渲染。
         // NSLog("[StateTrace][hook-ingress][socket] sid=\(event.sessionId?.prefix(8) ?? "-") evt=\(event.event?.rawValue ?? "nil") tool=\(event.toolName ?? "-") statusField=\(event.status ?? "-") inferred=\(event.inferredStatus.rawValue)")
 
         // Handle permission requests
@@ -338,77 +325,12 @@ public class HookSocketServer {
             eventHandler?(event)
             return
         } else {
-            // Stop hook 上的桌面版兜底：CLI session 走 AgentInboxShell 的
-            // Ghostty input 路径（transcript 写普通 user 气泡），但 Claude
-            // Desktop 子进程没 tty 推不进去，唯一可靠的注入路径是 hook
-            // decision=block + reason，让 Claude 把 reason 当下一轮 prompt
-            // 消化。CLI / SDK / 其它 session 都走原 close 路径，不响应。
-            if event.event == .stop, let sid = event.sessionId,
-               let response = drainResponseForDesktopStop(sessionId: sid) {
-                // NSLog("[HookSocketServer] Event Stop with desktop drain, writing decision=block then closing")
-                writeRawResponse(response, to: clientSocket)
-            } else {
-                // NSLog("[HookSocketServer] Event does NOT expect response, closing socket")
-            }
+            // Stop hooks no longer drain channel inboxes into Claude prompts.
+            // Permission requests above remain the only response path.
             close(clientSocket)
         }
 
         eventHandler?(event)
-    }
-
-    /// 桌面版 Stop hook 的 inline drain。仅在确认是 `entrypoint=claude-desktop`
-    /// 的 session 上触发；CLI/SDK/未知 entrypoint 都返回 nil（让流程走默认 close
-    /// 路径，inbox 由 AgentInboxShell 走 Ghostty/iTerm/Apple Terminal 推送）。
-    /// inbox 为空也返回 nil（不能空 reason 阻塞 Stop）。
-    ///
-    /// 取出来的消息通过 LabeledSenderPolicy 格式化（`[meee2 a2a] from ...`），
-    /// 多条用空行分隔，跟 AgentInboxShell.deliverIfResting 的 payload 形态一致。
-    ///
-    /// 访问级别 internal（非 private）方便 unit test 直接调用；唯一调用方是
-    /// 同文件里的 handleClient。
-    func drainResponseForDesktopStop(sessionId: String) -> PermissionResponse? {
-        let path = SessionStore.shared.get(sessionId)?.transcriptPath
-        guard ClaudeEntrypointReader.read(transcriptPath: path)
-                == ClaudeEntrypointReader.knownDesktop else {
-            return nil
-        }
-        let messages = MessageRouter.shared.drainInbox(sessionId: sessionId)
-        guard !messages.isEmpty else { return nil }
-
-        let policy = LabeledSenderPolicy()
-        let formatted = messages.compactMap { msg -> String? in
-            policy.format(A2AInboundView(
-                id: msg.id,
-                traceId: msg.traceId,
-                channel: msg.channel,
-                fromAlias: msg.fromAlias,
-                toAlias: msg.toAlias,
-                hopCount: msg.hopCount,
-                content: msg.content,
-                createdAt: msg.createdAt,
-                injectedByHuman: msg.injectedByHuman
-            ))
-        }.joined(separator: "\n\n")
-
-        guard !formatted.isEmpty else { return nil }
-
-        for msg in messages {
-            ConversationContext.shared.recordInbound(sessionId: sessionId, message: msg)
-        }
-
-        // NSLog("[HookSocketServer] Desktop Stop drain: sid=\(sessionId.prefix(8)) drained=\(messages.count) msgs reason=\(formatted.count) chars")
-        return PermissionResponse(decision: "block", reason: formatted)
-    }
-
-    private func writeRawResponse(_ response: PermissionResponse, to socket: Int32) {
-        guard let data = try? JSONEncoder().encode(response) else { return }
-        data.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            let n = write(socket, base, data.count)
-            if n < 0 {
-                NSLog("[HookSocketServer] writeRawResponse failed errno=\(errno)")
-            }
-        }
     }
 
     // MARK: - Private - Permission Response

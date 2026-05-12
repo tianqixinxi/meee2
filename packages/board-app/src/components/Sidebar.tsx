@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardState, CanvasInfo, ClientKind, Selection, Session } from '../types'
 import { isOlderSession } from '../types'
-import ChannelDetail from './ChannelDetail'
 import {
   SidebarFilterMenu,
   loadFilterState,
@@ -19,8 +18,7 @@ import {
   loadPinnedSet,
   togglePinned,
 } from '../sessionOverrides'
-import { isDmChannelName } from '@meee1/board-core'
-import { ExternalLink, Inbox, LogIn, LogOut, MoreHorizontal, Pin, PinOff, Settings as SettingsIcon } from 'lucide-react'
+import { ExternalLink, LogIn, LogOut, MoreHorizontal, Pin, PinOff, Settings as SettingsIcon } from 'lucide-react'
 import { SessionRowMenu, originalClientLabel } from './SessionRowMenu'
 import { Tooltip } from './Tooltip'
 import { UpdatePill } from './UpdatePill'
@@ -761,9 +759,7 @@ export default function Sidebar({
 
   const isPreview = !open && hoverPreview
 
-  // session 选中后 sidebar 不再切到 detail 模式（transcript 现在浮在画板上）。
-  // 只有 channel 选中才走 detail 视图。
-  const inDetail = selection.kind === 'channel'
+  const inDetail = false
 
   // Always-visible floating toggle, fixed at top:8 left:80 (right of the
   // macOS traffic lights). One button serves both states:
@@ -861,7 +857,7 @@ export default function Sidebar({
         onScroll={markSidebarScrolling}
       >
         {!state && <div className="muted">Loading…</div>}
-        {state && selection.kind !== 'channel' && (() => {
+        {state && (() => {
           const visibleState: BoardState = state
           const tabs: SidebarTab[] = tabsOverride ?? defaultTabsFromSessions(visibleState.sessions)
           // 找当前 active tab（防止 sessions 变了之后 activeTabId 没对应的 tab）
@@ -1146,14 +1142,6 @@ export default function Sidebar({
                         )}
                       </div>
                       <div className="sidebar-session-row__actions">
-                        {s.inboxPending > 0 && (
-                          <span
-                            className="badge warn sidebar-session-row__inbox"
-                            title={`${s.inboxPending} pending inbox message${s.inboxPending === 1 ? '' : 's'}`}
-                          >
-                            <Inbox size={11} aria-hidden /> {s.inboxPending}
-                          </span>
-                        )}
                         <Tooltip label={pinned.has(s.id) ? 'Unpin session' : 'Pin session'}>
                           <button
                             className={
@@ -1603,52 +1591,9 @@ export default function Sidebar({
                 )
               })()}
             </div>
-            <div className="section">
-              {(() => {
-                // DM channels (`dm-…`) are visualised as card↔card arrows on
-                // the canvas and are intentionally hidden from this listing
-                // -- the user clicks the line to open one.
-                const visibleChannels = state.channels.filter(
-                  (c) => !isDmChannelName(c.name),
-                )
-                return (
-                  <>
-                    <h4>Channels ({visibleChannels.length})</h4>
-                    {visibleChannels.length === 0 && (
-                      <div className="muted">No channels yet.</div>
-                    )}
-                    {visibleChannels.map((ch) => {
-                      // displayName 是 issue #24 加的"友好名"，UI 优先展示它，
-                      // 但 canonical name 还是 channel id（hover 上去能看到原名）
-                      const label = ch.displayName?.trim() || ch.name
-                      return (
-                        <div
-                          key={ch.name}
-                          className="row space"
-                          style={{ marginBottom: 4, cursor: 'pointer' }}
-                          title={label !== ch.name ? `id: ${ch.name}` : undefined}
-                          onClick={() =>
-                            onSelectionChange({ kind: 'channel', channelName: ch.name })
-                          }
-                        >
-                          <span>{label}</span>
-                          <span className="mono muted">
-                            {ch.members.length}m · {ch.mode}
-                            {ch.pendingCount > 0 ? ` ·⏳${ch.pendingCount}` : ''}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </>
-                )
-              })()}
-            </div>
           </div>
           )
         })()}
-        {state && selection.kind === 'channel' && (
-          <ChannelDetail state={state} channelName={selection.channelName} />
-        )}
       </div>
       {/* ── 底部用户行（mirror Settings > User meee2 identity） ───────── */}
       <div className="sidebar-footer" ref={accountMenuRef}>

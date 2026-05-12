@@ -302,21 +302,15 @@ final class CoordinationStore {
             if !digest.lastDecision.isEmpty { lines.append("  lastDecision: \(digest.lastDecision)") }
         }
         lines.append("")
-        lines.append("Requested action: decide whether to route work, summarize risks, or ask a member for clarification. Use send_to_session or broadcast_to_members when action is needed. Do not rely on channels.")
+        lines.append("Requested action: summarize risks and next steps. Channel/inbox routing is disabled.")
         return Self.truncate(lines.joined(separator: "\n"), to: Self.compactContextLimit)
     }
 
     func sendToSession(sessionId: String, content: String) throws {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw CoordinationStoreError.invalidInput("content is empty") }
-        let target = resolveInboxSessionId(sessionId)
-        let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: target)
-        _ = try MessageRouter.shared.send(
-            channel: channelName,
-            fromAlias: "operator",
-            toAlias: "session",
-            content: trimmed,
-            injectedByHuman: true
+        throw CoordinationStoreError.invalidInput(
+            "channel/inbox session routing is disabled; use Workroom/Handoff once available"
         )
     }
 

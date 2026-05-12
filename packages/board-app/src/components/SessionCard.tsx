@@ -1,11 +1,10 @@
 import type { Session, TranscriptEntry } from '../types'
 import { shortenProject } from '@meee1/board-core'
-// Lucide icons replace inline emoji glyphs in status / inbox / bg-agent
+// Lucide icons replace inline emoji glyphs in status / bg-agent
 // chips. Keeping size: 11 to match the ~11px font cards use.
 import {
   Zap,
   Package,
-  Inbox,
   Lock,
   Settings as SettingsIcon,
   Wrench,
@@ -85,11 +84,8 @@ export function SessionCard({
   onSelect,
   onActivate,
 }: SessionCardProps) {
-  // waitingForUser 语义等同 idle，不算 urgent；只有真正的 permissionRequired
-  // 或 inbox 里有待处理消息才算
-  const urgent =
-    session.inboxPending > 0 ||
-    session.status === 'permissionRequired'
+  // waitingForUser 语义等同 idle，不算 urgent；只有真正的 permissionRequired 才算
+  const urgent = session.status === 'permissionRequired'
 
   // 新分类：是否 active（halo + 呼吸）/ waiting / completed / dead / idle。
   // 同时决定 halo 的颜色（live-color CSS 变量）。
@@ -233,11 +229,6 @@ export function SessionCard({
               .join('\n')}
           >
             <SettingsIcon size={10} aria-hidden /> {session.backgroundAgents.length} bg
-          </span>
-        )}
-        {session.inboxPending > 0 && (
-          <span className="session-card__pending">
-            <Inbox size={11} aria-hidden /> {session.inboxPending}
           </span>
         )}
         <span className="session-card__sid">{sidShort}</span>

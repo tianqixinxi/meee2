@@ -45,7 +45,12 @@ let package = Package(
             name: "meee2Tests",
             dependencies: ["meee2Kit"],
             path: "Tests",
-            exclude: ["Fixtures"]
+            exclude: [
+                "Fixtures",
+                "A2ATests.swift",
+                "CommKitTests.swift",
+                "HookSocketServerDesktopDrainTests.swift",
+            ]
         ),
         .executableTarget(
             name: "meee2App",

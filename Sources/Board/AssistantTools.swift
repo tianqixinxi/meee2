@@ -25,14 +25,10 @@ enum AssistantTools {
         getSessionListDef(),
         getSessionInfoDef(),
         getSessionTranscriptDef(),
-        listChannelsDef(),
-        getChannelMessagesDef(),
         proposeCanvasPatchDef(),
         createSessionDef(),
         createCoordinatorSessionDef(),
         getCoordinationStateDef(),
-        sendToSessionDef(),
-        broadcastToMembersDef(),
         updateGroupDigestDef(),
         pauseCoordinationDef(),
         resumeCoordinationDef(),
@@ -74,10 +70,6 @@ enum AssistantTools {
             return runGetSessionInfo(args: args)
         case "get_session_transcript":
             return runGetSessionTranscript(args: args)
-        case "list_channels":
-            return runListChannels(args: args)
-        case "get_channel_messages":
-            return runGetChannelMessages(args: args)
         case "propose_canvas_patch":
             return runProposeCanvasPatch(args: args, settings: settings)
         case "create_session":
@@ -86,10 +78,6 @@ enum AssistantTools {
             return runCreateCoordinatorSession(args: args, settings: settings)
         case "get_coordination_state":
             return runGetCoordinationState(args: args)
-        case "send_to_session":
-            return runSendToSession(args: args)
-        case "broadcast_to_members":
-            return runBroadcastToMembers(args: args)
         case "update_group_digest":
             return runUpdateGroupDigest(args: args)
         case "pause_coordination":
