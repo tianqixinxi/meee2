@@ -18,6 +18,14 @@ export type ToolName =
   | 'get_channel_messages'
   | 'propose_canvas_patch'
   | 'create_session'
+  | 'create_coordinator_session'
+  | 'get_coordination_state'
+  | 'send_to_session'
+  | 'broadcast_to_members'
+  | 'update_group_digest'
+  | 'pause_coordination'
+  | 'resume_coordination'
+  | 'ask_coordinator'
 
 export const ALL_TOOLS: ToolName[] = [
   'get_canvas_context',
@@ -28,6 +36,14 @@ export const ALL_TOOLS: ToolName[] = [
   'get_channel_messages',
   'propose_canvas_patch',
   'create_session',
+  'create_coordinator_session',
+  'get_coordination_state',
+  'send_to_session',
+  'broadcast_to_members',
+  'update_group_digest',
+  'pause_coordination',
+  'resume_coordination',
+  'ask_coordinator',
 ]
 
 export interface LlmSettings {
@@ -71,6 +87,14 @@ export const DEFAULT_LLM_SETTINGS: LlmSettings = {
     get_channel_messages: true,
     propose_canvas_patch: true,
     create_session: true,
+    create_coordinator_session: true,
+    get_coordination_state: true,
+    send_to_session: true,
+    broadcast_to_members: true,
+    update_group_digest: true,
+    pause_coordination: true,
+    resume_coordination: true,
+    ask_coordinator: true,
   },
 }
 

@@ -144,10 +144,49 @@ struct MessageDTO: Encodable {
     let injectedByHuman: Bool
 }
 
+struct MemberDigestDTO: Encodable {
+    let sessionId: String
+    let summary: String
+    let currentTask: String
+    let status: String
+    let blockers: [String]
+    let lastDecision: String
+    let lastTranscriptCursor: String
+    let lastActivity: String?
+}
+
+struct CoordinationEventDTO: Encodable {
+    let id: String
+    let groupId: String
+    let kind: String
+    let reason: String
+    let sessionIds: [String]
+    let contextPreview: String
+    let createdAt: String
+}
+
+struct CoordinationGroupDTO: Encodable {
+    let id: String
+    let canvasId: String
+    let coordinatorSessionId: String?
+    let pendingSpawnIntentId: String?
+    let memberSessionIds: [String]
+    let mode: String
+    let goal: String
+    let paused: Bool
+    let memberDigests: [String: MemberDigestDTO]
+    let events: [CoordinationEventDTO]
+    let lastWakeAt: String?
+    let lastRoutedAction: String?
+    let createdAt: String
+    let updatedAt: String
+}
+
 /// 全局状态 DTO —— `GET /api/state` 的 payload
 struct StateDTO: Encodable {
     let sessions: [SessionDTO]
     let channels: [ChannelDTO]
+    let coordinationGroups: [CoordinationGroupDTO]
 }
 
 /// Settings/User tab mirrored user profile for the board sidebar footer.
@@ -209,6 +248,8 @@ struct MessageEnvelope: Encodable {
 }
 struct MessagesEnvelope: Encodable { let messages: [MessageDTO] }
 struct OkEnvelope: Encodable { let ok: Bool }
+struct CoordinationGroupEnvelope: Encodable { let group: CoordinationGroupDTO }
+struct CoordinationGroupsEnvelope: Encodable { let groups: [CoordinationGroupDTO] }
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }
@@ -310,6 +351,46 @@ enum BoardDTOBuilder {
     static func iso(_ date: Date?) -> String? {
         guard let d = date else { return nil }
         return iso8601.string(from: d)
+    }
+
+    static func coordinationGroupDTO(_ group: CoordinationGroup) -> CoordinationGroupDTO {
+        CoordinationGroupDTO(
+            id: group.id,
+            canvasId: group.canvasId,
+            coordinatorSessionId: group.coordinatorSessionId,
+            pendingSpawnIntentId: group.pendingSpawnIntentId,
+            memberSessionIds: group.memberSessionIds,
+            mode: group.mode,
+            goal: group.goal,
+            paused: group.paused,
+            memberDigests: group.memberDigests.mapValues { digest in
+                MemberDigestDTO(
+                    sessionId: digest.sessionId,
+                    summary: digest.summary,
+                    currentTask: digest.currentTask,
+                    status: digest.status,
+                    blockers: digest.blockers,
+                    lastDecision: digest.lastDecision,
+                    lastTranscriptCursor: digest.lastTranscriptCursor,
+                    lastActivity: iso(digest.lastActivity)
+                )
+            },
+            events: group.events.map { event in
+                CoordinationEventDTO(
+                    id: event.id,
+                    groupId: event.groupId,
+                    kind: event.kind,
+                    reason: event.reason,
+                    sessionIds: event.sessionIds,
+                    contextPreview: event.contextPreview,
+                    createdAt: iso(event.createdAt)
+                )
+            },
+            lastWakeAt: iso(group.lastWakeAt),
+            lastRoutedAction: group.lastRoutedAction,
+            createdAt: iso(group.createdAt),
+            updatedAt: iso(group.updatedAt)
+        )
     }
 
     static func meee2OnlineTeams() -> [SyncTeamDTO] {

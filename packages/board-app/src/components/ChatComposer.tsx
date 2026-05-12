@@ -31,6 +31,12 @@ interface AttachmentItem {
   filename: string
 }
 
+interface ContextTag {
+  id: string
+  label: string
+  title?: string
+}
+
 export interface ChatComposerHandle {
   /** 把文本追加到 textarea 当前光标位置并 focus。 */
   appendAndFocus: (text: string) => void
@@ -54,6 +60,8 @@ interface Props {
   bottomRight?: React.ReactNode
   /** Bottombar 左下角内容。SessionDock 放 attach / quick-cmd 占位按钮；AssistantChat 一般空。 */
   bottomLeft?: React.ReactNode
+  /** Read-only context references included with the next assistant request. */
+  contextTags?: ContextTag[]
   /** Sending 时禁用 textarea 并把 send 换成 spinner。父组件想强制独立控制 busy 时用。 */
   externalBusy?: boolean
   /** Optional 第二个 send action。提供时渲染 ⚡ 按钮在主 send 旁边，跑跟
@@ -75,6 +83,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     autoFocus = true,
     bottomRight,
     bottomLeft,
+    contextTags,
     externalBusy,
     onPush,
     pushTitle,
@@ -241,6 +250,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(function ChatC
     <>
       {/* ── input box（attachments + textarea + send button）─────── */}
       <div className="session-dock__input-box">
+        {contextTags && contextTags.length > 0 && (
+          <div className="cc-context-tags" aria-label="Selected canvas context">
+            {contextTags.map((tag) => (
+              <span key={tag.id} className="cc-context-tag" title={tag.title ?? tag.label}>
+                {truncateName(tag.label, 36)}
+              </span>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="cc-attachments">
             {attachments.map((a) => (

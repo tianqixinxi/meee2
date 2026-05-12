@@ -401,6 +401,12 @@ public final class BoardServer {
         server.POST["/api/canvases/:id/sessions"] = BoardServer.cors(BoardAPI.addSessionToCanvas)
         server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
         server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
+        server.GET["/api/coordination-groups"] = BoardServer.cors(BoardAPI.listCoordinationGroups)
+        server.POST["/api/coordination-groups/:id/sync"] = BoardServer.cors(BoardAPI.syncCoordinationGroup)
+        server.POST["/api/coordination-groups/:id/ask"] = BoardServer.cors(BoardAPI.askCoordinationGroup)
+        server.POST["/api/coordination-groups/:id/pause"] = BoardServer.cors(BoardAPI.pauseCoordinationGroup)
+        server.POST["/api/coordination-groups/:id/resume"] = BoardServer.cors(BoardAPI.resumeCoordinationGroup)
+        server.DELETE["/api/coordination-groups/:id/members/:sessionId"] = BoardServer.cors(BoardAPI.removeCoordinationMember)
 
         // External chat session push (browser extension content scripts at
         // chatgpt.com / claude.ai). All CORS-wrapped — they hit localhost
@@ -487,8 +493,19 @@ public final class BoardServer {
         }
 
         let contentType = mimeType(for: finalPath)
+        var headers = [
+            "Content-Type": contentType,
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        ]
+        if finalPath.hasSuffix(".woff") || finalPath.hasSuffix(".woff2") || finalPath.hasSuffix(".ttf") {
+            headers["Cache-Control"] = "public, max-age=3600"
+            headers.removeValue(forKey: "Pragma")
+            headers.removeValue(forKey: "Expires")
+        }
         let bytes = Array(data)
-        return .raw(200, "OK", ["Content-Type": contentType]) { writer in
+        return .raw(200, "OK", headers) { writer in
             try writer.write(bytes)
         }
     }

@@ -6,7 +6,9 @@ import type {
   Mode,
   CanvasList,
   CanvasScope,
+  SelectedCanvasElementContext,
   SpawnProvider,
+  CoordinationGroup,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -52,6 +54,47 @@ async function jsonRequest<T>(
 
 export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
+}
+
+// -- coordination groups ---------------------------------------------------
+
+export function fetchCoordinationGroups(): Promise<{ groups: CoordinationGroup[] }> {
+  return jsonRequest<{ groups: CoordinationGroup[] }>('/api/coordination-groups')
+}
+
+export function syncCoordinationGroup(groupId: string): Promise<{ group: CoordinationGroup }> {
+  return jsonRequest<{ group: CoordinationGroup }>(`/api/coordination-groups/${encodeURIComponent(groupId)}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function askCoordinator(groupId: string, reason?: string): Promise<{ group: CoordinationGroup }> {
+  return jsonRequest<{ group: CoordinationGroup }>(`/api/coordination-groups/${encodeURIComponent(groupId)}/ask`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: reason ?? 'manual Ask coordinator' }),
+  })
+}
+
+export function pauseCoordination(groupId: string): Promise<{ group: CoordinationGroup }> {
+  return jsonRequest<{ group: CoordinationGroup }>(`/api/coordination-groups/${encodeURIComponent(groupId)}/pause`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function resumeCoordination(groupId: string): Promise<{ group: CoordinationGroup }> {
+  return jsonRequest<{ group: CoordinationGroup }>(`/api/coordination-groups/${encodeURIComponent(groupId)}/resume`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function removeCoordinationMember(groupId: string, sessionId: string): Promise<{ group: CoordinationGroup }> {
+  return jsonRequest<{ group: CoordinationGroup }>(
+    `/api/coordination-groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(sessionId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 // -- canvases --------------------------------------------------------------
@@ -474,6 +517,7 @@ export interface AssistantChatSettings {
   canvasId?: string
   workspacePath?: string
   canvasName?: string
+  selectedElements?: SelectedCanvasElementContext[]
 }
 
 /**

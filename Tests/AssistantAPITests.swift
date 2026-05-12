@@ -54,6 +54,27 @@ final class AssistantAPITests: XCTestCase {
         XCTAssertEqual(s.workspacePath, "/tmp/meee2-canvas")
     }
 
+    func testParseSettingsCarriesSelectedElements() {
+        let s = AssistantAPI.parseSettings([
+            "selectedElements": [
+                [
+                    "id": "el-1",
+                    "type": "text",
+                    "label": "Text: Launch plan",
+                    "textPreview": "Launch plan",
+                    "x": 12,
+                    "y": 24,
+                    "width": 120,
+                    "height": 40,
+                ],
+            ],
+        ])
+        XCTAssertEqual(s.selectedElements.count, 1)
+        XCTAssertEqual(s.selectedElements[0].label, "Text: Launch plan")
+        XCTAssertEqual(s.selectedElements[0].textPreview, "Launch plan")
+        XCTAssertEqual(s.selectedElements[0].x, 12)
+    }
+
     func testParseSettingsParsesEnabledToolsAsSet() {
         let s = AssistantAPI.parseSettings([
             "enabledTools": ["get_session_list", "create_session"],
@@ -96,6 +117,9 @@ final class AssistantAPITests: XCTestCase {
         XCTAssertTrue(prompt.contains("get_session_list"))
         XCTAssertTrue(prompt.contains("get_session_info"))
         XCTAssertTrue(prompt.contains("create_session"))
+        XCTAssertTrue(prompt.contains("Default context policy"))
+        XCTAssertTrue(prompt.contains("Current-canvas visible sessions"))
+        XCTAssertTrue(prompt.contains("Selected canvas elements at chat start"))
         XCTAssertTrue(prompt.contains("absolute paths"),
                       "system prompt must instruct LLM to expand ~ to absolute paths")
     }
@@ -117,10 +141,11 @@ final class AssistantAPITests: XCTestCase {
                 baseUrl: "",
                 model: "",
                 enabledTools: nil,
-                scope: "this-mac",
-                canvasId: "personal-default",
-                workspacePath: "",
-                canvasName: "Canvas")
+	                scope: "this-mac",
+	                canvasId: "personal-default",
+	                workspacePath: "",
+	                canvasName: "Canvas",
+	                selectedElements: [])
             let prompt = AssistantAPI.buildSystemPrompt(settings: s)
             XCTAssertFalse(prompt.isEmpty, "empty prompt for provider=\(kind)")
         }
@@ -184,6 +209,51 @@ final class AssistantAPITests: XCTestCase {
         XCTAssertEqual(dict["type"] as? String, "canvas_patch_proposal")
         XCTAssertEqual(dict["canvasId"] as? String, "personal-default")
         XCTAssertEqual(dict["operationCount"] as? Int, 1)
+    }
+
+    func testProposeCanvasPatchAcceptsStructuredDrawingOperations() {
+        let settings = AssistantAPI.parseSettings(["canvasId": "personal-default"])
+        let result = AssistantTools.dispatch(
+            name: "propose_canvas_patch",
+            args: [
+                "summary": "Draw relationship notes",
+                "operations": [
+                    [
+                        "type": "add_frame",
+                        "title": "Group",
+                        "x": 10,
+                        "y": 20,
+                        "width": 320,
+                        "height": 180,
+                        "stylePreset": "group"
+                    ],
+                    [
+                        "type": "add_shape",
+                        "shape": "diamond",
+                        "text": "Decision",
+                        "x": 50,
+                        "y": 70,
+                        "stylePreset": "dependency"
+                    ],
+                    [
+                        "type": "add_label",
+                        "text": "Coordinates",
+                        "x": 80,
+                        "y": 120,
+                        "stylePreset": "coordination"
+                    ]
+                ]
+            ],
+            enabled: nil,
+            settings: settings
+        )
+        guard case .success(let payload) = result,
+              let dict = payload as? [String: Any],
+              let operations = dict["operations"] as? [[String: Any]] else {
+            return XCTFail("expected successful structured drawing proposal")
+        }
+        XCTAssertEqual(dict["operationCount"] as? Int, 3)
+        XCTAssertEqual(operations.map { $0["type"] as? String }, ["add_frame", "add_shape", "add_label"])
     }
 
     func testGetCanvasContextUsesRequestedCanvas() {

@@ -118,13 +118,54 @@ export interface Message {
   injectedByHuman: boolean
 }
 
+export interface MemberDigest {
+  sessionId: string
+  summary: string
+  currentTask: string
+  status: string
+  blockers: string[]
+  lastDecision: string
+  lastTranscriptCursor: string
+  lastActivity: string | null
+}
+
+export interface CoordinationEvent {
+  id: string
+  groupId: string
+  kind: string
+  reason: string
+  sessionIds: string[]
+  contextPreview: string
+  createdAt: string
+}
+
+export interface CoordinationGroup {
+  id: string
+  canvasId: string
+  coordinatorSessionId: string | null
+  pendingSpawnIntentId: string | null
+  memberSessionIds: string[]
+  mode: 'hybrid' | string
+  goal: string
+  paused: boolean
+  memberDigests: Record<string, MemberDigest>
+  events: CoordinationEvent[]
+  lastWakeAt: string | null
+  lastRoutedAction: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export interface BoardState {
   sessions: Session[]
   channels: Channel[]
+  coordinationGroups: CoordinationGroup[]
 }
 
 export type CanvasScope = 'personal' | 'team'
 export type SpawnProvider = 'claude' | 'codex'
+export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
+export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
 
 export interface CanvasInfo {
   id: string
@@ -150,6 +191,57 @@ export type CanvasPatchOperation =
   | { type: 'hide_session'; sessionId: string }
   | { type: 'add_note'; text: string; x: number; y: number }
   | { type: 'update_note'; elementId: string; text?: string; x?: number; y?: number }
+  | {
+      type: 'add_frame'
+      elementId?: string
+      sessionIds?: string[]
+      title?: string
+      x?: number
+      y?: number
+      width?: number
+      height?: number
+      padding?: number
+      stylePreset?: CanvasRelationStylePreset
+    }
+  | {
+      type: 'add_connector'
+      fromSessionId?: string
+      toSessionId?: string
+      fromElementId?: string
+      toElementId?: string
+      label?: string
+      direction?: 'forward' | 'backward' | 'none'
+      stylePreset?: CanvasRelationStylePreset
+    }
+  | {
+      type: 'add_shape'
+      elementId?: string
+      shape: CanvasShapeKind
+      text?: string
+      x: number
+      y: number
+      width?: number
+      height?: number
+      stylePreset?: CanvasRelationStylePreset
+    }
+  | {
+      type: 'add_label'
+      elementId?: string
+      text: string
+      x: number
+      y: number
+      stylePreset?: CanvasRelationStylePreset
+    }
+  | {
+      type: 'update_element'
+      elementId: string
+      text?: string
+      x?: number
+      y?: number
+      width?: number
+      height?: number
+      stylePreset?: CanvasRelationStylePreset
+    }
 
 export interface CanvasPatchProposal {
   type: 'canvas_patch_proposal'
@@ -171,6 +263,19 @@ export interface CanvasList {
   activeCanvasId: string
   defaultCanvasIds: string[]
   memberships: CanvasSessionMembership[]
+}
+
+export interface SelectedCanvasElementContext {
+  id: string
+  type: string
+  label: string
+  textPreview?: string
+  sessionId?: string
+  channelName?: string
+  x: number
+  y: number
+  width: number
+  height: number
 }
 
 export interface ApiError {

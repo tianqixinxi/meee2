@@ -114,19 +114,134 @@ enum BoardAPI {
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
         let sessions = currentBoardSessions()
-        var sessionCwds: [String: String] = [:]
+        var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
         for session in sessions where !session.project.isEmpty {
-            sessionCwds[session.id] = session.project
+            spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
+                sessionId: session.id,
+                cwd: session.project,
+                provider: spawnProvider(from: session),
+                startedAt: parseISODate(session.startedAt)
+            ))
         }
-        BoardLayoutStore.shared.applySpawnIntents(sessionCwds: sessionCwds)
+        let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
+        deliverMatchedSpawnPrompts(matchedSpawnIntents)
         // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
         // 不在 UI 里显示，保持 channel 列表干净
         let channels = ChannelRegistry.shared.list()
             .filter { !$0.name.hasPrefix("__") }
             .map { BoardDTOBuilder.channelDTO($0) }
         _ = BoardLayoutStore.shared.ensureDefaults(sessionIds: [])
-        let state = StateDTO(sessions: sessions, channels: channels)
+        let groups = CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
+        let state = StateDTO(sessions: sessions, channels: channels, coordinationGroups: groups)
         return jsonResponse(state)
+    }
+
+    private static func spawnProvider(from session: SessionDTO) -> String? {
+        let raw = "\(session.pluginId) \(session.pluginDisplayName)".lowercased()
+        if raw.contains("codex") { return "codex" }
+        if raw.contains("claude") { return "claude" }
+        return nil
+    }
+
+    private static func parseISODate(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: raw) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: raw)
+    }
+
+    private static func deliverMatchedSpawnPrompts(_ matches: [BoardLayoutStore.MatchedSpawnIntent]) {
+        for match in matches {
+            guard let prompt = match.intent.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !prompt.isEmpty else { continue }
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: match.sessionId)
+                _ = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: prompt,
+                    injectedByHuman: true
+                )
+            } catch {
+                MWarn("[BoardAPI] failed to inject spawn initial prompt sid=\(match.sessionId.prefix(8)): \(error)")
+            }
+        }
+    }
+
+    // MARK: - Coordination groups
+
+    static func listCoordinationGroups(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(CoordinationGroupsEnvelope(
+            groups: CoordinationStore.shared.snapshot().map(BoardDTOBuilder.coordinationGroupDTO)
+        ))
+    }
+
+    static func syncCoordinationGroup(_ req: HttpRequest) -> HttpResponse {
+        guard let groupId = req.params[":id"], !groupId.isEmpty else {
+            return errorResponse("bad_request", "missing coordination group id", status: 400)
+        }
+        do {
+            try CoordinationWatcher.shared.syncNow(groupId: groupId)
+            let group = try CoordinationStore.shared.group(id: groupId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CoordinationGroupEnvelope(group: BoardDTOBuilder.coordinationGroupDTO(group)))
+        } catch {
+            return errorResponse("coordination_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func askCoordinationGroup(_ req: HttpRequest) -> HttpResponse {
+        guard let groupId = req.params[":id"], !groupId.isEmpty else {
+            return errorResponse("bad_request", "missing coordination group id", status: 400)
+        }
+        let body = parseJSONBody(req) ?? [:]
+        let reason = (body["reason"] as? String) ?? "manual Ask coordinator"
+        do {
+            try CoordinationStore.shared.manualAsk(groupId: groupId, reason: reason)
+            let group = try CoordinationStore.shared.group(id: groupId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CoordinationGroupEnvelope(group: BoardDTOBuilder.coordinationGroupDTO(group)))
+        } catch {
+            return errorResponse("coordination_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func pauseCoordinationGroup(_ req: HttpRequest) -> HttpResponse {
+        setCoordinationPaused(req, paused: true)
+    }
+
+    static func resumeCoordinationGroup(_ req: HttpRequest) -> HttpResponse {
+        setCoordinationPaused(req, paused: false)
+    }
+
+    private static func setCoordinationPaused(_ req: HttpRequest, paused: Bool) -> HttpResponse {
+        guard let groupId = req.params[":id"], !groupId.isEmpty else {
+            return errorResponse("bad_request", "missing coordination group id", status: 400)
+        }
+        do {
+            let group = try CoordinationStore.shared.setPaused(groupId: groupId, paused: paused)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CoordinationGroupEnvelope(group: BoardDTOBuilder.coordinationGroupDTO(group)))
+        } catch {
+            return errorResponse("coordination_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func removeCoordinationMember(_ req: HttpRequest) -> HttpResponse {
+        guard let groupId = req.params[":id"], !groupId.isEmpty,
+              let sessionId = req.params[":sessionId"], !sessionId.isEmpty else {
+            return errorResponse("bad_request", "missing coordination group id or session id", status: 400)
+        }
+        do {
+            let group = try CoordinationStore.shared.removeMember(groupId: groupId, sessionId: sessionId)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CoordinationGroupEnvelope(group: BoardDTOBuilder.coordinationGroupDTO(group)))
+        } catch {
+            return errorResponse("coordination_error", error.localizedDescription, status: 400)
+        }
     }
 
     private static func currentBoardSessions() -> [SessionDTO] {
@@ -1131,7 +1246,15 @@ enum BoardAPI {
         let termProgram = json["termProgram"] as? String
         do {
             let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-            try BoardLayoutStore.shared.recordSpawnIntent(canvasId: canvasId, cwd: cwd, command: command)
+            try BoardLayoutStore.shared.recordSpawnIntent(
+                canvasId: canvasId,
+                cwd: cwd,
+                command: command,
+                provider: provider,
+                purpose: "global",
+                initialPrompt: nil,
+                layoutHint: nil
+            )
             return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: termProgram)
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)

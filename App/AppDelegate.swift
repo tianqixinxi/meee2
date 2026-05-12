@@ -220,6 +220,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 启动状态监控
         statusManager.start()
+        CoordinationWatcher.shared.start()
 
         // Codex / Cursor / OpenClaw 是 dylib 形式的外部 plugin，加载阶段会做文件
         // 同步、dlopen 和 plugin.json 扫描。先让 Claude/ExternalChat 这些进程内

@@ -22,7 +22,15 @@ final class AssistantToolsTests: XCTestCase {
             "list_channels",
             "get_channel_messages",
             "propose_canvas_patch",
-            "create_session"
+            "create_session",
+            "create_coordinator_session",
+            "get_coordination_state",
+            "send_to_session",
+            "broadcast_to_members",
+            "update_group_digest",
+            "pause_coordination",
+            "resume_coordination",
+            "ask_coordinator"
         ])
     }
 
