@@ -793,10 +793,10 @@ enum AssistantTools {
             context = nil
         }
         let rawMode = stringValue(args["mode"])?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let mode = rawMode == "project" || rawMode == "global" ? rawMode! : "project"
+        var cwd = stringValue(args["cwd"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let mode = createSessionMode(rawMode: rawMode, cwd: cwd)
         let provider = normalizedProvider(stringValue(args["provider"]) ?? stringValue(args["command"]) ?? "claude")
         let command = provider
-        var cwd = stringValue(args["cwd"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if mode == "global" {
             guard let context else {
                 return .failure("global session requires a current canvas")
@@ -867,6 +867,13 @@ enum AssistantTools {
             "spawnIntentId": spawnIntentId,
             "note": "Spawn dispatched. Session will appear on the current canvas once meee2 observes it."
         ])
+    }
+
+    static func createSessionMode(rawMode: String?, cwd: String) -> String {
+        if rawMode == "project" || rawMode == "global" {
+            return rawMode!
+        }
+        return cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "global" : "project"
     }
 
     private static func createCoordinatorSessionDef() -> ToolDef {
@@ -1505,8 +1512,8 @@ enum AssistantTools {
             if let sid = try optionalSessionId("toSessionId") { out["toSessionId"] = sid }
             if let id = optionalElementId("fromElementId") { out["fromElementId"] = id }
             if let id = optionalElementId("toElementId") { out["toElementId"] = id }
-            guard (out["fromSessionId"] != nil || out["fromElementId"] != nil),
-                  (out["toSessionId"] != nil || out["toElementId"] != nil) else {
+            guard out["fromSessionId"] != nil || out["fromElementId"] != nil,
+                  out["toSessionId"] != nil || out["toElementId"] != nil else {
                 throw toolError("operation \(index) add_connector requires from/to endpoints")
             }
             if let label = stringValue(raw["label"])?.trimmingCharacters(in: .whitespacesAndNewlines),
