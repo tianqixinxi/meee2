@@ -9,7 +9,7 @@
 //   - .session-dock CSS 类
 //
 // 区别只在中间区 + onSend 业务：
-//   mode='session'   → <TranscriptPanel /> + jump-back context only
+//   mode='session'   → overview-first detail + collapsed transcript + jump-back context
 //   mode='assistant' → 自渲 chat log + streamAssistantChat
 //
 // 所以 App.tsx 现在只挂一个 <Dock>（按 selection / assistantOpen 决定 mode），
@@ -22,6 +22,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
 } from 'react'
 import type { BoardState, CanvasPatchProposal, SelectedCanvasElementContext, Session } from '../types'
 import {
@@ -37,6 +41,7 @@ import { useToast } from '../App'
 import TranscriptPanel from './TranscriptPanel'
 import { ChatComposer, type ChatComposerHandle } from './ChatComposer'
 import { Tooltip } from './Tooltip'
+import { buildSessionGraph, type SessionGraphNode } from '../sessionGraph'
 import {
   TranscriptView,
   loadTranscriptVerbosity,
@@ -65,7 +70,7 @@ export type DockMode =
       onError: (msg: string) => void
       /** Assistant chat 历史。lifted 到 App 才能跨 dock 开关持久化。 */
       messages: DisplayMessage[]
-      setMessages: React.Dispatch<React.SetStateAction<DisplayMessage[]>>
+      setMessages: Dispatch<SetStateAction<DisplayMessage[]>>
       canvasId: string
       canvasName: string
       workspacePath: string
@@ -151,6 +156,11 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     setVerbosityState(v)
     saveTranscriptVerbosity(v)
   }
+  const [sessionTranscriptOpen, setSessionTranscriptOpen] = useState(false)
+  const sessionIdForReset = mode.kind === 'session' ? mode.session.id : null
+  useEffect(() => {
+    setSessionTranscriptOpen(false)
+  }, [sessionIdForReset])
 
   const sessionRefreshKey = mode.kind === 'session'
     ? [
@@ -360,6 +370,10 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       pluginDisplayName: mode.session.pluginDisplayName,
     }
   }, [mode])
+  const sessionOverviewNode = useMemo(() => {
+    if (mode.kind !== 'session') return null
+    return buildSessionGraph([mode.session]).nodes[0] ?? null
+  }, [mode])
 
   const canvasPatchProposals = useMemo(() => {
     if (mode.kind !== 'assistant') return []
@@ -437,18 +451,28 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       {/* ── 中间区：mode 分流 ──────────────────────────────── */}
       <div className="session-dock__transcript">
         {mode.kind === 'session' ? (
-          <TranscriptPanel
-            key={mode.session.id}
-            sessionId={mode.session.id}
-            limit={200}
-            pollMs={sessionPollMs}
-            refreshTrigger={sessionRefreshKey}
-            liveStatus={mode.session.status ?? null}
-            liveCurrentTool={mode.session.currentTool ?? null}
-            liveCurrentTask={mode.session.currentTask ?? null}
-            assistantLabel={mode.session.pluginDisplayName || 'Assistant'}
-            verbosity="normal"
-            onVerbosityChange={() => undefined}
+          <SessionOverview
+            node={sessionOverviewNode}
+            transcriptOpen={sessionTranscriptOpen}
+            onToggleTranscript={() => setSessionTranscriptOpen((open) => !open)}
+            onOpenSession={() => void activateSession(mode.session.id)}
+            transcript={
+              sessionTranscriptOpen ? (
+                <TranscriptPanel
+                  key={mode.session.id}
+                  sessionId={mode.session.id}
+                  limit={200}
+                  pollMs={sessionPollMs}
+                  refreshTrigger={sessionRefreshKey}
+                  liveStatus={mode.session.status ?? null}
+                  liveCurrentTool={mode.session.currentTool ?? null}
+                  liveCurrentTask={mode.session.currentTask ?? null}
+                  assistantLabel={mode.session.pluginDisplayName || 'Assistant'}
+                  verbosity="normal"
+                  onVerbosityChange={() => undefined}
+                />
+              ) : null
+            }
           />
         ) : (
           // Assistant 模式复用 TranscriptView —— 跟 session 模式视觉同源
@@ -611,6 +635,130 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     </div>
   )
 })
+
+function SessionOverview({
+  node,
+  transcriptOpen,
+  transcript,
+  onToggleTranscript,
+  onOpenSession,
+}: {
+  node: SessionGraphNode | null
+  transcriptOpen: boolean
+  transcript: ReactNode
+  onToggleTranscript: () => void
+  onOpenSession: () => void
+}) {
+  if (!node) {
+    return <div className="session-overview session-overview--empty">Session detail unavailable.</div>
+  }
+  const session = node.session
+  const recentMessages = session.recentMessages.slice(-3).reverse()
+  return (
+    <div className="session-overview">
+      <section className="session-overview__hero">
+        <div className="session-overview__identity">
+          <span className="session-overview__provider" style={{ '--provider-color': session.pluginColor } as CSSProperties}>
+            {node.provider}
+          </span>
+          <h2>{session.title}</h2>
+          <div className="session-overview__meta">
+            <span>{node.repo}</span>
+            <span>{formatRelativeTime(node.lastActivityMs)}</span>
+            <span>{formatStatusLabel(session.status)}</span>
+          </div>
+        </div>
+        <button className="primary session-overview__jump" type="button" onClick={onOpenSession}>
+          Jump back
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" strokeWidth="1.8"
+               strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M7 17 17 7M9 7h8v8"/>
+          </svg>
+        </button>
+      </section>
+
+      <section className="session-overview__grid" aria-label="Session overview">
+        <div className="session-overview__panel">
+          <div className="session-overview__label">Current step</div>
+          <p>{node.currentStep}</p>
+        </div>
+        <div className="session-overview__panel">
+          <div className="session-overview__label">Runtime</div>
+          <dl className="session-overview__facts">
+            <div><dt>Status</dt><dd>{formatStatusLabel(session.status)}</dd></div>
+            <div><dt>Tool</dt><dd>{session.currentTool || '—'}</dd></div>
+            <div><dt>Client</dt><dd>{session.clientKind || 'local'}</dd></div>
+            <div><dt>Sync</dt><dd>{session.syncEnabled ? session.syncTeamName || 'enabled' : 'private'}</dd></div>
+          </dl>
+        </div>
+        <div className="session-overview__panel">
+          <div className="session-overview__label">Risks</div>
+          {node.risks.length === 0 ? (
+            <p className="session-overview__muted">No visible blockers or local risks.</p>
+          ) : (
+            <div className="session-overview__risks">
+              {node.risks.map((risk) => (
+                <span key={`${risk.type}:${risk.label}`} className={`session-overview__risk ${risk.severity}`} title={risk.detail}>
+                  {risk.label}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="session-overview__panel">
+          <div className="session-overview__label">Evidence</div>
+          <dl className="session-overview__facts">
+            <div><dt>Messages</dt><dd>{session.recentMessages.length}</dd></div>
+            <div><dt>Model</dt><dd>{formatModelLabel(session.usageStats?.model ?? null) ?? '—'}</dd></div>
+            <div><dt>Turns</dt><dd>{session.usageStats?.turns ?? '—'}</dd></div>
+            <div><dt>Background</dt><dd>{session.backgroundAgents.length}</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section className="session-overview__panel session-overview__recent">
+        <div className="session-overview__section-header">
+          <div>
+            <div className="session-overview__label">Recent context</div>
+            <p>Latest local messages, not the full transcript.</p>
+          </div>
+        </div>
+        {recentMessages.length === 0 ? (
+          <p className="session-overview__muted">No recent messages captured yet.</p>
+        ) : (
+          <div className="session-overview__messages">
+            {recentMessages.map((message, index) => (
+              <div key={`${message.role}-${index}`} className="session-overview__message">
+                <span>{message.role}</span>
+                <p>{message.text}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="session-overview__panel session-overview__transcript">
+        <div className="session-overview__section-header">
+          <div>
+            <div className="session-overview__label">Transcript</div>
+            <p>Collapsed by default. Open only when investigating details.</p>
+          </div>
+          <button type="button" className="ghost" onClick={onToggleTranscript}>
+            {transcriptOpen ? 'Hide transcript' : 'Show transcript'}
+          </button>
+        </div>
+        {transcriptOpen ? (
+          <div className="session-overview__transcript-body">{transcript}</div>
+        ) : (
+          <div className="session-overview__transcript-placeholder">
+            Transcript is hidden. Overview stays focused on state, risk, and handoff context.
+          </div>
+        )}
+      </section>
+    </div>
+  )
+}
 
 // ── Helpers / sub-components for assistant chat log ───────────────────
 
@@ -924,10 +1072,25 @@ function formatStatusLabel(status: string | null): string {
     case 'thinking': return 'thinking'
     case 'tooling': return 'tooling'
     case 'waitingForUser': return 'waiting'
+    case 'permissionRequired': return 'permission'
+    case 'completed': return 'completed'
+    case 'dead': return 'failed'
     case 'spawning': return 'spawning'
     case 'error': return 'error'
     default: return status
   }
+}
+
+function formatRelativeTime(ms: number): string {
+  if (!ms) return 'no activity'
+  const delta = Date.now() - ms
+  if (delta < 60 * 1000) return 'just now'
+  const minutes = Math.floor(delta / (60 * 1000))
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }
 
 function isStatusActive(status: string | null): boolean {

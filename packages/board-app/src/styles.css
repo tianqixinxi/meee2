@@ -1178,6 +1178,273 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   margin-top: auto;
 }
 
+.session-overview {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 0 2px 8px;
+}
+
+.session-overview--empty {
+  justify-content: center;
+  color: rgba(229, 231, 235, 0.72);
+}
+
+.session-overview__hero,
+.session-overview__panel {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(8, 10, 15, 0.34);
+}
+
+.session-overview__hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+.session-overview__identity {
+  min-width: 0;
+}
+
+.session-overview__provider {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  color: rgba(199, 204, 217, 0.82);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-overview__provider::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 999px;
+  background: var(--provider-color, var(--accent));
+}
+
+.session-overview__hero h2 {
+  max-width: 760px;
+  margin: 7px 0 0;
+  overflow: hidden;
+  color: rgba(245, 244, 239, 0.96);
+  font-size: 22px;
+  line-height: 1.18;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-overview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  color: rgba(199, 204, 217, 0.64);
+  font-size: 12px;
+}
+
+.session-overview__meta span:not(:last-child)::after {
+  content: '·';
+  margin-left: 8px;
+  color: rgba(199, 204, 217, 0.35);
+}
+
+.session-overview__jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.session-overview__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.85fr);
+  gap: 12px;
+}
+
+.session-overview__panel {
+  min-width: 0;
+  padding: 14px;
+}
+
+.session-overview__label {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-overview__panel p {
+  margin: 0;
+  color: rgba(245, 244, 239, 0.82);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.session-overview__muted {
+  color: rgba(199, 204, 217, 0.62) !important;
+}
+
+.session-overview__facts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.session-overview__facts div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-overview__facts dt {
+  color: rgba(199, 204, 217, 0.56);
+  font-size: 12px;
+}
+
+.session-overview__facts dd {
+  margin: 0;
+  overflow: hidden;
+  color: rgba(245, 244, 239, 0.86);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-overview__risks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.session-overview__risk {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-overview__risk.high {
+  background: rgba(194, 106, 106, 0.14);
+  color: var(--danger);
+}
+
+.session-overview__risk.medium {
+  background: rgba(212, 163, 115, 0.14);
+  color: var(--warning);
+}
+
+.session-overview__risk.low {
+  background: rgba(139, 169, 194, 0.13);
+  color: var(--info);
+}
+
+.session-overview__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.session-overview__section-header p {
+  margin: -3px 0 0;
+  color: rgba(199, 204, 217, 0.62);
+  font-size: 12px;
+}
+
+.session-overview__messages {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.session-overview__message {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-overview__message span {
+  overflow: hidden;
+  color: rgba(199, 204, 217, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-overview__message p {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(245, 244, 239, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.session-overview__transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.session-overview__transcript-placeholder {
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(199, 204, 217, 0.62);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-overview__transcript-body {
+  display: flex;
+  min-height: 320px;
+  max-height: 520px;
+  margin-top: 10px;
+}
+
+.session-overview__transcript-body .transcript-wrap,
+.session-overview__transcript-body .transcript-panel-wrap,
+.session-overview__transcript-body .transcript-panel {
+  min-height: 0;
+}
+
+@media (max-width: 880px) {
+  .session-overview__hero {
+    flex-direction: column;
+  }
+
+  .session-overview__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* sticky-user bar 不再无脑隐藏 —— TranscriptView 里改成只在 "stickyIdx
  * 是最新一条 user message"（没有更新的 prompt）时才返回 null，平时滚动看
  * 旧对话仍会出现。视觉与右上角 expand/close 按钮的间距由 transcript 的
