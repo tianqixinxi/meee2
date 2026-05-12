@@ -37,6 +37,31 @@ final class A2ATests: XCTestCase {
         XCTAssertEqual(msg.renderForInbox(), "[a2a from planner via review] hello")
     }
 
+    /// 旧账 #1：operator + injectedByHuman 也走无前缀分支（之前只 __human__
+    /// 有这层豁免，operator 还会被贴 `[a2a from operator via ...]`）。
+    func testRenderForInboxHumanInjectedHasNoPrefix() {
+        let opMsg = A2AMessage(
+            channel: "__ops-abc",
+            fromAlias: "operator",
+            fromSessionId: "",
+            toAlias: "session",
+            content: "restart 吧",
+            injectedByHuman: true
+        )
+        XCTAssertEqual(opMsg.renderForInbox(), "restart 吧",
+                       "operator + injectedByHuman 注入应当无前缀（旧账修复）")
+
+        let humanMsg = A2AMessage(
+            channel: "__ops-abc",
+            fromAlias: "__human__",
+            fromSessionId: "",
+            toAlias: "session",
+            content: "ok",
+            injectedByHuman: true
+        )
+        XCTAssertEqual(humanMsg.renderForInbox(), "ok")
+    }
+
     func testMessageRoundTripCodable() throws {
         let original = A2AMessage(
             id: "m-deadbeef",
