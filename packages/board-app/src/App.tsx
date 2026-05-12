@@ -12,6 +12,7 @@ import Board from './components/Board'
 import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
+import { PersonalCockpit } from './components/PersonalCockpit'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type {
@@ -36,6 +37,7 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
+  activateSession,
   addSessionToCanvas,
   createCanvas,
   deleteCanvas,
@@ -56,6 +58,16 @@ interface HydratedState {
 
 const FALLBACK_CANVAS_ID = 'personal-default'
 const MIN_CANVAS_LOADING_MS = 3000
+const HOME_VIEW_STORAGE_KEY = 'meee2.homeView.v1'
+type HomeView = 'cockpit' | 'map'
+
+function loadHomeView(): HomeView {
+  try {
+    return window.localStorage.getItem(HOME_VIEW_STORAGE_KEY) === 'map' ? 'map' : 'cockpit'
+  } catch {
+    return 'cockpit'
+  }
+}
 
 async function loadCanvasHydratedState(
   canvasId: string,
@@ -275,6 +287,15 @@ export default function App() {
   const [assistantMessagesByCanvas, setAssistantMessagesByCanvas] = useState<Record<string, DisplayMessage[]>>({})
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
+  const [homeView, setHomeViewState] = useState<HomeView>(loadHomeView)
+  const setHomeView = useCallback((next: HomeView) => {
+    setHomeViewState(next)
+    try {
+      window.localStorage.setItem(HOME_VIEW_STORAGE_KEY, next)
+    } catch {
+      // Storage can be unavailable in hardened webviews; default stays cockpit.
+    }
+  }, [])
   useEffect(() => {
     const handler = () => setBoardGridEnabled(loadBoardGridEnabled())
     window.addEventListener(BOARD_PREFERENCES_CHANGED, handler)
@@ -620,6 +641,7 @@ export default function App() {
   // (so they can still type into Excalidraw text shapes etc.). The
   // `selection.kind === 'session'` vs `'none'` split handles that.
   useEffect(() => {
+    if (homeView !== 'map') return
     const isInputTarget = (t: EventTarget | null) => {
       if (!(t instanceof HTMLElement)) return false
       const tag = t.tagName
@@ -734,7 +756,7 @@ export default function App() {
       window.removeEventListener('paste', onPaste, true)
       window.removeEventListener('dblclick', onDblClick, true)
     }
-  }, [selectedSessionId, selection.kind, dockOpen])
+  }, [homeView, selectedSessionId, selection.kind, dockOpen])
 
   // Refetch currently-cached templates on every state tick. The backend may
   // emit a single state.changed frame after a template edit; rather than
@@ -820,6 +842,18 @@ export default function App() {
     })
   }, [activeCanvasId])
 
+  const handleOpenSession = useCallback((sessionId: string) => {
+    activateSession(sessionId).then((ok) => {
+      if (!ok) pushToast('error', 'Failed to jump back to that session')
+    })
+  }, [pushToast])
+
+  const handleShowSessionInMap = useCallback((sessionId: string) => {
+    setHomeView('map')
+    setSelection({ kind: 'session', sessionId })
+    setFocusSessionRequest({ sessionId, bump: performance.now() })
+  }, [setHomeView])
+
   if (!hydrated || !canvasList) {
     return (
       <div className="app boot">
@@ -833,131 +867,170 @@ export default function App() {
 
   return (
     <ToastContext.Provider value={toastCtx}>
-      <div className="app">
+      <div className={`app ${homeView === 'cockpit' ? 'app--cockpit' : 'app--work-map'}`}>
         <div className="board-area">
-          <Board
-            canvasId={activeCanvasId}
-            canvasLoading={activeCanvasLoading}
-            gridModeEnabled={boardGridEnabled}
-            currentCanvasSessionIds={canvasSessionIds}
-            persistence={persistence}
-            initial={hydrated}
-            state={canvasBoardState}
-            selection={selection}
-            onSelectionChange={setSelection}
-            onSelectedElementsContextChange={setSelectedCanvasElements}
-            fitSignal={fitSignal}
-            addToCanvasRequest={addToCanvasRequest}
-            hideFromCanvasRequest={hideFromCanvasRequest}
-            bulkVisibilityRequest={bulkVisibilityRequest}
-            focusSessionRequest={focusSessionRequest}
-            canvasPatchRequest={canvasPatchRequest}
-            onCanvasPatchApplied={handleCanvasPatchApplied}
-            onCountsChange={handleCountsChange}
-            onSceneSnapshotChange={handleSceneSnapshotChange}
-            templateCache={templateCache}
-            onNeedTemplate={ensureTemplate}
-            unreadSids={unreadSids}
-            onRefresh={() => {
-              boardState.refresh()
-              void refreshCanvases()
-            }}
-            onAskAndSpawn={() => {
-              setAssistantRequested(true)
-              dockSeedRef.current = ''
-              setDockOpen(true)
-            }}
-            onPreferences={() => setPreferencesOpen(true)}
-            onFit={() => setFitSignal((x) => x + 1)}
-            arrangeSignal={arrangeSignal}
-          />
-          <CanvasToolbar
+          <div className="home-view-switch" role="tablist" aria-label="Home view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={homeView === 'cockpit'}
+              className={homeView === 'cockpit' ? 'active' : ''}
+              onClick={() => setHomeView('cockpit')}
+            >
+              Cockpit
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={homeView === 'map'}
+              className={homeView === 'map' ? 'active' : ''}
+              onClick={() => setHomeView('map')}
+            >
+              Work Map
+            </button>
+          </div>
+          {homeView === 'cockpit' ? (
+            <PersonalCockpit
+              state={boardState.state}
+              loading={boardState.loading}
+              error={boardState.error}
+              onRefresh={() => {
+                boardState.refresh()
+                void refreshCanvases()
+              }}
+              onOpenSession={handleOpenSession}
+              onShowInMap={handleShowSessionInMap}
+              onOpenPreferences={() => setPreferencesOpen(true)}
+            />
+          ) : (
+            <>
+              <Board
+                canvasId={activeCanvasId}
+                canvasLoading={activeCanvasLoading}
+                gridModeEnabled={boardGridEnabled}
+                currentCanvasSessionIds={canvasSessionIds}
+                persistence={persistence}
+                initial={hydrated}
+                state={canvasBoardState}
+                selection={selection}
+                onSelectionChange={setSelection}
+                onSelectedElementsContextChange={setSelectedCanvasElements}
+                fitSignal={fitSignal}
+                addToCanvasRequest={addToCanvasRequest}
+                hideFromCanvasRequest={hideFromCanvasRequest}
+                bulkVisibilityRequest={bulkVisibilityRequest}
+                focusSessionRequest={focusSessionRequest}
+                canvasPatchRequest={canvasPatchRequest}
+                onCanvasPatchApplied={handleCanvasPatchApplied}
+                onCountsChange={handleCountsChange}
+                onSceneSnapshotChange={handleSceneSnapshotChange}
+                templateCache={templateCache}
+                onNeedTemplate={ensureTemplate}
+                unreadSids={unreadSids}
+                onRefresh={() => {
+                  boardState.refresh()
+                  void refreshCanvases()
+                }}
+                onAskAndSpawn={() => {
+                  setAssistantRequested(true)
+                  dockSeedRef.current = ''
+                  setDockOpen(true)
+                }}
+                onPreferences={() => setPreferencesOpen(true)}
+                onFit={() => setFitSignal((x) => x + 1)}
+                arrangeSignal={arrangeSignal}
+              />
+              <CanvasToolbar
+                canvases={canvasList.canvases}
+                activeCanvasId={activeCanvasId}
+                onActiveCanvasChange={handleSetActiveCanvas}
+                onCreateCanvas={handleCreateCanvas}
+                onRenameCanvas={handleRenameCanvas}
+                onDeleteCanvas={handleDeleteCanvas}
+                onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
+              />
+              {activeCanvasLoading && (
+                <div className="canvas-global-loading" role="status" aria-live="polite">
+                  <div className="canvas-global-loading__ring" aria-hidden />
+                  <div className="canvas-global-loading__label">Switching canvas</div>
+                </div>
+              )}
+              {boardState.error && (
+                <div className="inline-error" style={{ position: 'absolute', bottom: 8, left: 12 }}>
+                  {boardState.error}
+                </div>
+              )}
+              {/* 统一 Dock 入口：mode 由 selection + assistantRequested 决定。
+                  session-mode：现有 session 的 transcript + injectToSession。
+                  assistant-mode：AI 对话 + spawnSession。
+                  Esc / × 关闭：session 模式保留 selection，assistant 模式清
+                  assistantRequested。下次再按键又能重开。 */}
+              {dockOpen && boardState.state && (() => {
+                // dockSessionId 是 dock 自己锚定的 session（不跟随 selection 清空），
+                // 这样画板空白点击不会让 transcript 收起。
+                const sessionForDock = dockSessionId
+                  ? boardState.state.sessions.find((x) => x.id === dockSessionId)
+                  : undefined
+                const useAssistant = assistantRequested || !sessionForDock
+                const mode: DockMode = useAssistant
+                  ? {
+                      kind: 'assistant',
+                      messages: assistantMessages,
+                      setMessages: setAssistantMessages,
+                      canvasId: activeCanvasId,
+                      canvasName: activeCanvas?.name ?? 'Canvas',
+                      workspacePath: activeCanvas?.workspacePath ?? '',
+                      selectedElements: selectedCanvasElements,
+                      onApplyCanvasPatch: handleApplyCanvasPatch,
+                      onSpawned: (cwd) => {
+                        setDockOpen(false)
+                        setDockSessionId(null)
+                        setAssistantRequested(false)
+                        pushToast('success', `Spawning Claude in ${cwd}`)
+                      },
+                      onError: (msg) => pushToast('error', msg),
+                    }
+                  : {
+                      kind: 'session',
+                      state: boardState.state,
+                      session: sessionForDock!,
+                    }
+                return (
+                  <Dock
+                    ref={dockRef}
+                    mode={mode}
+                    initialSeed={dockSeedRef.current}
+                    onClose={() => {
+                      setDockOpen(false)
+                      setDockSessionId(null)
+                      if (useAssistant) setAssistantRequested(false)
+                    }}
+                  />
+                )
+              })()}
+            </>
+          )}
+        </div>
+        {homeView === 'map' && (
+          <Sidebar
+            state={boardState.state}
             canvases={canvasList.canvases}
             activeCanvasId={activeCanvasId}
-            onActiveCanvasChange={handleSetActiveCanvas}
-            onCreateCanvas={handleCreateCanvas}
-            onRenameCanvas={handleRenameCanvas}
-            onDeleteCanvas={handleDeleteCanvas}
-            onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
+            sessionCanvasIds={sessionCanvasIds}
+            onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
+            selection={selection}
+            open={sidebarOpen}
+            onClose={() => setSidebarOpen(false)}
+            onOpen={() => setSidebarOpen(true)}
+            onSelectionChange={handleSidebarSelectionChange}
+            onCanvasCounts={onCanvasCounts}
+            unreadSids={unreadSids}
+            onAddToCanvas={handleAddToCanvas}
+            onHideFromCanvas={handleHideFromCanvas}
+            onBulkVisibility={handleBulkVisibility}
+            onPreferences={() => setPreferencesOpen(true)}
           />
-          {activeCanvasLoading && (
-            <div className="canvas-global-loading" role="status" aria-live="polite">
-              <div className="canvas-global-loading__ring" aria-hidden />
-              <div className="canvas-global-loading__label">Switching canvas</div>
-            </div>
-          )}
-          {boardState.error && (
-            <div className="inline-error" style={{ position: 'absolute', bottom: 8, left: 12 }}>
-              {boardState.error}
-            </div>
-          )}
-          {/* 统一 Dock 入口：mode 由 selection + assistantRequested 决定。
-              session-mode：现有 session 的 transcript + injectToSession。
-              assistant-mode：AI 对话 + spawnSession。
-              Esc / × 关闭：session 模式保留 selection，assistant 模式清
-              assistantRequested。下次再按键又能重开。 */}
-          {dockOpen && boardState.state && (() => {
-            // dockSessionId 是 dock 自己锚定的 session（不跟随 selection 清空），
-            // 这样画板空白点击不会让 transcript 收起。
-            const sessionForDock = dockSessionId
-              ? boardState.state.sessions.find((x) => x.id === dockSessionId)
-              : undefined
-            const useAssistant = assistantRequested || !sessionForDock
-            const mode: DockMode = useAssistant
-              ? {
-                  kind: 'assistant',
-                  messages: assistantMessages,
-                  setMessages: setAssistantMessages,
-                  canvasId: activeCanvasId,
-                  canvasName: activeCanvas?.name ?? 'Canvas',
-                  workspacePath: activeCanvas?.workspacePath ?? '',
-                  selectedElements: selectedCanvasElements,
-                  onApplyCanvasPatch: handleApplyCanvasPatch,
-                  onSpawned: (cwd) => {
-                    setDockOpen(false)
-                    setDockSessionId(null)
-                    setAssistantRequested(false)
-                    pushToast('success', `Spawning Claude in ${cwd}`)
-                  },
-                  onError: (msg) => pushToast('error', msg),
-                }
-              : {
-                  kind: 'session',
-                  state: boardState.state,
-                  session: sessionForDock!,
-                }
-            return (
-              <Dock
-                ref={dockRef}
-                mode={mode}
-                initialSeed={dockSeedRef.current}
-                onClose={() => {
-                  setDockOpen(false)
-                  setDockSessionId(null)
-                  if (useAssistant) setAssistantRequested(false)
-                }}
-              />
-            )
-          })()}
-        </div>
-        <Sidebar
-          state={boardState.state}
-          canvases={canvasList.canvases}
-          activeCanvasId={activeCanvasId}
-          sessionCanvasIds={sessionCanvasIds}
-          onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
-          selection={selection}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          onOpen={() => setSidebarOpen(true)}
-          onSelectionChange={handleSidebarSelectionChange}
-          onCanvasCounts={onCanvasCounts}
-          unreadSids={unreadSids}
-          onAddToCanvas={handleAddToCanvas}
-          onHideFromCanvas={handleHideFromCanvas}
-          onBulkVisibility={handleBulkVisibility}
-          onPreferences={() => setPreferencesOpen(true)}
-        />
+        )}
         {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}
         {preferencesOpen && (
           <PreferencesDialog
