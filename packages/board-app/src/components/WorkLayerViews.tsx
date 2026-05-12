@@ -38,6 +38,7 @@ import {
   type Workroom,
 } from '../workLayer'
 import type { SyncPolicy } from '../types'
+import { useI18n } from '../i18n'
 
 export type WorkLayerView = 'team' | 'workrooms' | 'review' | 'memory'
 
@@ -60,6 +61,7 @@ export function WorkLayerViews({
   onOpenSession,
   onShowInMap,
 }: WorkLayerViewsProps) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [workrooms, setWorkrooms] = useState(loadWorkrooms)
   const [feishu, setFeishu] = useState<FeishuConfig | null>(null)
@@ -69,6 +71,7 @@ export function WorkLayerViews({
     () => graph.nodes.filter((node) => matchesSessionNode(node, query)),
     [graph.nodes, query],
   )
+  const title = titleFor(view, t)
   useEffect(() => {
     fetchFeishuConfig()
       .then((result) => setFeishu(result.feishu))
@@ -93,13 +96,13 @@ export function WorkLayerViews({
     <main className="work-layer" aria-label="AI Work Layer">
       <header className="work-layer__header">
         <div>
-          <p className="cockpit-kicker">{titleFor(view).kicker}</p>
-          <h1>{titleFor(view).title}</h1>
-          <p className="cockpit-subtitle">{titleFor(view).subtitle}</p>
+          <p className="cockpit-kicker">{title.kicker}</p>
+          <h1>{title.title}</h1>
+          <p className="cockpit-subtitle">{title.subtitle}</p>
         </div>
         <button className="ghost icon-label" type="button" onClick={onRefresh} disabled={loading}>
           <RefreshCw size={15} aria-hidden />
-          Refresh
+          {t('action.refresh')}
         </button>
       </header>
 
@@ -108,7 +111,7 @@ export function WorkLayerViews({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search repo, session, provider, status, or latest message"
+          placeholder={t('work.search')}
           aria-label="Search work layer"
         />
       </div>
@@ -800,31 +803,34 @@ function buildFeishuWorkroomBrief(workroom: Workroom, nodes: SessionGraphNode[])
   ].join('\n')
 }
 
-function titleFor(view: WorkLayerView): { kicker: string; title: string; subtitle: string } {
+function titleFor(
+  view: WorkLayerView,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): { kicker: string; title: string; subtitle: string } {
   switch (view) {
     case 'team':
       return {
-        kicker: 'Phase 2 · Selective Sync',
-        title: 'Team AI Radar',
-        subtitle: 'Choose what local AI work becomes team-visible without exposing full transcripts by default.',
+        kicker: t('work.team.kicker'),
+        title: t('work.team.title'),
+        subtitle: t('work.team.subtitle'),
       }
     case 'workrooms':
       return {
-        kicker: 'Phase 3 · Handoff',
-        title: 'Workroom & Handoff',
-        subtitle: 'Collect one or more real sessions into a temporary rescue, review, or handoff surface.',
+        kicker: t('work.workrooms.kicker'),
+        title: t('work.workrooms.title'),
+        subtitle: t('work.workrooms.subtitle'),
       }
     case 'review':
       return {
-        kicker: 'Phase 4 · Evidence',
-        title: 'Review Room',
-        subtitle: 'Group related sessions, inferred artifacts, risks, and integration slots around PR review.',
+        kicker: t('work.review.kicker'),
+        title: t('work.review.title'),
+        subtitle: t('work.review.subtitle'),
       }
     case 'memory':
       return {
-        kicker: 'Phase 5 · Memory',
-        title: 'Team Memory & Audit',
-        subtitle: 'Turn local session history into standup drafts, throughput signals, and privacy audit checks.',
+        kicker: t('work.memory.kicker'),
+        title: t('work.memory.title'),
+        subtitle: t('work.memory.subtitle'),
       }
   }
 }

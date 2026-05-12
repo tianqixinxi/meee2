@@ -16,28 +16,32 @@
         </span>
       </a>
       <nav class="topnav" aria-label="Page sections">
-        <a href="#architecture">架构</a>
-        <a href="#data-flow">数据流</a>
-        <a href="#model">模型</a>
-        <a href="#sync">同步</a>
-        <a href="#feishu">飞书</a>
-        <a href="#usecases">Use cases</a>
-        <a href="#roadmap">Roadmap</a>
+        <a href="#architecture" data-i18n="nav.architecture">架构</a>
+        <a href="#data-flow" data-i18n="nav.dataFlow">数据流</a>
+        <a href="#model" data-i18n="nav.model">模型</a>
+        <a href="#sync" data-i18n="nav.sync">同步</a>
+        <a href="#feishu" data-i18n="nav.feishu">飞书</a>
+        <a href="#usecases" data-i18n="nav.usecases">Use cases</a>
+        <a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a>
       </nav>
+      <div class="top-actions" aria-label="Display settings">
+        <button class="top-action" type="button" data-theme-toggle>Light</button>
+        <button class="top-action" type="button" data-locale-toggle>EN</button>
+      </div>
     </header>
 
     <main>
       <section id="overview" class="overview">
         <div class="overview-copy">
-          <p class="eyebrow">Session-first · Local-first · Selective-sync</p>
-          <h1>让工程团队看见、控制并协作处理本机正在运行的 AI 编程工作。</h1>
-          <p class="lead">
+          <p class="eyebrow" data-i18n="hero.eyebrow">Session-first · Local-first · Selective-sync</p>
+          <h1 data-i18n="hero.title">让工程团队看见、控制并协作处理本机正在运行的 AI 编程工作。</h1>
+          <p class="lead" data-i18n="hero.lead">
             meee2 不做通用白板，也不替代 Jira / Linear。它把 Claude Code、Codex、Cursor、OpenClaw
             等本地 AI session 变成可观察、可同步、可接力、可审查的真实工作执行层。
           </p>
           <div class="overview-actions" aria-label="Primary architecture anchors">
-            <a class="primary-action" href="#architecture">查看架构</a>
-            <a class="secondary-action" href="#sync">查看隐私边界</a>
+            <a class="primary-action" href="#architecture" data-i18n="hero.primary">查看架构</a>
+            <a class="secondary-action" href="#sync" data-i18n="hero.secondary">查看隐私边界</a>
           </div>
         </div>
         <div class="radar-visual" aria-label="Work radar visualization">
@@ -70,6 +74,22 @@
           <div class="session-strip">
             <span></span><span></span><span></span><span></span><span></span>
           </div>
+        </div>
+      </section>
+
+      <section id="surfaces" class="section-band compact">
+        <div class="section-heading">
+          <p class="eyebrow" data-i18n="surfaces.eyebrow">Product UI</p>
+          <h2 data-i18n="surfaces.title">六个入口统一成 Work Surfaces</h2>
+          <p data-i18n="surfaces.copy">前五个是结构化工作面，Work Map 是空间化地图工作面。它们都读取 Session Graph，并共享同一套主题、语言和色彩体系。</p>
+        </div>
+        <div class="surface-grid">
+          <article><strong>Cockpit</strong><span data-i18n="surfaces.cockpit">个人工作面</span></article>
+          <article><strong>Team Radar</strong><span data-i18n="surfaces.team">团队态势工作面</span></article>
+          <article><strong>Workroom</strong><span data-i18n="surfaces.workroom">接力协作工作面</span></article>
+          <article><strong>Review</strong><span data-i18n="surfaces.review">证据审查工作面</span></article>
+          <article><strong>Memory</strong><span data-i18n="surfaces.memory">团队记忆工作面</span></article>
+          <article><strong>Work Map</strong><span data-i18n="surfaces.map">空间化地图工作面</span></article>
         </div>
       </section>
 

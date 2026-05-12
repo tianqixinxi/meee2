@@ -17,6 +17,24 @@
   --shadow: 0 22px 70px rgba(0, 0, 0, 0.28);
 }
 
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f6f3ec;
+  --surface: #fffdf8;
+  --surface-2: #f2ece3;
+  --line: #ddd5c9;
+  --line-strong: #c7baaa;
+  --text: #292522;
+  --muted: #716a62;
+  --dim: #9b9287;
+  --accent: #b8654d;
+  --amber: #a97532;
+  --red: #b75353;
+  --green: #4e8b5c;
+  --blue: #4c7898;
+  --shadow: 0 22px 70px rgba(53, 45, 36, 0.12);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -59,8 +77,8 @@ select {
   gap: 24px;
   min-height: 72px;
   padding: 14px clamp(18px, 4vw, 56px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(16, 17, 19, 0.88);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(16px);
 }
 
@@ -78,7 +96,7 @@ select {
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
   border-radius: 8px;
-  background: #162522;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
   color: var(--accent);
   font-weight: 800;
 }
@@ -102,6 +120,28 @@ select {
   font-size: 13px;
 }
 
+.top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.top-action {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.top-action:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
 .topnav a {
   padding: 8px 10px;
   border-radius: 8px;
@@ -109,7 +149,7 @@ select {
 }
 
 .topnav a:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text);
 }
 
@@ -194,7 +234,7 @@ h3 {
 
 .primary-action {
   background: var(--accent);
-  color: #08201d;
+  color: #fffdf8;
 }
 
 .secondary-action {
@@ -301,6 +341,33 @@ h3 {
 
 .positioning {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.surface-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  max-width: 1180px;
+  margin: 24px auto 0;
+}
+
+.surface-grid article {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.surface-grid strong,
+.surface-grid span {
+  display: block;
+}
+
+.surface-grid span {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .positioning article,
@@ -971,6 +1038,7 @@ h3 {
   }
 
   .positioning,
+  .surface-grid,
   .model-grid,
   .feishu-layout,
   .roadmap {

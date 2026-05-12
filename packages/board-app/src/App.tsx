@@ -12,9 +12,12 @@ import Board from './components/Board'
 import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
+import { Globe2, Moon, Monitor, RefreshCw, Settings, Sun } from 'lucide-react'
 import { PersonalCockpit } from './components/PersonalCockpit'
 import { WorkLayerViews, type WorkLayerView } from './components/WorkLayerViews'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { useI18n, type Locale } from './i18n'
+import { useTheme, type ThemeMode } from './theme'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
@@ -62,19 +65,24 @@ const MIN_CANVAS_LOADING_MS = 3000
 const HOME_VIEW_STORAGE_KEY = 'meee2.homeView.v1'
 type HomeView = 'cockpit' | WorkLayerView | 'map'
 
-const HOME_VIEWS: Array<{ id: HomeView; label: string }> = [
-  { id: 'cockpit', label: 'Cockpit' },
-  { id: 'team', label: 'Team Radar' },
-  { id: 'workrooms', label: 'Workroom' },
-  { id: 'review', label: 'Review' },
-  { id: 'memory', label: 'Memory' },
-  { id: 'map', label: 'Work Map' },
+const WORK_SURFACES: Array<{
+  id: HomeView
+  labelKey: string
+  descriptionKey: string
+  scope: 'personal' | 'team' | 'workspace'
+}> = [
+  { id: 'cockpit', labelKey: 'surface.cockpit.label', descriptionKey: 'surface.cockpit.description', scope: 'personal' },
+  { id: 'team', labelKey: 'surface.team.label', descriptionKey: 'surface.team.description', scope: 'team' },
+  { id: 'workrooms', labelKey: 'surface.workrooms.label', descriptionKey: 'surface.workrooms.description', scope: 'team' },
+  { id: 'review', labelKey: 'surface.review.label', descriptionKey: 'surface.review.description', scope: 'team' },
+  { id: 'memory', labelKey: 'surface.memory.label', descriptionKey: 'surface.memory.description', scope: 'workspace' },
+  { id: 'map', labelKey: 'surface.map.label', descriptionKey: 'surface.map.description', scope: 'workspace' },
 ]
 
 function loadHomeView(): HomeView {
   try {
     const stored = window.localStorage.getItem(HOME_VIEW_STORAGE_KEY)
-    return HOME_VIEWS.some((view) => view.id === stored) ? stored as HomeView : 'cockpit'
+    return WORK_SURFACES.some((view) => view.id === stored) ? stored as HomeView : 'cockpit'
   } catch {
     return 'cockpit'
   }
@@ -157,6 +165,8 @@ const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
 
 export default function App() {
+  const { t, locale, setLocale } = useI18n()
+  const { mode, resolvedTheme, setMode } = useTheme()
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
   const activeCanvasId = canvasList?.activeCanvasId ?? FALLBACK_CANVAS_ID
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
@@ -879,34 +889,65 @@ export default function App() {
 
   const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
+  const activeSurface = WORK_SURFACES.find((surface) => surface.id === homeView) ?? WORK_SURFACES[0]
+  const refreshAll = () => {
+    boardState.refresh()
+    void refreshCanvases()
+  }
 
   return (
     <ToastContext.Provider value={toastCtx}>
       <div className={`app ${homeView !== 'map' ? 'app--cockpit' : 'app--work-map'}`}>
         <div className="board-area">
-          <div className="home-view-switch" role="tablist" aria-label="Home view">
-            {HOME_VIEWS.map((view) => (
+          <div className="surface-shell-nav" aria-label="Work surfaces">
+            <div className="surface-tabs" role="tablist" aria-label="Work surfaces">
+              {WORK_SURFACES.map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={homeView === view.id}
+                  className={homeView === view.id ? 'active' : ''}
+                  onClick={() => setHomeView(view.id)}
+                >
+                  {t(view.labelKey)}
+                </button>
+              ))}
+            </div>
+            <div className="surface-nav-actions">
+              <span className="surface-scope-badge">{t(`scope.${activeSurface.scope}`)}</span>
               <button
-                key={view.id}
+                className="ghost icon-only"
                 type="button"
-                role="tab"
-                aria-selected={homeView === view.id}
-                className={homeView === view.id ? 'active' : ''}
-                onClick={() => setHomeView(view.id)}
+                onClick={() => setMode(nextThemeMode(mode))}
+                aria-label={`Theme: ${mode}`}
+                title={`Theme: ${mode}`}
               >
-                {view.label}
+                {mode === 'system' ? <Monitor size={15} aria-hidden /> : resolvedTheme === 'dark' ? <Moon size={15} aria-hidden /> : <Sun size={15} aria-hidden />}
               </button>
-            ))}
+              <button
+                className="ghost icon-only"
+                type="button"
+                onClick={() => setLocale(nextLocale(locale))}
+                aria-label="Language"
+                title="Language"
+              >
+                <Globe2 size={15} aria-hidden />
+              </button>
+              <button className="ghost icon-only" type="button" onClick={refreshAll} disabled={boardState.loading || canvasLoading} aria-label={t('action.refresh')} title={t('action.refresh')}>
+                <RefreshCw size={15} aria-hidden />
+              </button>
+              <button className="ghost icon-only" type="button" onClick={() => setPreferencesOpen(true)} aria-label={t('action.settings')} title={t('action.settings')}>
+                <Settings size={15} aria-hidden />
+              </button>
+            </div>
           </div>
           {homeView === 'cockpit' ? (
             <PersonalCockpit
               state={boardState.state}
               loading={boardState.loading}
               error={boardState.error}
-              onRefresh={() => {
-                boardState.refresh()
-                void refreshCanvases()
-              }}
+              onRefresh={refreshAll}
               onOpenSession={handleOpenSession}
               onShowInMap={handleShowSessionInMap}
               onOpenPreferences={() => setPreferencesOpen(true)}
@@ -917,16 +958,22 @@ export default function App() {
               state={boardState.state}
               loading={boardState.loading}
               error={boardState.error}
-              onRefresh={() => {
-                boardState.refresh()
-                void refreshCanvases()
-              }}
+              onRefresh={refreshAll}
               onOpenSession={handleOpenSession}
               onShowInMap={handleShowSessionInMap}
             />
           ) : (
-            <>
+            <main className="work-map-surface" aria-label={t('surface.map.label')}>
+              <header className="surface-page-header">
+                <div>
+                  <p className="cockpit-kicker">{t('workmap.kicker')}</p>
+                  <h1>{t('workmap.title')}</h1>
+                  <p className="cockpit-subtitle">{t('workmap.subtitle')}</p>
+                </div>
+              </header>
+              <div className="work-map-canvas-frame">
               <Board
+                resolvedTheme={resolvedTheme}
                 canvasId={activeCanvasId}
                 canvasLoading={activeCanvasLoading}
                 gridModeEnabled={boardGridEnabled}
@@ -949,10 +996,7 @@ export default function App() {
                 templateCache={templateCache}
                 onNeedTemplate={ensureTemplate}
                 unreadSids={unreadSids}
-                onRefresh={() => {
-                  boardState.refresh()
-                  void refreshCanvases()
-                }}
+                onRefresh={refreshAll}
                 onAskAndSpawn={() => {
                   setAssistantRequested(true)
                   dockSeedRef.current = ''
@@ -974,7 +1018,7 @@ export default function App() {
               {activeCanvasLoading && (
                 <div className="canvas-global-loading" role="status" aria-live="polite">
                   <div className="canvas-global-loading__ring" aria-hidden />
-                  <div className="canvas-global-loading__label">Switching canvas</div>
+                  <div className="canvas-global-loading__label">{t('workmap.switching')}</div>
                 </div>
               )}
               {boardState.error && (
@@ -1030,7 +1074,8 @@ export default function App() {
                   />
                 )
               })()}
-            </>
+              </div>
+            </main>
           )}
         </div>
         {homeView === 'map' && (
@@ -1071,4 +1116,14 @@ export default function App() {
       </div>
     </ToastContext.Provider>
   )
+}
+
+function nextThemeMode(mode: ThemeMode): ThemeMode {
+  if (mode === 'system') return 'light'
+  if (mode === 'light') return 'dark'
+  return 'system'
+}
+
+function nextLocale(locale: Locale): Locale {
+  return locale === 'zh-CN' ? 'en' : 'zh-CN'
 }

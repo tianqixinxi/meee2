@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Layers, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
+import { useI18n } from '../i18n'
 
 interface Props {
   canvases: CanvasInfo[]
@@ -21,6 +22,7 @@ export function CanvasToolbar({
   onDeleteCanvas,
   onArrangeSessions,
 }: Props) {
+  const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -95,11 +97,11 @@ export function CanvasToolbar({
         >
           <Layers size={15} aria-hidden />
           <span className="canvas-toolbar__scope">
-            {activeCanvas.scope === 'team' ? 'Team' : 'Personal'}
+            {activeCanvas.scope === 'team' ? t('scope.team') : t('scope.personal')}
           </span>
           <span className="canvas-toolbar__name">{activeCanvas.name}</span>
           {activeCanvas.isDefault && (
-            <span className="canvas-toolbar__badge">Default</span>
+            <span className="canvas-toolbar__badge">{t('map.default')}</span>
           )}
           <ChevronDown size={14} aria-hidden />
         </button>
@@ -127,8 +129,8 @@ export function CanvasToolbar({
                   <span className="canvas-toolbar__item-text">
                     <span>{canvas.name}</span>
                     <span>
-                      {canvas.scope === 'team' ? 'Team' : 'Personal'}
-                      {canvas.isDefault ? ' · Default' : ''}
+                      {canvas.scope === 'team' ? t('scope.team') : t('scope.personal')}
+                      {canvas.isDefault ? ` · ${t('map.default')}` : ''}
                     </span>
                   </span>
                 </button>
@@ -146,7 +148,7 @@ export function CanvasToolbar({
                 setDeleteConfirming(false)
               }}
             >
-              <Plus size={13} aria-hidden /> New canvas
+              <Plus size={13} aria-hidden /> {t('map.new')}
             </button>
             <button
               type="button"
@@ -156,7 +158,7 @@ export function CanvasToolbar({
                 onArrangeSessions()
               }}
             >
-              <LayoutGrid size={13} aria-hidden /> Arrange
+              <LayoutGrid size={13} aria-hidden /> {t('map.arrange')}
             </button>
             <button
               type="button"
@@ -167,7 +169,7 @@ export function CanvasToolbar({
                 setDeleteConfirming(false)
               }}
             >
-              <Pencil size={13} aria-hidden /> Rename
+              <Pencil size={13} aria-hidden /> {t('map.rename')}
             </button>
             <button
               type="button"
@@ -179,7 +181,7 @@ export function CanvasToolbar({
                 setRenaming(false)
               }}
               disabled={activeCanvas.isDefault}
-              title={activeCanvas.isDefault ? 'Default canvas cannot be deleted' : 'Delete canvas'}
+              title={activeCanvas.isDefault ? 'Default map cannot be deleted' : t('map.delete')}
             >
               <Trash2 size={13} aria-hidden /> Delete
             </button>
@@ -193,7 +195,7 @@ export function CanvasToolbar({
                   if (event.key === 'Enter') submitRename()
                   if (event.key === 'Escape') setRenaming(false)
                 }}
-                placeholder="Canvas name"
+                placeholder={t('map.namePlaceholder')}
                 autoFocus
               />
               <button
@@ -216,10 +218,10 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setCreating(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Create canvas">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('map.create')}>
             <div className="modal-header">
-              <div className="modal-title">Create canvas</div>
-              <div className="modal-subtitle">Name it and choose where it lives.</div>
+              <div className="modal-title">{t('map.create')}</div>
+              <div className="modal-subtitle">{t('map.createSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
               <input
@@ -229,7 +231,7 @@ export function CanvasToolbar({
                   if (event.key === 'Enter') submitCreate()
                   if (event.key === 'Escape') setCreating(false)
                 }}
-                placeholder="Canvas name"
+                placeholder={t('map.namePlaceholder')}
                 autoFocus
               />
               <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas scope">
@@ -241,20 +243,20 @@ export function CanvasToolbar({
                     aria-pressed={canvasScopeDraft === scope}
                     onClick={() => setCanvasScopeDraft(scope)}
                   >
-                    {scope === 'team' ? 'Team' : 'Personal'}
+                    {scope === 'team' ? t('scope.team') : t('scope.personal')}
                   </button>
                 ))}
               </div>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setCreating(false)}>Cancel</button>
+              <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('action.cancel')}</button>
               <button
                 className="primary"
                 type="button"
                 onClick={submitCreate}
                 disabled={!canvasNameDraft.trim()}
               >
-                Create
+                {t('action.create')}
               </button>
             </div>
           </div>
@@ -267,20 +269,20 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setDeleteConfirming(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Delete canvas">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('map.delete')}>
             <div className="modal-header">
-              <div className="modal-title">Delete canvas</div>
-              <div className="modal-subtitle">This only removes the canvas container.</div>
+              <div className="modal-title">{t('map.delete')}</div>
+              <div className="modal-subtitle">{t('map.deleteSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 8 }}>
               <strong>{activeCanvas.name}</strong>
               <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
-                This removes the canvas layout and memberships. Sessions are not deleted.
+                {t('map.deleteBody')}
               </span>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setDeleteConfirming(false)}>Cancel</button>
-              <button className="danger" type="button" onClick={submitDelete}>Delete</button>
+              <button className="ghost" type="button" onClick={() => setDeleteConfirming(false)}>{t('action.cancel')}</button>
+              <button className="danger" type="button" onClick={submitDelete}>{t('action.delete')}</button>
             </div>
           </div>
         </div>

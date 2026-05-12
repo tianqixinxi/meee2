@@ -18,6 +18,7 @@ import {
   type SessionBucketId,
   type SessionGraphNode,
 } from '../sessionGraph'
+import { useI18n } from '../i18n'
 
 interface PersonalCockpitProps {
   state: BoardState | null
@@ -55,6 +56,7 @@ export function PersonalCockpit({
   onShowInMap,
   onOpenPreferences,
 }: PersonalCockpitProps) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const graph = useMemo(() => buildSessionGraph(state?.sessions ?? []), [state])
   const filteredNodes = useMemo(
@@ -75,20 +77,20 @@ export function PersonalCockpit({
     <main className="personal-cockpit" aria-label="Personal AI Cockpit">
       <header className="cockpit-header">
         <div>
-          <p className="cockpit-kicker">Personal AI Cockpit</p>
-          <h1>AI Work in Progress</h1>
+          <p className="cockpit-kicker">{t('cockpit.kicker')}</p>
+          <h1>{t('cockpit.title')}</h1>
           <p className="cockpit-subtitle">
-            Local sessions first: status, evidence, risks, and jump-back points.
+            {t('cockpit.subtitle')}
           </p>
         </div>
         <div className="cockpit-actions">
           <button className="ghost icon-label" type="button" onClick={onOpenPreferences}>
             <Settings size={15} aria-hidden />
-            Settings
+            {t('action.settings')}
           </button>
           <button className="ghost icon-label" type="button" onClick={onRefresh} disabled={loading}>
             <RefreshCw size={15} aria-hidden />
-            Refresh
+            {t('action.refresh')}
           </button>
         </div>
       </header>
@@ -117,7 +119,7 @@ export function PersonalCockpit({
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search repo, session, provider, status, or latest message"
+          placeholder={t('cockpit.search')}
           aria-label="Search session history"
         />
       </div>
@@ -125,7 +127,7 @@ export function PersonalCockpit({
       {error && <div className="cockpit-inline-error">{error}</div>}
 
       {!state && loading ? (
-        <div className="cockpit-empty-state">Loading local sessions...</div>
+        <div className="cockpit-empty-state">{t('cockpit.loading')}</div>
       ) : (
         <div className="cockpit-content">
           {PRIMARY_BUCKETS.map((bucketId) => (
@@ -142,7 +144,7 @@ export function PersonalCockpit({
             <div className="cockpit-section__header">
               <div>
                 <h2>{SESSION_BUCKET_META.history.title}</h2>
-                <p>{filteredNodes.length} matching sessions</p>
+                <p>{filteredNodes.length} {t('cockpit.matching')}</p>
               </div>
             </div>
             {historyNodes.length === 0 ? (
@@ -177,13 +179,14 @@ function SessionBucket({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const meta = SESSION_BUCKET_META[bucketId]
   return (
     <section className={`cockpit-section ${bucketId}`}>
       <div className="cockpit-section__header">
         <div>
           <h2>{meta.title}</h2>
-          <p>{nodes.length} sessions</p>
+          <p>{nodes.length} {t('cockpit.sessions')}</p>
         </div>
       </div>
       {nodes.length === 0 ? (
@@ -213,6 +216,7 @@ function SessionRadarCard({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const s = node.session
   return (
     <article className={`cockpit-card status-${s.status}`}>
@@ -220,13 +224,13 @@ function SessionRadarCard({
         <span className="cockpit-provider" style={{ '--provider-color': s.pluginColor } as CSSProperties}>
           {node.provider}
         </span>
-        <span className="cockpit-status">{statusLabel(s.status)}</span>
+        <span className="cockpit-status">{statusLabel(s.status, t)}</span>
       </div>
       <h3 title={s.title}>{s.title}</h3>
       <div className="cockpit-card__meta">
         <span>{node.repo}</span>
         {node.branch && <span>{node.branch}</span>}
-        <span>{formatRelativeTime(node.lastActivityMs)}</span>
+        <span>{formatRelativeTime(node.lastActivityMs, t)}</span>
       </div>
       <p className="cockpit-current-step">{node.currentStep}</p>
       {node.latestMessageText && (
@@ -247,9 +251,9 @@ function SessionRadarCard({
       <div className="cockpit-card__actions">
         <button className="primary icon-label" type="button" onClick={() => onOpenSession(s.id)}>
           <ExternalLink size={14} aria-hidden />
-          Jump back
+          {t('action.jumpBack')}
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label="Show in Work Map">
+        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
         </button>
       </div>
@@ -266,20 +270,21 @@ function SessionHistoryRow({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const s = node.session
   return (
     <div className="cockpit-history-row">
       <div>
         <div className="cockpit-history-row__title">{s.title}</div>
         <div className="cockpit-history-row__meta">
-          {node.provider} · {node.repo} · {statusLabel(s.status)} · {formatRelativeTime(node.lastActivityMs)}
+          {node.provider} · {node.repo} · {statusLabel(s.status, t)} · {formatRelativeTime(node.lastActivityMs, t)}
         </div>
       </div>
       <div className="cockpit-history-row__actions">
-        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label="Show in Work Map">
+        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label="Jump back">
+        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.jumpBack')}>
           <ExternalLink size={15} aria-hidden />
         </button>
       </div>
@@ -287,35 +292,35 @@ function SessionHistoryRow({
   )
 }
 
-function statusLabel(status: string): string {
+function statusLabel(status: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   switch (status) {
     case 'permissionRequired':
-      return 'Permission'
+      return t('status.permissionRequired')
     case 'waitingForUser':
-      return 'Waiting'
+      return t('status.waitingForUser')
     case 'tooling':
-      return 'Tooling'
+      return t('status.tooling')
     case 'thinking':
-      return 'Thinking'
+      return t('status.thinking')
     case 'compacting':
-      return 'Compacting'
+      return t('status.compacting')
     case 'completed':
-      return 'Completed'
+      return t('status.completed')
     case 'dead':
-      return 'Failed'
+      return t('status.dead')
     default:
       return status
   }
 }
 
-function formatRelativeTime(ms: number): string {
-  if (!ms) return 'No activity'
+function formatRelativeTime(ms: number, t: (key: string, params?: Record<string, string | number>) => string): string {
+  if (!ms) return t('time.none')
   const delta = Date.now() - ms
-  if (delta < 60 * 1000) return 'just now'
+  if (delta < 60 * 1000) return t('time.justNow')
   const minutes = Math.floor(delta / (60 * 1000))
-  if (minutes < 60) return `${minutes}m ago`
+  if (minutes < 60) return t('time.minutesAgo', { count: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
+  if (hours < 24) return t('time.hoursAgo', { count: hours })
   const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return t('time.daysAgo', { count: days })
 }

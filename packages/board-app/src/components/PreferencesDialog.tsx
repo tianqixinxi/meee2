@@ -33,6 +33,8 @@ import {
   type FeishuConfig,
   type UserProfile,
 } from '../api'
+import { useI18n, type Locale } from '../i18n'
+import { useTheme, type ThemeMode } from '../theme'
 
 interface Props {
   onClose: () => void
@@ -47,6 +49,8 @@ interface Props {
  *      enabled tools。默认 provider='local' 走 `claude -p`（不需要 key）。
  */
 export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
+  const { t, locale, setLocale } = useI18n()
+  const { mode, setMode } = useTheme()
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
@@ -182,13 +186,39 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
         className="modal settings-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Board Settings"
+        aria-label={t('settings.title')}
       >
         <div className="modal-header">
-          <div className="modal-title">Board Settings</div>
-          <div className="modal-subtitle">Canvas, sync, and assistant behavior for this board.</div>
+          <div className="modal-title">{t('settings.title')}</div>
+          <div className="modal-subtitle">{t('settings.subtitle')}</div>
         </div>
         <div className="modal-body settings-body">
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">{t('settings.appearance')}</div>
+                <div className="settings-section-caption">{t('settings.appearanceCaption')}</div>
+              </div>
+            </div>
+            <div className="settings-panel settings-appearance-panel">
+              <label className="settings-field">
+                <span>{t('settings.theme')}</span>
+                <select value={mode} onChange={(event) => setMode(event.target.value as ThemeMode)}>
+                  <option value="system">{t('settings.theme.system')}</option>
+                  <option value="light">{t('settings.theme.light')}</option>
+                  <option value="dark">{t('settings.theme.dark')}</option>
+                </select>
+              </label>
+              <label className="settings-field">
+                <span>{t('settings.language')}</span>
+                <select value={locale} onChange={(event) => setLocale(event.target.value as Locale)}>
+                  <option value="en">{t('settings.language.en')}</option>
+                  <option value="zh-CN">{t('settings.language.zh-CN')}</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
           {/* ── meee2 Online account + sync ───────────────────────── */}
           <section className="settings-section">
             <div className="settings-section-header">
@@ -317,7 +347,7 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
           <section className="settings-section">
             <div className="settings-section-header">
               <div>
-                <div className="settings-section-title">Canvas Display</div>
+                <div className="settings-section-title">Work Map Display</div>
                 <div className="settings-section-caption">Visual guides only; saved card positions stay unchanged.</div>
               </div>
             </div>
@@ -468,8 +498,8 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
         </div>
         <div className="modal-footer">
           <span style={{ flex: 1 }} />
-          <button className="ghost" onClick={onClose}>Cancel</button>
-          <button className="primary" onClick={save}>Save</button>
+          <button className="ghost" onClick={onClose}>{t('action.cancel')}</button>
+          <button className="primary" onClick={save}>{t('action.save')}</button>
         </div>
       </div>
     </div>

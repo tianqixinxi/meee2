@@ -1,3 +1,98 @@
+const THEME_KEY = 'meee2-readme.theme.v1'
+const LOCALE_KEY = 'meee2-readme.locale.v1'
+
+const translations = {
+  'zh-CN': {
+    'nav.architecture': '架构',
+    'nav.dataFlow': '数据流',
+    'nav.model': '模型',
+    'nav.sync': '同步',
+    'nav.feishu': '飞书',
+    'nav.usecases': 'Use cases',
+    'nav.roadmap': 'Roadmap',
+    'hero.eyebrow': 'Session-first · Local-first · Selective-sync',
+    'hero.title': '让工程团队看见、控制并协作处理本机正在运行的 AI 编程工作。',
+    'hero.lead': 'meee2 不做通用白板，也不替代 Jira / Linear。它把 Claude Code、Codex、Cursor、OpenClaw 等本地 AI session 变成可观察、可同步、可接力、可审查的真实工作执行层。',
+    'hero.primary': '查看架构',
+    'hero.secondary': '查看隐私边界',
+    'surfaces.eyebrow': 'Product UI',
+    'surfaces.title': '六个入口统一成 Work Surfaces',
+    'surfaces.copy': '前五个是结构化工作面，Work Map 是空间化地图工作面。它们都读取 Session Graph，并共享同一套主题、语言和色彩体系。',
+    'surfaces.cockpit': '个人工作面',
+    'surfaces.team': '团队态势工作面',
+    'surfaces.workroom': '接力协作工作面',
+    'surfaces.review': '证据审查工作面',
+    'surfaces.memory': '团队记忆工作面',
+    'surfaces.map': '空间化地图工作面',
+  },
+  en: {
+    'nav.architecture': 'Architecture',
+    'nav.dataFlow': 'Data flow',
+    'nav.model': 'Model',
+    'nav.sync': 'Sync',
+    'nav.feishu': 'Feishu',
+    'nav.usecases': 'Use cases',
+    'nav.roadmap': 'Roadmap',
+    'hero.eyebrow': 'Session-first · Local-first · Selective-sync',
+    'hero.title': 'Make local AI coding work visible, controllable, and handoff-ready for engineering teams.',
+    'hero.lead': 'meee2 is not a generic whiteboard or a Jira / Linear replacement. It turns local Claude Code, Codex, Cursor, and OpenClaw sessions into an observable execution layer with status, evidence, risk, sync policy, and handoff points.',
+    'hero.primary': 'View architecture',
+    'hero.secondary': 'View privacy boundary',
+    'surfaces.eyebrow': 'Product UI',
+    'surfaces.title': 'Six entries become one Work Surfaces system',
+    'surfaces.copy': 'The first five entries are structured work surfaces. Work Map is the spatial map surface. All of them read from Session Graph and share one theme, language, and color system.',
+    'surfaces.cockpit': 'Personal work surface',
+    'surfaces.team': 'Team radar surface',
+    'surfaces.workroom': 'Handoff collaboration surface',
+    'surfaces.review': 'Evidence review surface',
+    'surfaces.memory': 'Team memory surface',
+    'surfaces.map': 'Spatial map surface',
+  },
+}
+
+const themeToggle = document.querySelector('[data-theme-toggle]')
+const localeToggle = document.querySelector('[data-locale-toggle]')
+
+function detectTheme() {
+  const stored = localStorage.getItem(THEME_KEY)
+  if (stored === 'light' || stored === 'dark') return stored
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+}
+
+function setTheme(theme) {
+  document.documentElement.dataset.theme = theme
+  localStorage.setItem(THEME_KEY, theme)
+  if (themeToggle) themeToggle.textContent = theme === 'light' ? 'Dark' : 'Light'
+}
+
+function detectLocale() {
+  const stored = localStorage.getItem(LOCALE_KEY)
+  if (stored === 'en' || stored === 'zh-CN') return stored
+  return navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en'
+}
+
+function setLocale(locale) {
+  const dict = translations[locale] ?? translations.en
+  document.documentElement.lang = locale
+  localStorage.setItem(LOCALE_KEY, locale)
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    const key = node.dataset.i18n
+    if (dict[key]) node.textContent = dict[key]
+  })
+  if (localeToggle) localeToggle.textContent = locale === 'zh-CN' ? 'EN' : '中'
+}
+
+setTheme(detectTheme())
+setLocale(detectLocale())
+
+themeToggle?.addEventListener('click', () => {
+  setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light')
+})
+
+localeToggle?.addEventListener('click', () => {
+  setLocale(document.documentElement.lang === 'zh-CN' ? 'en' : 'zh-CN')
+})
+
 const layerButtons = document.querySelectorAll('.layer-button')
 const flowNodes = document.querySelectorAll('.flow-node')
 
@@ -99,4 +194,3 @@ policyTabs.forEach((tab) => {
   tab.addEventListener('click', () => setPolicy(tab.dataset.policy))
 })
 setPolicy('private')
-
