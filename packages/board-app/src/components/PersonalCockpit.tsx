@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Wrench,
 } from 'lucide-react'
 import type { BoardState } from '../types'
 import {
@@ -129,7 +130,7 @@ export function PersonalCockpit({
       {!state && loading ? (
         <div className="cockpit-empty-state">{t('cockpit.loading')}</div>
       ) : (
-        <div className="cockpit-content">
+        <div className="cockpit-content cockpit-content--radar">
           {PRIMARY_BUCKETS.map((bucketId) => (
             <SessionBucket
               key={bucketId}
@@ -192,9 +193,9 @@ function SessionBucket({
       {nodes.length === 0 ? (
         <div className="cockpit-empty-state">{meta.empty}</div>
       ) : (
-        <div className="cockpit-card-grid">
+        <div className="cockpit-radar-list">
           {nodes.slice(0, 6).map((node) => (
-            <SessionRadarCard
+            <SessionRadarRow
               key={node.session.id}
               node={node}
               onOpenSession={onOpenSession}
@@ -207,7 +208,7 @@ function SessionBucket({
   )
 }
 
-function SessionRadarCard({
+function SessionRadarRow({
   node,
   onOpenSession,
   onShowInMap,
@@ -218,40 +219,49 @@ function SessionRadarCard({
 }) {
   const { t } = useI18n()
   const s = node.session
+  const primaryRisk = node.risks[0] ?? null
   return (
-    <article className={`cockpit-card status-${s.status}`}>
-      <div className="cockpit-card__top">
+    <article className={`cockpit-radar-row status-${s.status}`}>
+      <div className="cockpit-radar-row__status">
+        <span className={`cockpit-state-dot ${node.primaryBucket}`} aria-hidden />
+        <span>{statusLabel(s.status, t)}</span>
+      </div>
+      <div className="cockpit-radar-row__identity">
         <span className="cockpit-provider" style={{ '--provider-color': s.pluginColor } as CSSProperties}>
           {node.provider}
         </span>
-        <span className="cockpit-status">{statusLabel(s.status, t)}</span>
+        <button className="cockpit-radar-row__title" type="button" onClick={() => onOpenSession(s.id)} title={s.title}>
+          {s.title}
+        </button>
+        <div className="cockpit-radar-row__meta">
+          <span title={node.repo}>{node.repo}</span>
+          {node.branch && <span title={node.branch}>{node.branch}</span>}
+        </div>
       </div>
-      <h3 title={s.title}>{s.title}</h3>
-      <div className="cockpit-card__meta">
-        <span>{node.repo}</span>
-        {node.branch && <span>{node.branch}</span>}
-        <span>{formatRelativeTime(node.lastActivityMs, t)}</span>
-      </div>
-      <p className="cockpit-current-step">{node.currentStep}</p>
+      <p className="cockpit-current-step" title={node.currentStep}>{node.currentStep}</p>
       {node.latestMessageText && (
-        <p className="cockpit-latest-message">
+        <p className="cockpit-latest-message" title={node.latestMessageText}>
           <span>{node.latestMessage?.role ?? 'message'}</span>
           {node.latestMessageText}
         </p>
       )}
-      {node.risks.length > 0 && (
-        <div className="cockpit-risks">
-          {node.risks.slice(0, 3).map((risk) => (
-            <span key={`${risk.type}:${risk.label}`} className={`cockpit-risk ${risk.severity}`} title={risk.detail}>
-              {risk.label}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="cockpit-card__actions">
-        <button className="primary icon-label" type="button" onClick={() => onOpenSession(s.id)}>
+      <div className="cockpit-radar-row__tool" title={s.currentTool || s.currentTask || ''}>
+        <Wrench size={13} aria-hidden />
+        <span>{s.currentTool || s.currentTask || '—'}</span>
+      </div>
+      <div className="cockpit-radar-row__risk">
+        {primaryRisk ? (
+          <span className={`cockpit-risk ${primaryRisk.severity}`} title={primaryRisk.detail}>
+            {primaryRisk.label}
+          </span>
+        ) : (
+          <span className="cockpit-muted-pill">No risk</span>
+        )}
+      </div>
+      <div className="cockpit-radar-row__time">{formatRelativeTime(node.lastActivityMs, t)}</div>
+      <div className="cockpit-radar-row__actions">
+        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')}>
           <ExternalLink size={14} aria-hidden />
-          {t('action.openDetail')}
         </button>
         <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
