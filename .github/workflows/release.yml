@@ -138,6 +138,16 @@ jobs:
             ${{ runner.os }}-spm-release-
             ${{ runner.os }}-spm-
 
+      # SwiftPM 把 Sources/Board/WebDist 声明为 .copy resource —— 目录在 repo
+      # 里靠 .gitkeep 占位（vite 产物 .gitignore 掉了）。空目录时 SwiftPM 不
+      # 生成 Bundle.module accessor，BoardWebDistLocator.swift 就编不过。
+      # build.sh 里会跑 pnpm build，但那一步在 Sanity test 之后；要让 sanity
+      # 真正测到带 WebDist 的 bundle，必须在 swift test 前先填一遍。
+      - name: Build web frontend (populate Sources/Board/WebDist)
+        run: |
+          pnpm install --frozen-lockfile=false
+          pnpm -F @meee1/board-app build
+
       # 先跑一次 test 作 sanity —— 挂掉的 build 不该 release
       - name: Sanity test
         run: swift test --parallel
