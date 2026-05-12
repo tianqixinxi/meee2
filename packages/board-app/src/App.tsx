@@ -13,6 +13,7 @@ import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import { PersonalCockpit } from './components/PersonalCockpit'
+import { WorkLayerViews, type WorkLayerView } from './components/WorkLayerViews'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type {
@@ -59,14 +60,28 @@ interface HydratedState {
 const FALLBACK_CANVAS_ID = 'personal-default'
 const MIN_CANVAS_LOADING_MS = 3000
 const HOME_VIEW_STORAGE_KEY = 'meee2.homeView.v1'
-type HomeView = 'cockpit' | 'map'
+type HomeView = 'cockpit' | WorkLayerView | 'map'
+
+const HOME_VIEWS: Array<{ id: HomeView; label: string }> = [
+  { id: 'cockpit', label: 'Cockpit' },
+  { id: 'team', label: 'Team Radar' },
+  { id: 'workrooms', label: 'Workroom' },
+  { id: 'review', label: 'Review' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'map', label: 'Work Map' },
+]
 
 function loadHomeView(): HomeView {
   try {
-    return window.localStorage.getItem(HOME_VIEW_STORAGE_KEY) === 'map' ? 'map' : 'cockpit'
+    const stored = window.localStorage.getItem(HOME_VIEW_STORAGE_KEY)
+    return HOME_VIEWS.some((view) => view.id === stored) ? stored as HomeView : 'cockpit'
   } catch {
     return 'cockpit'
   }
+}
+
+function isWorkLayerView(view: HomeView): view is WorkLayerView {
+  return view === 'team' || view === 'workrooms' || view === 'review' || view === 'memory'
 }
 
 async function loadCanvasHydratedState(
@@ -867,27 +882,21 @@ export default function App() {
 
   return (
     <ToastContext.Provider value={toastCtx}>
-      <div className={`app ${homeView === 'cockpit' ? 'app--cockpit' : 'app--work-map'}`}>
+      <div className={`app ${homeView !== 'map' ? 'app--cockpit' : 'app--work-map'}`}>
         <div className="board-area">
           <div className="home-view-switch" role="tablist" aria-label="Home view">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={homeView === 'cockpit'}
-              className={homeView === 'cockpit' ? 'active' : ''}
-              onClick={() => setHomeView('cockpit')}
-            >
-              Cockpit
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={homeView === 'map'}
-              className={homeView === 'map' ? 'active' : ''}
-              onClick={() => setHomeView('map')}
-            >
-              Work Map
-            </button>
+            {HOME_VIEWS.map((view) => (
+              <button
+                key={view.id}
+                type="button"
+                role="tab"
+                aria-selected={homeView === view.id}
+                className={homeView === view.id ? 'active' : ''}
+                onClick={() => setHomeView(view.id)}
+              >
+                {view.label}
+              </button>
+            ))}
           </div>
           {homeView === 'cockpit' ? (
             <PersonalCockpit
@@ -901,6 +910,19 @@ export default function App() {
               onOpenSession={handleOpenSession}
               onShowInMap={handleShowSessionInMap}
               onOpenPreferences={() => setPreferencesOpen(true)}
+            />
+          ) : isWorkLayerView(homeView) ? (
+            <WorkLayerViews
+              view={homeView}
+              state={boardState.state}
+              loading={boardState.loading}
+              error={boardState.error}
+              onRefresh={() => {
+                boardState.refresh()
+                void refreshCanvases()
+              }}
+              onOpenSession={handleOpenSession}
+              onShowInMap={handleShowSessionInMap}
             />
           ) : (
             <>
