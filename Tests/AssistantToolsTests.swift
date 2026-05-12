@@ -22,7 +22,15 @@ final class AssistantToolsTests: XCTestCase {
             "list_channels",
             "get_channel_messages",
             "propose_canvas_patch",
-            "create_session"
+            "create_session",
+            "create_coordinator_session",
+            "get_coordination_state",
+            "send_to_session",
+            "broadcast_to_members",
+            "update_group_digest",
+            "pause_coordination",
+            "resume_coordination",
+            "ask_coordinator"
         ])
     }
 
@@ -86,7 +94,7 @@ final class AssistantToolsTests: XCTestCase {
         // proceeds to its handler.
         let r = AssistantTools.dispatch(
             name: "create_session",
-            args: [:],  // missing cwd → handler-level failure
+            args: ["mode": "project"],  // missing cwd → handler-level failure
             enabled: nil)
         guard case .failure(let msg) = r else {
             return XCTFail("expected handler-level failure for missing cwd")
@@ -97,16 +105,16 @@ final class AssistantToolsTests: XCTestCase {
 
     // MARK: - create_session validation
 
-    func testCreateSessionRejectsMissingCwd() {
-        let r = AssistantTools.dispatch(name: "create_session", args: [:], enabled: nil)
+    func testCreateSessionRejectsMissingProjectCwd() {
+        let r = AssistantTools.dispatch(name: "create_session", args: ["mode": "project"], enabled: nil)
         guard case .failure(let msg) = r else {
             return XCTFail("expected failure for missing cwd, got \(r)")
         }
         XCTAssertTrue(msg.contains("cwd"))
     }
 
-    func testCreateSessionRejectsEmptyCwd() {
-        let r = AssistantTools.dispatch(name: "create_session", args: ["cwd": ""], enabled: nil)
+    func testCreateSessionRejectsEmptyProjectCwd() {
+        let r = AssistantTools.dispatch(name: "create_session", args: ["mode": "project", "cwd": ""], enabled: nil)
         guard case .failure = r else {
             return XCTFail("expected failure for empty cwd, got \(r)")
         }
@@ -125,6 +133,13 @@ final class AssistantToolsTests: XCTestCase {
         XCTAssertTrue(msg.contains("does not exist"))
         XCTAssertTrue(msg.contains("createIfMissing"),
                       "error message should hint at the createIfMissing escape hatch")
+    }
+
+    func testCreateSessionDefaultsModeFromCwdPresence() {
+        XCTAssertEqual(AssistantTools.createSessionMode(rawMode: nil, cwd: ""), "global")
+        XCTAssertEqual(AssistantTools.createSessionMode(rawMode: nil, cwd: "/tmp"), "project")
+        XCTAssertEqual(AssistantTools.createSessionMode(rawMode: "global", cwd: "/tmp"), "global")
+        XCTAssertEqual(AssistantTools.createSessionMode(rawMode: "project", cwd: ""), "project")
     }
 
     // MARK: - get_session_list / get_session_info smoke

@@ -15,7 +15,14 @@ import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './com
 import NewChannelDialog from './components/NewChannelDialog'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
-import type { CanvasList, CanvasPatchProposal, CanvasPatchRequest, CanvasScope, Selection } from './types'
+import type {
+  CanvasList,
+  CanvasPatchProposal,
+  CanvasPatchRequest,
+  CanvasScope,
+  SelectedCanvasElementContext,
+  Selection,
+} from './types'
 import {
   BOARD_PREFERENCES_CHANGED,
   loadBoardGridEnabled,
@@ -256,6 +263,7 @@ export default function App() {
 
   const boardState = useBoardState()
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
+  const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
@@ -845,6 +853,7 @@ export default function App() {
             state={canvasBoardState}
             selection={selection}
             onSelectionChange={setSelection}
+            onSelectedElementsContextChange={setSelectedCanvasElements}
             fitSignal={fitSignal}
             addToCanvasRequest={addToCanvasRequest}
             hideFromCanvasRequest={hideFromCanvasRequest}
@@ -864,7 +873,6 @@ export default function App() {
             onNewChannel={() => setNewChannelOpen(true)}
             placeChannelRequest={placeChannelRequest}
             onAskAndSpawn={() => {
-              setSelection({ kind: 'none' })
               setAssistantRequested(true)
               dockSeedRef.current = ''
               setDockOpen(true)
@@ -913,6 +921,7 @@ export default function App() {
                   canvasId: activeCanvasId,
                   canvasName: activeCanvas?.name ?? 'Canvas',
                   workspacePath: activeCanvas?.workspacePath ?? '',
+                  selectedElements: selectedCanvasElements,
                   onApplyCanvasPatch: handleApplyCanvasPatch,
                   onSpawned: (cwd) => {
                     setDockOpen(false)

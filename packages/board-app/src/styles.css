@@ -220,6 +220,60 @@ textarea {
   color: rgba(245, 244, 239, 0.72);
 }
 
+.canvas-save-status {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 999px;
+  background: rgba(13, 17, 25, 0.72);
+  color: rgba(189, 198, 211, 0.74);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font-size: 11px;
+  font-weight: 650;
+  pointer-events: none;
+  transition: opacity 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.canvas-save-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.72);
+}
+
+.canvas-save-status--saving {
+  border-color: rgba(96, 165, 250, 0.36);
+  color: rgba(219, 234, 254, 0.9);
+}
+
+.canvas-save-status--saving .canvas-save-status__dot {
+  background: #60a5fa;
+  animation: canvas-save-pulse 0.9s ease-in-out infinite;
+}
+
+.canvas-save-status--saved {
+  border-color: rgba(74, 222, 128, 0.28);
+  color: rgba(220, 252, 231, 0.86);
+}
+
+.canvas-save-status--saved .canvas-save-status__dot {
+  background: #4ade80;
+}
+
+@keyframes canvas-save-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+
 @keyframes canvas-loading-spin {
   to { transform: rotate(360deg); }
 }
@@ -584,6 +638,14 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   background: rgba(255, 255, 255, 0.1);
   color: #E5E7EB;
 }
+.session-dock__actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.session-dock__actions button:disabled:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #C7CCD9;
+}
 
 .session-dock__transcript {
   flex: 1 1 auto;
@@ -760,6 +822,27 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   line-height: 1.55;
 }
 
+.assistant-context-reset {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 10px 6px;
+  color: rgba(199, 204, 217, 0.48);
+  font-size: 11px;
+  line-height: 1;
+  user-select: none;
+}
+.assistant-context-reset::before,
+.assistant-context-reset::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: rgba(199, 204, 217, 0.16);
+}
+.assistant-context-reset span {
+  white-space: nowrap;
+}
+
 .canvas-patch-card {
   display: flex;
   align-items: flex-start;
@@ -770,6 +853,10 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   border: 1px solid rgba(96, 165, 250, 0.22);
   background: rgba(15, 23, 42, 0.56);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+}
+.canvas-patch-card--applied {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(15, 23, 42, 0.36);
 }
 .canvas-patch-card__body {
   min-width: 0;
@@ -806,6 +893,10 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   padding: 5px 11px;
   font-size: 12px;
   line-height: 1.2;
+}
+.canvas-patch-card__apply:disabled {
+  opacity: 0.58;
+  cursor: default;
 }
 
 .session-dock__bottombar {
@@ -970,23 +1061,24 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 /* -- Wave 18: SessionOverlay ------------------------------------------- */
-/* Outer wrapper is purely positional. pointer-events:none so Excalidraw
- * (below, in DOM order) owns all mouse input: selection, drag, arrow
- * binding, copy/paste, library, lasso — all native. */
+/* Outer wrapper is purely positional. Items opt back into pointer events so
+ * session-card drag can update the underlying Excalidraw rect deterministically. */
 .session-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
   overflow: hidden;
 }
-/* Each item mirrors one embeddable's screen-space bbox. The <CardHost>
- * iframe inside is full-bleed. Clicks pass through to Excalidraw's canvas
- * so the user can still select/drag the embeddable beneath. */
+/* Each item mirrors one session rect's screen-space bbox. */
 .session-overlay__item {
   position: absolute;
-  /* auto: we need to capture click to do explicit selection (Excalidraw's
-   * embeddable click goes to activation, not selection) */
   pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.session-overlay__item:active {
+  cursor: grabbing;
 }
 .session-overlay__card-shell {
   width: 100%;
@@ -2551,6 +2643,29 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 /* attachments ride above textarea inside the box */
+.cc-context-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.cc-context-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 280px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(37, 99, 235, 0.12);
+  color: rgba(191, 219, 254, 0.92);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cc-attachments {
   display: flex;
   flex-wrap: wrap;
@@ -2814,12 +2929,9 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   margin: 0 0 6px;
 }
 
-/* Entry wrapper — owns the per-turn layout. tx-entry__header is sticky
-   at the top of this box (within the scrolling .transcript-panel) so
-   when a long assistant reply scrolls past, you still see who's
-   talking + when until the entry's bottom edge pushes the header out.
-   measureElement walks the box so the virtualizer's translateY layout
-   stays accurate even with the sticky header. */
+/* Entry wrapper — owns the per-turn layout. Speaker labels stay in normal
+   document flow; pinning them during scroll makes the transcript look like
+   labels detach from their message. */
 .tx-entry {
   display: flex;
   flex-direction: column;
@@ -2839,9 +2951,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .tx-entry__header {
-  position: sticky;
-  top: 0;
-  z-index: 2;                     /* stays under .tx-sticky-user (z-index 5) */
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -2849,18 +2958,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   max-width: min(86%, 72ch);
   padding: 4px 0 6px;
   margin-bottom: 2px;
-  /* Translucent mask + backdrop-filter so the chip stays legible over
-     either the warm-paper sidebar bg or the dock's blurred glass bg
-     without baking in a specific color. */
-  background: linear-gradient(
-    to bottom,
-    rgba(28, 28, 26, 0.85) 0%,
-    rgba(28, 28, 26, 0.7) 60%,
-    rgba(28, 28, 26, 0) 100%
-  );
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  pointer-events: none;           /* don't eat clicks meant for content beneath */
   user-select: none;
 }
 
@@ -3317,86 +3414,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 /* scroll 容器的外壳 —— relative 定位给 "↓ Latest" 浮按钮锚点用 */
 .transcript-panel-wrap {
   position: relative;
-}
-
-/* ─── Sticky current-user bar ──────────────────────────────────────────
-   滚动浏览历史时，当前 Claude 回复所针对的那条 user 消息滚出视口上沿后，
-   把它压成紧凑横条粘在面板顶部。视觉上跟 .tx-text--user 的 chip 同色系，
-   建立"bubble 变 bar"的视觉连续性，不引入新配色。 */
-.tx-sticky-user {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 5;
-
-  display: flex;
-  align-items: center;
-  gap: 8px;
-
-  padding: 6px 12px;
-  /* 贴合 user bubble 的暖褐底调，再加一点半透明 + blur 把它和下方 transcript 分开 */
-  background: rgba(51, 40, 37, 0.92);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border-bottom: 1px solid rgba(204, 120, 92, 0.28);
-
-  color: var(--text);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-  text-align: left;
-
-  animation: tx-sticky-user-in 280ms cubic-bezier(0.2, 0.9, 0.25, 1);
-}
-.tx-sticky-user:hover {
-  background: rgba(58, 46, 42, 0.96);
-}
-.tx-sticky-user:active {
-  transform: translateY(1px);
-}
-
-/* "You" chip —— 同 .tx-text--user .tx-text__role 的药丸，只是小一号 */
-.tx-sticky-user__chip {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  color: #F0D5C7;
-  background: var(--accent-subtle, rgba(204, 120, 92, 0.18));
-  border: 1px solid rgba(204, 120, 92, 0.38);
-  padding: 2px 8px;
-  border-radius: 999px;
-}
-
-.tx-sticky-user__text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text);
-}
-
-.tx-sticky-user__hint {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--accent);
-  opacity: 0.75;
-}
-.tx-sticky-user:hover .tx-sticky-user__hint {
-  opacity: 1;
-}
-
-@keyframes tx-sticky-user-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .transcript-scroll-latest {
@@ -5539,6 +5556,97 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   display: block !important;
   width: 10px !important;
   height: 10px !important;
+}
+
+.coordination-panel {
+  position: absolute;
+  right: 18px;
+  top: 72px;
+  z-index: 9;
+  width: min(360px, calc(100vw - 36px));
+  padding: 14px;
+  border: 1px solid rgba(93, 119, 158, 0.42);
+  border-radius: 12px;
+  background: rgba(13, 17, 25, 0.88);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
+  color: rgba(238, 242, 247, 0.94);
+  backdrop-filter: blur(18px);
+  pointer-events: auto;
+}
+
+.coordination-panel__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coordination-panel__title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.coordination-panel__meta,
+.coordination-panel__row,
+.coordination-panel__goal {
+  color: rgba(189, 198, 211, 0.8);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.coordination-panel__goal {
+  margin-top: 10px;
+  color: rgba(226, 232, 240, 0.9);
+}
+
+.coordination-panel__row {
+  margin-top: 6px;
+}
+
+.coordination-panel__badge {
+  flex: none;
+  padding: 3px 7px;
+  border: 1px solid rgba(231, 126, 91, 0.45);
+  border-radius: 999px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.24);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.coordination-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.coordination-panel__actions button {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(135, 154, 185, 0.32);
+  border-radius: 8px;
+  background: rgba(32, 39, 54, 0.74);
+  color: rgba(241, 245, 249, 0.92);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.coordination-panel__actions button:hover:not(:disabled) {
+  border-color: rgba(148, 163, 184, 0.54);
+  background: rgba(45, 56, 76, 0.9);
+}
+
+.coordination-panel__actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.coordination-panel__actions button.danger {
+  border-color: rgba(231, 126, 91, 0.42);
+  color: #fecaca;
+  background: rgba(80, 28, 28, 0.45);
 }
 
 @media (max-width: 900px) {

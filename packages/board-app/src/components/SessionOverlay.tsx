@@ -2,7 +2,9 @@
 //
 // Wave 19: session shapes are now plain `rectangle` elements (not embeddables)
 // so Excalidraw handles click/drag/resize/wheel-pan-zoom natively. Overlay is
-// fully `pointer-events: none` — mouse events flow through to Excalidraw.
+// mostly `pointer-events: none`: empty canvas areas flow through to Excalidraw,
+// while each card item captures pointer drag so we can persist card layout
+// immediately even when Excalidraw's transparent rect hit-testing misses.
 //
 // Selection sync: click on rect → Excalidraw native selection → Board's onChange
 // handler reads selectedElementIds → updates sidebar.
@@ -14,7 +16,7 @@
 // own overlay instance — same session data via customData.sessionId.
 
 import { memo, useEffect, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { sceneCoordsToViewportCoords } from '@excalidraw/excalidraw'
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 
@@ -33,6 +35,7 @@ interface Props {
   currentCanvasSessionIds: Set<string>
   /** Bumped after Board mutates the Excalidraw scene programmatically. */
   sceneRevision: number
+  onSessionPointerDown?: (event: ReactPointerEvent<HTMLDivElement>, elementId: string, sessionId: string) => void
 }
 
 // De-dup log tracker keyed by sid. Only fires when the source length changes
@@ -77,9 +80,10 @@ export function SessionOverlay({
   unreadSids,
   currentCanvasSessionIds,
   sceneRevision: _sceneRevision,
+  onSessionPointerDown,
 }: Props) {
   void _sceneRevision
-  const [, setTick] = useState(0)
+  const [overlayTick, setOverlayTick] = useState(0)
   const rafRef = useRef<number | null>(null)
   useEffect(() => {
     if (!excalidrawAPI) return
@@ -87,7 +91,7 @@ export function SessionOverlay({
       if (rafRef.current !== null) return
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null
-        setTick((t) => (t + 1) & 0x7fffffff)
+        setOverlayTick((t) => (t + 1) & 0x7fffffff)
       })
     }
     const unsub = excalidrawAPI.onChange(() => {
@@ -172,10 +176,10 @@ export function SessionOverlay({
       style={{
         position: 'absolute',
         inset: 0,
-        pointerEvents: 'none',  // crucial: let all mouse events reach Excalidraw
+        pointerEvents: 'none',
         overflow: 'hidden',
-        // Excalidraw canvas sits at z-index:2. Overlay above so visuals show,
-        // but events pass through thanks to pointer-events:none.
+        // Excalidraw canvas sits at z-index:2. Overlay above so visuals show;
+        // only individual card items opt back into pointer events.
         zIndex: 3,
       }}
     >
@@ -196,17 +200,19 @@ export function SessionOverlay({
                 ? ' session-overlay__item--current'
                 : ' session-overlay__item--secondary')
             }
+            onPointerDown={(event) => onSessionPointerDown?.(event, it.elementId, it.session.id)}
             style={{
               position: 'absolute',
               left: it.left,
               top: it.top,
               width: it.width,
               height: it.height,
-              pointerEvents: 'none',
+              pointerEvents: 'auto',
             }}
           >
             <div style={{
               pointerEvents: 'none',
+              position: 'relative',
               // Render card at base 360x260, CSS-scale to match zoom.
               // Font rendering stays crisp at any zoom level.
               transform: `scale(${it.width / RECT_W})`,
@@ -224,10 +230,10 @@ export function SessionOverlay({
                   />
                 </div>
               ) : (
-                <SecondarySessionCard session={it.session} />
-              )}
+                  <SecondarySessionCard session={it.session} />
+                )}
+              {urgent && <NotificationDot />}
             </div>
-            {urgent && <NotificationDot />}
           </div>
         )
       })}
@@ -254,8 +260,7 @@ function SecondarySessionCard({ session }: { session: Session }) {
 
 /**
  * 右上角小红点 —— 和 Island 的橙色 attention 指示灯对齐。
- * 绝对定位在 card 右上角，尺寸固定（不跟着 canvas zoom 缩放——避免小画
- * 板时看不见、大画板时又巨大），pulse 动画吸引注意。
+ * 放在 card 的缩放容器内，跟随 session card 的 canvas zoom 一起缩放。
  */
 function NotificationDot() {
   return (

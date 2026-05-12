@@ -23,7 +23,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { BoardState, CanvasPatchProposal, Session } from '../types'
+import type { BoardState, CanvasPatchProposal, SelectedCanvasElementContext, Session } from '../types'
 import {
   activateSession,
   injectToSession,
@@ -72,6 +72,7 @@ export type DockMode =
       canvasId: string
       canvasName: string
       workspacePath: string
+      selectedElements: SelectedCanvasElementContext[]
       onApplyCanvasPatch: (proposal: CanvasPatchProposal) => void
     }
 
@@ -98,6 +99,7 @@ export interface ToolEvent {
   error?: string
 }
 export interface DisplayMessage extends AssistantMessage {
+  kind?: 'context_reset'
   toolEvents?: ToolEvent[]
 }
 
@@ -108,6 +110,22 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   ref,
 ) {
   const toast = useToast()
+  const selectedElementTags = useMemo(
+    () => mode.kind === 'assistant'
+      ? mode.selectedElements.map((el) => ({
+          id: el.id,
+          label: el.label,
+          title: [
+            el.label,
+            `type=${el.type}`,
+            `pos=(${el.x}, ${el.y})`,
+            `size=${el.width}x${el.height}`,
+            el.textPreview ? `text=${el.textPreview}` : null,
+          ].filter(Boolean).join(' | '),
+        }))
+      : [],
+    [mode],
+  )
 
   // session 模式默认 expanded（看 transcript），assistant 模式默认折叠
   // （问 AI 是个轻交互，不该立刻占满整个画板）。
@@ -169,8 +187,17 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
   const messages = mode.kind === 'assistant' ? mode.messages : []
   const setMessages =
     mode.kind === 'assistant' ? mode.setMessages : (() => { /* noop */ })
+  const visibleAssistantMessages = useMemo(
+    () => messagesAfterLastReset(messages),
+    [messages],
+  )
+  const hasContextReset = useMemo(
+    () => messages.some(isContextResetMessage),
+    [messages],
+  )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [appliedPatchEventIds, setAppliedPatchEventIds] = useState<Set<string>>(() => new Set())
   const logRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -181,6 +208,13 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     if (!el) return
     el.scrollTop = el.scrollHeight
   }, [messages, busy, mode.kind])
+
+  const handleClearAssistantContext = () => {
+    if (mode.kind !== 'assistant' || busy) return
+    setErr(null)
+    setAppliedPatchEventIds(new Set())
+    setMessages([makeContextResetMessage()])
+  }
 
   // assistant busy 时按 Esc → cancel stream（textarea 已 disabled，键盘事件
   // 不会落到 textarea，走 window-level）
@@ -225,7 +259,8 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     // 让用户开始一段全新的对话。这是用户主动"重启"assistant chat 的唯一
     // 方式（普通关闭 dock 不会清，跨 dock 开关 chat 历史保留）。
     if (text === '/new-session' || text === '/new' || text === '/clear' || text === '/reset') {
-      setMessages([])
+      setAppliedPatchEventIds(new Set())
+      setMessages([makeContextResetMessage()])
       setErr(null)
       return
     }
@@ -251,8 +286,9 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
       canvasId: mode.kind === 'assistant' ? mode.canvasId : undefined,
       workspacePath: mode.kind === 'assistant' ? mode.workspacePath : undefined,
       canvasName: mode.kind === 'assistant' ? mode.canvasName : undefined,
+      selectedElements: mode.kind === 'assistant' ? mode.selectedElements : undefined,
     }
-    const wireMessages: AssistantMessage[] = next.slice(0, assistantIndex).map((m) => ({
+    const wireMessages: AssistantMessage[] = messagesAfterLastReset(next.slice(0, assistantIndex)).map((m) => ({
       role: m.role,
       content: m.content,
     }))
@@ -344,15 +380,15 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
 
   const canvasPatchProposals = useMemo(() => {
     if (mode.kind !== 'assistant') return []
-    const rows: Array<{ key: string; proposal: CanvasPatchProposal }> = []
-    messages.forEach((message, messageIndex) => {
+    const rows: Array<{ key: string; eventId: string; proposal: CanvasPatchProposal }> = []
+    visibleAssistantMessages.forEach((message, messageIndex) => {
       for (const event of message.toolEvents ?? []) {
         const proposal = canvasPatchProposalFromToolEvent(event)
-        if (proposal) rows.push({ key: `${messageIndex}-${event.id}`, proposal })
+        if (proposal) rows.push({ key: `${messageIndex}-${event.id}`, eventId: event.id, proposal })
       }
     })
     return rows
-  }, [messages, mode])
+  }, [visibleAssistantMessages, mode])
 
   // ── render ────────────────────────────────────────────────────────
   return (
@@ -368,6 +404,21 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
     >
       {/* ── 右上角浮动按钮：toggle expand + close ─────────── */}
       <div className="session-dock__actions">
+        {mode.kind === 'assistant' && (
+          <Tooltip label="Clear assistant context">
+            <button
+              onClick={handleClearAssistantContext}
+              aria-label="Clear assistant context"
+              disabled={busy}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7l1-3h4l1 3"
+                  stroke="currentColor" strokeWidth="1.8"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </Tooltip>
+        )}
         <Tooltip label={expanded ? 'Collapse to bottom' : 'Expand to fill canvas'}>
           <button
             onClick={() => setExpanded((v) => !v)}
@@ -423,21 +474,26 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
           // Spawn fence 单独抽出来在底下渲一个 button 行（保留 ChatBubble
           // 时代的"⚡ Spawn here"功能 —— TranscriptView 不认这个 fence）。
           <div className="col" style={{ flex: 1, minHeight: 0, gap: 8 }}>
-            {messages.length === 0 && !busy ? (
+            {visibleAssistantMessages.length === 0 && !busy && !hasContextReset ? (
               <div className="assistant-empty">
                 Ask about this canvas. I can summarize sessions, explain what changed,
                 or help draft the next prompt.
               </div>
             ) : (
-              <TranscriptView
-                entries={assistantMessagesToTranscriptEntries(messages)}
-                cacheKey="__assistant_dock__"
-                liveStatus={busy ? 'thinking' : null}
-                verbosity={verbosity}
-                onVerbosityChange={setVerbosity}
-              />
+              <>
+                {hasContextReset && <ContextResetDivider />}
+                {(visibleAssistantMessages.length > 0 || busy) && (
+                  <TranscriptView
+                    entries={assistantMessagesToTranscriptEntries(visibleAssistantMessages)}
+                    cacheKey="__assistant_dock__"
+                    liveStatus={busy ? 'thinking' : null}
+                    verbosity={verbosity}
+                    onVerbosityChange={setVerbosity}
+                  />
+                )}
+              </>
             )}
-            {messages.map((m, i) => {
+            {visibleAssistantMessages.map((m, i) => {
               if (m.role !== 'assistant') return null
               const { spawn } = splitSpawnFence(m.content)
               if (!spawn) return null
@@ -460,12 +516,20 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
                 </div>
               )
             })}
-            {mode.kind === 'assistant' && canvasPatchProposals.map(({ key, proposal }) => (
+            {mode.kind === 'assistant' && canvasPatchProposals.map(({ key, eventId, proposal }) => (
               <CanvasPatchCard
                 key={`patch-${key}`}
                 proposal={proposal}
                 activeCanvasId={mode.canvasId}
-                onApply={() => mode.onApplyCanvasPatch(proposal)}
+                applied={appliedPatchEventIds.has(eventId)}
+                onApply={() => {
+                  if (proposal.canvasId !== mode.canvasId) {
+                    mode.onApplyCanvasPatch(proposal)
+                    return
+                  }
+                  setAppliedPatchEventIds((prev) => new Set(prev).add(eventId))
+                  mode.onApplyCanvasPatch(proposal)
+                }}
               />
             ))}
             {err && <div className="inline-error" style={{ margin: '4px 4px 0' }}>{err}</div>}
@@ -480,6 +544,7 @@ export const Dock = forwardRef<DockHandle, Props>(function Dock(
         placeholder={mode.kind === 'assistant' ? 'Ask about this canvas…' : 'Type a message…'}
         onSend={handleSend}
         onEscape={onClose}
+        contextTags={mode.kind === 'assistant' ? selectedElementTags : undefined}
         externalBusy={mode.kind === 'assistant' ? busy : undefined}
         uploadImage={
           mode.kind === 'session'
@@ -688,21 +753,25 @@ function ToolChip({ event }: { event: ToolEvent }) {
 function CanvasPatchCard({
   proposal,
   activeCanvasId,
+  applied,
   onApply,
 }: {
   proposal: CanvasPatchProposal
   activeCanvasId: string
+  applied: boolean
   onApply: () => void
 }) {
   const isCurrentCanvas = proposal.canvasId === activeCanvasId
   const count = proposal.operationCount ?? proposal.operations.length
   return (
-    <div className="canvas-patch-card">
+    <div className={'canvas-patch-card' + (applied ? ' canvas-patch-card--applied' : '')}>
       <div className="canvas-patch-card__body">
-        <div className="canvas-patch-card__title">Canvas changes ready</div>
+        <div className="canvas-patch-card__title">
+          {applied ? 'Canvas changes applied' : 'Canvas changes ready'}
+        </div>
         <div className="canvas-patch-card__summary">{proposal.summary}</div>
         <div className="canvas-patch-card__meta">
-          {count} change{count === 1 ? '' : 's'} · Apply only changes this canvas
+          {count} change{count === 1 ? '' : 's'} · {applied ? 'Applied to this canvas' : 'Apply only changes this canvas'}
         </div>
         <ul className="canvas-patch-card__ops">
           {proposal.operations.slice(0, 4).map((op, index) => (
@@ -716,32 +785,63 @@ function CanvasPatchCard({
       <button
         className="primary canvas-patch-card__apply"
         onClick={onApply}
-        disabled={!isCurrentCanvas}
-        title={isCurrentCanvas ? 'Apply to this canvas' : 'Switch back to this canvas first'}
+        disabled={!isCurrentCanvas || applied}
+        title={applied ? 'Already applied' : isCurrentCanvas ? 'Apply to this canvas' : 'Switch back to this canvas first'}
       >
-        Apply
+        {applied ? 'Applied' : 'Apply'}
       </button>
     </div>
   )
 }
 
+function ContextResetDivider() {
+  return (
+    <div className="assistant-context-reset" role="status" aria-label="上下文已重置">
+      <span>上下文已重置</span>
+    </div>
+  )
+}
+
 function canvasPatchProposalFromToolEvent(event: ToolEvent): CanvasPatchProposal | null {
-  if (event.name !== 'propose_canvas_patch') return null
   const raw = event.result
   if (!raw || typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
-  if (obj.type !== 'canvas_patch_proposal') return null
-  if (typeof obj.canvasId !== 'string') return null
-  if (!Array.isArray(obj.operations)) return null
+  const rawProposal =
+    event.name === 'propose_canvas_patch'
+      ? obj
+      : event.name === 'create_coordinator_session'
+        ? obj.canvasPatchProposal
+        : null
+  if (!rawProposal || typeof rawProposal !== 'object') return null
+  const proposal = rawProposal as Record<string, unknown>
+  if (proposal.type !== 'canvas_patch_proposal') return null
+  if (typeof proposal.canvasId !== 'string') return null
+  if (!Array.isArray(proposal.operations)) return null
   return {
     type: 'canvas_patch_proposal',
-    canvasId: obj.canvasId,
-    canvasName: typeof obj.canvasName === 'string' ? obj.canvasName : undefined,
-    summary: typeof obj.summary === 'string' ? obj.summary : 'Canvas changes ready.',
-    operations: obj.operations as CanvasPatchProposal['operations'],
-    operationCount: typeof obj.operationCount === 'number' ? obj.operationCount : undefined,
-    requiresApply: obj.requiresApply === true,
+    canvasId: proposal.canvasId,
+    canvasName: typeof proposal.canvasName === 'string' ? proposal.canvasName : undefined,
+    summary: typeof proposal.summary === 'string' ? proposal.summary : 'Canvas changes ready.',
+    operations: proposal.operations as CanvasPatchProposal['operations'],
+    operationCount: typeof proposal.operationCount === 'number' ? proposal.operationCount : undefined,
+    requiresApply: proposal.requiresApply === true,
   }
+}
+
+function makeContextResetMessage(): DisplayMessage {
+  return { role: 'assistant', content: '', kind: 'context_reset' }
+}
+
+function isContextResetMessage(message: DisplayMessage): boolean {
+  return message.kind === 'context_reset'
+}
+
+function messagesAfterLastReset(messages: DisplayMessage[]): DisplayMessage[] {
+  const lastReset = messages.reduce(
+    (last, message, index) => isContextResetMessage(message) ? index : last,
+    -1,
+  )
+  return messages.slice(lastReset + 1).filter((message) => !isContextResetMessage(message))
 }
 
 function operationLabel(op: CanvasPatchProposal['operations'][number]): string {
@@ -752,6 +852,15 @@ function operationLabel(op: CanvasPatchProposal['operations'][number]): string {
     case 'hide_session': return `Hide session ${shortId(op.sessionId)}`
     case 'add_note': return `Add note "${op.text.slice(0, 36)}${op.text.length > 36 ? '…' : ''}"`
     case 'update_note': return `Update note ${shortId(op.elementId)}`
+    case 'add_frame': return `Add ${op.title ? `"${op.title}" ` : ''}frame`
+    case 'add_connector': {
+      const from = op.fromSessionId ? shortId(op.fromSessionId) : op.fromElementId ? shortId(op.fromElementId) : '?'
+      const to = op.toSessionId ? shortId(op.toSessionId) : op.toElementId ? shortId(op.toElementId) : '?'
+      return `Connect ${from} → ${to}${op.label ? ` (${op.label})` : ''}`
+    }
+    case 'add_shape': return `Add ${op.shape}${op.text ? ` "${op.text.slice(0, 28)}${op.text.length > 28 ? '…' : ''}"` : ''}`
+    case 'add_label': return `Add label "${op.text.slice(0, 36)}${op.text.length > 36 ? '…' : ''}"`
+    case 'update_element': return `Update element ${shortId(op.elementId)}`
   }
 }
 

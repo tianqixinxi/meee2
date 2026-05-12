@@ -62,6 +62,20 @@ struct AssistantSettings {
     let canvasId: String      // current canvas id for canvas-aware tools
     let workspacePath: String // current canvas workspace for local temporary assistant
     let canvasName: String
+    let selectedElements: [AssistantSelectedElement]
+}
+
+struct AssistantSelectedElement {
+    let id: String
+    let type: String
+    let label: String
+    let textPreview: String?
+    let sessionId: String?
+    let channelName: String?
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
 }
 
 /// Common interface across hosted (OpenAI / Anthropic) and local (claude -p)

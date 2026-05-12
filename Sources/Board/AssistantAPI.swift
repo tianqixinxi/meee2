@@ -214,6 +214,7 @@ enum AssistantAPI {
         let canvasId = ((dict["canvasId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let workspacePath = ((dict["workspacePath"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let canvasName = ((dict["canvasName"] as? String) ?? "Canvas").trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedElements = parseSelectedElements(dict["selectedElements"] as? [[String: Any]])
         return AssistantSettings(
             provider: provider,
             apiKey: apiKey,
@@ -223,95 +224,44 @@ enum AssistantAPI {
             scope: scope,
             canvasId: canvasId,
             workspacePath: workspacePath,
-            canvasName: canvasName.isEmpty ? "Canvas" : canvasName
+            canvasName: canvasName.isEmpty ? "Canvas" : canvasName,
+            selectedElements: selectedElements
         )
+    }
+
+    private static func parseSelectedElements(_ raw: [[String: Any]]?) -> [AssistantSelectedElement] {
+        (raw ?? []).prefix(12).compactMap { item in
+            guard let id = item["id"] as? String,
+                  let type = item["type"] as? String,
+                  let label = item["label"] as? String else {
+                return nil
+            }
+            return AssistantSelectedElement(
+                id: id,
+                type: type,
+                label: label,
+                textPreview: item["textPreview"] as? String,
+                sessionId: item["sessionId"] as? String,
+                channelName: item["channelName"] as? String,
+                x: numberValue(item["x"]),
+                y: numberValue(item["y"]),
+                width: numberValue(item["width"]),
+                height: numberValue(item["height"])
+            )
+        }
+    }
+
+    private static func numberValue(_ raw: Any?) -> Double {
+        if let double = raw as? Double { return double }
+        if let int = raw as? Int { return Double(int) }
+        if let string = raw as? String, let double = Double(string) { return double }
+        return 0
     }
 
     // MARK: - System prompt
 
     static func buildSystemPrompt(settings: AssistantSettings) -> String {
-        let cwds = candidateCwds()
-        let cwdList = cwds.isEmpty
-            ? "(no recent projects found)"
-            : cwds.prefix(20).map { "- \($0)" }.joined(separator: "\n")
-
-        let sessionSummary = currentSessionSummary()
-        let scopeSummary = assistantScopeSummary(settings.scope)
-
-        return """
-        You are the meee2 board assistant. The user can see a canvas of
-        live Claude / Codex / etc. sessions and is asking you to query,
-        summarise, or spawn new ones.
-
-        Be concise. Respond in the user's language (often Chinese).
-
-        Current assistant scope:
-        \(scopeSummary)
-
-        Current canvas:
-        - ID: \(settings.canvasId.isEmpty ? "(not set)" : settings.canvasId)
-        - Name: \(settings.canvasName)
-        - Workspace: \(settings.workspacePath.isEmpty ? "(not set)" : settings.workspacePath)
-
-        Treat this chat as a temporary assistant bound to the current canvas.
-        It does not create a board session card by itself. For local file/path
-        work, use the current canvas workspace as the working directory.
-
-        Current sessions on the board:
-        \(sessionSummary.isEmpty ? "(none)" : sessionSummary)
-
-        Recent project directories on this machine:
-        \(cwdList)
-
-        User's home is \(NSHomeDirectory()). Always use absolute paths
-        (expand `~` to the home).
-
-        You have these tools available (call them when the user's intent
-        clearly maps to one):
-          • get_session_list        — narrow by status / plugin / project
-          • get_session_info        — fetch full state + a short transcript preview
-          • get_session_transcript  — recent transcript entries for content questions
-          • list_channels           — A2A channels (name / mode / member count)
-          • get_channel_messages    — recent messages on a channel for content questions
-          • get_canvas_context      — read the current canvas layout and visible items
-          • propose_canvas_patch    — propose a low-risk canvas layout/note change; user applies it
-          • create_session          — spawn a new local session at a cwd
-
-        Guidelines:
-          • If the user asks "what sessions do I have", call get_session_list
-            instead of guessing.
-          • If they ask about a specific session, call get_session_info.
-          • If they ask to summarise / explain *what a session is doing* or
-            *what it asked*, call get_session_transcript (it returns more
-            entries than get_session_info's preview).
-          • If they ask about an A2A channel ("ops 频道", "today's coordination
-            channel"), call list_channels first if the id is fuzzy, then
-            get_channel_messages with the channel name.
-          • If they ask what is on this canvas, how things are laid out, or
-            whether you can rearrange the canvas, call get_canvas_context.
-          • If they explicitly ask to tidy, move, hide, show, or add/update a
-            note on the canvas, call propose_canvas_patch. This only produces
-            an Apply card in the UI; do not claim the canvas changed until the
-            user clicks Apply.
-          • Do not generate arbitrary Excalidraw JSON. Use only the supported
-            proposal operations.
-          • Do not create a new session unless the user explicitly asks to
-            create or open one. For normal questions, answer in this temporary
-            canvas assistant.
-          • If they explicitly ask to create / open a new session, call
-            create_session with an absolute cwd.
-          • For mutating tools (create_session) prefer to confirm the cwd
-            briefly with the user first if there's any ambiguity.
-        """
-    }
-
-    private static func assistantScopeSummary(_ scope: String) -> String {
-        let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "this-mac" {
-            return "This Mac. Use local meee2 tools and local session context."
-        }
-        let teamName = BoardDTOBuilder.meee2OnlineTeams().first(where: { $0.id == trimmed })?.name ?? trimmed
-        return "Team: \(teamName). Prefer team-scoped wording, but any action that changes this Mac must still use local meee2 tools."
+        AssistantContextBuilder.buildSystemPrompt(settings: settings)
     }
 
     static func runAutomation(title: String, prompt: String, settings: AssistantSettings) async -> (output: String, error: String?) {
@@ -389,48 +339,6 @@ enum AssistantAPI {
         }
 
         return (finalText, "max tool iterations reached (\(maxToolIterations))")
-    }
-
-    private static func currentSessionSummary() -> String {
-        let sessions = PluginManager.shared.sessions
-            .filter { $0.status != .dead }
-            .prefix(20)
-        return sessions.map { s in
-            let st = String(describing: s.status).replacingOccurrences(of: "SessionStatus.", with: "")
-            let title = s.title.isEmpty ? "(untitled)" : s.title
-            let proj = (s.cwd ?? "").isEmpty ? "" : " · \(s.cwd!)"
-            return "- \(s.id.prefix(8)) [\(st)] \(title)\(proj)"
-        }.joined(separator: "\n")
-    }
-
-    /// Recent project directories from SessionTerminalStore + ~/projects/*
-    private static func candidateCwds() -> [String] {
-        var seen: Set<String> = []
-        var out: [String] = []
-        let infos = SessionTerminalStore.shared.getAll().values
-            .sorted { $0.lastActivityAt > $1.lastActivityAt }
-        for info in infos {
-            let cwd = (info.cwd as NSString).standardizingPath
-            if cwd.hasPrefix("/"), !seen.contains(cwd) {
-                seen.insert(cwd)
-                out.append(cwd)
-                if out.count >= 20 { break }
-            }
-        }
-        let projectsRoot = (NSHomeDirectory() as NSString).appendingPathComponent("projects")
-        if let children = try? FileManager.default.contentsOfDirectory(atPath: projectsRoot) {
-            for child in children.sorted() {
-                let path = (projectsRoot as NSString).appendingPathComponent(child)
-                var isDir: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { continue }
-                if !seen.contains(path) {
-                    seen.insert(path)
-                    out.append(path)
-                    if out.count >= 30 { break }
-                }
-            }
-        }
-        return out
     }
 
     // MARK: - JSON helpers

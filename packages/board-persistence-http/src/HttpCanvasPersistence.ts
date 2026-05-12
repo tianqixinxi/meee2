@@ -191,7 +191,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     this.shadowSessions = map
     this.loadedSessions = true
     writeJSON(this.key(SESSION_LAYOUT_KEY), map)
-    this.schedulePush()
+    await this.pushNow()
   }
 
   async loadChannelLayout(): Promise<LayoutMap> {
@@ -212,7 +212,7 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     this.shadowChannels = map
     this.loadedChannels = true
     writeJSON(this.key(CHANNEL_LAYOUT_KEY), map)
-    this.schedulePush()
+    await this.pushNow()
   }
 
   // -- Dismissed sids (localStorage + backend) --------------------------
@@ -302,6 +302,14 @@ export class HttpCanvasPersistence implements CanvasPersistence {
     // 400ms drag-coalescing window — matches the original debounce in
     // layout.ts / channelLayout.ts so a drag still produces one PUT.
     this.pushTimer = window.setTimeout(() => this.doPush(), 400)
+  }
+
+  private async pushNow(): Promise<void> {
+    if (this.pushTimer !== null) {
+      window.clearTimeout(this.pushTimer)
+      this.pushTimer = null
+    }
+    await this.doPush()
   }
 
   private async doPush(): Promise<void> {

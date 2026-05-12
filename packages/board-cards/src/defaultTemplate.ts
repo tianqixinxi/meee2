@@ -301,6 +301,24 @@ function SessionCard({ session, board, helpers }) {
     .slice(-5)
   const sidShort = session.id.replace(/-/g, '').slice(0, 8)
   const bar = statusBarColor(session.status, urgent)
+  const groups = (board && board.coordinationGroups) || []
+  const coordinatorGroup = groups.find((g) => g.coordinatorSessionId === session.id)
+  const memberGroup = groups.find((g) => (g.memberSessionIds || []).includes(session.id))
+  const coordination = coordinatorGroup
+    ? {
+        label: 'Coordinator',
+        group: coordinatorGroup,
+        detail: (coordinatorGroup.paused ? 'paused' : 'hybrid') + ' · ' + (coordinatorGroup.memberSessionIds || []).length + ' members',
+      }
+    : memberGroup
+    ? {
+        label: 'Coordinated',
+        group: memberGroup,
+        detail: ((memberGroup.memberDigests || {})[session.id]?.blockers || []).length > 0
+          ? 'blocked'
+          : (memberGroup.paused ? 'paused' : 'hybrid'),
+      }
+    : null
 
   const footerStatus = session.currentTool
     ? '⚡ ' + session.currentTool
@@ -450,6 +468,30 @@ function SessionCard({ session, board, helpers }) {
       }} title={session.project}>
         {shortenProject(session.project)}
       </div>
+
+      {coordination && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginBottom: 6,
+          padding: '4px 6px',
+          border: '1px solid rgba(100,116,139,0.35)',
+          borderRadius: 6,
+          background: 'rgba(15,23,42,0.34)',
+          color: '#C9D4E5',
+          fontSize: 10,
+          lineHeight: 1.2,
+        }} title={coordination.group.goal}>
+          <span style={{ fontWeight: 700 }}>{coordination.label}</span>
+          <span style={{ color: '#7D8DA3' }}>·</span>
+          <span style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>{coordination.detail}</span>
+        </div>
+      )}
 
       <div style={{
         flex: 1,

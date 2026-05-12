@@ -195,10 +195,73 @@ public final class BoardLayoutStore {
     }
 
     public struct SpawnIntent: Codable, Equatable {
+        public var id: String
         public var canvasId: String
         public var cwd: String
         public var command: String
+        public var provider: String?
+        public var purpose: String?
+        public var initialPrompt: String?
+        public var layoutHint: Point?
         public var createdAt: Date
+
+        public init(
+            id: String = UUID().uuidString.lowercased(),
+            canvasId: String,
+            cwd: String,
+            command: String,
+            provider: String? = nil,
+            purpose: String? = nil,
+            initialPrompt: String? = nil,
+            layoutHint: Point? = nil,
+            createdAt: Date
+        ) {
+            self.id = id
+            self.canvasId = canvasId
+            self.cwd = cwd
+            self.command = command
+            self.provider = provider
+            self.purpose = purpose
+            self.initialPrompt = initialPrompt
+            self.layoutHint = layoutHint
+            self.createdAt = createdAt
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case id, canvasId, cwd, command, provider, purpose, initialPrompt, layoutHint, createdAt
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString.lowercased()
+            self.canvasId = try c.decode(String.self, forKey: .canvasId)
+            self.cwd = try c.decode(String.self, forKey: .cwd)
+            self.command = try c.decode(String.self, forKey: .command)
+            self.provider = try c.decodeIfPresent(String.self, forKey: .provider)
+            self.purpose = try c.decodeIfPresent(String.self, forKey: .purpose)
+            self.initialPrompt = try c.decodeIfPresent(String.self, forKey: .initialPrompt)
+            self.layoutHint = try c.decodeIfPresent(Point.self, forKey: .layoutHint)
+            self.createdAt = try c.decode(Date.self, forKey: .createdAt)
+        }
+    }
+
+    public struct SpawnCandidate {
+        public let sessionId: String
+        public let cwd: String
+        public let provider: String?
+        public let startedAt: Date?
+
+        public init(sessionId: String, cwd: String, provider: String?, startedAt: Date?) {
+            self.sessionId = sessionId
+            self.cwd = cwd
+            self.provider = provider
+            self.startedAt = startedAt
+        }
+    }
+
+    public struct MatchedSpawnIntent {
+        public let sessionId: String
+        public let intent: SpawnIntent
     }
 
     public struct CanvasSession: Codable, Equatable {
@@ -382,7 +445,29 @@ public final class BoardLayoutStore {
         }
     }
 
-    public func recordSpawnIntent(canvasId: String, cwd: String, command: String) throws {
+    @discardableResult
+    public func recordSpawnIntent(canvasId: String, cwd: String, command: String) throws -> SpawnIntent {
+        try recordSpawnIntent(
+            canvasId: canvasId,
+            cwd: cwd,
+            command: command,
+            provider: nil,
+            purpose: nil,
+            initialPrompt: nil,
+            layoutHint: nil
+        )
+    }
+
+    @discardableResult
+    public func recordSpawnIntent(
+        canvasId: String,
+        cwd: String,
+        command: String,
+        provider: String?,
+        purpose: String?,
+        initialPrompt: String?,
+        layoutHint: Point?
+    ) throws -> SpawnIntent {
         try queue.sync {
             var store = cached ?? loadFromDiskLocked()
             ensureDefaultCanvasesLocked(&store, sessionIds: [])
@@ -393,14 +478,132 @@ public final class BoardLayoutStore {
             let normalizedCwd = (cwd as NSString).standardizingPath
             let cutoff = Date().addingTimeInterval(-10 * 60)
             var intents = (store.spawnIntents ?? []).filter { $0.createdAt >= cutoff }
-            intents.append(SpawnIntent(canvasId: canvasId, cwd: normalizedCwd, command: command, createdAt: Date()))
+            let intent = SpawnIntent(
+                canvasId: canvasId,
+                cwd: normalizedCwd,
+                command: command,
+                provider: provider,
+                purpose: purpose,
+                initialPrompt: initialPrompt,
+                layoutHint: layoutHint,
+                createdAt: Date()
+            )
+            intents.append(intent)
             store.spawnIntents = intents
             try writeToDiskLocked(store)
             cached = store
+            return intent
         }
     }
 
     public func applySpawnIntents(sessionCwds: [String: String]) {
+        let candidates = sessionCwds.map {
+            SpawnCandidate(sessionId: $0.key, cwd: $0.value, provider: nil, startedAt: nil)
+        }
+        _ = applySpawnIntents(candidates: candidates)
+    }
+
+    @discardableResult
+    public func applySpawnIntents(candidates rawCandidates: [SpawnCandidate]) -> [MatchedSpawnIntent] {
+        queue.sync {
+            var matched: [MatchedSpawnIntent] = []
+            let candidates = rawCandidates.sorted {
+                switch ($0.startedAt, $1.startedAt) {
+                case let (lhs?, rhs?):
+                    if lhs != rhs { return lhs < rhs }
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                case (nil, nil):
+                    break
+                }
+                return $0.sessionId < $1.sessionId
+            }
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let cutoff = Date().addingTimeInterval(-10 * 60)
+            let intents = (store.spawnIntents ?? [])
+                .filter { $0.createdAt >= cutoff }
+                .sorted { $0.createdAt < $1.createdAt }
+            var changed = intents.count != (store.spawnIntents ?? []).count
+            guard !intents.isEmpty else {
+                if changed {
+                    store.spawnIntents = intents
+                    try? writeToDiskLocked(store)
+                    cached = store
+                }
+                return []
+            }
+
+            var homeCanvasIds = store.sessionHomeCanvasIds ?? [:]
+            var consumedSessionIds = Set<String>()
+            for intent in intents {
+                let intentCwd = (intent.cwd as NSString).standardizingPath
+                guard !intentCwd.isEmpty,
+                      store.canvases.contains(where: { $0.id == intent.canvasId }) else {
+                    continue
+                }
+                guard let candidate = candidates.first(where: { candidate in
+                    if consumedSessionIds.contains(candidate.sessionId) { return false }
+                    if homeCanvasIds[candidate.sessionId] != nil { return false }
+                    let cwd = (candidate.cwd as NSString).standardizingPath
+                    if cwd != intentCwd { return false }
+                    if let provider = intent.provider?.lowercased(),
+                       let candidateProvider = candidate.provider?.lowercased(),
+                       !candidateProvider.contains(provider) {
+                        return false
+                    }
+                    if let startedAt = candidate.startedAt,
+                       startedAt < intent.createdAt.addingTimeInterval(-2) {
+                        return false
+                    }
+                    return true
+                }) else {
+                    continue
+                }
+
+                consumedSessionIds.insert(candidate.sessionId)
+                ensureMembershipsLocked(&store, canvasId: intent.canvasId, sessionIds: [candidate.sessionId])
+                homeCanvasIds[candidate.sessionId] = intent.canvasId
+                if let layoutHint = intent.layoutHint {
+                    var layout = store.layouts[intent.canvasId] ?? .empty
+                    layout.sessions[candidate.sessionId] = layoutHint
+                    layout.dismissedSids.removeAll { $0 == candidate.sessionId }
+                    layout.updatedAt = Date()
+                    store.layouts[intent.canvasId] = layout
+                }
+                for canvas in store.canvases where canvas.isDefault && canvas.id != intent.canvasId {
+                    store.memberships[canvas.id]?[candidate.sessionId] = nil
+                    if var layout = store.layouts[canvas.id] {
+                        layout.sessions.removeValue(forKey: candidate.sessionId)
+                        layout.dismissedSids.removeAll { $0 == candidate.sessionId }
+                        layout.updatedAt = Date()
+                        store.layouts[canvas.id] = layout
+                    }
+                }
+                matched.append(MatchedSpawnIntent(sessionId: candidate.sessionId, intent: intent))
+                CoordinationStore.shared.bindCoordinator(spawnIntentId: intent.id, sessionId: candidate.sessionId)
+                changed = true
+            }
+
+            if changed {
+                let matchedIntentIds = Set(matched.map { $0.intent.id })
+                store.spawnIntents = intents.filter { !matchedIntentIds.contains($0.id) }
+                store.sessionHomeCanvasIds = homeCanvasIds
+                do {
+                    try writeToDiskLocked(store)
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist spawn intents: \(error)")
+                }
+                cached = store
+                SessionEventBus.shared.publish(.boardLayoutChanged)
+            }
+            return matched
+        }
+    }
+
+    private func applySpawnIntentsLegacy(sessionCwds: [String: String]) {
         queue.sync {
             var store = cached ?? loadFromDiskLocked()
             ensureDefaultCanvasesLocked(&store, sessionIds: [])

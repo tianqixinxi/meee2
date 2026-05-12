@@ -1,6 +1,6 @@
 // Headless transcript view — full-fidelity port of meee2's TranscriptPanel.
 // Apps own data fetching: pass `entries` already-loaded; this component
-// owns search / tool-toggle / virtualization / sticky user / auto-scroll
+// owns search / tool-toggle / virtualization / auto-scroll
 // / Markdown / diff / collapsible code etc.
 //
 // Style: import '@meee1/board-ui/TranscriptView.css' once at app boot
@@ -50,7 +50,7 @@ import type {
 export interface TranscriptViewProps {
   /** Pre-fetched entries — caller (app) owns loading + polling. */
   entries: TranscriptEntryForView[]
-  /** Cache key — module-level Map keys scroll/sticky state on this so
+  /** Cache key — module-level Map keys scroll state on this so
    *  switching between sessions and back doesn't lose position. Usually
    *  pass the session id. */
   cacheKey: string
@@ -446,20 +446,6 @@ export function TranscriptView({
   })
 
   const [atBottom, setAtBottom] = useState(true)
-  const [stickyUser, setStickyUser] = useState<{ index: number; text: string } | null>(null)
-  const userEndCacheRef = useRef<Map<string, number>>(new Map())
-
-  useEffect(() => {
-    userEndCacheRef.current = new Map()
-  }, [cacheKey])
-
-  // Warm user-end cache from currently-rendered virtual items
-  useEffect(() => {
-    for (const item of virtualizer.getVirtualItems()) {
-      const entry = visibleEntries[item.index]
-      if (entry?.type === 'user') userEndCacheRef.current.set(entry.id, item.end)
-    }
-  })
 
   const handleScroll = () => {
     const el = parentRef.current
@@ -478,58 +464,7 @@ export function TranscriptView({
     const isAtB = dist < 40
     stickToBottomRef.current = isAtB
     setAtBottom(isAtB)
-
-    const top = el.scrollTop
-    for (const item of virtualizer.getVirtualItems()) {
-      const entry = visibleEntries[item.index]
-      if (entry?.type === 'user') userEndCacheRef.current.set(entry.id, item.end)
-    }
-
-    let stickyIdx: number | null = null
-    for (let i = visibleEntries.length - 1; i >= 0; i--) {
-      const entry = visibleEntries[i]
-      if (entry.type !== 'user') continue
-      const end = userEndCacheRef.current.get(entry.id)
-      if (end == null) continue
-      if (end <= top + 2) { stickyIdx = i; break }
-    }
-
-    // Don't show sticky when the chosen user entry IS the most recent user
-    // message in the conversation —— there's nothing "scrolled past" worth
-    // reminding the user about; the bar would just duplicate whatever they
-    // most recently typed (or the prompt they just scrolled away from).
-    // Sticky is meaningful only when there's a NEWER user prompt below.
-    if (stickyIdx != null) {
-      let hasLaterUserMsg = false
-      for (let i = stickyIdx + 1; i < visibleEntries.length; i++) {
-        if (visibleEntries[i].type === 'user') { hasLaterUserMsg = true; break }
-      }
-      if (!hasLaterUserMsg) stickyIdx = null
-    }
-
-    let sticky: { index: number; text: string } | null = null
-    if (stickyIdx != null) {
-      let start = stickyIdx
-      while (start > 0 && visibleEntries[start - 1].type === 'user') start--
-      const anchor = visibleEntries[start]
-      const textBlock = anchor.blocks.find((b) => b.type === 'text' && (b.text ?? '').trim())
-      const preview = (textBlock?.text ?? '').trim()
-      if (preview) sticky = { index: start, text: preview }
-    }
-    setStickyUser((prev) => {
-      if (prev?.index === sticky?.index && prev?.text === sticky?.text) return prev
-      return sticky
-    })
   }
-
-  const scrollToStickyUser = useCallback(() => {
-    if (stickyUser == null) return
-    virtualizer.scrollToIndex(stickyUser.index, { align: 'start' })
-    requestAnimationFrame(() => {
-      const node = parentRef.current
-      if (node) node.scrollTop = Math.max(0, node.scrollTop - 8)
-    })
-  }, [stickyUser, virtualizer])
 
   const scrollToBottom = useCallback(() => {
     if (visibleEntries.length === 0) return
@@ -699,18 +634,6 @@ export function TranscriptView({
         </div>
       ) : (
         <div className="transcript-panel-wrap">
-          {stickyUser && (
-            <button
-              type="button"
-              className="tx-sticky-user"
-              onClick={scrollToStickyUser}
-              title="Click to jump back to this message"
-            >
-              <span className="tx-sticky-user__chip">You</span>
-              <span className="tx-sticky-user__text">{stickyUser.text}</span>
-              <span className="tx-sticky-user__hint" aria-hidden>↑</span>
-            </button>
-          )}
           <div ref={parentRef} className="transcript-panel" onScroll={handleScroll}>
             <div style={{ height: totalH, width: '100%', position: 'relative' }}>
               {vItems.map((v) => {

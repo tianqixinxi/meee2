@@ -396,5 +396,13 @@ function toolDesc(t: ToolName): string {
     case 'get_channel_messages': return 'read channel messages'
     case 'propose_canvas_patch': return 'prepare Apply-only canvas changes'
     case 'create_session': return 'spawn a new claude session'
+    case 'create_coordinator_session': return 'spawn a coordinator for selected sessions'
+    case 'get_coordination_state': return 'read coordinator groups and digests'
+    case 'send_to_session': return 'route a message to one session'
+    case 'broadcast_to_members': return 'route messages to group members'
+    case 'update_group_digest': return 'maintain compact coordinator state'
+    case 'pause_coordination': return 'pause automatic coordinator wakes'
+    case 'resume_coordination': return 'resume automatic coordinator wakes'
+    case 'ask_coordinator': return 'wake coordinator with compact context'
   }
 }

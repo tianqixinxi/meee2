@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Excalidraw,
@@ -11,7 +12,16 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 
-import type { BoardState, CanvasPatchOperation, CanvasPatchRequest, Selection, Session } from '../types'
+import type {
+  BoardState,
+  CanvasPatchOperation,
+  CanvasPatchRequest,
+  CanvasRelationStylePreset,
+  CoordinationGroup,
+  SelectedCanvasElementContext,
+  Selection,
+  Session,
+} from '../types'
 import {
   buildChannelHub,
   buildScene,
@@ -47,8 +57,13 @@ import {
   addMember,
   createChannel,
   deleteChannel,
+  askCoordinator,
+  pauseCoordination,
+  removeCoordinationMember,
   removeSessionFromCanvas,
   removeMember,
+  resumeCoordination,
+  syncCoordinationGroup,
 } from '../api'
 import { SessionOverlay } from './SessionOverlay'
 import { Tooltip } from './Tooltip'
@@ -68,6 +83,67 @@ function aliasFromSession(title: string, sid: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 30)
   return base ? `${base}-${short}` : `session-${short}`
+}
+
+function selectedElementTextPreview(el: ExcalidrawElement): string | undefined {
+  const text = typeof (el as any).text === 'string'
+    ? (el as any).text.trim()
+    : ''
+  if (!text) return undefined
+  return text.length <= 120 ? text : `${text.slice(0, 119)}...`
+}
+
+function labelForSelectedElement(
+  el: ExcalidrawElement,
+  state: BoardState,
+  sessionId?: string,
+  channelName?: string,
+  textPreview?: string,
+): string {
+  if (sessionId) {
+    const session = state.sessions.find((s) => s.id === sessionId)
+    return `Session: ${session?.title || sessionId.slice(0, 8)}`
+  }
+  if (channelName) {
+    const channel = state.channels.find((ch) => ch.name === channelName)
+    return `Channel: ${channel?.displayName || channelName}`
+  }
+  if (el.type === 'text' && textPreview) return `Text: ${textPreview}`
+  return el.type.charAt(0).toUpperCase() + el.type.slice(1)
+}
+
+function selectedElementsContext(
+  elements: readonly ExcalidrawElement[],
+  selectedIds: string[],
+  state: BoardState,
+): SelectedCanvasElementContext[] {
+  if (selectedIds.length === 0) return []
+  const selectedIdSet = new Set(selectedIds)
+  return elements
+    .filter((el) => selectedIdSet.has(el.id) && !(el as any).isDeleted)
+    .slice(0, 12)
+    .map((el) => {
+      const sessionId = el.type === 'rectangle' ? parseSessionFromElement(el) ?? undefined : undefined
+      const channelName =
+        el.type === 'ellipse'
+          ? parseChannelFromElement(el) ?? undefined
+          : el.id.startsWith('channel-')
+          ? resolveChannelFromElementId(el.id, state.channels)?.name ?? undefined
+          : undefined
+      const textPreview = selectedElementTextPreview(el)
+      return {
+        id: el.id,
+        type: el.type,
+        label: labelForSelectedElement(el, state, sessionId, channelName, textPreview),
+        textPreview,
+        sessionId,
+        channelName,
+        x: Math.round(el.x ?? 0),
+        y: Math.round(el.y ?? 0),
+        width: Math.round(el.width ?? 0),
+        height: Math.round(el.height ?? 0),
+      }
+    })
 }
 
 // Inline feather-style icons used by MainMenu / Footer. 16px, stroke=1.75.
@@ -137,12 +213,136 @@ const SESSION_GRID_GAP_Y = 40
 const SESSION_GRID_COL_W = RECT_W + SESSION_GRID_GAP_X
 const SESSION_GRID_ROW_H = RECT_H + SESSION_GRID_GAP_Y
 
+function CoordinationPanel({
+  group,
+  selectedSessionId,
+  state,
+  onRefresh,
+}: {
+  group: CoordinationGroup
+  selectedSessionId: string
+  state: BoardState
+  onRefresh: () => void
+}) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const selectedIsMember = group.memberSessionIds.includes(selectedSessionId)
+  const selectedIsCoordinator = group.coordinatorSessionId === selectedSessionId
+  const latestEvent = group.events[group.events.length - 1]
+  const blockerCount = Object.values(group.memberDigests).reduce((sum, digest) => sum + digest.blockers.length, 0)
+  const members = group.memberSessionIds
+    .map((sid) => state.sessions.find((s) => s.id === sid)?.title || sid.slice(0, 8))
+    .slice(0, 3)
+    .join(', ')
+
+  const run = async (label: string, action: () => Promise<unknown>) => {
+    setBusy(label)
+    try {
+      await action()
+      onRefresh()
+    } catch (error) {
+      console.warn('[Board] coordination action failed', error)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="coordination-panel">
+      <div className="coordination-panel__head">
+        <div>
+          <div className="coordination-panel__title">Coordination</div>
+          <div className="coordination-panel__meta">
+            {group.paused ? 'Paused' : 'Hybrid'} · {group.memberSessionIds.length} members
+          </div>
+        </div>
+        {blockerCount > 0 && <span className="coordination-panel__badge">{blockerCount} blocker</span>}
+      </div>
+      <div className="coordination-panel__goal">{group.goal}</div>
+      <div className="coordination-panel__row">Members: {members || 'none'}</div>
+      {latestEvent && (
+        <div className="coordination-panel__row">Last: {latestEvent.kind} · {latestEvent.reason}</div>
+      )}
+      {group.lastRoutedAction && (
+        <div className="coordination-panel__row">Action: {group.lastRoutedAction}</div>
+      )}
+      <div className="coordination-panel__actions">
+        <button type="button" onClick={() => run('sync', () => syncCoordinationGroup(group.id))} disabled={busy !== null}>
+          {busy === 'sync' ? 'Syncing' : 'Sync now'}
+        </button>
+        <button type="button" onClick={() => run('ask', () => askCoordinator(group.id, 'manual Ask coordinator'))} disabled={busy !== null || !group.coordinatorSessionId}>
+          {busy === 'ask' ? 'Asking' : 'Ask coordinator'}
+        </button>
+        <button
+          type="button"
+          onClick={() => run('pause', () => group.paused ? resumeCoordination(group.id) : pauseCoordination(group.id))}
+          disabled={busy !== null}
+        >
+          {group.paused ? 'Resume' : 'Pause'}
+        </button>
+        {selectedIsMember && !selectedIsCoordinator && (
+          <button
+            type="button"
+            className="danger"
+            onClick={() => run('remove', () => removeCoordinationMember(group.id, selectedSessionId))}
+            disabled={busy !== null}
+          >
+            Remove member
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** Annotation written into a card-to-card arrow's customData so we can
  *  recognise it as a "DM line" across refreshes -- Excalidraw can briefly
  *  drop bindings on load (user shapes restore before managed rects rebuild),
  *  and without a persisted hint the arrow temporarily looks like a vanilla
  *  shape. */
 const DM_ARROW_META_KEY = 'dmArrow'
+const RELATION_KIND_KEY = 'meee2Kind'
+const RELATION_ELEMENT_KINDS = new Set([
+  'relationFrame',
+  'relationConnector',
+  'relationShape',
+  'relationLabel',
+])
+
+const RELATION_STYLES: Record<CanvasRelationStylePreset, {
+  strokeColor: string
+  backgroundColor: string
+  strokeStyle: 'solid' | 'dashed' | 'dotted'
+  strokeWidth: number
+}> = {
+  coordination: { strokeColor: '#64748B', backgroundColor: 'transparent', strokeStyle: 'solid', strokeWidth: 2 },
+  review: { strokeColor: '#8B5CF6', backgroundColor: 'transparent', strokeStyle: 'dashed', strokeWidth: 2 },
+  dependency: { strokeColor: '#F59E0B', backgroundColor: 'transparent', strokeStyle: 'solid', strokeWidth: 2 },
+  handoff: { strokeColor: '#06B6D4', backgroundColor: 'transparent', strokeStyle: 'solid', strokeWidth: 2 },
+  group: { strokeColor: '#64748B', backgroundColor: 'transparent', strokeStyle: 'dashed', strokeWidth: 2 },
+}
+
+function relationStylePreset(raw?: string): CanvasRelationStylePreset {
+  return raw === 'coordination' ||
+    raw === 'review' ||
+    raw === 'dependency' ||
+    raw === 'handoff' ||
+    raw === 'group'
+    ? raw
+    : 'group'
+}
+
+function relationStyle(raw?: string) {
+  return RELATION_STYLES[relationStylePreset(raw)]
+}
+
+function relationCustomData(kind: string, extra: Record<string, unknown> = {}) {
+  return { [RELATION_KIND_KEY]: kind, ...extra }
+}
+
+function isAssistantRelationElement(el: ExcalidrawElement): boolean {
+  const kind = (el as any).customData?.[RELATION_KIND_KEY]
+  return typeof kind === 'string' && RELATION_ELEMENT_KINDS.has(kind)
+}
 
 function appStateFromViewport(
   viewport: { scrollX: number; scrollY: number; zoom: number } | null,
@@ -160,7 +360,7 @@ function sortSessionsForCanvas(
   sessions: readonly Session[],
   currentCanvasSessionIds: ReadonlySet<string>,
 ): Session[] {
-  return [...sessions].sort((a, b) => {
+  return sessions.filter((s) => currentCanvasSessionIds.has(s.id)).sort((a, b) => {
     const aCurrent = currentCanvasSessionIds.has(a.id)
     const bCurrent = currentCanvasSessionIds.has(b.id)
     if (aCurrent !== bCurrent) return aCurrent ? -1 : 1
@@ -330,6 +530,7 @@ function dmStructureSignature(elements: readonly ExcalidrawElement[]): string {
   let out = ''
   for (const el of elements) {
     if (el.type !== 'arrow') continue
+    if (isAssistantRelationElement(el)) continue
     const anyEl = el as any
     const start = anyEl.startBinding?.elementId ?? ''
     const end = anyEl.endBinding?.elementId ?? ''
@@ -573,6 +774,7 @@ function classifyDmArrow(
   sessionIds: readonly string[],
 ): { sidA: string; sidB: string } | null {
   if (!el || el.type !== 'arrow' || el.isDeleted) return null
+  if (isAssistantRelationElement(el as ExcalidrawElement)) return null
   const sStart = endpointSid(el.startBinding?.elementId, elementsById, sessionIds)
   const sEnd = endpointSid(el.endBinding?.elementId, elementsById, sessionIds)
   if (sStart && sEnd && sStart !== sEnd) {
@@ -614,6 +816,7 @@ interface Props {
   state: BoardState | null
   selection: Selection
   onSelectionChange: (s: Selection) => void
+  onSelectedElementsContextChange: (items: SelectedCanvasElementContext[]) => void
   /** Increments each time Fit button is pressed. */
   fitSignal: number
   /** Increments each time Arrange sessions is requested outside Board. */
@@ -701,6 +904,7 @@ export default function Board({
   state,
   selection,
   onSelectionChange,
+  onSelectedElementsContextChange,
   fitSignal,
   arrangeSignal,
   addToCanvasRequest,
@@ -726,6 +930,11 @@ export default function Board({
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const [arrangeConfirmOpen, setArrangeConfirmOpen] = useState(false)
   const [sceneRevision, setSceneRevision] = useState(0)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const pendingSaveCountRef = useRef(0)
+  const saveIdleTimerRef = useRef<number | null>(null)
+  const persistenceRef = useRef(persistence)
+  persistenceRef.current = persistence
   // 把 Create channel / DM line 两个按钮 portal 到 Excalidraw 自己的
   // 横向 shape tool 行 (`.App-toolbar .Stack_horizontal`) 里 ——
   // Excalidraw 不暴露添加 shape tool 的公开 API（issue #7583 / #6697 已
@@ -755,13 +964,55 @@ export default function Board({
   // Save wrappers fire-and-forget the async persistence call; debounce coalesces
   // bursty drag updates. 400ms matches the old layout.ts / channelLayout.ts
   // debounce, so PUT traffic during a drag stays bounded.
+  const trackCanvasSave = useCallback((label: string, action: () => Promise<unknown> | unknown): Promise<void> => {
+    if (saveIdleTimerRef.current !== null) {
+      window.clearTimeout(saveIdleTimerRef.current)
+      saveIdleTimerRef.current = null
+    }
+    pendingSaveCountRef.current += 1
+    setSaveStatus('saving')
+    let result: Promise<unknown> | unknown
+    try {
+      result = action()
+    } catch (error) {
+      result = Promise.reject(error)
+    }
+    return Promise.resolve(result)
+      .catch((error) => {
+        console.warn(`[Board] ${label} autosave failed`, error)
+      })
+      .finally(() => {
+        pendingSaveCountRef.current = Math.max(0, pendingSaveCountRef.current - 1)
+        if (pendingSaveCountRef.current > 0) return
+        setSaveStatus('saved')
+        saveIdleTimerRef.current = window.setTimeout(() => {
+          saveIdleTimerRef.current = null
+          setSaveStatus('idle')
+        }, 1800)
+      })
+      .then(() => undefined)
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (saveIdleTimerRef.current !== null) {
+        window.clearTimeout(saveIdleTimerRef.current)
+        saveIdleTimerRef.current = null
+      }
+    }
+  }, [])
+
   const saveLayoutDebounced = useMemo(
-    () => debounce((m: LayoutMap) => { void persistence.saveSessionLayout(m) }, 400),
-    [persistence],
+    () => debounce((m: LayoutMap) => {
+      trackCanvasSave('session layout', () => persistence.saveSessionLayout(m))
+    }, 400),
+    [persistence, trackCanvasSave],
   )
   const saveChannelLayoutDebounced = useMemo(
-    () => debounce((m: LayoutMap) => { void persistence.saveChannelLayout(m) }, 400),
-    [persistence],
+    () => debounce((m: LayoutMap) => {
+      trackCanvasSave('channel layout', () => persistence.saveChannelLayout(m))
+    }, 400),
+    [persistence, trackCanvasSave],
   )
 
   // Persisted Excalidraw appState + user-drawn shapes.
@@ -771,13 +1022,34 @@ export default function Board({
     appState: appStateFromViewport(initial.viewport),
   })
   const saveAppStateDebounced = useMemo(
-    () => debounce((s: { scrollX: number; scrollY: number; zoom: number }) => { void persistence.saveViewport(s) }, 400),
+    () => debounce((s: { scrollX: number; scrollY: number; zoom: number }) => {
+      void persistence.saveViewport(s)
+    }, 400),
     [persistence],
   )
   const saveShapesDebounced = useMemo(
-    () => debounce((els: readonly any[]) => { void persistence.saveUserElements(els) }, 400),
-    [persistence],
+    () => debounce((els: readonly any[]) => {
+      trackCanvasSave('user elements', () => persistence.saveUserElements(els))
+    }, 400),
+    [persistence, trackCanvasSave],
   )
+  const canvasSessionIdSignature = useMemo(
+    () => [...currentCanvasSessionIds].sort().join('|'),
+    [currentCanvasSessionIds],
+  )
+  const flushCanvasWrites = useCallback(() => {
+    saveAppStateDebounced.flush()
+    saveLayoutDebounced.flush()
+    saveChannelLayoutDebounced.flush()
+    saveShapesDebounced.flush()
+    void persistence.flushPendingWrites?.()
+  }, [
+    persistence,
+    saveAppStateDebounced,
+    saveChannelLayoutDebounced,
+    saveLayoutDebounced,
+    saveShapesDebounced,
+  ])
   // Sids the user has explicitly removed from canvas (last copy deleted).
   // Persisted via persistence.saveDismissed so auto-re-add doesn't fight the
   // user across WS ticks / reloads.
@@ -896,7 +1168,9 @@ export default function Board({
       //     'dismissed=', [...dismissedRef.current].map(s => s.slice(0, 8)),
       //   )
       // }
-      if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
+      if (dismissedChanged) {
+        void persistenceRef.current.saveDismissed(dismissedRef.current)
+      }
       prevCountsRef.current = counts
 
       onCountsChangeRef.current(counts)
@@ -939,6 +1213,22 @@ export default function Board({
     setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(initial.userElements as any)
   }, [api, canvasId, initial, onSelectionChange])
+
+  useEffect(() => {
+    const flush = () => flushCanvasWrites()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    window.addEventListener('beforeunload', flush)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      window.removeEventListener('beforeunload', flush)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      flush()
+    }
+  }, [flushCanvasWrites])
 
   // -- Always-allow validator for our custom link scheme ------------------
   // Excalidraw normally checks embeddable links against an allowlist (known
@@ -1135,7 +1425,9 @@ export default function Board({
       if (!currentCanvasSessionIds.has(s.id)) continue
       if (dismissedRef.current.delete(s.id)) clearedMembershipDismissal = true
     }
-    if (clearedMembershipDismissal) void persistence.saveDismissed(dismissedRef.current)
+    if (clearedMembershipDismissal) {
+      void persistence.saveDismissed(dismissedRef.current)
+    }
 
     const newSessionIds: string[] = []
     for (const s of sceneState.sessions) {
@@ -1145,7 +1437,6 @@ export default function Board({
       if (knownSessionIds.has(s.id)) continue
       newSessionIds.push(s.id)
     }
-
     // if (newSessionIds.length > 0 || dismissedRef.current.size > 0) {
     //   console.log(
     //     '[Board.scene] new=%d dismissed=%d',
@@ -1298,7 +1589,7 @@ export default function Board({
         })
       }
     }
-  }, [api, state, canvasId, canvasLoading, currentCanvasSessionIds, persistence, saveLayoutDebounced, saveChannelLayoutDebounced])
+  }, [api, state, canvasId, canvasLoading, canvasSessionIdSignature, currentCanvasSessionIds, persistence, saveLayoutDebounced, saveChannelLayoutDebounced, trackCanvasSave])
 
   // -- Fit-to-content --------------------------------------------------
   useEffect(() => {
@@ -1411,7 +1702,7 @@ export default function Board({
 
     // Scroll the new element into view.
     api.scrollToContent([sized], { fitToContent: false, animate: true })
-  }, [api, state, addToCanvasRequest, persistence, saveLayoutDebounced])
+  }, [api, state, addToCanvasRequest, persistence, saveLayoutDebounced, trackCanvasSave])
 
   // -- Hide-from-canvas from sidebar (eye 👁 toggle off) ---------------
   // Deletes all rects with customData.sessionId === sid. The
@@ -1541,12 +1832,14 @@ export default function Board({
       if (!inScope(s.id)) continue
       if (dismissedRef.current.delete(s.id)) dismissedChanged = true
     }
-    if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
+    if (dismissedChanged) {
+      void persistence.saveDismissed(dismissedRef.current)
+    }
 
     api.updateScene({ elements: next as any })
     setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(next)
-  }, [api, state, bulkVisibilityRequest, saveLayoutDebounced])
+  }, [api, state, bulkVisibilityRequest, persistence, saveLayoutDebounced, trackCanvasSave])
 
   // -- Place a freshly-created channel frame at the current viewport center --
   // The dialog calls onCreated(name) in App.tsx, which sets
@@ -1696,7 +1989,7 @@ export default function Board({
     requestAnimationFrame(() => {
       focusSceneElement(api, targetEl)
     })
-  }, [api, state, focusSessionRequest, persistence, saveLayoutDebounced])
+  }, [api, state, focusSessionRequest, persistence, saveLayoutDebounced, trackCanvasSave])
 
   // -- Assistant canvas patch Apply -----------------------------------
   // Chatbox proposals are intentionally preview-only. Once the user clicks
@@ -1725,6 +2018,8 @@ export default function Board({
       let userElementsChanged = false
       let dismissedChanged = false
       const membershipOps: Array<Promise<unknown>> = []
+      const persistenceOps: Array<Promise<unknown>> = []
+      const elementAliases = new Map<string, string>()
 
       const requireSession = (sid: string) => {
         const session = sessionById.get(sid)
@@ -1804,6 +2099,214 @@ export default function Board({
         }] as any, { regenerateIds: false })
         if (!built) throw new Error('Could not create note')
         nextElements = [...nextElements, built as ExcalidrawElement]
+        userElementsChanged = true
+      }
+      const sessionRect = (sid: string): ExcalidrawElement => {
+        requireSession(sid)
+        const idx = visibleSessionRectIndex(sid)
+        if (idx < 0) throw new Error(`Session card is hidden: ${sid.slice(0, 8)}`)
+        return nextElements[idx]
+      }
+      const elementBounds = (el: ExcalidrawElement) => ({
+        x: el.x,
+        y: el.y,
+        width: Math.max((el as any).width ?? RECT_W, 1),
+        height: Math.max((el as any).height ?? RECT_H, 1),
+      })
+      const boundsForSessions = (sessionIds: string[], padding: number) => {
+        if (sessionIds.length === 0) throw new Error('add_frame requires sessionIds or explicit bounds')
+        const rects = sessionIds.map((sid) => elementBounds(sessionRect(sid)))
+        const minX = Math.min(...rects.map((r) => r.x))
+        const minY = Math.min(...rects.map((r) => r.y))
+        const maxX = Math.max(...rects.map((r) => r.x + r.width))
+        const maxY = Math.max(...rects.map((r) => r.y + r.height))
+        return {
+          x: Math.round(minX - padding),
+          y: Math.round(minY - padding),
+          width: Math.round(maxX - minX + padding * 2),
+          height: Math.round(maxY - minY + padding * 2),
+        }
+      }
+      const buildText = (
+        text: string,
+        x: number,
+        y: number,
+        customData: Record<string, unknown>,
+        fontSize = 18,
+        elementId?: string,
+      ) => {
+        const requestedId = elementId || `relation-label-${Date.now().toString(36)}-${nextElements.length}`
+        const built = convertToExcalidrawElements([{
+          id: requestedId,
+          type: 'text',
+          x,
+          y,
+          text,
+          originalText: text,
+          fontSize,
+          fontFamily: 1,
+          textAlign: 'left',
+          verticalAlign: 'top',
+          strokeColor: '#E5E7EB',
+          backgroundColor: 'transparent',
+          customData,
+        }] as any, { regenerateIds: false })[0] as ExcalidrawElement | undefined
+        if (built) elementAliases.set(requestedId, built.id)
+        return built
+      }
+      const elementById = (id: string | undefined): ExcalidrawElement | null => {
+        if (!id) return null
+        const resolvedId = elementAliases.get(id) ?? id
+        return nextElements.find((el) => el.id === resolvedId && !(el as any).isDeleted) ?? null
+      }
+      const addFrame = (op: Extract<CanvasPatchOperation, { type: 'add_frame' }>) => {
+        const style = relationStyle(op.stylePreset)
+        const padding = typeof op.padding === 'number' ? op.padding : 36
+        const bounds = Array.isArray(op.sessionIds) && op.sessionIds.length > 0
+          ? boundsForSessions(op.sessionIds, padding)
+          : {
+              x: typeof op.x === 'number' ? op.x : viewportCenter().x - 260,
+              y: typeof op.y === 'number' ? op.y : viewportCenter().y - 180,
+              width: typeof op.width === 'number' ? op.width : 520,
+              height: typeof op.height === 'number' ? op.height : 360,
+            }
+        const id = op.elementId || `relation-frame-${Date.now().toString(36)}-${nextElements.length}`
+        const [built] = convertToExcalidrawElements([{
+          id,
+          type: 'frame',
+          x: bounds.x,
+          y: bounds.y,
+          width: Math.max(bounds.width, 120),
+          height: Math.max(bounds.height, 90),
+          name: op.title || 'Group',
+          children: [],
+          strokeColor: style.strokeColor,
+          backgroundColor: style.backgroundColor,
+          fillStyle: 'solid',
+          strokeWidth: style.strokeWidth,
+          strokeStyle: style.strokeStyle,
+          roundness: null,
+          locked: false,
+          groupIds: [],
+          opacity: 100,
+          customData: relationCustomData('relationFrame', {
+            stylePreset: relationStylePreset(op.stylePreset),
+            sessionIds: op.sessionIds ?? [],
+          }),
+        }] as any, { regenerateIds: false })
+        if (!built) throw new Error('Could not create frame')
+        elementAliases.set(id, built.id)
+        nextElements = [...nextElements, built as ExcalidrawElement]
+        userElementsChanged = true
+      }
+      const centerOf = (el: ExcalidrawElement) => {
+        const b = elementBounds(el)
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+      }
+      const addConnector = (op: Extract<CanvasPatchOperation, { type: 'add_connector' }>) => {
+        const from = op.fromSessionId
+          ? sessionRect(op.fromSessionId)
+          : elementById(op.fromElementId)
+        const to = op.toSessionId
+          ? sessionRect(op.toSessionId)
+          : elementById(op.toElementId)
+        if (!from || !to) throw new Error('add_connector requires existing from/to endpoints')
+        const style = relationStyle(op.stylePreset)
+        const a = centerOf(from)
+        const b = centerOf(to)
+        const id = `relation-connector-${Date.now().toString(36)}-${nextElements.length}`
+        const direction = op.direction ?? 'forward'
+        const [built] = convertToExcalidrawElements([{
+          id,
+          type: 'arrow',
+          x: a.x,
+          y: a.y,
+          points: [[0, 0], [Math.round(b.x - a.x), Math.round(b.y - a.y)]],
+          strokeColor: style.strokeColor,
+          backgroundColor: 'transparent',
+          strokeWidth: style.strokeWidth,
+          strokeStyle: style.strokeStyle,
+          startArrowhead: direction === 'backward' ? 'arrow' : null,
+          endArrowhead: direction === 'none' || direction === 'backward' ? null : 'arrow',
+          startBinding: { elementId: from.id, focus: 0, gap: 8 },
+          endBinding: { elementId: to.id, focus: 0, gap: 8 },
+          roundness: { type: 2 },
+          customData: relationCustomData('relationConnector', {
+            stylePreset: relationStylePreset(op.stylePreset),
+            fromSessionId: op.fromSessionId,
+            toSessionId: op.toSessionId,
+            label: op.label,
+          }),
+        }] as any, { regenerateIds: false })
+        if (!built) throw new Error('Could not create connector')
+        nextElements = [...nextElements, built as ExcalidrawElement]
+        if (op.label && op.label.trim()) {
+          const label = buildText(op.label.trim(), Math.round((a.x + b.x) / 2 + 8), Math.round((a.y + b.y) / 2 - 12), relationCustomData('relationLabel', { connectorId: id }), 14)
+          if (label) nextElements = [...nextElements, label]
+        }
+        userElementsChanged = true
+      }
+      const addShape = (op: Extract<CanvasPatchOperation, { type: 'add_shape' }>) => {
+        const style = relationStyle(op.stylePreset)
+        const id = op.elementId || `relation-shape-${Date.now().toString(36)}-${nextElements.length}`
+        const width = Math.max(op.width ?? 180, 48)
+        const height = Math.max(op.height ?? 96, 36)
+        const [built] = convertToExcalidrawElements([{
+          id,
+          type: op.shape,
+          x: op.x,
+          y: op.y,
+          width,
+          height,
+          strokeColor: style.strokeColor,
+          backgroundColor: style.backgroundColor,
+          fillStyle: 'solid',
+          strokeWidth: style.strokeWidth,
+          strokeStyle: style.strokeStyle,
+          roughness: 0,
+          roundness: op.shape === 'rectangle' ? { type: 3 } : null,
+          customData: relationCustomData('relationShape', { stylePreset: relationStylePreset(op.stylePreset) }),
+        }] as any, { regenerateIds: false })
+        if (!built) throw new Error('Could not create shape')
+        elementAliases.set(id, built.id)
+        nextElements = [...nextElements, built as ExcalidrawElement]
+        if (op.text && op.text.trim()) {
+          const label = buildText(op.text.trim(), op.x + 14, op.y + Math.max(12, height / 2 - 10), relationCustomData('relationLabel', { shapeId: id }), 16)
+          if (label) nextElements = [...nextElements, label]
+        }
+        userElementsChanged = true
+      }
+      const addLabel = (op: Extract<CanvasPatchOperation, { type: 'add_label' }>) => {
+        const built = buildText(op.text, op.x, op.y, relationCustomData('relationLabel', { stylePreset: relationStylePreset(op.stylePreset) }), 16, op.elementId)
+        if (!built) throw new Error('Could not create label')
+        nextElements = [...nextElements, built]
+        userElementsChanged = true
+      }
+      const updateElement = (op: Extract<CanvasPatchOperation, { type: 'update_element' }>) => {
+        let found = false
+        nextElements = nextElements.map((el) => {
+          if (el.id !== op.elementId || (el as any).isDeleted) return el
+          if (!isAssistantRelationElement(el)) throw new Error(`Element is not assistant-created: ${op.elementId.slice(0, 8)}`)
+          found = true
+          const text = typeof op.text === 'string' && el.type === 'text' ? op.text : (el as any).text
+          const style = op.stylePreset ? relationStyle(op.stylePreset) : null
+          return {
+            ...el,
+            x: typeof op.x === 'number' ? op.x : el.x,
+            y: typeof op.y === 'number' ? op.y : el.y,
+            width: typeof op.width === 'number' ? op.width : (el as any).width,
+            height: typeof op.height === 'number' ? op.height : (el as any).height,
+            text,
+            originalText: text,
+            ...(style ? {
+              strokeColor: style.strokeColor,
+              backgroundColor: style.backgroundColor,
+              strokeStyle: style.strokeStyle,
+              strokeWidth: style.strokeWidth,
+            } : {}),
+          } as ExcalidrawElement
+        })
+        if (!found) throw new Error(`Element not found: ${op.elementId.slice(0, 8)}`)
         userElementsChanged = true
       }
 
@@ -1914,6 +2417,26 @@ export default function Board({
             userElementsChanged = true
             break
           }
+          case 'add_frame': {
+            addFrame(op)
+            break
+          }
+          case 'add_connector': {
+            addConnector(op)
+            break
+          }
+          case 'add_shape': {
+            addShape(op)
+            break
+          }
+          case 'add_label': {
+            addLabel(op)
+            break
+          }
+          case 'update_element': {
+            updateElement(op)
+            break
+          }
         }
       }
 
@@ -1922,16 +2445,23 @@ export default function Board({
       reportCountsRef.current(nextElements)
       if (sessionLayoutChanged) {
         layoutRef.current = nextLayout
-        saveLayoutDebounced(nextLayout)
+        saveLayoutDebounced.cancel()
+        persistenceOps.push(trackCanvasSave('session layout', () => persistence.saveSessionLayout(nextLayout)))
       }
       if (channelLayoutChanged) {
         channelLayoutRef.current = nextChannelLayout
-        saveChannelLayoutDebounced(nextChannelLayout)
+        saveChannelLayoutDebounced.cancel()
+        persistenceOps.push(trackCanvasSave('channel layout', () => persistence.saveChannelLayout(nextChannelLayout)))
       }
-      if (dismissedChanged) void persistence.saveDismissed(dismissedRef.current)
-      if (userElementsChanged) saveShapesDebounced(nextElements)
+      if (dismissedChanged) {
+        persistenceOps.push(trackCanvasSave('dismissed sessions', () => persistence.saveDismissed(dismissedRef.current)))
+      }
+      if (userElementsChanged) {
+        saveShapesDebounced.cancel()
+        persistenceOps.push(trackCanvasSave('user elements', () => persistence.saveUserElements(nextElements)))
+      }
 
-      Promise.all(membershipOps)
+      Promise.all([...membershipOps, ...persistenceOps])
         .then(() => onCanvasPatchApplied({
           ok: true,
           message: `Applied ${proposal.operations.length} canvas change${proposal.operations.length === 1 ? '' : 's'}`,
@@ -1955,6 +2485,7 @@ export default function Board({
     saveChannelLayoutDebounced,
     saveLayoutDebounced,
     saveShapesDebounced,
+    trackCanvasSave,
   ])
 
   // -- Multi-select all cards for the sidebar-selected session --------
@@ -2125,6 +2656,7 @@ export default function Board({
       // the selection don't thrash the sidebar (see prevSelSigRef init).
       if (selectionChanged) {
         prevSelSigRef.current = selSig
+        onSelectedElementsContextChange(selectedElementsContext(elements, selIds, state))
 
         // Classify selection
         const uniqueSids = new Set<string>()
@@ -2233,6 +2765,7 @@ export default function Board({
           if ((el as any).isDeleted) continue
           const sid = parseSessionFromElement(el)
           if (!sid || seen.has(sid)) continue
+          if (!currentCanvasSessionIdsRef.current.has(sid)) continue
           seen.add(sid)
           const prev = next[sid]
           const current = sessionLayoutFromRect(el)
@@ -2547,7 +3080,7 @@ export default function Board({
       const snapshotElements = aspectNeedsFix ? fixedElements : elementsForPersistence
       publishSnapshotIfNeeded(snapshotElements, viewport)
     }
-  }, [state, canvasId, canvasLoading, selection, onSelectionChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced, publishSceneSnapshotDebounced, unreadSids, onRefresh])
+  }, [state, canvasId, canvasLoading, selection, onSelectionChange, onSelectedElementsContextChange, saveLayoutDebounced, saveChannelLayoutDebounced, api, saveAppStateDebounced, saveShapesDebounced, publishSceneSnapshotDebounced, unreadSids, onRefresh])
 
   // -- Minimal UI options --------------------------------------------
   const uiOptions = useMemo(
@@ -2615,11 +3148,10 @@ export default function Board({
 
     layoutRef.current = nextLayout
     saveLayoutDebounced.cancel()
-    void persistence.saveSessionLayout(nextLayout)
-      .then(() => persistence.flushPendingWrites?.())
-      .catch((e) => {
-        console.warn('[Board] arrange layout save failed:', (e as Error).message)
-      })
+    trackCanvasSave('arranged session layout', async () => {
+      await persistence.saveSessionLayout(nextLayout)
+      await persistence.flushPendingWrites?.()
+    })
     api.updateScene({ elements: next as any })
     setSceneRevision((x) => (x + 1) & 0x7fffffff)
     reportCountsRef.current(next)
@@ -2632,6 +3164,123 @@ export default function Board({
     setArrangeConfirmOpen(false)
   }
 
+  const handleSessionOverlayPointerDown = useCallback((
+    event: ReactPointerEvent<HTMLDivElement>,
+    elementId: string,
+    sessionId: string,
+  ) => {
+    if (!api || !state) return
+    if (event.button !== 0) return
+    const startElements = api.getSceneElements()
+    const startEl = startElements.find((el) => el.id === elementId)
+    if (!startEl || startEl.type !== 'rectangle' || parseSessionFromElement(startEl) !== sessionId) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId)
+    } catch {
+      // Window-level listeners below are the durable capture path.
+    }
+
+    onSelectionChange({ kind: 'session', sessionId })
+    onSelectedElementsContextChange(selectedElementsContext(startElements, [elementId], state))
+    api.updateScene({
+      appState: {
+        selectedElementIds: { [elementId]: true },
+      } as any,
+    })
+
+    const startClientX = event.clientX
+    const startClientY = event.clientY
+    const startX = startEl.x
+    const startY = startEl.y
+    const zoom = api.getAppState().zoom?.value || 1
+    let moved = false
+    let latest: PointerEvent | null = null
+    let raf: number | null = null
+
+    const applyMove = () => {
+      raf = null
+      if (!latest) return
+      const dx = (latest.clientX - startClientX) / zoom
+      const dy = (latest.clientY - startClientY) / zoom
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return
+      moved = true
+      const nextX = startX + dx
+      const nextY = startY + dy
+      let updated: ExcalidrawElement | null = null
+      const nextElements = api.getSceneElements().map((el) => {
+        if (el.id !== elementId) return el
+        updated = { ...el, x: nextX, y: nextY } as ExcalidrawElement
+        return updated
+      })
+      if (!updated) return
+      layoutRef.current = {
+        ...layoutRef.current,
+        [sessionId]: sessionLayoutFromRect(updated),
+      }
+      saveLayoutDebounced(layoutRef.current)
+      api.updateScene({
+        elements: nextElements as any,
+        appState: {
+          selectedElementIds: { [elementId]: true },
+        } as any,
+      })
+      setSceneRevision((x) => (x + 1) & 0x7fffffff)
+    }
+
+    const applyPendingMoveNow = () => {
+      if (raf !== null) {
+        window.cancelAnimationFrame(raf)
+        raf = null
+      }
+      applyMove()
+    }
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove, true)
+      window.removeEventListener('pointerup', onUp, true)
+      window.removeEventListener('pointercancel', onCancel, true)
+      if (raf !== null) {
+        window.cancelAnimationFrame(raf)
+        raf = null
+      }
+    }
+    const flushMove = () => {
+      if (!moved) return
+      saveLayoutDebounced.flush()
+      void persistence.flushPendingWrites?.()
+    }
+    const onMove = (moveEvent: PointerEvent) => {
+      latest = moveEvent
+      if (raf !== null) return
+      raf = window.requestAnimationFrame(applyMove)
+    }
+    const onUp = (upEvent: PointerEvent) => {
+      latest = upEvent
+      applyPendingMoveNow()
+      cleanup()
+      flushMove()
+    }
+    const onCancel = (cancelEvent: PointerEvent) => {
+      latest = cancelEvent
+      applyPendingMoveNow()
+      cleanup()
+      flushMove()
+    }
+
+    window.addEventListener('pointermove', onMove, true)
+    window.addEventListener('pointerup', onUp, true)
+    window.addEventListener('pointercancel', onCancel, true)
+  }, [
+    api,
+    onSelectedElementsContextChange,
+    onSelectionChange,
+    persistence,
+    saveLayoutDebounced,
+    state,
+  ])
+
   // -- renderEmbeddable: Wave 18 — the real card is rendered by
   // `<SessionOverlay>` (a sibling overlay div). We still need to pass
   // `renderEmbeddable` so Excalidraw doesn't attempt its default link-fetch
@@ -2642,6 +3291,14 @@ export default function Board({
     () => (_element: unknown, _appState: AppState) => null,
     [],
   )
+
+  const selectedCoordinationSessionId = selection.kind === 'session' ? selection.sessionId : ''
+  const selectedCoordinationGroup = selectedCoordinationSessionId && state
+    ? state.coordinationGroups.find((group) =>
+        group.coordinatorSessionId === selectedCoordinationSessionId ||
+        group.memberSessionIds.includes(selectedCoordinationSessionId),
+      )
+    : undefined
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -2798,7 +3455,30 @@ export default function Board({
         templateCache={templateCache}
         onNeedTemplate={onNeedTemplate}
         unreadSids={unreadSids}
+        onSessionPointerDown={handleSessionOverlayPointerDown}
       />
+      {saveStatus !== 'idle' && (
+        <div
+          className={
+            'canvas-save-status' +
+            (saveStatus === 'saving' ? ' canvas-save-status--saving' : '') +
+            (saveStatus === 'saved' ? ' canvas-save-status--saved' : '')
+          }
+          role="status"
+          aria-live="polite"
+        >
+          <span className="canvas-save-status__dot" aria-hidden />
+          {saveStatus === 'saving' ? 'Saving canvas' : 'Canvas saved'}
+        </div>
+      )}
+      {state && selectedCoordinationGroup && selectedCoordinationSessionId && (
+        <CoordinationPanel
+          group={selectedCoordinationGroup}
+          selectedSessionId={selectedCoordinationSessionId}
+          state={state}
+          onRefresh={onRefresh}
+        />
+      )}
     </div>
   )
 }
