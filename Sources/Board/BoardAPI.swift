@@ -299,6 +299,7 @@ enum BoardAPI {
             dashboardUrl: Meee2OnlineConfig.appURL(path: "dashboard").absoluteString,
             connectUrl: meee2ConnectUrl().absoluteString,
             defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
+            defaultSyncPolicy: defaults.bool(forKey: "meee2Online") ? Meee2SyncPolicy.metadata.rawValue : Meee2SyncPolicy.private.rawValue,
             defaultSyncTeamId: defaults.string(forKey: "meee2TeamId") ?? "",
             defaultSyncTeamName: BoardDTOBuilder.meee2DefaultSyncTeamName(),
             teams: BoardDTOBuilder.meee2OnlineTeams(),
@@ -334,9 +335,12 @@ enum BoardAPI {
         }
 
         if let sync = json["sessionSync"] as? [String: Any],
-           let sessionId = sync["sessionId"] as? String,
-           let enabled = sync["enabled"] as? Bool {
-            setMeee2OnlineSession(sessionId, enabled: enabled)
+           let sessionId = sync["sessionId"] as? String {
+            if let rawPolicy = sync["syncPolicy"] as? String {
+                setMeee2OnlineSession(sessionId, policy: Meee2SyncPolicy(rawValueOrAlias: rawPolicy))
+            } else if let enabled = sync["enabled"] as? Bool {
+                setMeee2OnlineSession(sessionId, enabled: enabled)
+            }
         }
 
         persistMeee2OnlineSettings()
@@ -403,7 +407,13 @@ enum BoardAPI {
             "meee2SupabaseUrl",
             "meee2SupabaseKey",
             "meee2EnabledSessionIds",
-            "meee2DisabledSessionIds"
+            "meee2DisabledSessionIds",
+            "meee2SessionSyncPolicies",
+            "meee2FeishuDefaultGroupId",
+            "meee2FeishuDefaultGroupName",
+            "meee2FeishuDeliveryStatus",
+            "meee2FeishuLastSentAt",
+            "meee2FeishuLastError"
         ] {
             defaults.removeObject(forKey: key)
         }
@@ -415,6 +425,7 @@ enum BoardAPI {
                 "teams": [],
                 "sessionTeamIds": [:],
                 "defaultSyncEnabled": false,
+                "sessionSyncPolicies": [:],
                 "enabledSessionIds": [],
                 "disabledSessionIds": [],
                 "machineId": Host.current().name ?? "unknown",
@@ -442,7 +453,8 @@ enum BoardAPI {
                 title: session.title,
                 pluginDisplayName: plugin?.displayName ?? session.pluginId,
                 project: session.cwd ?? "",
-                enabled: isMeee2OnlineSessionEnabled(session.id)
+                enabled: isMeee2OnlineSessionEnabled(session.id),
+                syncPolicy: syncPolicyForSession(session.id).rawValue
             )
         }
     }
@@ -462,11 +474,15 @@ enum BoardAPI {
     }
 
     private static func setMeee2OnlineSession(_ sessionId: String, enabled: Bool) {
+        setMeee2OnlineSession(sessionId, policy: enabled ? .metadata : .private)
+    }
+
+    private static func setMeee2OnlineSession(_ sessionId: String, policy: Meee2SyncPolicy) {
         var disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
         var explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
         let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
 
-        if enabled {
+        if policy.uploadsSession {
             disabled.subtract(aliases)
             explicitlyEnabled.formUnion(aliases)
         } else {
@@ -476,6 +492,27 @@ enum BoardAPI {
 
         Meee2OnlinePusher.storeSessionIdSet(disabled, forKey: "meee2DisabledSessionIds")
         Meee2OnlinePusher.storeSessionIdSet(explicitlyEnabled, forKey: "meee2EnabledSessionIds")
+        Meee2OnlinePusher.storeSessionSyncPolicy(sessionId: sessionId, policy: policy)
+    }
+
+    private static func syncPolicyForSession(_ sessionId: String) -> Meee2SyncPolicy {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else { return .private }
+
+        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+        let policies = Meee2OnlinePusher.sessionSyncPolicyMap()
+        for alias in aliases {
+            if let policy = policies[alias] {
+                return policy
+            }
+        }
+
+        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
+        if !aliases.isDisjoint(with: disabled) { return .private }
+        if defaults.bool(forKey: "meee2Online") { return .metadata }
+
+        let enabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
+        return aliases.isDisjoint(with: enabled) ? .private : .metadata
     }
 
     private static func persistMeee2OnlineSettings() {
@@ -493,6 +530,7 @@ enum BoardAPI {
         }
         let enabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds"))
         let disabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds"))
+        let sessionSyncPolicies = Meee2OnlinePusher.sessionSyncPolicyMap().mapValues(\.rawValue)
         let meee2Settings: [String: Any] = [
             "enabled": true,
             "online": defaults.bool(forKey: "meee2Online"),
@@ -506,6 +544,7 @@ enum BoardAPI {
             "teams": teams,
             "sessionTeamIds": [String: String](),
             "defaultSyncEnabled": defaults.bool(forKey: "meee2Online"),
+            "sessionSyncPolicies": sessionSyncPolicies,
             "enabledSessionIds": enabledSessionIds,
             "disabledSessionIds": disabledSessionIds,
             "machineId": Host.current().name ?? "unknown",
@@ -519,6 +558,112 @@ enum BoardAPI {
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: file, options: .atomic)
         }
+    }
+
+    // MARK: - Feishu delivery via meee2 Online
+
+    static func getFeishuConfig(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(FeishuConfigEnvelope(feishu: feishuConfigDTO()))
+    }
+
+    static func updateFeishuConfig(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let defaults = UserDefaults.standard
+        if let defaultGroupId = json["defaultGroupId"] as? String {
+            defaults.set(defaultGroupId.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "meee2FeishuDefaultGroupId")
+        }
+        if let defaultGroupName = json["defaultGroupName"] as? String {
+            defaults.set(defaultGroupName.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "meee2FeishuDefaultGroupName")
+        }
+        if let configured = json["configured"] as? Bool {
+            defaults.set(configured, forKey: "meee2FeishuConfigured")
+        }
+        return getFeishuConfig(req)
+    }
+
+    static func testFeishuNotification(_ req: HttpRequest) -> HttpResponse {
+        deliverFeishu(kind: "testNotification", payload: [
+            "defaultGroupId": UserDefaults.standard.string(forKey: "meee2FeishuDefaultGroupId") ?? "",
+            "title": "meee2 Feishu test",
+            "message": "Feishu delivery is routed through meee2 Online and uses the configured team app."
+        ])
+    }
+
+    static func sendFeishuCard(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let kind = stringSetting(json["kind"])
+        let payload = json["payload"] as? [String: Any] ?? [:]
+        return deliverFeishu(kind: kind.isEmpty ? "sessionCard" : kind, payload: payload)
+    }
+
+    static func createFeishuDoc(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let title = stringSetting(json["title"])
+        let content = stringSetting(json["content"])
+        guard !title.isEmpty, !content.isEmpty else {
+            return errorResponse("bad_request", "title and content are required", status: 400)
+        }
+        return deliverFeishu(kind: stringSetting(json["kind"]).isEmpty ? "createDoc" : stringSetting(json["kind"]), payload: [
+            "title": title,
+            "content": content,
+            "workroomId": stringSetting(json["workroomId"])
+        ])
+    }
+
+    private static func feishuConfigDTO() -> FeishuConfigDTO {
+        let defaults = UserDefaults.standard
+        let configured = defaults.bool(forKey: "meee2FeishuConfigured")
+            || !(defaults.string(forKey: "meee2FeishuDefaultGroupId") ?? "").isEmpty
+        return FeishuConfigDTO(
+            configured: configured,
+            deliveryStatus: defaults.string(forKey: "meee2FeishuDeliveryStatus") ?? (configured ? "ready" : "notConfigured"),
+            defaultGroupId: defaults.string(forKey: "meee2FeishuDefaultGroupId") ?? "",
+            defaultGroupName: defaults.string(forKey: "meee2FeishuDefaultGroupName") ?? "",
+            lastSentAt: defaults.string(forKey: "meee2FeishuLastSentAt"),
+            lastError: defaults.string(forKey: "meee2FeishuLastError")
+        )
+    }
+
+    private static func deliverFeishu(kind: String, payload: [String: Any]) -> HttpResponse {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else {
+            return errorResponse("not_connected", "Connect meee2 Online before sending Feishu delivery.", status: 409)
+        }
+
+        var deliveryPayload = payload
+        deliveryPayload["defaultGroupId"] = defaults.string(forKey: "meee2FeishuDefaultGroupId") ?? ""
+
+        let group = DispatchGroup()
+        group.enter()
+        var response: FeishuDeliveryResultDTO?
+        Meee2OnlinePusher.shared.deliverFeishu(kind: kind, payload: deliveryPayload) { result in
+            switch result {
+            case .success(let data):
+                let url = data["url"] as? String ?? data["docUrl"] as? String
+                defaults.set("lastSent", forKey: "meee2FeishuDeliveryStatus")
+                defaults.set(BoardDTOBuilder.iso(Date()), forKey: "meee2FeishuLastSentAt")
+                defaults.removeObject(forKey: "meee2FeishuLastError")
+                response = FeishuDeliveryResultDTO(ok: true, status: "sent", url: url, error: nil)
+            case .failure(let error):
+                defaults.set("failed", forKey: "meee2FeishuDeliveryStatus")
+                defaults.set(error.localizedDescription, forKey: "meee2FeishuLastError")
+                response = FeishuDeliveryResultDTO(ok: false, status: "failed", url: nil, error: error.localizedDescription)
+            }
+            group.leave()
+        }
+
+        if group.wait(timeout: .now() + 15) == .timedOut {
+            defaults.set("failed", forKey: "meee2FeishuDeliveryStatus")
+            defaults.set("Timed out waiting for meee2 Online Feishu delivery.", forKey: "meee2FeishuLastError")
+            return errorResponse("feishu_timeout", "Timed out waiting for meee2 Online Feishu delivery.", status: 504)
+        }
+        return jsonResponse(response ?? FeishuDeliveryResultDTO(ok: false, status: "failed", url: nil, error: "Unknown Feishu delivery result"))
     }
 
     // MARK: - Automations

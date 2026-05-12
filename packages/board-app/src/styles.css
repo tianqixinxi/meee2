@@ -2904,6 +2904,22 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   accent-color: var(--accent);
 }
 
+.settings-session-sync-row select {
+  flex: 0 0 150px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.settings-field span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .settings-session-sync-list {
   max-height: 220px;
   overflow: auto;

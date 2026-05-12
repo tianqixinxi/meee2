@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,6 +14,13 @@ import {
 } from 'lucide-react'
 import type { BoardState } from '../types'
 import {
+  createFeishuDoc,
+  fetchFeishuConfig,
+  sendFeishuCard,
+  updateUserProfile,
+  type FeishuConfig,
+} from '../api'
+import {
   buildSessionGraph,
   matchesSessionNode,
   type SessionGraph,
@@ -25,14 +32,12 @@ import {
   effectiveSyncPolicy,
   generateHandoffSummary,
   inferArtifacts,
-  loadSyncPolicies,
   loadWorkrooms,
-  saveSyncPolicy,
   saveWorkrooms,
   SYNC_POLICY_OPTIONS,
-  type SyncPolicy,
   type Workroom,
 } from '../workLayer'
+import type { SyncPolicy } from '../types'
 
 export type WorkLayerView = 'team' | 'workrooms' | 'review' | 'memory'
 
@@ -56,21 +61,29 @@ export function WorkLayerViews({
   onShowInMap,
 }: WorkLayerViewsProps) {
   const [query, setQuery] = useState('')
-  const [syncPolicies, setSyncPolicies] = useState(loadSyncPolicies)
   const [workrooms, setWorkrooms] = useState(loadWorkrooms)
+  const [feishu, setFeishu] = useState<FeishuConfig | null>(null)
+  const [deliveryMessage, setDeliveryMessage] = useState<string | null>(null)
   const graph = useMemo(() => buildSessionGraph(state?.sessions ?? []), [state])
   const nodes = useMemo(
     () => graph.nodes.filter((node) => matchesSessionNode(node, query)),
     [graph.nodes, query],
   )
-  const setPolicy = (sessionId: string, policy: SyncPolicy) => {
+  useEffect(() => {
+    fetchFeishuConfig()
+      .then((result) => setFeishu(result.feishu))
+      .catch(() => setFeishu(null))
+  }, [])
+
+  const setPolicy = async (sessionId: string, policy: SyncPolicy) => {
     if (
       policy === 'fullTranscript' &&
       !window.confirm('Full transcript sync can expose prompts, code, and tool output. Enable it for this session?')
     ) {
       return
     }
-    setSyncPolicies(saveSyncPolicy(sessionId, policy))
+    await updateUserProfile({ sessionSync: { sessionId, syncPolicy: policy } })
+    onRefresh()
   }
   const persistWorkrooms = (next: Workroom[]) => {
     setWorkrooms(saveWorkrooms(next))
@@ -106,8 +119,10 @@ export function WorkLayerViews({
         <TeamRadar
           graph={graph}
           nodes={nodes}
-          syncPolicies={syncPolicies}
+          feishu={feishu}
+          deliveryMessage={deliveryMessage}
           onPolicyChange={setPolicy}
+          onDeliveryMessage={setDeliveryMessage}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
         />
@@ -116,6 +131,8 @@ export function WorkLayerViews({
         <WorkroomsView
           nodes={nodes}
           workrooms={workrooms}
+          feishu={feishu}
+          onDeliveryMessage={setDeliveryMessage}
           onSave={persistWorkrooms}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
@@ -132,7 +149,8 @@ export function WorkLayerViews({
         <MemoryAudit
           graph={graph}
           nodes={nodes}
-          syncPolicies={syncPolicies}
+          feishu={feishu}
+          onDeliveryMessage={setDeliveryMessage}
         />
       )}
     </main>
@@ -142,24 +160,49 @@ export function WorkLayerViews({
 function TeamRadar({
   graph,
   nodes,
-  syncPolicies,
+  feishu,
+  deliveryMessage,
   onPolicyChange,
+  onDeliveryMessage,
   onOpenSession,
   onShowInMap,
 }: {
   graph: SessionGraph
   nodes: SessionGraphNode[]
-  syncPolicies: Record<string, SyncPolicy>
-  onPolicyChange: (sessionId: string, policy: SyncPolicy) => void
+  feishu: FeishuConfig | null
+  deliveryMessage: string | null
+  onPolicyChange: (sessionId: string, policy: SyncPolicy) => Promise<void>
+  onDeliveryMessage: (message: string | null) => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
-  const visible = nodes.filter((node) => effectiveSyncPolicy(node.session, syncPolicies) !== 'private')
+  const visible = nodes.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
   const privateCount = nodes.length - visible.length
   const firstVisible = visible[0]
+  const visibleBlockedCount = graph.buckets.needsAttention.filter((node) => effectiveSyncPolicy(node.session) !== 'private').length
   const preview = firstVisible
-    ? buildSyncPayloadPreview(firstVisible, effectiveSyncPolicy(firstVisible.session, syncPolicies))
+    ? buildSyncPayloadPreview(firstVisible, effectiveSyncPolicy(firstVisible.session))
     : null
+  const sendBlocked = async () => {
+    const node = graph.buckets.needsAttention.find((candidate) => effectiveSyncPolicy(candidate.session) !== 'private')
+    if (!node) return
+    const policy = effectiveSyncPolicy(node.session)
+    const preview = buildSyncPayloadPreview(node, policy)
+    try {
+      const result = await sendFeishuCard({
+        kind: 'blocked',
+        payload: {
+          event: 'blocked',
+          policy,
+          card: preview.payload,
+          sessionLink: `/sessions/${node.session.id}`,
+        },
+      })
+      onDeliveryMessage(result.ok ? 'Feishu blocked alert sent.' : result.error ?? 'Feishu blocked alert failed.')
+    } catch (err) {
+      onDeliveryMessage((err as Error).message)
+    }
+  }
   return (
     <div className="work-layer__grid">
       <section className="work-layer__panel work-layer__wide">
@@ -172,7 +215,6 @@ function TeamRadar({
         </div>
         <SessionTable
           nodes={visible}
-          syncPolicies={syncPolicies}
           onPolicyChange={onPolicyChange}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
@@ -199,6 +241,19 @@ function TeamRadar({
           <p className="work-layer__muted">Select a non-private session to preview team payload shape.</p>
         )}
       </section>
+      <section className="work-layer__panel">
+        <h2>Feishu delivery</h2>
+        <StatusRows rows={[
+          ['Status', feishu?.deliveryStatus ?? 'not configured'],
+          ['Default group', feishu?.defaultGroupName || feishu?.defaultGroupId || 'not set'],
+          ['Last sent', feishu?.lastSentAt ? new Date(feishu.lastSentAt).toLocaleString() : 'never'],
+          ['Last error', feishu?.lastError ?? 'none'],
+        ]} />
+        {deliveryMessage && <p className="work-layer__muted">{deliveryMessage}</p>}
+        <button className="ghost" type="button" onClick={() => void sendBlocked()} disabled={visibleBlockedCount === 0}>
+          Send blocked alert
+        </button>
+      </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
@@ -208,7 +263,6 @@ function TeamRadar({
         </div>
         <SessionTable
           nodes={nodes}
-          syncPolicies={syncPolicies}
           onPolicyChange={onPolicyChange}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
@@ -222,12 +276,16 @@ function TeamRadar({
 function WorkroomsView({
   nodes,
   workrooms,
+  feishu,
+  onDeliveryMessage,
   onSave,
   onOpenSession,
   onShowInMap,
 }: {
   nodes: SessionGraphNode[]
   workrooms: Workroom[]
+  feishu: FeishuConfig | null
+  onDeliveryMessage: (message: string | null) => void
   onSave: (workrooms: Workroom[]) => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
@@ -239,6 +297,7 @@ function WorkroomsView({
   const selectedNodes = nodes.filter((node) => selectedIds.includes(node.session.id))
   const activeWorkroom = workrooms[0] ?? null
   const handoff = activeWorkroom ? generateHandoffSummary(activeWorkroom, nodes) : ''
+  const feishuHandoff = activeWorkroom ? buildFeishuWorkroomBrief(activeWorkroom, nodes) : ''
 
   const toggle = (sessionId: string) => {
     setSelectedIds((current) =>
@@ -279,6 +338,36 @@ function WorkroomsView({
     )
     setCommentBody('')
     onSave(next)
+  }
+  const sendHandoffCard = async () => {
+    if (!activeWorkroom) return
+    try {
+      const result = await sendFeishuCard({
+        kind: 'handoffCreated',
+        payload: {
+          event: 'handoffCreated',
+          workroom: activeWorkroom,
+          handoff: feishuHandoff,
+        },
+      })
+      onDeliveryMessage(result.ok ? 'Feishu handoff card sent.' : result.error ?? 'Feishu handoff card failed.')
+    } catch (err) {
+      onDeliveryMessage((err as Error).message)
+    }
+  }
+  const createHandoffDoc = async () => {
+    if (!activeWorkroom) return
+    try {
+      const result = await createFeishuDoc({
+        kind: 'handoffDoc',
+        title: `meee2 handoff · ${activeWorkroom.name}`,
+        content: feishuHandoff,
+        workroomId: activeWorkroom.id,
+      })
+      onDeliveryMessage(result.ok ? `Feishu handoff doc created${result.url ? `: ${result.url}` : '.'}` : result.error ?? 'Feishu doc failed.')
+    } catch (err) {
+      onDeliveryMessage((err as Error).message)
+    }
   }
 
   return (
@@ -387,6 +476,19 @@ function WorkroomsView({
               >
                 Prepare send context
               </button>
+              <button type="button" className="ghost" onClick={() => void sendHandoffCard()} disabled={!feishu?.configured}>
+                Send to Feishu group
+              </button>
+              <button type="button" className="ghost" onClick={() => void createHandoffDoc()} disabled={!feishu?.configured}>
+                Create Feishu handoff doc
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void navigator.clipboard?.writeText(feishuHandoff)}
+              >
+                Copy Feishu-ready brief
+              </button>
             </div>
           </>
         ) : (
@@ -468,20 +570,57 @@ function ReviewRoom({
 function MemoryAudit({
   graph,
   nodes,
-  syncPolicies,
+  feishu,
+  onDeliveryMessage,
 }: {
   graph: SessionGraph
   nodes: SessionGraphNode[]
-  syncPolicies: Record<string, SyncPolicy>
+  feishu: FeishuConfig | null
+  onDeliveryMessage: (message: string | null) => void
 }) {
-  const visible = nodes.filter((node) => effectiveSyncPolicy(node.session, syncPolicies) !== 'private')
-  const fullTranscript = nodes.filter((node) => effectiveSyncPolicy(node.session, syncPolicies) === 'fullTranscript').length
+  const visible = nodes.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
+  const fullTranscript = nodes.filter((node) => effectiveSyncPolicy(node.session) === 'fullTranscript').length
   const privateCount = nodes.length - visible.length
   const standup = [
     ...graph.buckets.needsAttention.slice(0, 4).map((node) => `Blocked: ${node.session.title} — ${node.risks[0]?.label ?? node.currentStep}`),
     ...graph.buckets.running.slice(0, 4).map((node) => `Running: ${node.session.title} — ${node.currentStep}`),
     ...graph.buckets.recentlyCompleted.slice(0, 4).map((node) => `Done: ${node.session.title}`),
   ]
+  const standupText = standup.join('\n') || 'No local session activity yet.'
+  const feishuStandupText = visible
+    .slice(0, 12)
+    .map((node) => {
+      const preview = buildSyncPayloadPreview(node, effectiveSyncPolicy(node.session))
+      return `- ${node.session.status}: ${JSON.stringify(preview.payload)}`
+    })
+    .join('\n') || 'No team-visible session activity.'
+  const sendStandup = async () => {
+    try {
+      const result = await sendFeishuCard({
+        kind: 'dailyStandup',
+        payload: {
+          event: 'dailyStandup',
+          policy: 'selective',
+          standup: feishuStandupText,
+        },
+      })
+      onDeliveryMessage(result.ok ? 'Feishu standup sent.' : result.error ?? 'Feishu standup failed.')
+    } catch (err) {
+      onDeliveryMessage((err as Error).message)
+    }
+  }
+  const createStandupDoc = async () => {
+    try {
+      const result = await createFeishuDoc({
+        kind: 'dailyStandupDoc',
+        title: `meee2 AI standup · ${new Date().toLocaleDateString()}`,
+        content: feishuStandupText,
+      })
+      onDeliveryMessage(result.ok ? `Feishu standup doc created${result.url ? `: ${result.url}` : '.'}` : result.error ?? 'Feishu standup doc failed.')
+    } catch (err) {
+      onDeliveryMessage((err as Error).message)
+    }
+  }
   return (
     <div className="work-layer__grid">
       <section className="work-layer__panel">
@@ -492,7 +631,15 @@ function MemoryAudit({
           </div>
           <History size={18} aria-hidden />
         </div>
-        <pre className="work-layer__handoff">{standup.join('\n') || 'No local session activity yet.'}</pre>
+        <pre className="work-layer__handoff">{standupText}</pre>
+        <div className="work-layer__comment-box">
+          <button className="ghost" type="button" onClick={() => void createStandupDoc()} disabled={!feishu?.configured || visible.length === 0}>
+            Generate daily Feishu standup
+          </button>
+          <button className="ghost" type="button" onClick={() => void sendStandup()} disabled={!feishu?.configured || visible.length === 0}>
+            Send standup to Feishu group
+          </button>
+        </div>
       </section>
       <section className="work-layer__panel">
         <h2>Throughput</h2>
@@ -527,15 +674,13 @@ function MemoryAudit({
 
 function SessionTable({
   nodes,
-  syncPolicies,
   onPolicyChange,
   onOpenSession,
   onShowInMap,
   empty,
 }: {
   nodes: SessionGraphNode[]
-  syncPolicies: Record<string, SyncPolicy>
-  onPolicyChange: (sessionId: string, policy: SyncPolicy) => void
+  onPolicyChange: (sessionId: string, policy: SyncPolicy) => Promise<void>
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
   empty: string
@@ -544,7 +689,7 @@ function SessionTable({
   return (
     <div className="work-layer__table">
       {nodes.map((node) => {
-        const policy = effectiveSyncPolicy(node.session, syncPolicies)
+        const policy = effectiveSyncPolicy(node.session)
         return (
           <div key={node.session.id} className="work-layer__row">
             <span className="work-layer__provider" style={{ '--provider-color': node.session.pluginColor } as CSSProperties}>
@@ -553,7 +698,7 @@ function SessionTable({
             <strong>{node.session.title}</strong>
             <span>{node.repo}</span>
             <span>{node.session.status}</span>
-            <select value={policy} onChange={(event) => onPolicyChange(node.session.id, event.target.value as SyncPolicy)}>
+            <select value={policy} onChange={(event) => void onPolicyChange(node.session.id, event.target.value as SyncPolicy)}>
               {SYNC_POLICY_OPTIONS.map((option) => (
                 <option key={option.id} value={option.id}>{option.label}</option>
               ))}
@@ -630,6 +775,29 @@ function StatusRows({ rows }: { rows: Array<[string, string]> }) {
       ))}
     </div>
   )
+}
+
+function buildFeishuWorkroomBrief(workroom: Workroom, nodes: SessionGraphNode[]): string {
+  const selected = nodes.filter((node) => workroom.selectedSessionIds.includes(node.session.id))
+  const visible = selected.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
+  const omitted = selected.length - visible.length
+  const payloads = visible.map((node) => {
+    const policy = effectiveSyncPolicy(node.session)
+    const preview = buildSyncPayloadPreview(node, policy)
+    return [
+      `Session: ${node.session.id}`,
+      `Policy: ${policy}`,
+      JSON.stringify(preview.payload, null, 2),
+    ].join('\n')
+  })
+
+  return [
+    `Workroom: ${workroom.name}`,
+    `Purpose: ${workroom.purpose}`,
+    omitted > 0 ? `Private sessions omitted: ${omitted}` : 'Private sessions omitted: 0',
+    '',
+    payloads.join('\n\n') || 'No team-visible sessions in this workroom.',
+  ].join('\n')
 }
 
 function titleFor(view: WorkLayerView): { kicker: string; title: string; subtitle: string } {

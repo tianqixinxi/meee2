@@ -1,13 +1,5 @@
-import type { Session } from './types'
+import type { Session, SyncPolicy } from './types'
 import type { SessionGraphNode } from './sessionGraph'
-
-export type SyncPolicy =
-  | 'private'
-  | 'metadata'
-  | 'summary'
-  | 'recentContext'
-  | 'fullTranscript'
-  | 'artifactsOnly'
 
 export interface SyncPolicyOption {
   id: SyncPolicy
@@ -41,7 +33,6 @@ export interface SyncPayloadPreview {
   payload: Record<string, unknown>
 }
 
-const SYNC_POLICY_STORAGE_KEY = 'meee2.syncPolicies.v1'
 const WORKROOM_STORAGE_KEY = 'meee2.workrooms.v1'
 
 export const SYNC_POLICY_OPTIONS: SyncPolicyOption[] = [
@@ -77,21 +68,8 @@ export const SYNC_POLICY_OPTIONS: SyncPolicyOption[] = [
   },
 ]
 
-export function loadSyncPolicies(): Record<string, SyncPolicy> {
-  return readJson<Record<string, SyncPolicy>>(SYNC_POLICY_STORAGE_KEY, {})
-}
-
-export function saveSyncPolicy(sessionId: string, policy: SyncPolicy): Record<string, SyncPolicy> {
-  const current = loadSyncPolicies()
-  const next = { ...current, [sessionId]: policy }
-  writeJson(SYNC_POLICY_STORAGE_KEY, next)
-  return next
-}
-
-export function effectiveSyncPolicy(session: Session, policies: Record<string, SyncPolicy>): SyncPolicy {
-  const explicit = policies[session.id]
-  if (explicit) return explicit
-  return session.syncEnabled ? 'metadata' : 'private'
+export function effectiveSyncPolicy(session: Session): SyncPolicy {
+  return session.syncPolicy ?? (session.syncEnabled ? 'metadata' : 'private')
 }
 
 export function buildSyncPayloadPreview(

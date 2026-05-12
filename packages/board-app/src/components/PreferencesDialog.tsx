@@ -8,6 +8,8 @@ import {
   spawnProviderLabel,
 } from '../preferences'
 import type { SpawnProvider } from '../types'
+import type { SyncPolicy } from '../types'
+import { SYNC_POLICY_OPTIONS } from '../workLayer'
 import {
   readLlmSettings,
   writeLlmSettings,
@@ -21,10 +23,14 @@ import {
 } from '../lib/llmSettings'
 import {
   disconnectMeee2Online,
+  fetchFeishuConfig,
   fetchUserProfile,
   openMeee2OnlineConnect,
   openMeee2OnlineDashboard,
+  testFeishuNotification,
+  updateFeishuConfig,
   updateUserProfile,
+  type FeishuConfig,
   type UserProfile,
 } from '../api'
 
@@ -45,6 +51,9 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
   const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [feishu, setFeishu] = useState<FeishuConfig | null>(null)
+  const [feishuGroupId, setFeishuGroupId] = useState('')
+  const [feishuGroupName, setFeishuGroupName] = useState('')
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
     onToast?.(kind, text)
   }, [onToast])
@@ -55,11 +64,26 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
       .catch(() => setProfile(null))
   }, [])
 
+  const loadFeishu = useCallback(() => {
+    fetchFeishuConfig()
+      .then((result) => {
+        setFeishu(result.feishu)
+        setFeishuGroupId(result.feishu.defaultGroupId)
+        setFeishuGroupName(result.feishu.defaultGroupName)
+      })
+      .catch(() => setFeishu(null))
+  }, [])
+
   useEffect(() => {
     loadProfile()
+    loadFeishu()
     window.addEventListener('focus', loadProfile)
-    return () => window.removeEventListener('focus', loadProfile)
-  }, [loadProfile])
+    window.addEventListener('focus', loadFeishu)
+    return () => {
+      window.removeEventListener('focus', loadProfile)
+      window.removeEventListener('focus', loadFeishu)
+    }
+  }, [loadFeishu, loadProfile])
 
   const save = () => {
     saveSpawnProvider(spawnProvider)
@@ -86,11 +110,36 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
     }
   }
 
-  const setSessionSync = async (sessionId: string, enabled: boolean) => {
+  const setSessionSyncPolicy = async (sessionId: string, syncPolicy: SyncPolicy) => {
     try {
-      setProfile(await updateUserProfile({ sessionSync: { sessionId, enabled } }))
+      setProfile(await updateUserProfile({ sessionSync: { sessionId, syncPolicy } }))
     } catch (err) {
       notify('error', (err as Error).message || 'Failed to update session sync')
+    }
+  }
+
+  const saveFeishu = async () => {
+    try {
+      const result = await updateFeishuConfig({
+        configured: true,
+        defaultGroupId: feishuGroupId,
+        defaultGroupName: feishuGroupName,
+      })
+      setFeishu(result.feishu)
+      notify('success', 'Feishu delivery settings saved')
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to save Feishu settings')
+    }
+  }
+
+  const testFeishu = async () => {
+    try {
+      const result = await testFeishuNotification()
+      loadFeishu()
+      notify(result.ok ? 'success' : 'error', result.ok ? 'Feishu test sent' : result.error ?? 'Feishu test failed')
+    } catch (err) {
+      loadFeishu()
+      notify('error', (err as Error).message || 'Feishu test failed')
     }
   }
 
@@ -209,17 +258,58 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
                             <strong>{session.title}</strong>
                             <small>{session.pluginDisplayName}{session.project ? ` · ${session.project}` : ''}</small>
                           </span>
-                          <input
-                            type="checkbox"
-                            checked={session.enabled}
-                            onChange={(event) => void setSessionSync(session.sessionId, event.target.checked)}
-                          />
+                          <select
+                            value={session.syncPolicy}
+                            onChange={(event) => void setSessionSyncPolicy(session.sessionId, event.target.value as SyncPolicy)}
+                          >
+                            {SYNC_POLICY_OPTIONS.map((option) => (
+                              <option key={option.id} value={option.id}>{option.label}</option>
+                            ))}
+                          </select>
                         </label>
                       ))}
                     </div>
                   )}
                 </div>
               )}
+            </div>
+          </section>
+
+          {/* ── Feishu delivery ───────────────────────────────────── */}
+          <section className="settings-section">
+            <div className="settings-section-header">
+              <div>
+                <div className="settings-section-title">Feishu Delivery</div>
+                <div className="settings-section-caption">Cards and docs are sent by meee2 Online using allowed sync payloads.</div>
+              </div>
+            </div>
+            <div className="settings-panel">
+              <div className="settings-meta-row">
+                <span>Status</span>
+                <strong>{feishu?.deliveryStatus ?? 'not configured'}</strong>
+              </div>
+              {feishu?.lastError && (
+                <div className="settings-meta-row">
+                  <span>Last error</span>
+                  <strong>{feishu.lastError}</strong>
+                </div>
+              )}
+              <label className="settings-field">
+                <span>Default group ID</span>
+                <input value={feishuGroupId} onChange={(event) => setFeishuGroupId(event.target.value)} placeholder="oc_xxx or chat id from meee2 Online" />
+              </label>
+              <label className="settings-field">
+                <span>Default group name</span>
+                <input value={feishuGroupName} onChange={(event) => setFeishuGroupName(event.target.value)} placeholder="AI work radar" />
+              </label>
+              <div className="row" style={{ gap: 8, marginTop: 10 }}>
+                <button className="ghost" type="button" onClick={() => void saveFeishu()}>
+                  Save Feishu settings
+                </button>
+                <button className="ghost" type="button" onClick={() => void testFeishu()} disabled={!profile?.connected}>
+                  Test notification
+                </button>
+              </div>
             </div>
           </section>
 

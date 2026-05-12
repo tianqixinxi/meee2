@@ -28,6 +28,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         var defaultSyncEnabled: Bool
         var disabledSessionIds: Set<String>
         var enabledSessionIds: Set<String>
+        var sessionSyncPolicies: [String: Meee2SyncPolicy]
         var sessionTeamIds: [String: String]
         var teamId: String
         var userId: String
@@ -144,7 +145,11 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private var shouldStayActive: Bool {
         let settings = settingsSnapshot()
-        return settings.isConnected && (settings.defaultSyncEnabled || !settings.enabledSessionIds.isEmpty)
+        return settings.isConnected && (
+            settings.defaultSyncEnabled ||
+            !settings.enabledSessionIds.isEmpty ||
+            settings.sessionSyncPolicies.values.contains(where: { $0.uploadsSession })
+        )
     }
 
     private var userId: String { settingsSnapshot().userId }
@@ -172,6 +177,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
             disabledSessionIds: Self.sessionIdSet(forKey: "meee2DisabledSessionIds"),
             enabledSessionIds: Self.sessionIdSet(forKey: "meee2EnabledSessionIds"),
+            sessionSyncPolicies: Self.sessionSyncPolicyMap(),
             sessionTeamIds: Self.sessionIdMap(forKey: "meee2SessionTeamIds"),
             teamId: defaults.string(forKey: "meee2TeamId") ?? "",
             userId: defaults.string(forKey: "meee2UserId") ?? "",
@@ -226,6 +232,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     // MARK: - Push methods
 
     private func pushNewMessage(sessionId: String) {
+        guard syncPolicy(forSessionId: sessionId).uploadsRecentContext else { return }
         guard let session = SessionStore.shared.get(sessionId) else { return }
         guard let transcriptPath = session.transcriptPath else { return }
 
@@ -260,9 +267,10 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private func pushSessionUpdate(sessionId: String) {
         guard let session = SessionStore.shared.get(sessionId) else { return }
+        let policy = syncPolicy(forSessionId: sessionId)
         pushSessionUpsert(
             session: session,
-            hydrateTranscriptFields: shouldHydrateTranscriptFields(for: session)
+            hydrateTranscriptFields: policy.uploadsSummary && shouldHydrateTranscriptFields(for: session)
         )
     }
 
@@ -292,6 +300,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         defer {
             perfLog("session-upsert-build", started: started, extra: "sid=\(session.sessionId.prefix(8)),force=\(force),hydrate=\(hydrateTranscriptFields)")
         }
+        let policy = syncPolicy(forSessionId: session.sessionId)
+        guard policy.uploadsSession else { return }
         // Build payload with full summary data for meee2 dashboard
         let status = mapStatus(session.status)
 
@@ -411,6 +421,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         }
 
         // Add summary to payload
+        summary["syncPolicy"] = policy.rawValue
+        summary = filteredSummary(summary, policy: policy)
         payload["summary"] = summary
 
         let signature = upsertSignature(status: status, summary: summary)
@@ -435,7 +447,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
         let started = Date()
         for session in sessions where shouldSyncPluginSession(session) {
-            pushPluginSessionUpsert(session: session, force: force, hydrateSummary: !force) { [weak self] in
+            let policy = syncPolicy(forSessionId: session.id)
+            pushPluginSessionUpsert(session: session, force: force, hydrateSummary: !force && policy.uploadsSummary) { [weak self] in
                 self?.pushLatestPluginMessageIfNeeded(session: session)
             }
         }
@@ -450,17 +463,31 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {
+        syncPolicy(forSessionId: sessionId).uploadsSession
+    }
+
+    public func effectiveSyncPolicy(forSessionId sessionId: String) -> Meee2SyncPolicy {
+        syncPolicy(forSessionId: sessionId)
+    }
+
+    private func syncPolicy(forSessionId sessionId: String) -> Meee2SyncPolicy {
         let settings = settingsSnapshot()
+        guard settings.isConnected else { return .private }
         let aliases = Self.sessionIdAliases(sessionId)
+        for alias in aliases {
+            if let policy = settings.sessionSyncPolicies[alias] {
+                return policy
+            }
+        }
         if !aliases.isDisjoint(with: settings.disabledSessionIds) {
-            return false
+            return .private
         }
 
         if settings.defaultSyncEnabled {
-            return true
+            return .metadata
         }
 
-        return !aliases.isDisjoint(with: settings.enabledSessionIds)
+        return aliases.isDisjoint(with: settings.enabledSessionIds) ? .private : .metadata
     }
 
     private func teamIdForSession(_ sessionId: String) -> String {
@@ -477,6 +504,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func pushLatestPluginMessageIfNeeded(session: PluginSession) {
+        guard syncPolicy(forSessionId: session.id).uploadsRecentContext else { return }
         guard let transcriptPath = session.transcriptPath else { return }
         let targetTeamId = teamIdForSession(session.id)
         guard !targetTeamId.isEmpty else { return }
@@ -579,6 +607,28 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         return map
     }
 
+    public static func sessionSyncPolicyMap() -> [String: Meee2SyncPolicy] {
+        guard let data = UserDefaults.standard.data(forKey: "meee2SessionSyncPolicies"),
+              let raw = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+        return raw.mapValues { Meee2SyncPolicy(rawValueOrAlias: $0) }
+    }
+
+    public static func storeSessionSyncPolicyMap(_ policies: [String: Meee2SyncPolicy]) {
+        let raw = policies.mapValues(\.rawValue)
+        guard let data = try? JSONEncoder().encode(raw) else { return }
+        UserDefaults.standard.set(data, forKey: "meee2SessionSyncPolicies")
+    }
+
+    public static func storeSessionSyncPolicy(sessionId: String, policy: Meee2SyncPolicy) {
+        var policies = sessionSyncPolicyMap()
+        for alias in sessionIdAliases(sessionId) {
+            policies[alias] = policy
+        }
+        storeSessionSyncPolicyMap(policies)
+    }
+
     public static func sessionIdAliases(_ sessionId: String) -> Set<String> {
         var aliases: Set<String> = [sessionId]
         let knownPrefixes = [
@@ -598,6 +648,11 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         completion: (() -> Void)? = nil
     ) {
         let started = Date()
+        let policy = syncPolicy(forSessionId: session.id)
+        guard policy.uploadsSession else {
+            completion?()
+            return
+        }
         let summaryAndStatus = pluginSummaryAndStatus(session: session, hydrateSummary: hydrateSummary)
         var summary = summaryAndStatus.summary
 
@@ -644,6 +699,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         if let latestRecap = summaryAndStatus.latestRecap {
             summary["latestRecap"] = latestRecap
         }
+        summary["syncPolicy"] = policy.rawValue
+        summary = filteredSummary(summary, policy: policy)
 
         let payload: [String: Any] = [
             "machine_id": machineId,
@@ -785,6 +842,37 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         return session.status.isWorking || session.status.needsUserAction
     }
 
+    private func filteredSummary(_ summary: [String: Any], policy: Meee2SyncPolicy) -> [String: Any] {
+        switch policy {
+        case .private:
+            return [:]
+        case .metadata:
+            return keep(summary, keys: [
+                "title", "project", "pluginId", "pluginDisplayName", "pluginColor",
+                "startedAt", "lastActivity", "pendingPermissionTool", "syncPolicy"
+            ])
+        case .artifactsOnly:
+            var filtered = keep(summary, keys: [
+                "title", "project", "pluginId", "pluginDisplayName", "pluginColor",
+                "startedAt", "lastActivity", "syncPolicy"
+            ])
+            filtered["artifacts"] = summary["artifacts"] ?? []
+            return filtered
+        case .summary, .recentContext, .fullTranscript:
+            return summary
+        }
+    }
+
+    private func keep(_ summary: [String: Any], keys: Set<String>) -> [String: Any] {
+        var filtered: [String: Any] = [:]
+        for key in keys {
+            if let value = summary[key] {
+                filtered[key] = value
+            }
+        }
+        return filtered
+    }
+
     private func hexColorString(_ color: Color?) -> String {
         guard let color = color else { return "#FF9500" }
         let nsColor = NSColor(color).usingColorSpace(.sRGB)
@@ -841,6 +929,46 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     // MARK: - HTTP helper
+
+    public func deliverFeishu(
+        kind: String,
+        payload: [String: Any],
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
+        let settings = settingsSnapshot(force: true)
+        guard settings.isConnected,
+              !settings.userId.isEmpty,
+              !settings.teamId.isEmpty,
+              !settings.machineId.isEmpty else {
+            completion(.failure(URLError(.userAuthenticationRequired)))
+            return
+        }
+
+        rpcDataRequest(
+            name: "meee2_feishu_deliver",
+            payload: [
+                "p_team_id": settings.teamId,
+                "p_user_id": settings.userId,
+                "p_machine_id": settings.machineId,
+                "p_kind": kind,
+                "p_payload": payload
+            ]
+        ) { result in
+            switch result {
+            case .success(let data):
+                if data.isEmpty {
+                    completion(.success([:]))
+                    return
+                }
+                let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    ?? ((try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]])?.first
+                    ?? [:]
+                completion(.success(json))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
 
     private func pollDesktopCommands() {
         let currentUserId = userId
