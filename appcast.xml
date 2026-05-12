@@ -7,6 +7,41 @@
         <description>meee2 release feed</description>
         <language>en</language>
         <item>
+            <title>meee2 v0.4.4</title>
+            <description><![CDATA[## What's Changed
+* fix(board): keep transcript dock open on canvas click (#21) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/30
+* fix(board): make transcript URLs clickable (#22) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/31
+* feat(assistant): tools for transcripts + channels (#23) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/32
+* fix(board): wire up transcript verbosity toggle (#27 partial) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/33
+* [codex] Optimize board idle performance by @rsgok in https://github.com/tianqixinxi/meee2/pull/34
+* chore(diag): logs to investigate board flash + state-loss (#25) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/35
+* feat(board): polish transcript typography (#29) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/36
+* docs: stream-json ingestion design (#28) by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/37
+* [codex] Add desktop automations by @rsgok in https://github.com/tianqixinxi/meee2/pull/38
+* [codex] Unify meee2 online board flow by @rsgok in https://github.com/tianqixinxi/meee2/pull/39
+* Add multi-canvas board model by @rsgok in https://github.com/tianqixinxi/meee2/pull/40
+* [codex] Polish board UX and persistence by @rsgok in https://github.com/tianqixinxi/meee2/pull/41
+* [codex] Polish board persistence and coordination by @rsgok in https://github.com/tianqixinxi/meee2/pull/42
+* Release v0.4.4: resolver staleness + overlay perf + dev workflow by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/43
+* Restore WebDist/.gitkeep + build web before release sanity test by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/44
+* release.yml: build whole pnpm workspace before sanity test by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/45
+
+
+**Full Changelog**: https://github.com/tianqixinxi/meee2/compare/v0.4.3...v0.4.4]]></description>
+            <pubDate>Tue, 12 May 2026 11:31:37 +0000</pubDate>
+            <sparkle:version>0.4.4</sparkle:version>
+            <sparkle:shortVersionString>0.4.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/tianqixinxi/meee2/releases/download/v0.4.4/meee2-v0.4.4.dmg"
+                sparkle:version="0.4.4"
+                sparkle:shortVersionString="0.4.4"
+                type="application/octet-stream"
+                sparkle:edSignature="tuyVh4H4MdJU54o6M0ju4iOcC7UqLbxecn676dXw7NRlC9/ozdhxhWqpYcIcU+SwJX1cBEpQhKqjhELAgp8HAA=="
+                length="13286760" />
+        </item>
+
+        <item>
             <title>meee2 v0.4.3</title>
             <description><![CDATA[## What's Changed
 * fix(a2a): channel rename + whoami sidebar + docs by @hawkelethan9 in https://github.com/tianqixinxi/meee2/pull/26
