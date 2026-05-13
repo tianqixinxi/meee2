@@ -75,7 +75,7 @@ export function WorkLayerViews({
   }
 
   return (
-    <main className="work-layer" aria-label="AI Work Layer">
+    <main className="work-layer" aria-label={t('work.aria')}>
       <header className="work-layer__header">
         <div>
           <p className="cockpit-kicker">{title.kicker}</p>
@@ -90,7 +90,7 @@ export function WorkLayerViews({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t('work.search')}
-          aria-label="Search work layer"
+          aria-label={t('work.searchAria')}
         />
       </div>
 
@@ -154,6 +154,7 @@ function TeamRadar({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const visible = nodes.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
   const privateCount = nodes.length - visible.length
   const needsAttention = visible.filter((node) => node.bucketIds.includes('needsAttention'))
@@ -179,7 +180,7 @@ function TeamRadar({
           sessionLink: `/sessions/${node.session.id}`,
         },
       })
-      onDeliveryMessage(result.ok ? 'Feishu blocked alert sent.' : result.error ?? 'Feishu blocked alert failed.')
+      onDeliveryMessage(result.ok ? t('feishu.blockedSent') : result.error ?? t('feishu.blockedFailed'))
     } catch (err) {
       onDeliveryMessage((err as Error).message)
     }
@@ -189,23 +190,23 @@ function TeamRadar({
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Team AI Radar</h2>
-            <p>For CEO / PM / CTO: what is moving, what is blocked, what is ready for review, and what shipped.</p>
+            <h2>{t('team.radarTitle')}</h2>
+            <p>{t('team.radarSubtitle')}</p>
           </div>
           <Users size={18} aria-hidden />
         </div>
         <div className="work-layer__radar-stats">
-          <RadarStat label="Needs attention" value={needsAttention.length} tone="danger" />
-          <RadarStat label="Running" value={running.length} tone="info" />
-          <RadarStat label="Review-ready" value={reviewReady.length} tone="warning" />
-          <RadarStat label="Recently done" value={done.length} tone="success" />
+          <RadarStat label={t('team.needsAttention')} value={needsAttention.length} tone="danger" />
+          <RadarStat label={t('team.running')} value={running.length} tone="info" />
+          <RadarStat label={t('team.reviewReady')} value={reviewReady.length} tone="warning" />
+          <RadarStat label={t('team.recentlyDone')} value={done.length} tone="success" />
         </div>
       </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Needs attention</h2>
-            <p>Blocked, permission-required, stale, or failed work that needs a person.</p>
+            <h2>{t('team.needsAttention')}</h2>
+            <p>{t('team.needsAttentionSubtitle')}</p>
           </div>
           <AlertTriangle size={18} aria-hidden />
         </div>
@@ -213,67 +214,67 @@ function TeamRadar({
           nodes={needsAttention.slice(0, 8)}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
-          empty={visible.length === 0 ? 'No team-visible sessions yet.' : 'No visible blockers right now.'}
+          empty={visible.length === 0 ? t('team.noVisibleSessions') : t('team.noVisibleBlockers')}
         />
       </section>
       <section className="work-layer__panel">
-        <h2>Active work</h2>
+        <h2>{t('team.activeWork')}</h2>
         <RadarSessionList
           nodes={running.slice(0, 5)}
           onOpenSession={onOpenSession}
           onShowInMap={onShowInMap}
-          empty="No team-visible running sessions."
+          empty={t('team.noRunning')}
           compact
         />
       </section>
       <section className="work-layer__panel">
-        <h2>Ready / done</h2>
+        <h2>{t('team.readyDone')}</h2>
         <MetricRows rows={[
-          ['Review-ready', reviewReady.length],
-          ['Completed', done.length],
-          ['Visible sessions', visible.length],
-          ['Private local', privateCount],
+          [t('team.reviewReady'), reviewReady.length],
+          [t('team.completed'), done.length],
+          [t('team.visibleSessions'), visible.length],
+          [t('team.privateLocal'), privateCount],
         ]} />
       </section>
       <section className="work-layer__panel">
-        <h2>Feishu delivery</h2>
+        <h2>{t('feishu.delivery')}</h2>
         <StatusRows rows={[
-          ['Status', feishu?.deliveryStatus ?? 'not configured'],
-          ['Default group', feishu?.defaultGroupName || feishu?.defaultGroupId || 'not set'],
-          ['Last sent', feishu?.lastSentAt ? new Date(feishu.lastSentAt).toLocaleString() : 'never'],
-          ['Last error', feishu?.lastError ?? 'none'],
+          [t('feishu.status'), feishu?.deliveryStatus ?? t('feishu.notConfigured')],
+          [t('feishu.defaultGroup'), feishu?.defaultGroupName || feishu?.defaultGroupId || t('feishu.notSet')],
+          [t('feishu.lastSent'), feishu?.lastSentAt ? new Date(feishu.lastSentAt).toLocaleString() : t('feishu.never')],
+          [t('feishu.lastError'), feishu?.lastError ?? t('feishu.none')],
         ]} />
         {deliveryMessage && <p className="work-layer__muted">{deliveryMessage}</p>}
         <button className="ghost" type="button" onClick={() => void sendBlocked()} disabled={needsAttention.length === 0}>
-          Send blocked alert
+          {t('feishu.sendBlocked')}
         </button>
       </section>
       <section className="work-layer__panel">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Visibility boundary</h2>
-            <p>Radar only uses sessions allowed by sync policy.</p>
+            <h2>{t('team.visibilityBoundary')}</h2>
+            <p>{t('team.visibilitySubtitle')}</p>
           </div>
           <Shield size={18} aria-hidden />
         </div>
         <StatusRows rows={[
-          ['Team-visible', `${visible.length}`],
-          ['Private local', `${privateCount}`],
-          ['Hidden blockers', `${Math.max(0, hiddenAttention)}`],
-          ['Full transcript', `${visible.filter((node) => effectiveSyncPolicy(node.session) === 'fullTranscript').length}`],
+          [t('team.visibleSessions'), `${visible.length}`],
+          [t('team.privateLocal'), `${privateCount}`],
+          [t('team.hiddenBlockers'), `${Math.max(0, hiddenAttention)}`],
+          [t('team.fullTranscript'), `${visible.filter((node) => effectiveSyncPolicy(node.session) === 'fullTranscript').length}`],
         ]} />
       </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Team slices</h2>
-            <p>Scan by team scope, repo, and provider without leaving the radar.</p>
+            <h2>{t('team.slices')}</h2>
+            <p>{t('team.slicesSubtitle')}</p>
           </div>
         </div>
         <div className="work-layer__slice-grid">
-          <MetricRows rows={ownerRows.length > 0 ? ownerRows : [['No team-visible sessions', 0]]} />
-          <MetricRows rows={repoRows.length > 0 ? repoRows : [['No repos', 0]]} />
-          <MetricRows rows={providerRows.length > 0 ? providerRows : [['No providers', 0]]} />
+          <MetricRows rows={ownerRows.length > 0 ? ownerRows : [[t('team.noVisibleSessions'), 0]]} />
+          <MetricRows rows={repoRows.length > 0 ? repoRows : [[t('team.noRepos'), 0]]} />
+          <MetricRows rows={providerRows.length > 0 ? providerRows : [[t('team.noProviders'), 0]]} />
         </div>
       </section>
     </div>
@@ -297,10 +298,12 @@ function WorkroomsView({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const [selectedIds, setSelectedIds] = useState<string[]>(() => nodes.slice(0, 2).map((node) => node.session.id))
   const [name, setName] = useState('Handoff room')
   const [purpose, setPurpose] = useState('Rescue or review selected AI sessions.')
   const [commentBody, setCommentBody] = useState('')
+  const [selectModalOpen, setSelectModalOpen] = useState(false)
   const selectedNodes = nodes.filter((node) => selectedIds.includes(node.session.id))
   const activeWorkroom = workrooms[0] ?? null
   const handoff = activeWorkroom ? generateHandoffSummary(activeWorkroom, nodes) : ''
@@ -357,7 +360,7 @@ function WorkroomsView({
           handoff: feishuHandoff,
         },
       })
-      onDeliveryMessage(result.ok ? 'Feishu handoff card sent.' : result.error ?? 'Feishu handoff card failed.')
+      onDeliveryMessage(result.ok ? t('feishu.handoffSent') : result.error ?? t('feishu.handoffFailed'))
     } catch (err) {
       onDeliveryMessage((err as Error).message)
     }
@@ -371,50 +374,43 @@ function WorkroomsView({
         content: feishuHandoff,
         workroomId: activeWorkroom.id,
       })
-      onDeliveryMessage(result.ok ? `Feishu handoff doc created${result.url ? `: ${result.url}` : '.'}` : result.error ?? 'Feishu doc failed.')
+      onDeliveryMessage(result.ok ? `${t('feishu.handoffDocCreated')}${result.url ? `: ${result.url}` : '.'}` : result.error ?? t('feishu.docFailed'))
     } catch (err) {
       onDeliveryMessage((err as Error).message)
     }
   }
 
   return (
+    <>
     <div className="work-layer__grid">
       <section className="work-layer__panel">
-        <h2>Create Workroom</h2>
+        <h2>{t('workroom.createTitle')}</h2>
         <label className="work-layer__field">
-          <span>Name</span>
+          <span>{t('workroom.name')}</span>
           <input value={name} onChange={(event) => setName(event.target.value)} />
         </label>
         <label className="work-layer__field">
-          <span>Purpose</span>
+          <span>{t('workroom.purpose')}</span>
           <textarea value={purpose} onChange={(event) => setPurpose(event.target.value)} />
         </label>
+        <div className="work-layer__selected-summary">
+          <div>
+            <strong>{t('workroom.selectedSessions')}</strong>
+            <span>{t('workroom.selectedCount', { count: selectedIds.length })}</span>
+          </div>
+          <button className="ghost" type="button" onClick={() => setSelectModalOpen(true)}>
+            {t('workroom.selectSessions')}
+          </button>
+        </div>
+        <SessionPills nodes={selectedNodes.slice(0, 3)} onOpenSession={onOpenSession} onShowInMap={onShowInMap} />
         <button className="primary" type="button" onClick={create} disabled={selectedIds.length === 0}>
-          Create from {selectedIds.length} sessions
+          {t('workroom.createFrom', { count: selectedIds.length })}
         </button>
       </section>
-      <section className="work-layer__panel work-layer__wide">
-        <h2>Select sessions</h2>
-        <div className="work-layer__checklist">
-          {nodes.map((node) => (
-            <label key={node.session.id} className="work-layer__checkrow">
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(node.session.id)}
-                onChange={() => toggle(node.session.id)}
-              />
-              <span>
-                <strong>{node.session.title}</strong>
-                <small>{node.provider} · {node.repo} · {node.currentStep}</small>
-              </span>
-            </label>
-          ))}
-        </div>
-      </section>
       <section className="work-layer__panel">
-        <h2>Workrooms</h2>
+        <h2>{t('workroom.listTitle')}</h2>
         {workrooms.length === 0 ? (
-          <p className="work-layer__muted">No workrooms yet. Workroom replaces old global session/channel as the temporary handoff surface.</p>
+          <p className="work-layer__muted">{t('workroom.empty')}</p>
         ) : (
           <div className="work-layer__room-list">
             {workrooms.map((room) => (
@@ -429,8 +425,8 @@ function WorkroomsView({
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Combined handoff</h2>
-            <p>Generated locally from selected session state, risks, and current steps.</p>
+            <h2>{t('workroom.combinedHandoff')}</h2>
+            <p>{t('workroom.handoffSubtitle')}</p>
           </div>
           <MessageSquare size={18} aria-hidden />
         </div>
@@ -440,21 +436,21 @@ function WorkroomsView({
             <SessionPills nodes={nodes.filter((node) => activeWorkroom.selectedSessionIds.includes(node.session.id))} onOpenSession={onOpenSession} onShowInMap={onShowInMap} />
           </>
         ) : (
-          <p className="work-layer__muted">Create a workroom to generate handoff context.</p>
+          <p className="work-layer__muted">{t('workroom.createForHandoff')}</p>
         )}
       </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Comments and actions</h2>
-            <p>Local collaboration notes for this workroom. Sending context to sessions still requires explicit action.</p>
+            <h2>{t('workroom.commentsActions')}</h2>
+            <p>{t('workroom.commentsSubtitle')}</p>
           </div>
         </div>
         {activeWorkroom ? (
           <>
             <div className="work-layer__comments">
               {activeWorkroom.comments.length === 0 ? (
-                <p className="work-layer__muted">No comments yet.</p>
+                <p className="work-layer__muted">{t('workroom.noComments')}</p>
               ) : activeWorkroom.comments.map((comment) => (
                 <div key={comment.id} className="work-layer__comment">
                   <strong>{comment.author}</strong>
@@ -467,42 +463,73 @@ function WorkroomsView({
               <input
                 value={commentBody}
                 onChange={(event) => setCommentBody(event.target.value)}
-                placeholder="Add handoff note, reviewer context, or rescue action"
+                placeholder={t('workroom.commentPlaceholder')}
               />
               <button type="button" className="primary" onClick={addComment} disabled={!commentBody.trim()}>
-                Add comment
+                {t('workroom.addComment')}
               </button>
               <button
                 type="button"
                 className="ghost"
                 onClick={() => {
-                  if (window.confirm('Prepare this handoff context for selected sessions? Nothing is sent automatically.')) {
-                    setCommentBody('Prepared combined handoff context. Use Jump back to paste or continue in the real terminal/editor.')
+                  if (window.confirm(t('workroom.prepareConfirm'))) {
+                    setCommentBody(t('workroom.preparedContext'))
                   }
                 }}
               >
-                Prepare send context
+                {t('workroom.prepareSendContext')}
               </button>
               <button type="button" className="ghost" onClick={() => void sendHandoffCard()} disabled={!feishu?.configured}>
-                Send to Feishu group
+                {t('feishu.sendToGroup')}
               </button>
               <button type="button" className="ghost" onClick={() => void createHandoffDoc()} disabled={!feishu?.configured}>
-                Create Feishu handoff doc
+                {t('feishu.createHandoffDoc')}
               </button>
               <button
                 type="button"
                 className="ghost"
                 onClick={() => void navigator.clipboard?.writeText(feishuHandoff)}
               >
-                Copy Feishu-ready brief
+                {t('feishu.copyBrief')}
               </button>
             </div>
           </>
         ) : (
-          <p className="work-layer__muted">Create a workroom to add comments.</p>
+          <p className="work-layer__muted">{t('workroom.createForComments')}</p>
         )}
       </section>
     </div>
+    {selectModalOpen && (
+      <div className="work-layer__modal-backdrop" role="presentation">
+        <div className="work-layer__modal" role="dialog" aria-modal="true" aria-label={t('workroom.selectSessions')}>
+          <div className="work-layer__modal-head">
+            <div>
+              <h2>{t('workroom.selectSessions')}</h2>
+              <p>{t('workroom.selectSubtitle')}</p>
+            </div>
+            <button className="ghost" type="button" onClick={() => setSelectModalOpen(false)}>
+              {t('action.done')}
+            </button>
+          </div>
+          <div className="work-layer__checklist work-layer__checklist--modal">
+            {nodes.map((node) => (
+              <label key={node.session.id} className="work-layer__checkrow">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(node.session.id)}
+                  onChange={() => toggle(node.session.id)}
+                />
+                <span>
+                  <strong>{node.session.title}</strong>
+                  <small>{node.provider} · {node.repo} · {node.currentStep}</small>
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
 
@@ -515,6 +542,7 @@ function ReviewRoom({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
+  const { t } = useI18n()
   const repos = [...new Set(nodes.map((node) => node.repo))]
   const [repo, setRepo] = useState(repos[0] ?? '')
   const scoped = nodes.filter((node) => !repo || node.repo === repo)
@@ -522,33 +550,33 @@ function ReviewRoom({
   return (
     <div className="work-layer__grid">
       <section className="work-layer__panel">
-        <h2>Review scope</h2>
+        <h2>{t('review.scope')}</h2>
         <label className="work-layer__field">
-          <span>Repo / project</span>
+          <span>{t('review.repoProject')}</span>
           <select value={repo} onChange={(event) => setRepo(event.target.value)}>
             {repos.map((r) => <option key={r} value={r}>{r}</option>)}
           </select>
         </label>
         <MetricRows rows={[
-          ['Related sessions', scoped.length],
-          ['Risks', scoped.reduce((sum, node) => sum + node.risks.length, 0)],
-          ['Artifacts', artifacts.length],
+          [t('review.relatedSessions'), scoped.length],
+          [t('review.risks'), scoped.reduce((sum, node) => sum + node.risks.length, 0)],
+          [t('review.artifacts'), artifacts.length],
         ]} />
       </section>
       <section className="work-layer__panel work-layer__wide">
         <div className="work-layer__panel-head">
           <div>
-            <h2>Related sessions</h2>
-            <p>PR review context comes from session status, recent decisions, failed attempts, and local evidence.</p>
+            <h2>{t('review.relatedSessions')}</h2>
+            <p>{t('review.relatedSubtitle')}</p>
           </div>
           <GitPullRequest size={18} aria-hidden />
         </div>
         <SessionPills nodes={scoped} onOpenSession={onOpenSession} onShowInMap={onShowInMap} />
       </section>
       <section className="work-layer__panel">
-        <h2>Evidence</h2>
+        <h2>{t('review.evidence')}</h2>
         {artifacts.length === 0 ? (
-          <p className="work-layer__muted">No PR/test/deploy evidence inferred yet. GitHub and CI integrations will write here in Phase 4.</p>
+          <p className="work-layer__muted">{t('review.noEvidence')}</p>
         ) : (
           <div className="work-layer__artifact-list">
             {artifacts.map((artifact, index) => (
@@ -562,12 +590,12 @@ function ReviewRoom({
         )}
       </section>
       <section className="work-layer__panel">
-        <h2>Integration slots</h2>
+        <h2>{t('review.integrationSlots')}</h2>
         <StatusRows rows={[
-          ['GitHub PR / checks', 'not connected'],
-          ['Linear / Jira issue', 'light link only'],
-          ['CI / Vercel deploy', 'pending integration'],
-          ['Reviewer brief', scoped.length > 0 ? 'ready from local sessions' : 'no sessions'],
+          [t('review.githubChecks'), t('review.notConnected')],
+          [t('review.issueLink'), t('review.lightLinkOnly')],
+          [t('review.ciDeploy'), t('review.pendingIntegration')],
+          [t('review.reviewerBrief'), scoped.length > 0 ? t('review.readyFromLocal') : t('review.noSessions')],
         ]} />
       </section>
     </div>
@@ -585,22 +613,23 @@ function MemoryAudit({
   feishu: FeishuConfig | null
   onDeliveryMessage: (message: string | null) => void
 }) {
+  const { t } = useI18n()
   const visible = nodes.filter((node) => effectiveSyncPolicy(node.session) !== 'private')
   const fullTranscript = nodes.filter((node) => effectiveSyncPolicy(node.session) === 'fullTranscript').length
   const privateCount = nodes.length - visible.length
   const standup = [
-    ...graph.buckets.needsAttention.slice(0, 4).map((node) => `Blocked: ${node.session.title} — ${node.risks[0]?.label ?? node.currentStep}`),
-    ...graph.buckets.running.slice(0, 4).map((node) => `Running: ${node.session.title} — ${node.currentStep}`),
-    ...graph.buckets.recentlyCompleted.slice(0, 4).map((node) => `Done: ${node.session.title}`),
+    ...graph.buckets.needsAttention.slice(0, 4).map((node) => `${t('memory.blocked')}: ${node.session.title} - ${node.risks[0]?.label ?? node.currentStep}`),
+    ...graph.buckets.running.slice(0, 4).map((node) => `${t('memory.running')}: ${node.session.title} - ${node.currentStep}`),
+    ...graph.buckets.recentlyCompleted.slice(0, 4).map((node) => `${t('memory.done')}: ${node.session.title}`),
   ]
-  const standupText = standup.join('\n') || 'No local session activity yet.'
+  const standupText = standup.join('\n') || t('memory.noLocalActivity')
   const feishuStandupText = visible
     .slice(0, 12)
     .map((node) => {
       const preview = buildSyncPayloadPreview(node, effectiveSyncPolicy(node.session))
       return `- ${node.session.status}: ${JSON.stringify(preview.payload)}`
     })
-    .join('\n') || 'No team-visible session activity.'
+    .join('\n') || t('memory.noVisibleActivity')
   const sendStandup = async () => {
     try {
       const result = await sendFeishuCard({
@@ -611,7 +640,7 @@ function MemoryAudit({
           standup: feishuStandupText,
         },
       })
-      onDeliveryMessage(result.ok ? 'Feishu standup sent.' : result.error ?? 'Feishu standup failed.')
+      onDeliveryMessage(result.ok ? t('feishu.standupSent') : result.error ?? t('feishu.standupFailed'))
     } catch (err) {
       onDeliveryMessage((err as Error).message)
     }
@@ -623,7 +652,7 @@ function MemoryAudit({
         title: `meee2 AI standup · ${new Date().toLocaleDateString()}`,
         content: feishuStandupText,
       })
-      onDeliveryMessage(result.ok ? `Feishu standup doc created${result.url ? `: ${result.url}` : '.'}` : result.error ?? 'Feishu standup doc failed.')
+      onDeliveryMessage(result.ok ? `${t('feishu.standupDocCreated')}${result.url ? `: ${result.url}` : '.'}` : result.error ?? t('feishu.standupDocFailed'))
     } catch (err) {
       onDeliveryMessage((err as Error).message)
     }
@@ -633,46 +662,46 @@ function MemoryAudit({
       <section className="work-layer__panel">
         <div className="work-layer__panel-head">
           <div>
-            <h2>AI standup</h2>
-            <p>Local draft for daily team update.</p>
+            <h2>{t('memory.standup')}</h2>
+            <p>{t('memory.standupSubtitle')}</p>
           </div>
           <History size={18} aria-hidden />
         </div>
         <pre className="work-layer__handoff">{standupText}</pre>
         <div className="work-layer__comment-box">
           <button className="ghost" type="button" onClick={() => void createStandupDoc()} disabled={!feishu?.configured || visible.length === 0}>
-            Generate daily Feishu standup
+            {t('memory.generateStandup')}
           </button>
           <button className="ghost" type="button" onClick={() => void sendStandup()} disabled={!feishu?.configured || visible.length === 0}>
-            Send standup to Feishu group
+            {t('memory.sendStandup')}
           </button>
         </div>
       </section>
       <section className="work-layer__panel">
-        <h2>Throughput</h2>
+        <h2>{t('memory.throughput')}</h2>
         <MetricRows rows={[
-          ['Total sessions', nodes.length],
-          ['Running', graph.buckets.running.length],
-          ['Blocked / attention', graph.buckets.needsAttention.length],
-          ['Completed', graph.buckets.recentlyCompleted.length],
+          [t('memory.totalSessions'), nodes.length],
+          [t('memory.running'), graph.buckets.running.length],
+          [t('memory.blockedAttention'), graph.buckets.needsAttention.length],
+          [t('memory.completed'), graph.buckets.recentlyCompleted.length],
         ]} />
       </section>
       <section className="work-layer__panel">
-        <h2>Privacy audit</h2>
+        <h2>{t('memory.privacyAudit')}</h2>
         <MetricRows rows={[
-          ['Private', privateCount],
-          ['Team visible', visible.length],
-          ['Full transcript', fullTranscript],
-          ['Metadata or safer', nodes.length - fullTranscript],
+          [t('memory.private'), privateCount],
+          [t('memory.teamVisible'), visible.length],
+          [t('memory.fullTranscript'), fullTranscript],
+          [t('memory.metadataOrSafer'), nodes.length - fullTranscript],
         ]} />
       </section>
       <section className="work-layer__panel work-layer__wide">
-        <h2>Retention and governance</h2>
+        <h2>{t('memory.retentionGovernance')}</h2>
         <StatusRows rows={[
-          ['Default sync', 'private locally; metadata only after explicit team policy'],
-          ['Transcript', 'collapsed and excluded unless policy is Full transcript'],
-          ['Enterprise audit', 'planned integration surface'],
-          ['Self-host', 'planned deployment mode'],
+          [t('memory.defaultSync'), t('memory.defaultSyncValue')],
+          [t('memory.transcript'), t('memory.transcriptValue')],
+          [t('memory.enterpriseAudit'), t('memory.plannedIntegration')],
+          [t('memory.selfHost'), t('memory.plannedDeployment')],
         ]} />
       </section>
     </div>
@@ -701,6 +730,7 @@ function RadarSessionList({
   empty: string
   compact?: boolean
 }) {
+  const { t } = useI18n()
   if (nodes.length === 0) return <p className="work-layer__muted">{empty}</p>
   return (
     <div className={`work-layer__radar-list${compact ? ' is-compact' : ''}`}>
@@ -721,10 +751,10 @@ function RadarSessionList({
               {risk?.label ?? node.session.status}
             </span>
             <span className="work-layer__policy-chip">{policy}</span>
-            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
+            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label={t('action.showInMap')}>
               <Map size={15} aria-hidden />
             </button>
-            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Open session detail">
+            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label={t('action.openDetail')}>
               <ExternalLink size={15} aria-hidden />
             </button>
           </div>
@@ -754,7 +784,8 @@ function SessionPills({
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
 }) {
-  if (nodes.length === 0) return <p className="work-layer__muted">No related sessions.</p>
+  const { t } = useI18n()
+  if (nodes.length === 0) return <p className="work-layer__muted">{t('session.noRelated')}</p>
   return (
     <div className="work-layer__pills">
       {nodes.map((node) => (
@@ -767,10 +798,10 @@ function SessionPills({
           <div className="work-layer__pill-actions">
             {node.risks.length > 0 && <AlertTriangle size={15} aria-label="Has risk" />}
             {node.session.status === 'completed' && <CheckCircle2 size={15} aria-label="Completed" />}
-            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label="Show in Session Map">
+            <button className="ghost icon-only" type="button" onClick={() => onShowInMap(node.session.id)} aria-label={t('action.showInMap')}>
               <Map size={15} aria-hidden />
             </button>
-            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label="Open session detail">
+            <button className="ghost icon-only" type="button" onClick={() => onOpenSession(node.session.id)} aria-label={t('action.openDetail')}>
               <ExternalLink size={15} aria-hidden />
             </button>
           </div>

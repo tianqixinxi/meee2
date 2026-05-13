@@ -1,11 +1,13 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   Clock3,
   ExternalLink,
   Map,
   PlayCircle,
+  RotateCcw,
   Search,
   Wrench,
 } from 'lucide-react'
@@ -13,7 +15,6 @@ import type { BoardState } from '../types'
 import {
   buildSessionGraph,
   matchesSessionNode,
-  SESSION_BUCKET_META,
   type SessionBucketId,
   type SessionGraphNode,
 } from '../sessionGraph'
@@ -35,6 +36,8 @@ const PRIMARY_BUCKETS: SessionBucketId[] = [
   'failed',
 ]
 
+const ARCHIVED_SESSIONS_STORAGE_KEY = 'meee2.archivedSessions.v1'
+
 const BUCKET_ICONS: Record<SessionBucketId, typeof AlertTriangle> = {
   needsAttention: AlertTriangle,
   running: PlayCircle,
@@ -53,23 +56,46 @@ export function PersonalCockpit({
 }: PersonalCockpitProps) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(loadArchivedSessionIds)
   const graph = useMemo(() => buildSessionGraph(state?.sessions ?? []), [state])
   const filteredNodes = useMemo(
     () => graph.nodes.filter((node) => matchesSessionNode(node, query)),
     [graph.nodes, query],
   )
   const filteredIds = useMemo(
-    () => new Set(filteredNodes.map((node) => node.session.id)),
-    [filteredNodes],
+    () => new Set(filteredNodes.filter((node) => !archivedIds.has(node.session.id)).map((node) => node.session.id)),
+    [archivedIds, filteredNodes],
   )
+  const archivedNodes = useMemo(
+    () => filteredNodes.filter((node) => archivedIds.has(node.session.id)),
+    [archivedIds, filteredNodes],
+  )
+  const archivedTotal = graph.nodes.filter((node) => archivedIds.has(node.session.id)).length
+  const hasArchiveSearch = query.trim().length > 0
+
+  const archiveSession = (sessionId: string) => {
+    setArchivedIds((current) => {
+      const next = new Set(current)
+      next.add(sessionId)
+      saveArchivedSessionIds(next)
+      return next
+    })
+  }
+
+  const restoreSession = (sessionId: string) => {
+    setArchivedIds((current) => {
+      const next = new Set(current)
+      next.delete(sessionId)
+      saveArchivedSessionIds(next)
+      return next
+    })
+  }
 
   const bucketNodes = (bucketId: SessionBucketId) =>
     graph.buckets[bucketId].filter((node) => filteredIds.has(node.session.id))
 
-  const historyNodes = filteredNodes.slice(0, 30)
-
   return (
-    <main className="personal-cockpit" aria-label="Personal AI Cockpit">
+    <main className="personal-cockpit" aria-label={t('cockpit.kicker')}>
       <header className="cockpit-header">
         <div>
           <p className="cockpit-kicker">{t('cockpit.kicker')}</p>
@@ -82,9 +108,8 @@ export function PersonalCockpit({
 
       <section className="cockpit-summary" aria-label="Session status summary">
         {PRIMARY_BUCKETS.map((bucketId) => {
-          const meta = SESSION_BUCKET_META[bucketId]
           const Icon = BUCKET_ICONS[bucketId]
-          const count = graph.buckets[bucketId].length
+          const count = graph.buckets[bucketId].filter((node) => !archivedIds.has(node.session.id)).length
           return (
             <div key={bucketId} className={`cockpit-stat ${bucketId}`}>
               <div className="cockpit-stat__icon" aria-hidden>
@@ -92,7 +117,7 @@ export function PersonalCockpit({
               </div>
               <div>
                 <div className="cockpit-stat__value">{count}</div>
-                <div className="cockpit-stat__label">{meta.shortTitle}</div>
+                <div className="cockpit-stat__label">{bucketShortTitle(bucketId, t)}</div>
               </div>
             </div>
           )
@@ -105,7 +130,7 @@ export function PersonalCockpit({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={t('cockpit.search')}
-          aria-label="Search session history"
+          aria-label={t('cockpit.searchAria')}
         />
       </div>
 
@@ -122,26 +147,34 @@ export function PersonalCockpit({
               nodes={bucketNodes(bucketId)}
               onOpenSession={onOpenSession}
               onShowInMap={onShowInMap}
+              onArchiveSession={archiveSession}
             />
           ))}
 
           <section className="cockpit-section cockpit-history">
             <div className="cockpit-section__header">
               <div>
-                <h2>{SESSION_BUCKET_META.history.title}</h2>
-                <p>{filteredNodes.length} {t('cockpit.matching')}</p>
+                <h2>{t('archive.title')}</h2>
+                <p>
+                  {hasArchiveSearch
+                    ? t('archive.matching', { count: archivedNodes.length })
+                    : t('archive.collapsed', { count: archivedTotal })}
+                </p>
               </div>
             </div>
-            {historyNodes.length === 0 ? (
-              <div className="cockpit-empty-state">{SESSION_BUCKET_META.history.empty}</div>
+            {!hasArchiveSearch ? (
+              <div className="cockpit-empty-state">{t('archive.searchHint')}</div>
+            ) : archivedNodes.length === 0 ? (
+              <div className="cockpit-empty-state">{t('archive.empty')}</div>
             ) : (
               <div className="cockpit-history-list">
-                {historyNodes.map((node) => (
-                  <SessionHistoryRow
+                {archivedNodes.slice(0, 30).map((node) => (
+                  <SessionArchiveRow
                     key={node.session.id}
                     node={node}
                     onOpenSession={onOpenSession}
                     onShowInMap={onShowInMap}
+                    onRestoreSession={restoreSession}
                   />
                 ))}
               </div>
@@ -158,24 +191,25 @@ function SessionBucket({
   nodes,
   onOpenSession,
   onShowInMap,
+  onArchiveSession,
 }: {
   bucketId: SessionBucketId
   nodes: SessionGraphNode[]
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
+  onArchiveSession: (sessionId: string) => void
 }) {
   const { t } = useI18n()
-  const meta = SESSION_BUCKET_META[bucketId]
   return (
     <section className={`cockpit-section ${bucketId}`}>
       <div className="cockpit-section__header">
         <div>
-          <h2>{meta.title}</h2>
+          <h2>{bucketTitle(bucketId, t)}</h2>
           <p>{nodes.length} {t('cockpit.sessions')}</p>
         </div>
       </div>
       {nodes.length === 0 ? (
-        <div className="cockpit-empty-state">{meta.empty}</div>
+        <div className="cockpit-empty-state">{bucketEmpty(bucketId, t)}</div>
       ) : (
         <div className="cockpit-radar-list">
           {nodes.slice(0, 6).map((node) => (
@@ -184,6 +218,7 @@ function SessionBucket({
               node={node}
               onOpenSession={onOpenSession}
               onShowInMap={onShowInMap}
+              onArchiveSession={onArchiveSession}
             />
           ))}
         </div>
@@ -196,10 +231,12 @@ function SessionRadarRow({
   node,
   onOpenSession,
   onShowInMap,
+  onArchiveSession,
 }: {
   node: SessionGraphNode
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
+  onArchiveSession: (sessionId: string) => void
 }) {
   const { t } = useI18n()
   const s = node.session
@@ -225,7 +262,7 @@ function SessionRadarRow({
       <p className="cockpit-current-step" title={node.currentStep}>{node.currentStep}</p>
       {node.latestMessageText && (
         <p className="cockpit-latest-message" title={node.latestMessageText}>
-          <span>{node.latestMessage?.role ?? 'message'}</span>
+          <span>{node.latestMessage?.role ?? t('session.message')}</span>
           {node.latestMessageText}
         </p>
       )}
@@ -250,19 +287,24 @@ function SessionRadarRow({
         <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
         </button>
+        <button className="ghost icon-only" type="button" onClick={() => onArchiveSession(s.id)} aria-label={t('archive.archiveAction')}>
+          <Archive size={14} aria-hidden />
+        </button>
       </div>
     </article>
   )
 }
 
-function SessionHistoryRow({
+function SessionArchiveRow({
   node,
   onOpenSession,
   onShowInMap,
+  onRestoreSession,
 }: {
   node: SessionGraphNode
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
+  onRestoreSession: (sessionId: string) => void
 }) {
   const { t } = useI18n()
   const s = node.session
@@ -277,6 +319,9 @@ function SessionHistoryRow({
       <div className="cockpit-history-row__actions">
         <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
           <Map size={15} aria-hidden />
+        </button>
+        <button className="ghost icon-only" type="button" onClick={() => onRestoreSession(s.id)} aria-label={t('archive.restoreAction')}>
+          <RotateCcw size={14} aria-hidden />
         </button>
         <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')}>
           <ExternalLink size={15} aria-hidden />
@@ -307,6 +352,18 @@ function statusLabel(status: string, t: (key: string, params?: Record<string, st
   }
 }
 
+function bucketTitle(bucketId: SessionBucketId, t: (key: string) => string): string {
+  return t(`bucket.${bucketId}.title`)
+}
+
+function bucketShortTitle(bucketId: SessionBucketId, t: (key: string) => string): string {
+  return t(`bucket.${bucketId}.short`)
+}
+
+function bucketEmpty(bucketId: SessionBucketId, t: (key: string) => string): string {
+  return t(`bucket.${bucketId}.empty`)
+}
+
 function formatRelativeTime(ms: number, t: (key: string, params?: Record<string, string | number>) => string): string {
   if (!ms) return t('time.none')
   const delta = Date.now() - ms
@@ -317,4 +374,22 @@ function formatRelativeTime(ms: number, t: (key: string, params?: Record<string,
   if (hours < 24) return t('time.hoursAgo', { count: hours })
   const days = Math.floor(hours / 24)
   return t('time.daysAgo', { count: days })
+}
+
+function loadArchivedSessionIds(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(ARCHIVED_SESSIONS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveArchivedSessionIds(ids: Set<string>) {
+  try {
+    window.localStorage.setItem(ARCHIVED_SESSIONS_STORAGE_KEY, JSON.stringify([...ids]))
+  } catch {
+    // Local archive is best-effort; sessions remain visible if storage is blocked.
+  }
 }

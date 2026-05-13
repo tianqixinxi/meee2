@@ -253,10 +253,11 @@ textarea {
   top: 14px;
   right: 16px;
   z-index: 90;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  max-width: min(980px, calc(100% - 32px));
+  gap: 10px;
+  width: min(1040px, calc(100% - 32px));
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent);
   border-radius: 8px;
@@ -267,16 +268,16 @@ textarea {
 
 .surface-tabs,
 .home-view-switch {
-  display: inline-flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(86px, 1fr));
   gap: 3px;
+  min-width: 0;
 }
 
 .surface-tabs button,
 .home-view-switch button {
-  min-width: 74px;
-  max-width: 128px;
+  width: 100%;
+  min-width: 0;
   height: 28px;
   padding: 0 10px;
   border: 0;
@@ -304,8 +305,9 @@ textarea {
 .surface-nav-actions {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding-left: 6px;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding-left: 10px;
   border-left: 1px solid var(--border);
 }
 
@@ -314,6 +316,7 @@ textarea {
   align-items: center;
   justify-content: center;
   flex: 0 0 86px;
+  width: 86px;
   height: 26px;
   padding: 0 8px;
   border-radius: 999px;
@@ -336,6 +339,7 @@ textarea {
   background: var(--color-bg-subtle);
   color: var(--accent);
   overflow: hidden;
+  flex: 0 0 28px;
 }
 
 .surface-user-button:hover {
@@ -575,7 +579,7 @@ textarea {
     minmax(96px, 0.55fr)
     minmax(118px, 0.62fr)
     72px
-    64px;
+    96px;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -596,7 +600,9 @@ textarea {
 .cockpit-radar-row__identity,
 .cockpit-radar-row__tool,
 .cockpit-radar-row__risk,
-.cockpit-radar-row__actions {
+.cockpit-radar-row__actions,
+.cockpit-current-step,
+.cockpit-latest-message {
   min-width: 0;
 }
 
@@ -783,6 +789,7 @@ textarea {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--text);
   font-size: 12px;
   line-height: 1.35;
@@ -794,6 +801,7 @@ textarea {
   display: -webkit-box;
   margin: 0;
   overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--text-dim);
   font-size: 12px;
   line-height: 1.35;
@@ -822,6 +830,7 @@ textarea {
   padding: 0 8px;
   border-radius: 999px;
   overflow: hidden;
+  min-width: 0;
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -872,15 +881,26 @@ textarea {
 }
 
 .cockpit-history-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-width: 0;
   padding: 11px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-paper);
+}
+
+.cockpit-history-row > div:first-child {
+  min-width: 0;
+}
+
+.cockpit-history-row__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .cockpit-history-row__title {
@@ -1021,7 +1041,7 @@ textarea {
 
 .work-layer__radar-row {
   display: grid;
-  grid-template-columns: 112px minmax(170px, 1.35fr) minmax(120px, 0.75fr) minmax(110px, 0.7fr) 112px 32px 32px;
+  grid-template-columns: 100px minmax(170px, 1.4fr) minmax(100px, 0.65fr) minmax(96px, 0.6fr) 104px 32px 32px;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -1053,6 +1073,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .work-layer__radar-main strong {
@@ -1079,6 +1100,9 @@ textarea {
   color: var(--text-dim);
   font-size: 11px;
   font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .work-layer__risk-chip.is-high {
@@ -1219,9 +1243,92 @@ textarea {
   font-size: 12px;
 }
 
+.work-layer__selected-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0 12px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent);
+}
+
+.work-layer__selected-summary > div {
+  min-width: 0;
+}
+
+.work-layer__selected-summary strong,
+.work-layer__selected-summary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-layer__selected-summary span {
+  margin-top: 3px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .work-layer__field textarea {
   min-height: 86px;
   font-family: var(--sans);
+}
+
+.work-layer__modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-bg) 62%, rgba(0, 0, 0, 0.45));
+  backdrop-filter: blur(10px);
+}
+
+.work-layer__modal {
+  width: min(760px, 96vw);
+  max-height: min(760px, 86vh);
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-modal);
+}
+
+.work-layer__modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.work-layer__modal-head > div {
+  min-width: 0;
+}
+
+.work-layer__modal-head h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.work-layer__modal-head p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.work-layer__checklist--modal {
+  min-height: 0;
+  overflow: auto;
 }
 
 .work-layer__checklist,
