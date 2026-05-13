@@ -842,6 +842,8 @@ interface Props {
   focusSessionRequest: { sessionId: string; bump: number } | null
   /** Assistant-generated canvas patch proposal. Consumed after the user clicks Apply. */
   canvasPatchRequest: CanvasPatchRequest | null
+  /** Team canvases may only contain sessions that are synced to that team. */
+  canAddSessionToCanvas?: (canvasId: string, sessionId: string) => boolean
   /** Emits a toast-level result after applying an assistant canvas patch. */
   onCanvasPatchApplied: (result: { ok: boolean; message: string }) => void
   /**
@@ -912,6 +914,7 @@ export default function Board({
   bulkVisibilityRequest,
   focusSessionRequest,
   canvasPatchRequest,
+  canAddSessionToCanvas,
   onCanvasPatchApplied,
   onCountsChange,
   onSceneSnapshotChange,
@@ -2345,6 +2348,9 @@ export default function Board({
           }
           case 'show_session': {
             requireSession(op.sessionId)
+            if (canAddSessionToCanvas && !canAddSessionToCanvas(proposal.canvasId, op.sessionId)) {
+              throw new Error('Sync this session to the team before adding it to a team canvas.')
+            }
             const pos = sessionPosition(op.sessionId, op)
             const visibleIdx = visibleSessionRectIndex(op.sessionId)
             if (visibleIdx >= 0) {
@@ -2480,6 +2486,7 @@ export default function Board({
     api,
     state,
     canvasPatchRequest,
+    canAddSessionToCanvas,
     onCanvasPatchApplied,
     persistence,
     saveChannelLayoutDebounced,

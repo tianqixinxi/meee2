@@ -1766,6 +1766,25 @@ enum BoardAPI {
         }
     }
 
+    static func resolveCanvasConflict(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"] else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let choice = (json["choice"] as? String) ?? ""
+        do {
+            let snapshot = try BoardLayoutStore.shared.resolveTeamCanvasConflict(
+                canvasId: canvasId,
+                useRemote: choice == "remote"
+            )
+            return jsonResponse(canvasEnvelope(snapshot))
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
         let canvases = snapshot.canvases.map {
             let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: $0.id)) ?? ""
@@ -1776,7 +1795,13 @@ enum BoardAPI {
                 isDefault: $0.isDefault,
                 workspacePath: workspacePath,
                 teamId: $0.teamId,
-                ownerUserId: $0.ownerUserId
+                ownerUserId: $0.ownerUserId,
+                remoteId: $0.remoteId,
+                remoteVersion: $0.remoteVersion,
+                syncStatus: $0.syncStatus,
+                dirtySince: $0.dirtySince.map(BoardDTOBuilder.iso),
+                lastSyncedAt: $0.lastSyncedAt.map(BoardDTOBuilder.iso),
+                lastRemoteUpdatedAt: $0.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
             )
         }
         let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }

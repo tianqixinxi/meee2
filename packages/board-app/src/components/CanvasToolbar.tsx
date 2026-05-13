@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Layers, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
+import { resolveCanvasConflict } from '../api'
 
 interface Props {
   canvases: CanvasInfo[]
@@ -28,6 +29,7 @@ export function CanvasToolbar({
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
+  const [resolvingConflict, setResolvingConflict] = useState(false)
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
 
@@ -78,6 +80,16 @@ export function CanvasToolbar({
     })
   }
 
+  const resolveConflict = (choice: 'current' | 'remote') => {
+    if (!activeCanvas || activeCanvas.syncStatus !== 'conflict') return
+    setResolvingConflict(true)
+    Promise.resolve(resolveCanvasConflict(activeCanvas.id, choice))
+      .then(() => {
+        window.location.reload()
+      })
+      .finally(() => setResolvingConflict(false))
+  }
+
   if (!activeCanvas) return null
 
   return (
@@ -100,6 +112,9 @@ export function CanvasToolbar({
           <span className="canvas-toolbar__name">{activeCanvas.name}</span>
           {activeCanvas.isDefault && (
             <span className="canvas-toolbar__badge">Default</span>
+          )}
+          {activeCanvas.syncStatus === 'conflict' && (
+            <span className="canvas-toolbar__badge">Conflict</span>
           )}
           <ChevronDown size={14} aria-hidden />
         </button>
@@ -129,6 +144,8 @@ export function CanvasToolbar({
                     <span>
                       {canvas.scope === 'team' ? 'Team' : 'Personal'}
                       {canvas.isDefault ? ' · Default' : ''}
+                      {canvas.syncStatus === 'conflict' ? ' · Conflict' : ''}
+                      {canvas.syncStatus === 'pending' || canvas.syncStatus === 'force-pending' ? ' · Syncing' : ''}
                     </span>
                   </span>
                 </button>
@@ -206,6 +223,18 @@ export function CanvasToolbar({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {activeCanvas.syncStatus === 'conflict' && (
+        <div className="canvas-toolbar__conflict" role="status">
+          <span>Remote changes conflict with this team canvas.</span>
+          <button type="button" disabled={resolvingConflict} onClick={() => resolveConflict('current')}>
+            Use current
+          </button>
+          <button type="button" disabled={resolvingConflict} onClick={() => resolveConflict('remote')}>
+            Use remote
+          </button>
         </div>
       )}
 

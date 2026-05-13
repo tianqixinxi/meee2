@@ -2,7 +2,7 @@
 //
 // 监听 SessionEventBus，当 transcriptAppended / sessionMetadataChanged 时，
 // 调用 meee2 REST API 同步数据。默认同步打开，或至少一个 session 被
-// 单独 opt-in 时激活。
+// 单独 opt-in 时同步 session；team canvas 只要已连接 team 就会同步。
 
 import Foundation
 import Combine
@@ -18,8 +18,11 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private var subscription: AnyCancellable?
     private var pluginSessionsSubscription: AnyCancellable?
     private var heartbeatTimer: Timer?
+    private var canvasSyncTimer: Timer?
     private let syncQueue = DispatchQueue(label: "com.meee2.meee2-pusher", qos: .utility)
     private let heartbeatInterval: TimeInterval = 60.0
+    private let canvasSyncInterval: TimeInterval = 60.0
+    private let canvasDebounceInterval: TimeInterval = 2.0
     private let metadataDebounceInterval: TimeInterval = 0.5
     private let settingsCacheFreshSeconds: TimeInterval = 1.0
 
@@ -78,6 +81,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private var lastPluginTranscriptFingerprints: [String: TranscriptFingerprint] = [:]
     private var inboxPendingCache: [String: PendingCountCacheEntry] = [:]
     private let inboxPendingCacheFreshSeconds: TimeInterval = 1.0
+    private var pendingCanvasSyncWorkItem: DispatchWorkItem?
 
     // MARK: - Activation
 
@@ -85,14 +89,16 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     public func activate() {
         _ = settingsSnapshot(force: true)
         guard shouldStayActive else {
-            MLog("[Meee2OnlinePusher] Not connected or no sync targets, skipping activation")
+            MLog("[Meee2OnlinePusher] Not connected to meee2 Online, skipping activation")
             return
         }
         guard subscription == nil,
               pluginSessionsSubscription == nil,
-              heartbeatTimer == nil else {
+              heartbeatTimer == nil,
+              canvasSyncTimer == nil else {
             syncQueue.async { [weak self] in
                 self?.sendHeartbeatForActiveSessions()
+                self?.syncTeamCanvases()
             }
             return
         }
@@ -120,9 +126,18 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         RunLoop.main.add(timer, forMode: .common)
         heartbeatTimer = timer
 
+        let canvasTimer = Timer(timeInterval: canvasSyncInterval, repeats: true) { [weak self] _ in
+            self?.syncQueue.async {
+                self?.syncTeamCanvases()
+            }
+        }
+        RunLoop.main.add(canvasTimer, forMode: .common)
+        canvasSyncTimer = canvasTimer
+
         MLog("[Meee2OnlinePusher] Activated - listening to events, heartbeat every 60s")
         syncQueue.async { [weak self] in
             self?.sendHeartbeatForActiveSessions()
+            self?.syncTeamCanvases()
         }
     }
 
@@ -133,9 +148,13 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         pluginSessionsSubscription = nil
         heartbeatTimer?.invalidate()
         heartbeatTimer = nil
+        canvasSyncTimer?.invalidate()
+        canvasSyncTimer = nil
         syncQueue.async { [weak self] in
             self?.pendingSessionUpdateWorkItems.values.forEach { $0.cancel() }
             self?.pendingSessionUpdateWorkItems.removeAll()
+            self?.pendingCanvasSyncWorkItem?.cancel()
+            self?.pendingCanvasSyncWorkItem = nil
         }
         MLog("[Meee2OnlinePusher] Deactivated")
     }
@@ -151,7 +170,10 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private var shouldStayActive: Bool {
         let settings = settingsSnapshot()
-        return settings.isConnected && (settings.defaultSyncEnabled || !settings.enabledSessionIds.isEmpty)
+        return settings.isConnected
+            && !settings.teamId.isEmpty
+            && !settings.normalizedSupabaseUrl.isEmpty
+            && !settings.supabaseKey.isEmpty
     }
 
     private var userId: String { settingsSnapshot().userId }
@@ -212,8 +234,23 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             syncQueue.async { [weak self] in
                 self?.pushSessionCreate(sessionId: sid)
             }
+        case .boardLayoutChanged:
+            scheduleCanvasSync()
         default:
             break
+        }
+    }
+
+    private func scheduleCanvasSync() {
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.pendingCanvasSyncWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.pendingCanvasSyncWorkItem = nil
+                self?.syncTeamCanvases()
+            }
+            self.pendingCanvasSyncWorkItem = workItem
+            self.syncQueue.asyncAfter(deadline: .now() + self.canvasDebounceInterval, execute: workItem)
         }
     }
 
@@ -286,8 +323,91 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         }
 
         pushPluginSessions(PluginManager.shared.sessions, force: true)
+        syncTeamCanvases()
         pollDesktopCommands()
         perfLog("heartbeat", started: started, extra: "sessions=\(activeSessions.count),plugins=\(PluginManager.shared.sessions.count)")
+    }
+
+    private func syncTeamCanvases() {
+        let currentTeamId = settingsSnapshot().teamId
+        guard shouldStayActive,
+              !currentTeamId.isEmpty,
+              !normalizedSupabaseUrl.isEmpty,
+              !supabaseKey.isEmpty else {
+            return
+        }
+
+        let items = BoardLayoutStore.shared.dirtyTeamCanvasPayloads()
+        if !items.isEmpty {
+            rpcDataRequest(
+                name: "meee2_sync_team_canvases",
+                payload: [
+                    "p_team_id": currentTeamId,
+                    "p_user_id": userId,
+                    "p_items": items
+                ]
+            ) { result in
+                switch result {
+                case .success(let data):
+                    if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                        BoardLayoutStore.shared.markTeamCanvasSyncResults(rows)
+                    }
+                case .failure(let error):
+                    MLog("[Meee2OnlinePusher] canvas push failed: \(error)")
+                }
+            }
+        }
+
+        rpcDataRequest(
+            name: "meee2_list_team_canvases",
+            payload: [
+                "p_team_id": currentTeamId,
+                "p_user_id": userId,
+                "p_include_deleted": true
+            ]
+        ) { result in
+            switch result {
+            case .success(let data):
+                let canvases = Self.parseRemoteTeamCanvases(data: data, teamId: currentTeamId)
+                BoardLayoutStore.shared.applyRemoteTeamCanvases(canvases)
+            case .failure(let error):
+                MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
+            }
+        }
+    }
+
+    private static func parseRemoteTeamCanvases(data: Data, teamId: String) -> [BoardLayoutStore.RemoteTeamCanvas] {
+        guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return []
+        }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return rows.compactMap { row in
+            guard let id = row["id"] as? String,
+                  let name = row["name"] as? String else {
+                return nil
+            }
+            let version: Int
+            if let v = row["version"] as? Int {
+                version = v
+            } else if let n = row["version"] as? NSNumber {
+                version = n.intValue
+            } else {
+                version = 0
+            }
+            let state = row["state"] as? [String: Any] ?? [:]
+            let updatedAt = (row["updated_at"] as? String).flatMap { formatter.date(from: $0) }
+            let deletedAt = (row["deleted_at"] as? String).flatMap { formatter.date(from: $0) }
+            return BoardLayoutStore.RemoteTeamCanvas(
+                id: id,
+                name: name,
+                teamId: teamId,
+                version: version,
+                state: state,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt
+            )
+        }
     }
 
     private func pushSessionUpsert(
