@@ -15,7 +15,7 @@ export interface BoardStateHook {
  * Subscribes to /api/events and re-fetches /api/state on every frame (plus
  * initial fetch on mount). Auto-reconnects the socket.
  */
-export function useBoardState(): BoardStateHook {
+export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook {
   const [state, setState] = useState<BoardState | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -78,6 +78,7 @@ export function useBoardState(): BoardStateHook {
       pendingWhileHidden.current = true
       return
     }
+    onStateChangedEvent?.()
     if (debounceTimer.current) {
       window.clearTimeout(debounceTimer.current)
     }
@@ -85,7 +86,7 @@ export function useBoardState(): BoardStateHook {
       debounceTimer.current = null
       void refresh()
     }, 750)
-  }, [refresh])
+  }, [onStateChangedEvent, refresh])
 
   useEffect(() => {
     // initial fetch (WS will also fire one immediately on connect; that's fine)
@@ -97,6 +98,7 @@ export function useBoardState(): BoardStateHook {
     const onVisible = () => {
       if (document.visibilityState !== 'visible' || !pendingWhileHidden.current) return
       pendingWhileHidden.current = false
+      onStateChangedEvent?.()
       void refresh()
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -108,7 +110,7 @@ export function useBoardState(): BoardStateHook {
         debounceTimer.current = null
       }
     }
-  }, [refresh, scheduleRefresh])
+  }, [onStateChangedEvent, refresh, scheduleRefresh])
 
   return { state, loading, error, connected, refresh }
 }
