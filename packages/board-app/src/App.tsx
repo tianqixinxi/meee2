@@ -13,7 +13,7 @@ import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import { SessionDetailModal } from './components/SessionDetailModal'
-import { Globe2, Moon, Monitor, RefreshCw, Settings, Sun } from 'lucide-react'
+import { Globe2, Moon, Monitor, RefreshCw, Sun } from 'lucide-react'
 import { PersonalCockpit } from './components/PersonalCockpit'
 import { WorkLayerViews, type WorkLayerView } from './components/WorkLayerViews'
 import { PreferencesDialog } from './components/PreferencesDialog'
@@ -926,8 +926,8 @@ export default function App() {
     <ToastContext.Provider value={toastCtx}>
       <div className={`app ${homeView !== 'map' ? 'app--cockpit' : 'app--work-map'}`}>
         <div className="board-area">
-          <div className="surface-shell-nav" aria-label="Work surfaces">
-            <div className="surface-tabs" role="tablist" aria-label="Work surfaces">
+          <div className="surface-shell-nav" aria-label={t('surface.navAria')}>
+            <div className="surface-tabs" role="tablist" aria-label={t('surface.navAria')}>
               {WORK_SURFACES.map((view) => (
                 <button
                   key={view.id}
@@ -947,8 +947,8 @@ export default function App() {
                 className="ghost icon-only"
                 type="button"
                 onClick={() => setMode(nextThemeMode(mode))}
-                aria-label={`Theme: ${mode}`}
-                title={`Theme: ${mode}`}
+                aria-label={t('action.theme')}
+                title={t('action.theme')}
               >
                 {mode === 'system' ? <Monitor size={15} aria-hidden /> : resolvedTheme === 'dark' ? <Moon size={15} aria-hidden /> : <Sun size={15} aria-hidden />}
               </button>
@@ -956,23 +956,20 @@ export default function App() {
                 className="ghost icon-only"
                 type="button"
                 onClick={() => setLocale(nextLocale(locale))}
-                aria-label="Language"
-                title="Language"
+                aria-label={t('action.language')}
+                title={t('action.language')}
               >
                 <Globe2 size={15} aria-hidden />
               </button>
               <button className="ghost icon-only" type="button" onClick={refreshAll} disabled={boardState.loading || canvasLoading} aria-label={t('action.refresh')} title={t('action.refresh')}>
                 <RefreshCw size={15} aria-hidden />
               </button>
-              <button className="ghost icon-only" type="button" onClick={() => setPreferencesOpen(true)} aria-label={t('action.settings')} title={t('action.settings')}>
-                <Settings size={15} aria-hidden />
-              </button>
               <button
                 className="surface-user-button"
                 type="button"
                 onClick={() => setPreferencesOpen(true)}
-                aria-label={userProfile?.connected ? userProfile.displayName : t('settings.title')}
-                title={userProfile?.connected ? userProfile.displayName : t('settings.title')}
+                aria-label={userProfile?.connected ? userProfile.displayName : t('action.accountSettings')}
+                title={userProfile?.connected ? userProfile.displayName : t('action.accountSettings')}
               >
                 <img src={userProfile?.userAvatarUrl || DEFAULT_USER_AVATAR} alt="" />
               </button>

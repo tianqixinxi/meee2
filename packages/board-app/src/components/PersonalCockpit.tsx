@@ -3,9 +3,11 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock3,
-  ExternalLink,
-  Map,
+  LocateFixed,
+  PanelRightOpen,
   PlayCircle,
   RotateCcw,
   Search,
@@ -57,6 +59,8 @@ export function PersonalCockpit({
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [archivedIds, setArchivedIds] = useState<Set<string>>(loadArchivedSessionIds)
+  const [expandedBuckets, setExpandedBuckets] = useState<Set<SessionBucketId>>(() => new Set())
+  const [archiveExpanded, setArchiveExpanded] = useState(false)
   const graph = useMemo(() => buildSessionGraph(state?.sessions ?? []), [state])
   const filteredNodes = useMemo(
     () => graph.nodes.filter((node) => matchesSessionNode(node, query)),
@@ -72,6 +76,19 @@ export function PersonalCockpit({
   )
   const archivedTotal = graph.nodes.filter((node) => archivedIds.has(node.session.id)).length
   const hasArchiveSearch = query.trim().length > 0
+  const archiveVisible = hasArchiveSearch || archiveExpanded
+
+  const toggleBucket = (bucketId: SessionBucketId) => {
+    setExpandedBuckets((current) => {
+      const next = new Set(current)
+      if (next.has(bucketId)) {
+        next.delete(bucketId)
+      } else {
+        next.add(bucketId)
+      }
+      return next
+    })
+  }
 
   const archiveSession = (sessionId: string) => {
     setArchivedIds((current) => {
@@ -106,12 +123,12 @@ export function PersonalCockpit({
         </div>
       </header>
 
-      <section className="cockpit-summary" aria-label="Session status summary">
+      <section className="cockpit-summary" aria-label={t('cockpit.summaryAria')}>
         {PRIMARY_BUCKETS.map((bucketId) => {
           const Icon = BUCKET_ICONS[bucketId]
           const count = graph.buckets[bucketId].filter((node) => !archivedIds.has(node.session.id)).length
           return (
-            <div key={bucketId} className={`cockpit-stat ${bucketId}`}>
+            <div key={bucketId} className={`cockpit-stat ${bucketId}`} title={bucketRule(bucketId, t)}>
               <div className="cockpit-stat__icon" aria-hidden>
                 <Icon size={16} />
               </div>
@@ -145,6 +162,8 @@ export function PersonalCockpit({
               key={bucketId}
               bucketId={bucketId}
               nodes={bucketNodes(bucketId)}
+              expanded={expandedBuckets.has(bucketId)}
+              onToggleExpanded={() => toggleBucket(bucketId)}
               onOpenSession={onOpenSession}
               onShowInMap={onShowInMap}
               onArchiveSession={archiveSession}
@@ -156,13 +175,35 @@ export function PersonalCockpit({
               <div>
                 <h2>{t('archive.title')}</h2>
                 <p>
-                  {hasArchiveSearch
-                    ? t('archive.matching', { count: archivedNodes.length })
+                  {archiveVisible
+                    ? hasArchiveSearch
+                      ? t('archive.matching', { count: archivedNodes.length })
+                      : t('archive.expanded', { count: archivedNodes.length })
                     : t('archive.collapsed', { count: archivedTotal })}
                 </p>
               </div>
+              {archivedTotal > 0 && (
+                <button
+                  className="ghost cockpit-section__toggle"
+                  type="button"
+                  onClick={() => setArchiveExpanded((current) => !current)}
+                  title={archiveExpanded ? t('bucket.collapse') : t('archive.expand')}
+                >
+                  {archiveExpanded ? (
+                    <>
+                      <ChevronUp size={14} aria-hidden />
+                      {t('bucket.collapse')}
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown size={14} aria-hidden />
+                      {t('archive.expand')}
+                    </>
+                  )}
+                </button>
+              )}
             </div>
-            {!hasArchiveSearch ? (
+            {!archiveVisible ? (
               <div className="cockpit-empty-state">{t('archive.searchHint')}</div>
             ) : archivedNodes.length === 0 ? (
               <div className="cockpit-empty-state">{t('archive.empty')}</div>
@@ -189,30 +230,56 @@ export function PersonalCockpit({
 function SessionBucket({
   bucketId,
   nodes,
+  expanded,
+  onToggleExpanded,
   onOpenSession,
   onShowInMap,
   onArchiveSession,
 }: {
   bucketId: SessionBucketId
   nodes: SessionGraphNode[]
+  expanded: boolean
+  onToggleExpanded: () => void
   onOpenSession: (sessionId: string) => void
   onShowInMap: (sessionId: string) => void
   onArchiveSession: (sessionId: string) => void
 }) {
   const { t } = useI18n()
+  const visibleNodes = expanded ? nodes : nodes.slice(0, 6)
   return (
     <section className={`cockpit-section ${bucketId}`}>
       <div className="cockpit-section__header">
         <div>
           <h2>{bucketTitle(bucketId, t)}</h2>
-          <p>{nodes.length} {t('cockpit.sessions')}</p>
+          <p>{t('bucket.showing', { shown: Math.min(visibleNodes.length, nodes.length), total: nodes.length })}</p>
+          <p className="cockpit-section__rule">{bucketRule(bucketId, t)}</p>
         </div>
+        {nodes.length > 6 && (
+          <button
+            className="ghost cockpit-section__toggle"
+            type="button"
+            onClick={onToggleExpanded}
+            title={expanded ? t('bucket.collapse') : t('bucket.showAll', { count: nodes.length })}
+          >
+            {expanded ? (
+              <>
+                <ChevronUp size={14} aria-hidden />
+                {t('bucket.collapse')}
+              </>
+            ) : (
+              <>
+                <ChevronDown size={14} aria-hidden />
+                {t('bucket.showAll', { count: nodes.length })}
+              </>
+            )}
+          </button>
+        )}
       </div>
       {nodes.length === 0 ? (
         <div className="cockpit-empty-state">{bucketEmpty(bucketId, t)}</div>
       ) : (
         <div className="cockpit-radar-list">
-          {nodes.slice(0, 6).map((node) => (
+          {visibleNodes.map((node) => (
             <SessionRadarRow
               key={node.session.id}
               node={node}
@@ -241,6 +308,12 @@ function SessionRadarRow({
   const { t } = useI18n()
   const s = node.session
   const primaryRisk = node.risks[0] ?? null
+  const archiveTitle = t('archive.archiveAction')
+  const archive = () => {
+    if (window.confirm(t('archive.confirm', { title: s.title }))) {
+      onArchiveSession(s.id)
+    }
+  }
   return (
     <article className={`cockpit-radar-row status-${s.status}`}>
       <div className="cockpit-radar-row__status">
@@ -273,21 +346,21 @@ function SessionRadarRow({
       <div className="cockpit-radar-row__risk">
         {primaryRisk ? (
           <span className={`cockpit-risk ${primaryRisk.severity}`} title={primaryRisk.detail}>
-            {primaryRisk.label}
+            {riskLabel(primaryRisk, t)}
           </span>
         ) : (
-          <span className="cockpit-muted-pill">No risk</span>
+          <span className="cockpit-muted-pill">{t('risk.none')}</span>
         )}
       </div>
       <div className="cockpit-radar-row__time">{formatRelativeTime(node.lastActivityMs, t)}</div>
       <div className="cockpit-radar-row__actions">
-        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')}>
-          <ExternalLink size={14} aria-hidden />
+        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')} title={t('action.openDetail')}>
+          <PanelRightOpen size={14} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
-          <Map size={15} aria-hidden />
+        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')} title={t('action.showInMap')}>
+          <LocateFixed size={15} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onArchiveSession(s.id)} aria-label={t('archive.archiveAction')}>
+        <button className="ghost icon-only" type="button" onClick={archive} aria-label={archiveTitle} title={archiveTitle}>
           <Archive size={14} aria-hidden />
         </button>
       </div>
@@ -317,14 +390,14 @@ function SessionArchiveRow({
         </div>
       </div>
       <div className="cockpit-history-row__actions">
-        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')}>
-          <Map size={15} aria-hidden />
+        <button className="ghost icon-only" type="button" onClick={() => onShowInMap(s.id)} aria-label={t('action.showInMap')} title={t('action.showInMap')}>
+          <LocateFixed size={15} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onRestoreSession(s.id)} aria-label={t('archive.restoreAction')}>
+        <button className="ghost icon-only" type="button" onClick={() => onRestoreSession(s.id)} aria-label={t('archive.restoreAction')} title={t('archive.restoreAction')}>
           <RotateCcw size={14} aria-hidden />
         </button>
-        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')}>
-          <ExternalLink size={15} aria-hidden />
+        <button className="ghost icon-only" type="button" onClick={() => onOpenSession(s.id)} aria-label={t('action.openDetail')} title={t('action.openDetail')}>
+          <PanelRightOpen size={15} aria-hidden />
         </button>
       </div>
     </div>
@@ -362,6 +435,17 @@ function bucketShortTitle(bucketId: SessionBucketId, t: (key: string) => string)
 
 function bucketEmpty(bucketId: SessionBucketId, t: (key: string) => string): string {
   return t(`bucket.${bucketId}.empty`)
+}
+
+function bucketRule(bucketId: SessionBucketId, t: (key: string) => string): string {
+  return t(`bucket.${bucketId}.rule`)
+}
+
+function riskLabel(
+  risk: SessionGraphNode['risks'][number],
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  return t(`risk.${risk.type}`)
 }
 
 function formatRelativeTime(ms: number, t: (key: string, params?: Record<string, string | number>) => string): string {
