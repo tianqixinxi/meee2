@@ -117,6 +117,38 @@ function fallbackCanvasList(): CanvasList {
   }
 }
 
+function canvasListSignature(list: CanvasList): string {
+  return JSON.stringify({
+    activeCanvasId: list.activeCanvasId,
+    defaultCanvasIds: [...list.defaultCanvasIds].sort(),
+    canvases: [...list.canvases]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((canvas) => ({
+        id: canvas.id,
+        name: canvas.name,
+        scope: canvas.scope,
+        isDefault: canvas.isDefault,
+        workspacePath: canvas.workspacePath,
+        ownerUserId: canvas.ownerUserId ?? null,
+        teamId: canvas.teamId ?? null,
+        remoteId: canvas.remoteId ?? null,
+        remoteVersion: canvas.remoteVersion ?? null,
+        syncStatus: canvas.syncStatus ?? null,
+        dirtySince: canvas.dirtySince ?? null,
+        lastSyncedAt: canvas.lastSyncedAt ?? null,
+        lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt ?? null,
+      })),
+    memberships: [...list.memberships]
+      .sort((a, b) => `${a.canvasId}:${a.sessionId}`.localeCompare(`${b.canvasId}:${b.sessionId}`))
+      .map((membership) => ({
+        canvasId: membership.canvasId,
+        sessionId: membership.sessionId,
+        visible: membership.visible,
+        layout: membership.layout ?? null,
+      })),
+  })
+}
+
 // -- toast context ---------------------------------------------------------
 
 interface Toast {
@@ -132,6 +164,15 @@ export const useToast = () => useContext(ToastContext)
 
 export default function App() {
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
+  const canvasListSignatureRef = useRef('')
+  const applyCanvasList = useCallback((list: CanvasList) => {
+    const nextSignature = canvasListSignature(list)
+    if (nextSignature !== canvasListSignatureRef.current) {
+      canvasListSignatureRef.current = nextSignature
+      setCanvasList(list)
+    }
+    return list
+  }, [])
   const activeCanvasId = canvasList?.activeCanvasId ?? FALLBACK_CANVAS_ID
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
   // meee2 桌面端通过本地 HTTP API 写入 BoardLayoutStore。
@@ -150,7 +191,7 @@ export default function App() {
     let retryTimer: number | null = null
     const load = (allowFallback: boolean) => {
       fetchCanvases()
-        .then((list) => { if (!cancelled) setCanvasList(list) })
+        .then((list) => { if (!cancelled) applyCanvasList(list) })
         .catch((err) => {
           console.warn('[App] fetchCanvases failed:', (err as Error).message)
           if (cancelled) return
@@ -165,14 +206,34 @@ export default function App() {
       cancelled = true
       if (retryTimer !== null) window.clearTimeout(retryTimer)
     }
-  }, [])
+  }, [applyCanvasList])
 
   const refreshCanvases = useCallback(() => {
     return fetchCanvases()
       .then((list) => {
-        setCanvasList(list)
+        applyCanvasList(list)
         return list
       })
+  }, [applyCanvasList])
+  const refreshCanvasesTimerRef = useRef<number | null>(null)
+  const scheduleCanvasListRefresh = useCallback(() => {
+    if (refreshCanvasesTimerRef.current !== null) {
+      window.clearTimeout(refreshCanvasesTimerRef.current)
+    }
+    refreshCanvasesTimerRef.current = window.setTimeout(() => {
+      refreshCanvasesTimerRef.current = null
+      refreshCanvases().catch((err) => {
+        console.warn('[App] refreshCanvases after state update failed:', (err as Error).message)
+      })
+    }, 350)
+  }, [refreshCanvases])
+
+  useEffect(() => {
+    return () => {
+      if (refreshCanvasesTimerRef.current !== null) {
+        window.clearTimeout(refreshCanvasesTimerRef.current)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -261,7 +322,7 @@ export default function App() {
     canvasSceneCacheRef.current = updated
   }, [])
 
-  const boardState = useBoardState()
+  const boardState = useBoardState(scheduleCanvasListRefresh)
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -448,17 +509,17 @@ export default function App() {
       return
     }
     addSessionToCanvas(activeCanvasId, sessionId)
-      .then(setCanvasList)
+      .then(applyCanvasList)
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to add session to canvas'))
     setAddToCanvasRequest({ sessionId, bump: Date.now() })
-  }, [activeCanvasId, canAddSessionToCanvas, pushToast])
+  }, [activeCanvasId, applyCanvasList, canAddSessionToCanvas, pushToast])
 
   const handleHideFromCanvas = useCallback((sessionId: string) => {
     removeSessionFromCanvas(activeCanvasId, sessionId)
-      .then(setCanvasList)
+      .then(applyCanvasList)
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to hide session from canvas'))
     setHideFromCanvasRequest({ sessionId, bump: Date.now() })
-  }, [activeCanvasId, pushToast])
+  }, [activeCanvasId, applyCanvasList, pushToast])
 
   const handleBulkVisibility = useCallback((mode: 'show' | 'hide', sids?: string[]) => {
     const targetSids = sids ?? boardState.state?.sessions.map((s) => s.id) ?? []
@@ -476,11 +537,11 @@ export default function App() {
             : removeSessionFromCanvas(activeCanvasId, sid),
         ),
       )
-        .then((results) => setCanvasList(results[results.length - 1]))
+        .then((results) => applyCanvasList(results[results.length - 1]))
         .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas sessions'))
     }
     setBulkVisibilityRequest({ mode, bump: Date.now(), sids: allowedSids })
-  }, [activeCanvasId, boardState.state, canAddSessionToCanvas, pushToast])
+  }, [activeCanvasId, applyCanvasList, boardState.state, canAddSessionToCanvas, pushToast])
 
   const handleSetSessionCanvasMembership = useCallback((
     sessionId: string,
@@ -495,41 +556,41 @@ export default function App() {
       ? addSessionToCanvas(canvasId, sessionId)
       : removeSessionFromCanvas(canvasId, sessionId)
     request
-      .then(setCanvasList)
+      .then(applyCanvasList)
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas membership'))
 
     if (canvasId === activeCanvasId) {
       if (present) setAddToCanvasRequest({ sessionId, bump: Date.now() })
       else setHideFromCanvasRequest({ sessionId, bump: Date.now() })
     }
-  }, [activeCanvasId, canAddSessionToCanvas, pushToast])
+  }, [activeCanvasId, applyCanvasList, canAddSessionToCanvas, pushToast])
 
   const handleSetActiveCanvas = useCallback((canvasId: string) => {
     updateCanvas(canvasId, { active: true })
       .then((list) => {
         setSelection({ kind: 'none' })
         setOnCanvasCounts({})
-        setCanvasList(list)
+        applyCanvasList(list)
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
-  }, [pushToast])
+  }, [applyCanvasList, pushToast])
 
   const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
     return createCanvas({ name, scope })
       .then((list) => {
         setSelection({ kind: 'none' })
         setOnCanvasCounts({})
-        setCanvasList(list)
+        applyCanvasList(list)
       })
-  }, [])
+  }, [applyCanvasList])
 
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
       .then((list) => {
-        setCanvasList(list)
+        applyCanvasList(list)
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to rename canvas'))
-  }, [pushToast])
+  }, [applyCanvasList, pushToast])
 
   const handleDeleteCanvas = useCallback((canvasId: string) => {
     return deleteCanvas(canvasId)
@@ -539,11 +600,11 @@ export default function App() {
         const nextCache = { ...canvasSceneCacheRef.current }
         delete nextCache[canvasId]
         canvasSceneCacheRef.current = nextCache
-        setCanvasList(list)
+        applyCanvasList(list)
         pushToast('success', 'Canvas deleted')
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to delete canvas'))
-  }, [pushToast])
+  }, [applyCanvasList, pushToast])
 
   const handleCountsChange = useCallback(
     (counts: Record<string, number>) => {
@@ -775,11 +836,9 @@ export default function App() {
     }
   }, [selectedSessionId, selection.kind, dockOpen])
 
-  // Refetch currently-cached templates on every state tick. The backend may
-  // emit a single state.changed frame after a template edit; rather than
-  // tracking a diff, we just re-read what we already care about. This is
-  // cheap because the cache set is small (one entry per unique pluginId).
-  const stateChangedTick = boardState.state // proxy — changes on every WS tick
+  // Refetch currently-cached templates when fetched board state actually
+  // changes. Unchanged websocket frames are filtered in useBoardState.
+  const stateChangedTick = boardState.state
   useEffect(() => {
     // 只 refetch 已经从 backend 拉到真实 template 的条目。对 404 回退到
     // DEFAULT_TEMPLATE 的 id 跳过——否则每秒 WS tick 都会打一发 404，
