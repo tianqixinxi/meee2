@@ -401,6 +401,7 @@ public final class BoardServer {
         server.POST["/api/canvases/:id/sessions"] = BoardServer.cors(BoardAPI.addSessionToCanvas)
         server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
         server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
+        server.POST["/api/canvases/:id/conflict"] = BoardServer.cors(BoardAPI.resolveCanvasConflict)
         server.GET["/api/coordination-groups"] = BoardServer.cors(BoardAPI.listCoordinationGroups)
         server.POST["/api/coordination-groups/:id/sync"] = BoardServer.cors(BoardAPI.syncCoordinationGroup)
         server.POST["/api/coordination-groups/:id/ask"] = BoardServer.cors(BoardAPI.askCoordinationGroup)

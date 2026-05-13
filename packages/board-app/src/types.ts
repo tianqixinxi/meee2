@@ -175,6 +175,12 @@ export interface CanvasInfo {
   workspacePath: string
   teamId?: string | null
   ownerUserId?: string | null
+  remoteId?: string | null
+  remoteVersion?: number | null
+  syncStatus?: 'pending' | 'synced' | 'conflict' | 'force-pending' | string | null
+  dirtySince?: string | null
+  lastSyncedAt?: string | null
+  lastRemoteUpdatedAt?: string | null
 }
 
 export interface CanvasSessionMembership {

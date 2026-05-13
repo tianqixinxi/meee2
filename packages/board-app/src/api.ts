@@ -143,6 +143,16 @@ export function removeSessionFromCanvas(
   )
 }
 
+export function resolveCanvasConflict(
+  canvasId: string,
+  choice: 'current' | 'remote',
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(canvasId)}/conflict`, {
+    method: 'POST',
+    body: JSON.stringify({ choice }),
+  })
+}
+
 export function spawnGlobalSession(
   canvasId: string,
   provider: SpawnProvider,

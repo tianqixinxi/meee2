@@ -134,7 +134,7 @@ export default function App() {
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
   const activeCanvasId = canvasList?.activeCanvasId ?? FALLBACK_CANVAS_ID
   // 整个应用的持久化层。CanvasPersistence interface 来自 @meee1/board-core；
-  // meee2 走 HTTP / localStorage 双层实现，meee2 改用 SupabaseCanvasPersistence。
+  // meee2 桌面端通过本地 HTTP API 写入 BoardLayoutStore。
   const persistence = useMemo<CanvasPersistence>(
     () => new HttpCanvasPersistence(activeCanvasId),
     [activeCanvasId],
@@ -425,12 +425,33 @@ export default function App() {
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
 
+  const sessionById = useMemo(() => {
+    const map = new Map<string, NonNullable<typeof boardState.state>['sessions'][number]>()
+    for (const session of boardState.state?.sessions ?? []) {
+      map.set(session.id, session)
+    }
+    return map
+  }, [boardState.state])
+
+  const canAddSessionToCanvas = useCallback((canvasId: string, sessionId: string) => {
+    const canvas = canvasList?.canvases.find((item) => item.id === canvasId)
+    if (!canvas || canvas.scope !== 'team') return true
+    const session = sessionById.get(sessionId)
+    return Boolean(session?.syncEnabled && session.syncTeamId === canvas.teamId)
+  }, [canvasList, sessionById])
+
+  const teamCanvasSyncMessage = 'Sync this session to the team before adding it to a team canvas.'
+
   const handleAddToCanvas = useCallback((sessionId: string) => {
+    if (!canAddSessionToCanvas(activeCanvasId, sessionId)) {
+      pushToast('error', teamCanvasSyncMessage)
+      return
+    }
     addSessionToCanvas(activeCanvasId, sessionId)
       .then(setCanvasList)
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to add session to canvas'))
     setAddToCanvasRequest({ sessionId, bump: Date.now() })
-  }, [activeCanvasId, pushToast])
+  }, [activeCanvasId, canAddSessionToCanvas, pushToast])
 
   const handleHideFromCanvas = useCallback((sessionId: string) => {
     removeSessionFromCanvas(activeCanvasId, sessionId)
@@ -441,9 +462,15 @@ export default function App() {
 
   const handleBulkVisibility = useCallback((mode: 'show' | 'hide', sids?: string[]) => {
     const targetSids = sids ?? boardState.state?.sessions.map((s) => s.id) ?? []
-    if (targetSids.length > 0) {
+    const allowedSids = mode === 'show'
+      ? targetSids.filter((sid) => canAddSessionToCanvas(activeCanvasId, sid))
+      : targetSids
+    if (mode === 'show' && allowedSids.length < targetSids.length) {
+      pushToast('error', teamCanvasSyncMessage)
+    }
+    if (allowedSids.length > 0) {
       Promise.all(
-        targetSids.map((sid) =>
+        allowedSids.map((sid) =>
           mode === 'show'
             ? addSessionToCanvas(activeCanvasId, sid)
             : removeSessionFromCanvas(activeCanvasId, sid),
@@ -452,14 +479,18 @@ export default function App() {
         .then((results) => setCanvasList(results[results.length - 1]))
         .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas sessions'))
     }
-    setBulkVisibilityRequest({ mode, bump: Date.now(), sids })
-  }, [activeCanvasId, boardState.state, pushToast])
+    setBulkVisibilityRequest({ mode, bump: Date.now(), sids: allowedSids })
+  }, [activeCanvasId, boardState.state, canAddSessionToCanvas, pushToast])
 
   const handleSetSessionCanvasMembership = useCallback((
     sessionId: string,
     canvasId: string,
     present: boolean,
   ) => {
+    if (present && !canAddSessionToCanvas(canvasId, sessionId)) {
+      pushToast('error', teamCanvasSyncMessage)
+      return
+    }
     const request = present
       ? addSessionToCanvas(canvasId, sessionId)
       : removeSessionFromCanvas(canvasId, sessionId)
@@ -471,7 +502,7 @@ export default function App() {
       if (present) setAddToCanvasRequest({ sessionId, bump: Date.now() })
       else setHideFromCanvasRequest({ sessionId, bump: Date.now() })
     }
-  }, [activeCanvasId, pushToast])
+  }, [activeCanvasId, canAddSessionToCanvas, pushToast])
 
   const handleSetActiveCanvas = useCallback((canvasId: string) => {
     updateCanvas(canvasId, { active: true })
@@ -860,6 +891,7 @@ export default function App() {
             bulkVisibilityRequest={bulkVisibilityRequest}
             focusSessionRequest={focusSessionRequest}
             canvasPatchRequest={canvasPatchRequest}
+            canAddSessionToCanvas={canAddSessionToCanvas}
             onCanvasPatchApplied={handleCanvasPatchApplied}
             onCountsChange={handleCountsChange}
             onSceneSnapshotChange={handleSceneSnapshotChange}

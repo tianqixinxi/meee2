@@ -265,6 +265,12 @@ struct CanvasInfoDTO: Encodable {
     let workspacePath: String
     let teamId: String?
     let ownerUserId: String?
+    let remoteId: String?
+    let remoteVersion: Int?
+    let syncStatus: String?
+    let dirtySince: String?
+    let lastSyncedAt: String?
+    let lastRemoteUpdatedAt: String?
 }
 
 struct CanvasSessionMembershipDTO: Encodable {
