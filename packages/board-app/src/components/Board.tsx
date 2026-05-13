@@ -22,6 +22,8 @@ import type {
   Selection,
   Session,
 } from '../types'
+import type { ResolvedTheme } from '../theme'
+import { useI18n } from '../i18n'
 import {
   buildChannelHub,
   buildScene,
@@ -844,6 +846,8 @@ interface Props {
   focusSessionRequest: { sessionId: string; bump: number } | null
   /** Assistant-generated canvas patch proposal. Consumed after the user clicks Apply. */
   canvasPatchRequest: CanvasPatchRequest | null
+  /** Resolved app theme, also drives Excalidraw's native theme. */
+  resolvedTheme: ResolvedTheme
   /** Emits a toast-level result after applying an assistant canvas patch. */
   onCanvasPatchApplied: (result: { ok: boolean; message: string }) => void
   /**
@@ -904,6 +908,7 @@ export default function Board({
   bulkVisibilityRequest,
   focusSessionRequest,
   canvasPatchRequest,
+  resolvedTheme,
   onCanvasPatchApplied,
   onCountsChange,
   onSceneSnapshotChange,
@@ -917,6 +922,7 @@ export default function Board({
   persistence,
   initial,
 }: Props) {
+  const { t } = useI18n()
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
   const onNewChannel = useCallback(() => {}, [])
   const [arrangeConfirmOpen, setArrangeConfirmOpen] = useState(false)
@@ -3227,7 +3233,7 @@ export default function Board({
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Excalidraw
-        theme="dark"
+        theme={resolvedTheme}
         initialData={initialDataRef.current as any}
         excalidrawAPI={(a) => setApi(a)}
         onChange={handleChange}
@@ -3240,7 +3246,7 @@ export default function Board({
             Ask AI to spawn…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onPreferences} icon={<PlusSquareIcon />}>
-            Board Settings…
+            {t('action.settings')}…
           </MainMenu.Item>
           <MainMenu.Item onSelect={onFit} icon={<FitIcon />}>
             Fit to content
@@ -3389,7 +3395,7 @@ export default function Board({
           aria-live="polite"
         >
           <span className="canvas-save-status__dot" aria-hidden />
-          {saveStatus === 'saving' ? 'Saving canvas' : 'Canvas saved'}
+          {saveStatus === 'saving' ? t('workmap.saving') : t('workmap.saved')}
         </div>
       )}
       {state && selectedCoordinationGroup && selectedCoordinationSessionId && (

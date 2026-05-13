@@ -424,6 +424,8 @@ interface Props {
   onRenameSession?: (sessionId: string, newTitle: string) => Promise<void> | void
   /** Open Board Settings. */
   onPreferences: () => void
+  /** Whether to render the account footer. Session Map keeps account access in the global toolbar. */
+  showAccountFooter?: boolean
 }
 
 export default function Sidebar({
@@ -445,6 +447,7 @@ export default function Sidebar({
   tabsOverride,
   onRenameSession,
   onPreferences,
+  showAccountFooter = true,
 }: Props) {
   const toast = useToast()
   const [width, setWidth] = useState<number>(readStoredWidth)
@@ -1596,7 +1599,7 @@ export default function Sidebar({
         })()}
       </div>
       {/* ── 底部用户行（mirror Settings > User meee2 identity） ───────── */}
-      <div className="sidebar-footer" ref={accountMenuRef}>
+      {showAccountFooter && <div className="sidebar-footer" ref={accountMenuRef}>
         {accountMenuOpen && (
           <div className="sidebar-account-menu" role="menu">
             <div className="sidebar-account-menu-user">
@@ -1700,7 +1703,7 @@ export default function Sidebar({
             )}
           </span>
         </button>
-      </div>
+      </div>}
     </aside>
     </>
   )

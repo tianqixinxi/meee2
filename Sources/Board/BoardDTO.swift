@@ -69,6 +69,7 @@ struct SessionDTO: Encodable {
     let syncEnabled: Bool
     let syncTeamId: String?
     let syncTeamName: String?
+    let syncPolicy: String
 
     // 注：旧版本曾下发 `displayGroup: "older"` 字段（idle ≥ 1h）。这是 webui
     // 呈现规则，已挪到前端从 lastActivity 派生（see board-app/types.ts
@@ -207,6 +208,7 @@ struct UserProfileDTO: Encodable {
     let dashboardUrl: String
     let connectUrl: String
     let defaultSyncEnabled: Bool
+    let defaultSyncPolicy: String
     let defaultSyncTeamId: String
     let defaultSyncTeamName: String
     let teams: [SyncTeamDTO]
@@ -219,6 +221,27 @@ struct UserProfileSessionSyncDTO: Encodable {
     let pluginDisplayName: String
     let project: String
     let enabled: Bool
+    let syncPolicy: String
+}
+
+struct FeishuConfigDTO: Encodable {
+    let configured: Bool
+    let deliveryStatus: String
+    let defaultGroupId: String
+    let defaultGroupName: String
+    let lastSentAt: String?
+    let lastError: String?
+}
+
+struct FeishuConfigEnvelope: Encodable {
+    let feishu: FeishuConfigDTO
+}
+
+struct FeishuDeliveryResultDTO: Encodable {
+    let ok: Bool
+    let status: String
+    let url: String?
+    let error: String?
 }
 
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body
@@ -294,6 +317,7 @@ enum BoardDTOBuilder {
         let enabled: Bool
         let teamId: String?
         let teamName: String?
+        let policy: Meee2SyncPolicy
     }
 
     /// 缓存 ISO8601 formatter（带毫秒精度）
@@ -440,30 +464,34 @@ enum BoardDTOBuilder {
     private static func syncInfo(forSessionId sessionId: String) -> SyncInfo {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "meee2Connected") else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil, policy: .private)
         }
 
         let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
+        let policies = Meee2OnlinePusher.sessionSyncPolicyMap()
+        let explicitPolicy = aliases.compactMap { policies[$0] }.first
         let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        if !aliases.isDisjoint(with: disabled) {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        if explicitPolicy == nil, !aliases.isDisjoint(with: disabled) {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil, policy: .private)
         }
 
         let enabledByDefault = defaults.bool(forKey: "meee2Online")
         let explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        guard enabledByDefault || !aliases.isDisjoint(with: explicitlyEnabled) else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        let policy = explicitPolicy
+            ?? (enabledByDefault || !aliases.isDisjoint(with: explicitlyEnabled) ? Meee2SyncPolicy.metadata : .private)
+        guard policy.uploadsSession else {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil, policy: .private)
         }
 
         let teams = meee2OnlineTeams()
         let teamId = teams.first?.id ?? defaults.string(forKey: "meee2TeamId") ?? ""
         guard !teamId.isEmpty else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil, policy: .private)
         }
         let teamName = teams.first(where: { $0.id == teamId })?.name
             ?? defaults.string(forKey: "meee2TeamName")
             ?? "Default team"
-        return SyncInfo(enabled: true, teamId: teamId, teamName: teamName)
+        return SyncInfo(enabled: true, teamId: teamId, teamName: teamName, policy: policy)
     }
 
     /// 按 channel 统计 pending + held 计数
@@ -702,7 +730,8 @@ enum BoardDTOBuilder {
             clientKind: clientKind,
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
-            syncTeamName: sync.teamName
+            syncTeamName: sync.teamName,
+            syncPolicy: sync.policy.rawValue
         )
     }
 
@@ -760,7 +789,8 @@ enum BoardDTOBuilder {
             clientKind: "desktop",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
-            syncTeamName: sync.teamName
+            syncTeamName: sync.teamName,
+            syncPolicy: sync.policy.rawValue
         )
     }
 

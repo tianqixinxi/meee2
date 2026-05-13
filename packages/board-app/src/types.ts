@@ -67,7 +67,16 @@ export interface Session {
   syncEnabled: boolean
   syncTeamId: string | null
   syncTeamName: string | null
+  syncPolicy: SyncPolicy
 }
+
+export type SyncPolicy =
+  | 'private'
+  | 'metadata'
+  | 'summary'
+  | 'recentContext'
+  | 'fullTranscript'
+  | 'artifactsOnly'
 
 /// "Older" / 折叠显示的判定：lastActivity ≥ 1h 前 → older。
 /// 这是纯 webui 的呈现规则 —— 后端不再下发 displayGroup 字段。Sidebar 的

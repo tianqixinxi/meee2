@@ -9,6 +9,7 @@ import type {
   SelectedCanvasElementContext,
   SpawnProvider,
   CoordinationGroup,
+  SyncPolicy,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -166,6 +167,7 @@ export interface UserProfile {
   dashboardUrl: string
   connectUrl: string
   defaultSyncEnabled: boolean
+  defaultSyncPolicy: SyncPolicy
   defaultSyncTeamId: string
   defaultSyncTeamName: string
   teams: Array<{
@@ -180,6 +182,7 @@ export interface UserProfile {
     pluginDisplayName: string
     project: string
     enabled: boolean
+    syncPolicy: SyncPolicy
   }>
 }
 
@@ -201,10 +204,67 @@ export function openMeee2Settings(): Promise<{ ok: boolean }> {
 
 export function updateUserProfile(input: {
   defaultSyncEnabled?: boolean
-  sessionSync?: { sessionId: string; enabled: boolean }
+  sessionSync?: { sessionId: string; enabled?: boolean; syncPolicy?: SyncPolicy }
 }): Promise<UserProfile> {
   return jsonRequest<UserProfile>('/api/user-profile', {
     method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface FeishuConfig {
+  configured: boolean
+  deliveryStatus: 'notConfigured' | 'ready' | 'lastSent' | 'failed' | string
+  defaultGroupId: string
+  defaultGroupName: string
+  lastSentAt: string | null
+  lastError: string | null
+}
+
+export interface FeishuDeliveryResult {
+  ok: boolean
+  status: string
+  url: string | null
+  error: string | null
+}
+
+export function fetchFeishuConfig(): Promise<{ feishu: FeishuConfig }> {
+  return jsonRequest<{ feishu: FeishuConfig }>('/api/feishu/config')
+}
+
+export function updateFeishuConfig(input: {
+  configured?: boolean
+  defaultGroupId?: string
+  defaultGroupName?: string
+}): Promise<{ feishu: FeishuConfig }> {
+  return jsonRequest<{ feishu: FeishuConfig }>('/api/feishu/config', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+export function testFeishuNotification(): Promise<FeishuDeliveryResult> {
+  return jsonRequest<FeishuDeliveryResult>('/api/feishu/test', { method: 'POST' })
+}
+
+export function sendFeishuCard(input: {
+  kind: string
+  payload: Record<string, unknown>
+}): Promise<FeishuDeliveryResult> {
+  return jsonRequest<FeishuDeliveryResult>('/api/feishu/send-card', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function createFeishuDoc(input: {
+  kind?: string
+  title: string
+  content: string
+  workroomId?: string
+}): Promise<FeishuDeliveryResult> {
+  return jsonRequest<FeishuDeliveryResult>('/api/feishu/create-doc', {
+    method: 'POST',
     body: JSON.stringify(input),
   })
 }

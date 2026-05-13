@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>meee2 Architecture</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#overview" aria-label="meee2 architecture home">
+        <span class="brand-mark" aria-hidden="true">m2</span>
+        <span>
+          <strong>meee2</strong>
+          <small>AI Work-in-Progress Layer</small>
+        </span>
+      </a>
+      <nav class="topnav" aria-label="Page sections">
+        <a href="#architecture" data-i18n="nav.architecture">架构</a>
+        <a href="#data-flow" data-i18n="nav.dataFlow">数据流</a>
+        <a href="#model" data-i18n="nav.model">模型</a>
+        <a href="#sync" data-i18n="nav.sync">同步</a>
+        <a href="#feishu" data-i18n="nav.feishu">飞书</a>
+        <a href="#usecases" data-i18n="nav.usecases">Use cases</a>
+        <a href="#roadmap" data-i18n="nav.roadmap">Roadmap</a>
+      </nav>
+      <div class="top-actions" aria-label="Display settings">
+        <button class="top-action" type="button" data-theme-toggle>Light</button>
+        <button class="top-action" type="button" data-locale-toggle>EN</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="overview" class="overview">
+        <div class="overview-copy">
+          <p class="eyebrow" data-i18n="hero.eyebrow">Session-first · Local-first · Selective-sync</p>
+          <h1 data-i18n="hero.title">让工程团队看见、控制并协作处理本机正在运行的 AI 编程工作。</h1>
+          <p class="lead" data-i18n="hero.lead">
+            meee2 不做通用白板，也不替代 Jira / Linear。它把 Claude Code、Codex、Cursor、OpenClaw
+            等本地 AI session 变成可观察、可同步、可接力、可审查的真实工作执行层。
+          </p>
+          <div class="overview-actions" aria-label="Primary architecture anchors">
+            <a class="primary-action" href="#architecture" data-i18n="hero.primary">查看架构</a>
+            <a class="secondary-action" href="#sync" data-i18n="hero.secondary">查看隐私边界</a>
+          </div>
+        </div>
+        <div class="radar-visual" aria-label="Work radar visualization">
+          <div class="radar-header">
+            <span>Personal AI Cockpit</span>
+            <strong>Live Work Radar</strong>
+          </div>
+          <div class="radar-grid">
+            <article class="radar-tile attention">
+              <span>Needs attention</span>
+              <strong>2</strong>
+              <small>permission / blocked</small>
+            </article>
+            <article class="radar-tile running">
+              <span>Running</span>
+              <strong>5</strong>
+              <small>Claude · Codex · Cursor</small>
+            </article>
+            <article class="radar-tile done">
+              <span>Recently done</span>
+              <strong>3</strong>
+              <small>PR / tests / handoff</small>
+            </article>
+            <article class="radar-tile risk">
+              <span>Risk</span>
+              <strong>1</strong>
+              <small>outside repo</small>
+            </article>
+          </div>
+          <div class="session-strip">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </div>
+      </section>
+
+      <section id="surfaces" class="section-band compact">
+        <div class="section-heading">
+          <p class="eyebrow" data-i18n="surfaces.eyebrow">Product UI</p>
+          <h2 data-i18n="surfaces.title">六个入口统一成 Work Surfaces</h2>
+          <p data-i18n="surfaces.copy">前五个是结构化工作面，Session Map 是空间化 session 地图。它们都读取 Session Graph，并共享同一套主题、语言和色彩体系。</p>
+        </div>
+        <div class="surface-grid">
+          <article><strong>Cockpit</strong><span data-i18n="surfaces.cockpit">个人工作面</span></article>
+          <article><strong>Team Radar</strong><span data-i18n="surfaces.team">团队态势工作面</span></article>
+          <article><strong>Workroom</strong><span data-i18n="surfaces.workroom">接力协作工作面</span></article>
+          <article><strong>Review</strong><span data-i18n="surfaces.review">证据审查工作面</span></article>
+          <article><strong>Memory</strong><span data-i18n="surfaces.memory">团队记忆工作面</span></article>
+          <article><strong>Session Map</strong><span data-i18n="surfaces.map">空间化地图工作面</span></article>
+        </div>
+      </section>
+
+      <section class="section-band compact" aria-label="Positioning">
+        <div class="positioning">
+          <article>
+            <span>不是</span>
+            <strong>AI 白板</strong>
+            <p>不把自由画布作为主心智，不做 sticky note 或 Miro 式泛协作。</p>
+          </article>
+          <article>
+            <span>不是</span>
+            <strong>项目管理</strong>
+            <p>Issue / PR 是关联对象，不在 meee2 里重建 Jira / Linear。</p>
+          </article>
+          <article>
+            <span>是</span>
+            <strong>AI WIP Layer</strong>
+            <p>默认看状态、证据、风险、产出和可接管点，而不是 transcript 流。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">System architecture</p>
+          <h2>从本机 AI 工具到团队协作现场</h2>
+          <p>meee2 的关键不是再发明 agent runtime，而是观察真实工作、建立 Session Graph，并按用户选择同步到团队视图。</p>
+        </div>
+
+        <div class="architecture-map" data-active-layer="runtime">
+          <aside class="layer-list" aria-label="Architecture layers">
+            <button class="layer-button active" type="button" data-layer="tools">
+              <span>01</span>
+              Local AI Tools
+            </button>
+            <button class="layer-button" type="button" data-layer="runtime">
+              <span>02</span>
+              Local Runtime
+            </button>
+            <button class="layer-button" type="button" data-layer="graph">
+              <span>03</span>
+              Session Graph
+            </button>
+            <button class="layer-button" type="button" data-layer="sync">
+              <span>04</span>
+              Privacy & Sync
+            </button>
+            <button class="layer-button" type="button" data-layer="views">
+              <span>05</span>
+              Team Work Views
+            </button>
+            <button class="layer-button" type="button" data-layer="context">
+              <span>06</span>
+              Context Engine
+            </button>
+            <button class="layer-button" type="button" data-layer="integrations">
+              <span>07</span>
+              Feishu Integrations
+            </button>
+          </aside>
+
+          <div class="flow-panel" aria-live="polite">
+            <div class="flow-stack">
+              <div class="flow-node" data-layer-node="tools">
+                <strong>Claude Code / Codex / Cursor / OpenClaw</strong>
+                <span>用户保持原工作方式，session 真实发生在本机。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="runtime">
+                <strong>session discovery / transcript reader / permission bridge</strong>
+                <span>发现 session、解析最近消息、判断状态、保留跳回 terminal / IDE 的能力。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="graph">
+                <strong>session / repo / status / risk / output / handoff</strong>
+                <span>把散乱 session 转成可过滤、可审查、可接力的工作图谱。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="sync">
+                <strong>private / metadata / summary / recent context / full / artifacts</strong>
+                <span>同步级别是一等边界，默认不上传完整 transcript。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="views">
+                <strong>Personal Cockpit / Team Radar / Workroom / Review / Memory</strong>
+                <span>先让个人 5 分钟 aha，再把公开 AI 工作变成团队 work radar。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="context">
+                <strong>summary / blocker / handoff / standup / reviewer brief</strong>
+                <span>不是再加聊天框，而是把 transcript 转成协作记忆。</span>
+              </div>
+              <div class="flow-arrow" aria-hidden="true"></div>
+              <div class="flow-node" data-layer-node="integrations">
+                <strong>Feishu IM cards / Feishu docs</strong>
+                <span>外部协作第一版只做飞书生态；GitHub / Linear / Jira 先保留 evidence 占位。</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="detailed-architecture" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Detailed architecture diagram</p>
+          <h2>本机感知、策略裁剪、团队协作、飞书输出</h2>
+          <p>meee2 的架构分成本机控制面和团队协作面。权限确认、terminal/editor jump back、transcript 读取留在本机；团队侧只接收 sync policy 允许后的 payload。</p>
+        </div>
+
+        <div class="system-blueprint" aria-label="Detailed meee2 architecture diagram">
+          <div class="blueprint-column local-plane">
+            <div class="plane-title">
+              <span>Local machine</span>
+              <strong>本机 AI 工作感知层</strong>
+            </div>
+            <div class="diagram-block source">
+              <span>AI tools</span>
+              <strong>Claude Code · Codex · Cursor · OpenClaw</strong>
+              <small>真实 session、transcript、工具调用、权限请求</small>
+            </div>
+            <div class="diagram-arrow vertical" aria-hidden="true"></div>
+            <div class="diagram-block runtime">
+              <span>Local Runtime</span>
+              <strong>Discovery · Transcript Reader · Status Resolver</strong>
+              <small>发现 session、读最近消息、识别 blocked / done / failed</small>
+            </div>
+            <div class="runtime-grid">
+              <div>Permission bridge</div>
+              <div>Jump back</div>
+              <div>Git enrichment</div>
+              <div>Local history</div>
+            </div>
+            <div class="diagram-arrow vertical" aria-hidden="true"></div>
+            <div class="diagram-block graph">
+              <span>Session Graph</span>
+              <strong>Session · Risk · Artifact · Handoff</strong>
+              <small>把不同 agent 的工作统一成 session-first 图谱</small>
+            </div>
+          </div>
+
+          <div class="blueprint-gate">
+            <div class="gate-card">
+              <span>Policy gate</span>
+              <strong>Selective Sync</strong>
+              <small>private / metadata / summary / recentContext / fullTranscript / artifactsOnly</small>
+            </div>
+            <div class="gate-rules">
+              <div>Private: local only</div>
+              <div>Metadata: no messages</div>
+              <div>Full transcript: explicit opt-in</div>
+            </div>
+          </div>
+
+          <div class="blueprint-column team-plane">
+            <div class="plane-title">
+              <span>meee2 Online</span>
+              <strong>团队 AI 工作现场</strong>
+            </div>
+            <div class="diagram-block online">
+              <span>Team Workspace</span>
+              <strong>Team Radar · Workroom · Review · Memory</strong>
+              <small>团队只看允许同步后的状态、证据、风险和接力点</small>
+            </div>
+            <div class="view-grid">
+              <div>
+                <strong>Team Radar</strong>
+                <small>active / blocked / done</small>
+              </div>
+              <div>
+                <strong>Workroom</strong>
+                <small>1-N sessions handoff</small>
+              </div>
+              <div>
+                <strong>Review Room</strong>
+                <small>PR 背后的执行证据</small>
+              </div>
+              <div>
+                <strong>Memory</strong>
+                <small>standup / audit / history</small>
+              </div>
+            </div>
+            <div class="diagram-arrow vertical" aria-hidden="true"></div>
+            <div class="diagram-block context">
+              <span>Context Engine</span>
+              <strong>Summary · Blocker · Rescue · Reviewer Brief</strong>
+              <small>把 transcript tail 和 session state 转成协作上下文</small>
+            </div>
+          </div>
+
+          <div class="blueprint-column integration-plane">
+            <div class="plane-title">
+              <span>External output</span>
+              <strong>飞书优先</strong>
+            </div>
+            <div class="diagram-block feishu">
+              <span>Feishu IM</span>
+              <strong>Blocked / Done / Review / Handoff cards</strong>
+              <small>卡片内容受 sync policy 约束</small>
+            </div>
+            <div class="diagram-arrow vertical" aria-hidden="true"></div>
+            <div class="diagram-block feishu">
+              <span>Feishu Docs</span>
+              <strong>Handoff Doc · Reviewer Brief · Daily Standup</strong>
+              <small>首版不做多维表格、审批流、复杂知识库同步</small>
+            </div>
+            <div class="placeholder-stack">
+              <span>Deferred real APIs</span>
+              <small>GitHub / CI / Linear / Jira 先保留本地 evidence 和 UI 占位</small>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="data-flow" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Data flow diagram</p>
+          <h2>从 session 事件到团队可见，再到飞书输出</h2>
+          <p>数据流转的核心原则：先在本机形成可信 session state，再通过 policy gate 裁剪，最后进入 meee2 Online 和飞书。</p>
+        </div>
+
+        <div class="dataflow-board" aria-label="Detailed data flow diagram">
+          <div class="swimlane-labels" aria-hidden="true">
+            <span>Local tools</span>
+            <span>Local runtime</span>
+            <span>Policy gate</span>
+            <span>Online workspace</span>
+            <span>Feishu</span>
+          </div>
+          <div class="dataflow-row">
+            <div class="data-step" data-step="1">
+              <span>1</span>
+              <strong>Session event</strong>
+              <small>agent starts, transcript appended, tool call, permission request, status changed</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step" data-step="2">
+              <span>2</span>
+              <strong>Normalize</strong>
+              <small>provider、repo、branch、cwd、status、current step、last activity</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step" data-step="3">
+              <span>3</span>
+              <strong>Extract risk & evidence</strong>
+              <small>blocked reason、permission、test failed、changed files、artifact hints</small>
+            </div>
+          </div>
+
+          <div class="dataflow-row">
+            <div class="data-step" data-step="4">
+              <span>4</span>
+              <strong>Update Session Graph</strong>
+              <small>Session → Risks / Artifacts / Handoff / Comments / Evidence</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step policy-step" data-step="5">
+              <span>5</span>
+              <strong>Apply sync policy</strong>
+              <small>private stops here; metadata strips messages; full transcript requires opt-in</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step" data-step="6">
+              <span>6</span>
+              <strong>Push allowed payload</strong>
+              <small>session upsert、recent context append、artifact-only evidence</small>
+            </div>
+          </div>
+
+          <div class="dataflow-row">
+            <div class="data-step" data-step="7">
+              <span>7</span>
+              <strong>Render team views</strong>
+              <small>Team Radar、Workroom、Review Room、Memory</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step" data-step="8">
+              <span>8</span>
+              <strong>Generate collaboration context</strong>
+              <small>blocked alert、combined handoff、reviewer brief、daily standup</small>
+            </div>
+            <div class="data-connector" aria-hidden="true"></div>
+            <div class="data-step feishu-step" data-step="9">
+              <span>9</span>
+              <strong>Deliver to Feishu</strong>
+              <small>IM cards and docs use only allowed payload, never raw local transcript by default</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="data-contracts">
+          <article>
+            <span>Metadata payload</span>
+            <code>owner / provider / repo / branch / status / blocker</code>
+          </article>
+          <article>
+            <span>Summary payload</span>
+            <code>metadata + currentStep + recap + risks</code>
+          </article>
+          <article>
+            <span>Recent context payload</span>
+            <code>summary + recentMessages[N]</code>
+          </article>
+          <article>
+            <span>Artifacts payload</span>
+            <code>PR / diff / test / deploy / file evidence</code>
+          </article>
+        </div>
+      </section>
+
+      <section id="model" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Core model</p>
+          <h2>Session 是第一对象</h2>
+          <p>Task / Issue / PR 是上层意图；session 才是真实执行单元。一个目标可以关联多个 session，一个 session 可以产生多个证据。</p>
+        </div>
+
+        <div class="model-grid">
+          <article class="model-card primary-model">
+            <span class="model-chip">Session</span>
+            <h3>AI 工作执行单元</h3>
+            <ul>
+              <li>who: owner / agent / machine</li>
+              <li>where: repo / branch / cwd / terminal</li>
+              <li>what: title / goal / current step / status</li>
+              <li>output: diff / commit / PR / test / deploy</li>
+              <li>risk: permission / blocked / failed / context low</li>
+              <li>handoff: compact context / resume point</li>
+            </ul>
+          </article>
+          <article class="graph-card">
+            <h3>Session Graph</h3>
+            <div class="graph-lines" aria-label="Session graph relationship">
+              <div>Goal / Issue / PR</div>
+              <span></span>
+              <div>1..N Sessions</div>
+              <span></span>
+              <div>Artifacts / Risks / Handoffs / Comments / Evidence</div>
+            </div>
+          </article>
+          <article class="model-card">
+            <span class="model-chip">Workroom</span>
+            <h3>替代旧 global session / channel</h3>
+            <p>Workroom 是围绕 1-N 个真实 session 的临时协作现场，可生成 combined handoff、rescue context 和 reviewer brief。</p>
+          </article>
+          <article class="model-card">
+            <span class="model-chip">Evidence</span>
+            <h3>先可信，再统计</h3>
+            <p>优先沉淀 changed files、测试结果、PR、deploy 和 failed attempts。analytics 必须建立在可信证据之后。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="sync" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Selective sync</p>
+          <h2>同步策略就是数据边界</h2>
+          <p>用户可以把 AI 工作带进团队，但不必把整个电脑或完整 transcript 暴露给团队。</p>
+        </div>
+
+        <div class="sync-workbench">
+          <div class="policy-tabs" role="tablist" aria-label="Sync policies">
+            <button class="policy-tab active" type="button" data-policy="private">Private</button>
+            <button class="policy-tab" type="button" data-policy="metadata">Metadata</button>
+            <button class="policy-tab" type="button" data-policy="summary">Summary</button>
+            <button class="policy-tab" type="button" data-policy="recentContext">Recent context</button>
+            <button class="policy-tab" type="button" data-policy="fullTranscript">Full transcript</button>
+            <button class="policy-tab" type="button" data-policy="artifactsOnly">Artifacts only</button>
+          </div>
+          <div class="payload-preview">
+            <div>
+              <h3 id="policy-title">Private</h3>
+              <p id="policy-copy">只在本机，不上传。</p>
+            </div>
+            <pre id="policy-payload">{
+  "uploads": []
+}</pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="feishu" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Feishu-first external integration</p>
+          <h2>真实外部集成先只做飞书生态</h2>
+          <p>本机不直连飞书，也不保存 app secret。本机只上传 sync policy 允许的 payload，由 meee2 Online 负责发飞书 IM 卡片和飞书文档。</p>
+        </div>
+
+        <div class="feishu-layout">
+          <article class="feishu-panel">
+            <h3>Feishu IM cards</h3>
+            <p>Team Radar 触发 blocked、permission required、done、needs review、handoff created 和 daily standup 卡片。</p>
+            <ul>
+              <li>session title / owner / provider</li>
+              <li>repo / branch / status / risk</li>
+              <li>current step or summary</li>
+              <li>Open Radar / Open Workroom / Mark reviewed</li>
+            </ul>
+          </article>
+          <article class="feishu-panel">
+            <h3>Feishu docs</h3>
+            <p>Workroom、Review Room、Memory 都先输出到飞书文档，而不是扩 Slack / GitHub / Linear / Jira 的真实 API。</p>
+            <ul>
+              <li>handoff doc</li>
+              <li>reviewer brief</li>
+              <li>daily AI standup</li>
+              <li>project activity summary</li>
+            </ul>
+          </article>
+          <article class="delivery-card">
+            <div class="delivery-status">
+              <span>Delivery status</span>
+              <strong>ready</strong>
+            </div>
+            <div class="delivery-body">
+              <strong>Blocked session</strong>
+              <p>Metadata-only card: repo, branch, status, blocker. No recent messages. No transcript.</p>
+              <div class="button-row">
+                <span>Open Radar</span>
+                <span>Open Workroom</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="usecases" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">User use cases</p>
+          <h2>不同角色看到的是同一批 session 的不同工作视角</h2>
+          <p>meee2 不把所有人拉进同一个 transcript 流，而是根据角色展示状态、风险、证据和接力点。</p>
+        </div>
+
+        <div class="usecase-grid">
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>个人开发者</span>
+              <strong>同时跑多个 AI session</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>Claude、Codex、Cursor 同时执行不同任务。</dd>
+              <dt>meee2 行为</dt>
+              <dd>Personal Cockpit 分组展示 running、blocked、done，并提示 permission required。</dd>
+              <dt>产出</dt>
+              <dd>少切窗口、不漏权限请求，一键跳回真实 terminal / editor。</dd>
+            </dl>
+          </article>
+
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>重度 AI coder</span>
+              <strong>agent 卡住或跑偏</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>测试失败、上下文不足、长时间无活动、越界修改。</dd>
+              <dt>meee2 行为</dt>
+              <dd>Session Detail 展示 risk、recent summary、changed files 和 handoff context。</dd>
+              <dt>产出</dt>
+              <dd>快速定位阻塞，修正 prompt 或直接接管执行现场。</dd>
+            </dl>
+          </article>
+
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>Tech lead</span>
+              <strong>看团队 AI 工作进展</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>团队成员本机公开 metadata / summary 级别 session。</dd>
+              <dt>meee2 行为</dt>
+              <dd>Team Radar 按 owner、repo、status、blocker 聚合。</dd>
+              <dt>产出</dt>
+              <dd>不用逐个问人，就知道谁在跑、谁卡住、什么快完成。</dd>
+            </dl>
+          </article>
+
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>远程团队</span>
+              <strong>异步协作和接力</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>多个 session 围绕同一个 repo / incident / feature 推进。</dd>
+              <dt>meee2 行为</dt>
+              <dd>创建 Workroom，选择 1-N 个 session，生成 combined handoff。</dd>
+              <dt>产出</dt>
+              <dd>队友围绕 session 评论和接手，而不是复制粘贴长 transcript。</dd>
+            </dl>
+          </article>
+
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>Reviewer</span>
+              <strong>理解 AI 生成 PR 背后的过程</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>PR 有多个相关 session、失败尝试和测试证据。</dd>
+              <dt>meee2 行为</dt>
+              <dd>Review Room 组织相关 sessions、key decisions、failed attempts、tests。</dd>
+              <dt>产出</dt>
+              <dd>review 不只看最终 diff，还能看关键执行过程和证据可信度。</dd>
+            </dl>
+          </article>
+
+          <article class="usecase-card">
+            <div class="usecase-head">
+              <span>安全敏感团队</span>
+              <strong>协作但不暴露完整上下文</strong>
+            </div>
+            <dl>
+              <dt>触发</dt>
+              <dd>团队需要可见 AI WIP，但不能默认上传代码和 transcript。</dd>
+              <dt>meee2 行为</dt>
+              <dd>默认 private / metadata，飞书卡片和文档只使用 policy 允许 payload。</dd>
+              <dt>产出</dt>
+              <dd>团队获得状态感知，同时保留数据治理和审计边界。</dd>
+            </dl>
+          </article>
+        </div>
+      </section>
+
+      <section id="roadmap" class="section-band">
+        <div class="section-heading">
+          <p class="eyebrow">Roadmap</p>
+          <h2>从本地 aha 到团队 AI 工作记忆</h2>
+        </div>
+        <div class="roadmap">
+          <article>
+            <span>Phase 0</span>
+            <strong>Remove Channel Capability</strong>
+            <p>清掉旧 A2A channel / msg / 白板协作心智。</p>
+          </article>
+          <article>
+            <span>Phase 1</span>
+            <strong>Personal AI Cockpit</strong>
+            <p>本地发现、状态分组、jump back、permission/blocked 提醒。</p>
+          </article>
+          <article>
+            <span>Phase 2</span>
+            <strong>Selective Sync + Team Radar</strong>
+            <p>session 级 sync policy，团队可见的 active / blocked / done。</p>
+          </article>
+          <article>
+            <span>Phase 3</span>
+            <strong>Workroom + Handoff</strong>
+            <p>选中多个 session 创建临时协作现场，生成 rescue / handoff context。</p>
+          </article>
+          <article>
+            <span>Phase 4</span>
+            <strong>Feishu Evidence Output</strong>
+            <p>飞书 IM 卡片、飞书文档、reviewer brief、daily standup。</p>
+          </article>
+          <article>
+            <span>Phase 5</span>
+            <strong>Team Memory & Audit</strong>
+            <p>历史搜索、retention、audit、self-host / enterprise controls。</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>meee2 architecture readme</span>
+      <a href="#overview">Back to top</a>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
