@@ -26,6 +26,7 @@ import './planner.css'
 interface Props {
   canvasId: string
   canvasName: string
+  onOpenSubCanvas?: (canvasId: string) => void
 }
 
 const nodeTypes = {
@@ -40,7 +41,7 @@ export function PlannerGraph(props: Props) {
   )
 }
 
-function PlannerGraphInner({ canvasId, canvasName }: Props) {
+function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
@@ -70,8 +71,9 @@ function PlannerGraphInner({ canvasId, canvasName }: Props) {
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       proposal: previewActive ? null : proposal,
+      onOpenSubCanvas,
     })
-  }, [plannerState, previewActive, proposal])
+  }, [plannerState, previewActive, proposal, onOpenSubCanvas])
 
   useEffect(() => {
     window.setTimeout(() => {

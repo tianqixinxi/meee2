@@ -88,6 +88,7 @@ struct PlanningNode: Codable, Equatable {
     var chatThreadId: String?
     var source: PlanningNodeSource?
     var dependsOnNodeIds: [String]?
+    var subCanvasId: String?
 
     init(
         id: String,
@@ -102,7 +103,8 @@ struct PlanningNode: Codable, Equatable {
         sessionId: String? = nil,
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = .planner,
-        dependsOnNodeIds: [String]? = nil
+        dependsOnNodeIds: [String]? = nil,
+        subCanvasId: String? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -117,6 +119,7 @@ struct PlanningNode: Codable, Equatable {
         self.chatThreadId = chatThreadId
         self.source = source
         self.dependsOnNodeIds = dependsOnNodeIds
+        self.subCanvasId = subCanvasId
     }
 }
 
@@ -141,6 +144,7 @@ struct PlanChange: Codable, Equatable {
     var ioSchema: IOSchema?
     var contextSources: [ContextSource]?
     var dependsOnNodeIds: [String]?
+    var subCanvasId: String?
 
     init(
         kind: Kind,
@@ -150,7 +154,8 @@ struct PlanChange: Codable, Equatable {
         status: PlanningNodeStatus?,
         ioSchema: IOSchema? = nil,
         contextSources: [ContextSource]? = nil,
-        dependsOnNodeIds: [String]? = nil
+        dependsOnNodeIds: [String]? = nil,
+        subCanvasId: String? = nil
     ) {
         self.kind = kind
         self.node = node
@@ -160,6 +165,7 @@ struct PlanChange: Codable, Equatable {
         self.ioSchema = ioSchema
         self.contextSources = contextSources
         self.dependsOnNodeIds = dependsOnNodeIds
+        self.subCanvasId = subCanvasId
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
@@ -172,7 +178,8 @@ struct PlanChange: Codable, Equatable {
         status: PlanningNodeStatus? = nil,
         ioSchema: IOSchema? = nil,
         contextSources: [ContextSource]? = nil,
-        dependsOnNodeIds: [String]? = nil
+        dependsOnNodeIds: [String]? = nil,
+        subCanvasId: String? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .updateNode,
@@ -182,7 +189,8 @@ struct PlanChange: Codable, Equatable {
             status: status,
             ioSchema: ioSchema,
             contextSources: contextSources,
-            dependsOnNodeIds: dependsOnNodeIds
+            dependsOnNodeIds: dependsOnNodeIds,
+            subCanvasId: subCanvasId
         )
     }
 }
@@ -208,6 +216,14 @@ struct NodeStateSnapshot: Codable, Equatable {
     var runState: NodeRunState
     var blockers: [String]
     var artifactRefs: [String]
+    var needsOwnerReview: Bool
+}
+
+struct SubCanvasSummary: Codable, Equatable {
+    var subCanvasId: String
+    var runState: NodeRunState
+    var blockers: [String]
+    var pendingProposalCount: Int
     var needsOwnerReview: Bool
 }
 
@@ -381,7 +397,8 @@ enum PlannerProposalValidator {
                     change.status != nil ||
                     change.ioSchema != nil ||
                     change.contextSources != nil ||
-                    change.dependsOnNodeIds != nil else {
+                    change.dependsOnNodeIds != nil ||
+                    change.subCanvasId != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             }
@@ -477,7 +494,8 @@ final class PlannerCoreService {
                 executorType: .mock,
                 doerId: "B",
                 status: .done,
-                dependsOnNodeIds: ["\(canvasId)-node-3"]
+                dependsOnNodeIds: ["\(canvasId)-node-3"],
+                subCanvasId: "\(canvasId)-subcanvas-node-state"
             )
         ]
     }
@@ -529,6 +547,9 @@ final class PlannerCoreService {
                 if let dependsOnNodeIds = change.dependsOnNodeIds {
                     updatedNodes[index].dependsOnNodeIds = dependsOnNodeIds
                 }
+                if let subCanvasId = change.subCanvasId {
+                    updatedNodes[index].subCanvasId = subCanvasId
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
@@ -556,10 +577,51 @@ final class PlannerCoreService {
                 nodeId: node.id,
                 runState: runState,
                 blockers: blockers(for: node),
-                artifactRefs: node.status == .done ? ["artifact://\(node.id)/output"] : [],
+                artifactRefs: artifactRefs(for: node),
                 needsOwnerReview: node.status == .blocked || (node.status != .planning && node.executionMode == .signOff)
             )
         }
+    }
+
+    func summarizeSubCanvas(
+        subCanvasId: String,
+        states: [NodeStateSnapshot],
+        proposals: [PlanProposal]
+    ) -> SubCanvasSummary {
+        let pendingProposalCount = proposals.filter { proposal in
+            proposal.canvasId == subCanvasId && (proposal.status == .pending || proposal.status == .approved)
+        }.count
+        let scopedStates = states
+        let blockers = scopedStates.flatMap(\.blockers)
+        let runState: NodeRunState
+        if scopedStates.contains(where: { $0.runState == .blocked }) {
+            runState = .blocked
+        } else if pendingProposalCount > 0 || scopedStates.contains(where: { $0.needsOwnerReview }) {
+            runState = .planning
+        } else if !scopedStates.isEmpty && scopedStates.allSatisfy({ $0.runState == .done }) {
+            runState = .done
+        } else if scopedStates.contains(where: { $0.runState == .running }) {
+            runState = .running
+        } else if scopedStates.contains(where: { $0.runState == .planning }) {
+            runState = .planning
+        } else {
+            runState = .waiting
+        }
+        return SubCanvasSummary(
+            subCanvasId: subCanvasId,
+            runState: runState,
+            blockers: blockers,
+            pendingProposalCount: pendingProposalCount,
+            needsOwnerReview: pendingProposalCount > 0 || scopedStates.contains(where: \.needsOwnerReview)
+        )
+    }
+
+    private func artifactRefs(for node: PlanningNode) -> [String] {
+        var refs = node.status == .done ? ["artifact://\(node.id)/output"] : []
+        if let subCanvasId = node.subCanvasId {
+            refs.append("subcanvas:\(subCanvasId)")
+        }
+        return refs
     }
 
     private func blockers(for node: PlanningNode) -> [String] {

@@ -107,6 +107,23 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(updated.first { $0.id == "canvas-a-node-3" }?.status, .blocked)
     }
 
+    func testApplyNodeChangeCanAttachSubCanvas() throws {
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+        let proposal = service.approve(PlanProposal(
+            id: "proposal-subcanvas",
+            canvasId: "canvas-a",
+            summary: "Attach sub canvas",
+            changes: [
+                .updateNode(id: nodes[0].id, subCanvasId: "canvas-a-child")
+            ],
+            status: .pending
+        ))
+
+        let updated = try service.applyNodeChange(nodes: nodes, proposal: proposal)
+
+        XCTAssertEqual(updated.first { $0.id == nodes[0].id }?.subCanvasId, "canvas-a-child")
+    }
+
     func testReadNodeStateExposesBlockedNodeToPlanner() {
         let nodes = service.nodeMock(canvasId: "canvas-a")
 
@@ -127,6 +144,41 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(planning?.runState, .planning)
         XCTAssertEqual(planning?.blockers, ["Node is replanning after dependency or schema change"])
         XCTAssertEqual(planning?.needsOwnerReview, false)
+    }
+
+    func testSubCanvasNodeExposesArtifactRefAndSummary() {
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+        let states = service.readNodeState(nodes: nodes)
+        let subCanvasNode = nodes.first { $0.subCanvasId != nil }
+        let subCanvasState = states.first { $0.nodeId == subCanvasNode?.id }
+
+        XCTAssertEqual(subCanvasState?.artifactRefs.last, "subcanvas:\(subCanvasNode?.subCanvasId ?? "")")
+
+        let summary = service.summarizeSubCanvas(
+            subCanvasId: "child-canvas",
+            states: [
+                NodeStateSnapshot(
+                    nodeId: "child-node",
+                    runState: .blocked,
+                    blockers: ["child blocked"],
+                    artifactRefs: [],
+                    needsOwnerReview: true
+                )
+            ],
+            proposals: [
+                PlanProposal(
+                    id: "child-proposal",
+                    canvasId: "child-canvas",
+                    summary: "Review child",
+                    changes: [],
+                    status: .pending
+                )
+            ]
+        )
+
+        XCTAssertEqual(summary.runState, .blocked)
+        XCTAssertEqual(summary.pendingProposalCount, 1)
+        XCTAssertEqual(summary.needsOwnerReview, true)
     }
 
     func testMockPlannerGeneratePlanReturnsPendingProposal() async throws {

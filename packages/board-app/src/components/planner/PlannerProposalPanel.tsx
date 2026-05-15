@@ -148,6 +148,7 @@ function ProposalChangeRow({ change }: { change: PlanChange }) {
       {change.ioSchema && <em>schema</em>}
       {change.contextSources && <em>context</em>}
       {change.dependsOnNodeIds && <em>deps {change.dependsOnNodeIds.length}</em>}
+      {change.subCanvasId && <em>sub-canvas</em>}
     </div>
   )
 }

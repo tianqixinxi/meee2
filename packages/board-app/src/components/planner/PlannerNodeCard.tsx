@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
+  ExternalLink,
   GitBranch,
   PlayCircle,
   Route,
@@ -72,6 +73,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         <div className="planner-node__session-ref">
           session {node.sessionId}
         </div>
+      )}
+
+      {node.subCanvasId && (
+        <button
+          type="button"
+          className="planner-node__subcanvas"
+          onClick={(event) => {
+            event.stopPropagation()
+            data.onOpenSubCanvas?.(node.subCanvasId as string)
+          }}
+          title="Open sub-canvas"
+        >
+          <ExternalLink size={12} aria-hidden />
+          Open sub-canvas
+        </button>
       )}
 
       {blockers.length > 0 && (

@@ -12,6 +12,7 @@ export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
   previewKind: PlannerPreviewKind
+  onOpenSubCanvas?: (canvasId: string) => void
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -21,6 +22,7 @@ interface PlannerGraphInput {
   nodes: PlanningNode[]
   states: NodeStateSnapshot[]
   proposal?: PlanProposal | null
+  onOpenSubCanvas?: (canvasId: string) => void
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -43,6 +45,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         node,
         state: stateByNodeId.get(node.id) ?? null,
         previewKind,
+        onOpenSubCanvas: input.onOpenSubCanvas,
       },
     }
   })
@@ -110,6 +113,7 @@ function applyUpdateOverlay(
       ioSchema: change.ioSchema ?? overlay[index].node.ioSchema,
       contextSources: change.contextSources ?? overlay[index].node.contextSources,
       dependsOnNodeIds: change.dependsOnNodeIds ?? overlay[index].node.dependsOnNodeIds,
+      subCanvasId: change.subCanvasId ?? overlay[index].node.subCanvasId,
     },
     previewKind: 'updated',
   }

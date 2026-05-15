@@ -981,6 +981,7 @@ export default function App() {
             <PlannerGraph
               canvasId={activeCanvasId}
               canvasName={activeCanvas?.name ?? 'Canvas'}
+              onOpenSubCanvas={handleSetActiveCanvas}
             />
           ) : (
             <WorkspaceMonitor />
