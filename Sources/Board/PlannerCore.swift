@@ -74,6 +74,15 @@ struct PlannerAccess: Codable, Equatable {
     var canUpdateAssignedNode: Bool
 }
 
+struct PlannerActivity: Codable, Equatable {
+    var userId: String
+    var displayName: String
+    var currentCanvasId: String
+    var selectedNodeId: String?
+    var selectedSessionId: String?
+    var lastActiveAt: Date
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -1158,14 +1167,22 @@ enum PlannerBoardBridge {
         nodes: [PlanningNode],
         states: [NodeStateSnapshot],
         proposals: [PlanProposal],
-        access: PlannerAccess
+        access: PlannerAccess,
+        activities: [PlannerActivity]
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas)
         let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
         let nodes = record.nodes + sessionBackedNodes(for: record.canvas, snapshot: snapshot)
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
-        return (record.canvas, nodes, service.readNodeState(nodes: nodes), record.proposals, access)
+        return (
+            record.canvas,
+            nodes,
+            service.readNodeState(nodes: nodes),
+            record.proposals,
+            access,
+            activities(for: record.canvas, nodes: nodes, actorId: access.actorId)
+        )
     }
 
     static func generateProposal(
@@ -1445,6 +1462,26 @@ enum PlannerBoardBridge {
         case .done:
             return 9
         }
+    }
+
+    private static func activities(
+        for canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        actorId: String
+    ) -> [PlannerActivity] {
+        let selected = nodes.first { node in
+            node.doerId == actorId && (node.status == .running || node.status == .blocked || node.status == .planning)
+        }
+        return [
+            PlannerActivity(
+                userId: actorId,
+                displayName: actorId == canvas.ownerId ? "Owner" : actorId,
+                currentCanvasId: canvas.id,
+                selectedNodeId: selected?.id,
+                selectedSessionId: selected?.sessionId,
+                lastActiveAt: Date()
+            )
+        ]
     }
 }
 

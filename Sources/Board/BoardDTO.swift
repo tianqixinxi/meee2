@@ -256,6 +256,7 @@ struct PlannerCanvasStateEnvelope: Encodable {
     let states: [NodeStateSnapshot]
     let proposals: [PlanProposal]
     let access: PlannerAccess
+    let activities: [PlannerActivity]
 }
 struct PlannerProposalEnvelope: Encodable {
     let proposal: PlanProposal?

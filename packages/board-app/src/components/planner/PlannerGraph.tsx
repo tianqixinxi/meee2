@@ -136,6 +136,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             states: preview.states,
             proposals: current?.proposals ?? [],
             access: current?.access ?? defaultPlannerAccess(),
+            activities: current?.activities ?? [],
           }
         })
         setPreviewActive(true)
@@ -180,6 +181,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             states: result.states,
             proposals: upsertProposal(current?.proposals ?? [], result.proposal),
             access: current?.access ?? defaultPlannerAccess(),
+            activities: current?.activities ?? [],
           }
         })
         setPreviewActive(false)
@@ -221,6 +223,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           Refresh
         </button>
       </div>
+      <ActivityStrip activities={plannerState?.activities ?? []} />
 
       <div className="planner-main">
         <div className="planner-flow">
@@ -270,6 +273,29 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       </div>
     </section>
   )
+}
+
+function ActivityStrip({
+  activities,
+}: {
+  activities: NonNullable<PlannerCanvasState['activities']>
+}) {
+  if (activities.length === 0) return null
+  return (
+    <div className="planner-activity-strip" aria-label="Planner activity">
+      {activities.map((activity) => (
+        <div key={`${activity.userId}-${activity.currentCanvasId}`} className="planner-activity-pill">
+          <span>{activity.displayName || activity.userId}</span>
+          {activity.selectedNodeId && <em>node {shortId(activity.selectedNodeId)}</em>}
+          {activity.selectedSessionId && <em>session {shortId(activity.selectedSessionId)}</em>}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function shortId(id: string) {
+  return id.length > 14 ? `${id.slice(0, 10)}...` : id
 }
 
 function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): PlanProposal[] {

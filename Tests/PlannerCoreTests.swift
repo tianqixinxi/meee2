@@ -381,6 +381,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.proposals.count, 0)
         XCTAssertEqual(state.access.role, .owner)
         XCTAssertTrue(state.access.canApplyProposal)
+        XCTAssertEqual(state.activities.first?.userId, "owner-a")
+        XCTAssertEqual(state.activities.first?.currentCanvasId, "canvas-a")
     }
 
     func testPlannerPermissionResolvesOwnerDoerAndViewerAccess() throws {

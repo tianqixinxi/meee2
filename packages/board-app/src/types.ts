@@ -320,6 +320,15 @@ export interface PlannerAccess {
   canUpdateAssignedNode: boolean
 }
 
+export interface PlannerActivity {
+  userId: string
+  displayName: string
+  currentCanvasId: string
+  selectedNodeId?: string | null
+  selectedSessionId?: string | null
+  lastActiveAt: string
+}
+
 export interface PlanningNode {
   id: string
   canvasId: string
@@ -400,6 +409,7 @@ export interface PlannerCanvasState {
   states: NodeStateSnapshot[]
   proposals: PlanProposal[]
   access: PlannerAccess
+  activities?: PlannerActivity[]
 }
 
 export interface SelectedCanvasElementContext {
