@@ -133,6 +133,7 @@ function PlannerGraphInner({ canvasId, canvasName }: Props) {
             nodes: preview.nodes,
             states: preview.states,
             proposals: current?.proposals ?? [],
+            access: current?.access ?? defaultPlannerAccess(),
           }
         })
         setPreviewActive(true)
@@ -176,6 +177,7 @@ function PlannerGraphInner({ canvasId, canvasName }: Props) {
             nodes: result.nodes,
             states: result.states,
             proposals: upsertProposal(current?.proposals ?? [], result.proposal),
+            access: current?.access ?? defaultPlannerAccess(),
           }
         })
         setPreviewActive(false)
@@ -207,6 +209,11 @@ function PlannerGraphInner({ canvasId, canvasName }: Props) {
           <h1>{plannerState?.canvas.title ?? canvasName}</h1>
           <p>React Flow Planner Graph · owner-controlled topology</p>
         </div>
+        {plannerState?.access && (
+          <span className={`planner-role-badge planner-role-badge--${plannerState.access.role}`}>
+            {plannerState.access.role}
+          </span>
+        )}
         <button type="button" onClick={loadState} disabled={busy}>
           <RefreshCw size={14} aria-hidden />
           Refresh
@@ -248,6 +255,7 @@ function PlannerGraphInner({ canvasId, canvasName }: Props) {
             previewActive={previewActive}
             busy={busy}
             error={error}
+            access={plannerState?.access ?? null}
             onGenerate={handleGenerate}
             onInspectDrift={handleInspectDrift}
             onApplyPreview={handleApplyPreview}
@@ -266,6 +274,18 @@ function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): Plan
   const index = proposals.findIndex((item) => item.id === proposal.id)
   if (index < 0) return [...proposals, proposal]
   return proposals.map((item, itemIndex) => itemIndex === index ? proposal : item)
+}
+
+function defaultPlannerAccess() {
+  return {
+    actorId: 'local-owner',
+    role: 'owner' as const,
+    canCreateProposal: true,
+    canApproveProposal: true,
+    canApplyProposal: true,
+    canRejectProposal: true,
+    canUpdateAssignedNode: true,
+  }
 }
 
 function StatesList({

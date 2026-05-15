@@ -34,6 +34,7 @@ enum BoardAPI {
         let reason: String = {
             switch status {
             case 400: return "Bad Request"
+            case 403: return "Forbidden"
             case 404: return "Not Found"
             case 409: return "Conflict"
             case 500: return "Internal Server Error"
@@ -261,13 +262,15 @@ enum BoardAPI {
         do {
             let state = try PlannerBoardBridge.canvasState(
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             return jsonResponse(PlannerCanvasStateEnvelope(
                 canvas: state.canvas,
                 nodes: state.nodes,
                 states: state.states,
-                proposals: state.proposals
+                proposals: state.proposals,
+                access: state.access
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -288,7 +291,8 @@ enum BoardAPI {
             let proposal = try PlannerBoardBridge.generateProposal(
                 goal: goal,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -305,7 +309,8 @@ enum BoardAPI {
         do {
             let proposal = try PlannerBoardBridge.driftProposal(
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
         } catch let err as PlannerCoreError {
@@ -336,7 +341,8 @@ enum BoardAPI {
                 nodeId: nodeId,
                 reason: body.reason ?? "",
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -384,7 +390,8 @@ enum BoardAPI {
             let proposal = try PlannerBoardBridge.approveProposal(
                 proposalId: proposalId,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
@@ -404,7 +411,8 @@ enum BoardAPI {
             let result = try PlannerBoardBridge.applyProposal(
                 proposalId: proposalId,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerApplyPreviewEnvelope(
@@ -428,7 +436,8 @@ enum BoardAPI {
             let proposal = try PlannerBoardBridge.rejectProposal(
                 proposalId: proposalId,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
@@ -443,6 +452,8 @@ enum BoardAPI {
         switch err {
         case .canvasNotFound, .proposalNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .permissionDenied:
+            return errorResponse("forbidden", err.localizedDescription, status: 403)
         case .proposalNotApproved,
              .canvasMismatch,
              .emptyProposalChanges,

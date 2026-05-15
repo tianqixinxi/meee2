@@ -270,13 +270,41 @@ final class PlannerCoreTests: XCTestCase {
     func testPlannerBoardBridgeBuildsCanvasStateFromBoardSnapshot() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
 
-        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
 
         XCTAssertEqual(state.canvas.id, "canvas-a")
         XCTAssertEqual(state.canvas.ownerId, "owner-a")
         XCTAssertTrue(state.nodes.allSatisfy { $0.canvasId == "canvas-a" })
         XCTAssertEqual(state.states.count, state.nodes.count)
         XCTAssertEqual(state.proposals.count, 0)
+        XCTAssertEqual(state.access.role, .owner)
+        XCTAssertTrue(state.access.canApplyProposal)
+    }
+
+    func testPlannerPermissionResolvesOwnerDoerAndViewerAccess() throws {
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+
+        let owner = PlannerPermission.access(for: canvas, nodes: nodes, actorId: "owner-a")
+        let doer = PlannerPermission.access(for: canvas, nodes: nodes, actorId: "B")
+        let viewer = PlannerPermission.access(for: canvas, nodes: nodes, actorId: "viewer-a")
+
+        XCTAssertEqual(owner.role, .owner)
+        XCTAssertTrue(owner.canCreateProposal)
+        XCTAssertTrue(owner.canApplyProposal)
+
+        XCTAssertEqual(doer.role, .doer)
+        XCTAssertTrue(doer.canUpdateAssignedNode)
+        XCTAssertFalse(doer.canApplyProposal)
+
+        XCTAssertEqual(viewer.role, .viewer)
+        XCTAssertFalse(viewer.canCreateProposal)
+        XCTAssertFalse(viewer.canUpdateAssignedNode)
     }
 
     func testPlannerBoardBridgeGenerateProposalStaysPending() throws {
@@ -285,7 +313,8 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Ship proposal shell",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         XCTAssertEqual(proposal.canvasId, "canvas-a")
@@ -306,7 +335,8 @@ final class PlannerCoreTests: XCTestCase {
             nodeId: node.id,
             reason: "Split contract into DTO and API work",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         XCTAssertEqual(proposal.canvasId, "canvas-a")
@@ -326,12 +356,41 @@ final class PlannerCoreTests: XCTestCase {
         }
     }
 
+    func testPlannerBoardBridgeRejectsNonOwnerProposalMutation() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Owner topology change",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertThrowsError(try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "viewer-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .permissionDenied(action: "approve proposal", role: .viewer))
+        }
+
+        XCTAssertThrowsError(try PlannerBoardBridge.generateProposal(
+            goal: "Viewer cannot mutate topology",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "viewer-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .permissionDenied(action: "create proposal", role: .viewer))
+        }
+    }
+
     func testPlannerBoardBridgeApplyPreviewApprovesAndReturnsUpdatedState() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Ship owner approval",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         let preview = try PlannerBoardBridge.applyPreview(
@@ -354,7 +413,8 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Persist planner proposal",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
@@ -370,7 +430,8 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Persist applied node",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         XCTAssertThrowsError(try PlannerBoardBridge.applyProposal(
@@ -384,14 +445,16 @@ final class PlannerCoreTests: XCTestCase {
         let approved = try PlannerBoardBridge.approveProposal(
             proposalId: proposal.id,
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
         XCTAssertEqual(approved.status, .approved)
 
         let applied = try PlannerBoardBridge.applyProposal(
             proposalId: proposal.id,
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
         XCTAssertEqual(applied.proposal.status, .applied)
         XCTAssertTrue(applied.nodes.contains { $0.title == "Persist applied node" })
@@ -406,13 +469,15 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Reject this proposal",
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         let rejected = try PlannerBoardBridge.rejectProposal(
             proposalId: proposal.id,
             for: "canvas-a",
-            snapshot: snapshot
+            snapshot: snapshot,
+            actorUserId: "owner-a"
         )
 
         XCTAssertEqual(rejected.status, .rejected)
@@ -431,7 +496,8 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Canvas scoped proposal",
             for: "canvas-a",
-            snapshot: snapshotA
+            snapshot: snapshotA,
+            actorUserId: "owner-a"
         )
 
         _ = try PlannerBoardBridge.canvasState(for: "canvas-b", snapshot: snapshotB)
@@ -439,7 +505,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertThrowsError(try PlannerBoardBridge.approveProposal(
             proposalId: proposal.id,
             for: "canvas-b",
-            snapshot: snapshotB
+            snapshot: snapshotB,
+            actorUserId: "owner-b"
         )) { error in
             XCTAssertEqual(error as? PlannerCoreError, .proposalNotFound(proposal.id))
         }

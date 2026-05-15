@@ -308,6 +308,17 @@ export type ExecutorType =
   | 'mock'
 export type PlanningNodeStatus = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
 export type PlanningNodeSource = 'planner' | 'session'
+export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
+
+export interface PlannerAccess {
+  actorId: string
+  role: PlannerCanvasRole
+  canCreateProposal: boolean
+  canApproveProposal: boolean
+  canApplyProposal: boolean
+  canRejectProposal: boolean
+  canUpdateAssignedNode: boolean
+}
 
 export interface PlanningNode {
   id: string
@@ -358,6 +369,7 @@ export interface PlannerCanvasState {
   nodes: PlanningNode[]
   states: NodeStateSnapshot[]
   proposals: PlanProposal[]
+  access: PlannerAccess
 }
 
 export interface SelectedCanvasElementContext {

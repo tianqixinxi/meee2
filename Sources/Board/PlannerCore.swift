@@ -57,6 +57,23 @@ enum PlanningNodeSource: String, Codable, Equatable {
     case session
 }
 
+enum PlannerCanvasRole: String, Codable, Equatable {
+    case owner
+    case doer
+    case viewer
+    case suggestion
+}
+
+struct PlannerAccess: Codable, Equatable {
+    var actorId: String
+    var role: PlannerCanvasRole
+    var canCreateProposal: Bool
+    var canApproveProposal: Bool
+    var canApplyProposal: Bool
+    var canRejectProposal: Bool
+    var canUpdateAssignedNode: Bool
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -167,6 +184,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case nodeNotFound(String)
     case updateNodeNoFields(String)
     case canvasNotFound(String)
+    case permissionDenied(action: String, role: PlannerCanvasRole)
 
     var errorDescription: String? {
         switch self {
@@ -190,6 +208,71 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "updateNode change for \(id) must set title or status"
         case .canvasNotFound(let id):
             return "planning canvas not found: \(id)"
+        case .permissionDenied(let action, let role):
+            return "planner \(action) is not allowed for \(role.rawValue)"
+        }
+    }
+}
+
+enum PlannerPermissionAction: String {
+    case createProposal = "create proposal"
+    case approveProposal = "approve proposal"
+    case applyProposal = "apply proposal"
+    case rejectProposal = "reject proposal"
+    case updateAssignedNode = "update assigned node"
+}
+
+enum PlannerPermission {
+    static func currentActorId() -> String? {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "meee2Connected") else { return nil }
+        let actorId = defaults.string(forKey: "meee2UserId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return actorId.isEmpty ? nil : actorId
+    }
+
+    static func access(
+        for canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        actorId explicitActorId: String? = nil
+    ) -> PlannerAccess {
+        let actorId = explicitActorId ?? canvas.ownerId
+        let role: PlannerCanvasRole
+        if explicitActorId == nil || actorId == canvas.ownerId {
+            role = .owner
+        } else if nodes.contains(where: { $0.doerId == actorId }) {
+            role = .doer
+        } else {
+            role = .viewer
+        }
+
+        return PlannerAccess(
+            actorId: actorId,
+            role: role,
+            canCreateProposal: role == .owner || role == .suggestion,
+            canApproveProposal: role == .owner,
+            canApplyProposal: role == .owner,
+            canRejectProposal: role == .owner,
+            canUpdateAssignedNode: role == .owner || role == .doer
+        )
+    }
+
+    static func require(_ action: PlannerPermissionAction, access: PlannerAccess) throws {
+        let allowed: Bool
+        switch action {
+        case .createProposal:
+            allowed = access.canCreateProposal
+        case .approveProposal:
+            allowed = access.canApproveProposal
+        case .applyProposal:
+            allowed = access.canApplyProposal
+        case .rejectProposal:
+            allowed = access.canRejectProposal
+        case .updateAssignedNode:
+            allowed = access.canUpdateAssignedNode
+        }
+        guard allowed else {
+            throw PlannerCoreError.permissionDenied(action: action.rawValue, role: access.role)
         }
     }
 }
@@ -665,22 +748,35 @@ enum PlannerBoardBridge {
 
     static func canvasState(
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
-    ) throws -> (canvas: PlanningCanvas, nodes: [PlanningNode], states: [NodeStateSnapshot], proposals: [PlanProposal]) {
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> (
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        states: [NodeStateSnapshot],
+        proposals: [PlanProposal],
+        access: PlannerAccess
+    ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas)
         let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
         let nodes = record.nodes + sessionBackedNodes(for: record.canvas, snapshot: snapshot)
-        return (record.canvas, nodes, service.readNodeState(nodes: nodes), record.proposals)
+        let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
+        return (record.canvas, nodes, service.readNodeState(nodes: nodes), record.proposals, access)
     }
 
     static func generateProposal(
         goal: String,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> PlanProposal {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas)
+        let seedNodes = service.nodeMock(canvasId: canvas.id)
+        let record = try store.record(for: canvas, seedNodes: seedNodes)
+        let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: access)
         let title = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         let proposalUUID = UUID().uuidString.lowercased()
         let node = PlanningNode(
@@ -707,14 +803,16 @@ enum PlannerBoardBridge {
             changes: [.addNode(node)],
             status: .pending
         )
-        .saved(in: store, canvas: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
+        .saved(in: store, canvas: canvas, seedNodes: seedNodes)
     }
 
     static func driftProposal(
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> PlanProposal? {
-        let state = try canvasState(for: canvasId, snapshot: snapshot)
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
         guard let blocked = state.states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
               let node = state.nodes.first(where: { $0.id == blocked.nodeId }) else {
             return nil
@@ -740,9 +838,11 @@ enum PlannerBoardBridge {
         nodeId: String,
         reason: String,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> PlanProposal {
-        let state = try canvasState(for: canvasId, snapshot: snapshot)
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
         guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
             throw PlannerCoreError.nodeNotFound(nodeId)
         }
@@ -784,27 +884,33 @@ enum PlannerBoardBridge {
     static func approveProposal(
         proposalId: String,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> PlanProposal {
-        _ = try requireCanvas(canvasId, in: snapshot)
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.approveProposal, access: state.access)
         return try store.approveProposal(proposalId: proposalId, canvasId: canvasId)
     }
 
     static func rejectProposal(
         proposalId: String,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> PlanProposal {
-        _ = try requireCanvas(canvasId, in: snapshot)
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.rejectProposal, access: state.access)
         return try store.rejectProposal(proposalId: proposalId, canvasId: canvasId)
     }
 
     static func applyProposal(
         proposalId: String,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
-        _ = try requireCanvas(canvasId, in: snapshot)
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.applyProposal, access: state.access)
         let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
         guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
             throw PlannerCoreError.proposalNotFound(proposalId)

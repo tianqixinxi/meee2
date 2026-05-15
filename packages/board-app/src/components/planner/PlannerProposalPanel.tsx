@@ -1,12 +1,13 @@
 import { Eye, GitPullRequestArrow, ScanSearch, WandSparkles } from 'lucide-react'
 import { useState } from 'react'
-import type { PlanChange, PlanProposal } from '../../types'
+import type { PlanChange, PlanProposal, PlannerAccess } from '../../types'
 
 interface Props {
   proposal: PlanProposal | null
   previewActive: boolean
   busy: boolean
   error: string | null
+  access: PlannerAccess | null
   onGenerate: (goal: string) => void
   onInspectDrift: () => void
   onApplyPreview: () => void
@@ -20,6 +21,7 @@ export function PlannerProposalPanel({
   previewActive,
   busy,
   error,
+  access,
   onGenerate,
   onInspectDrift,
   onApplyPreview,
@@ -28,7 +30,8 @@ export function PlannerProposalPanel({
   onReject,
 }: Props) {
   const [goal, setGoal] = useState('')
-  const canGenerate = goal.trim().length > 0 && !busy
+  const canCreateProposal = access?.canCreateProposal ?? true
+  const canGenerate = goal.trim().length > 0 && !busy && canCreateProposal
 
   return (
     <aside className="planner-proposal-panel">
@@ -53,11 +56,17 @@ export function PlannerProposalPanel({
             className="primary"
             disabled={!canGenerate}
             onClick={() => onGenerate(goal.trim())}
+            title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
           >
             <WandSparkles size={14} aria-hidden />
             Generate plan
           </button>
-          <button type="button" disabled={busy} onClick={onInspectDrift}>
+          <button
+            type="button"
+            disabled={busy || !canCreateProposal}
+            onClick={onInspectDrift}
+            title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
+          >
             <ScanSearch size={14} aria-hidden />
             Inspect drift
           </button>
@@ -90,7 +99,7 @@ export function PlannerProposalPanel({
           <div className="planner-proposal__lifecycle">
             <button
               type="button"
-              disabled={busy || proposal.status !== 'pending'}
+              disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
               onClick={onApprove}
             >
               Approve
@@ -98,14 +107,14 @@ export function PlannerProposalPanel({
             <button
               type="button"
               className="primary"
-              disabled={busy || proposal.status !== 'approved'}
+              disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
               onClick={onApply}
             >
               Apply
             </button>
             <button
               type="button"
-              disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected'}
+              disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
               onClick={onReject}
             >
               Reject
