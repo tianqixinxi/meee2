@@ -265,6 +265,10 @@ struct PlannerApplyPreviewEnvelope: Encodable {
     let nodes: [PlanningNode]
     let states: [NodeStateSnapshot]
 }
+struct PlannerMonitorEnvelope: Encodable {
+    let generatedAt: Date
+    let items: [PlannerMonitorItem]
+}
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }

@@ -364,6 +364,30 @@ export interface NodeStateSnapshot {
   needsOwnerReview: boolean
 }
 
+export type PlannerMonitorItemKind = 'node' | 'proposal'
+
+export interface PlannerMonitorItem {
+  id: string
+  kind: PlannerMonitorItemKind
+  canvasId: string
+  canvasTitle: string
+  nodeId?: string | null
+  nodeTitle?: string | null
+  proposalId?: string | null
+  proposalStatus?: PlanProposalStatus | null
+  summary: string
+  runState?: NodeRunState | null
+  blockers: string[]
+  needsOwnerReview: boolean
+  doerId?: string | null
+  riskRank: number
+}
+
+export interface PlannerMonitorState {
+  generatedAt: string
+  items: PlannerMonitorItem[]
+}
+
 export interface PlannerCanvasState {
   canvas: PlanningCanvas
   nodes: PlanningNode[]

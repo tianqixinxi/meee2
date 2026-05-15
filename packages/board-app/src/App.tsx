@@ -14,6 +14,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
 import { PlannerGraph } from './components/planner/PlannerGraph'
+import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type {
@@ -327,7 +328,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [workspaceMode, setWorkspaceMode] = useState<'board' | 'planner'>('board')
+  const [workspaceMode, setWorkspaceMode] = useState<'board' | 'planner' | 'monitor'>('board')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
@@ -976,11 +977,13 @@ export default function App() {
               onFit={() => setFitSignal((x) => x + 1)}
               arrangeSignal={arrangeSignal}
             />
-          ) : (
+          ) : workspaceMode === 'planner' ? (
             <PlannerGraph
               canvasId={activeCanvasId}
               canvasName={activeCanvas?.name ?? 'Canvas'}
             />
+          ) : (
+            <WorkspaceMonitor />
           )}
           <CanvasToolbar
             canvases={canvasList.canvases}
@@ -1014,6 +1017,20 @@ export default function App() {
               }}
             >
               Planner
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === 'monitor'}
+              className={workspaceMode === 'monitor' ? 'is-active' : ''}
+              onClick={() => {
+                setSelection({ kind: 'none' })
+                setDockOpen(false)
+                setAssistantRequested(false)
+                setWorkspaceMode('monitor')
+              }}
+            >
+              Monitor
             </button>
           </div>
           {activeCanvasLoading && (

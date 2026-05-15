@@ -279,6 +279,23 @@ enum BoardAPI {
         }
     }
 
+    static func getPlannerWorkspaceMonitor(_ req: HttpRequest) -> HttpResponse {
+        do {
+            let monitor = try PlannerBoardBridge.workspaceMonitor(
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerMonitorEnvelope(
+                generatedAt: monitor.generatedAt,
+                items: monitor.items
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func generatePlannerProposal(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)

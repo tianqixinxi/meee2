@@ -384,6 +384,33 @@ final class PlannerCoreTests: XCTestCase {
         }
     }
 
+    func testPlannerWorkspaceMonitorRanksBlockedAndPendingWork() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Pending monitor proposal",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "owner-a")
+
+        XCTAssertTrue(monitor.items.contains { $0.proposalId == proposal.id && $0.proposalStatus == .pending })
+        XCTAssertTrue(monitor.items.contains { $0.runState == .blocked })
+        XCTAssertEqual(monitor.items.first?.riskRank, 0)
+    }
+
+    func testPlannerWorkspaceMonitorDoerViewFiltersAssignedNodes() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "B")
+
+        XCTAssertFalse(monitor.items.isEmpty)
+        XCTAssertTrue(monitor.items.allSatisfy { item in
+            item.kind == .node && item.doerId == "B"
+        })
+    }
+
     func testPlannerBoardBridgeApplyPreviewApprovesAndReturnsUpdatedState() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(

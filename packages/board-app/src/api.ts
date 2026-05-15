@@ -11,6 +11,7 @@ import type {
   CoordinationGroup,
   PlanProposal,
   PlannerCanvasState,
+  PlannerMonitorState,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -172,6 +173,10 @@ export function spawnGlobalSession(
 
 export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvasState> {
   return jsonRequest<PlannerCanvasState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/state`)
+}
+
+export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
+  return jsonRequest<PlannerMonitorState>('/api/planner/monitor')
 }
 
 export async function generatePlannerProposal(

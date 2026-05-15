@@ -173,6 +173,33 @@ struct NodeStateSnapshot: Codable, Equatable {
     var needsOwnerReview: Bool
 }
 
+enum PlannerMonitorItemKind: String, Codable, Equatable {
+    case node
+    case proposal
+}
+
+struct PlannerMonitorItem: Codable, Equatable {
+    var id: String
+    var kind: PlannerMonitorItemKind
+    var canvasId: String
+    var canvasTitle: String
+    var nodeId: String?
+    var nodeTitle: String?
+    var proposalId: String?
+    var proposalStatus: PlanProposalStatus?
+    var summary: String
+    var runState: NodeRunState?
+    var blockers: [String]
+    var needsOwnerReview: Bool
+    var doerId: String?
+    var riskRank: Int
+}
+
+struct PlannerMonitorState: Codable, Equatable {
+    var generatedAt: Date
+    var items: [PlannerMonitorItem]
+}
+
 enum PlannerCoreError: LocalizedError, Equatable {
     case invalidPlannerProposalJSON
     case proposalNotApproved
@@ -918,6 +945,75 @@ enum PlannerBoardBridge {
         return (proposal, record.nodes, service.readNodeState(nodes: record.nodes))
     }
 
+    static func workspaceMonitor(
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerMonitorState {
+        var items: [PlannerMonitorItem] = []
+        for boardCanvas in snapshot.canvases {
+            let state = try canvasState(
+                for: boardCanvas.id,
+                snapshot: snapshot,
+                actorUserId: actorUserId
+            )
+            let actorId = state.access.actorId
+            let statesByNodeId = Dictionary(uniqueKeysWithValues: state.states.map { ($0.nodeId, $0) })
+            let visibleNodes = state.access.role == .doer
+                ? state.nodes.filter { $0.doerId == actorId }
+                : state.nodes
+
+            for node in visibleNodes {
+                guard let snapshot = statesByNodeId[node.id],
+                      snapshot.runState != .done else { continue }
+                let rank = monitorRank(for: snapshot)
+                items.append(PlannerMonitorItem(
+                    id: "node-\(node.id)",
+                    kind: .node,
+                    canvasId: state.canvas.id,
+                    canvasTitle: state.canvas.title,
+                    nodeId: node.id,
+                    nodeTitle: node.title,
+                    proposalId: nil,
+                    proposalStatus: nil,
+                    summary: node.title,
+                    runState: snapshot.runState,
+                    blockers: snapshot.blockers,
+                    needsOwnerReview: snapshot.needsOwnerReview,
+                    doerId: node.doerId,
+                    riskRank: rank
+                ))
+            }
+
+            if state.access.role == .owner {
+                for proposal in state.proposals where proposal.status == .pending || proposal.status == .approved {
+                    items.append(PlannerMonitorItem(
+                        id: "proposal-\(proposal.id)",
+                        kind: .proposal,
+                        canvasId: state.canvas.id,
+                        canvasTitle: state.canvas.title,
+                        nodeId: nil,
+                        nodeTitle: nil,
+                        proposalId: proposal.id,
+                        proposalStatus: proposal.status,
+                        summary: proposal.summary,
+                        runState: nil,
+                        blockers: [],
+                        needsOwnerReview: proposal.status == .pending,
+                        doerId: nil,
+                        riskRank: proposal.status == .pending ? 1 : 2
+                    ))
+                }
+            }
+        }
+
+        items.sort {
+            if $0.riskRank != $1.riskRank { return $0.riskRank < $1.riskRank }
+            if $0.canvasTitle != $1.canvasTitle { return $0.canvasTitle < $1.canvasTitle }
+            return $0.summary < $1.summary
+        }
+        return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
     private static func requireCanvas(
         _ canvasId: String,
         in snapshot: BoardLayoutStore.Snapshot
@@ -956,6 +1052,23 @@ enum PlannerBoardBridge {
                     doerId: canvas.ownerId
                 )
             }
+    }
+
+    private static func monitorRank(for state: NodeStateSnapshot) -> Int {
+        if state.runState == .blocked { return 0 }
+        if state.needsOwnerReview { return 1 }
+        switch state.runState {
+        case .running:
+            return 2
+        case .planning:
+            return 3
+        case .waiting:
+            return 4
+        case .blocked:
+            return 0
+        case .done:
+            return 9
+        }
     }
 }
 
