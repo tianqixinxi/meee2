@@ -29,16 +29,16 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
 } {
   const stateByNodeId = new Map(input.states.map((state) => [state.nodeId, state]))
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
+  const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
-    const column = index % 3
-    const row = Math.floor(index / 3)
+    const position = positionByNodeId.get(node.id) ?? {
+      x: (index % 3) * 340,
+      y: Math.floor(index / 3) * 190,
+    }
     return {
       id: node.id,
       type: 'plannerNode' as const,
-      position: {
-        x: column * 340,
-        y: row * 190,
-      },
+      position,
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,
@@ -47,22 +47,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     }
   })
 
-  const edges: PlannerGraphEdge[] = []
-  for (let index = 1; index < previewNodes.length; index += 1) {
-    const previous = previewNodes[index - 1]
-    const current = previewNodes[index]
-    edges.push({
-      id: `planner-edge-${previous.node.id}-${current.node.id}`,
-      source: previous.node.id,
-      target: current.node.id,
-      type: 'smoothstep',
-      animated: current.previewKind !== 'none',
-      data: {
-        preview: current.previewKind !== 'none',
-      },
-      className: current.previewKind !== 'none' ? 'planner-flow__edge--preview' : undefined,
-    })
-  }
+  const edges = buildDependencyEdges(previewNodes)
   return { nodes: graphNodes, edges }
 }
 
@@ -122,7 +107,87 @@ function applyUpdateOverlay(
       ...overlay[index].node,
       title: change.title ?? overlay[index].node.title,
       status: change.status ?? overlay[index].node.status,
+      ioSchema: change.ioSchema ?? overlay[index].node.ioSchema,
+      contextSources: change.contextSources ?? overlay[index].node.contextSources,
+      dependsOnNodeIds: change.dependsOnNodeIds ?? overlay[index].node.dependsOnNodeIds,
     },
     previewKind: 'updated',
   }
+}
+
+function buildDependencyEdges(
+  previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
+): PlannerGraphEdge[] {
+  const nodeIds = new Set(previewNodes.map((item) => item.node.id))
+  const edges: PlannerGraphEdge[] = []
+  for (const current of previewNodes) {
+    for (const dependencyId of current.node.dependsOnNodeIds ?? []) {
+      if (!nodeIds.has(dependencyId)) continue
+      edges.push({
+        id: `planner-edge-${dependencyId}-${current.node.id}`,
+        source: dependencyId,
+        target: current.node.id,
+        type: 'smoothstep',
+        animated: current.previewKind !== 'none',
+        data: {
+          preview: current.previewKind !== 'none',
+        },
+        className: current.previewKind !== 'none' ? 'planner-flow__edge--preview' : undefined,
+      })
+    }
+  }
+
+  if (edges.length > 0) return edges
+  for (let index = 1; index < previewNodes.length; index += 1) {
+    const previous = previewNodes[index - 1]
+    const current = previewNodes[index]
+    edges.push({
+      id: `planner-edge-${previous.node.id}-${current.node.id}`,
+      source: previous.node.id,
+      target: current.node.id,
+      type: 'smoothstep',
+      animated: current.previewKind !== 'none',
+      data: {
+        preview: current.previewKind !== 'none',
+      },
+      className: current.previewKind !== 'none' ? 'planner-flow__edge--preview' : undefined,
+    })
+  }
+  return edges
+}
+
+function buildNodePositions(nodes: PlanningNode[]): Map<string, { x: number; y: number }> {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+  const depthCache = new Map<string, number>()
+  const visiting = new Set<string>()
+
+  const depthFor = (node: PlanningNode): number => {
+    const cached = depthCache.get(node.id)
+    if (cached !== undefined) return cached
+    if (visiting.has(node.id)) return 0
+    visiting.add(node.id)
+    const depth = Math.max(
+      0,
+      ...((node.dependsOnNodeIds ?? [])
+        .map((dependencyId) => nodeById.get(dependencyId))
+        .filter((dependency): dependency is PlanningNode => Boolean(dependency))
+        .map((dependency) => depthFor(dependency) + 1)),
+    )
+    visiting.delete(node.id)
+    depthCache.set(node.id, depth)
+    return depth
+  }
+
+  const rowByDepth = new Map<number, number>()
+  const positionByNodeId = new Map<string, { x: number; y: number }>()
+  for (const node of nodes) {
+    const depth = depthFor(node)
+    const row = rowByDepth.get(depth) ?? 0
+    rowByDepth.set(depth, row + 1)
+    positionByNodeId.set(node.id, {
+      x: depth * 340,
+      y: row * 190,
+    })
+  }
+  return positionByNodeId
 }

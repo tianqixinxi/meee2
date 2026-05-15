@@ -87,6 +87,7 @@ struct PlanningNode: Codable, Equatable {
     var sessionId: String?
     var chatThreadId: String?
     var source: PlanningNodeSource?
+    var dependsOnNodeIds: [String]?
 
     init(
         id: String,
@@ -100,7 +101,8 @@ struct PlanningNode: Codable, Equatable {
         status: PlanningNodeStatus,
         sessionId: String? = nil,
         chatThreadId: String? = nil,
-        source: PlanningNodeSource? = .planner
+        source: PlanningNodeSource? = .planner,
+        dependsOnNodeIds: [String]? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -114,6 +116,7 @@ struct PlanningNode: Codable, Equatable {
         self.sessionId = sessionId
         self.chatThreadId = chatThreadId
         self.source = source
+        self.dependsOnNodeIds = dependsOnNodeIds
     }
 }
 
@@ -135,6 +138,29 @@ struct PlanChange: Codable, Equatable {
     var nodeId: String?
     var title: String?
     var status: PlanningNodeStatus?
+    var ioSchema: IOSchema?
+    var contextSources: [ContextSource]?
+    var dependsOnNodeIds: [String]?
+
+    init(
+        kind: Kind,
+        node: PlanningNode?,
+        nodeId: String?,
+        title: String?,
+        status: PlanningNodeStatus?,
+        ioSchema: IOSchema? = nil,
+        contextSources: [ContextSource]? = nil,
+        dependsOnNodeIds: [String]? = nil
+    ) {
+        self.kind = kind
+        self.node = node
+        self.nodeId = nodeId
+        self.title = title
+        self.status = status
+        self.ioSchema = ioSchema
+        self.contextSources = contextSources
+        self.dependsOnNodeIds = dependsOnNodeIds
+    }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
         PlanChange(kind: .addNode, node: node, nodeId: nil, title: nil, status: nil)
@@ -143,9 +169,21 @@ struct PlanChange: Codable, Equatable {
     static func updateNode(
         id: String,
         title: String? = nil,
-        status: PlanningNodeStatus? = nil
+        status: PlanningNodeStatus? = nil,
+        ioSchema: IOSchema? = nil,
+        contextSources: [ContextSource]? = nil,
+        dependsOnNodeIds: [String]? = nil
     ) -> PlanChange {
-        PlanChange(kind: .updateNode, node: nil, nodeId: id, title: title, status: status)
+        PlanChange(
+            kind: .updateNode,
+            node: nil,
+            nodeId: id,
+            title: title,
+            status: status,
+            ioSchema: ioSchema,
+            contextSources: contextSources,
+            dependsOnNodeIds: dependsOnNodeIds
+        )
     }
 }
 
@@ -339,7 +377,11 @@ enum PlannerProposalValidator {
             case .updateNode:
                 guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
                 guard nodeIds.contains(nodeId) else { throw PlannerCoreError.nodeNotFound(nodeId) }
-                guard change.title != nil || change.status != nil else {
+                guard change.title != nil ||
+                    change.status != nil ||
+                    change.ioSchema != nil ||
+                    change.contextSources != nil ||
+                    change.dependsOnNodeIds != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             }
@@ -380,7 +422,8 @@ final class PlannerCoreService {
                 executionMode: .signOff,
                 executorType: .codex,
                 doerId: "A",
-                status: .running
+                status: .running,
+                dependsOnNodeIds: []
             ),
             PlanningNode(
                 id: "\(canvasId)-node-2",
@@ -397,7 +440,8 @@ final class PlannerCoreService {
                 executionMode: .human,
                 executorType: .human,
                 doerId: "B",
-                status: .waiting
+                status: .waiting,
+                dependsOnNodeIds: ["\(canvasId)-node-1"]
             ),
             PlanningNode(
                 id: "\(canvasId)-node-3",
@@ -414,7 +458,8 @@ final class PlannerCoreService {
                 executionMode: .signOff,
                 executorType: .mock,
                 doerId: "A",
-                status: .blocked
+                status: .blocked,
+                dependsOnNodeIds: ["\(canvasId)-node-2"]
             ),
             PlanningNode(
                 id: "\(canvasId)-node-4",
@@ -431,7 +476,8 @@ final class PlannerCoreService {
                 executionMode: .auto,
                 executorType: .mock,
                 doerId: "B",
-                status: .done
+                status: .done,
+                dependsOnNodeIds: ["\(canvasId)-node-3"]
             )
         ]
     }
@@ -452,6 +498,7 @@ final class PlannerCoreService {
         }
 
         var updatedNodes = nodes
+        var dependencyInvalidationNodeIds = Set<String>()
         for change in proposal.changes {
             switch change.kind {
             case .addNode:
@@ -471,9 +518,32 @@ final class PlannerCoreService {
                 if let title = change.title {
                     updatedNodes[index].title = title
                 }
+                if let ioSchema = change.ioSchema {
+                    updatedNodes[index].ioSchema = ioSchema
+                    dependencyInvalidationNodeIds.insert(nodeId)
+                }
+                if let contextSources = change.contextSources {
+                    updatedNodes[index].contextSources = contextSources
+                    dependencyInvalidationNodeIds.insert(nodeId)
+                }
+                if let dependsOnNodeIds = change.dependsOnNodeIds {
+                    updatedNodes[index].dependsOnNodeIds = dependsOnNodeIds
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
+            }
+        }
+
+        if !dependencyInvalidationNodeIds.isEmpty {
+            for index in updatedNodes.indices where updatedNodes[index].canvasId == proposal.canvasId {
+                guard updatedNodes[index].dependsOnNodeIds?.contains(where: dependencyInvalidationNodeIds.contains) == true else {
+                    continue
+                }
+                guard !dependencyInvalidationNodeIds.contains(updatedNodes[index].id) else {
+                    continue
+                }
+                updatedNodes[index].status = .planning
             }
         }
         return updatedNodes
@@ -485,10 +555,21 @@ final class PlannerCoreService {
             return NodeStateSnapshot(
                 nodeId: node.id,
                 runState: runState,
-                blockers: node.status == .blocked ? ["Node is blocked and needs planner attention"] : [],
+                blockers: blockers(for: node),
                 artifactRefs: node.status == .done ? ["artifact://\(node.id)/output"] : [],
-                needsOwnerReview: node.status == .blocked || node.executionMode == .signOff
+                needsOwnerReview: node.status == .blocked || (node.status != .planning && node.executionMode == .signOff)
             )
+        }
+    }
+
+    private func blockers(for node: PlanningNode) -> [String] {
+        switch node.status {
+        case .blocked:
+            return ["Node is blocked and needs planner attention"]
+        case .planning:
+            return ["Node is replanning after dependency or schema change"]
+        default:
+            return []
         }
     }
 }
@@ -515,7 +596,8 @@ enum SessionToPlanningNodeMapper {
             status: nodeStatus(session.status),
             sessionId: session.id,
             chatThreadId: chatThreadId(session),
-            source: .session
+            source: .session,
+            dependsOnNodeIds: []
         )
     }
 
@@ -1109,7 +1191,8 @@ enum PlannerProposalFactory {
             executionMode: .signOff,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .planning
+            status: .planning,
+            dependsOnNodeIds: [node.id]
         )
         return PlanProposal(
             id: "proposal-\(node.id)-refine\(suffix)",
@@ -1125,6 +1208,32 @@ enum PlannerProposalFactory {
 }
 
 enum PlannerDriftAdvisor {
+    static func repairPlanningProposal(
+        for node: PlanningNode,
+        state: NodeStateSnapshot
+    ) -> PlanProposal {
+        PlanProposal(
+            id: "proposal-\(node.id)-repair-planning",
+            canvasId: node.canvasId,
+            summary: "Repair planning state for \(node.title)",
+            changes: [
+                .updateNode(
+                    id: node.id,
+                    title: "\(node.title) (schema repair planned)",
+                    status: .planning,
+                    contextSources: node.contextSources + [
+                        ContextSource(
+                            kind: .artifact,
+                            title: "Planning repair reason",
+                            reference: state.blockers.joined(separator: "; ")
+                        )
+                    ]
+                )
+            ],
+            status: .pending
+        )
+    }
+
     static func splitProposal(
         for node: PlanningNode,
         state: NodeStateSnapshot,
@@ -1144,7 +1253,8 @@ enum PlannerDriftAdvisor {
             executionMode: .signOff,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .planning
+            status: .planning,
+            dependsOnNodeIds: [node.id]
         )
         let blockerSummary = state.blockers.isEmpty ? "blocked state" : state.blockers.joined(separator: "; ")
         return PlanProposal(
@@ -1201,6 +1311,13 @@ final class MockPlannerAgent: PlannerAgent {
     func inspectDrift(nodes: [PlanningNode], states: [NodeStateSnapshot]) async throws -> PlanProposal? {
         guard let state = states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
               let node = nodes.first(where: { $0.id == state.nodeId }) else {
+            if let planningState = states.first(where: { $0.runState == .planning }),
+               let planningNode = nodes.first(where: { $0.id == planningState.nodeId }) {
+                return PlannerDriftAdvisor.repairPlanningProposal(
+                    for: planningNode,
+                    state: planningState
+                )
+            }
             return nil
         }
         if state.blockers.contains(where: { blocker in

@@ -60,6 +60,12 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           <UserRound size={12} aria-hidden />
           {node.doerId}
         </span>
+        {(node.dependsOnNodeIds?.length ?? 0) > 0 && (
+          <span>
+            <Route size={12} aria-hidden />
+            {node.dependsOnNodeIds?.length} deps
+          </span>
+        )}
       </div>
 
       {node.sessionId && (

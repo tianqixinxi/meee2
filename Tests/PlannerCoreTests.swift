@@ -81,6 +81,32 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(updated.last?.id, "canvas-a-node-5")
     }
 
+    func testApplyNodeChangeMarksDownstreamDependenciesPlanningOnSchemaChange() throws {
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+        let proposal = service.approve(PlanProposal(
+            id: "proposal-schema",
+            canvasId: "canvas-a",
+            summary: "Change upstream schema",
+            changes: [
+                .updateNode(
+                    id: "canvas-a-node-1",
+                    ioSchema: IOSchema(
+                        consumes: ["owner goal", "new contract"],
+                        produces: ["revised proposal"],
+                        completionSignal: "schema changed"
+                    )
+                )
+            ],
+            status: .pending
+        ))
+
+        let updated = try service.applyNodeChange(nodes: nodes, proposal: proposal)
+
+        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-1" }?.status, .running)
+        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-2" }?.status, .planning)
+        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-3" }?.status, .blocked)
+    }
+
     func testReadNodeStateExposesBlockedNodeToPlanner() {
         let nodes = service.nodeMock(canvasId: "canvas-a")
 
@@ -90,6 +116,17 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNotNil(blocked)
         XCTAssertEqual(blocked?.blockers, ["Node is blocked and needs planner attention"])
         XCTAssertEqual(blocked?.needsOwnerReview, true)
+    }
+
+    func testReadNodeStateTreatsPlanningAsReplanningNotOwnerReview() {
+        var nodes = service.nodeMock(canvasId: "canvas-a")
+        nodes[1].status = .planning
+
+        let planning = service.readNodeState(nodes: nodes).first { $0.nodeId == nodes[1].id }
+
+        XCTAssertEqual(planning?.runState, .planning)
+        XCTAssertEqual(planning?.blockers, ["Node is replanning after dependency or schema change"])
+        XCTAssertEqual(planning?.needsOwnerReview, false)
     }
 
     func testMockPlannerGeneratePlanReturnsPendingProposal() async throws {
@@ -265,6 +302,19 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(proposal?.summary, "Split \(nodes[0].title) because repeated failure after two retries")
         XCTAssertEqual(proposal?.changes.map(\.kind), [.updateNode, .addNode])
         XCTAssertEqual(proposal?.changes.last?.node?.status, .planning)
+    }
+
+    func testMockPlannerInspectDriftReturnsRepairProposalForPlanningState() async throws {
+        let planner = MockPlannerAgent()
+        var nodes = service.nodeMock(canvasId: "canvas-a")
+        nodes[1].status = .planning
+        let states = service.readNodeState(nodes: nodes)
+
+        let proposal = try await planner.inspectDrift(nodes: nodes, states: states.filter { $0.runState == .planning })
+
+        XCTAssertEqual(proposal?.summary, "Repair planning state for \(nodes[1].title)")
+        XCTAssertEqual(proposal?.changes.first?.kind, .updateNode)
+        XCTAssertEqual(proposal?.changes.first?.contextSources?.last?.title, "Planning repair reason")
     }
 
     func testPlannerBoardBridgeBuildsCanvasStateFromBoardSnapshot() throws {

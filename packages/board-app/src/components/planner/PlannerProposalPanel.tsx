@@ -145,6 +145,9 @@ function ProposalChangeRow({ change }: { change: PlanChange }) {
       <span>updateNode</span>
       <strong>{change.title ?? change.nodeId ?? 'Unknown node'}</strong>
       {change.status && <em>{change.status}</em>}
+      {change.ioSchema && <em>schema</em>}
+      {change.contextSources && <em>context</em>}
+      {change.dependsOnNodeIds && <em>deps {change.dependsOnNodeIds.length}</em>}
     </div>
   )
 }

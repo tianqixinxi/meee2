@@ -333,6 +333,7 @@ export interface PlanningNode {
   sessionId?: string | null
   chatThreadId?: string | null
   source?: PlanningNodeSource | null
+  dependsOnNodeIds?: string[] | null
 }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
@@ -344,6 +345,9 @@ export interface PlanChange {
   nodeId?: string | null
   title?: string | null
   status?: PlanningNodeStatus | null
+  ioSchema?: IOSchema | null
+  contextSources?: ContextSource[] | null
+  dependsOnNodeIds?: string[] | null
 }
 
 export interface PlanProposal {
