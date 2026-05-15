@@ -731,6 +731,69 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(SessionToPlanningNodeMapper.map(session: done, canvasId: "c", doerId: "d").executorType, .cursor)
     }
 
+    func testCrossCanvasSuggestionRequiresTargetOwnerApproval() throws {
+        let targetCanvas = PlanningCanvas(
+            id: "target-canvas",
+            ownerId: "target-owner",
+            title: "Target Canvas",
+            plannerContext: "canvas:target-canvas"
+        )
+        let proposal = PlanProposal(
+            id: "proposal-target",
+            canvasId: "target-canvas",
+            summary: "Suggest target repair",
+            changes: [
+                .updateNode(id: "target-node", title: "Suggested repair")
+            ],
+            status: .pending
+        )
+
+        let suggestion = try service.createCrossCanvasSuggestion(
+            id: "suggestion-1",
+            sourceCanvasId: "source-canvas",
+            targetCanvas: targetCanvas,
+            sourcePlannerId: "planner-source",
+            suggestedProposal: proposal,
+            reason: "Source planner needs target output"
+        )
+
+        XCTAssertEqual(suggestion.status, .pending)
+        XCTAssertEqual(suggestion.targetOwnerId, "target-owner")
+        XCTAssertThrowsError(try service.acceptCrossCanvasSuggestion(suggestion, byOwnerId: "source-owner")) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .permissionDenied(action: "accept cross-canvas suggestion", role: .viewer))
+        }
+
+        let accepted = try service.acceptCrossCanvasSuggestion(suggestion, byOwnerId: "target-owner")
+        XCTAssertEqual(accepted.status, .accepted)
+        XCTAssertEqual(accepted.suggestedProposal.status, .pending)
+    }
+
+    func testCrossCanvasSuggestionRejectsProposalForWrongTargetCanvas() throws {
+        let targetCanvas = PlanningCanvas(
+            id: "target-canvas",
+            ownerId: "target-owner",
+            title: "Target Canvas",
+            plannerContext: "canvas:target-canvas"
+        )
+        let proposal = PlanProposal(
+            id: "proposal-other",
+            canvasId: "other-canvas",
+            summary: "Wrong target",
+            changes: [],
+            status: .pending
+        )
+
+        XCTAssertThrowsError(try service.createCrossCanvasSuggestion(
+            sourceCanvasId: "source-canvas",
+            targetCanvas: targetCanvas,
+            sourcePlannerId: "planner-source",
+            suggestedProposal: proposal,
+            reason: "Mismatch"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .canvasMismatch(expected: "target-canvas", actual: "other-canvas"))
+        }
+    }
+
     private func boardSnapshot(canvasId: String, ownerId: String) -> BoardLayoutStore.Snapshot {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let canvas = BoardLayoutStore.Canvas(

@@ -249,6 +249,23 @@ struct PlannerEvent: Codable, Equatable {
     var createdAt: Date
 }
 
+enum PlannerCrossCanvasSuggestionStatus: String, Codable, Equatable {
+    case pending
+    case accepted
+    case rejected
+}
+
+struct PlannerCrossCanvasSuggestion: Codable, Equatable {
+    var id: String
+    var sourceCanvasId: String
+    var targetCanvasId: String
+    var sourcePlannerId: String
+    var targetOwnerId: String
+    var suggestedProposal: PlanProposal
+    var reason: String
+    var status: PlannerCrossCanvasSuggestionStatus
+}
+
 enum PlannerMonitorItemKind: String, Codable, Equatable {
     case node
     case proposal
@@ -636,6 +653,62 @@ final class PlannerCoreService {
             pendingProposalCount: pendingProposalCount,
             needsOwnerReview: pendingProposalCount > 0 || scopedStates.contains(where: \.needsOwnerReview)
         )
+    }
+
+    func createCrossCanvasSuggestion(
+        id: String = "suggestion-\(UUID().uuidString.lowercased())",
+        sourceCanvasId: String,
+        targetCanvas: PlanningCanvas,
+        sourcePlannerId: String,
+        suggestedProposal: PlanProposal,
+        reason: String
+    ) throws -> PlannerCrossCanvasSuggestion {
+        guard suggestedProposal.canvasId == targetCanvas.id else {
+            throw PlannerCoreError.canvasMismatch(
+                expected: targetCanvas.id,
+                actual: suggestedProposal.canvasId
+            )
+        }
+        return PlannerCrossCanvasSuggestion(
+            id: id,
+            sourceCanvasId: sourceCanvasId,
+            targetCanvasId: targetCanvas.id,
+            sourcePlannerId: sourcePlannerId,
+            targetOwnerId: targetCanvas.ownerId,
+            suggestedProposal: suggestedProposal,
+            reason: reason,
+            status: .pending
+        )
+    }
+
+    func acceptCrossCanvasSuggestion(
+        _ suggestion: PlannerCrossCanvasSuggestion,
+        byOwnerId ownerId: String
+    ) throws -> PlannerCrossCanvasSuggestion {
+        guard ownerId == suggestion.targetOwnerId else {
+            throw PlannerCoreError.permissionDenied(
+                action: "accept cross-canvas suggestion",
+                role: .viewer
+            )
+        }
+        var accepted = suggestion
+        accepted.status = .accepted
+        return accepted
+    }
+
+    func rejectCrossCanvasSuggestion(
+        _ suggestion: PlannerCrossCanvasSuggestion,
+        byOwnerId ownerId: String
+    ) throws -> PlannerCrossCanvasSuggestion {
+        guard ownerId == suggestion.targetOwnerId else {
+            throw PlannerCoreError.permissionDenied(
+                action: "reject cross-canvas suggestion",
+                role: .viewer
+            )
+        }
+        var rejected = suggestion
+        rejected.status = .rejected
+        return rejected
     }
 
     private func artifactRefs(for node: PlanningNode) -> [String] {
