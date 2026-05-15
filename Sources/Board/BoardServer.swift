@@ -404,6 +404,7 @@ public final class BoardServer {
         server.POST["/api/canvases/:id/conflict"] = BoardServer.cors(BoardAPI.resolveCanvasConflict)
         server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)
         server.POST["/api/planner/canvases/:id/proposals/generate"] = BoardServer.cors(BoardAPI.generatePlannerProposal)
+        server.POST["/api/planner/canvases/:id/proposals/refine"] = BoardServer.cors(BoardAPI.refinePlannerProposal)
         server.POST["/api/planner/canvases/:id/proposals/inspect-drift"] = BoardServer.cors(BoardAPI.inspectPlannerDrift)
         server.POST["/api/planner/canvases/:id/proposals/apply-preview"] = BoardServer.cors(BoardAPI.applyPlannerProposalPreview)
         server.POST["/api/planner/canvases/:id/proposals/:proposalId/approve"] = BoardServer.cors(BoardAPI.approvePlannerProposal)

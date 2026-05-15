@@ -315,6 +315,37 @@ enum BoardAPI {
         }
     }
 
+    static func refinePlannerProposal(_ req: HttpRequest) -> HttpResponse {
+        struct RefineRequest: Decodable {
+            let nodeId: String
+            let reason: String?
+        }
+
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: RefineRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"nodeId\": String, \"reason\": String}", status: 400)
+        }
+        let nodeId = body.nodeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing node id", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.refineProposal(
+                nodeId: nodeId,
+                reason: body.reason ?? "",
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot()
+            )
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func applyPlannerProposalPreview(_ req: HttpRequest) -> HttpResponse {
         struct ApplyRequest: Decodable {
             let proposal: PlanProposal
@@ -412,7 +443,14 @@ enum BoardAPI {
         switch err {
         case .canvasNotFound, .proposalNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
-        case .proposalNotApproved, .canvasMismatch, .missingNodeForAdd, .missingNodeId, .nodeNotFound:
+        case .proposalNotApproved,
+             .canvasMismatch,
+             .emptyProposalChanges,
+             .invalidPlannerProposalJSON,
+             .missingNodeForAdd,
+             .missingNodeId,
+             .nodeNotFound,
+             .updateNodeNoFields:
             return errorResponse("planner_error", err.localizedDescription, status: 400)
         }
     }

@@ -199,6 +199,21 @@ export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposa
   return response.proposal
 }
 
+export async function refinePlannerNode(
+  canvasId: string,
+  nodeId: string,
+  reason: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/refine`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ nodeId, reason }),
+    },
+  )
+  return response.proposal
+}
+
 export function applyPlannerProposalPreview(
   canvasId: string,
   proposal: PlanProposal,

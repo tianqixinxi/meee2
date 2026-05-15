@@ -157,30 +157,97 @@ struct NodeStateSnapshot: Codable, Equatable {
 }
 
 enum PlannerCoreError: LocalizedError, Equatable {
+    case invalidPlannerProposalJSON
     case proposalNotApproved
     case proposalNotFound(String)
     case canvasMismatch(expected: String, actual: String)
+    case emptyProposalChanges
     case missingNodeForAdd
     case missingNodeId
     case nodeNotFound(String)
+    case updateNodeNoFields(String)
     case canvasNotFound(String)
 
     var errorDescription: String? {
         switch self {
+        case .invalidPlannerProposalJSON:
+            return "planner proposal output is not valid JSON"
         case .proposalNotApproved:
             return "plan proposal must be approved before apply"
         case .proposalNotFound(let id):
             return "plan proposal not found: \(id)"
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
+        case .emptyProposalChanges:
+            return "planner proposal must contain at least one change"
         case .missingNodeForAdd:
             return "addNode change is missing node"
         case .missingNodeId:
             return "updateNode change is missing nodeId"
         case .nodeNotFound(let id):
             return "planning node not found: \(id)"
+        case .updateNodeNoFields(let id):
+            return "updateNode change for \(id) must set title or status"
         case .canvasNotFound(let id):
             return "planning canvas not found: \(id)"
+        }
+    }
+}
+
+enum PlannerProposalValidator {
+    static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
+        let decoder = JSONDecoder()
+        for candidate in jsonCandidates(from: rawOutput) {
+            guard let data = candidate.data(using: .utf8) else { continue }
+            if let proposal = try? decoder.decode(PlanProposal.self, from: data) {
+                return proposal
+            }
+        }
+        throw PlannerCoreError.invalidPlannerProposalJSON
+    }
+
+    static func validate(
+        _ proposal: PlanProposal,
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode]
+    ) throws {
+        guard proposal.canvasId == canvas.id else {
+            throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
+        }
+        guard !proposal.changes.isEmpty else {
+            throw PlannerCoreError.emptyProposalChanges
+        }
+
+        let nodeIds = Set(nodes.map(\.id))
+        for change in proposal.changes {
+            switch change.kind {
+            case .addNode:
+                guard let node = change.node else { throw PlannerCoreError.missingNodeForAdd }
+                guard node.canvasId == canvas.id else {
+                    throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: node.canvasId)
+                }
+            case .updateNode:
+                guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
+                guard nodeIds.contains(nodeId) else { throw PlannerCoreError.nodeNotFound(nodeId) }
+                guard change.title != nil || change.status != nil else {
+                    throw PlannerCoreError.updateNodeNoFields(nodeId)
+                }
+            }
+        }
+    }
+
+    private static func jsonCandidates(from rawOutput: String) -> [String] {
+        let trimmed = rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates = [trimmed]
+        if let first = trimmed.firstIndex(of: "{"),
+           let last = trimmed.lastIndex(of: "}"),
+           first <= last {
+            candidates.append(String(trimmed[first...last]))
+        }
+        return candidates.reduce(into: []) { unique, candidate in
+            if !candidate.isEmpty && !unique.contains(candidate) {
+                unique.append(candidate)
+            }
         }
     }
 }
@@ -477,12 +544,15 @@ final class PlannerStore {
     func saveProposal(
         _ proposal: PlanProposal,
         canvas: PlanningCanvas,
-        seedNodes: [PlanningNode]
+        seedNodes: [PlanningNode],
+        validationNodes: [PlanningNode]? = nil
     ) throws -> PlanProposal {
         var record = try record(for: canvas, seedNodes: seedNodes)
-        guard proposal.canvasId == canvas.id else {
-            throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
-        }
+        try PlannerProposalValidator.validate(
+            proposal,
+            canvas: canvas,
+            nodes: validationNodes ?? record.nodes
+        )
         if let index = record.proposals.firstIndex(where: { $0.id == proposal.id }) {
             record.proposals[index] = proposal
         } else {
@@ -537,9 +607,7 @@ final class PlannerStore {
             throw PlannerCoreError.proposalNotFound(proposalId)
         }
         let proposal = record.proposals[index]
-        guard proposal.canvasId == canvasId else {
-            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
-        }
+        try PlannerProposalValidator.validate(proposal, canvas: record.canvas, nodes: record.nodes)
         let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
         record.nodes = nodes
         record.proposals[index].status = .applied
@@ -555,9 +623,7 @@ final class PlannerStore {
         service: PlannerCoreService
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
         let record = try record(for: canvas, seedNodes: seedNodes)
-        guard proposal.canvasId == canvas.id else {
-            throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
-        }
+        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: record.nodes)
         let approved = service.approve(proposal)
         let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
         return (approved, nodes)
@@ -662,7 +728,35 @@ enum PlannerBoardBridge {
             ],
             status: .pending
         )
-        .saved(in: store, canvas: state.canvas, seedNodes: service.nodeMock(canvasId: state.canvas.id))
+        .saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: service.nodeMock(canvasId: state.canvas.id),
+            validationNodes: state.nodes
+        )
+    }
+
+    static func refineProposal(
+        nodeId: String,
+        reason: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        let proposal = PlannerProposalFactory.refineNode(
+            node: node,
+            reason: reason,
+            idSuffix: UUID().uuidString.lowercased()
+        )
+        return try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: service.nodeMock(canvasId: state.canvas.id),
+            validationNodes: state.nodes
+        )
     }
 
     static func applyPreview(
@@ -763,9 +857,87 @@ private extension PlanProposal {
     func saved(
         in store: PlannerStore,
         canvas: PlanningCanvas,
-        seedNodes: [PlanningNode]
+        seedNodes: [PlanningNode],
+        validationNodes: [PlanningNode]? = nil
     ) throws -> PlanProposal {
-        try store.saveProposal(self, canvas: canvas, seedNodes: seedNodes)
+        try store.saveProposal(
+            self,
+            canvas: canvas,
+            seedNodes: seedNodes,
+            validationNodes: validationNodes
+        )
+    }
+}
+
+enum PlannerProposalFactory {
+    static func refineNode(
+        node: PlanningNode,
+        reason: String,
+        idSuffix: String? = nil
+    ) -> PlanProposal {
+        let suffix = idSuffix.map { "-\($0)" } ?? ""
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let followUp = PlanningNode(
+            id: "\(node.id)-refine\(suffix)",
+            canvasId: node.canvasId,
+            title: trimmedReason.isEmpty ? "\(node.title) refinement" : trimmedReason,
+            ioSchema: IOSchema(
+                consumes: [node.ioSchema.produces.joined(separator: ", ")],
+                produces: ["refined output"],
+                completionSignal: "refinement reviewed"
+            ),
+            contextSources: node.contextSources,
+            executionMode: .signOff,
+            executorType: node.executorType,
+            doerId: node.doerId,
+            status: .planning
+        )
+        return PlanProposal(
+            id: "proposal-\(node.id)-refine\(suffix)",
+            canvasId: node.canvasId,
+            summary: "Refine \(node.title)",
+            changes: [
+                .updateNode(id: node.id, status: .planning),
+                .addNode(followUp)
+            ],
+            status: .pending
+        )
+    }
+}
+
+enum PlannerDriftAdvisor {
+    static func splitProposal(
+        for node: PlanningNode,
+        state: NodeStateSnapshot,
+        reason: String
+    ) -> PlanProposal {
+        let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let splitNode = PlanningNode(
+            id: "\(node.id)-split",
+            canvasId: node.canvasId,
+            title: trimmedReason.isEmpty ? "\(node.title) split follow-up" : trimmedReason,
+            ioSchema: IOSchema(
+                consumes: node.ioSchema.consumes,
+                produces: ["split node output"],
+                completionSignal: "split output reviewed"
+            ),
+            contextSources: node.contextSources,
+            executionMode: .signOff,
+            executorType: node.executorType,
+            doerId: node.doerId,
+            status: .planning
+        )
+        let blockerSummary = state.blockers.isEmpty ? "blocked state" : state.blockers.joined(separator: "; ")
+        return PlanProposal(
+            id: "proposal-\(node.id)-split",
+            canvasId: node.canvasId,
+            summary: "Split \(node.title) because \(blockerSummary)",
+            changes: [
+                .updateNode(id: node.id, status: .planning),
+                .addNode(splitNode)
+            ],
+            status: .pending
+        )
     }
 }
 
@@ -804,37 +976,23 @@ final class MockPlannerAgent: PlannerAgent {
     }
 
     func refineNode(node: PlanningNode, reason: String) async throws -> PlanProposal {
-        let followUp = PlanningNode(
-            id: "\(node.id)-refine-1",
-            canvasId: node.canvasId,
-            title: reason.isEmpty ? "\(node.title) refinement" : reason,
-            ioSchema: IOSchema(
-                consumes: [node.ioSchema.produces.joined(separator: ", ")],
-                produces: ["refined output"],
-                completionSignal: "refinement reviewed"
-            ),
-            contextSources: node.contextSources,
-            executionMode: .signOff,
-            executorType: node.executorType,
-            doerId: node.doerId,
-            status: .planning
-        )
-        return PlanProposal(
-            id: "proposal-\(node.id)-refine",
-            canvasId: node.canvasId,
-            summary: "Refine \(node.title)",
-            changes: [
-                .updateNode(id: node.id, status: .planning),
-                .addNode(followUp)
-            ],
-            status: .pending
-        )
+        PlannerProposalFactory.refineNode(node: node, reason: reason)
     }
 
     func inspectDrift(nodes: [PlanningNode], states: [NodeStateSnapshot]) async throws -> PlanProposal? {
         guard let state = states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
               let node = nodes.first(where: { $0.id == state.nodeId }) else {
             return nil
+        }
+        if state.blockers.contains(where: { blocker in
+            let normalized = blocker.lowercased()
+            return normalized.contains("repeated") || normalized.contains("failed")
+        }) {
+            return PlannerDriftAdvisor.splitProposal(
+                for: node,
+                state: state,
+                reason: "\(node.title) split after repeated failure"
+            )
         }
         return PlanProposal(
             id: "proposal-\(node.id)-drift",

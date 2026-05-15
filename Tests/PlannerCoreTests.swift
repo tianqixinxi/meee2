@@ -122,6 +122,151 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(proposal?.changes.first?.kind, .updateNode)
     }
 
+    func testPlannerProposalValidatorDecodesRawAndFencedJSON() throws {
+        let raw = """
+        {
+          "id": "proposal-a",
+          "canvasId": "canvas-a",
+          "summary": "Repair blocked node",
+          "changes": [
+            {
+              "kind": "updateNode",
+              "nodeId": "canvas-a-node-1",
+              "title": "Repair node",
+              "status": "planning"
+            }
+          ],
+          "status": "pending"
+        }
+        """
+        let fenced = """
+        Planner output:
+        ```json
+        \(raw)
+        ```
+        """
+
+        XCTAssertEqual(try PlannerProposalValidator.decodeProposal(from: raw).id, "proposal-a")
+        XCTAssertEqual(try PlannerProposalValidator.decodeProposal(from: fenced).changes.first?.status, .planning)
+    }
+
+    func testPlannerProposalValidatorRejectsInvalidJSON() {
+        XCTAssertThrowsError(try PlannerProposalValidator.decodeProposal(from: "not json")) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .invalidPlannerProposalJSON)
+        }
+    }
+
+    func testPlannerProposalValidatorRejectsInvalidChanges() throws {
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+
+        XCTAssertThrowsError(try PlannerProposalValidator.validate(
+            PlanProposal(
+                id: "proposal-empty",
+                canvasId: "canvas-a",
+                summary: "No changes",
+                changes: [],
+                status: .pending
+            ),
+            canvas: canvas,
+            nodes: nodes
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .emptyProposalChanges)
+        }
+
+        XCTAssertThrowsError(try PlannerProposalValidator.validate(
+            PlanProposal(
+                id: "proposal-unknown",
+                canvasId: "canvas-a",
+                summary: "Unknown update",
+                changes: [.updateNode(id: "missing-node", title: "Missing")],
+                status: .pending
+            ),
+            canvas: canvas,
+            nodes: nodes
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .nodeNotFound("missing-node"))
+        }
+
+        XCTAssertThrowsError(try PlannerProposalValidator.validate(
+            PlanProposal(
+                id: "proposal-empty-update",
+                canvasId: "canvas-a",
+                summary: "Empty update",
+                changes: [PlanChange(kind: .updateNode, node: nil, nodeId: nodes[0].id, title: nil, status: nil)],
+                status: .pending
+            ),
+            canvas: canvas,
+            nodes: nodes
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .updateNodeNoFields(nodes[0].id))
+        }
+    }
+
+    func testPlannerProposalValidatorRejectsCrossCanvasProposalAndAddNode() throws {
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+        var crossCanvasNode = nodes[0]
+        crossCanvasNode.id = "canvas-b-node-1"
+        crossCanvasNode.canvasId = "canvas-b"
+
+        XCTAssertThrowsError(try PlannerProposalValidator.validate(
+            PlanProposal(
+                id: "proposal-cross",
+                canvasId: "canvas-b",
+                summary: "Cross canvas",
+                changes: [.updateNode(id: nodes[0].id, title: "Cross")],
+                status: .pending
+            ),
+            canvas: canvas,
+            nodes: nodes
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .canvasMismatch(expected: "canvas-a", actual: "canvas-b"))
+        }
+
+        XCTAssertThrowsError(try PlannerProposalValidator.validate(
+            PlanProposal(
+                id: "proposal-cross-add",
+                canvasId: "canvas-a",
+                summary: "Cross add",
+                changes: [.addNode(crossCanvasNode)],
+                status: .pending
+            ),
+            canvas: canvas,
+            nodes: nodes
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .canvasMismatch(expected: "canvas-a", actual: "canvas-b"))
+        }
+    }
+
+    func testMockPlannerInspectDriftSuggestsSplitForRepeatedFailure() async throws {
+        let planner = MockPlannerAgent()
+        let nodes = service.nodeMock(canvasId: "canvas-a")
+        let state = NodeStateSnapshot(
+            nodeId: nodes[0].id,
+            runState: .blocked,
+            blockers: ["repeated failure after two retries"],
+            artifactRefs: [],
+            needsOwnerReview: true
+        )
+
+        let proposal = try await planner.inspectDrift(nodes: nodes, states: [state])
+
+        XCTAssertEqual(proposal?.summary, "Split \(nodes[0].title) because repeated failure after two retries")
+        XCTAssertEqual(proposal?.changes.map(\.kind), [.updateNode, .addNode])
+        XCTAssertEqual(proposal?.changes.last?.node?.status, .planning)
+    }
+
     func testPlannerBoardBridgeBuildsCanvasStateFromBoardSnapshot() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
 
@@ -150,6 +295,27 @@ final class PlannerCoreTests: XCTestCase {
 
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
         XCTAssertEqual(state.proposals.map(\.id), [proposal.id])
+    }
+
+    func testPlannerBoardBridgeRefineProposalStaysPending() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        let node = try XCTUnwrap(state.nodes.first)
+
+        let proposal = try PlannerBoardBridge.refineProposal(
+            nodeId: node.id,
+            reason: "Split contract into DTO and API work",
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(proposal.canvasId, "canvas-a")
+        XCTAssertEqual(proposal.status, .pending)
+        XCTAssertEqual(proposal.changes.map(\.kind), [.updateNode, .addNode])
+        XCTAssertEqual(proposal.changes.last?.node?.title, "Split contract into DTO and API work")
+
+        let nextState = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertTrue(nextState.proposals.contains { $0.id == proposal.id })
     }
 
     func testPlannerBoardBridgeRejectsUnknownCanvas() throws {
