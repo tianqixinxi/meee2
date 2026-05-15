@@ -250,6 +250,19 @@ struct MessagesEnvelope: Encodable { let messages: [MessageDTO] }
 struct OkEnvelope: Encodable { let ok: Bool }
 struct CoordinationGroupEnvelope: Encodable { let group: CoordinationGroupDTO }
 struct CoordinationGroupsEnvelope: Encodable { let groups: [CoordinationGroupDTO] }
+struct PlannerCanvasStateEnvelope: Encodable {
+    let canvas: PlanningCanvas
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+}
+struct PlannerProposalEnvelope: Encodable {
+    let proposal: PlanProposal?
+}
+struct PlannerApplyPreviewEnvelope: Encodable {
+    let proposal: PlanProposal
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+}
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }
