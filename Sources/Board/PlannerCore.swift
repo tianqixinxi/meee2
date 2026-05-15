@@ -227,6 +227,28 @@ struct SubCanvasSummary: Codable, Equatable {
     var needsOwnerReview: Bool
 }
 
+enum PlannerEventType: String, Codable, Equatable {
+    case nodeCreated = "node.created"
+    case nodeUpdated = "node.updated"
+    case nodeStateChanged = "node.state_changed"
+    case proposalCreated = "proposal.created"
+    case proposalApproved = "proposal.approved"
+    case proposalApplied = "proposal.applied"
+    case proposalRejected = "proposal.rejected"
+    case artifactAttached = "artifact.attached"
+}
+
+struct PlannerEvent: Codable, Equatable {
+    var id: String
+    var canvasId: String
+    var type: PlannerEventType
+    var nodeId: String?
+    var proposalId: String?
+    var summary: String
+    var artifactRefs: [String]
+    var createdAt: Date
+}
+
 enum PlannerMonitorItemKind: String, Codable, Equatable {
     case node
     case proposal
@@ -748,6 +770,31 @@ final class PlannerStore {
         var canvas: PlanningCanvas
         var nodes: [PlanningNode]
         var proposals: [PlanProposal]
+        var events: [PlannerEvent]
+
+        init(
+            canvas: PlanningCanvas,
+            nodes: [PlanningNode],
+            proposals: [PlanProposal],
+            events: [PlannerEvent] = []
+        ) {
+            self.canvas = canvas
+            self.nodes = nodes
+            self.proposals = proposals
+            self.events = events
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case canvas, nodes, proposals, events
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.canvas = try container.decode(PlanningCanvas.self, forKey: .canvas)
+            self.nodes = try container.decode([PlanningNode].self, forKey: .nodes)
+            self.proposals = try container.decode([PlanProposal].self, forKey: .proposals)
+            self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
+        }
     }
 
     private struct StoreDocument: Codable {
@@ -811,6 +858,12 @@ final class PlannerStore {
             record.proposals[index] = proposal
         } else {
             record.proposals.append(proposal)
+            record.events.append(event(
+                canvasId: canvas.id,
+                type: .proposalCreated,
+                proposalId: proposal.id,
+                summary: proposal.summary
+            ))
         }
         document.canvases[canvas.id] = record
         try save()
@@ -829,6 +882,12 @@ final class PlannerStore {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
         }
         record.proposals[index].status = .approved
+        record.events.append(event(
+            canvasId: canvasId,
+            type: .proposalApproved,
+            proposalId: proposalId,
+            summary: record.proposals[index].summary
+        ))
         document.canvases[canvasId] = record
         try save()
         return record.proposals[index]
@@ -846,6 +905,12 @@ final class PlannerStore {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
         }
         record.proposals[index].status = .rejected
+        record.events.append(event(
+            canvasId: canvasId,
+            type: .proposalRejected,
+            proposalId: proposalId,
+            summary: record.proposals[index].summary
+        ))
         document.canvases[canvasId] = record
         try save()
         return record.proposals[index]
@@ -863,8 +928,15 @@ final class PlannerStore {
         let proposal = record.proposals[index]
         try PlannerProposalValidator.validate(proposal, canvas: record.canvas, nodes: record.nodes)
         let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
+        record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
         record.nodes = nodes
         record.proposals[index].status = .applied
+        record.events.append(event(
+            canvasId: canvasId,
+            type: .proposalApplied,
+            proposalId: proposalId,
+            summary: proposal.summary
+        ))
         document.canvases[canvasId] = record
         try save()
         return record
@@ -897,6 +969,93 @@ final class PlannerStore {
         )
         let data = try encoder.encode(document)
         try data.write(to: fileURL, options: .atomic)
+    }
+
+    private func events(
+        for proposal: PlanProposal,
+        before: [PlanningNode],
+        after: [PlanningNode]
+    ) -> [PlannerEvent] {
+        let beforeById = Dictionary(uniqueKeysWithValues: before.map { ($0.id, $0) })
+        let afterById = Dictionary(uniqueKeysWithValues: after.map { ($0.id, $0) })
+        var events: [PlannerEvent] = []
+        var changedNodeIds = Set<String>()
+        for change in proposal.changes {
+            switch change.kind {
+            case .addNode:
+                guard let node = change.node else { continue }
+                changedNodeIds.insert(node.id)
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .nodeCreated,
+                    nodeId: node.id,
+                    proposalId: proposal.id,
+                    summary: node.title
+                ))
+            case .updateNode:
+                guard let nodeId = change.nodeId,
+                      let afterNode = afterById[nodeId] else { continue }
+                changedNodeIds.insert(nodeId)
+                let beforeNode = beforeById[nodeId]
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .nodeUpdated,
+                    nodeId: nodeId,
+                    proposalId: proposal.id,
+                    summary: afterNode.title
+                ))
+                if beforeNode?.status != afterNode.status {
+                    events.append(event(
+                        canvasId: proposal.canvasId,
+                        type: .nodeStateChanged,
+                        nodeId: nodeId,
+                        proposalId: proposal.id,
+                        summary: "\(afterNode.title) -> \(afterNode.status.rawValue)"
+                    ))
+                }
+            }
+        }
+        for node in after where changedNodeIds.contains(node.id) && node.status == .done {
+            let refs = serviceArtifactRefs(node: node)
+            guard !refs.isEmpty else { continue }
+            events.append(event(
+                canvasId: proposal.canvasId,
+                type: .artifactAttached,
+                nodeId: node.id,
+                proposalId: proposal.id,
+                summary: node.title,
+                artifactRefs: refs
+            ))
+        }
+        return events
+    }
+
+    private func serviceArtifactRefs(node: PlanningNode) -> [String] {
+        var refs = node.status == .done ? ["artifact://\(node.id)/output"] : []
+        if let subCanvasId = node.subCanvasId {
+            refs.append("subcanvas:\(subCanvasId)")
+        }
+        return refs
+    }
+
+    private func event(
+        canvasId: String,
+        type: PlannerEventType,
+        nodeId: String? = nil,
+        proposalId: String? = nil,
+        summary: String,
+        artifactRefs: [String] = []
+    ) -> PlannerEvent {
+        PlannerEvent(
+            id: "event-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            type: type,
+            nodeId: nodeId,
+            proposalId: proposalId,
+            summary: summary,
+            artifactRefs: artifactRefs,
+            createdAt: Date()
+        )
     }
 
     private static func loadDocument(

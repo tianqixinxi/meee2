@@ -593,6 +593,43 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(state.nodes.contains { $0.title == "Persist applied node" })
     }
 
+    func testPlannerStoreWritesProposalAndNodeEvents() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Event sourced node",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(
+                id: "canvas-a",
+                ownerId: "owner-a",
+                title: "Planning Canvas",
+                plannerContext: "canvas:canvas-a"
+            ),
+            seedNodes: service.nodeMock(canvasId: "canvas-a")
+        )
+
+        XCTAssertTrue(record.events.contains { $0.type == .proposalCreated && $0.proposalId == proposal.id })
+        XCTAssertTrue(record.events.contains { $0.type == .proposalApproved && $0.proposalId == proposal.id })
+        XCTAssertTrue(record.events.contains { $0.type == .proposalApplied && $0.proposalId == proposal.id })
+        XCTAssertTrue(record.events.contains { $0.type == .nodeCreated && $0.proposalId == proposal.id })
+    }
+
     func testPlannerProposalCanBeRejected() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
