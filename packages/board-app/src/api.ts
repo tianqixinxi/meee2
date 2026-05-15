@@ -9,6 +9,8 @@ import type {
   SelectedCanvasElementContext,
   SpawnProvider,
   CoordinationGroup,
+  PlanProposal,
+  PlannerCanvasState,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -164,6 +166,96 @@ export function spawnGlobalSession(
       body: JSON.stringify({ provider }),
     },
   )
+}
+
+// -- planner ---------------------------------------------------------------
+
+export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvasState> {
+  return jsonRequest<PlannerCanvasState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/state`)
+}
+
+export async function generatePlannerProposal(
+  canvasId: string,
+  goal: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ goal }),
+    },
+  )
+  return response.proposal
+}
+
+export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/inspect-drift`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export function applyPlannerProposalPreview(
+  canvasId: string,
+  proposal: PlanProposal,
+): Promise<{
+  proposal: PlanProposal
+  nodes: PlannerCanvasState['nodes']
+  states: PlannerCanvasState['states']
+}> {
+  return jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/apply-preview`, {
+    method: 'POST',
+    body: JSON.stringify({ proposal }),
+  })
+}
+
+export async function approvePlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/approve`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export function applyPlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<{
+  proposal: PlanProposal
+  nodes: PlannerCanvasState['nodes']
+  states: PlannerCanvasState['states']
+}> {
+  return jsonRequest(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export async function rejectPlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
 }
 
 export interface UserProfile {

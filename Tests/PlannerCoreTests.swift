@@ -1,8 +1,23 @@
 import XCTest
+import Meee2PluginKit
 @testable import meee2Kit
 
 final class PlannerCoreTests: XCTestCase {
     private let service = PlannerCoreService()
+    private var plannerStoreURL: URL!
+
+    override func setUpWithError() throws {
+        plannerStoreURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("planner-core-tests-\(UUID().uuidString)")
+            .appendingPathComponent("planner-canvases.json")
+        PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
+    }
+
+    override func tearDownWithError() throws {
+        PlannerBoardBridge.store = PlannerStore.shared
+        try? FileManager.default.removeItem(at: plannerStoreURL.deletingLastPathComponent())
+        plannerStoreURL = nil
+    }
 
     func testNodeMockGeneratesNodesForOneCanvas() {
         let nodes = service.nodeMock(canvasId: "canvas-a")
@@ -116,6 +131,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.canvas.ownerId, "owner-a")
         XCTAssertTrue(state.nodes.allSatisfy { $0.canvasId == "canvas-a" })
         XCTAssertEqual(state.states.count, state.nodes.count)
+        XCTAssertEqual(state.proposals.count, 0)
     }
 
     func testPlannerBoardBridgeGenerateProposalStaysPending() throws {
@@ -131,6 +147,9 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(proposal.status, .pending)
         XCTAssertEqual(proposal.changes.first?.kind, .addNode)
         XCTAssertEqual(proposal.changes.first?.node?.doerId, "owner-a")
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertEqual(state.proposals.map(\.id), [proposal.id])
     }
 
     func testPlannerBoardBridgeRejectsUnknownCanvas() throws {
@@ -156,8 +175,161 @@ final class PlannerCoreTests: XCTestCase {
         )
 
         XCTAssertEqual(preview.proposal.status, .approved)
-        XCTAssertTrue(preview.nodes.contains { $0.id == "canvas-a-proposal-node-1" })
+        XCTAssertTrue(preview.nodes.contains { $0.title == "Ship owner approval" })
         XCTAssertEqual(preview.nodes.count, preview.states.count)
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertFalse(state.nodes.contains { $0.title == "Ship owner approval" })
+        XCTAssertEqual(state.proposals.first?.status, .pending)
+    }
+
+    func testPlannerStorePersistsStateAcrossInstances() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Persist planner proposal",
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+
+        PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+
+        XCTAssertEqual(state.proposals.first?.id, proposal.id)
+        XCTAssertEqual(state.proposals.first?.status, .pending)
+        XCTAssertTrue(state.nodes.contains { $0.title == "Planner LLM Spike" })
+    }
+
+    func testPlannerProposalLifecycleRequiresApprovalBeforePersistentApply() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Persist applied node",
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+
+        XCTAssertThrowsError(try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
+        }
+
+        let approved = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+        XCTAssertEqual(approved.status, .approved)
+
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+        XCTAssertEqual(applied.proposal.status, .applied)
+        XCTAssertTrue(applied.nodes.contains { $0.title == "Persist applied node" })
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertEqual(state.proposals.first?.status, .applied)
+        XCTAssertTrue(state.nodes.contains { $0.title == "Persist applied node" })
+    }
+
+    func testPlannerProposalCanBeRejected() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Reject this proposal",
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+
+        let rejected = try PlannerBoardBridge.rejectProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(rejected.status, .rejected)
+        XCTAssertThrowsError(try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
+        }
+    }
+
+    func testPlannerProposalCannotApplyAcrossCanvas() throws {
+        let snapshotA = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let snapshotB = boardSnapshot(canvasId: "canvas-b", ownerId: "owner-b")
+        let proposal = try PlannerBoardBridge.generateProposal(
+            goal: "Canvas scoped proposal",
+            for: "canvas-a",
+            snapshot: snapshotA
+        )
+
+        _ = try PlannerBoardBridge.canvasState(for: "canvas-b", snapshot: snapshotB)
+
+        XCTAssertThrowsError(try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-b",
+            snapshot: snapshotB
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .proposalNotFound(proposal.id))
+        }
+    }
+
+    func testSessionToPlanningNodeMapperMapsRealSessionShape() {
+        let session = PluginSession(
+            id: "com.meee2.plugin.codex-thread-123",
+            pluginId: "com.meee2.plugin.codex",
+            title: "Fix failing tests",
+            status: .permissionRequired,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            subtitle: "Waiting for owner approval",
+            cwd: "/tmp/project",
+            transcriptPath: "/tmp/project/thread.jsonl",
+            lastMessage: "Need permission to edit files"
+        )
+
+        let node = SessionToPlanningNodeMapper.map(
+            session: session,
+            canvasId: "canvas-a",
+            doerId: "owner-a"
+        )
+
+        XCTAssertEqual(node.canvasId, "canvas-a")
+        XCTAssertEqual(node.title, "Fix failing tests")
+        XCTAssertEqual(node.executorType, .codex)
+        XCTAssertEqual(node.executionMode, .signOff)
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.sessionId, session.id)
+        XCTAssertEqual(node.chatThreadId, session.id)
+        XCTAssertEqual(node.source, .session)
+        XCTAssertTrue(node.contextSources.contains { $0.kind == .repository && $0.reference == "/tmp/project" })
+        XCTAssertTrue(node.contextSources.contains { $0.kind == .chatHistory && $0.reference == "/tmp/project/thread.jsonl" })
+    }
+
+    func testSessionToPlanningNodeMapperMapsRunningAndDoneStates() {
+        let running = PluginSession(
+            id: "claude-running",
+            pluginId: "com.meee2.plugin.claude",
+            title: "Claude run",
+            status: .tooling,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let done = PluginSession(
+            id: "cursor-done",
+            pluginId: "com.meee2.plugin.cursor",
+            title: "Cursor run",
+            status: .completed,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: running, canvasId: "c", doerId: "d").status, .running)
+        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: running, canvasId: "c", doerId: "d").executorType, .claude)
+        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: done, canvasId: "c", doerId: "d").status, .done)
+        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: done, canvasId: "c", doerId: "d").executorType, .cursor)
     }
 
     private func boardSnapshot(canvasId: String, ownerId: String) -> BoardLayoutStore.Snapshot {

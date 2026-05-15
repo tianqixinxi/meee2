@@ -271,6 +271,95 @@ export interface CanvasList {
   memberships: CanvasSessionMembership[]
 }
 
+export interface PlanningCanvas {
+  id: string
+  ownerId: string
+  title: string
+  plannerContext: string
+}
+
+export interface IOSchema {
+  consumes: string[]
+  produces: string[]
+  completionSignal: string
+}
+
+export type ContextSourceKind =
+  | 'chatHistory'
+  | 'repository'
+  | 'web'
+  | 'document'
+  | 'artifact'
+
+export interface ContextSource {
+  kind: ContextSourceKind
+  title: string
+  reference: string
+}
+
+export type ExecutionMode = 'auto' | 'sign-off' | 'human'
+export type ExecutorType =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'openClaw'
+  | 'devin'
+  | 'human'
+  | 'mock'
+export type PlanningNodeStatus = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
+export type PlanningNodeSource = 'planner' | 'session'
+
+export interface PlanningNode {
+  id: string
+  canvasId: string
+  title: string
+  ioSchema: IOSchema
+  contextSources: ContextSource[]
+  executionMode: ExecutionMode
+  executorType: ExecutorType
+  doerId: string
+  status: PlanningNodeStatus
+  sessionId?: string | null
+  chatThreadId?: string | null
+  source?: PlanningNodeSource | null
+}
+
+export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
+export type PlanChangeKind = 'addNode' | 'updateNode'
+
+export interface PlanChange {
+  kind: PlanChangeKind
+  node?: PlanningNode | null
+  nodeId?: string | null
+  title?: string | null
+  status?: PlanningNodeStatus | null
+}
+
+export interface PlanProposal {
+  id: string
+  canvasId: string
+  summary: string
+  changes: PlanChange[]
+  status: PlanProposalStatus
+}
+
+export type NodeRunState = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
+
+export interface NodeStateSnapshot {
+  nodeId: string
+  runState: NodeRunState
+  blockers: string[]
+  artifactRefs: string[]
+  needsOwnerReview: boolean
+}
+
+export interface PlannerCanvasState {
+  canvas: PlanningCanvas
+  nodes: PlanningNode[]
+  states: NodeStateSnapshot[]
+  proposals: PlanProposal[]
+}
+
 export interface SelectedCanvasElementContext {
   id: string
   type: string

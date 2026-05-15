@@ -1,4 +1,5 @@
 import Foundation
+import Meee2PluginKit
 
 struct PlanningCanvas: Codable, Equatable {
     var id: String
@@ -51,6 +52,11 @@ enum PlanningNodeStatus: String, Codable, Equatable {
     case planning
 }
 
+enum PlanningNodeSource: String, Codable, Equatable {
+    case planner
+    case session
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -61,6 +67,37 @@ struct PlanningNode: Codable, Equatable {
     var executorType: ExecutorType
     var doerId: String
     var status: PlanningNodeStatus
+    var sessionId: String?
+    var chatThreadId: String?
+    var source: PlanningNodeSource?
+
+    init(
+        id: String,
+        canvasId: String,
+        title: String,
+        ioSchema: IOSchema,
+        contextSources: [ContextSource],
+        executionMode: ExecutionMode,
+        executorType: ExecutorType,
+        doerId: String,
+        status: PlanningNodeStatus,
+        sessionId: String? = nil,
+        chatThreadId: String? = nil,
+        source: PlanningNodeSource? = .planner
+    ) {
+        self.id = id
+        self.canvasId = canvasId
+        self.title = title
+        self.ioSchema = ioSchema
+        self.contextSources = contextSources
+        self.executionMode = executionMode
+        self.executorType = executorType
+        self.doerId = doerId
+        self.status = status
+        self.sessionId = sessionId
+        self.chatThreadId = chatThreadId
+        self.source = source
+    }
 }
 
 enum PlanProposalStatus: String, Codable, Equatable {
@@ -121,6 +158,7 @@ struct NodeStateSnapshot: Codable, Equatable {
 
 enum PlannerCoreError: LocalizedError, Equatable {
     case proposalNotApproved
+    case proposalNotFound(String)
     case canvasMismatch(expected: String, actual: String)
     case missingNodeForAdd
     case missingNodeId
@@ -131,6 +169,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
         switch self {
         case .proposalNotApproved:
             return "plan proposal must be approved before apply"
+        case .proposalNotFound(let id):
+            return "plan proposal not found: \(id)"
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
         case .missingNodeForAdd:
@@ -276,17 +316,296 @@ final class PlannerCoreService {
     }
 }
 
+enum SessionToPlanningNodeMapper {
+    static func map(
+        session: PluginSession,
+        canvasId: String,
+        doerId: String
+    ) -> PlanningNode {
+        PlanningNode(
+            id: "\(canvasId)-session-\(stableNodeSuffix(for: session.id))",
+            canvasId: canvasId,
+            title: session.title.isEmpty ? session.projectName : session.title,
+            ioSchema: IOSchema(
+                consumes: sessionInputHints(session),
+                produces: ["session output"],
+                completionSignal: completionSignal(for: session.status)
+            ),
+            contextSources: contextSources(session),
+            executionMode: session.status == .permissionRequired ? .signOff : .auto,
+            executorType: executorType(pluginId: session.pluginId),
+            doerId: doerId,
+            status: nodeStatus(session.status),
+            sessionId: session.id,
+            chatThreadId: chatThreadId(session),
+            source: .session
+        )
+    }
+
+    private static func stableNodeSuffix(for sessionId: String) -> String {
+        sessionId
+            .lowercased()
+            .map { char in
+                char.isLetter || char.isNumber ? char : "-"
+            }
+            .reduce(into: "") { $0.append($1) }
+    }
+
+    private static func sessionInputHints(_ session: PluginSession) -> [String] {
+        var hints: [String] = []
+        if let cwd = session.cwd, !cwd.isEmpty {
+            hints.append("cwd:\(cwd)")
+        }
+        if let subtitle = session.subtitle, !subtitle.isEmpty {
+            hints.append("task:\(subtitle)")
+        }
+        if hints.isEmpty {
+            hints.append("session:\(session.id)")
+        }
+        return hints
+    }
+
+    private static func contextSources(_ session: PluginSession) -> [ContextSource] {
+        var sources: [ContextSource] = []
+        if let cwd = session.cwd, !cwd.isEmpty {
+            sources.append(ContextSource(kind: .repository, title: session.projectName, reference: cwd))
+        }
+        if let transcriptPath = session.transcriptPath, !transcriptPath.isEmpty {
+            sources.append(ContextSource(kind: .chatHistory, title: "Session transcript", reference: transcriptPath))
+        }
+        if let lastMessage = session.lastMessage, !lastMessage.isEmpty {
+            sources.append(ContextSource(kind: .artifact, title: "Last message", reference: lastMessage))
+        }
+        return sources
+    }
+
+    private static func executorType(pluginId: String) -> ExecutorType {
+        let normalized = pluginId.lowercased()
+        if normalized.contains("claude") { return .claude }
+        if normalized.contains("codex") { return .codex }
+        if normalized.contains("cursor") { return .cursor }
+        if normalized.contains("openclaw") { return .openClaw }
+        return .mock
+    }
+
+    private static func nodeStatus(_ status: SessionStatus) -> PlanningNodeStatus {
+        switch status {
+        case .thinking, .tooling, .active, .compacting:
+            return .running
+        case .permissionRequired, .dead:
+            return .blocked
+        case .completed:
+            return .done
+        case .idle, .waitingForUser:
+            return .waiting
+        }
+    }
+
+    private static func completionSignal(for status: SessionStatus) -> String {
+        switch status {
+        case .permissionRequired:
+            return "owner permission required"
+        case .completed:
+            return "session completed"
+        case .dead:
+            return "session failed or disappeared"
+        default:
+            return "session state changed"
+        }
+    }
+
+    private static func chatThreadId(_ session: PluginSession) -> String? {
+        if session.pluginId.lowercased().contains("codex") {
+            return session.id
+        }
+        return nil
+    }
+}
+
+final class PlannerStore {
+    struct CanvasRecord: Codable, Equatable {
+        var canvas: PlanningCanvas
+        var nodes: [PlanningNode]
+        var proposals: [PlanProposal]
+    }
+
+    private struct StoreDocument: Codable {
+        var canvases: [String: CanvasRecord]
+    }
+
+    static let shared = PlannerStore(
+        fileURL: URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("planner-canvases.json")
+    )
+
+    private let fileURL: URL
+    private let fileManager: FileManager
+    private let encoder: JSONEncoder
+    private let decoder = JSONDecoder()
+    private var document: StoreDocument
+
+    init(fileURL: URL, fileManager: FileManager = .default) {
+        self.fileURL = fileURL
+        self.fileManager = fileManager
+        self.encoder = JSONEncoder()
+        self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        self.document = Self.loadDocument(fileURL: fileURL, fileManager: fileManager, decoder: decoder)
+    }
+
+    func record(
+        for canvas: PlanningCanvas,
+        seedNodes: [PlanningNode]
+    ) throws -> CanvasRecord {
+        if let existing = document.canvases[canvas.id] {
+            if existing.canvas == canvas {
+                return existing
+            }
+            var updated = existing
+            updated.canvas = canvas
+            document.canvases[canvas.id] = updated
+            try save()
+            return updated
+        }
+
+        let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
+        document.canvases[canvas.id] = record
+        try save()
+        return record
+    }
+
+    func saveProposal(
+        _ proposal: PlanProposal,
+        canvas: PlanningCanvas,
+        seedNodes: [PlanningNode]
+    ) throws -> PlanProposal {
+        var record = try record(for: canvas, seedNodes: seedNodes)
+        guard proposal.canvasId == canvas.id else {
+            throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
+        }
+        if let index = record.proposals.firstIndex(where: { $0.id == proposal.id }) {
+            record.proposals[index] = proposal
+        } else {
+            record.proposals.append(proposal)
+        }
+        document.canvases[canvas.id] = record
+        try save()
+        return proposal
+    }
+
+    func approveProposal(
+        proposalId: String,
+        canvasId: String
+    ) throws -> PlanProposal {
+        var record = try requireRecord(canvasId: canvasId)
+        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+            throw PlannerCoreError.proposalNotFound(proposalId)
+        }
+        guard record.proposals[index].canvasId == canvasId else {
+            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
+        }
+        record.proposals[index].status = .approved
+        document.canvases[canvasId] = record
+        try save()
+        return record.proposals[index]
+    }
+
+    func rejectProposal(
+        proposalId: String,
+        canvasId: String
+    ) throws -> PlanProposal {
+        var record = try requireRecord(canvasId: canvasId)
+        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+            throw PlannerCoreError.proposalNotFound(proposalId)
+        }
+        guard record.proposals[index].canvasId == canvasId else {
+            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
+        }
+        record.proposals[index].status = .rejected
+        document.canvases[canvasId] = record
+        try save()
+        return record.proposals[index]
+    }
+
+    func applyProposal(
+        proposalId: String,
+        canvasId: String,
+        service: PlannerCoreService
+    ) throws -> CanvasRecord {
+        var record = try requireRecord(canvasId: canvasId)
+        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+            throw PlannerCoreError.proposalNotFound(proposalId)
+        }
+        let proposal = record.proposals[index]
+        guard proposal.canvasId == canvasId else {
+            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
+        }
+        let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
+        record.nodes = nodes
+        record.proposals[index].status = .applied
+        document.canvases[canvasId] = record
+        try save()
+        return record
+    }
+
+    func preview(
+        proposal: PlanProposal,
+        canvas: PlanningCanvas,
+        seedNodes: [PlanningNode],
+        service: PlannerCoreService
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
+        let record = try record(for: canvas, seedNodes: seedNodes)
+        guard proposal.canvasId == canvas.id else {
+            throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
+        }
+        let approved = service.approve(proposal)
+        let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
+        return (approved, nodes)
+    }
+
+    private func requireRecord(canvasId: String) throws -> CanvasRecord {
+        guard let record = document.canvases[canvasId] else {
+            throw PlannerCoreError.canvasNotFound(canvasId)
+        }
+        return record
+    }
+
+    private func save() throws {
+        try fileManager.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let data = try encoder.encode(document)
+        try data.write(to: fileURL, options: .atomic)
+    }
+
+    private static func loadDocument(
+        fileURL: URL,
+        fileManager: FileManager,
+        decoder: JSONDecoder
+    ) -> StoreDocument {
+        guard fileManager.fileExists(atPath: fileURL.path),
+              let data = try? Data(contentsOf: fileURL),
+              let decoded = try? decoder.decode(StoreDocument.self, from: data) else {
+            return StoreDocument(canvases: [:])
+        }
+        return decoded
+    }
+}
+
 enum PlannerBoardBridge {
     private static let service = PlannerCoreService()
+    static var store = PlannerStore.shared
 
     static func canvasState(
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot
-    ) throws -> (canvas: PlanningCanvas, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
+    ) throws -> (canvas: PlanningCanvas, nodes: [PlanningNode], states: [NodeStateSnapshot], proposals: [PlanProposal]) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas)
-        let nodes = service.nodeMock(canvasId: canvas.id)
-        return (canvas, nodes, service.readNodeState(nodes: nodes))
+        let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
+        let nodes = record.nodes + sessionBackedNodes(for: record.canvas, snapshot: snapshot)
+        return (record.canvas, nodes, service.readNodeState(nodes: nodes), record.proposals)
     }
 
     static func generateProposal(
@@ -297,8 +616,9 @@ enum PlannerBoardBridge {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas)
         let title = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposalUUID = UUID().uuidString.lowercased()
         let node = PlanningNode(
-            id: "\(canvas.id)-proposal-node-1",
+            id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
             title: title.isEmpty ? "Generated planner node" : title,
             ioSchema: IOSchema(
@@ -314,13 +634,14 @@ enum PlannerBoardBridge {
             doerId: canvas.ownerId,
             status: .waiting
         )
-        return PlanProposal(
-            id: "proposal-\(canvas.id)-generate",
+        return try PlanProposal(
+            id: "proposal-\(canvas.id)-generate-\(proposalUUID)",
             canvasId: canvas.id,
             summary: "Generate planner graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
+        .saved(in: store, canvas: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
     }
 
     static func driftProposal(
@@ -332,8 +653,8 @@ enum PlannerBoardBridge {
               let node = state.nodes.first(where: { $0.id == blocked.nodeId }) else {
             return nil
         }
-        return PlanProposal(
-            id: "proposal-\(node.id)-drift",
+        return try PlanProposal(
+            id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
             summary: "Planner detected drift or review need for \(node.title)",
             changes: [
@@ -341,6 +662,7 @@ enum PlannerBoardBridge {
             ],
             status: .pending
         )
+        .saved(in: store, canvas: state.canvas, seedNodes: service.nodeMock(canvasId: state.canvas.id))
     }
 
     static func applyPreview(
@@ -352,10 +674,48 @@ enum PlannerBoardBridge {
         guard proposal.canvasId == canvasId else {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
         }
-        let currentNodes = service.nodeMock(canvasId: canvasId)
-        let approved = service.approve(proposal)
-        let nodes = try service.applyNodeChange(nodes: currentNodes, proposal: approved)
+        let boardCanvas = try requireCanvas(canvasId, in: snapshot)
+        let canvas = planningCanvas(from: boardCanvas)
+        let preview = try store.preview(
+            proposal: proposal,
+            canvas: canvas,
+            seedNodes: service.nodeMock(canvasId: canvasId),
+            service: service
+        )
+        let approved = preview.proposal
+        let nodes = preview.nodes
         return (approved, nodes, service.readNodeState(nodes: nodes))
+    }
+
+    static func approveProposal(
+        proposalId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot
+    ) throws -> PlanProposal {
+        _ = try requireCanvas(canvasId, in: snapshot)
+        return try store.approveProposal(proposalId: proposalId, canvasId: canvasId)
+    }
+
+    static func rejectProposal(
+        proposalId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot
+    ) throws -> PlanProposal {
+        _ = try requireCanvas(canvasId, in: snapshot)
+        return try store.rejectProposal(proposalId: proposalId, canvasId: canvasId)
+    }
+
+    static func applyProposal(
+        proposalId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
+        _ = try requireCanvas(canvasId, in: snapshot)
+        let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
+        guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
+            throw PlannerCoreError.proposalNotFound(proposalId)
+        }
+        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes))
     }
 
     private static func requireCanvas(
@@ -375,6 +735,37 @@ enum PlannerBoardBridge {
             title: canvas.name,
             plannerContext: "canvas:\(canvas.id)"
         )
+    }
+
+    private static func sessionBackedNodes(
+        for canvas: PlanningCanvas,
+        snapshot: BoardLayoutStore.Snapshot
+    ) -> [PlanningNode] {
+        let visibleSessionIds = Set(snapshot.memberships
+            .filter { $0.canvasId == canvas.id && $0.visible }
+            .map(\.sessionId))
+        guard !visibleSessionIds.isEmpty else { return [] }
+
+        return PluginManager.shared.sessions
+            .filter { visibleSessionIds.contains($0.id) }
+            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
+            .map {
+                SessionToPlanningNodeMapper.map(
+                    session: $0,
+                    canvasId: canvas.id,
+                    doerId: canvas.ownerId
+                )
+            }
+    }
+}
+
+private extension PlanProposal {
+    func saved(
+        in store: PlannerStore,
+        canvas: PlanningCanvas,
+        seedNodes: [PlanningNode]
+    ) throws -> PlanProposal {
+        try store.saveProposal(self, canvas: canvas, seedNodes: seedNodes)
     }
 }
 

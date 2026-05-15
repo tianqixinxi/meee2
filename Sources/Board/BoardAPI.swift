@@ -266,7 +266,8 @@ enum BoardAPI {
             return jsonResponse(PlannerCanvasStateEnvelope(
                 canvas: state.canvas,
                 nodes: state.nodes,
-                states: state.states
+                states: state.states,
+                proposals: state.proposals
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -343,9 +344,73 @@ enum BoardAPI {
         }
     }
 
+    static func approvePlannerProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let proposalId = req.params[":proposalId"], !proposalId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or proposal id", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.approveProposal(
+                proposalId: proposalId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func applyPlannerProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let proposalId = req.params[":proposalId"], !proposalId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or proposal id", status: 400)
+        }
+        do {
+            let result = try PlannerBoardBridge.applyProposal(
+                proposalId: proposalId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerApplyPreviewEnvelope(
+                proposal: result.proposal,
+                nodes: result.nodes,
+                states: result.states
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func rejectPlannerProposal(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let proposalId = req.params[":proposalId"], !proposalId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or proposal id", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.rejectProposal(
+                proposalId: proposalId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     private static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
         switch err {
-        case .canvasNotFound:
+        case .canvasNotFound, .proposalNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
         case .proposalNotApproved, .canvasMismatch, .missingNodeForAdd, .missingNodeId, .nodeNotFound:
             return errorResponse("planner_error", err.localizedDescription, status: 400)

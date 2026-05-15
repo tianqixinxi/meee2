@@ -188,6 +188,44 @@ textarea {
   height: 100%;
 }
 
+.workspace-mode-tabs {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  z-index: 95;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  width: 176px;
+  padding: 3px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(36, 36, 33, 0.86);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+}
+
+.workspace-mode-tabs button {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.workspace-mode-tabs button:hover {
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text);
+}
+
+.workspace-mode-tabs button.is-active {
+  background: rgba(204, 120, 92, 0.18);
+  color: var(--text);
+}
+
 .canvas-global-loading {
   position: absolute;
   inset: 0;

@@ -13,6 +13,7 @@ import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
+import { PlannerGraph } from './components/planner/PlannerGraph'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { useBoardState } from './useBoardState'
 import type {
@@ -326,6 +327,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [workspaceMode, setWorkspaceMode] = useState<'board' | 'planner'>('board')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
@@ -720,6 +722,7 @@ export default function App() {
   // (so they can still type into Excalidraw text shapes etc.). The
   // `selection.kind === 'session'` vs `'none'` split handles that.
   useEffect(() => {
+    if (workspaceMode !== 'board') return
     const isInputTarget = (t: EventTarget | null) => {
       if (!(t instanceof HTMLElement)) return false
       const tag = t.tagName
@@ -834,7 +837,7 @@ export default function App() {
       window.removeEventListener('paste', onPaste, true)
       window.removeEventListener('dblclick', onDblClick, true)
     }
-  }, [selectedSessionId, selection.kind, dockOpen])
+  }, [selectedSessionId, selection.kind, dockOpen, workspaceMode])
 
   // Refetch currently-cached templates when fetched board state actually
   // changes. Unchanged websocket frames are filtered in useBoardState.
@@ -933,45 +936,52 @@ export default function App() {
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
         <div className="board-area">
-          <Board
-            canvasId={activeCanvasId}
-            canvasLoading={activeCanvasLoading}
-            gridModeEnabled={boardGridEnabled}
-            currentCanvasSessionIds={canvasSessionIds}
-            persistence={persistence}
-            initial={hydrated}
-            state={canvasBoardState}
-            selection={selection}
-            onSelectionChange={setSelection}
-            onSelectedElementsContextChange={setSelectedCanvasElements}
-            fitSignal={fitSignal}
-            addToCanvasRequest={addToCanvasRequest}
-            hideFromCanvasRequest={hideFromCanvasRequest}
-            bulkVisibilityRequest={bulkVisibilityRequest}
-            focusSessionRequest={focusSessionRequest}
-            canvasPatchRequest={canvasPatchRequest}
-            canAddSessionToCanvas={canAddSessionToCanvas}
-            onCanvasPatchApplied={handleCanvasPatchApplied}
-            onCountsChange={handleCountsChange}
-            onSceneSnapshotChange={handleSceneSnapshotChange}
-            templateCache={templateCache}
-            onNeedTemplate={ensureTemplate}
-            unreadSids={unreadSids}
-            onRefresh={() => {
-              boardState.refresh()
-              void refreshCanvases()
-            }}
-            onNewChannel={() => setNewChannelOpen(true)}
-            placeChannelRequest={placeChannelRequest}
-            onAskAndSpawn={() => {
-              setAssistantRequested(true)
-              dockSeedRef.current = ''
-              setDockOpen(true)
-            }}
-            onPreferences={() => setPreferencesOpen(true)}
-            onFit={() => setFitSignal((x) => x + 1)}
-            arrangeSignal={arrangeSignal}
-          />
+          {workspaceMode === 'board' ? (
+            <Board
+              canvasId={activeCanvasId}
+              canvasLoading={activeCanvasLoading}
+              gridModeEnabled={boardGridEnabled}
+              currentCanvasSessionIds={canvasSessionIds}
+              persistence={persistence}
+              initial={hydrated}
+              state={canvasBoardState}
+              selection={selection}
+              onSelectionChange={setSelection}
+              onSelectedElementsContextChange={setSelectedCanvasElements}
+              fitSignal={fitSignal}
+              addToCanvasRequest={addToCanvasRequest}
+              hideFromCanvasRequest={hideFromCanvasRequest}
+              bulkVisibilityRequest={bulkVisibilityRequest}
+              focusSessionRequest={focusSessionRequest}
+              canvasPatchRequest={canvasPatchRequest}
+              canAddSessionToCanvas={canAddSessionToCanvas}
+              onCanvasPatchApplied={handleCanvasPatchApplied}
+              onCountsChange={handleCountsChange}
+              onSceneSnapshotChange={handleSceneSnapshotChange}
+              templateCache={templateCache}
+              onNeedTemplate={ensureTemplate}
+              unreadSids={unreadSids}
+              onRefresh={() => {
+                boardState.refresh()
+                void refreshCanvases()
+              }}
+              onNewChannel={() => setNewChannelOpen(true)}
+              placeChannelRequest={placeChannelRequest}
+              onAskAndSpawn={() => {
+                setAssistantRequested(true)
+                dockSeedRef.current = ''
+                setDockOpen(true)
+              }}
+              onPreferences={() => setPreferencesOpen(true)}
+              onFit={() => setFitSignal((x) => x + 1)}
+              arrangeSignal={arrangeSignal}
+            />
+          ) : (
+            <PlannerGraph
+              canvasId={activeCanvasId}
+              canvasName={activeCanvas?.name ?? 'Canvas'}
+            />
+          )}
           <CanvasToolbar
             canvases={canvasList.canvases}
             activeCanvasId={activeCanvasId}
@@ -981,6 +991,31 @@ export default function App() {
             onDeleteCanvas={handleDeleteCanvas}
             onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
           />
+          <div className="workspace-mode-tabs" role="tablist" aria-label="Workspace mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === 'board'}
+              className={workspaceMode === 'board' ? 'is-active' : ''}
+              onClick={() => setWorkspaceMode('board')}
+            >
+              Board
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={workspaceMode === 'planner'}
+              className={workspaceMode === 'planner' ? 'is-active' : ''}
+              onClick={() => {
+                setSelection({ kind: 'none' })
+                setDockOpen(false)
+                setAssistantRequested(false)
+                setWorkspaceMode('planner')
+              }}
+            >
+              Planner
+            </button>
+          </div>
           {activeCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
