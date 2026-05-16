@@ -94,7 +94,7 @@ function fallbackCanvasList(): CanvasList {
     memberships: [],
     canvases: [{
       id: FALLBACK_CANVAS_ID,
-      name: 'Default canvas',
+      name: 'My',
       scope: 'personal',
       isDefault: true,
       workspacePath: '',

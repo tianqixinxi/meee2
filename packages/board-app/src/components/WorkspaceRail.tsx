@@ -1,6 +1,4 @@
 import {
-  Bell,
-  GitPullRequestArrow,
   Network,
   Radar,
   Settings,
@@ -28,7 +26,6 @@ export function WorkspaceRail({
   canvases,
   activeCanvasId,
   mode,
-  unreadSids,
   onModeChange,
   onPreferences,
 }: WorkspaceRailProps) {
@@ -44,7 +41,7 @@ export function WorkspaceRail({
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId)
   const canvasInitial = useMemo(() => {
-    const name = activeCanvas?.name?.trim() || 'MEEE2'
+    const name = displayCanvasName(activeCanvas).trim() || 'MEEE2'
     const words = name.split(/\s+/).filter(Boolean)
     if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase()
     return name.slice(0, 2).toUpperCase()
@@ -53,22 +50,19 @@ export function WorkspaceRail({
   const counts = useMemo(() => {
     const sessions = state?.sessions ?? []
     return {
-      all: sessions.length,
-      working: sessions.filter((session) => WORKING_STATUSES.has(session.status)).length,
       attention: sessions.filter((session) =>
         session.status === 'permissionRequired' || session.status === 'waitingForUser',
       ).length,
-      unread: unreadSids.size,
     }
-  }, [state?.sessions, unreadSids])
+  }, [state?.sessions])
 
   return (
     <nav className="workspace-rail" aria-label="Workspace">
       <button
         type="button"
         className="workspace-rail__avatar"
-        title={activeCanvas?.name ?? 'Canvas'}
-        aria-label={activeCanvas?.name ?? 'Canvas'}
+        title={displayCanvasName(activeCanvas)}
+        aria-label={displayCanvasName(activeCanvas)}
       >
         {canvasInitial}
       </button>
@@ -87,22 +81,9 @@ export function WorkspaceRail({
           label="Monitor"
           active={mode === 'monitor'}
           onClick={() => onModeChange('monitor')}
-          badge={counts.unread > 0 ? counts.unread : undefined}
-          tone={counts.unread > 0 ? 'danger' : 'default'}
         >
           <Radar size={20} />
         </RailButton>
-      </div>
-
-      <div className="workspace-rail__status" aria-label="Session summary">
-        <div className="workspace-rail__metric" title="Working sessions">
-          <GitPullRequestArrow size={15} />
-          <span>{counts.working}</span>
-        </div>
-        <div className="workspace-rail__metric" title="Unread sessions">
-          <Bell size={15} />
-          <span>{counts.unread}</span>
-        </div>
       </div>
 
       <div className="workspace-rail__spacer" />
@@ -112,6 +93,11 @@ export function WorkspaceRail({
       </RailButton>
     </nav>
   )
+}
+
+function displayCanvasName(canvas: CanvasInfo | undefined): string {
+  if (!canvas) return 'Canvas'
+  return canvas.name === 'Default canvas' ? 'My' : canvas.name
 }
 
 interface RailButtonProps {

@@ -4,9 +4,7 @@
   display: grid;
   grid-template-rows: auto auto 1fr;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, rgba(58, 58, 56, 0.54), rgba(38, 38, 36, 0.96)),
-    var(--bg);
+  background: var(--bg);
 }
 
 .planner-topbar {
@@ -15,11 +13,11 @@
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 16px;
-  min-height: 86px;
-  padding: 50px 148px 12px 240px;
+  min-height: 92px;
+  padding: 22px 148px 14px 312px;
   border-bottom: 1px solid rgba(168, 165, 155, 0.18);
-  background: rgba(38, 38, 36, 0.88);
-  backdrop-filter: blur(12px);
+  background: rgba(38, 38, 36, 0.94);
+  backdrop-filter: blur(10px);
 }
 
 .planner-topbar h1,
@@ -45,8 +43,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 78px;
-  padding: 5px 9px;
+  min-width: 0;
+  padding: 4px 8px;
   border: 1px solid rgba(168, 165, 155, 0.22);
   border-radius: var(--radius-sm);
   background: rgba(245, 244, 239, 0.06);
@@ -85,7 +83,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 0 16px 12px 240px;
+  padding: 0 16px 10px 312px;
   border-bottom: 1px solid rgba(168, 165, 155, 0.14);
   background: rgba(38, 38, 36, 0.88);
 }
@@ -120,7 +118,7 @@
 .planner-main {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 336px;
 }
 
 .planner-flow {
@@ -130,33 +128,12 @@
 }
 
 .planner-flow .react-flow {
-  background:
-    radial-gradient(circle at 18% 12%, rgba(204, 120, 92, 0.11), transparent 260px),
-    radial-gradient(circle at 82% 78%, rgba(139, 169, 194, 0.12), transparent 280px);
+  background: #252522;
 }
 
 .planner-flow__edge--preview .react-flow__edge-path {
   stroke: var(--accent);
   stroke-width: 2;
-}
-
-.planner-flow__minimap {
-  overflow: hidden;
-  border: 1px solid rgba(168, 165, 155, 0.2);
-  border-radius: var(--radius-md);
-  background: rgba(36, 36, 33, 0.92) !important;
-}
-
-.planner-flow__minimap svg {
-  background: rgba(36, 36, 33, 0.92);
-}
-
-.planner-flow__minimap .react-flow__minimap-mask {
-  fill: rgba(245, 244, 239, 0.08);
-}
-
-.planner-flow__minimap .react-flow__minimap-node {
-  fill: rgba(204, 120, 92, 0.72);
 }
 
 .planner-flow__controls {
@@ -339,18 +316,52 @@
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 12px;
   border-left: 1px solid rgba(168, 165, 155, 0.18);
-  background: rgba(38, 38, 36, 0.82);
+  background: rgba(35, 35, 32, 0.88);
 }
 
 .planner-proposal-panel,
 .planner-states-list,
-.planner-timeline {
+.planner-states-summary {
   border: 1px solid rgba(168, 165, 155, 0.18);
   border-radius: var(--radius-sm);
   background: rgba(44, 43, 41, 0.74);
+}
+
+.planner-states-summary {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  color: var(--text-dim);
+  text-align: left;
+}
+
+.planner-states-summary:hover {
+  background: rgba(245, 244, 239, 0.06);
+}
+
+.planner-states-summary span {
+  display: grid;
+  gap: 1px;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.planner-states-summary strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.planner-states-summary em {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-style: normal;
 }
 
 .planner-proposal-panel {
@@ -366,8 +377,7 @@
 }
 
 .planner-proposal-panel__header h2,
-.planner-states-list h2,
-.planner-timeline h2 {
+.planner-states-list h2 {
   font-size: 13px;
   font-weight: 700;
 }
@@ -500,12 +510,11 @@
 }
 
 .planner-states-list,
-.planner-timeline {
+.planner-states-summary {
   padding: 12px;
 }
 
-.planner-states-list__header,
-.planner-timeline__header {
+.planner-states-list__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -513,50 +522,9 @@
   margin-bottom: 10px;
 }
 
-.planner-states-list__header span,
-.planner-timeline__header span {
+.planner-states-list__header span {
   color: var(--text-dim);
   font-size: 11px;
-}
-
-.planner-timeline h2 {
-  margin: 0;
-  letter-spacing: 0;
-}
-
-.planner-timeline__empty {
-  padding: 9px;
-  border: 1px dashed rgba(168, 165, 155, 0.2);
-  border-radius: var(--radius-sm);
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.planner-timeline__items {
-  display: grid;
-  gap: 7px;
-}
-
-.planner-timeline__item {
-  display: grid;
-  gap: 4px;
-  padding: 8px;
-  border-left: 3px solid rgba(139, 169, 194, 0.45);
-  border-radius: var(--radius-sm);
-  background: rgba(36, 36, 33, 0.7);
-}
-
-.planner-timeline__item span,
-.planner-timeline__item em {
-  color: var(--text-dim);
-  font-size: 11px;
-  font-style: normal;
-}
-
-.planner-timeline__item strong {
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.35;
 }
 
 .planner-states-group {
@@ -856,10 +824,6 @@
     min-height: 360px;
   }
 
-  .planner-flow__minimap {
-    display: none;
-  }
-
   .planner-flow__controls {
     transform: scale(0.9);
     transform-origin: bottom left;
@@ -895,7 +859,7 @@
 
   .planner-proposal-panel,
   .planner-states-list,
-  .planner-timeline {
+  .planner-states-summary {
     border-radius: 7px;
   }
 
@@ -913,7 +877,7 @@
   }
 
   .planner-states-list,
-  .planner-timeline {
+  .planner-states-summary {
     padding: 10px;
   }
 

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Layers, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
-import { resolveCanvasConflict } from '../api'
 
 interface Props {
   canvases: CanvasInfo[]
@@ -27,7 +26,6 @@ export function CanvasToolbar({
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
-  const [resolvingConflict, setResolvingConflict] = useState(false)
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
 
@@ -78,16 +76,6 @@ export function CanvasToolbar({
     })
   }
 
-  const resolveConflict = (choice: 'current' | 'remote') => {
-    if (!activeCanvas || activeCanvas.syncStatus !== 'conflict') return
-    setResolvingConflict(true)
-    Promise.resolve(resolveCanvasConflict(activeCanvas.id, choice))
-      .then(() => {
-        window.location.reload()
-      })
-      .finally(() => setResolvingConflict(false))
-  }
-
   if (!activeCanvas) return null
 
   return (
@@ -104,16 +92,8 @@ export function CanvasToolbar({
           }}
         >
           <Layers size={15} aria-hidden />
-          <span className="canvas-toolbar__scope">
-            {activeCanvas.scope === 'team' ? 'Team' : 'Personal'}
-          </span>
-          <span className="canvas-toolbar__name">{activeCanvas.name}</span>
-          {activeCanvas.isDefault && (
-            <span className="canvas-toolbar__badge">Default</span>
-          )}
-          {activeCanvas.syncStatus === 'conflict' && (
-            <span className="canvas-toolbar__badge">Conflict</span>
-          )}
+          <span className="canvas-toolbar__name">{displayCanvasName(activeCanvas)}</span>
+          <span className="canvas-toolbar__badge">{visibilityLabel(activeCanvas)}</span>
           <ChevronDown size={14} aria-hidden />
         </button>
       </div>
@@ -138,13 +118,8 @@ export function CanvasToolbar({
                     {selected && <Check size={13} aria-hidden />}
                   </span>
                   <span className="canvas-toolbar__item-text">
-                    <span>{canvas.name}</span>
-                    <span>
-                      {canvas.scope === 'team' ? 'Team' : 'Personal'}
-                      {canvas.isDefault ? ' · Default' : ''}
-                      {canvas.syncStatus === 'conflict' ? ' · Conflict' : ''}
-                      {canvas.syncStatus === 'pending' || canvas.syncStatus === 'force-pending' ? ' · Syncing' : ''}
-                    </span>
+                    <span>{displayCanvasName(canvas)}</span>
+                    <span>{visibilityLabel(canvas)}</span>
                   </span>
                 </button>
               )
@@ -174,20 +149,21 @@ export function CanvasToolbar({
             >
               <Pencil size={13} aria-hidden /> Rename
             </button>
-            <button
-              type="button"
-              className="canvas-toolbar__danger-action"
-              onClick={() => {
-                setDeleteConfirming(true)
-                setMenuOpen(false)
-                setCreating(false)
-                setRenaming(false)
-              }}
-              disabled={activeCanvas.isDefault}
-              title={activeCanvas.isDefault ? 'Default canvas cannot be deleted' : 'Delete canvas'}
-            >
-              <Trash2 size={13} aria-hidden /> Delete
-            </button>
+            {!activeCanvas.isDefault && (
+              <button
+                type="button"
+                className="canvas-toolbar__danger-action"
+                onClick={() => {
+                  setDeleteConfirming(true)
+                  setMenuOpen(false)
+                  setCreating(false)
+                  setRenaming(false)
+                }}
+                title="Delete canvas"
+              >
+                <Trash2 size={13} aria-hidden /> Delete
+              </button>
+            )}
           </div>
           {renaming && (
             <div className="canvas-toolbar__form canvas-toolbar__form--rename">
@@ -214,18 +190,6 @@ export function CanvasToolbar({
         </div>
       )}
 
-      {activeCanvas.syncStatus === 'conflict' && (
-        <div className="canvas-toolbar__conflict" role="status">
-          <span>Remote changes conflict with this team canvas.</span>
-          <button type="button" disabled={resolvingConflict} onClick={() => resolveConflict('current')}>
-            Use current
-          </button>
-          <button type="button" disabled={resolvingConflict} onClick={() => resolveConflict('remote')}>
-            Use remote
-          </button>
-        </div>
-      )}
-
       {creating && (
         <div
           className="modal-backdrop"
@@ -235,8 +199,8 @@ export function CanvasToolbar({
         >
           <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Create canvas">
             <div className="modal-header">
-              <div className="modal-title">Create canvas</div>
-              <div className="modal-subtitle">Name it and choose where it lives.</div>
+              <div className="modal-title">New canvas</div>
+              <div className="modal-subtitle">Choose who can view this planning space.</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
               <input
@@ -249,7 +213,7 @@ export function CanvasToolbar({
                 placeholder="Canvas name"
                 autoFocus
               />
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas scope">
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas visibility">
                 {(['personal', 'team'] as CanvasScope[]).map((scope) => (
                   <button
                     key={scope}
@@ -258,7 +222,7 @@ export function CanvasToolbar({
                     aria-pressed={canvasScopeDraft === scope}
                     onClick={() => setCanvasScopeDraft(scope)}
                   >
-                    {scope === 'team' ? 'Team' : 'Personal'}
+                    {scope === 'team' ? 'Public' : 'Private'}
                   </button>
                 ))}
               </div>
@@ -304,4 +268,12 @@ export function CanvasToolbar({
       )}
     </div>
   )
+}
+
+function visibilityLabel(canvas: CanvasInfo): 'Private' | 'Public' {
+  return canvas.scope === 'team' ? 'Public' : 'Private'
+}
+
+function displayCanvasName(canvas: CanvasInfo): string {
+  return canvas.name === 'Default canvas' ? 'My' : canvas.name
 }

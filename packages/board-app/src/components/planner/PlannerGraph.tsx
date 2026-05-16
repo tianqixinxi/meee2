@@ -1,7 +1,6 @@
 import {
   Background,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -19,7 +18,7 @@ import {
   rejectPlannerProposal,
   sendPlannerActivity,
 } from '../../api'
-import type { PlanProposal, PlannerCanvasState, PlannerEvent, PlanningNode } from '../../types'
+import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { buildPlannerGraph, groupStatesByRisk } from './plannerGraphAdapter'
@@ -49,6 +48,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [previewActive, setPreviewActive] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [statesOpen, setStatesOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -266,8 +266,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     <section className="planner-workspace" aria-label="Planner graph">
       <div className="planner-topbar">
         <div>
-          <h1>{plannerState?.canvas.title ?? canvasName}</h1>
-          <p>React Flow Planner Graph · owner-controlled topology</p>
+          <h1>{displayPlannerTitle(plannerState?.canvas.title ?? canvasName)}</h1>
+          <p>Planner proposes. Owner approves.</p>
         </div>
         {plannerState?.access && (
           <span className={`planner-role-badge planner-role-badge--${plannerState.access.role}`}>
@@ -295,13 +295,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               maxZoom={1.6}
               proOptions={{ hideAttribution: true }}
             >
-              <Background color="rgba(168, 165, 155, 0.16)" gap={28} />
-              <MiniMap
-                className="planner-flow__minimap"
-                pannable
-                zoomable
-                nodeStrokeWidth={2}
-              />
+              <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
               <Controls className="planner-flow__controls" />
             </ReactFlow>
           ) : (
@@ -328,42 +322,16 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             onApply={handleApply}
             onReject={handleReject}
           />
-          <StatesList groups={groupedStates} />
-          <PlannerTimeline events={plannerState?.events ?? []} />
+          <StatesSummary
+            groups={groupedStates}
+            open={statesOpen}
+            onToggle={() => setStatesOpen((value) => !value)}
+          />
+          {statesOpen && <StatesList groups={groupedStates} />}
         </div>
       </div>
     </section>
   )
-}
-
-function PlannerTimeline({ events }: { events: PlannerEvent[] }) {
-  return (
-    <aside className="planner-timeline">
-      <div className="planner-timeline__header">
-        <h2>Timeline</h2>
-        <span>{events.length} events</span>
-      </div>
-      {events.length === 0 ? (
-        <div className="planner-timeline__empty">No planner events yet.</div>
-      ) : (
-        <div className="planner-timeline__items">
-          {events.slice(0, 12).map((event) => (
-            <div key={event.id} className="planner-timeline__item">
-              <span>{event.type}</span>
-              <strong>{event.summary}</strong>
-              <em>{formatEventTime(event.createdAt)}</em>
-            </div>
-          ))}
-        </div>
-      )}
-    </aside>
-  )
-}
-
-function formatEventTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function ActivityStrip({
@@ -389,6 +357,10 @@ function shortId(id: string) {
   return id.length > 14 ? `${id.slice(0, 10)}...` : id
 }
 
+function displayPlannerTitle(title: string): string {
+  return title === 'Default canvas' ? 'My' : title
+}
+
 function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): PlanProposal[] {
   const index = proposals.findIndex((item) => item.id === proposal.id)
   if (index < 0) return [...proposals, proposal]
@@ -405,6 +377,42 @@ function defaultPlannerAccess() {
     canRejectProposal: true,
     canUpdateAssignedNode: true,
   }
+}
+
+function StatesSummary({
+  groups,
+  open,
+  onToggle,
+}: {
+  groups: Array<{ key: string; label: string; nodes: PlanningNode[] }>
+  open: boolean
+  onToggle: () => void
+}) {
+  const blocked = groups
+    .filter((group) => group.key === 'blocked')
+    .reduce((sum, group) => sum + group.nodes.length, 0)
+  const running = groups
+    .filter((group) => group.key === 'running')
+    .reduce((sum, group) => sum + group.nodes.length, 0)
+  const total = groups.reduce((sum, group) => sum + group.nodes.length, 0)
+  return (
+    <button
+      type="button"
+      className="planner-states-summary"
+      aria-expanded={open}
+      onClick={onToggle}
+    >
+      <span>
+        <strong>{blocked}</strong>
+        Review
+      </span>
+      <span>
+        <strong>{running}</strong>
+        Running
+      </span>
+      <em>{open ? 'Hide states' : `${total} nodes`}</em>
+    </button>
+  )
 }
 
 function StatesList({
