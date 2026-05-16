@@ -80,6 +80,10 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
 
   useEffect(() => {
     window.setTimeout(() => {
+      if (window.matchMedia('(max-width: 720px)').matches) {
+        reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
+        return
+      }
       reactFlow.fitView({ padding: 0.18, duration: 220 })
     }, 0)
   }, [graph.nodes.length, canvasId, reactFlow])
@@ -286,7 +290,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               nodeTypes={nodeTypes}
               onNodeClick={(_, node) => setSelectedNodeId(node.data.node.id)}
               onPaneClick={() => setSelectedNodeId(null)}
-              fitView
+              fitView={!window.matchMedia('(max-width: 720px)').matches}
               minZoom={0.35}
               maxZoom={1.6}
               proOptions={{ hideAttribution: true }}

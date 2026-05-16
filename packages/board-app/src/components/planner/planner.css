@@ -785,3 +785,174 @@
     justify-items: start;
   }
 }
+
+@media (max-width: 720px) {
+  .planner-workspace {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .planner-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+    min-height: 116px;
+    padding: 58px 10px 10px;
+  }
+
+  .planner-topbar h1 {
+    overflow: hidden;
+    max-width: 100%;
+    font-size: 17px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .planner-topbar p {
+    font-size: 11px;
+  }
+
+  .planner-topbar button {
+    grid-column: 2;
+    grid-row: 1;
+    width: 34px;
+    min-width: 34px;
+    height: 30px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .planner-topbar button svg {
+    margin: 0;
+  }
+
+  .planner-role-badge {
+    grid-column: 1 / -1;
+    justify-self: start;
+    min-width: 0;
+    padding: 4px 8px;
+  }
+
+  .planner-activity-strip {
+    gap: 6px;
+    padding: 0 10px 8px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .planner-activity-pill {
+    flex: 0 0 auto;
+    max-width: 220px;
+  }
+
+  .planner-activity-pill em {
+    max-width: 84px;
+  }
+
+  .planner-main {
+    min-height: 0;
+    grid-template-rows: minmax(360px, 58vh) minmax(300px, 42vh);
+  }
+
+  .planner-flow {
+    min-height: 360px;
+  }
+
+  .planner-flow__minimap {
+    display: none;
+  }
+
+  .planner-flow__controls {
+    transform: scale(0.9);
+    transform-origin: bottom left;
+  }
+
+  .planner-node {
+    width: min(250px, calc(100vw - 96px));
+    padding: 10px;
+  }
+
+  .planner-node__title {
+    font-size: 13px;
+  }
+
+  .planner-node__meta {
+    gap: 6px;
+  }
+
+  .planner-node__io {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+
+  .planner-node__blockers {
+    padding: 7px;
+  }
+
+  .planner-side {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .planner-proposal-panel,
+  .planner-states-list,
+  .planner-timeline {
+    border-radius: 7px;
+  }
+
+  .planner-proposal-panel {
+    padding: 11px;
+  }
+
+  .planner-proposal-panel__header {
+    margin-bottom: 10px;
+  }
+
+  .planner-proposal-panel__buttons,
+  .planner-proposal__lifecycle {
+    grid-template-columns: 1fr;
+  }
+
+  .planner-states-list,
+  .planner-timeline {
+    padding: 10px;
+  }
+
+  .planner-states-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .planner-states-row em {
+    max-width: 100%;
+  }
+
+  .planner-monitor {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .planner-monitor__topbar {
+    padding: 54px 10px 10px;
+  }
+
+  .planner-monitor__topbar h1 {
+    font-size: 18px;
+  }
+
+  .planner-monitor__body {
+    grid-template-columns: 1fr;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 420px) {
+  .planner-main {
+    grid-template-rows: minmax(330px, 54vh) minmax(330px, 46vh);
+  }
+
+  .planner-flow {
+    min-height: 330px;
+  }
+
+  .planner-node {
+    width: min(232px, calc(100vw - 88px));
+  }
+}
