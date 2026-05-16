@@ -328,7 +328,7 @@ export default function App() {
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [workspaceMode, setWorkspaceMode] = useState<'board' | 'planner' | 'monitor'>('board')
+  const [workspaceMode, setWorkspaceMode] = useState<'planner' | 'monitor' | 'legacy'>('planner')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
@@ -723,7 +723,7 @@ export default function App() {
   // (so they can still type into Excalidraw text shapes etc.). The
   // `selection.kind === 'session'` vs `'none'` split handles that.
   useEffect(() => {
-    if (workspaceMode !== 'board') return
+    if (workspaceMode !== 'legacy') return
     const isInputTarget = (t: EventTarget | null) => {
       if (!(t instanceof HTMLElement)) return false
       const tag = t.tagName
@@ -937,7 +937,7 @@ export default function App() {
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
         <div className="board-area">
-          {workspaceMode === 'board' ? (
+          {workspaceMode === 'legacy' ? (
             <Board
               canvasId={activeCanvasId}
               canvasLoading={activeCanvasLoading}
@@ -999,15 +999,6 @@ export default function App() {
             <button
               type="button"
               role="tab"
-              aria-selected={workspaceMode === 'board'}
-              className={workspaceMode === 'board' ? 'is-active' : ''}
-              onClick={() => setWorkspaceMode('board')}
-            >
-              Board
-            </button>
-            <button
-              type="button"
-              role="tab"
               aria-selected={workspaceMode === 'planner'}
               className={workspaceMode === 'planner' ? 'is-active' : ''}
               onClick={() => {
@@ -1032,6 +1023,16 @@ export default function App() {
               }}
             >
               Monitor
+            </button>
+            <button
+              type="button"
+              role="tab"
+              title="Legacy freeform board"
+              aria-selected={workspaceMode === 'legacy'}
+              className={workspaceMode === 'legacy' ? 'is-active is-legacy' : 'is-legacy'}
+              onClick={() => setWorkspaceMode('legacy')}
+            >
+              Legacy
             </button>
           </div>
           {activeCanvasLoading && (

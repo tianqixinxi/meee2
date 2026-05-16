@@ -194,9 +194,9 @@ textarea {
   left: 50%;
   z-index: 95;
   display: inline-grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 0.8fr;
   gap: 2px;
-  width: 176px;
+  width: 254px;
   padding: 3px;
   border: 1px solid rgba(168, 165, 155, 0.22);
   border-radius: var(--radius-sm);
@@ -224,6 +224,15 @@ textarea {
 .workspace-mode-tabs button.is-active {
   background: rgba(204, 120, 92, 0.18);
   color: var(--text);
+}
+
+.workspace-mode-tabs button.is-legacy {
+  color: rgba(203, 199, 190, 0.58);
+}
+
+.workspace-mode-tabs button.is-legacy.is-active {
+  background: rgba(120, 117, 110, 0.18);
+  color: rgba(245, 244, 239, 0.8);
 }
 
 .canvas-global-loading {
