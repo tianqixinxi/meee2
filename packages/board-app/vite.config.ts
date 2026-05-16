@@ -14,11 +14,6 @@ const boardWsTarget = boardApiTarget.replace(/^http/, 'ws')
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
   base: './',
-  define: {
-    // Excalidraw 运行时读 process.env.IS_PREACT；两种 mode 都需要静态替换，
-    // 否则 dev 下浏览器抛 "process is not defined"、prod 下 tree-shake 依赖分支。
-    'process.env.IS_PREACT': JSON.stringify('false'),
-  },
   build: {
     outDir: '../../Sources/Board/WebDist',
     emptyOutDir: true,

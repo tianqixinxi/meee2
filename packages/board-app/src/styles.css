@@ -304,11 +304,6 @@ textarea {
   overflow: hidden;
 }
 
-/* Excalidraw container */
-.board-area .excalidraw {
-  height: 100%;
-}
-
 .canvas-global-loading {
   position: absolute;
   inset: 0;
@@ -1071,193 +1066,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   flex: 0 0 auto;
 }
 
-/* ── Excalidraw shape toolbar 移到画板底部 ────────────────────────
- * 直接做 position: absolute 时 offsetParent 是 .shapes-section 里
- * 一个高度 ~0 的 relative 包裹 div，bottom: 12px 算出来跑到视口顶部
- * 上方。改用 position: fixed + 计算 sidebar 偏移，绕过 Excalidraw 自己
- * 的层级。Excalidraw 用内联 transform: matrix 做居中（≈ translateX(-50%)），
- * 我们把 left 算成"画板水平中点"配合它就能正中。
- *
- * 选中 session 时（.board-area:has(.session-dock)）toolbar 隐藏 ——
- * 画板上已经有 dock 占视野，再保留 shape toolbar 会争抢底部空间。
- */
-.excalidraw .App-toolbar-container {
-  position: fixed;
-  top: auto;
-  bottom: 12px;
-  /* 画板水平中点 = (sidebar-right-edge + viewport-right-edge) / 2 */
-  left: calc((100vw + var(--sidebar-width, 0px)) / 2);
-  /* 自己居中：Excalidraw 在 fixed 模式下不再注入它原本的 translateX(-w/2) 矩阵 */
-  transform: translateX(-50%);
-  z-index: 4;
-}
-
-.excalidraw .App-toolbar-container .dropdown-menu {
-  top: auto;
-  bottom: 100%;
-  margin-top: 0;
-  margin-bottom: 0.5rem;
-}
-
-/* 隐藏画板左上角的 Excalidraw MainMenu 汉堡按钮 + Library 按钮。
- * 我们的菜单都在 sidebar topnav 里，画板上不需要重复入口。 */
-.excalidraw .App-menu_top__left,
-.excalidraw .App-menu__left,
-.excalidraw .layer-ui__wrapper__top-right .help-icon,
-.excalidraw .layer-ui__wrapper__top-right .default-sidebar-trigger {
-  display: none !important;
-}
-
-.board-area:has(.session-dock) .excalidraw .App-toolbar-container {
-  display: none;
-}
-
-/* 只选了 session/channel 时，抹掉 Excalidraw 的"选中元素样式编辑面板"
- * (Stroke / Background / Stroke width / Opacity / Layers / Actions)。
- * 这一块在 v0.17 渲染在左侧 Island 里，典型 class 组合是
- * `.App-menu__left` 或 `.Stack > .Island`。用宽选择器保覆盖但限定只在
- * board--hide-shape-actions 激活时触发，不影响用户选自己 shape 的面板。
- *
- * pan/zoom/draw 工具栏在单独容器里（.App-toolbar 等），不受影响。 */
-.excalidraw.board--hide-shape-actions .App-menu__left,
-.excalidraw.board--hide-shape-actions [aria-label="Selected shape actions"],
-.excalidraw.board--hide-shape-actions section[aria-labelledby*="selectedShape"],
-.excalidraw.board--hide-shape-actions .panelColumn {
-  display: none !important;
-}
-
-/* Wave 18: we no longer try to force Excalidraw's native embeddable
- * container visible (Excalidraw inlines width:0/height:0/transform:none on
- * inactive embeddables so CSS overrides are ineffective). Instead the real
- * cards are drawn by <SessionOverlay> — a sibling div positioned over the
- * canvas. See SessionOverlay.tsx. */
-
-/* Hide Excalidraw's link/URL hint it paints over embeddables — for our
- * meee2:// scheme it's just noise. */
-.excalidraw .excalidraw__embeddable-hint {
-  display: none !important;
-}
-
-/* 把 Excalidraw 原生 "Arrow" 工具从顶部工具栏隐藏掉。arrow 语义上被重载
-   成 "channel arrow"——只能从我们自己的 floating toolbar 里 "Channel arrow"
-   按钮激活，避免用户画出不带 channel 语义的 arrow。匹配靠 title 前缀
-   （"Arrow — A or 5"），对 Excalidraw 改 key hint 也能容忍。 */
-.excalidraw label.ToolIcon[title^="Arrow"] {
-  display: none !important;
-}
-
-/* ─── Board channel tool (portaled into Excalidraw .App-toolbar) ──────────
-   Create channel + DM line 两个按钮通过 React Portal 注入到 .App-toolbar
-   里，跟 rectangle/ellipse/... 这些 shape tool 同行。沿用 Excalidraw 自
-   己的 `ToolIcon ToolIcon_size_medium` class。
-   挑战：styles.css 里的全局 `button { background: var(--bg-elevated);
-   border: 1px solid; padding: 5px 12px; }` 会污染我们 portal 的 button，
-   而 Excalidraw 的 native ToolIcon 在 .excalidraw 作用域里被重置成透明。
-   我们的 button 跨了那个边界但样式被全局 button 规则覆盖，所以这里显式
-   把外观 reset 回 Excalidraw native 的样子（透明 bg / 无边框 / 0 padding）。 */
-.excalidraw .App-toolbar .board-channel-tool {
-  background: transparent;
-  border: none;
-  padding: 0;
-  border-radius: var(--border-radius-lg, 6.5px);
-}
-.excalidraw .App-toolbar .board-channel-tool:hover {
-  background: var(--button-hover-bg, rgba(255, 255, 255, 0.06));
-}
-
-/* :first-of-type 在这个 DOM 里指 Stack_horizontal 的第一个 button 子元素
- * (= 原生 lock 工具)，匹配不到我们；所以 separator 规则没生效。
- * 改用相邻兄弟选择器 + 反向：第一个 channel-tool 是"前面有非 channel-tool"
- * 的那个 ——> 用 :nth-of-type 也不行（同类型计数）。最稳的：给第二个
- * channel-tool 用 `+` 兄弟选择器加 separator inverse —— 反过来想，不如
- * 把分隔线画在第一个 channel-tool 的 ::before 上，定位简单。 */
-.excalidraw .App-toolbar .board-channel-tool:not(.board-channel-tool + .board-channel-tool) {
-  margin-left: 8px;
-  position: relative;
-}
-.excalidraw .App-toolbar .board-channel-tool:not(.board-channel-tool + .board-channel-tool)::before {
-  content: '';
-  position: absolute;
-  left: -4px;
-  top: 4px;
-  bottom: 4px;
-  width: 1px;
-  background: var(--default-border-color, rgba(255, 255, 255, 0.12));
-}
-
-.excalidraw .scroll-back-to-content {
-  display: none !important;
-}
-
-.excalidraw .zoom-actions .board-fit-content-zoom-button {
-  border-left: 1px solid var(--color-surface-lowest) !important;
-  width: var(--lg-button-size) !important;
-  height: var(--lg-button-size) !important;
-  border-top-right-radius: var(--border-radius-lg) !important;
-  border-bottom-right-radius: var(--border-radius-lg) !important;
-}
-
-.excalidraw .zoom-actions .board-fit-content-zoom-button,
-.excalidraw .zoom-actions .board-fit-content-zoom-button:hover {
-  border-top: 0;
-  border-right: 0;
-  border-bottom: 0;
-  padding: 0;
-  color: var(--icon-fill-color);
-}
-
-.excalidraw .zoom-actions .zoom-in-button {
-  border-top-right-radius: 0 !important;
-  border-bottom-right-radius: 0 !important;
-}
-
-.excalidraw .zoom-actions .board-fit-content-zoom-button .ToolIcon__icon {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-}
-
-.excalidraw .zoom-actions .board-fit-content-zoom-button svg {
-  width: var(--lg-icon-size) !important;
-  height: var(--lg-icon-size) !important;
-}
-
-/* -- Wave 18: SessionOverlay ------------------------------------------- */
-/* Outer wrapper is purely positional. Items opt back into pointer events so
- * session-card drag can update the underlying Excalidraw rect deterministically. */
-.session-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-/* Each item mirrors one session rect's screen-space bbox. */
-.session-overlay__item {
-  position: absolute;
-  pointer-events: auto;
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-}
-.session-overlay__item:active {
-  cursor: grabbing;
-}
-.session-overlay__card-shell {
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 10px;
-  background: #181816;
-  box-shadow:
-    0 14px 30px rgba(0, 0, 0, 0.22),
-    0 0 0 1px rgba(245, 244, 239, 0.055);
-}
-.session-overlay__card-shell > * {
-  width: 100%;
-  height: 100%;
-  box-sizing: border-box;
-}
 .session-overlay__item--secondary {
   opacity: 0.5;
   filter: saturate(0.55);
@@ -2109,13 +1917,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   border-left-color: var(--success);
 }
 
-/* Excalidraw dark-theme tweaks to blend */
-.excalidraw.theme--dark {
-  --color-primary: var(--accent);
-}
-
-/* -- Wave 16: Excalidraw-native embeddable session cards --------------- */
-
 :root {
   --card-bg: #1E1E1E;
   --card-border: #2A2A2A;
@@ -2138,9 +1939,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 /* -- Card shell (Linear-inspired: 1px crisp border, halo on active) ---- */
 
-/* Fills the Excalidraw embeddable container — sized by the element's
- * width/height in canvas units. No fixed pixel size since Excalidraw
- * scales the container with zoom. */
 .session-card {
   width: 100%;
   height: 100%;
@@ -2166,14 +1964,6 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 .session-card:hover {
   border-color: #3A3A3A;
   background: #181818;
-}
-
-/* The Excalidraw embeddable container hosts our card inside a
- * flex-centered div that also has overflow:hidden + border-radius. Since
- * we render a full-bleed card, let it fill the container's content area. */
-.excalidraw__embeddable-container__inner > .session-card {
-  width: 100%;
-  height: 100%;
 }
 
 .session-card--selected {
@@ -3191,7 +2981,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   max-width: 70ch;                /* comfortable reading column */
 }
 
-/* Legacy in-text role chip — superseded by .tx-entry__header. Hide so
+/* In-text role chip superseded by .tx-entry__header. Hide so
    we don't render the speaker label twice. */
 .tx-text__role { display: none; }
 
@@ -5260,11 +5050,6 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* 老的 "Sessions (N)" h4 行：现在被 SidebarTopNav 取代，藏掉 */
-.sidebar .sidebar-legacy-h4-row {
-  display: none;
 }
 
 /* sidebar 整体改成 column flex，让底部 footer 贴底 */

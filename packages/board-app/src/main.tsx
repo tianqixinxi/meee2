@@ -2,8 +2,6 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import '@xyflow/react/dist/style.css'
-import '@meee1/board-ui/SessionInspector.css'
-import '@meee1/board-ui/TranscriptView.css'
 import './styles.css'
 
 if (navigator.userAgent.includes('meee2-board-shell')) {

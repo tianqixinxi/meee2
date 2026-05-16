@@ -22,8 +22,8 @@ export function loadSpawnProvider(): SpawnProvider {
   try {
     const v = localStorage.getItem(KEY_SPAWN_PROVIDER)
     if (v === 'claude' || v === 'codex') return v
-    const legacy = localStorage.getItem(LEGACY_KEY_SPAWN_COMMAND)?.trim().toLowerCase() ?? ''
-    if (legacy.startsWith('codex')) return 'codex'
+    const previousCommand = localStorage.getItem(LEGACY_KEY_SPAWN_COMMAND)?.trim().toLowerCase() ?? ''
+    if (previousCommand.startsWith('codex')) return 'codex'
   } catch {
     /* ignore */
   }

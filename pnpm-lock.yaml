@@ -10,54 +10,24 @@ importers:
 
   packages/board-app:
     dependencies:
-      '@babel/standalone':
-        specifier: ^7.25.6
-        version: 7.29.2
-      '@excalidraw/excalidraw':
-        specifier: ^0.18.1
-        version: 0.18.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@meee1/board-cards':
-        specifier: workspace:*
-        version: link:../board-cards
       '@meee1/board-core':
         specifier: workspace:*
         version: link:../board-core
       '@meee1/board-persistence-http':
         specifier: workspace:*
         version: link:../board-persistence-http
-      '@meee1/board-ui':
-        specifier: workspace:*
-        version: link:../board-ui
-      '@tanstack/react-virtual':
-        specifier: ^3.13.24
-        version: 3.13.24(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@xyflow/react':
         specifier: ^12.10.2
         version: 12.10.2(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      highlight.js:
-        specifier: ^11.11.1
-        version: 11.11.1
       lucide-react:
         specifier: ^1.14.0
         version: 1.14.0(react@19.2.4)
       react:
         specifier: 19.2.4
         version: 19.2.4
-      react-diff-viewer-continued:
-        specifier: ^4.2.2
-        version: 4.2.2(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react-dom:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
-      react-markdown:
-        specifier: ^10.1.0
-        version: 10.1.0(@types/react@19.2.14)(react@19.2.4)
-      rehype-highlight:
-        specifier: ^7.0.2
-        version: 7.0.2
-      remark-gfm:
-        specifier: ^4.0.1
-        version: 4.0.1
     devDependencies:
       '@types/babel__standalone':
         specifier: ^7.1.9
