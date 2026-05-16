@@ -79,14 +79,15 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   }, [plannerState, previewActive, proposal, onOpenSubCanvas])
 
   useEffect(() => {
-    window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       if (window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
         return
       }
-      reactFlow.fitView({ padding: 0.18, duration: 220 })
-    }, 0)
-  }, [graph.nodes.length, canvasId, reactFlow])
+      reactFlow.fitView({ padding: 0.12, duration: 220 })
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [graph.nodes.length, graph.edges.length, canvasId, reactFlow])
 
   const groupedStates = useMemo(() => {
     if (!plannerState) return []
