@@ -116,13 +116,14 @@
 }
 
 .planner-main {
+  position: relative;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 352px;
 }
 
 .planner-main--panel-collapsed {
-  grid-template-columns: minmax(0, 1fr) 44px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .planner-flow {
@@ -157,8 +158,8 @@
 }
 
 .planner-flow__minimap {
-  width: 156px;
-  height: 104px;
+  width: 168px;
+  height: 112px;
   overflow: hidden;
   border: 1px solid rgba(168, 165, 155, 0.2);
   border-radius: var(--radius-sm);
@@ -420,38 +421,37 @@
 }
 
 .planner-side {
-  position: relative;
   min-height: 0;
   overflow: hidden;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  align-content: start;
-  gap: 10px;
-  padding: 12px 12px 12px 10px;
   border-left: 1px solid rgba(168, 165, 155, 0.18);
   background: rgba(35, 35, 32, 0.88);
 }
 
-.planner-main--panel-collapsed .planner-side {
-  padding: 12px 8px;
-}
-
-.planner-side__collapse {
+.planner-dialog-toggle {
   position: absolute;
   top: 12px;
-  left: -1px;
-  z-index: 3;
-  width: 28px;
-  height: 32px;
+  right: 352px;
+  z-index: 30;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border: 1px solid rgba(168, 165, 155, 0.2);
-  border-left: 0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-right: 0;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
   background: rgba(44, 43, 41, 0.96);
   color: var(--text-dim);
 }
 
-.planner-side__collapse:hover {
+.planner-dialog-toggle.is-collapsed {
+  right: 12px;
+  border-right: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26);
+}
+
+.planner-dialog-toggle:hover {
   background: rgba(50, 49, 46, 0.96);
   color: var(--text);
 }
@@ -500,9 +500,86 @@
 
 .planner-proposal-panel {
   min-height: 0;
+  height: 100%;
   overflow: auto;
-  padding: 13px;
-  margin-left: 10px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+  background: rgba(38, 38, 36, 0.94);
+}
+
+.planner-dialog {
+  min-height: 0;
+  display: grid;
+}
+
+.planner-dialog__messages {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 18px 14px;
+}
+
+.planner-dialog__empty,
+.planner-dialog__message {
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.72);
+}
+
+.planner-dialog__empty {
+  padding: 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.planner-dialog__message {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.planner-dialog__message--error {
+  border-color: rgba(194, 106, 106, 0.28);
+  background: rgba(194, 106, 106, 0.12);
+  color: #edb0b0;
+  font-size: 12px;
+}
+
+.planner-dialog__message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.planner-dialog__message h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.planner-dialog__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.planner-dialog__composer {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid rgba(168, 165, 155, 0.16);
+  background: rgba(35, 35, 32, 0.96);
 }
 
 .planner-proposal-panel__header {

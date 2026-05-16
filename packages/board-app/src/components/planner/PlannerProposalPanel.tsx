@@ -1,6 +1,6 @@
-import { Eye, GitPullRequestArrow, ScanSearch, WandSparkles } from 'lucide-react'
+import { Eye, ScanSearch, WandSparkles } from 'lucide-react'
 import { useState } from 'react'
-import type { PlanChange, PlanProposal, PlannerAccess, PlanningNode } from '../../types'
+import type { PlanChange, PlanProposal, PlannerAccess } from '../../types'
 
 interface Props {
   proposal: PlanProposal | null
@@ -8,10 +8,8 @@ interface Props {
   busy: boolean
   error: string | null
   access: PlannerAccess | null
-  selectedNode: PlanningNode | null
   onGenerate: (goal: string) => void
   onInspectDrift: () => void
-  onRefineNode: (reason: string) => void
   onApplyPreview: () => void
   onApprove: () => void
   onApply: () => void
@@ -24,37 +22,80 @@ export function PlannerProposalPanel({
   busy,
   error,
   access,
-  selectedNode,
   onGenerate,
   onInspectDrift,
-  onRefineNode,
   onApplyPreview,
   onApprove,
   onApply,
   onReject,
 }: Props) {
   const [goal, setGoal] = useState('')
-  const [refineReason, setRefineReason] = useState('')
   const canCreateProposal = access?.canCreateProposal ?? true
   const canGenerate = goal.trim().length > 0 && !busy && canCreateProposal
-  const canRefine = Boolean(selectedNode) && refineReason.trim().length > 0 && !busy && canCreateProposal
 
   return (
     <aside className="planner-proposal-panel">
-      <div className="planner-proposal-panel__header">
-        <div>
-          <h2>Proposal</h2>
-          <p>Planner proposes. Owner approves.</p>
+      <div className="planner-dialog">
+        <div className="planner-dialog__messages">
+          {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
+          {proposal ? (
+            <div className="planner-dialog__message planner-dialog__message--planner">
+              <div className="planner-dialog__message-meta">
+                <span>{proposal.status}</span>
+                <span>{proposal.changes.length} changes</span>
+              </div>
+              <h3>{proposal.summary}</h3>
+              <div className="planner-proposal__changes">
+                {proposal.changes.map((change, index) => (
+                  <ProposalChangeRow key={`${change.kind}-${change.nodeId ?? change.node?.id ?? index}`} change={change} />
+                ))}
+              </div>
+              <div className="planner-dialog__actions">
+                <button
+                  type="button"
+                  className="planner-proposal__preview"
+                  disabled={busy}
+                  onClick={onApplyPreview}
+                >
+                  <Eye size={14} aria-hidden />
+                  {previewActive ? 'Update preview' : 'Apply preview'}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
+                  onClick={onApprove}
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
+                  onClick={onApply}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
+                  onClick={onReject}
+                >
+                  Reject
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="planner-dialog__empty">Ask Planner to propose the next topology change.</div>
+          )}
         </div>
-        <GitPullRequestArrow size={18} aria-hidden />
       </div>
 
-      <div className="planner-proposal-panel__controls">
+      <div className="planner-dialog__composer">
         <textarea
           value={goal}
           onChange={(event) => setGoal(event.target.value)}
-          placeholder="Describe the owner goal for this canvas"
-          rows={4}
+          placeholder="Tell Planner what should change"
+          rows={5}
         />
         <div className="planner-proposal-panel__buttons">
           <button
@@ -78,88 +119,6 @@ export function PlannerProposalPanel({
           </button>
         </div>
       </div>
-
-      <div className="planner-refine-panel">
-        <div className="planner-refine-panel__header">
-          <span>Selected node</span>
-          <strong>{selectedNode?.title ?? 'None'}</strong>
-        </div>
-        <textarea
-          value={refineReason}
-          onChange={(event) => setRefineReason(event.target.value)}
-          placeholder="Describe how Planner should refine the selected node"
-          rows={3}
-          disabled={!selectedNode}
-        />
-        <button
-          type="button"
-          disabled={!canRefine}
-          onClick={() => {
-            const reason = refineReason.trim()
-            if (!reason) return
-            onRefineNode(reason)
-            setRefineReason('')
-          }}
-          title={!selectedNode ? 'Select a node in the graph first.' : undefined}
-        >
-          <WandSparkles size={14} aria-hidden />
-          Refine selected
-        </button>
-      </div>
-
-      {error && <div className="planner-proposal-panel__error">{error}</div>}
-
-      {proposal ? (
-        <div className="planner-proposal">
-          <div className="planner-proposal__meta">
-            <span>{proposal.status}</span>
-            <span>{proposal.changes.length} changes</span>
-          </div>
-          <h3>{proposal.summary}</h3>
-          <div className="planner-proposal__changes">
-            {proposal.changes.map((change, index) => (
-              <ProposalChangeRow key={`${change.kind}-${change.nodeId ?? change.node?.id ?? index}`} change={change} />
-            ))}
-          </div>
-          <button
-            type="button"
-            className="planner-proposal__preview"
-            disabled={busy}
-            onClick={onApplyPreview}
-          >
-            <Eye size={14} aria-hidden />
-            {previewActive ? 'Update preview' : 'Apply preview'}
-          </button>
-          <div className="planner-proposal__lifecycle">
-            <button
-              type="button"
-              disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
-              onClick={onApprove}
-            >
-              Approve
-            </button>
-            <button
-              type="button"
-              className="primary"
-              disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
-              onClick={onApply}
-            >
-              Apply
-            </button>
-            <button
-              type="button"
-              disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
-              onClick={onReject}
-            >
-              Reject
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="planner-proposal-panel__empty">
-          Generate a proposal or inspect drift to preview topology changes.
-        </div>
-      )}
     </aside>
   )
 }

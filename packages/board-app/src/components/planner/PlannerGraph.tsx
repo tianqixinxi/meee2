@@ -6,7 +6,7 @@ import {
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { MessageSquare, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   applyPlannerProposal,
@@ -15,7 +15,6 @@ import {
   fetchPlannerCanvasState,
   generatePlannerProposal,
   inspectPlannerDrift,
-  refinePlannerNode,
   rejectPlannerProposal,
   sendPlannerActivity,
 } from '../../api'
@@ -155,22 +154,6 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       .finally(() => setBusy(false))
   }, [canvasId])
 
-  const handleRefineNode = useCallback((reason: string) => {
-    if (!selectedNode) return
-    setBusy(true)
-    setError(null)
-    refinePlannerNode(canvasId, selectedNode.id, reason)
-      .then((next) => {
-        setProposal(next)
-        setPlannerState((current) => current && next
-          ? { ...current, proposals: upsertProposal(current.proposals, next) }
-          : current)
-        setPreviewActive(false)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to refine planner node'))
-      .finally(() => setBusy(false))
-  }, [canvasId, selectedNode])
-
   const handleApplyPreview = useCallback(() => {
     if (!proposal) return
     setBusy(true)
@@ -263,6 +246,14 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   return (
     <section className="planner-workspace" aria-label="Planner graph">
       <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
+        <button
+          type="button"
+          className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
+          onClick={() => setPlannerPanelCollapsed((value) => !value)}
+          aria-label={plannerPanelCollapsed ? 'Open planner dialog' : 'Collapse planner dialog'}
+        >
+          {plannerPanelCollapsed ? <MessageSquare size={16} aria-hidden /> : <X size={15} aria-hidden />}
+        </button>
         <div className="planner-flow">
           {plannerState ? (
             <ReactFlow
@@ -285,8 +276,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
               <MiniMap
                 className="planner-flow__minimap"
-                nodeColor={miniMapNodeColor}
-                nodeStrokeColor="rgba(245, 244, 239, 0.34)"
+                nodeColor="rgba(63, 61, 56, 0.92)"
+                nodeStrokeColor={miniMapNodeColor}
                 nodeBorderRadius={3}
                 nodeStrokeWidth={2}
                 bgColor="rgba(31, 31, 29, 0.96)"
@@ -307,33 +298,23 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           )}
         </div>
 
-        <div className="planner-side">
-          <button
-            type="button"
-            className="planner-side__collapse"
-            onClick={() => setPlannerPanelCollapsed((value) => !value)}
-            aria-label={plannerPanelCollapsed ? 'Open planner dialog' : 'Collapse planner dialog'}
-          >
-            {plannerPanelCollapsed ? <ChevronLeft size={16} aria-hidden /> : <ChevronRight size={16} aria-hidden />}
-          </button>
-          {!plannerPanelCollapsed && (
+        {!plannerPanelCollapsed && (
+          <div className="planner-side">
             <PlannerProposalPanel
               proposal={proposal}
               previewActive={previewActive}
               busy={busy}
               error={error}
               access={plannerState?.access ?? null}
-              selectedNode={selectedNode}
               onGenerate={handleGenerate}
               onInspectDrift={handleInspectDrift}
-              onRefineNode={handleRefineNode}
               onApplyPreview={handleApplyPreview}
               onApprove={handleApprove}
               onApply={handleApply}
               onReject={handleReject}
             />
-          )}
-        </div>
+          </div>
+        )}
       </div>
       {nodeModalOpen && selectedNode && (
         <NodeInspectorModal
