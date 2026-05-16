@@ -271,6 +271,9 @@ struct PlannerMonitorEnvelope: Encodable {
     let generatedAt: Date
     let items: [PlannerMonitorItem]
 }
+struct PlannerActivityEnvelope: Encodable {
+    let activity: PlannerActivity
+}
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }

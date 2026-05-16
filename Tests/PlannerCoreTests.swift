@@ -19,9 +19,11 @@ final class PlannerCoreTests: XCTestCase {
             .appendingPathComponent("planner-core-tests-\(UUID().uuidString)")
             .appendingPathComponent("planner-canvases.json")
         PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
+        PlannerActivityStore.shared.reset()
     }
 
     override func tearDownWithError() throws {
+        PlannerActivityStore.shared.reset()
         PlannerBoardBridge.store = PlannerStore.shared
         try? FileManager.default.removeItem(at: plannerStoreURL.deletingLastPathComponent())
         plannerStoreURL = nil
@@ -904,6 +906,68 @@ final class PlannerCoreTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? PlannerCoreError, .canvasMismatch(expected: "target-canvas", actual: "other-canvas"))
         }
+    }
+
+    func testPlannerActivityStoreKeepsRecentCanvasPresence() {
+        let store = PlannerActivityStore(ttl: 60)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = store.heartbeat(
+            userId: "user-a",
+            displayName: "User A",
+            currentCanvasId: "canvas-a",
+            selectedNodeId: "node-a",
+            selectedSessionId: "session-a",
+            now: now
+        )
+        _ = store.heartbeat(
+            userId: "user-b",
+            displayName: "User B",
+            currentCanvasId: "canvas-b",
+            selectedNodeId: nil,
+            selectedSessionId: nil,
+            now: now
+        )
+
+        let fallback = PlannerActivity(
+            userId: "owner-a",
+            displayName: "Owner",
+            currentCanvasId: "canvas-a",
+            selectedNodeId: nil,
+            selectedSessionId: nil,
+            lastActiveAt: now
+        )
+        let recent = store.activities(for: "canvas-a", fallback: fallback, now: now.addingTimeInterval(10))
+        XCTAssertEqual(Set(recent.map(\.userId)), Set(["owner-a", "user-a"]))
+        XCTAssertEqual(recent.first { $0.userId == "user-a" }?.selectedNodeId, "node-a")
+
+        let expired = store.activities(for: "canvas-a", fallback: fallback, now: now.addingTimeInterval(120))
+        XCTAssertEqual(expired.map(\.userId), ["owner-a"])
+    }
+
+    func testPlannerBoardBridgeRecordsSelectedNodeActivity() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let state = try PlannerBoardBridge.canvasState(
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let node = try XCTUnwrap(state.nodes.first)
+
+        let activity = try PlannerBoardBridge.recordActivity(
+            canvasId: "canvas-a",
+            selectedNodeId: node.id,
+            selectedSessionId: nil,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(activity.selectedNodeId, node.id)
+
+        let updated = try PlannerBoardBridge.canvasState(
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(updated.activities.first?.selectedNodeId, node.id)
     }
 
     private func boardSnapshot(canvasId: String, ownerId: String) -> BoardLayoutStore.Snapshot {

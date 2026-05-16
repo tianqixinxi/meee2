@@ -17,6 +17,7 @@ import {
   inspectPlannerDrift,
   refinePlannerNode,
   rejectPlannerProposal,
+  sendPlannerActivity,
 } from '../../api'
 import type { PlanProposal, PlannerCanvasState, PlannerEvent, PlanningNode } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
@@ -92,6 +93,34 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     if (!selectedNodeId || !plannerState) return null
     return plannerState.nodes.find((node) => node.id === selectedNodeId) ?? null
   }, [plannerState, selectedNodeId])
+
+  useEffect(() => {
+    let cancelled = false
+    const heartbeat = () => {
+      sendPlannerActivity({
+        canvasId,
+        selectedNodeId,
+        selectedSessionId: selectedNode?.sessionId ?? null,
+      })
+        .then(({ activity }) => {
+          if (cancelled) return
+          setPlannerState((current) => {
+            if (!current) return current
+            const others = (current.activities ?? []).filter((item) => item.userId !== activity.userId)
+            return { ...current, activities: [activity, ...others] }
+          })
+        })
+        .catch(() => {
+          // Presence is best-effort; graph state should keep working offline.
+        })
+    }
+    heartbeat()
+    const timer = window.setInterval(heartbeat, 20_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [canvasId, selectedNode?.sessionId, selectedNodeId])
 
   const handleGenerate = useCallback((goal: string) => {
     setBusy(true)

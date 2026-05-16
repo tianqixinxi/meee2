@@ -83,6 +83,71 @@ struct PlannerActivity: Codable, Equatable {
     var lastActiveAt: Date
 }
 
+final class PlannerActivityStore {
+    static let shared = PlannerActivityStore()
+
+    private let lock = NSLock()
+    private var activitiesByUserId: [String: PlannerActivity] = [:]
+    private let ttl: TimeInterval
+
+    init(ttl: TimeInterval = 90) {
+        self.ttl = ttl
+    }
+
+    @discardableResult
+    func heartbeat(
+        userId: String,
+        displayName: String,
+        currentCanvasId: String,
+        selectedNodeId: String?,
+        selectedSessionId: String?,
+        now: Date = Date()
+    ) -> PlannerActivity {
+        let activity = PlannerActivity(
+            userId: userId,
+            displayName: displayName,
+            currentCanvasId: currentCanvasId,
+            selectedNodeId: selectedNodeId,
+            selectedSessionId: selectedSessionId,
+            lastActiveAt: now
+        )
+        lock.lock()
+        activitiesByUserId[userId] = activity
+        pruneLocked(now: now)
+        lock.unlock()
+        return activity
+    }
+
+    func activities(
+        for canvasId: String,
+        fallback: PlannerActivity,
+        now: Date = Date()
+    ) -> [PlannerActivity] {
+        lock.lock()
+        pruneLocked(now: now)
+        var values = activitiesByUserId.values
+            .filter { $0.currentCanvasId == canvasId }
+            .sorted { $0.lastActiveAt > $1.lastActiveAt }
+        if !values.contains(where: { $0.userId == fallback.userId }) {
+            values.insert(fallback, at: 0)
+        }
+        lock.unlock()
+        return values
+    }
+
+    func reset() {
+        lock.lock()
+        activitiesByUserId.removeAll()
+        lock.unlock()
+    }
+
+    private func pruneLocked(now: Date) {
+        activitiesByUserId = activitiesByUserId.filter { _, activity in
+            now.timeIntervalSince(activity.lastActiveAt) <= ttl
+        }
+    }
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -1182,8 +1247,31 @@ enum PlannerBoardBridge {
             service.readNodeState(nodes: nodes),
             record.proposals,
             access,
-            activities(for: record.canvas, nodes: nodes, actorId: access.actorId),
+            PlannerActivityStore.shared.activities(
+                for: record.canvas.id,
+                fallback: fallbackActivity(for: record.canvas, nodes: nodes, actorId: access.actorId)
+            ),
             record.events.sorted { $0.createdAt > $1.createdAt }
+        )
+    }
+
+    static func recordActivity(
+        canvasId: String,
+        selectedNodeId: String?,
+        selectedSessionId: String?,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerActivity {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let selectedNode = selectedNodeId.flatMap { id in state.nodes.first(where: { $0.id == id }) }
+        let safeSelectedNodeId = selectedNode?.id
+        let safeSelectedSessionId = selectedNode?.sessionId ?? selectedSessionId
+        return PlannerActivityStore.shared.heartbeat(
+            userId: state.access.actorId,
+            displayName: state.access.role == .owner ? "Owner" : state.access.actorId,
+            currentCanvasId: state.canvas.id,
+            selectedNodeId: safeSelectedNodeId,
+            selectedSessionId: safeSelectedSessionId
         )
     }
 
@@ -1482,24 +1570,22 @@ enum PlannerBoardBridge {
         }
     }
 
-    private static func activities(
+    private static func fallbackActivity(
         for canvas: PlanningCanvas,
         nodes: [PlanningNode],
         actorId: String
-    ) -> [PlannerActivity] {
+    ) -> PlannerActivity {
         let selected = nodes.first { node in
             node.doerId == actorId && (node.status == .running || node.status == .blocked || node.status == .planning)
         }
-        return [
-            PlannerActivity(
-                userId: actorId,
-                displayName: actorId == canvas.ownerId ? "Owner" : actorId,
-                currentCanvasId: canvas.id,
-                selectedNodeId: selected?.id,
-                selectedSessionId: selected?.sessionId,
-                lastActiveAt: Date()
-            )
-        ]
+        return PlannerActivity(
+            userId: actorId,
+            displayName: actorId == canvas.ownerId ? "Owner" : actorId,
+            currentCanvasId: canvas.id,
+            selectedNodeId: selected?.id,
+            selectedSessionId: selected?.sessionId,
+            lastActiveAt: Date()
+        )
     }
 }
 

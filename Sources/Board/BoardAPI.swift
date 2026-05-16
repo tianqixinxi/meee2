@@ -298,6 +298,36 @@ enum BoardAPI {
         }
     }
 
+    static func updatePlannerActivity(_ req: HttpRequest) -> HttpResponse {
+        struct ActivityRequest: Decodable {
+            let canvasId: String
+            let selectedNodeId: String?
+            let selectedSessionId: String?
+        }
+
+        guard let body = decodeJSONBody(req, as: ActivityRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"canvasId\": String}", status: 400)
+        }
+        let canvasId = body.canvasId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let activity = try PlannerBoardBridge.recordActivity(
+                canvasId: canvasId,
+                selectedNodeId: body.selectedNodeId,
+                selectedSessionId: body.selectedSessionId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerActivityEnvelope(activity: activity))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func generatePlannerProposal(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)

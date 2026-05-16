@@ -10,6 +10,7 @@ import type {
   SpawnProvider,
   CoordinationGroup,
   PlanProposal,
+  PlannerActivity,
   PlannerCanvasState,
   PlannerMonitorState,
 } from './types'
@@ -177,6 +178,17 @@ export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvas
 
 export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
   return jsonRequest<PlannerMonitorState>('/api/planner/monitor')
+}
+
+export function sendPlannerActivity(input: {
+  canvasId: string
+  selectedNodeId?: string | null
+  selectedSessionId?: string | null
+}): Promise<{ activity: PlannerActivity }> {
+  return jsonRequest('/api/planner/activity', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export async function generatePlannerProposal(
