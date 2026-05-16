@@ -4,13 +4,12 @@ import {
   Network,
   Radar,
   Settings,
-  SquareStack,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo } from 'react'
 import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 
-export type WorkspaceMode = 'planner' | 'monitor' | 'legacy'
+export type WorkspaceMode = 'planner' | 'monitor'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -92,13 +91,6 @@ export function WorkspaceRail({
           tone={counts.unread > 0 ? 'danger' : 'default'}
         >
           <Radar size={20} />
-        </RailButton>
-        <RailButton
-          label="Sessions"
-          active={mode === 'legacy'}
-          onClick={() => onModeChange('legacy')}
-        >
-          <SquareStack size={20} />
         </RailButton>
       </div>
 

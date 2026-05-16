@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Layers, LayoutGrid, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Layers, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
 import { resolveCanvasConflict } from '../api'
 
@@ -10,7 +10,6 @@ interface Props {
   onCreateCanvas: (name: string, scope: CanvasScope) => Promise<void> | void
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
-  onArrangeSessions: () => void
 }
 
 export function CanvasToolbar({
@@ -20,7 +19,6 @@ export function CanvasToolbar({
   onCreateCanvas,
   onRenameCanvas,
   onDeleteCanvas,
-  onArrangeSessions,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -164,16 +162,6 @@ export function CanvasToolbar({
               }}
             >
               <Plus size={13} aria-hidden /> New canvas
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                closePanels()
-                setMenuOpen(false)
-                onArrangeSessions()
-              }}
-            >
-              <LayoutGrid size={13} aria-hidden /> Arrange
             </button>
             <button
               type="button"
