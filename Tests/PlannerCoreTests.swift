@@ -457,8 +457,8 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertEqual(state.canvas.id, "canvas-a")
         XCTAssertEqual(state.canvas.ownerId, "owner-a")
-        XCTAssertTrue(state.nodes.allSatisfy { $0.canvasId == "canvas-a" })
-        XCTAssertEqual(state.states.count, state.nodes.count)
+        XCTAssertTrue(state.nodes.isEmpty)
+        XCTAssertTrue(state.states.isEmpty)
         XCTAssertEqual(state.proposals.count, 0)
         XCTAssertEqual(state.access.role, .owner)
         XCTAssertTrue(state.access.canApplyProposal)
@@ -487,7 +487,7 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertTrue(state.nodes.allSatisfy { $0.source != .session })
         XCTAssertTrue(state.nodes.allSatisfy { $0.sessionId == nil })
-        XCTAssertEqual(state.nodes.count, service.nodeMock(canvasId: "canvas-a").count)
+        XCTAssertTrue(state.nodes.isEmpty)
     }
 
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
@@ -568,6 +568,7 @@ final class PlannerCoreTests: XCTestCase {
 
     func testPlannerBoardBridgeRefineProposalStaysPending() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
         let node = try XCTUnwrap(state.nodes.first)
 
@@ -626,6 +627,7 @@ final class PlannerCoreTests: XCTestCase {
 
     func testPlannerWorkspaceMonitorRanksBlockedAndPendingWork() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
             goal: "Pending monitor proposal",
             for: "canvas-a",
@@ -642,6 +644,7 @@ final class PlannerCoreTests: XCTestCase {
 
     func testPlannerWorkspaceMonitorDoerViewFiltersAssignedNodes() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
 
         let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "B")
 
@@ -689,7 +692,7 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertEqual(state.proposals.first?.id, proposal.id)
         XCTAssertEqual(state.proposals.first?.status, .pending)
-        XCTAssertTrue(state.nodes.contains { $0.title == "Planner LLM Spike" })
+        XCTAssertTrue(state.nodes.isEmpty)
     }
 
     func testPlannerProposalLifecycleRequiresApprovalBeforePersistentApply() throws {
@@ -970,6 +973,7 @@ final class PlannerCoreTests: XCTestCase {
 
     func testPlannerBoardBridgeRecordsSelectedNodeActivity() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let state = try PlannerBoardBridge.canvasState(
             for: "canvas-a",
             snapshot: snapshot,
@@ -1016,6 +1020,22 @@ final class PlannerCoreTests: XCTestCase {
             activeCanvasId: canvasId,
             canvases: [canvas],
             memberships: memberships
+        )
+    }
+
+    private func seedPlannerNodes(canvasId: String, ownerId: String) throws -> PlannerStore.CanvasRecord {
+        var nodes = service.nodeMock(canvasId: canvasId)
+        if !nodes.isEmpty {
+            nodes[0].title = "\(nodes[0].title) Fixture"
+        }
+        return try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(
+                id: canvasId,
+                ownerId: ownerId,
+                title: "Planning Canvas",
+                plannerContext: "canvas:\(canvasId)"
+            ),
+            seedNodes: nodes
         )
     }
 }

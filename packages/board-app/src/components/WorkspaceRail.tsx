@@ -1,4 +1,5 @@
 import {
+  List,
   Network,
   Radar,
   Settings,
@@ -7,7 +8,7 @@ import { type ReactNode, useEffect, useMemo } from 'react'
 import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 
-export type WorkspaceMode = 'planner' | 'monitor'
+export type WorkspaceMode = 'planner' | 'sessions' | 'monitor'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -72,10 +73,17 @@ export function WorkspaceRail({
           label="Planner"
           active={mode === 'planner'}
           onClick={() => onModeChange('planner')}
+        >
+          <Network size={20} />
+        </RailButton>
+        <RailButton
+          label="Sessions"
+          active={mode === 'sessions'}
+          onClick={() => onModeChange('sessions')}
           badge={counts.attention > 0 ? counts.attention : undefined}
           tone={counts.attention > 0 ? 'attention' : 'default'}
         >
-          <Network size={20} />
+          <List size={20} />
         </RailButton>
         <RailButton
           label="Monitor"

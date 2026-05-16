@@ -10,6 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
+import { SessionsView } from './components/SessionsView'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { useBoardState } from './useBoardState'
@@ -455,6 +456,8 @@ export default function App() {
               canvasName={activeCanvas?.name ?? 'Canvas'}
               onOpenSubCanvas={handleSetActiveCanvas}
             />
+          ) : workspaceMode === 'sessions' ? (
+            <SessionsView state={boardState.state} />
           ) : (
             <WorkspaceMonitor />
           )}

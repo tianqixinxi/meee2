@@ -989,6 +989,23 @@ final class PlannerStore {
         return record
     }
 
+    func replaceNodesIfUnmodified(
+        canvasId: String,
+        matching expectedNodes: [PlanningNode],
+        with replacementNodes: [PlanningNode]
+    ) throws -> CanvasRecord {
+        var record = try requireRecord(canvasId: canvasId)
+        guard record.proposals.isEmpty,
+              record.events.isEmpty,
+              record.nodes == expectedNodes else {
+            return record
+        }
+        record.nodes = replacementNodes
+        document.canvases[canvasId] = record
+        try save()
+        return record
+    }
+
     func saveProposal(
         _ proposal: PlanProposal,
         canvas: PlanningCanvas,
@@ -1238,7 +1255,12 @@ enum PlannerBoardBridge {
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
-        let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
+        var record = try store.record(for: canvas, seedNodes: [])
+        record = try store.replaceNodesIfUnmodified(
+            canvasId: canvas.id,
+            matching: service.nodeMock(canvasId: canvas.id),
+            with: []
+        )
         let nodes = record.nodes
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
         return (
@@ -1283,8 +1305,7 @@ enum PlannerBoardBridge {
     ) throws -> PlanProposal {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
-        let seedNodes = service.nodeMock(canvasId: canvas.id)
-        let record = try store.record(for: canvas, seedNodes: seedNodes)
+        let record = try store.record(for: canvas, seedNodes: [])
         let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
         try PlannerPermission.require(.createProposal, access: access)
         let title = goal.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1313,7 +1334,7 @@ enum PlannerBoardBridge {
             changes: [.addNode(node)],
             status: .pending
         )
-        .saved(in: store, canvas: canvas, seedNodes: seedNodes)
+        .saved(in: store, canvas: canvas, seedNodes: [])
     }
 
     static func driftProposal(
@@ -1339,7 +1360,7 @@ enum PlannerBoardBridge {
         .saved(
             in: store,
             canvas: state.canvas,
-            seedNodes: service.nodeMock(canvasId: state.canvas.id),
+            seedNodes: [],
             validationNodes: state.nodes
         )
     }
@@ -1364,7 +1385,7 @@ enum PlannerBoardBridge {
         return try proposal.saved(
             in: store,
             canvas: state.canvas,
-            seedNodes: service.nodeMock(canvasId: state.canvas.id),
+            seedNodes: [],
             validationNodes: state.nodes
         )
     }
@@ -1383,7 +1404,7 @@ enum PlannerBoardBridge {
         let preview = try store.preview(
             proposal: proposal,
             canvas: canvas,
-            seedNodes: service.nodeMock(canvasId: canvasId),
+            seedNodes: [],
             service: service
         )
         let approved = preview.proposal

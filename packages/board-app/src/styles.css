@@ -318,6 +318,154 @@ textarea {
   overflow: hidden;
 }
 
+.sessions-workspace {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.sessions-workspace__inner {
+  width: min(920px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 34px 0 48px;
+}
+
+.sessions-workspace__header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 18px;
+}
+
+.sessions-workspace__header h1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.sessions-workspace__header p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sessions-empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.74);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sessions-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.sessions-group {
+  display: grid;
+  gap: 8px;
+}
+
+.sessions-group__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.sessions-group__title em {
+  color: var(--text-dim);
+  font-style: normal;
+}
+
+.sessions-list {
+  display: grid;
+  gap: 6px;
+}
+
+.sessions-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.72);
+}
+
+.sessions-row__icon {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.06);
+}
+
+.sessions-row__main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.sessions-row__title,
+.sessions-row__meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.sessions-row__title {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sessions-row__title strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-row__title span {
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(204, 120, 92, 0.18);
+  color: var(--accent-hover);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sessions-row__meta {
+  gap: 8px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.sessions-row__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 720px) {
   .app {
     grid-template-columns: 52px 1fr;

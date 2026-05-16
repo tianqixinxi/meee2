@@ -34,6 +34,24 @@ const DEMO_OWNER_ID = 'demo-owner'
 
 let demoActiveCanvasId = DEMO_CANVAS_ID
 let demoProposal: PlanProposal | null = null
+let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
+  [DEMO_CANVAS_ID]: {
+    id: DEMO_CANVAS_ID,
+    name: 'Planner Demo',
+    scope: 'personal',
+    isDefault: true,
+    workspacePath: '/demo/planner',
+    ownerUserId: DEMO_OWNER_ID,
+  },
+  [DEMO_SUB_CANVAS_ID]: {
+    id: DEMO_SUB_CANVAS_ID,
+    name: 'Release Readiness',
+    scope: 'personal',
+    isDefault: false,
+    workspacePath: '/demo/release-readiness',
+    ownerUserId: DEMO_OWNER_ID,
+  },
+}
 let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
   [DEMO_CANVAS_ID]: [
     demoNode({
@@ -158,24 +176,7 @@ function demoCanvases(): CanvasList {
     activeCanvasId: demoActiveCanvasId,
     defaultCanvasIds: [DEMO_CANVAS_ID],
     memberships: [],
-    canvases: [
-      {
-        id: DEMO_CANVAS_ID,
-        name: 'Planner Demo',
-        scope: 'personal',
-        isDefault: true,
-        workspacePath: '/demo/planner',
-        ownerUserId: DEMO_OWNER_ID,
-      },
-      {
-        id: DEMO_SUB_CANVAS_ID,
-        name: 'Release Readiness',
-        scope: 'personal',
-        isDefault: false,
-        workspacePath: '/demo/release-readiness',
-        ownerUserId: DEMO_OWNER_ID,
-      },
-    ],
+    canvases: Object.values(demoCanvasRecords),
   }
 }
 
@@ -205,14 +206,15 @@ function demoBoardState(): BoardState {
 }
 
 function demoPlannerState(canvasId: string): PlannerCanvasState {
-  const safeCanvasId = canvasId === DEMO_SUB_CANVAS_ID ? DEMO_SUB_CANVAS_ID : DEMO_CANVAS_ID
-  const nodes = demoNodesByCanvasId[safeCanvasId] ?? demoNodesByCanvasId[DEMO_CANVAS_ID]
+  const safeCanvasId = demoCanvasRecords[canvasId] ? canvasId : DEMO_CANVAS_ID
+  const canvas = demoCanvasRecords[safeCanvasId]
+  const nodes = demoNodesByCanvasId[safeCanvasId] ?? []
   const now = new Date().toISOString()
   return {
     canvas: {
       id: safeCanvasId,
       ownerId: DEMO_OWNER_ID,
-      title: safeCanvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'Planner Demo',
+      title: canvas.name,
       plannerContext: 'Static public demo of the React Flow Planner Graph.',
     },
     nodes,
@@ -282,7 +284,7 @@ function demoNodeState(node: PlanningNode) {
 }
 
 function nextDemoProposal(canvasId: string, summary: string, title: string): PlanProposal {
-  const safeCanvasId = canvasId === DEMO_SUB_CANVAS_ID ? DEMO_SUB_CANVAS_ID : DEMO_CANVAS_ID
+  const safeCanvasId = demoCanvasRecords[canvasId] ? canvasId : DEMO_CANVAS_ID
   return {
     id: `proposal-${Date.now()}`,
     canvasId: safeCanvasId,
@@ -410,7 +412,26 @@ export function fetchCanvases(): Promise<CanvasList> {
 }
 
 export function createCanvas(input: { name: string; scope: CanvasScope }): Promise<CanvasList> {
-  if (PLANNER_DEMO_MODE) return Promise.resolve(demoCanvases())
+  if (PLANNER_DEMO_MODE) {
+    const id = `demo-canvas-${Date.now()}`
+    demoCanvasRecords = {
+      ...demoCanvasRecords,
+      [id]: {
+        id,
+        name: input.name,
+        scope: input.scope,
+        isDefault: false,
+        workspacePath: `/demo/${id}`,
+        ownerUserId: DEMO_OWNER_ID,
+      },
+    }
+    demoNodesByCanvasId = {
+      ...demoNodesByCanvasId,
+      [id]: [],
+    }
+    demoActiveCanvasId = id
+    return Promise.resolve(demoCanvases())
+  }
   return jsonRequest<CanvasList>('/api/canvases', {
     method: 'POST',
     body: JSON.stringify(input),
@@ -422,7 +443,13 @@ export function updateCanvas(
   input: { name?: string; active?: boolean },
 ): Promise<CanvasList> {
   if (PLANNER_DEMO_MODE) {
-    if (input.active) demoActiveCanvasId = id === DEMO_SUB_CANVAS_ID ? DEMO_SUB_CANVAS_ID : DEMO_CANVAS_ID
+    if (input.active && demoCanvasRecords[id]) demoActiveCanvasId = id
+    if (input.name && demoCanvasRecords[id]) {
+      demoCanvasRecords = {
+        ...demoCanvasRecords,
+        [id]: { ...demoCanvasRecords[id], name: input.name },
+      }
+    }
     return Promise.resolve(demoCanvases())
   }
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
@@ -432,7 +459,18 @@ export function updateCanvas(
 }
 
 export function deleteCanvas(id: string): Promise<CanvasList> {
-  if (PLANNER_DEMO_MODE) return Promise.resolve(demoCanvases())
+  if (PLANNER_DEMO_MODE) {
+    if (id !== DEMO_CANVAS_ID) {
+      const nextCanvases = { ...demoCanvasRecords }
+      const nextNodes = { ...demoNodesByCanvasId }
+      delete nextCanvases[id]
+      delete nextNodes[id]
+      demoCanvasRecords = nextCanvases
+      demoNodesByCanvasId = nextNodes
+      if (demoActiveCanvasId === id) demoActiveCanvasId = DEMO_CANVAS_ID
+    }
+    return Promise.resolve(demoCanvases())
+  }
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
