@@ -43,7 +43,7 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
-const MIN_CANVAS_LOADING_MS = 3000
+const MIN_CANVAS_LOADING_MS = import.meta.env.VITE_PLANNER_DEMO === '1' ? 0 : 3000
 
 async function loadCanvasHydratedState(
   canvasId: string,
