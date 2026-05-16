@@ -25,6 +25,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const Icon = statusIcons[runState]
   const blockers = data.state?.blockers ?? []
   const needsOwnerReview = Boolean(data.state?.needsOwnerReview)
+  const executorLabel = node.executorType === 'mock' ? 'local' : node.executorType
 
   return (
     <div
@@ -55,7 +56,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       <div className="planner-node__meta">
         <span>
           <GitBranch size={12} aria-hidden />
-          {node.executorType} / {node.executionMode}
+          {executorLabel} / {node.executionMode}
         </span>
         <span>
           <UserRound size={12} aria-hidden />

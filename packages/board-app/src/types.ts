@@ -329,6 +329,27 @@ export interface PlannerActivity {
   lastActiveAt: string
 }
 
+export type PlannerEventType =
+  | 'node.created'
+  | 'node.updated'
+  | 'node.state_changed'
+  | 'proposal.created'
+  | 'proposal.approved'
+  | 'proposal.applied'
+  | 'proposal.rejected'
+  | 'artifact.attached'
+
+export interface PlannerEvent {
+  id: string
+  canvasId: string
+  type: PlannerEventType
+  nodeId?: string | null
+  proposalId?: string | null
+  summary: string
+  artifactRefs: string[]
+  createdAt: string
+}
+
 export interface PlanningNode {
   id: string
   canvasId: string
@@ -410,6 +431,7 @@ export interface PlannerCanvasState {
   proposals: PlanProposal[]
   access: PlannerAccess
   activities?: PlannerActivity[]
+  events?: PlannerEvent[]
 }
 
 export interface SelectedCanvasElementContext {

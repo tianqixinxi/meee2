@@ -271,7 +271,8 @@ enum BoardAPI {
                 states: state.states,
                 proposals: state.proposals,
                 access: state.access,
-                activities: state.activities
+                activities: state.activities,
+                events: state.events
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)

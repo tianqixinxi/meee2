@@ -15,9 +15,10 @@ import {
   fetchPlannerCanvasState,
   generatePlannerProposal,
   inspectPlannerDrift,
+  refinePlannerNode,
   rejectPlannerProposal,
 } from '../../api'
-import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
+import type { PlanProposal, PlannerCanvasState, PlannerEvent, PlanningNode } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { buildPlannerGraph, groupStatesByRisk } from './plannerGraphAdapter'
@@ -46,6 +47,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [previewActive, setPreviewActive] = useState(false)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -86,6 +88,11 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     return groupStatesByRisk(plannerState.nodes, plannerState.states)
   }, [plannerState])
 
+  const selectedNode = useMemo(() => {
+    if (!selectedNodeId || !plannerState) return null
+    return plannerState.nodes.find((node) => node.id === selectedNodeId) ?? null
+  }, [plannerState, selectedNodeId])
+
   const handleGenerate = useCallback((goal: string) => {
     setBusy(true)
     setError(null)
@@ -116,6 +123,22 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       .catch((err) => setError((err as Error).message || 'Failed to inspect planner drift'))
       .finally(() => setBusy(false))
   }, [canvasId])
+
+  const handleRefineNode = useCallback((reason: string) => {
+    if (!selectedNode) return
+    setBusy(true)
+    setError(null)
+    refinePlannerNode(canvasId, selectedNode.id, reason)
+      .then((next) => {
+        setProposal(next)
+        setPlannerState((current) => current && next
+          ? { ...current, proposals: upsertProposal(current.proposals, next) }
+          : current)
+        setPreviewActive(false)
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to refine planner node'))
+      .finally(() => setBusy(false))
+  }, [canvasId, selectedNode])
 
   const handleApplyPreview = useCallback(() => {
     if (!proposal) return
@@ -232,6 +255,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               nodes={graph.nodes}
               edges={graph.edges}
               nodeTypes={nodeTypes}
+              onNodeClick={(_, node) => setSelectedNodeId(node.data.node.id)}
+              onPaneClick={() => setSelectedNodeId(null)}
               fitView
               minZoom={0.35}
               maxZoom={1.6}
@@ -261,18 +286,51 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             busy={busy}
             error={error}
             access={plannerState?.access ?? null}
+            selectedNode={selectedNode}
             onGenerate={handleGenerate}
             onInspectDrift={handleInspectDrift}
+            onRefineNode={handleRefineNode}
             onApplyPreview={handleApplyPreview}
             onApprove={handleApprove}
             onApply={handleApply}
             onReject={handleReject}
           />
           <StatesList groups={groupedStates} />
+          <PlannerTimeline events={plannerState?.events ?? []} />
         </div>
       </div>
     </section>
   )
+}
+
+function PlannerTimeline({ events }: { events: PlannerEvent[] }) {
+  return (
+    <aside className="planner-timeline">
+      <div className="planner-timeline__header">
+        <h2>Timeline</h2>
+        <span>{events.length} events</span>
+      </div>
+      {events.length === 0 ? (
+        <div className="planner-timeline__empty">No planner events yet.</div>
+      ) : (
+        <div className="planner-timeline__items">
+          {events.slice(0, 12).map((event) => (
+            <div key={event.id} className="planner-timeline__item">
+              <span>{event.type}</span>
+              <strong>{event.summary}</strong>
+              <em>{formatEventTime(event.createdAt)}</em>
+            </div>
+          ))}
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function formatEventTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
 function ActivityStrip({

@@ -1168,7 +1168,8 @@ enum PlannerBoardBridge {
         states: [NodeStateSnapshot],
         proposals: [PlanProposal],
         access: PlannerAccess,
-        activities: [PlannerActivity]
+        activities: [PlannerActivity],
+        events: [PlannerEvent]
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
@@ -1181,7 +1182,8 @@ enum PlannerBoardBridge {
             service.readNodeState(nodes: nodes),
             record.proposals,
             access,
-            activities(for: record.canvas, nodes: nodes, actorId: access.actorId)
+            activities(for: record.canvas, nodes: nodes, actorId: access.actorId),
+            record.events.sorted { $0.createdAt > $1.createdAt }
         )
     }
 
@@ -1686,6 +1688,145 @@ final class MockPlannerAgent: PlannerAgent {
             ],
             status: .pending
         )
+    }
+}
+
+protocol PlannerTextClient {
+    func complete(systemPrompt: String, userPrompt: String) async throws -> String
+}
+
+struct AssistantProviderPlannerClient: PlannerTextClient {
+    var provider: AssistantProvider
+    var settings: AssistantSettings
+
+    func complete(systemPrompt: String, userPrompt: String) async throws -> String {
+        var output = ""
+        let stream = provider.runTurn(
+            systemPrompt: systemPrompt,
+            messages: [ChatMessage(role: .user, content: userPrompt)],
+            tools: [],
+            settings: settings
+        )
+        for try await event in stream {
+            switch event {
+            case .textDelta(let delta):
+                output += delta
+            case .turnDone:
+                return output
+            case .error(let message):
+                throw NSError(
+                    domain: "PlannerAgent",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: message]
+                )
+            case .toolCall:
+                continue
+            }
+        }
+        return output
+    }
+}
+
+final class LLMPlannerAgent: PlannerAgent {
+    private let client: PlannerTextClient
+
+    init(client: PlannerTextClient) {
+        self.client = client
+    }
+
+    func generatePlan(goal: String, canvas: PlanningCanvas) async throws -> PlanProposal {
+        let output = try await client.complete(
+            systemPrompt: PlannerPromptFactory.systemPrompt,
+            userPrompt: PlannerPromptFactory.generatePrompt(goal: goal, canvas: canvas)
+        )
+        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: [])
+        return proposal
+    }
+
+    func refineNode(node: PlanningNode, reason: String) async throws -> PlanProposal {
+        let canvas = PlanningCanvas(
+            id: node.canvasId,
+            ownerId: node.doerId,
+            title: node.canvasId,
+            plannerContext: "canvas:\(node.canvasId)"
+        )
+        let output = try await client.complete(
+            systemPrompt: PlannerPromptFactory.systemPrompt,
+            userPrompt: PlannerPromptFactory.refinePrompt(node: node, reason: reason)
+        )
+        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: [node])
+        return proposal
+    }
+
+    func inspectDrift(nodes: [PlanningNode], states: [NodeStateSnapshot]) async throws -> PlanProposal? {
+        guard let firstNode = nodes.first else { return nil }
+        let canvas = PlanningCanvas(
+            id: firstNode.canvasId,
+            ownerId: firstNode.doerId,
+            title: firstNode.canvasId,
+            plannerContext: "canvas:\(firstNode.canvasId)"
+        )
+        let output = try await client.complete(
+            systemPrompt: PlannerPromptFactory.systemPrompt,
+            userPrompt: PlannerPromptFactory.driftPrompt(nodes: nodes, states: states)
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.isEmpty || output == "null" { return nil }
+        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: nodes)
+        return proposal
+    }
+}
+
+enum PlannerPromptFactory {
+    static let systemPrompt = """
+    You are the MEEE2 Planner. Return only strict JSON for PlanProposal, or null when no proposal is needed.
+    You may propose topology changes, but the owner approval API is the only path that can apply them.
+    Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
+    """
+
+    static func generatePrompt(goal: String, canvas: PlanningCanvas) -> String {
+        """
+        Generate a PlanProposal for this canvas.
+        Canvas JSON:
+        \(json(canvas))
+
+        Owner goal:
+        \(goal)
+        """
+    }
+
+    static func refinePrompt(node: PlanningNode, reason: String) -> String {
+        """
+        Refine the selected PlanningNode by returning a PlanProposal.
+        Existing node JSON:
+        \(json(node))
+
+        Refinement reason:
+        \(reason)
+        """
+    }
+
+    static func driftPrompt(nodes: [PlanningNode], states: [NodeStateSnapshot]) -> String {
+        """
+        Inspect drift between planning nodes and runtime states. Return a PlanProposal or null.
+        Nodes JSON:
+        \(json(nodes))
+
+        State snapshots JSON:
+        \(json(states))
+        """
+    }
+
+    private static func json<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value),
+              let string = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return string
     }
 }
 

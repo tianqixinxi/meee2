@@ -1,6 +1,6 @@
 import { Eye, GitPullRequestArrow, ScanSearch, WandSparkles } from 'lucide-react'
 import { useState } from 'react'
-import type { PlanChange, PlanProposal, PlannerAccess } from '../../types'
+import type { PlanChange, PlanProposal, PlannerAccess, PlanningNode } from '../../types'
 
 interface Props {
   proposal: PlanProposal | null
@@ -8,8 +8,10 @@ interface Props {
   busy: boolean
   error: string | null
   access: PlannerAccess | null
+  selectedNode: PlanningNode | null
   onGenerate: (goal: string) => void
   onInspectDrift: () => void
+  onRefineNode: (reason: string) => void
   onApplyPreview: () => void
   onApprove: () => void
   onApply: () => void
@@ -22,16 +24,20 @@ export function PlannerProposalPanel({
   busy,
   error,
   access,
+  selectedNode,
   onGenerate,
   onInspectDrift,
+  onRefineNode,
   onApplyPreview,
   onApprove,
   onApply,
   onReject,
 }: Props) {
   const [goal, setGoal] = useState('')
+  const [refineReason, setRefineReason] = useState('')
   const canCreateProposal = access?.canCreateProposal ?? true
   const canGenerate = goal.trim().length > 0 && !busy && canCreateProposal
+  const canRefine = Boolean(selectedNode) && refineReason.trim().length > 0 && !busy && canCreateProposal
 
   return (
     <aside className="planner-proposal-panel">
@@ -71,6 +77,34 @@ export function PlannerProposalPanel({
             Inspect drift
           </button>
         </div>
+      </div>
+
+      <div className="planner-refine-panel">
+        <div className="planner-refine-panel__header">
+          <span>Selected node</span>
+          <strong>{selectedNode?.title ?? 'None'}</strong>
+        </div>
+        <textarea
+          value={refineReason}
+          onChange={(event) => setRefineReason(event.target.value)}
+          placeholder="Describe how Planner should refine the selected node"
+          rows={3}
+          disabled={!selectedNode}
+        />
+        <button
+          type="button"
+          disabled={!canRefine}
+          onClick={() => {
+            const reason = refineReason.trim()
+            if (!reason) return
+            onRefineNode(reason)
+            setRefineReason('')
+          }}
+          title={!selectedNode ? 'Select a node in the graph first.' : undefined}
+        >
+          <WandSparkles size={14} aria-hidden />
+          Refine selected
+        </button>
       </div>
 
       {error && <div className="planner-proposal-panel__error">{error}</div>}
