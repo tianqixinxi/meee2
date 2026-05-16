@@ -461,26 +461,27 @@ textarea {
   top: 12px;
   left: 12px;
   z-index: 20;
-  width: min(420px, calc(100vw - var(--sidebar-width, 360px) - 40px));
+  width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
   pointer-events: auto;
-  color: #E5E7EB;
+  color: var(--text);
 }
 
 html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   left: calc(var(--titlebar-lights-right, 72px) + 44px);
-  width: min(420px, calc(100vw - var(--titlebar-lights-right, 72px) - 64px));
+  width: min(360px, calc(100vw - var(--titlebar-lights-right, 72px) - 64px));
 }
 
 .canvas-toolbar__main {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid rgba(42, 48, 64, 0.92);
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
   border-radius: 8px;
-  background: rgba(16, 19, 27, 0.92);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--bg-paper) 84%, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
 }
 
 .canvas-toolbar__trigger,
@@ -489,33 +490,35 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #C7CCD9;
+  color: var(--text-dim);
   cursor: pointer;
-  transition: background 100ms, color 100ms, border-color 100ms;
+  transition: background 100ms, color 100ms, border-color 100ms, box-shadow 100ms;
 }
 
 .canvas-toolbar__trigger {
   min-width: 0;
-  max-width: 310px;
-  height: 28px;
+  max-width: 300px;
+  height: 30px;
   display: grid;
   grid-template-columns: 16px auto minmax(0, 1fr) auto 14px;
   align-items: center;
-  gap: 8px;
-  padding: 0 8px;
+  gap: 7px;
+  padding: 0 9px 0 8px;
   text-align: left;
 }
 
 .canvas-toolbar__trigger:hover,
 .canvas-toolbar__actions button:hover,
 .canvas-toolbar__submit:hover:not(:disabled) {
-  background: #1A1E2B;
-  color: #F3F4F6;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
 }
 
 .canvas-toolbar__scope {
-  color: #8B93A7;
+  color: var(--text-faint);
   font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
 }
 
 .canvas-toolbar__name {
@@ -524,24 +527,25 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+  font-weight: 560;
 }
 
 .canvas-toolbar__badge {
   height: 18px;
   display: inline-flex;
   align-items: center;
-  padding: 0 6px;
-  border: 1px solid rgba(96, 165, 250, 0.28);
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
   border-radius: 999px;
-  background: rgba(37, 99, 235, 0.14);
-  color: #93C5FD;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: color-mix(in srgb, var(--accent-hover) 76%, var(--text));
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1;
 }
 
 .canvas-toolbar__conflict {
-  width: min(420px, calc(100vw - var(--sidebar-width, 360px) - 40px));
+  width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
@@ -583,13 +587,14 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .canvas-toolbar__panel {
-  width: 360px;
-  margin-top: 6px;
-  padding: 6px;
-  border: 1px solid #2A3040;
+  width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
+  margin-top: 7px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: 8px;
-  background: #10131B;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.38);
+  background: color-mix(in srgb, var(--bg-paper) 92%, #0f0e0d);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(14px);
 }
 
 .canvas-toolbar__list {
@@ -609,7 +614,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: #C7CCD9;
+  color: var(--text-dim);
   padding: 7px 8px;
   text-align: left;
   cursor: pointer;
@@ -617,13 +622,13 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .canvas-toolbar__item:hover,
 .canvas-toolbar__item.is-selected {
-  background: #1A1E2B;
-  color: #F3F4F6;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
 }
 
 .canvas-toolbar__check {
   width: 18px;
-  color: #60A5FA;
+  color: var(--accent-hover);
 }
 
 .canvas-toolbar__item-text {
@@ -643,7 +648,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .canvas-toolbar__item-text span:last-child {
-  color: #6B7488;
+  color: var(--text-faint);
   font-size: 10px;
   flex-shrink: 0;
 }
@@ -654,7 +659,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   gap: 4px;
   padding-top: 6px;
   margin-top: 6px;
-  border-top: 1px solid #232838;
+  border-top: 1px solid var(--border);
 }
 
 .canvas-toolbar__actions button {
@@ -686,7 +691,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   gap: 6px;
   padding-top: 6px;
   margin-top: 6px;
-  border-top: 1px solid #232838;
+  border-top: 1px solid var(--border);
 }
 
 .canvas-toolbar__form--rename {
@@ -696,10 +701,10 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 .canvas-toolbar__form input {
   min-width: 0;
   height: 30px;
-  border: 1px solid #2A3040;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #0B0E14;
-  color: #E5E7EB;
+  background: #242421;
+  color: var(--text);
   font-size: 12px;
   padding: 0 8px;
   outline: none;
