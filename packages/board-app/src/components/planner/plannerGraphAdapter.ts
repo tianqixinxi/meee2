@@ -41,6 +41,8 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       id: node.id,
       type: 'plannerNode' as const,
       position,
+      initialWidth: 286,
+      initialHeight: node.status === 'blocked' ? 170 : 142,
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,

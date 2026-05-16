@@ -128,7 +128,7 @@ export function PlannerProposalPanel({
             onClick={onApplyPreview}
           >
             <Eye size={14} aria-hidden />
-            {previewActive ? 'Refresh preview' : 'Apply preview'}
+            {previewActive ? 'Update preview' : 'Apply preview'}
           </button>
           <div className="planner-proposal__lifecycle">
             <button

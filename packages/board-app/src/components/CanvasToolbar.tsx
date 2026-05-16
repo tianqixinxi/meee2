@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Layers, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Info, Layers, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
 
 interface Props {
@@ -24,6 +24,7 @@ export function CanvasToolbar({
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
 
@@ -95,6 +96,18 @@ export function CanvasToolbar({
           <span className="canvas-toolbar__name">{displayCanvasName(activeCanvas)}</span>
           <span className="canvas-toolbar__badge">{visibilityLabel(activeCanvas)}</span>
           <ChevronDown size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="canvas-toolbar__info"
+          aria-label="Canvas info"
+          onClick={() => {
+            closePanels()
+            setMenuOpen(false)
+            setInfoOpen(true)
+          }}
+        >
+          <Info size={14} aria-hidden />
         </button>
       </div>
 
@@ -187,6 +200,30 @@ export function CanvasToolbar({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {infoOpen && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInfoOpen(false)
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Canvas info">
+            <div className="modal-header">
+              <div className="modal-title">{displayCanvasName(activeCanvas)}</div>
+              <div className="modal-subtitle">{visibilityLabel(activeCanvas)} planning canvas</div>
+            </div>
+            <div className="modal-body col" style={{ gap: 8 }}>
+              <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
+                Planner topology is scoped to this canvas. Session relationships only appear after explicit binding.
+              </span>
+            </div>
+            <div className="modal-footer">
+              <button className="primary" type="button" onClick={() => setInfoOpen(false)}>Done</button>
+            </div>
+          </div>
         </div>
       )}
 

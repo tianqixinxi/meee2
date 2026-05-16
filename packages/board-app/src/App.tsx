@@ -458,14 +458,16 @@ export default function App() {
           ) : (
             <WorkspaceMonitor />
           )}
-          <CanvasToolbar
-            canvases={canvasList.canvases}
-            activeCanvasId={activeCanvasId}
-            onActiveCanvasChange={handleSetActiveCanvas}
-            onCreateCanvas={handleCreateCanvas}
-            onRenameCanvas={handleRenameCanvas}
-            onDeleteCanvas={handleDeleteCanvas}
-          />
+          {workspaceMode === 'planner' && (
+            <CanvasToolbar
+              canvases={canvasList.canvases}
+              activeCanvasId={activeCanvasId}
+              onActiveCanvasChange={handleSetActiveCanvas}
+              onCreateCanvas={handleCreateCanvas}
+              onRenameCanvas={handleRenameCanvas}
+              onDeleteCanvas={handleDeleteCanvas}
+            />
+          )}
           {activeCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />

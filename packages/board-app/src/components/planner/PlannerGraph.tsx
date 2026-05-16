@@ -1,11 +1,12 @@
 import {
   Background,
   Controls,
+  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
 } from '@xyflow/react'
-import { RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   applyPlannerProposal,
@@ -21,7 +22,7 @@ import {
 import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
-import { buildPlannerGraph, groupStatesByRisk } from './plannerGraphAdapter'
+import { buildPlannerGraph } from './plannerGraphAdapter'
 import './planner.css'
 
 interface Props {
@@ -48,7 +49,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [previewActive, setPreviewActive] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
-  const [statesOpen, setStatesOpen] = useState(false)
+  const [nodeModalOpen, setNodeModalOpen] = useState(false)
+  const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -88,11 +90,6 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     }, 120)
     return () => window.clearTimeout(timer)
   }, [graph.nodes.length, graph.edges.length, canvasId, reactFlow])
-
-  const groupedStates = useMemo(() => {
-    if (!plannerState) return []
-    return groupStatesByRisk(plannerState.nodes, plannerState.states)
-  }, [plannerState])
 
   const selectedNode = useMemo(() => {
     if (!selectedNodeId || !plannerState) return null
@@ -265,38 +262,41 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
 
   return (
     <section className="planner-workspace" aria-label="Planner graph">
-      <div className="planner-topbar">
-        <div>
-          <h1>{displayPlannerTitle(plannerState?.canvas.title ?? canvasName)}</h1>
-          <p>Planner proposes. Owner approves.</p>
-        </div>
-        {plannerState?.access && (
-          <span className={`planner-role-badge planner-role-badge--${plannerState.access.role}`}>
-            {plannerState.access.role}
-          </span>
-        )}
-        <button type="button" onClick={loadState} disabled={busy}>
-          <RefreshCw size={14} aria-hidden />
-          Refresh
-        </button>
-      </div>
-      <ActivityStrip activities={plannerState?.activities ?? []} />
-
-      <div className="planner-main">
+      <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
         <div className="planner-flow">
           {plannerState ? (
             <ReactFlow
               nodes={graph.nodes}
               edges={graph.edges}
               nodeTypes={nodeTypes}
-              onNodeClick={(_, node) => setSelectedNodeId(node.data.node.id)}
-              onPaneClick={() => setSelectedNodeId(null)}
+              onNodeClick={(_, node) => {
+                setSelectedNodeId(node.data.node.id)
+                setNodeModalOpen(true)
+              }}
+              onPaneClick={() => {
+                setSelectedNodeId(null)
+                setNodeModalOpen(false)
+              }}
               fitView={!window.matchMedia('(max-width: 720px)').matches}
               minZoom={0.35}
               maxZoom={1.6}
               proOptions={{ hideAttribution: true }}
             >
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
+              <MiniMap
+                className="planner-flow__minimap"
+                nodeColor={miniMapNodeColor}
+                nodeStrokeColor="rgba(245, 244, 239, 0.34)"
+                nodeBorderRadius={3}
+                nodeStrokeWidth={2}
+                bgColor="rgba(31, 31, 29, 0.96)"
+                maskColor="rgba(245, 244, 239, 0.08)"
+                maskStrokeColor="rgba(245, 244, 239, 0.24)"
+                maskStrokeWidth={1}
+                offsetScale={8}
+                pannable
+                zoomable
+              />
               <Controls className="planner-flow__controls" />
             </ReactFlow>
           ) : (
@@ -308,58 +308,109 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
         </div>
 
         <div className="planner-side">
-          <PlannerProposalPanel
-            proposal={proposal}
-            previewActive={previewActive}
-            busy={busy}
-            error={error}
-            access={plannerState?.access ?? null}
-            selectedNode={selectedNode}
-            onGenerate={handleGenerate}
-            onInspectDrift={handleInspectDrift}
-            onRefineNode={handleRefineNode}
-            onApplyPreview={handleApplyPreview}
-            onApprove={handleApprove}
-            onApply={handleApply}
-            onReject={handleReject}
-          />
-          <StatesSummary
-            groups={groupedStates}
-            open={statesOpen}
-            onToggle={() => setStatesOpen((value) => !value)}
-          />
-          {statesOpen && <StatesList groups={groupedStates} />}
+          <button
+            type="button"
+            className="planner-side__collapse"
+            onClick={() => setPlannerPanelCollapsed((value) => !value)}
+            aria-label={plannerPanelCollapsed ? 'Open planner dialog' : 'Collapse planner dialog'}
+          >
+            {plannerPanelCollapsed ? <ChevronLeft size={16} aria-hidden /> : <ChevronRight size={16} aria-hidden />}
+          </button>
+          {!plannerPanelCollapsed && (
+            <PlannerProposalPanel
+              proposal={proposal}
+              previewActive={previewActive}
+              busy={busy}
+              error={error}
+              access={plannerState?.access ?? null}
+              selectedNode={selectedNode}
+              onGenerate={handleGenerate}
+              onInspectDrift={handleInspectDrift}
+              onRefineNode={handleRefineNode}
+              onApplyPreview={handleApplyPreview}
+              onApprove={handleApprove}
+              onApply={handleApply}
+              onReject={handleReject}
+            />
+          )}
         </div>
       </div>
+      {nodeModalOpen && selectedNode && (
+        <NodeInspectorModal
+          node={selectedNode}
+          state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
+          onClose={() => setNodeModalOpen(false)}
+        />
+      )}
     </section>
   )
 }
 
-function ActivityStrip({
-  activities,
+function NodeInspectorModal({
+  node,
+  state,
+  onClose,
 }: {
-  activities: NonNullable<PlannerCanvasState['activities']>
+  node: PlanningNode
+  state: PlannerCanvasState['states'][number] | null
+  onClose: () => void
 }) {
-  if (activities.length === 0) return null
   return (
-    <div className="planner-activity-strip" aria-label="Planner activity">
-      {activities.map((activity) => (
-        <div key={`${activity.userId}-${activity.currentCanvasId}`} className="planner-activity-pill">
-          <span>{activity.displayName || activity.userId}</span>
-          {activity.selectedNodeId && <em>node {shortId(activity.selectedNodeId)}</em>}
-          {activity.selectedSessionId && <em>session {shortId(activity.selectedSessionId)}</em>}
+    <div
+      className="planner-modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div className="planner-node-modal" role="dialog" aria-modal="true" aria-label="Node details">
+        <button type="button" className="planner-node-modal__close" onClick={onClose} aria-label="Close node details">
+          <X size={15} aria-hidden />
+        </button>
+        <div className="planner-node-modal__header">
+          <span>{state?.runState ?? node.status}</span>
+          <h2>{node.title}</h2>
         </div>
-      ))}
+        <div className="planner-node-modal__grid">
+          <span>Executor</span>
+          <strong>{node.executorType} / {node.executionMode}</strong>
+          <span>Doer</span>
+          <strong>{node.doerId}</strong>
+          <span>Consumes</span>
+          <strong>{node.ioSchema.consumes.length > 0 ? node.ioSchema.consumes.join(', ') : 'none'}</strong>
+          <span>Produces</span>
+          <strong>{node.ioSchema.produces.length > 0 ? node.ioSchema.produces.join(', ') : 'none'}</strong>
+          <span>Dependencies</span>
+          <strong>{node.dependsOnNodeIds?.length ?? 0}</strong>
+        </div>
+        {state?.blockers.length ? (
+          <div className="planner-node-modal__blockers">
+            {state.blockers.map((blocker) => <span key={blocker}>{blocker}</span>)}
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
 
-function shortId(id: string) {
-  return id.length > 14 ? `${id.slice(0, 10)}...` : id
-}
-
-function displayPlannerTitle(title: string): string {
-  return title === 'Default canvas' ? 'My' : title
+function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {
+  const data = node.data
+  const state = data?.state as { runState?: string; needsOwnerReview?: boolean } | null | undefined
+  const plannerNode = data?.node as { status?: string } | null | undefined
+  const status = state?.needsOwnerReview ? 'review' : state?.runState ?? plannerNode?.status
+  switch (status) {
+    case 'blocked':
+    case 'review':
+      return '#c26a6a'
+    case 'running':
+      return '#8ba9c2'
+    case 'planning':
+      return '#c9a45d'
+    case 'done':
+      return '#79ad87'
+    case 'waiting':
+    default:
+      return '#8c8980'
+  }
 }
 
 function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): PlanProposal[] {
@@ -378,66 +429,4 @@ function defaultPlannerAccess() {
     canRejectProposal: true,
     canUpdateAssignedNode: true,
   }
-}
-
-function StatesSummary({
-  groups,
-  open,
-  onToggle,
-}: {
-  groups: Array<{ key: string; label: string; nodes: PlanningNode[] }>
-  open: boolean
-  onToggle: () => void
-}) {
-  const blocked = groups
-    .filter((group) => group.key === 'blocked')
-    .reduce((sum, group) => sum + group.nodes.length, 0)
-  const running = groups
-    .filter((group) => group.key === 'running')
-    .reduce((sum, group) => sum + group.nodes.length, 0)
-  const total = groups.reduce((sum, group) => sum + group.nodes.length, 0)
-  return (
-    <button
-      type="button"
-      className="planner-states-summary"
-      aria-expanded={open}
-      onClick={onToggle}
-    >
-      <span>
-        <strong>{blocked}</strong>
-        Review
-      </span>
-      <span>
-        <strong>{running}</strong>
-        Running
-      </span>
-      <em>{open ? 'Hide states' : `${total} nodes`}</em>
-    </button>
-  )
-}
-
-function StatesList({
-  groups,
-}: {
-  groups: Array<{ key: string; label: string; nodes: PlanningNode[] }>
-}) {
-  return (
-    <aside className="planner-states-list">
-      <div className="planner-states-list__header">
-        <h2>States</h2>
-        <span>{groups.reduce((sum, group) => sum + group.nodes.length, 0)} nodes</span>
-      </div>
-      {groups.map((group) => (
-        <div key={group.key} className="planner-states-group">
-          <div className="planner-states-group__title">{group.label}</div>
-          {group.nodes.map((node) => (
-            <div key={node.id} className={`planner-states-row planner-states-row--${node.status}`}>
-              <span>{node.title}</span>
-              <em>{node.doerId}</em>
-            </div>
-          ))}
-        </div>
-      ))}
-    </aside>
-  )
 }

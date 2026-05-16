@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, RefreshCw, Route } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, Route } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import type { NodeRunState, PlannerMonitorState } from '../../types'
@@ -14,16 +14,13 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 
 export function WorkspaceMonitor() {
   const [monitor, setMonitor] = useState<PlannerMonitorState | null>(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const loadMonitor = useCallback(() => {
-    setBusy(true)
     setError(null)
     fetchPlannerWorkspaceMonitor()
       .then(setMonitor)
       .catch((err) => setError((err as Error).message || 'Failed to load planner monitor'))
-      .finally(() => setBusy(false))
   }, [])
 
   useEffect(() => {
@@ -41,20 +38,6 @@ export function WorkspaceMonitor() {
 
   return (
     <section className="planner-monitor" aria-label="Workspace monitor">
-      <div className="planner-topbar">
-        <div>
-          <h1>Workspace Monitor</h1>
-          <p>Cross-canvas AI work state, ordered by owner risk</p>
-        </div>
-        <span className="planner-role-badge planner-role-badge--owner">
-          {monitor?.items.length ?? 0} items
-        </span>
-        <button type="button" onClick={loadMonitor} disabled={busy}>
-          <RefreshCw size={14} aria-hidden />
-          Refresh
-        </button>
-      </div>
-
       <div className="planner-monitor__body">
         {error && <div className="planner-proposal-panel__error">{error}</div>}
         {!monitor && !error ? (

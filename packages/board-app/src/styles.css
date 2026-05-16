@@ -212,6 +212,19 @@ textarea {
   box-shadow: inset 0 1px 0 rgba(245, 244, 239, 0.05);
 }
 
+.workspace-rail__avatar:hover,
+.workspace-rail__avatar:active,
+.workspace-rail__avatar:focus {
+  border-color: rgba(204, 120, 92, 0.18);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-paper));
+  color: color-mix(in srgb, var(--accent-hover) 64%, var(--text));
+}
+
+.workspace-rail__avatar:focus-visible {
+  outline: none;
+  box-shadow: inset 0 1px 0 rgba(245, 244, 239, 0.05), 0 0 0 2px rgba(204, 120, 92, 0.18);
+}
+
 .workspace-rail__group {
   display: flex;
   flex-direction: column;
@@ -481,6 +494,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .canvas-toolbar__trigger,
+.canvas-toolbar__info,
 .canvas-toolbar__actions button,
 .canvas-toolbar__submit {
   border: none;
@@ -503,7 +517,14 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   text-align: left;
 }
 
+.canvas-toolbar__info {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
 .canvas-toolbar__trigger:hover,
+.canvas-toolbar__info:hover,
 .canvas-toolbar__actions button:hover,
 .canvas-toolbar__submit:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.045);

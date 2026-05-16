@@ -2,7 +2,7 @@
   position: absolute;
   inset: 0;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   background: var(--bg);
 }
@@ -118,7 +118,11 @@
 .planner-main {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 336px;
+  grid-template-columns: minmax(0, 1fr) 352px;
+}
+
+.planner-main--panel-collapsed {
+  grid-template-columns: minmax(0, 1fr) 44px;
 }
 
 .planner-flow {
@@ -150,6 +154,110 @@
 
 .planner-flow__controls button svg {
   fill: var(--text);
+}
+
+.planner-flow__minimap {
+  width: 156px;
+  height: 104px;
+  overflow: hidden;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(31, 31, 29, 0.94);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
+}
+
+.planner-flow__minimap .react-flow__minimap-svg {
+  display: block;
+}
+
+.planner-flow__minimap .react-flow__minimap-mask {
+  fill: rgba(245, 244, 239, 0.08);
+  stroke: rgba(245, 244, 239, 0.2);
+}
+
+.planner-flow__minimap .react-flow__minimap-node {
+  stroke-width: 2;
+}
+
+.planner-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.planner-node-modal {
+  position: relative;
+  width: min(420px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  color: var(--text);
+}
+
+.planner-node-modal__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.planner-node-modal__header {
+  display: grid;
+  gap: 5px;
+  padding-right: 34px;
+}
+
+.planner-node-modal__header span {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.planner-node-modal__header h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.planner-node-modal__grid {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 9px 12px;
+  margin-top: 16px;
+  font-size: 12px;
+}
+
+.planner-node-modal__grid span {
+  color: var(--text-faint);
+}
+
+.planner-node-modal__grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.planner-node-modal__blockers {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid rgba(194, 106, 106, 0.26);
+  border-radius: var(--radius-sm);
+  background: rgba(194, 106, 106, 0.12);
+  color: #edb0b0;
+  font-size: 12px;
 }
 
 .planner-node {
@@ -312,14 +420,40 @@
 }
 
 .planner-side {
+  position: relative;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   align-content: start;
   gap: 10px;
-  padding: 12px;
+  padding: 12px 12px 12px 10px;
   border-left: 1px solid rgba(168, 165, 155, 0.18);
   background: rgba(35, 35, 32, 0.88);
+}
+
+.planner-main--panel-collapsed .planner-side {
+  padding: 12px 8px;
+}
+
+.planner-side__collapse {
+  position: absolute;
+  top: 12px;
+  left: -1px;
+  z-index: 3;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(44, 43, 41, 0.96);
+  color: var(--text-dim);
+}
+
+.planner-side__collapse:hover {
+  background: rgba(50, 49, 46, 0.96);
+  color: var(--text);
 }
 
 .planner-proposal-panel,
@@ -365,7 +499,10 @@
 }
 
 .planner-proposal-panel {
+  min-height: 0;
+  overflow: auto;
   padding: 13px;
+  margin-left: 10px;
 }
 
 .planner-proposal-panel__header {
@@ -734,7 +871,7 @@
 
   .planner-side {
     grid-row: 2;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     overflow: auto;
     border-top: 1px solid rgba(168, 165, 155, 0.18);
     border-left: 0;
@@ -756,7 +893,7 @@
 
 @media (max-width: 720px) {
   .planner-workspace {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .planner-topbar {
