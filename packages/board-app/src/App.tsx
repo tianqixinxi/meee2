@@ -9,13 +9,13 @@ import {
   useState,
 } from 'react'
 import Board from './components/Board'
-import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
 import NewChannelDialog from './components/NewChannelDialog'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
@@ -327,8 +327,7 @@ export default function App() {
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [selection, setSelection] = useState<Selection>({ kind: 'none' })
   const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [workspaceMode, setWorkspaceMode] = useState<'planner' | 'monitor' | 'legacy'>('planner')
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [newChannelOpen, setNewChannelOpen] = useState(false)
   // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
   // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
@@ -639,13 +638,6 @@ export default function App() {
     }
   }, [boardState, pushToast, refreshCanvases])
 
-  const handleSidebarSelectionChange = useCallback((next: Selection) => {
-    setSelection(next)
-    if (next.kind === 'session') {
-      setFocusSessionRequest({ sessionId: next.sessionId, bump: performance.now() })
-    }
-  }, [])
-
   // Lazily fetch a template for a given sessionId. Per-card storage via
   // templateIdForSession. Falls back to DEFAULT_TEMPLATE when backend has
   // no entry for this session.
@@ -921,6 +913,15 @@ export default function App() {
       return { ...prev, [activeCanvasId]: value }
     })
   }, [activeCanvasId])
+  const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
+    if (nextMode !== 'legacy') {
+      setSelection({ kind: 'none' })
+      setDockOpen(false)
+      setDockSessionId(null)
+      setAssistantRequested(false)
+    }
+    setWorkspaceMode(nextMode)
+  }, [])
 
   if (!hydrated || !canvasList) {
     return (
@@ -936,6 +937,15 @@ export default function App() {
   return (
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
+        <WorkspaceRail
+          state={boardState.state}
+          canvases={canvasList.canvases}
+          activeCanvasId={activeCanvasId}
+          mode={workspaceMode}
+          unreadSids={unreadSids}
+          onModeChange={handleWorkspaceModeChange}
+          onPreferences={() => setPreferencesOpen(true)}
+        />
         <div className="board-area">
           {workspaceMode === 'legacy' ? (
             <Board
@@ -995,46 +1005,6 @@ export default function App() {
             onDeleteCanvas={handleDeleteCanvas}
             onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
           />
-          <div className="workspace-mode-tabs" role="tablist" aria-label="Workspace mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={workspaceMode === 'planner'}
-              className={workspaceMode === 'planner' ? 'is-active' : ''}
-              onClick={() => {
-                setSelection({ kind: 'none' })
-                setDockOpen(false)
-                setAssistantRequested(false)
-                setWorkspaceMode('planner')
-              }}
-            >
-              Planner
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={workspaceMode === 'monitor'}
-              className={workspaceMode === 'monitor' ? 'is-active' : ''}
-              onClick={() => {
-                setSelection({ kind: 'none' })
-                setDockOpen(false)
-                setAssistantRequested(false)
-                setWorkspaceMode('monitor')
-              }}
-            >
-              Monitor
-            </button>
-            <button
-              type="button"
-              role="tab"
-              title="Legacy freeform board"
-              aria-selected={workspaceMode === 'legacy'}
-              className={workspaceMode === 'legacy' ? 'is-active is-legacy' : 'is-legacy'}
-              onClick={() => setWorkspaceMode('legacy')}
-            >
-              Legacy
-            </button>
-          </div>
           {activeCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
@@ -1095,24 +1065,6 @@ export default function App() {
             )
           })()}
         </div>
-        <Sidebar
-          state={boardState.state}
-          canvases={canvasList.canvases}
-          activeCanvasId={activeCanvasId}
-          sessionCanvasIds={sessionCanvasIds}
-          onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
-          selection={selection}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          onOpen={() => setSidebarOpen(true)}
-          onSelectionChange={handleSidebarSelectionChange}
-          onCanvasCounts={onCanvasCounts}
-          unreadSids={unreadSids}
-          onAddToCanvas={handleAddToCanvas}
-          onHideFromCanvas={handleHideFromCanvas}
-          onBulkVisibility={handleBulkVisibility}
-          onPreferences={() => setPreferencesOpen(true)}
-        />
         {newChannelOpen && boardState.state && (
           <NewChannelDialog
             state={boardState.state}

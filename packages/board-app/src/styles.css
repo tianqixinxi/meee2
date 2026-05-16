@@ -158,22 +158,143 @@ textarea {
   min-height: 60px;
 }
 
-/* -- app layout --
-   2 行 × 2 列：
-     row 1 — board (col 1) | sidebar (col 2)
-     row 2 — command bar (col 1) | sidebar 一直延伸到底
-   sidebar 跨两行（grid-row: 1 / span 2），command bar 只占 col 1。
-*/
-
 .app {
   display: grid;
   grid-template-rows: 1fr auto;
-  /* sidebar 列宽直接读 :root 上的 --sidebar-width（Sidebar.tsx 维护：
-   * 展开时是用户拖拽存的宽度，collapsed 时强制 48px）。auto 模式下 grid
-   * 自动列 sizing 不严格遵守 .sidebar.collapsed 的 width !important，
-   * 改用 var 直接驱动 track 宽度。 */
-  grid-template-columns: var(--sidebar-width, 360px) 1fr;
+  grid-template-columns: var(--sidebar-width, 64px) 1fr;
   height: 100%;
+}
+
+.workspace-rail {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  display: flex;
+  width: 64px;
+  min-width: 64px;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 10px;
+  background:
+    linear-gradient(180deg, rgba(37, 37, 33, 0.98), rgba(28, 28, 26, 0.98)),
+    var(--bg-elevated);
+  border-right: 1px solid rgba(168, 165, 155, 0.18);
+  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.18);
+  color: var(--text-dim);
+  z-index: 140;
+}
+
+.workspace-rail__avatar,
+.workspace-rail__button {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(245, 244, 239, 0.62);
+  font: inherit;
+}
+
+.workspace-rail__avatar {
+  margin-bottom: 2px;
+  background: linear-gradient(135deg, #e6b16f, #cc785c 60%, #8f5a4d);
+  color: #1f1b17;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22);
+}
+
+.workspace-rail__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workspace-rail__button:hover {
+  background: rgba(245, 244, 239, 0.07);
+  color: var(--text);
+}
+
+.workspace-rail__button:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.workspace-rail__button.is-active {
+  background: rgba(204, 120, 92, 0.16);
+  color: #fff7ef;
+}
+
+.workspace-rail__button.is-active::before {
+  position: absolute;
+  left: -10px;
+  width: 3px;
+  height: 22px;
+  border-radius: 0 999px 999px 0;
+  background: var(--accent);
+  content: "";
+}
+
+.workspace-rail__button[data-tone="attention"] {
+  color: #f0b366;
+}
+
+.workspace-rail__button[data-tone="danger"] {
+  color: #ff8a7b;
+}
+
+.workspace-rail__badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid rgba(37, 31, 29, 0.9);
+  border-radius: 999px;
+  background: #e25f4f;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 14px;
+}
+
+.workspace-rail__status {
+  display: flex;
+  width: 42px;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(168, 165, 155, 0.14);
+}
+
+.workspace-rail__metric {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 7px;
+  color: rgba(245, 244, 239, 0.48);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-rail__metric svg {
+  flex: 0 0 auto;
+}
+
+.workspace-rail__spacer {
+  flex: 1 1 auto;
 }
 
 .board-area {
@@ -186,53 +307,6 @@ textarea {
 /* Excalidraw container */
 .board-area .excalidraw {
   height: 100%;
-}
-
-.workspace-mode-tabs {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  z-index: 95;
-  display: inline-grid;
-  grid-template-columns: 1fr 1fr 0.8fr;
-  gap: 2px;
-  width: 254px;
-  padding: 3px;
-  border: 1px solid rgba(168, 165, 155, 0.22);
-  border-radius: var(--radius-sm);
-  background: rgba(36, 36, 33, 0.86);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
-  transform: translateX(-50%);
-  backdrop-filter: blur(12px);
-}
-
-.workspace-mode-tabs button {
-  min-width: 0;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-}
-
-.workspace-mode-tabs button:hover {
-  background: rgba(245, 244, 239, 0.06);
-  color: var(--text);
-}
-
-.workspace-mode-tabs button.is-active {
-  background: rgba(204, 120, 92, 0.18);
-  color: var(--text);
-}
-
-.workspace-mode-tabs button.is-legacy {
-  color: rgba(203, 199, 190, 0.58);
-}
-
-.workspace-mode-tabs button.is-legacy.is-active {
-  background: rgba(120, 117, 110, 0.18);
-  color: rgba(245, 244, 239, 0.8);
 }
 
 .canvas-global-loading {
