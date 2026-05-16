@@ -1239,7 +1239,7 @@ enum PlannerBoardBridge {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
         let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
-        let nodes = record.nodes + sessionBackedNodes(for: record.canvas, snapshot: snapshot)
+        let nodes = record.nodes
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
         return (
             record.canvas,
@@ -1265,7 +1265,7 @@ enum PlannerBoardBridge {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         let selectedNode = selectedNodeId.flatMap { id in state.nodes.first(where: { $0.id == id }) }
         let safeSelectedNodeId = selectedNode?.id
-        let safeSelectedSessionId = selectedNode?.sessionId ?? selectedSessionId
+        let safeSelectedSessionId = selectedNode?.sessionId
         return PlannerActivityStore.shared.heartbeat(
             userId: state.access.actorId,
             displayName: state.access.role == .owner ? "Owner" : state.access.actorId,
@@ -1530,27 +1530,6 @@ enum PlannerBoardBridge {
             title: canvas.name,
             plannerContext: "canvas:\(canvas.id)"
         )
-    }
-
-    private static func sessionBackedNodes(
-        for canvas: PlanningCanvas,
-        snapshot: BoardLayoutStore.Snapshot
-    ) -> [PlanningNode] {
-        let visibleSessionIds = Set(snapshot.memberships
-            .filter { $0.canvasId == canvas.id && $0.visible }
-            .map(\.sessionId))
-        guard !visibleSessionIds.isEmpty else { return [] }
-
-        return PluginManager.shared.sessions
-            .filter { visibleSessionIds.contains($0.id) }
-            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
-            .map {
-                SessionToPlanningNodeMapper.map(
-                    session: $0,
-                    canvasId: canvas.id,
-                    doerId: canvas.ownerId
-                )
-            }
     }
 
     private static func monitorRank(for state: NodeStateSnapshot) -> Int {

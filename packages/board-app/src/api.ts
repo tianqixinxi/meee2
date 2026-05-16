@@ -53,8 +53,6 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       consumes: ['contract.md'],
       produces: ['GET /api/planner/canvases/:id/state'],
       dependsOnNodeIds: ['contract'],
-      sessionId: 'codex-session-state-api',
-      source: 'session',
     }),
     demoNode({
       id: 'proposal-shell',
@@ -65,8 +63,6 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       consumes: ['planner-dto'],
       produces: ['proposal-preview'],
       dependsOnNodeIds: ['contract', 'state-api'],
-      sessionId: 'claude-session-proposal',
-      source: 'session',
     }),
     demoNode({
       id: 'react-flow-graph',
@@ -237,7 +233,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         displayName: 'Owner',
         currentCanvasId: safeCanvasId,
         selectedNodeId: nodes.find((node) => node.status === 'blocked')?.id ?? nodes[0]?.id ?? null,
-        selectedSessionId: nodes.find((node) => node.sessionId)?.sessionId ?? null,
+        selectedSessionId: null,
         lastActiveAt: now,
       },
       {

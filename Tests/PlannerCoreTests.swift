@@ -466,6 +466,30 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.activities.first?.currentCanvasId, "canvas-a")
     }
 
+    func testPlannerBoardBridgeDoesNotAutoAttachVisibleSessionsToPlannerNodes() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let snapshot = boardSnapshot(
+            canvasId: "canvas-a",
+            ownerId: "owner-a",
+            memberships: [
+                BoardLayoutStore.CanvasSession(
+                    canvasId: "canvas-a",
+                    sessionId: "existing-session",
+                    visible: true,
+                    addedBy: "owner-a",
+                    addedAt: now,
+                    updatedAt: now
+                )
+            ]
+        )
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+
+        XCTAssertTrue(state.nodes.allSatisfy { $0.source != .session })
+        XCTAssertTrue(state.nodes.allSatisfy { $0.sessionId == nil })
+        XCTAssertEqual(state.nodes.count, service.nodeMock(canvasId: "canvas-a").count)
+    }
+
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
         let defaults = UserDefaults.standard
         let oldConnected = defaults.object(forKey: "meee2Connected")
@@ -970,7 +994,11 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(updated.activities.first?.selectedNodeId, node.id)
     }
 
-    private func boardSnapshot(canvasId: String, ownerId: String) -> BoardLayoutStore.Snapshot {
+    private func boardSnapshot(
+        canvasId: String,
+        ownerId: String,
+        memberships: [BoardLayoutStore.CanvasSession] = []
+    ) -> BoardLayoutStore.Snapshot {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let canvas = BoardLayoutStore.Canvas(
             id: canvasId,
@@ -987,7 +1015,7 @@ final class PlannerCoreTests: XCTestCase {
         return BoardLayoutStore.Snapshot(
             activeCanvasId: canvasId,
             canvases: [canvas],
-            memberships: []
+            memberships: memberships
         )
     }
 }
