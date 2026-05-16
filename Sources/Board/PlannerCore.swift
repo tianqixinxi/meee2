@@ -1171,7 +1171,7 @@ enum PlannerBoardBridge {
         activities: [PlannerActivity]
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
-        let canvas = planningCanvas(from: boardCanvas)
+        let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
         let record = try store.record(for: canvas, seedNodes: service.nodeMock(canvasId: canvas.id))
         let nodes = record.nodes + sessionBackedNodes(for: record.canvas, snapshot: snapshot)
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
@@ -1192,7 +1192,7 @@ enum PlannerBoardBridge {
         actorUserId: String? = nil
     ) throws -> PlanProposal {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
-        let canvas = planningCanvas(from: boardCanvas)
+        let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
         let seedNodes = service.nodeMock(canvasId: canvas.id)
         let record = try store.record(for: canvas, seedNodes: seedNodes)
         let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
@@ -1289,7 +1289,7 @@ enum PlannerBoardBridge {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
         }
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
-        let canvas = planningCanvas(from: boardCanvas)
+        let canvas = planningCanvas(from: boardCanvas, actorUserId: nil)
         let preview = try store.preview(
             proposal: proposal,
             canvas: canvas,
@@ -1417,10 +1417,26 @@ enum PlannerBoardBridge {
         return canvas
     }
 
-    private static func planningCanvas(from canvas: BoardLayoutStore.Canvas) -> PlanningCanvas {
-        PlanningCanvas(
+    private static func planningCanvas(
+        from canvas: BoardLayoutStore.Canvas,
+        actorUserId: String?
+    ) -> PlanningCanvas {
+        let ownerId: String
+        if canvas.scope == .personal {
+            let currentActorId = PlannerPermission.currentActorId()
+            if let actorUserId,
+               let currentActorId,
+               actorUserId == currentActorId {
+                ownerId = currentActorId
+            } else {
+                ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-owner"
+            }
+        } else {
+            ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-owner"
+        }
+        return PlanningCanvas(
             id: canvas.id,
-            ownerId: canvas.ownerUserId ?? canvas.createdBy ?? "local-owner",
+            ownerId: ownerId,
             title: canvas.name,
             plannerContext: "canvas:\(canvas.id)"
         )

@@ -385,6 +385,37 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.activities.first?.currentCanvasId, "canvas-a")
     }
 
+    func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
+        let defaults = UserDefaults.standard
+        let oldConnected = defaults.object(forKey: "meee2Connected")
+        let oldUserId = defaults.string(forKey: "meee2UserId")
+        defaults.set(true, forKey: "meee2Connected")
+        defaults.set("current-local-user", forKey: "meee2UserId")
+        defer {
+            if let oldConnected {
+                defaults.set(oldConnected, forKey: "meee2Connected")
+            } else {
+                defaults.removeObject(forKey: "meee2Connected")
+            }
+            if let oldUserId {
+                defaults.set(oldUserId, forKey: "meee2UserId")
+            } else {
+                defaults.removeObject(forKey: "meee2UserId")
+            }
+        }
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "stale-owner")
+
+        let state = try PlannerBoardBridge.canvasState(
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "current-local-user"
+        )
+
+        XCTAssertEqual(state.canvas.ownerId, "current-local-user")
+        XCTAssertEqual(state.access.role, .owner)
+        XCTAssertTrue(state.access.canCreateProposal)
+    }
+
     func testPlannerPermissionResolvesOwnerDoerAndViewerAccess() throws {
         let canvas = PlanningCanvas(
             id: "canvas-a",
