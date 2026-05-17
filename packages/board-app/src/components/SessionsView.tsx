@@ -16,7 +16,7 @@ export function SessionsView({ state }: Props) {
       <div className="sessions-workspace__inner">
         <div className="sessions-workspace__header">
           <h1>Sessions</h1>
-          <p>Live local AI sessions. Planner nodes only attach after explicit binding.</p>
+          <p>Live local AI sessions. meee2 AI nodes only attach after explicit binding.</p>
         </div>
         {sessions.length === 0 ? (
           <div className="sessions-empty">

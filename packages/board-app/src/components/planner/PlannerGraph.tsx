@@ -62,7 +62,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
         setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
         setPreviewActive(false)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to load planner state'))
+      .catch((err) => setError((err as Error).message || 'Failed to load meee2 AI state'))
       .finally(() => setBusy(false))
   }, [canvasId])
 
@@ -140,7 +140,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           : current)
         setPreviewActive(false)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to generate planner proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to generate meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [canvasId])
 
@@ -172,7 +172,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           setPreviewActive(false)
           return undefined
         })
-        .catch((err) => setError((err as Error).message || 'Failed to inspect planner drift'))
+        .catch((err) => setError((err as Error).message || 'Failed to inspect meee2 AI drift'))
         .finally(() => setBusy(false))
       return
     }
@@ -205,7 +205,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
         })
         setPreviewActive(true)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to apply planner preview'))
+      .catch((err) => setError((err as Error).message || 'Failed to apply meee2 AI preview'))
       .finally(() => setBusy(false))
   }, [canvasId, canvasName, proposal])
 
@@ -221,7 +221,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to approve planner proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to approve meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [canvasId, proposal])
 
@@ -250,7 +250,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
         })
         setPreviewActive(false)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to apply planner proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to apply meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [canvasId, canvasName, proposal])
 
@@ -266,18 +266,18 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to reject planner proposal'))
+      .catch((err) => setError((err as Error).message || 'Failed to reject meee2 AI proposal'))
       .finally(() => setBusy(false))
   }, [canvasId, proposal])
 
   return (
-    <section className="planner-workspace" aria-label="Planner graph">
+    <section className="planner-workspace" aria-label="meee2 AI graph">
       <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
         <button
           type="button"
           className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
           onClick={() => setPlannerPanelCollapsed((value) => !value)}
-          aria-label={plannerPanelCollapsed ? 'Open planner dialog' : 'Collapse planner dialog'}
+          aria-label={plannerPanelCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
         >
           {plannerPanelCollapsed ? <MessageSquare size={16} aria-hidden /> : <X size={15} aria-hidden />}
         </button>
@@ -320,7 +320,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           ) : (
             <div className="planner-empty-state">
               <div className="boot-spinner" />
-              <span>Loading planner graph</span>
+              <span>Loading meee2 AI graph</span>
             </div>
           )}
         </div>

@@ -112,7 +112,7 @@ export function PlannerProposalPanel({
               setMessage('')
             }
           }}
-          placeholder={hasActionableDrift ? 'Ask Planner what to fix, or send empty to inspect drift' : 'Ask Planner to change the graph'}
+          placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to change the graph'}
           rows={5}
         />
         <div className="planner-proposal-panel__buttons">
@@ -152,7 +152,7 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     return [
       'Tell me the outcome you want.',
       '',
-      'I will turn it into a planner proposal first. You approve before the graph changes.',
+      'I will turn it into a meee2 AI proposal first. You approve before the graph changes.',
     ].join('\n')
   }
   if (hasActionableDrift) {
@@ -163,7 +163,7 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     ].join('\n')
   }
   return [
-    'Ask me to adjust the planner graph.',
+    'Ask meee2 AI to adjust the graph.',
     '',
     'I will decide whether this should create new plan work or inspect the current state.',
   ].join('\n')

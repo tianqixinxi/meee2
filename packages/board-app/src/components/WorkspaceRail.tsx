@@ -70,7 +70,7 @@ export function WorkspaceRail({
 
       <div className="workspace-rail__group">
         <RailButton
-          label="Planner"
+          label="meee2 AI"
           active={mode === 'planner'}
           onClick={() => onModeChange('planner')}
         >

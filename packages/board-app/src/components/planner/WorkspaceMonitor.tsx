@@ -20,7 +20,7 @@ export function WorkspaceMonitor() {
     setError(null)
     fetchPlannerWorkspaceMonitor()
       .then(setMonitor)
-      .catch((err) => setError((err as Error).message || 'Failed to load planner monitor'))
+      .catch((err) => setError((err as Error).message || 'Failed to load meee2 AI monitor'))
   }, [])
 
   useEffect(() => {

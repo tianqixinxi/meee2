@@ -52,7 +52,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertThrowsError(try service.applyNodeChange(nodes: nodes, proposal: proposal)) { error in
             XCTAssertEqual(error as? PlannerCoreError, .proposalNotApproved)
         }
-        XCTAssertEqual(nodes[0].title, "Planner LLM Spike")
+        XCTAssertEqual(nodes[0].title, "meee2 AI LLM Spike")
     }
 
     func testApplyNodeChangeAddsAndUpdatesApprovedProposal() throws {
@@ -60,10 +60,10 @@ final class PlannerCoreTests: XCTestCase {
         let newNode = PlanningNode(
             id: "canvas-a-node-5",
             canvasId: "canvas-a",
-            title: "Real Planner Adapter",
+            title: "Real meee2 AI Adapter",
             ioSchema: IOSchema(
                 consumes: ["node state"],
-                produces: ["planner proposal"],
+                produces: ["meee2 AI proposal"],
                 completionSignal: "proposal generated"
             ),
             contextSources: [],
@@ -75,9 +75,9 @@ final class PlannerCoreTests: XCTestCase {
         let proposal = service.approve(PlanProposal(
             id: "proposal-a",
             canvasId: "canvas-a",
-            summary: "Add planner adapter",
+            summary: "Add meee2 AI adapter",
             changes: [
-                .updateNode(id: nodes[0].id, title: "Planner LLM Spike Done", status: .done),
+                .updateNode(id: nodes[0].id, title: "meee2 AI LLM Spike Done", status: .done),
                 .addNode(newNode)
             ],
             status: .pending
@@ -86,7 +86,7 @@ final class PlannerCoreTests: XCTestCase {
         let updated = try service.applyNodeChange(nodes: nodes, proposal: proposal)
 
         XCTAssertEqual(updated.count, nodes.count + 1)
-        XCTAssertEqual(updated.first { $0.id == nodes[0].id }?.title, "Planner LLM Spike Done")
+        XCTAssertEqual(updated.first { $0.id == nodes[0].id }?.title, "meee2 AI LLM Spike Done")
         XCTAssertEqual(updated.first { $0.id == nodes[0].id }?.status, .done)
         XCTAssertEqual(updated.last?.id, "canvas-a-node-5")
     }
@@ -141,7 +141,7 @@ final class PlannerCoreTests: XCTestCase {
 
         let blocked = states.first { $0.runState == .blocked }
         XCTAssertNotNil(blocked)
-        XCTAssertEqual(blocked?.blockers, ["Node is blocked and needs planner attention"])
+        XCTAssertEqual(blocked?.blockers, ["Node is blocked and needs meee2 AI attention"])
         XCTAssertEqual(blocked?.needsOwnerReview, true)
     }
 
@@ -681,7 +681,7 @@ final class PlannerCoreTests: XCTestCase {
     func testPlannerStorePersistsStateAcrossInstances() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
-            goal: "Persist planner proposal",
+            goal: "Persist meee2 AI proposal",
             for: "canvas-a",
             snapshot: snapshot,
             actorUserId: "owner-a"

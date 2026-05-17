@@ -217,7 +217,7 @@ export function CanvasToolbar({
             </div>
             <div className="modal-body col" style={{ gap: 8 }}>
               <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
-                Planner topology is scoped to this canvas. Session relationships only appear after explicit binding.
+                meee2 AI changes are scoped to this canvas. Session relationships only appear after explicit binding.
               </span>
             </div>
             <div className="modal-footer">

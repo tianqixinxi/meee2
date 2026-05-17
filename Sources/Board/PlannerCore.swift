@@ -383,7 +383,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPlannerProposalJSON:
-            return "planner proposal output is not valid JSON"
+            return "meee2 AI proposal output is not valid JSON"
         case .proposalNotApproved:
             return "plan proposal must be approved before apply"
         case .proposalNotFound(let id):
@@ -391,7 +391,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .canvasMismatch(let expected, let actual):
             return "proposal canvas mismatch: expected \(expected), got \(actual)"
         case .emptyProposalChanges:
-            return "planner proposal must contain at least one change"
+            return "meee2 AI proposal must contain at least one change"
         case .missingNodeForAdd:
             return "addNode change is missing node"
         case .missingNodeId:
@@ -403,7 +403,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
         case .canvasNotFound(let id):
             return "planning canvas not found: \(id)"
         case .permissionDenied(let action, let role):
-            return "planner \(action) is not allowed for \(role.rawValue)"
+            return "meee2 AI \(action) is not allowed for \(role.rawValue)"
         }
     }
 }
@@ -540,10 +540,10 @@ final class PlannerCoreService {
             PlanningNode(
                 id: "\(canvasId)-node-1",
                 canvasId: canvasId,
-                title: "Planner LLM Spike",
+                title: "meee2 AI LLM Spike",
                 ioSchema: IOSchema(
                     consumes: ["owner goal", "canvas context"],
-                    produces: ["initial plan proposal"],
+                    produces: ["initial meee2 AI proposal"],
                     completionSignal: "proposal created"
                 ),
                 contextSources: [
@@ -796,7 +796,7 @@ final class PlannerCoreService {
     private func blockers(for node: PlanningNode) -> [String] {
         switch node.status {
         case .blocked:
-            return ["Node is blocked and needs planner attention"]
+            return ["Node is blocked and needs meee2 AI attention"]
         case .planning:
             return ["Node is replanning after dependency or schema change"]
         default:
@@ -1334,14 +1334,14 @@ enum PlannerBoardBridge {
         let node = PlanningNode(
             id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
-            title: title.isEmpty ? "Generated planner node" : title,
+            title: title.isEmpty ? "Generated meee2 AI node" : title,
             ioSchema: IOSchema(
-                consumes: ["owner goal", "planner context"],
+                consumes: ["owner goal", "meee2 AI context"],
                 produces: ["executable node output"],
                 completionSignal: "owner approves generated proposal"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "Planner context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .signOff,
             executorType: .mock,
@@ -1351,7 +1351,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(canvas.id)-generate-\(proposalUUID)",
             canvasId: canvas.id,
-            summary: "Generate planner graph for \(canvas.title)",
+            summary: "Generate meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -1372,7 +1372,7 @@ enum PlannerBoardBridge {
         return try PlanProposal(
             id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
-            summary: "Planner detected drift or review need for \(node.title)",
+            summary: "meee2 AI detected drift or review need for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs owner review)", status: .planning)
             ],
@@ -1737,14 +1737,14 @@ final class MockPlannerAgent: PlannerAgent {
         let node = PlanningNode(
             id: "\(canvas.id)-planner-generated-1",
             canvasId: canvas.id,
-            title: goal.isEmpty ? "Generated planner node" : goal,
+            title: goal.isEmpty ? "Generated meee2 AI node" : goal,
             ioSchema: IOSchema(
                 consumes: ["owner goal"],
                 produces: ["first executable output"],
                 completionSignal: "owner reviews generated proposal"
             ),
             contextSources: [
-                ContextSource(kind: .document, title: "Planner context", reference: canvas.plannerContext)
+                ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
             ],
             executionMode: .signOff,
             executorType: .mock,
@@ -1754,7 +1754,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(canvas.id)-generate",
             canvasId: canvas.id,
-            summary: "Generate initial planner graph for \(canvas.title)",
+            summary: "Generate initial meee2 AI graph for \(canvas.title)",
             changes: [.addNode(node)],
             status: .pending
         )
@@ -1789,7 +1789,7 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(node.id)-drift",
             canvasId: node.canvasId,
-            summary: "Planner detected drift or review need for \(node.title)",
+            summary: "meee2 AI detected drift or review need for \(node.title)",
             changes: [
                 .updateNode(id: node.id, title: "\(node.title) (needs owner review)", status: .planning)
             ],
@@ -1888,7 +1888,7 @@ final class LLMPlannerAgent: PlannerAgent {
 
 enum PlannerPromptFactory {
     static let systemPrompt = """
-    You are the MEEE2 Planner. Return only strict JSON for PlanProposal, or null when no proposal is needed.
+    You are meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
     """

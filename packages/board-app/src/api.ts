@@ -37,7 +37,7 @@ let demoProposal: PlanProposal | null = null
 let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
   [DEMO_CANVAS_ID]: {
     id: DEMO_CANVAS_ID,
-    name: 'Planner Demo',
+    name: 'meee2 AI Demo',
     scope: 'personal',
     isDefault: true,
     workspacePath: '/demo/planner',
@@ -56,15 +56,15 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
   [DEMO_CANVAS_ID]: [
     demoNode({
       id: 'contract',
-      title: 'Planner Core Contract',
+      title: 'meee2 AI Core Contract',
       status: 'done',
       executorType: 'human',
       executionMode: 'sign-off',
-      produces: ['contract.md', 'planner-dto'],
+      produces: ['contract.md', 'meee2-ai-dto'],
     }),
     demoNode({
       id: 'state-api',
-      title: 'Store-backed Planner State API',
+      title: 'Store-backed meee2 AI State API',
       status: 'running',
       executorType: 'codex',
       executionMode: 'auto',
@@ -78,17 +78,17 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       status: 'blocked',
       executorType: 'claude',
       executionMode: 'sign-off',
-      consumes: ['planner-dto'],
+      consumes: ['meee2-ai-dto'],
       produces: ['proposal-preview'],
       dependsOnNodeIds: ['contract', 'state-api'],
     }),
     demoNode({
       id: 'react-flow-graph',
-      title: 'React Flow Planner Graph',
+      title: 'React Flow meee2 AI Graph',
       status: 'running',
       executorType: 'codex',
       executionMode: 'auto',
-      consumes: ['planner-state'],
+      consumes: ['meee2-ai-state'],
       produces: ['graph-ui'],
       dependsOnNodeIds: ['state-api'],
     }),
@@ -155,7 +155,7 @@ function demoNode(input: {
     contextSources: [
       {
         kind: 'repository',
-        title: 'meee2 planner branch',
+        title: 'meee2 AI branch',
         reference: 'codex/react-flow-planner-graph',
       },
     ],
@@ -215,7 +215,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
       id: safeCanvasId,
       ownerId: DEMO_OWNER_ID,
       title: canvas.name,
-      plannerContext: 'Static public demo of the React Flow Planner Graph.',
+      plannerContext: 'Static public demo of the React Flow meee2 AI Graph.',
     },
     nodes,
     states: nodes.map(demoNodeState),
@@ -254,7 +254,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         type: 'node.created',
         nodeId: nodes[0]?.id ?? null,
         proposalId: null,
-        summary: 'Planner graph loaded from public demo fixtures.',
+        summary: 'meee2 AI graph loaded from public demo fixtures.',
         artifactRefs: ['demo://planner'],
         createdAt: now,
       },
@@ -532,7 +532,7 @@ export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
         id: `monitor-${node.id}`,
         kind: 'node' as const,
         canvasId: node.canvasId,
-        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'Planner Demo',
+        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'meee2 AI Demo',
         nodeId: node.id,
         nodeTitle: node.title,
         proposalId: null,
@@ -580,7 +580,7 @@ export async function generatePlannerProposal(
   if (PLANNER_DEMO_MODE) {
     demoProposal = nextDemoProposal(
       canvasId,
-      `Generate planner graph for: ${goal || 'owner goal'}`,
+      `Generate meee2 AI graph for: ${goal || 'owner goal'}`,
       goal ? `Owner review: ${goal}` : 'Owner review checkpoint',
     )
     return demoProposal
