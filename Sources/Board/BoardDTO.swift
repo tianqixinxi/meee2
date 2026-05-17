@@ -258,6 +258,19 @@ struct PlannerCanvasStateEnvelope: Encodable {
     let access: PlannerAccess
     let activities: [PlannerActivity]
     let events: [PlannerEvent]
+    let artifacts: [PlannerArtifact]
+    let edges: [PlannerGraphEdge]
+}
+struct PlannerGraphStateEnvelope: Encodable {
+    let canvas: PlanningCanvas
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+    let proposals: [PlanProposal]
+    let access: PlannerAccess
+    let activities: [PlannerActivity]
+    let events: [PlannerEvent]
+    let artifacts: [PlannerArtifact]
+    let edges: [PlannerGraphEdge]
 }
 struct PlannerProposalEnvelope: Encodable {
     let proposal: PlanProposal?

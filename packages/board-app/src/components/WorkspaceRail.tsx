@@ -1,14 +1,17 @@
 import {
+  Cable,
   List,
   Network,
   Radar,
   Settings,
+  User,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo } from 'react'
 import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
+import type { UserProfile } from '../api'
 
-export type WorkspaceMode = 'planner' | 'sessions' | 'monitor'
+export type WorkspaceMode = 'planner' | 'sessions' | 'monitor' | 'integrations'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -16,6 +19,7 @@ interface WorkspaceRailProps {
   activeCanvasId: string
   mode: WorkspaceMode
   unreadSids: Set<string>
+  userProfile: UserProfile | null
   onModeChange: (mode: WorkspaceMode) => void
   onPreferences: () => void
 }
@@ -24,9 +28,8 @@ const RAIL_WIDTH = 64
 
 export function WorkspaceRail({
   state,
-  canvases,
-  activeCanvasId,
   mode,
+  userProfile,
   onModeChange,
   onPreferences,
 }: WorkspaceRailProps) {
@@ -40,19 +43,22 @@ export function WorkspaceRail({
     }
   }, [])
 
-  const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId)
-  const canvasInitial = useMemo(() => {
-    const name = displayCanvasName(activeCanvas).trim() || 'MEEE2'
-    const words = name.split(/\s+/).filter(Boolean)
-    if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase()
-    return name.slice(0, 2).toUpperCase()
-  }, [activeCanvas?.name])
+  const avatarLabel = userProfile?.connected
+    ? userProfile.displayName
+    : 'User'
+  const avatarInitials = userProfile?.connected
+    ? userProfile.initials || initialsFor(userProfile.displayName)
+    : ''
+  const avatarUrl = userProfile?.connected && userProfile.userAvatarUrl
+    ? userProfile.userAvatarUrl
+    : ''
+  const showFallbackUserIcon = !avatarUrl && !avatarInitials
 
   const counts = useMemo(() => {
     const sessions = state?.sessions ?? []
     return {
       attention: sessions.filter((session) =>
-        session.status === 'permissionRequired' || session.status === 'waitingForUser',
+        sessionNeedsAttention(session),
       ).length,
     }
   }, [state?.sessions])
@@ -61,11 +67,11 @@ export function WorkspaceRail({
     <nav className="workspace-rail" aria-label="Workspace">
       <button
         type="button"
-        className="workspace-rail__avatar"
-        title={displayCanvasName(activeCanvas)}
-        aria-label={displayCanvasName(activeCanvas)}
+        className={`workspace-rail__avatar${avatarUrl ? ' has-image' : ''}${showFallbackUserIcon ? ' has-user-icon' : ''}`}
+        title={avatarLabel}
+        aria-label={avatarLabel}
       >
-        {canvasInitial}
+        {avatarUrl ? <img src={avatarUrl} alt="" /> : showFallbackUserIcon ? <User size={20} /> : avatarInitials}
       </button>
 
       <div className="workspace-rail__group">
@@ -92,6 +98,13 @@ export function WorkspaceRail({
         >
           <Radar size={20} />
         </RailButton>
+        <RailButton
+          label="Integrations"
+          active={mode === 'integrations'}
+          onClick={() => onModeChange('integrations')}
+        >
+          <Cable size={20} />
+        </RailButton>
       </div>
 
       <div className="workspace-rail__spacer" />
@@ -103,9 +116,18 @@ export function WorkspaceRail({
   )
 }
 
-function displayCanvasName(canvas: CanvasInfo | undefined): string {
-  if (!canvas) return 'Canvas'
-  return canvas.name === 'Default canvas' ? 'My' : canvas.name
+function sessionNeedsAttention(session: { status: string; inboxPending: number; pendingPermissionTool?: string | null }): boolean {
+  return session.status === 'permissionRequired'
+    || session.status === 'waitingForUser'
+    || session.inboxPending > 0
+    || Boolean(session.pendingPermissionTool)
+}
+
+function initialsFor(value: string): string {
+  const name = value.trim() || 'MEEE2'
+  const words = name.split(/\s+/).filter(Boolean)
+  if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase()
+  return name.slice(0, 2).toUpperCase()
 }
 
 interface RailButtonProps {

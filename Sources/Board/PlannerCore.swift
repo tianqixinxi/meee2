@@ -57,6 +57,107 @@ enum PlanningNodeSource: String, Codable, Equatable {
     case session
 }
 
+enum PlanningNodeKind: String, Codable, Equatable {
+    case step
+    case session
+    case artifact
+    case subCanvas
+    case external
+}
+
+struct PlannerNodeLayout: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var width: Double?
+    var height: Double?
+}
+
+enum PlannerWorkflowRunState: String, Codable, Equatable {
+    case pending
+    case dispatched
+    case running
+    case gateWait = "gate-wait"
+    case done
+    case failed
+}
+
+struct PlannerNodeTrigger: Codable, Equatable {
+    var type: String
+    var label: String
+    var eventSource: String?
+}
+
+struct PlannerNodeGate: Codable, Equatable {
+    var type: String
+    var label: String
+    var requiredArtifactRefs: [String]
+    var approvers: [String]
+    var onFailGotoNodeId: String?
+}
+
+enum PlannerDispatchRunner: String, Codable, Equatable {
+    case byoaLocal = "byoa-local"
+    case ciAgent = "ci-agent"
+    case human
+}
+
+struct PlannerNodeDispatch: Codable, Equatable {
+    var runner: PlannerDispatchRunner
+    var skill: String?
+    var actor: String
+    var command: String?
+    var fallbackRunner: PlannerDispatchRunner?
+}
+
+enum PlannerArtifactKind: String, Codable, Equatable {
+    case ideaDraft = "idea-draft"
+    case prd
+    case implPR = "impl-pr"
+    case prereleaseVerdict = "prerelease-verdict"
+    case mainMerge = "main-merge"
+    case larkDoc = "lark-doc"
+    case checkResult = "check-result"
+    case generic
+}
+
+struct PlannerArtifact: Codable, Equatable {
+    var id: String
+    var canvasId: String
+    var nodeId: String
+    var kind: PlannerArtifactKind
+    var title: String
+    var reference: String
+    var status: String
+    var createdAt: Date
+}
+
+struct PlannerGraphEdge: Codable, Equatable {
+    var id: String
+    var sourceNodeId: String
+    var targetNodeId: String
+    var kind: String
+}
+
+struct PlannerWorkflowTemplate: Codable, Equatable {
+    var id: String
+    var title: String
+    var activePhase: String
+    var nodes: [PlanningNode]
+    var artifacts: [PlannerArtifact]
+}
+
+struct PlannerGraphState: Codable, Equatable {
+    var canvas: PlanningCanvas
+    var nodes: [PlanningNode]
+    var states: [NodeStateSnapshot]
+    var proposals: [PlanProposal]
+    var access: PlannerAccess
+    var activities: [PlannerActivity]
+    var events: [PlannerEvent]
+    var artifacts: [PlannerArtifact]
+    var edges: [PlannerGraphEdge]
+}
+
 enum PlannerCanvasRole: String, Codable, Equatable {
     case owner
     case doer
@@ -163,6 +264,15 @@ struct PlanningNode: Codable, Equatable {
     var source: PlanningNodeSource?
     var dependsOnNodeIds: [String]?
     var subCanvasId: String?
+    var nodeKind: PlanningNodeKind?
+    var layout: PlannerNodeLayout?
+    var trigger: PlannerNodeTrigger?
+    var gate: PlannerNodeGate?
+    var dispatch: PlannerNodeDispatch?
+    var approvers: [String]?
+    var artifactRefs: [String]?
+    var eventRefs: [String]?
+    var workflowRunState: PlannerWorkflowRunState?
 
     init(
         id: String,
@@ -178,7 +288,16 @@ struct PlanningNode: Codable, Equatable {
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = .planner,
         dependsOnNodeIds: [String]? = nil,
-        subCanvasId: String? = nil
+        subCanvasId: String? = nil,
+        nodeKind: PlanningNodeKind? = .step,
+        layout: PlannerNodeLayout? = nil,
+        trigger: PlannerNodeTrigger? = nil,
+        gate: PlannerNodeGate? = nil,
+        dispatch: PlannerNodeDispatch? = nil,
+        approvers: [String]? = nil,
+        artifactRefs: [String]? = nil,
+        eventRefs: [String]? = nil,
+        workflowRunState: PlannerWorkflowRunState? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -194,6 +313,15 @@ struct PlanningNode: Codable, Equatable {
         self.source = source
         self.dependsOnNodeIds = dependsOnNodeIds
         self.subCanvasId = subCanvasId
+        self.nodeKind = nodeKind
+        self.layout = layout
+        self.trigger = trigger
+        self.gate = gate
+        self.dispatch = dispatch
+        self.approvers = approvers
+        self.artifactRefs = artifactRefs
+        self.eventRefs = eventRefs
+        self.workflowRunState = workflowRunState
     }
 }
 
@@ -219,6 +347,18 @@ struct PlanChange: Codable, Equatable {
     var contextSources: [ContextSource]?
     var dependsOnNodeIds: [String]?
     var subCanvasId: String?
+    var nodeKind: PlanningNodeKind?
+    var layout: PlannerNodeLayout?
+    var trigger: PlannerNodeTrigger?
+    var gate: PlannerNodeGate?
+    var dispatch: PlannerNodeDispatch?
+    var approvers: [String]?
+    var artifactRefs: [String]?
+    var eventRefs: [String]?
+    var workflowRunState: PlannerWorkflowRunState?
+    var sessionId: String?
+    var chatThreadId: String?
+    var source: PlanningNodeSource?
 
     init(
         kind: Kind,
@@ -229,7 +369,19 @@ struct PlanChange: Codable, Equatable {
         ioSchema: IOSchema? = nil,
         contextSources: [ContextSource]? = nil,
         dependsOnNodeIds: [String]? = nil,
-        subCanvasId: String? = nil
+        subCanvasId: String? = nil,
+        nodeKind: PlanningNodeKind? = nil,
+        layout: PlannerNodeLayout? = nil,
+        trigger: PlannerNodeTrigger? = nil,
+        gate: PlannerNodeGate? = nil,
+        dispatch: PlannerNodeDispatch? = nil,
+        approvers: [String]? = nil,
+        artifactRefs: [String]? = nil,
+        eventRefs: [String]? = nil,
+        workflowRunState: PlannerWorkflowRunState? = nil,
+        sessionId: String? = nil,
+        chatThreadId: String? = nil,
+        source: PlanningNodeSource? = nil
     ) {
         self.kind = kind
         self.node = node
@@ -240,6 +392,18 @@ struct PlanChange: Codable, Equatable {
         self.contextSources = contextSources
         self.dependsOnNodeIds = dependsOnNodeIds
         self.subCanvasId = subCanvasId
+        self.nodeKind = nodeKind
+        self.layout = layout
+        self.trigger = trigger
+        self.gate = gate
+        self.dispatch = dispatch
+        self.approvers = approvers
+        self.artifactRefs = artifactRefs
+        self.eventRefs = eventRefs
+        self.workflowRunState = workflowRunState
+        self.sessionId = sessionId
+        self.chatThreadId = chatThreadId
+        self.source = source
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
@@ -253,7 +417,19 @@ struct PlanChange: Codable, Equatable {
         ioSchema: IOSchema? = nil,
         contextSources: [ContextSource]? = nil,
         dependsOnNodeIds: [String]? = nil,
-        subCanvasId: String? = nil
+        subCanvasId: String? = nil,
+        nodeKind: PlanningNodeKind? = nil,
+        layout: PlannerNodeLayout? = nil,
+        trigger: PlannerNodeTrigger? = nil,
+        gate: PlannerNodeGate? = nil,
+        dispatch: PlannerNodeDispatch? = nil,
+        approvers: [String]? = nil,
+        artifactRefs: [String]? = nil,
+        eventRefs: [String]? = nil,
+        workflowRunState: PlannerWorkflowRunState? = nil,
+        sessionId: String? = nil,
+        chatThreadId: String? = nil,
+        source: PlanningNodeSource? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .updateNode,
@@ -264,7 +440,19 @@ struct PlanChange: Codable, Equatable {
             ioSchema: ioSchema,
             contextSources: contextSources,
             dependsOnNodeIds: dependsOnNodeIds,
-            subCanvasId: subCanvasId
+            subCanvasId: subCanvasId,
+            nodeKind: nodeKind,
+            layout: layout,
+            trigger: trigger,
+            gate: gate,
+            dispatch: dispatch,
+            approvers: approvers,
+            artifactRefs: artifactRefs,
+            eventRefs: eventRefs,
+            workflowRunState: workflowRunState,
+            sessionId: sessionId,
+            chatThreadId: chatThreadId,
+            source: source
         )
     }
 }
@@ -511,7 +699,19 @@ enum PlannerProposalValidator {
                     change.ioSchema != nil ||
                     change.contextSources != nil ||
                     change.dependsOnNodeIds != nil ||
-                    change.subCanvasId != nil else {
+                    change.subCanvasId != nil ||
+                    change.nodeKind != nil ||
+                    change.layout != nil ||
+                    change.trigger != nil ||
+                    change.gate != nil ||
+                    change.dispatch != nil ||
+                    change.approvers != nil ||
+                    change.artifactRefs != nil ||
+                    change.eventRefs != nil ||
+                    change.workflowRunState != nil ||
+                    change.sessionId != nil ||
+                    change.chatThreadId != nil ||
+                    change.source != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             }
@@ -663,6 +863,42 @@ final class PlannerCoreService {
                 if let subCanvasId = change.subCanvasId {
                     updatedNodes[index].subCanvasId = subCanvasId
                 }
+                if let nodeKind = change.nodeKind {
+                    updatedNodes[index].nodeKind = nodeKind
+                }
+                if let layout = change.layout {
+                    updatedNodes[index].layout = layout
+                }
+                if let trigger = change.trigger {
+                    updatedNodes[index].trigger = trigger
+                }
+                if let gate = change.gate {
+                    updatedNodes[index].gate = gate
+                }
+                if let dispatch = change.dispatch {
+                    updatedNodes[index].dispatch = dispatch
+                }
+                if let approvers = change.approvers {
+                    updatedNodes[index].approvers = approvers
+                }
+                if let artifactRefs = change.artifactRefs {
+                    updatedNodes[index].artifactRefs = artifactRefs
+                }
+                if let eventRefs = change.eventRefs {
+                    updatedNodes[index].eventRefs = eventRefs
+                }
+                if let workflowRunState = change.workflowRunState {
+                    updatedNodes[index].workflowRunState = workflowRunState
+                }
+                if let sessionId = change.sessionId {
+                    updatedNodes[index].sessionId = sessionId
+                }
+                if let chatThreadId = change.chatThreadId {
+                    updatedNodes[index].chatThreadId = chatThreadId
+                }
+                if let source = change.source {
+                    updatedNodes[index].source = source
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
@@ -786,11 +1022,14 @@ final class PlannerCoreService {
     }
 
     private func artifactRefs(for node: PlanningNode) -> [String] {
-        var refs = node.status == .done ? ["artifact://\(node.id)/output"] : []
+        var refs = node.artifactRefs ?? []
+        if node.status == .done {
+            refs.append("artifact://\(node.id)/output")
+        }
         if let subCanvasId = node.subCanvasId {
             refs.append("subcanvas:\(subCanvasId)")
         }
-        return refs
+        return Array(Set(refs)).sorted()
     }
 
     private func blockers(for node: PlanningNode) -> [String] {
@@ -828,7 +1067,8 @@ enum SessionToPlanningNodeMapper {
             sessionId: session.id,
             chatThreadId: chatThreadId(session),
             source: .session,
-            dependsOnNodeIds: []
+            dependsOnNodeIds: [],
+            nodeKind: .session
         )
     }
 
@@ -918,21 +1158,24 @@ final class PlannerStore {
         var nodes: [PlanningNode]
         var proposals: [PlanProposal]
         var events: [PlannerEvent]
+        var artifacts: [PlannerArtifact]
 
         init(
             canvas: PlanningCanvas,
             nodes: [PlanningNode],
             proposals: [PlanProposal],
-            events: [PlannerEvent] = []
+            events: [PlannerEvent] = [],
+            artifacts: [PlannerArtifact] = []
         ) {
             self.canvas = canvas
             self.nodes = nodes
             self.proposals = proposals
             self.events = events
+            self.artifacts = artifacts
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events
+            case canvas, nodes, proposals, events, artifacts
         }
 
         init(from decoder: Decoder) throws {
@@ -941,6 +1184,7 @@ final class PlannerStore {
             self.nodes = try container.decode([PlanningNode].self, forKey: .nodes)
             self.proposals = try container.decode([PlanProposal].self, forKey: .proposals)
             self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
+            self.artifacts = try container.decodeIfPresent([PlannerArtifact].self, forKey: .artifacts) ?? []
         }
     }
 
@@ -1107,6 +1351,10 @@ final class PlannerStore {
             record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
             record.nodes = nodes
             record.proposals[index].status = .applied
+            record.artifacts = mergeArtifacts(
+                record.artifacts,
+                derivedArtifacts(from: nodes, canvasId: canvasId)
+            )
             record.events.append(event(
                 canvasId: canvasId,
                 type: .proposalApplied,
@@ -1215,12 +1463,98 @@ final class PlannerStore {
         return events
     }
 
+    func attachArtifact(_ artifact: PlannerArtifact, canvasId: String) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard artifact.canvasId == canvasId else {
+                throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: artifact.canvasId)
+            }
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == artifact.nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(artifact.nodeId)
+            }
+            record.artifacts = mergeArtifacts(record.artifacts, [artifact])
+            var refs = record.nodes[nodeIndex].artifactRefs ?? []
+            if !refs.contains(artifact.reference) {
+                refs.append(artifact.reference)
+            }
+            record.nodes[nodeIndex].artifactRefs = refs
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .artifactAttached,
+                nodeId: artifact.nodeId,
+                summary: artifact.title,
+                artifactRefs: [artifact.reference]
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    func updateNodeLayout(canvasId: String, nodeId: String, layout: PlannerNodeLayout) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            record.nodes[index].layout = layout
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "Updated layout for \(record.nodes[index].title)"
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    private func mergeArtifacts(
+        _ existing: [PlannerArtifact],
+        _ incoming: [PlannerArtifact]
+    ) -> [PlannerArtifact] {
+        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        for artifact in incoming {
+            byId[artifact.id] = artifact
+        }
+        return byId.values.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    private func derivedArtifacts(from nodes: [PlanningNode], canvasId: String) -> [PlannerArtifact] {
+        nodes.flatMap { node in
+            (node.artifactRefs ?? []).map { ref in
+                PlannerArtifact(
+                    id: "artifact-\(stableSuffix(ref))",
+                    canvasId: canvasId,
+                    nodeId: node.id,
+                    kind: .generic,
+                    title: ref,
+                    reference: ref,
+                    status: node.status.rawValue,
+                    createdAt: Date()
+                )
+            }
+        }
+    }
+
     private func serviceArtifactRefs(node: PlanningNode) -> [String] {
-        var refs = node.status == .done ? ["artifact://\(node.id)/output"] : []
+        var refs = node.artifactRefs ?? []
+        if node.status == .done {
+            refs.append("artifact://\(node.id)/output")
+        }
         if let subCanvasId = node.subCanvasId {
             refs.append("subcanvas:\(subCanvasId)")
         }
-        return refs
+        return Array(Set(refs)).sorted()
+    }
+
+    private func stableSuffix(_ raw: String) -> String {
+        let normalized = raw
+            .lowercased()
+            .map { char in char.isLetter || char.isNumber ? char : "-" }
+            .reduce(into: "") { $0.append($1) }
+        return normalized.isEmpty ? UUID().uuidString.lowercased() : normalized
     }
 
     private func event(
@@ -1272,7 +1606,9 @@ enum PlannerBoardBridge {
         proposals: [PlanProposal],
         access: PlannerAccess,
         activities: [PlannerActivity],
-        events: [PlannerEvent]
+        events: [PlannerEvent],
+        artifacts: [PlannerArtifact],
+        edges: [PlannerGraphEdge]
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
@@ -1294,7 +1630,28 @@ enum PlannerBoardBridge {
                 for: record.canvas.id,
                 fallback: fallbackActivity(for: record.canvas, nodes: nodes, actorId: access.actorId)
             ),
-            record.events.sorted { $0.createdAt > $1.createdAt }
+            record.events.sorted { $0.createdAt > $1.createdAt },
+            record.artifacts,
+            graphEdges(for: nodes)
+        )
+    }
+
+    static func graphState(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return PlannerGraphState(
+            canvas: state.canvas,
+            nodes: state.nodes,
+            states: state.states,
+            proposals: state.proposals,
+            access: state.access,
+            activities: state.activities,
+            events: state.events,
+            artifacts: state.artifacts,
+            edges: state.edges
         )
     }
 
@@ -1356,6 +1713,183 @@ enum PlannerBoardBridge {
             status: .pending
         )
         .saved(in: store, canvas: canvas, seedNodes: [])
+    }
+
+    static func graphChangeProposal(
+        summary: String,
+        changes: [PlanChange],
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        let proposal = PlanProposal(
+            id: "proposal-\(canvasId)-graph-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Update meee2 AI graph"
+                : summary,
+            changes: changes,
+            status: .pending
+        )
+        return try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+    }
+
+    static func bindSessionProposal(
+        nodeId: String,
+        sessionId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        return try PlanProposal(
+            id: "proposal-\(nodeId)-bind-session-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: "Bind session to \(node.title)",
+            changes: [
+                .updateNode(
+                    id: nodeId,
+                    nodeKind: .session,
+                    workflowRunState: .running,
+                    sessionId: sessionId,
+                    chatThreadId: sessionId,
+                    source: .session
+                )
+            ],
+            status: .pending
+        )
+        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
+    }
+
+    static func dispatchNodeProposal(
+        nodeId: String,
+        runner: PlannerDispatchRunner,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        let dispatch = PlannerNodeDispatch(
+            runner: runner,
+            skill: node.dispatch?.skill ?? "m3-coding",
+            actor: node.doerId,
+            command: runner == .byoaLocal ? "claude" : nil,
+            fallbackRunner: runner == .ciAgent ? .byoaLocal : nil
+        )
+        return try PlanProposal(
+            id: "proposal-\(nodeId)-dispatch-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: "Dispatch \(node.title) via \(runner.rawValue)",
+            changes: [
+                .updateNode(
+                    id: nodeId,
+                    status: runner == .human ? .blocked : .running,
+                    dispatch: dispatch,
+                    workflowRunState: runner == .human ? .gateWait : .dispatched
+                )
+            ],
+            status: .pending
+        )
+        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
+    }
+
+    static func attachArtifact(
+        nodeId: String,
+        kind: PlannerArtifactKind,
+        title: String,
+        reference: String,
+        status: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.updateAssignedNode, access: state.access)
+        guard state.nodes.contains(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        let artifact = PlannerArtifact(
+            id: "artifact-\(canvasId)-\(nodeId)-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            nodeId: nodeId,
+            kind: kind,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : title,
+            reference: reference,
+            status: status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "attached" : status,
+            createdAt: Date()
+        )
+        _ = try store.attachArtifact(artifact, canvasId: canvasId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func updateNodeLayout(
+        nodeId: String,
+        layout: PlannerNodeLayout,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.updateAssignedNode, access: state.access)
+        _ = try store.updateNodeLayout(canvasId: canvasId, nodeId: nodeId, layout: layout)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func createSubCanvasProposal(
+        nodeId: String,
+        subCanvasId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        return try PlanProposal(
+            id: "proposal-\(nodeId)-subcanvas-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: "Create sub-canvas for \(node.title)",
+            changes: [
+                .updateNode(id: nodeId, subCanvasId: subCanvasId, nodeKind: .subCanvas)
+            ],
+            status: .pending
+        )
+        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
+    }
+
+    static func deliveryPipelineProposal(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        let template = PlannerDeliveryPipelineTemplate.build(canvas: state.canvas)
+        return try PlanProposal(
+            id: "proposal-\(canvasId)-delivery-pipeline-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: "Create meee2 delivery pipeline graph",
+            changes: template.nodes.map { .addNode($0) },
+            status: .pending
+        )
+        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
     }
 
     static func driftProposal(
@@ -1608,6 +2142,30 @@ enum PlannerBoardBridge {
             lastActiveAt: Date()
         )
     }
+
+    private static func graphEdges(for nodes: [PlanningNode]) -> [PlannerGraphEdge] {
+        let nodeIds = Set(nodes.map(\.id))
+        var edges: [PlannerGraphEdge] = []
+        for node in nodes {
+            for dependencyId in node.dependsOnNodeIds ?? [] where nodeIds.contains(dependencyId) {
+                edges.append(PlannerGraphEdge(
+                    id: "edge-\(dependencyId)-\(node.id)",
+                    sourceNodeId: dependencyId,
+                    targetNodeId: node.id,
+                    kind: "dependency"
+                ))
+            }
+            if let subCanvasId = node.subCanvasId {
+                edges.append(PlannerGraphEdge(
+                    id: "edge-\(node.id)-subcanvas-\(subCanvasId)",
+                    sourceNodeId: node.id,
+                    targetNodeId: subCanvasId,
+                    kind: "subCanvas"
+                ))
+            }
+        }
+        return edges
+    }
 }
 
 private extension PlanProposal {
@@ -1660,6 +2218,211 @@ enum PlannerProposalFactory {
             ],
             status: .pending
         )
+    }
+}
+
+enum PlannerDeliveryPipelineTemplate {
+    static let id = "meee2-delivery-pipeline"
+
+    static func build(canvas: PlanningCanvas) -> PlannerWorkflowTemplate {
+        let artifacts = [
+            artifact(canvas: canvas, nodeId: "m1-idea", kind: .ideaDraft, title: "idea-draft", ref: "lark://wiki/prd-draft/<date>"),
+            artifact(canvas: canvas, nodeId: "m2-prd-decision", kind: .prd, title: "PRD / ADR", ref: "repo://meee2-workspace/doc/prd/<slug>.md"),
+            artifact(canvas: canvas, nodeId: "m3-impl-verify", kind: .implPR, title: "implementation PR", ref: "git://targetRepo/pull/<id>"),
+            artifact(canvas: canvas, nodeId: "m3-impl-verify", kind: .prereleaseVerdict, title: "pre-release verdict", ref: "artifact://prerelease-verdict"),
+            artifact(canvas: canvas, nodeId: "m4-tech-merge-main", kind: .mainMerge, title: "main merge", ref: "git://targetRepo/main")
+        ]
+        let nodes = [
+            step(
+                canvas: canvas,
+                id: "m1-idea",
+                title: "M1 本地产 idea -> prd-draft",
+                x: 0,
+                y: 0,
+                trigger: PlannerNodeTrigger(type: "manual", label: "手动", eventSource: nil),
+                gate: PlannerNodeGate(
+                    type: "artifact-exists",
+                    label: "idea-draft 写入 Lark Wiki /prd-draft/<date>/",
+                    requiredArtifactRefs: ["lark://wiki/prd-draft/<date>"],
+                    approvers: [],
+                    onFailGotoNodeId: nil
+                ),
+                dispatch: PlannerNodeDispatch(runner: .byoaLocal, skill: "m1-idea", actor: "any-member", command: "claude", fallbackRunner: nil),
+                artifactRefs: ["lark://wiki/prd-draft/<date>"],
+                dependsOn: []
+            ),
+            step(
+                canvas: canvas,
+                id: "m2-prd-decision",
+                title: "M2 会后产 PRD PR",
+                x: 360,
+                y: 0,
+                trigger: PlannerNodeTrigger(type: "manual", label: "会议后人工触发", eventSource: nil),
+                gate: PlannerNodeGate(
+                    type: "pr-merged",
+                    label: "PRD PR 合入 meee2-workspace/main",
+                    requiredArtifactRefs: ["repo://meee2-workspace/doc/prd/**"],
+                    approvers: ["product-owner", "tech-lead"],
+                    onFailGotoNodeId: "m2-prd-decision"
+                ),
+                dispatch: PlannerNodeDispatch(runner: .byoaLocal, skill: "m2-prd", actor: "meeting-recorder", command: "claude", fallbackRunner: nil),
+                artifactRefs: ["repo://meee2-workspace/doc/prd/<slug>.md"],
+                dependsOn: ["m1-idea"]
+            ),
+            step(
+                canvas: canvas,
+                id: "m3-impl-verify",
+                title: "M3 实现 + pre-release + 验证",
+                x: 720,
+                y: 0,
+                trigger: PlannerNodeTrigger(type: "event", label: "PRD PR merged", eventSource: "git.meee2-workspace"),
+                gate: PlannerNodeGate(
+                    type: "check-success",
+                    label: "负责人在 pre-release 版本验证通过",
+                    requiredArtifactRefs: ["artifact://prerelease-verdict"],
+                    approvers: ["pipeline-owner"],
+                    onFailGotoNodeId: "m3-impl-verify"
+                ),
+                dispatch: PlannerNodeDispatch(runner: .byoaLocal, skill: "m3-coding", actor: "pipeline-owner", command: "claude", fallbackRunner: .byoaLocal),
+                artifactRefs: ["git://targetRepo/pull/<id>", "artifact://prerelease-verdict"],
+                dependsOn: ["m2-prd-decision"]
+            ),
+            step(
+                canvas: canvas,
+                id: "m4-tech-merge-main",
+                title: "M4 技术验证 + 合并 main",
+                x: 1080,
+                y: 0,
+                trigger: PlannerNodeTrigger(type: "event", label: "prerelease-verified check passed", eventSource: "git.${prd.targetRepo}"),
+                gate: PlannerNodeGate(
+                    type: "branch-updated",
+                    label: "pre-release 合入 main",
+                    requiredArtifactRefs: ["git://targetRepo/main"],
+                    approvers: ["tech-reviewer"],
+                    onFailGotoNodeId: nil
+                ),
+                dispatch: PlannerNodeDispatch(runner: .human, skill: nil, actor: "tech-reviewer", command: nil, fallbackRunner: nil),
+                artifactRefs: ["git://targetRepo/main"],
+                dependsOn: ["m3-impl-verify"]
+            ),
+            external(
+                canvas: canvas,
+                id: "n6-release",
+                title: "N6 正式发布自动化",
+                x: 1440,
+                y: 0,
+                dependsOn: ["m4-tech-merge-main"]
+            )
+        ]
+        return PlannerWorkflowTemplate(
+            id: id,
+            title: "MEEE2 Delivery Pipeline",
+            activePhase: "phase-1",
+            nodes: nodes,
+            artifacts: artifacts
+        )
+    }
+
+    private static func step(
+        canvas: PlanningCanvas,
+        id: String,
+        title: String,
+        x: Double,
+        y: Double,
+        trigger: PlannerNodeTrigger,
+        gate: PlannerNodeGate,
+        dispatch: PlannerNodeDispatch,
+        artifactRefs: [String],
+        dependsOn: [String]
+    ) -> PlanningNode {
+        PlanningNode(
+            id: "\(canvas.id)-\(id)",
+            canvasId: canvas.id,
+            title: title,
+            ioSchema: IOSchema(
+                consumes: dependsOn.isEmpty ? ["owner intent"] : dependsOn,
+                produces: artifactRefs,
+                completionSignal: gate.label
+            ),
+            contextSources: artifactRefs.map {
+                ContextSource(kind: .artifact, title: $0, reference: $0)
+            },
+            executionMode: dispatch.runner == .human ? .human : .signOff,
+            executorType: executorType(for: dispatch.runner),
+            doerId: dispatch.actor,
+            status: .waiting,
+            dependsOnNodeIds: dependsOn.map { "\(canvas.id)-\($0)" },
+            nodeKind: .step,
+            layout: PlannerNodeLayout(x: x, y: y, width: 300, height: 168),
+            trigger: trigger,
+            gate: gate,
+            dispatch: dispatch,
+            approvers: gate.approvers,
+            artifactRefs: artifactRefs,
+            workflowRunState: .pending
+        )
+    }
+
+    private static func external(
+        canvas: PlanningCanvas,
+        id: String,
+        title: String,
+        x: Double,
+        y: Double,
+        dependsOn: [String]
+    ) -> PlanningNode {
+        PlanningNode(
+            id: "\(canvas.id)-\(id)",
+            canvasId: canvas.id,
+            title: title,
+            ioSchema: IOSchema(
+                consumes: ["main branch update"],
+                produces: ["external release automation"],
+                completionSignal: "external:N6"
+            ),
+            contextSources: [
+                ContextSource(kind: .artifact, title: "external automation", reference: "external:N6")
+            ],
+            executionMode: .auto,
+            executorType: .mock,
+            doerId: "external",
+            status: .waiting,
+            dependsOnNodeIds: dependsOn.map { "\(canvas.id)-\($0)" },
+            nodeKind: .external,
+            layout: PlannerNodeLayout(x: x, y: y, width: 260, height: 132),
+            artifactRefs: ["external:N6"],
+            workflowRunState: .pending
+        )
+    }
+
+    private static func artifact(
+        canvas: PlanningCanvas,
+        nodeId: String,
+        kind: PlannerArtifactKind,
+        title: String,
+        ref: String
+    ) -> PlannerArtifact {
+        PlannerArtifact(
+            id: "artifact-\(canvas.id)-\(nodeId)-\(kind.rawValue)",
+            canvasId: canvas.id,
+            nodeId: "\(canvas.id)-\(nodeId)",
+            kind: kind,
+            title: title,
+            reference: ref,
+            status: "required",
+            createdAt: Date()
+        )
+    }
+
+    private static func executorType(for runner: PlannerDispatchRunner) -> ExecutorType {
+        switch runner {
+        case .byoaLocal:
+            return .claude
+        case .ciAgent:
+            return .mock
+        case .human:
+            return .human
+        }
     }
 }
 

@@ -272,7 +272,37 @@ enum BoardAPI {
                 proposals: state.proposals,
                 access: state.access,
                 activities: state.activities,
-                events: state.events
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func getPlannerGraphState(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -430,6 +460,218 @@ enum BoardAPI {
         }
     }
 
+    static func proposePlannerGraphChange(_ req: HttpRequest) -> HttpResponse {
+        struct GraphChangeRequest: Decodable {
+            let summary: String?
+            let changes: [PlanChange]
+        }
+
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: GraphChangeRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"changes\": [PlanChange]}", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.graphChangeProposal(
+                summary: body.summary ?? "Update meee2 AI graph",
+                changes: body.changes,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createPlannerDeliveryPipeline(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.deliveryPipelineProposal(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func bindPlannerSessionToNode(_ req: HttpRequest) -> HttpResponse {
+        struct BindSessionRequest: Decodable {
+            let sessionId: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: BindSessionRequest.self),
+              !body.sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"sessionId\": String}", status: 400)
+        }
+        do {
+            let proposal = try PlannerBoardBridge.bindSessionProposal(
+                nodeId: nodeId,
+                sessionId: body.sessionId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func dispatchPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
+        struct DispatchRequest: Decodable {
+            let runner: PlannerDispatchRunner?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: DispatchRequest.self)
+        do {
+            let proposal = try PlannerBoardBridge.dispatchNodeProposal(
+                nodeId: nodeId,
+                runner: body?.runner ?? .byoaLocal,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func attachPlannerArtifactToNode(_ req: HttpRequest) -> HttpResponse {
+        struct AttachArtifactRequest: Decodable {
+            let kind: PlannerArtifactKind?
+            let title: String?
+            let reference: String
+            let status: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: AttachArtifactRequest.self),
+              !body.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"reference\": String}", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.attachArtifact(
+                nodeId: nodeId,
+                kind: body.kind ?? .generic,
+                title: body.title ?? body.reference,
+                reference: body.reference,
+                status: body.status ?? "attached",
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createPlannerSubCanvasFromNode(_ req: HttpRequest) -> HttpResponse {
+        struct CreateSubCanvasRequest: Decodable {
+            let title: String?
+            let scope: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: CreateSubCanvasRequest.self)
+        let scope: BoardLayoutStore.CanvasScope = body?.scope == "team" ? .team : .personal
+        do {
+            let subCanvasName = (body?.title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Sub-canvas"
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: subCanvasName, scope: scope)
+            guard let subCanvas = snapshot.canvases.first(where: { $0.name == subCanvasName }) ?? snapshot.canvases.last else {
+                return errorResponse("planner_error", "failed to create sub-canvas", status: 400)
+            }
+            let proposal = try PlannerBoardBridge.createSubCanvasProposal(
+                nodeId: nodeId,
+                subCanvasId: subCanvas.id,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func updatePlannerNodeLayout(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: PlannerNodeLayout.self) else {
+            return errorResponse("invalid_json", "body must be PlannerNodeLayout", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.updateNodeLayout(
+                nodeId: nodeId,
+                layout: body,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func approvePlannerProposal(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let proposalId = req.params[":proposalId"], !proposalId.isEmpty else {
@@ -463,6 +705,7 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
+            recordPlannerDispatchIntents(canvasId: canvasId, proposal: result.proposal, nodes: result.nodes)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: result.proposal,
@@ -513,6 +756,47 @@ enum BoardAPI {
              .updateNodeNoFields:
             return errorResponse("planner_error", err.localizedDescription, status: 400)
         }
+    }
+
+    private static func recordPlannerDispatchIntents(canvasId: String, proposal: PlanProposal, nodes: [PlanningNode]) {
+        guard let cwd = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId) else { return }
+        let changedNodeIds = Set(proposal.changes.compactMap { change in
+            change.nodeId ?? change.node?.id
+        })
+        for node in nodes where changedNodeIds.contains(node.id) && node.workflowRunState == .dispatched {
+            guard let dispatch = node.dispatch, dispatch.runner == .byoaLocal else { continue }
+            let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedCommand = command?.isEmpty == false ? command! : "claude"
+            let provider = resolvedCommand.lowercased().contains("codex") ? "codex" : "claude"
+            _ = try? BoardLayoutStore.shared.recordSpawnIntent(
+                canvasId: canvasId,
+                cwd: cwd,
+                command: resolvedCommand,
+                provider: provider,
+                purpose: "planner:\(node.id)",
+                initialPrompt: plannerDispatchPrompt(for: node),
+                layoutHint: nil
+            )
+        }
+    }
+
+    private static func plannerDispatchPrompt(for node: PlanningNode) -> String {
+        var lines = [
+            "You are executing a meee2 AI planner node.",
+            "Node: \(node.title)",
+            "Doer: \(node.doerId)",
+            "Completion signal: \(node.ioSchema.completionSignal)"
+        ]
+        if !node.ioSchema.consumes.isEmpty {
+            lines.append("Consumes: \(node.ioSchema.consumes.joined(separator: ", "))")
+        }
+        if !node.ioSchema.produces.isEmpty {
+            lines.append("Produces: \(node.ioSchema.produces.joined(separator: ", "))")
+        }
+        if let gate = node.gate {
+            lines.append("Gate: \(gate.label)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func currentBoardSessions() -> [SessionDTO] {

@@ -1,4 +1,4 @@
-import { Eye, Send } from 'lucide-react'
+import { Check, Eye, GitBranch, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -17,6 +17,7 @@ interface Props {
   onApprove: () => void
   onApply: () => void
   onReject: () => void
+  onCreateDeliveryPipeline?: () => void
 }
 
 export function PlannerProposalPanel({
@@ -32,9 +33,11 @@ export function PlannerProposalPanel({
   onApprove,
   onApply,
   onReject,
+  onCreateDeliveryPipeline,
 }: Props) {
   const [message, setMessage] = useState('')
   const [lastUserMessage, setLastUserMessage] = useState('')
+  const [reviewOpen, setReviewOpen] = useState(false)
   const canCreateProposal = access?.canCreateProposal ?? true
   const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
@@ -43,6 +46,12 @@ export function PlannerProposalPanel({
     <aside className="planner-proposal-panel">
       <div className="planner-dialog">
         <div className="planner-dialog__messages">
+          <WorkflowGuide
+            proposal={proposal}
+            previewActive={previewActive}
+            nodeCount={nodeCount}
+            hasActionableDrift={hasActionableDrift}
+          />
           {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
           {lastUserMessage && (
             <div className="planner-dialog__message planner-dialog__message--user">
@@ -54,45 +63,36 @@ export function PlannerProposalPanel({
               <div className="planner-dialog__message-meta">
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
+                {previewActive && <span>preview active</span>}
               </div>
-              <MarkdownMessage markdown={proposalMarkdown(proposal)} />
-              <div className="planner-dialog__actions">
+              <MarkdownMessage markdown={proposalChatMarkdown(proposal)} />
+              <div className="planner-dialog__actions planner-dialog__actions--single">
                 <button
                   type="button"
                   className="planner-proposal__preview"
                   disabled={busy}
-                  onClick={onApplyPreview}
+                  onClick={() => setReviewOpen(true)}
                 >
                   <Eye size={14} aria-hidden />
-                  {previewActive ? 'Update preview' : 'Apply preview'}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
-                  onClick={onApprove}
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
-                  onClick={onApply}
-                >
-                  Apply
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
-                  onClick={onReject}
-                >
-                  Reject
+                  Review proposal
                 </button>
               </div>
             </div>
           ) : (
             <div className="planner-dialog__message planner-dialog__message--planner">
               <MarkdownMessage markdown={guidance} />
+              {nodeCount === 0 && onCreateDeliveryPipeline && (
+                <div className="planner-dialog__actions">
+                  <button
+                    type="button"
+                    disabled={busy || !canCreateProposal}
+                    onClick={onCreateDeliveryPipeline}
+                  >
+                    <GitBranch size={14} aria-hidden />
+                    Create delivery pipeline
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -133,8 +133,141 @@ export function PlannerProposalPanel({
           </button>
         </div>
       </div>
+
+      {reviewOpen && proposal && (
+        <div
+          className="planner-proposal-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setReviewOpen(false)
+          }}
+        >
+          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label="Review proposal">
+            <button
+              type="button"
+              className="planner-proposal-modal__close"
+              onClick={() => setReviewOpen(false)}
+              aria-label="Close proposal review"
+            >
+              <X size={15} aria-hidden />
+            </button>
+            <div className="planner-proposal-modal__header">
+              <span>{proposal.status}</span>
+              <h2>{proposal.summary}</h2>
+              <p>{proposal.changes.length} proposed graph {proposal.changes.length === 1 ? 'change' : 'changes'}</p>
+            </div>
+            <div className="planner-proposal-modal__flow" aria-label="Proposal action order">
+              <span className={previewActive ? 'is-done' : ''}>1 Preview graph</span>
+              <span className={proposal.status === 'approved' || proposal.status === 'applied' ? 'is-done' : ''}>2 Approve</span>
+              <span className={proposal.status === 'applied' ? 'is-done' : ''}>3 Apply to live graph</span>
+              <em>Reject can be used before apply</em>
+            </div>
+            <MarkdownMessage markdown={proposalMarkdown(proposal)} />
+            <div className="planner-proposal-modal__actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onApplyPreview}
+              >
+                <Eye size={14} aria-hidden />
+                {previewActive ? 'Update preview' : 'Preview graph'}
+              </button>
+              <button
+                type="button"
+                disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
+                onClick={onApprove}
+              >
+                <Check size={14} aria-hidden />
+                Approve proposal
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
+                onClick={() => {
+                  onApply()
+                  setReviewOpen(false)
+                }}
+              >
+                Apply to live
+              </button>
+              <button
+                type="button"
+                disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
+                onClick={() => {
+                  onReject()
+                  setReviewOpen(false)
+                }}
+              >
+                Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </aside>
   )
+}
+
+function WorkflowGuide({
+  proposal,
+  previewActive,
+  nodeCount,
+  hasActionableDrift,
+}: {
+  proposal: PlanProposal | null
+  previewActive: boolean
+  nodeCount: number
+  hasActionableDrift: boolean
+}) {
+  const copy = workflowGuideCopy(proposal, previewActive, nodeCount, hasActionableDrift)
+  return (
+    <div className="planner-workflow-guide" aria-label="Workflow next step">
+      <span>Next</span>
+      <strong>{copy.title}</strong>
+      <p>{copy.body}</p>
+    </div>
+  )
+}
+
+function workflowGuideCopy(
+  proposal: PlanProposal | null,
+  previewActive: boolean,
+  nodeCount: number,
+  hasActionableDrift: boolean,
+): { title: string; body: string } {
+  if (proposal?.status === 'pending') {
+    return previewActive
+      ? {
+          title: 'Approve the proposal if the preview is right',
+          body: 'Preview is only a temporary graph. Approve first, then apply it to the live workflow.',
+        }
+      : {
+          title: 'Preview this proposal',
+          body: 'Review what meee2 AI wants to change before approving. Nothing has changed in the live graph yet.',
+        }
+  }
+  if (proposal?.status === 'approved') {
+    return {
+      title: 'Apply to live graph',
+      body: 'The owner has approved this proposal. Apply it to make the workflow state real.',
+    }
+  }
+  if (nodeCount === 0) {
+    return {
+      title: 'Create a workflow',
+      body: 'Describe the outcome you want, or start from the delivery pipeline template.',
+    }
+  }
+  if (hasActionableDrift) {
+    return {
+      title: 'Inspect blocked or review nodes',
+      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open Details on a node for bindings and artifacts.',
+    }
+  }
+  return {
+    title: 'Dispatch the next step',
+    body: 'Open a node Details modal, bind a session only when you know the relation, then dispatch or attach artifacts.',
+  }
 }
 
 function MarkdownMessage({ markdown }: { markdown: string }) {
@@ -181,6 +314,10 @@ function proposalMarkdown(proposal: PlanProposal): string {
       change.contextSources ? 'context' : null,
       change.dependsOnNodeIds ? `${change.dependsOnNodeIds.length} deps` : null,
       change.subCanvasId ? 'sub-canvas' : null,
+      change.nodeKind ? change.nodeKind : null,
+      change.workflowRunState ? change.workflowRunState : null,
+      change.sessionId ? 'session bind' : null,
+      change.artifactRefs ? `${change.artifactRefs.length} artifacts` : null,
     ].filter(Boolean).join(', ')
     return `| update node | ${escapeMarkdown(target)}${details ? ` (${escapeMarkdown(details)})` : ''} |`
   })
@@ -193,6 +330,22 @@ function proposalMarkdown(proposal: PlanProposal): string {
     '| Change | Target |',
     '|---|---|',
     ...rows,
+  ].join('\n')
+}
+
+function proposalChatMarkdown(proposal: PlanProposal): string {
+  const firstChanges = proposal.changes.slice(0, 3).map((change) => {
+    if (change.kind === 'addNode') {
+      return `- Add ${escapeMarkdown(change.node?.title ?? 'Untitled node')}`
+    }
+    return `- Update ${escapeMarkdown(change.title ?? change.nodeId ?? 'Unknown node')}`
+  })
+  const more = proposal.changes.length > 3 ? [`- +${proposal.changes.length - 3} more`] : []
+  return [
+    `### ${proposal.summary}`,
+    '',
+    ...firstChanges,
+    ...more,
   ].join('\n')
 }
 

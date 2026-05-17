@@ -12,8 +12,13 @@ import type {
   PlanProposal,
   PlannerActivity,
   PlannerCanvasState,
+  PlannerGraphState,
   PlannerMonitorState,
   PlanningNode,
+  PlannerNodeLayout,
+  PlanChange,
+  PlannerArtifactKind,
+  PlannerDispatchRunner,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -269,6 +274,22 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         createdAt: now,
       }] : []),
     ],
+    artifacts: nodes.flatMap((node) => (node.artifactRefs ?? []).map((ref) => ({
+      id: `artifact-${node.id}-${ref}`,
+      canvasId: safeCanvasId,
+      nodeId: node.id,
+      kind: 'generic' as const,
+      title: ref,
+      reference: ref,
+      status: node.status,
+      createdAt: now,
+    }))),
+    edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+      id: `edge-${dependencyId}-${node.id}`,
+      sourceNodeId: dependencyId,
+      targetNodeId: node.id,
+      kind: 'dependency',
+    }))),
   }
 }
 
@@ -523,6 +544,18 @@ export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvas
   return jsonRequest<PlannerCanvasState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/state`)
 }
 
+export function fetchPlannerGraphState(canvasId: string): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    const state = demoPlannerState(canvasId)
+    return Promise.resolve({
+      ...state,
+      artifacts: state.artifacts ?? [],
+      edges: state.edges ?? [],
+    })
+  }
+  return jsonRequest<PlannerGraphState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`)
+}
+
 export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
   if (PLANNER_DEMO_MODE) {
     const generatedAt = new Date().toISOString()
@@ -732,6 +765,109 @@ export async function rejectPlannerProposal(
     },
   )
   return response.proposal
+}
+
+export async function proposePlannerGraphChange(
+  canvasId: string,
+  input: { summary?: string; changes: PlanChange[] },
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/graph-change`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+  return response.proposal
+}
+
+export async function createPlannerDeliveryPipeline(canvasId: string): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/templates/delivery-pipeline`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export async function bindPlannerSessionToNode(
+  canvasId: string,
+  nodeId: string,
+  sessionId: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/bind-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    },
+  )
+  return response.proposal
+}
+
+export async function dispatchPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+  runner: PlannerDispatchRunner = 'byoa-local',
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ runner }),
+    },
+  )
+  return response.proposal
+}
+
+export function attachPlannerArtifactToNode(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    kind?: PlannerArtifactKind
+    title?: string
+    reference: string
+    status?: string
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export async function createPlannerSubCanvasFromNode(
+  canvasId: string,
+  nodeId: string,
+  title?: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/sub-canvas`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    },
+  )
+  return response.proposal
+}
+
+export function updatePlannerNodeLayout(
+  canvasId: string,
+  nodeId: string,
+  layout: PlannerNodeLayout,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/layout`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(layout),
+    },
+  )
 }
 
 export interface UserProfile {

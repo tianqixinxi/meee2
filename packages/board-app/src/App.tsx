@@ -11,6 +11,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { SessionsView } from './components/SessionsView'
+import { IntegrationsView } from './components/IntegrationsView'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { useBoardState } from './useBoardState'
@@ -30,7 +31,9 @@ import {
   createCanvas,
   deleteCanvas,
   fetchCanvases,
+  fetchUserProfile,
   updateCanvas,
+  type UserProfile,
 } from './api'
 
 interface HydratedState {
@@ -305,6 +308,7 @@ export default function App() {
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
@@ -426,6 +430,18 @@ export default function App() {
     setWorkspaceMode(nextMode)
   }, [])
 
+  const refreshUserProfile = useCallback(() => {
+    fetchUserProfile()
+      .then(setUserProfile)
+      .catch(() => setUserProfile(null))
+  }, [])
+
+  useEffect(() => {
+    refreshUserProfile()
+    window.addEventListener('focus', refreshUserProfile)
+    return () => window.removeEventListener('focus', refreshUserProfile)
+  }, [refreshUserProfile])
+
   if (!hydrated || !canvasList) {
     return (
       <div className="app boot">
@@ -446,6 +462,7 @@ export default function App() {
           activeCanvasId={activeCanvasId}
           mode={workspaceMode}
           unreadSids={unreadSids}
+          userProfile={userProfile}
           onModeChange={handleWorkspaceModeChange}
           onPreferences={() => setPreferencesOpen(true)}
         />
@@ -458,6 +475,8 @@ export default function App() {
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} />
+          ) : workspaceMode === 'integrations' ? (
+            <IntegrationsView state={boardState.state} />
           ) : (
             <WorkspaceMonitor />
           )}
@@ -486,7 +505,10 @@ export default function App() {
         {preferencesOpen && (
           <PreferencesDialog
             onClose={() => setPreferencesOpen(false)}
-            onSaved={(provider) => pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)}
+            onSaved={(provider) => {
+              pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)
+              refreshUserProfile()
+            }}
             onToast={pushToast}
           />
         )}

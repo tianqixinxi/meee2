@@ -1039,6 +1039,89 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(updated.activities.first?.selectedNodeId, node.id)
     }
 
+    func testDeliveryPipelineTemplateCreatesStepAndExternalNodes() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let proposal = try PlannerBoardBridge.deliveryPipelineProposal(
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(proposal.status, .pending)
+        XCTAssertEqual(proposal.changes.count, 5)
+        let nodes = proposal.changes.compactMap(\.node)
+        XCTAssertEqual(nodes.filter { $0.nodeKind == .step }.count, 4)
+        XCTAssertEqual(nodes.last?.nodeKind, .external)
+        XCTAssertEqual(nodes.first?.dispatch?.runner, .byoaLocal)
+        XCTAssertEqual(nodes[2].gate?.onFailGotoNodeId, "m3-impl-verify")
+        XCTAssertTrue(nodes[2].artifactRefs?.contains("artifact://prerelease-verdict") == true)
+    }
+
+    func testGraphChangeAndSessionBindStayAsPendingProposals() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first)
+
+        let layoutProposal = try PlannerBoardBridge.graphChangeProposal(
+            summary: "Move node",
+            changes: [
+                .updateNode(
+                    id: node.id,
+                    layout: PlannerNodeLayout(x: 42, y: 84, width: 300, height: 180)
+                )
+            ],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let bindProposal = try PlannerBoardBridge.bindSessionProposal(
+            nodeId: node.id,
+            sessionId: "explicit-session",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(layoutProposal.status, .pending)
+        XCTAssertEqual(layoutProposal.changes.first?.layout?.x, 42)
+        XCTAssertEqual(bindProposal.status, .pending)
+        XCTAssertEqual(bindProposal.changes.first?.sessionId, "explicit-session")
+
+        let unchanged = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        XCTAssertNil(unchanged.nodes.first { $0.id == node.id }?.sessionId)
+    }
+
+    func testGraphStateIncludesEdgesArtifactsAndPersistedLayout() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first)
+
+        let graph = try PlannerBoardBridge.attachArtifact(
+            nodeId: node.id,
+            kind: .prd,
+            title: "PRD",
+            reference: "repo://prd.md",
+            status: "attached",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let moved = try PlannerBoardBridge.updateNodeLayout(
+            nodeId: node.id,
+            layout: PlannerNodeLayout(x: 10, y: 20, width: 320, height: 160),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertTrue(graph.artifacts.contains { $0.reference == "repo://prd.md" })
+        XCTAssertFalse(graph.edges.isEmpty)
+        XCTAssertEqual(moved.nodes.first { $0.id == node.id }?.layout?.x, 10)
+    }
+
     private func boardSnapshot(
         canvasId: String,
         ownerId: String,

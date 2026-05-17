@@ -4,6 +4,8 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  applyNodeChanges,
+  type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
 import { MessageSquare, X } from 'lucide-react'
@@ -12,16 +14,18 @@ import {
   applyPlannerProposal,
   applyPlannerProposalPreview,
   approvePlannerProposal,
-  fetchPlannerCanvasState,
+  createPlannerDeliveryPipeline,
+  fetchPlannerGraphState,
   generatePlannerProposal,
   inspectPlannerDrift,
   rejectPlannerProposal,
   sendPlannerActivity,
+  updatePlannerNodeLayout,
 } from '../../api'
 import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
-import { buildPlannerGraph } from './plannerGraphAdapter'
+import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
 import './planner.css'
 
 interface Props {
@@ -50,13 +54,14 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(false)
+  const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const loadState = useCallback(() => {
     setBusy(true)
     setError(null)
-    fetchPlannerCanvasState(canvasId)
+    fetchPlannerGraphState(canvasId)
       .then((state) => {
         setPlannerState(state)
         setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
@@ -70,14 +75,36 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     loadState()
   }, [loadState])
 
+  const handleOpenNodeDetails = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId)
+    setNodeModalOpen(true)
+  }, [])
+
   const graph = useMemo(() => {
+    const displayNameByUserId = Object.fromEntries(
+      (plannerState?.activities ?? []).map((activity) => [activity.userId, activity.displayName]),
+    )
+    const avatarUrlByUserId: Record<string, string> = {}
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
+      edges: plannerState?.edges ?? [],
       proposal: previewActive ? null : proposal,
+      ownerId: plannerState?.canvas.ownerId,
+      displayNameByUserId,
+      avatarUrlByUserId,
+      onOpenDetails: handleOpenNodeDetails,
       onOpenSubCanvas,
     })
-  }, [plannerState, previewActive, proposal, onOpenSubCanvas])
+  }, [plannerState, previewActive, proposal, handleOpenNodeDetails, onOpenSubCanvas])
+
+  useEffect(() => {
+    setFlowNodes(graph.nodes)
+  }, [graph.nodes])
+
+  const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
+    setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
+  }, [])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -91,9 +118,11 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   }, [graph.nodes.length, graph.edges.length, canvasId, reactFlow])
 
   const selectedNode = useMemo(() => {
-    if (!selectedNodeId || !plannerState) return null
-    return plannerState.nodes.find((node) => node.id === selectedNodeId) ?? null
-  }, [plannerState, selectedNodeId])
+    if (!selectedNodeId) return null
+    return plannerState?.nodes.find((node) => node.id === selectedNodeId)
+      ?? graph.nodes.find((node) => node.id === selectedNodeId)?.data.node
+      ?? null
+  }, [graph.nodes, plannerState, selectedNodeId])
 
   const hasActionableDrift = useMemo(() => {
     return (plannerState?.states ?? []).some((state) =>
@@ -201,6 +230,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             proposals: current?.proposals ?? [],
             access: current?.access ?? defaultPlannerAccess(),
             activities: current?.activities ?? [],
+            artifacts: current?.artifacts ?? [],
+            edges: current?.edges ?? [],
           }
         })
         setPreviewActive(true)
@@ -246,6 +277,8 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
             proposals: upsertProposal(current?.proposals ?? [], result.proposal),
             access: current?.access ?? defaultPlannerAccess(),
             activities: current?.activities ?? [],
+            artifacts: current?.artifacts ?? [],
+            edges: current?.edges ?? [],
           }
         })
         setPreviewActive(false)
@@ -270,6 +303,22 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       .finally(() => setBusy(false))
   }, [canvasId, proposal])
 
+  const handleCreateDeliveryPipeline = useCallback(() => {
+    setBusy(true)
+    setError(null)
+    createPlannerDeliveryPipeline(canvasId)
+      .then((next) => {
+        if (!next) return
+        setProposal(next)
+        setPlannerState((current) => current
+          ? { ...current, proposals: upsertProposal(current.proposals, next) }
+          : current)
+        setPreviewActive(false)
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to create delivery pipeline proposal'))
+      .finally(() => setBusy(false))
+  }, [canvasId])
+
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
       <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
@@ -282,14 +331,29 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
           {plannerPanelCollapsed ? <MessageSquare size={16} aria-hidden /> : <X size={15} aria-hidden />}
         </button>
         <div className="planner-flow">
+          <div className={`planner-flow__state-badge${previewActive ? ' is-preview' : ''}`}>
+            <span>{previewActive ? 'Preview' : 'Live graph'}</span>
+            {previewActive && <em>not applied</em>}
+          </div>
           {plannerState ? (
             <ReactFlow
-              nodes={graph.nodes}
+              nodes={flowNodes}
               edges={graph.edges}
               nodeTypes={nodeTypes}
+              onNodesChange={handleNodesChange}
               onNodeClick={(_, node) => {
                 setSelectedNodeId(node.data.node.id)
                 setNodeModalOpen(true)
+              }}
+              onNodeDragStop={(_, node) => {
+                updatePlannerNodeLayout(canvasId, node.data.node.id, {
+                  x: node.position.x,
+                  y: node.position.y,
+                  width: node.width ?? node.measured?.width ?? null,
+                  height: node.height ?? node.measured?.height ?? null,
+                }).catch(() => {
+                  // Layout persistence should not interrupt graph interaction.
+                })
               }}
               onPaneClick={() => {
                 setSelectedNodeId(null)
@@ -303,7 +367,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
               <MiniMap
                 className="planner-flow__minimap"
-                nodeColor="rgba(63, 61, 56, 0.92)"
+                nodeColor={miniMapNodeFill}
                 nodeStrokeColor={miniMapNodeColor}
                 nodeBorderRadius={3}
                 nodeStrokeWidth={2}
@@ -340,6 +404,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               onApprove={handleApprove}
               onApply={handleApply}
               onReject={handleReject}
+              onCreateDeliveryPipeline={handleCreateDeliveryPipeline}
             />
           </div>
         )}
@@ -382,12 +447,24 @@ function NodeInspectorModal({
         <div className="planner-node-modal__grid">
           <span>Executor</span>
           <strong>{node.executorType} / {node.executionMode}</strong>
+          <span>Kind</span>
+          <strong>{node.nodeKind ?? (node.source === 'session' ? 'session' : 'step')}</strong>
+          <span>Workflow</span>
+          <strong>{node.workflowRunState ?? 'pending'}</strong>
           <span>Doer</span>
           <strong>{node.doerId}</strong>
+          <span>Trigger</span>
+          <strong>{node.trigger?.label ?? 'manual / none'}</strong>
+          <span>Gate</span>
+          <strong>{node.gate?.label ?? 'none'}</strong>
           <span>Consumes</span>
           <strong>{node.ioSchema.consumes.length > 0 ? node.ioSchema.consumes.join(', ') : 'none'}</strong>
           <span>Produces</span>
           <strong>{node.ioSchema.produces.length > 0 ? node.ioSchema.produces.join(', ') : 'none'}</strong>
+          <span>Artifacts</span>
+          <strong>{(node.artifactRefs ?? state?.artifactRefs ?? []).length > 0
+            ? (node.artifactRefs ?? state?.artifactRefs ?? []).join(', ')
+            : 'none'}</strong>
           <span>Dependencies</span>
           <strong>{node.dependsOnNodeIds?.length ?? 0}</strong>
         </div>
@@ -399,6 +476,24 @@ function NodeInspectorModal({
       </div>
     </div>
   )
+}
+
+function miniMapNodeFill(node: { data?: Record<string, unknown> }): string {
+  const data = node.data
+  const plannerNode = data?.node as { nodeKind?: string; source?: string } | null | undefined
+  const kind = plannerNode?.nodeKind ?? (plannerNode?.source === 'session' ? 'session' : 'step')
+  switch (kind) {
+    case 'session':
+      return 'rgba(38, 45, 50, 0.94)'
+    case 'artifact':
+      return 'rgba(48, 43, 34, 0.94)'
+    case 'subCanvas':
+      return 'rgba(51, 44, 40, 0.94)'
+    case 'external':
+      return 'rgba(54, 53, 50, 0.72)'
+    default:
+      return 'rgba(44, 43, 41, 0.94)'
+  }
 }
 
 function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {

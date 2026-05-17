@@ -308,7 +308,66 @@ export type ExecutorType =
   | 'mock'
 export type PlanningNodeStatus = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
 export type PlanningNodeSource = 'planner' | 'session'
+export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
+export type PlannerWorkflowRunState = 'pending' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
+export type PlannerDispatchRunner = 'byoa-local' | 'ci-agent' | 'human'
+export type PlannerArtifactKind =
+  | 'idea-draft'
+  | 'prd'
+  | 'impl-pr'
+  | 'prerelease-verdict'
+  | 'main-merge'
+  | 'lark-doc'
+  | 'check-result'
+  | 'generic'
+
+export interface PlannerNodeLayout {
+  x: number
+  y: number
+  width?: number | null
+  height?: number | null
+}
+
+export interface PlannerNodeTrigger {
+  type: string
+  label: string
+  eventSource?: string | null
+}
+
+export interface PlannerNodeGate {
+  type: string
+  label: string
+  requiredArtifactRefs: string[]
+  approvers: string[]
+  onFailGotoNodeId?: string | null
+}
+
+export interface PlannerNodeDispatch {
+  runner: PlannerDispatchRunner
+  skill?: string | null
+  actor: string
+  command?: string | null
+  fallbackRunner?: PlannerDispatchRunner | null
+}
+
+export interface PlannerArtifact {
+  id: string
+  canvasId: string
+  nodeId: string
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  status: string
+  createdAt: string
+}
+
+export interface PlannerGraphEdge {
+  id: string
+  sourceNodeId: string
+  targetNodeId: string
+  kind: string
+}
 
 export interface PlannerAccess {
   actorId: string
@@ -365,6 +424,15 @@ export interface PlanningNode {
   source?: PlanningNodeSource | null
   dependsOnNodeIds?: string[] | null
   subCanvasId?: string | null
+  nodeKind?: PlanningNodeKind | null
+  layout?: PlannerNodeLayout | null
+  trigger?: PlannerNodeTrigger | null
+  gate?: PlannerNodeGate | null
+  dispatch?: PlannerNodeDispatch | null
+  approvers?: string[] | null
+  artifactRefs?: string[] | null
+  eventRefs?: string[] | null
+  workflowRunState?: PlannerWorkflowRunState | null
 }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
@@ -380,6 +448,18 @@ export interface PlanChange {
   contextSources?: ContextSource[] | null
   dependsOnNodeIds?: string[] | null
   subCanvasId?: string | null
+  nodeKind?: PlanningNodeKind | null
+  layout?: PlannerNodeLayout | null
+  trigger?: PlannerNodeTrigger | null
+  gate?: PlannerNodeGate | null
+  dispatch?: PlannerNodeDispatch | null
+  approvers?: string[] | null
+  artifactRefs?: string[] | null
+  eventRefs?: string[] | null
+  workflowRunState?: PlannerWorkflowRunState | null
+  sessionId?: string | null
+  chatThreadId?: string | null
+  source?: PlanningNodeSource | null
 }
 
 export interface PlanProposal {
@@ -432,6 +512,13 @@ export interface PlannerCanvasState {
   access: PlannerAccess
   activities?: PlannerActivity[]
   events?: PlannerEvent[]
+  artifacts?: PlannerArtifact[]
+  edges?: PlannerGraphEdge[]
+}
+
+export type PlannerGraphState = PlannerCanvasState & {
+  artifacts: PlannerArtifact[]
+  edges: PlannerGraphEdge[]
 }
 
 export interface SelectedCanvasElementContext {

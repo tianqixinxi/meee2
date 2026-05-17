@@ -3,6 +3,7 @@ import type {
   NodeStateSnapshot,
   PlanChange,
   PlanProposal,
+  PlannerGraphEdge as PlannerGraphStateEdge,
   PlanningNode,
 } from '../../types'
 
@@ -12,6 +13,10 @@ export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
   previewKind: PlannerPreviewKind
+  ownerLabel?: string
+  ownerAvatarUrl?: string
+  doerLabel?: string
+  onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
 }
 
@@ -21,7 +26,12 @@ export type PlannerGraphEdge = Edge<{ preview: boolean }>
 interface PlannerGraphInput {
   nodes: PlanningNode[]
   states: NodeStateSnapshot[]
+  edges?: PlannerGraphStateEdge[]
   proposal?: PlanProposal | null
+  ownerId?: string
+  displayNameByUserId?: Record<string, string>
+  avatarUrlByUserId?: Record<string, string>
+  onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
 }
 
@@ -33,7 +43,9 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
   const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
-    const position = positionByNodeId.get(node.id) ?? {
+    const position = node.layout
+      ? { x: node.layout.x, y: node.layout.y }
+      : positionByNodeId.get(node.id) ?? {
       x: (index % 3) * 340,
       y: Math.floor(index / 3) * 190,
     }
@@ -41,19 +53,43 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       id: node.id,
       type: 'plannerNode' as const,
       position,
-      initialWidth: 286,
-      initialHeight: node.status === 'blocked' ? 170 : 142,
+      initialWidth: node.layout?.width ?? 286,
+      initialHeight: node.layout?.height ?? (node.status === 'blocked' ? 170 : 142),
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,
         previewKind,
+        ownerLabel: resolveUserLabel(input.ownerId, input.displayNameByUserId),
+        ownerAvatarUrl: resolveUserAvatar(input.ownerId, input.avatarUrlByUserId),
+        doerLabel: resolveUserLabel(node.doerId, input.displayNameByUserId),
+        onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
       },
     }
   })
 
-  const edges = buildDependencyEdges(previewNodes)
+  const edges = buildDependencyEdges(previewNodes, input.edges)
   return { nodes: graphNodes, edges }
+}
+
+function resolveUserAvatar(
+  userId: string | null | undefined,
+  avatarUrlByUserId: Record<string, string> | undefined,
+): string | undefined {
+  if (!userId) return undefined
+  const normalized = userId.trim()
+  if (!normalized) return undefined
+  return avatarUrlByUserId?.[normalized]
+}
+
+function resolveUserLabel(
+  userId: string | null | undefined,
+  displayNameByUserId: Record<string, string> | undefined,
+): string | undefined {
+  if (!userId) return undefined
+  const normalized = userId.trim()
+  if (!normalized) return undefined
+  return displayNameByUserId?.[normalized] ?? normalized
 }
 
 export function groupStatesByRisk(
@@ -116,6 +152,18 @@ function applyUpdateOverlay(
       contextSources: change.contextSources ?? overlay[index].node.contextSources,
       dependsOnNodeIds: change.dependsOnNodeIds ?? overlay[index].node.dependsOnNodeIds,
       subCanvasId: change.subCanvasId ?? overlay[index].node.subCanvasId,
+      nodeKind: change.nodeKind ?? overlay[index].node.nodeKind,
+      layout: change.layout ?? overlay[index].node.layout,
+      trigger: change.trigger ?? overlay[index].node.trigger,
+      gate: change.gate ?? overlay[index].node.gate,
+      dispatch: change.dispatch ?? overlay[index].node.dispatch,
+      approvers: change.approvers ?? overlay[index].node.approvers,
+      artifactRefs: change.artifactRefs ?? overlay[index].node.artifactRefs,
+      eventRefs: change.eventRefs ?? overlay[index].node.eventRefs,
+      workflowRunState: change.workflowRunState ?? overlay[index].node.workflowRunState,
+      sessionId: change.sessionId ?? overlay[index].node.sessionId,
+      chatThreadId: change.chatThreadId ?? overlay[index].node.chatThreadId,
+      source: change.source ?? overlay[index].node.source,
     },
     previewKind: 'updated',
   }
@@ -123,8 +171,21 @@ function applyUpdateOverlay(
 
 function buildDependencyEdges(
   previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
+  stateEdges?: PlannerGraphStateEdge[],
 ): PlannerGraphEdge[] {
   const nodeIds = new Set(previewNodes.map((item) => item.node.id))
+  if (stateEdges?.length) {
+    return stateEdges
+      .filter((edge) => nodeIds.has(edge.sourceNodeId) && nodeIds.has(edge.targetNodeId))
+      .map((edge) => ({
+        id: edge.id,
+        source: edge.sourceNodeId,
+        target: edge.targetNodeId,
+        type: 'smoothstep',
+        animated: edge.kind === 'subCanvas',
+        data: { preview: false },
+      }))
+  }
   const edges: PlannerGraphEdge[] = []
   for (const current of previewNodes) {
     for (const dependencyId of current.node.dependsOnNodeIds ?? []) {
