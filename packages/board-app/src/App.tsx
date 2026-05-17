@@ -12,6 +12,7 @@ import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
+import { TeamView } from './components/TeamView'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { useBoardState } from './useBoardState'
@@ -471,12 +472,20 @@ export default function App() {
             <PlannerGraph
               canvasId={activeCanvasId}
               canvasName={activeCanvas?.name ?? 'Canvas'}
+              userProfile={userProfile}
+              boardState={boardState.state}
               onOpenSubCanvas={handleSetActiveCanvas}
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView state={boardState.state} />
+          ) : workspaceMode === 'team' ? (
+            <TeamView
+              state={boardState.state}
+              activeCanvas={activeCanvas ?? null}
+              userProfile={userProfile}
+            />
           ) : (
             <WorkspaceMonitor />
           )}

@@ -61,7 +61,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               {data.previewKind === 'added' ? 'new' : 'changed'}
             </span>
           )}
-          {needsOwnerReview && <span className="planner-node__badge review">review</span>}
         </span>
       </div>
 
@@ -77,12 +76,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
 
       <div className="planner-node__meta">
         <span>
-          <GitBranch size={12} aria-hidden />
-          {executorLabel}
+          <UserRound size={12} aria-hidden />
+          Owner {data.ownerLabel ?? 'Owner'}
         </span>
         <span>
           <UserRound size={12} aria-hidden />
           Doer {data.doerLabel ?? node.doerId}
+        </span>
+        <span>
+          <GitBranch size={12} aria-hidden />
+          {executorLabel}
         </span>
         {(node.dependsOnNodeIds?.length ?? 0) > 0 && (
           <span>
@@ -130,6 +133,13 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           <AlertTriangle size={12} aria-hidden />
           <span>{blockers[0]}</span>
           {blockers.length > 1 && <em>+{blockers.length - 1}</em>}
+        </div>
+      )}
+
+      {needsOwnerReview && (
+        <div className="planner-node__owner-action">
+          <AlertTriangle size={12} aria-hidden />
+          Owner action required
         </div>
       )}
 

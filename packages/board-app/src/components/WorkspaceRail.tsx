@@ -5,13 +5,14 @@ import {
   Radar,
   Settings,
   User,
+  UsersRound,
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo } from 'react'
 import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 
-export type WorkspaceMode = 'planner' | 'sessions' | 'monitor' | 'integrations'
+export type WorkspaceMode = 'planner' | 'sessions' | 'monitor' | 'team' | 'integrations'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -97,6 +98,13 @@ export function WorkspaceRail({
           onClick={() => onModeChange('monitor')}
         >
           <Radar size={20} />
+        </RailButton>
+        <RailButton
+          label="Team"
+          active={mode === 'team'}
+          onClick={() => onModeChange('team')}
+        >
+          <UsersRound size={20} />
         </RailButton>
         <RailButton
           label="Integrations"

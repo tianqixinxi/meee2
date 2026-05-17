@@ -23,6 +23,13 @@ import {
   updatePlannerNodeLayout,
 } from '../../api'
 import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
+import type { BoardState } from '../../types'
+import type { UserProfile } from '../../api'
+import {
+  buildTeamDirectory,
+  teamAvatarUrlByUserId,
+  teamDisplayNameByUserId,
+} from '../../teamDirectory'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
@@ -31,6 +38,8 @@ import './planner.css'
 interface Props {
   canvasId: string
   canvasName: string
+  userProfile?: UserProfile | null
+  boardState?: BoardState | null
   onOpenSubCanvas?: (canvasId: string) => void
 }
 
@@ -46,7 +55,7 @@ export function PlannerGraph(props: Props) {
   )
 }
 
-function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
+function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardState = null, onOpenSubCanvas }: Props) {
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
@@ -81,10 +90,15 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
   }, [])
 
   const graph = useMemo(() => {
-    const displayNameByUserId = Object.fromEntries(
-      (plannerState?.activities ?? []).map((activity) => [activity.userId, activity.displayName]),
-    )
-    const avatarUrlByUserId: Record<string, string> = {}
+    const members = buildTeamDirectory({
+      userProfile,
+      boardState,
+      canvasOwnerId: plannerState?.canvas.ownerId,
+      nodes: plannerState?.nodes ?? [],
+      activities: plannerState?.activities ?? [],
+    })
+    const displayNameByUserId = teamDisplayNameByUserId(members)
+    const avatarUrlByUserId = teamAvatarUrlByUserId(members)
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
@@ -96,7 +110,7 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       onOpenDetails: handleOpenNodeDetails,
       onOpenSubCanvas,
     })
-  }, [plannerState, previewActive, proposal, handleOpenNodeDetails, onOpenSubCanvas])
+  }, [boardState, plannerState, previewActive, proposal, userProfile, handleOpenNodeDetails, onOpenSubCanvas])
 
   useEffect(() => {
     setFlowNodes(graph.nodes)
