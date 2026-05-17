@@ -695,6 +695,47 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(state.nodes.isEmpty)
     }
 
+    func testPlannerStoreSerializesConcurrentRecordCleanup() throws {
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let store = PlannerStore(fileURL: plannerStoreURL)
+        let seeded = service.nodeMock(canvasId: canvas.id)
+        _ = try store.record(for: canvas, seedNodes: seeded)
+
+        let queue = DispatchQueue(label: "planner-store-concurrency", attributes: .concurrent)
+        let group = DispatchGroup()
+        let errorsLock = NSLock()
+        var errors: [Error] = []
+
+        for _ in 0..<64 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                do {
+                    _ = try store.record(for: canvas, seedNodes: [])
+                    _ = try store.replaceNodesIfUnmodified(
+                        canvasId: canvas.id,
+                        matching: seeded,
+                        with: []
+                    )
+                } catch {
+                    errorsLock.lock()
+                    errors.append(error)
+                    errorsLock.unlock()
+                }
+            }
+        }
+
+        group.wait()
+        XCTAssertTrue(errors.isEmpty)
+        let record = try store.record(for: canvas, seedNodes: [])
+        XCTAssertTrue(record.nodes.isEmpty)
+    }
+
     func testPlannerProposalLifecycleRequiresApprovalBeforePersistentApply() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(

@@ -958,6 +958,7 @@ final class PlannerStore {
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder = JSONDecoder()
+    private let lock = NSRecursiveLock()
     private var document: StoreDocument
 
     init(fileURL: URL, fileManager: FileManager = .default) {
@@ -972,21 +973,23 @@ final class PlannerStore {
         for canvas: PlanningCanvas,
         seedNodes: [PlanningNode]
     ) throws -> CanvasRecord {
-        if let existing = document.canvases[canvas.id] {
-            if existing.canvas == canvas {
-                return existing
+        try withLock {
+            if let existing = document.canvases[canvas.id] {
+                if existing.canvas == canvas {
+                    return existing
+                }
+                var updated = existing
+                updated.canvas = canvas
+                document.canvases[canvas.id] = updated
+                try save()
+                return updated
             }
-            var updated = existing
-            updated.canvas = canvas
-            document.canvases[canvas.id] = updated
-            try save()
-            return updated
-        }
 
-        let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
-        document.canvases[canvas.id] = record
-        try save()
-        return record
+            let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
+            document.canvases[canvas.id] = record
+            try save()
+            return record
+        }
     }
 
     func replaceNodesIfUnmodified(
@@ -994,16 +997,18 @@ final class PlannerStore {
         matching expectedNodes: [PlanningNode],
         with replacementNodes: [PlanningNode]
     ) throws -> CanvasRecord {
-        var record = try requireRecord(canvasId: canvasId)
-        guard record.proposals.isEmpty,
-              record.events.isEmpty,
-              record.nodes == expectedNodes else {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard record.proposals.isEmpty,
+                  record.events.isEmpty,
+                  record.nodes == expectedNodes else {
+                return record
+            }
+            record.nodes = replacementNodes
+            document.canvases[canvasId] = record
+            try save()
             return record
         }
-        record.nodes = replacementNodes
-        document.canvases[canvasId] = record
-        try save()
-        return record
     }
 
     func saveProposal(
@@ -1012,72 +1017,78 @@ final class PlannerStore {
         seedNodes: [PlanningNode],
         validationNodes: [PlanningNode]? = nil
     ) throws -> PlanProposal {
-        var record = try record(for: canvas, seedNodes: seedNodes)
-        try PlannerProposalValidator.validate(
-            proposal,
-            canvas: canvas,
-            nodes: validationNodes ?? record.nodes
-        )
-        if let index = record.proposals.firstIndex(where: { $0.id == proposal.id }) {
-            record.proposals[index] = proposal
-        } else {
-            record.proposals.append(proposal)
-            record.events.append(event(
-                canvasId: canvas.id,
-                type: .proposalCreated,
-                proposalId: proposal.id,
-                summary: proposal.summary
-            ))
+        try withLock {
+            var record = try record(for: canvas, seedNodes: seedNodes)
+            try PlannerProposalValidator.validate(
+                proposal,
+                canvas: canvas,
+                nodes: validationNodes ?? record.nodes
+            )
+            if let index = record.proposals.firstIndex(where: { $0.id == proposal.id }) {
+                record.proposals[index] = proposal
+            } else {
+                record.proposals.append(proposal)
+                record.events.append(event(
+                    canvasId: canvas.id,
+                    type: .proposalCreated,
+                    proposalId: proposal.id,
+                    summary: proposal.summary
+                ))
+            }
+            document.canvases[canvas.id] = record
+            try save()
+            return proposal
         }
-        document.canvases[canvas.id] = record
-        try save()
-        return proposal
     }
 
     func approveProposal(
         proposalId: String,
         canvasId: String
     ) throws -> PlanProposal {
-        var record = try requireRecord(canvasId: canvasId)
-        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
-            throw PlannerCoreError.proposalNotFound(proposalId)
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+                throw PlannerCoreError.proposalNotFound(proposalId)
+            }
+            guard record.proposals[index].canvasId == canvasId else {
+                throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
+            }
+            record.proposals[index].status = .approved
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .proposalApproved,
+                proposalId: proposalId,
+                summary: record.proposals[index].summary
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record.proposals[index]
         }
-        guard record.proposals[index].canvasId == canvasId else {
-            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
-        }
-        record.proposals[index].status = .approved
-        record.events.append(event(
-            canvasId: canvasId,
-            type: .proposalApproved,
-            proposalId: proposalId,
-            summary: record.proposals[index].summary
-        ))
-        document.canvases[canvasId] = record
-        try save()
-        return record.proposals[index]
     }
 
     func rejectProposal(
         proposalId: String,
         canvasId: String
     ) throws -> PlanProposal {
-        var record = try requireRecord(canvasId: canvasId)
-        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
-            throw PlannerCoreError.proposalNotFound(proposalId)
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+                throw PlannerCoreError.proposalNotFound(proposalId)
+            }
+            guard record.proposals[index].canvasId == canvasId else {
+                throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
+            }
+            record.proposals[index].status = .rejected
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .proposalRejected,
+                proposalId: proposalId,
+                summary: record.proposals[index].summary
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record.proposals[index]
         }
-        guard record.proposals[index].canvasId == canvasId else {
-            throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: record.proposals[index].canvasId)
-        }
-        record.proposals[index].status = .rejected
-        record.events.append(event(
-            canvasId: canvasId,
-            type: .proposalRejected,
-            proposalId: proposalId,
-            summary: record.proposals[index].summary
-        ))
-        document.canvases[canvasId] = record
-        try save()
-        return record.proposals[index]
     }
 
     func applyProposal(
@@ -1085,25 +1096,27 @@ final class PlannerStore {
         canvasId: String,
         service: PlannerCoreService
     ) throws -> CanvasRecord {
-        var record = try requireRecord(canvasId: canvasId)
-        guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
-            throw PlannerCoreError.proposalNotFound(proposalId)
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
+                throw PlannerCoreError.proposalNotFound(proposalId)
+            }
+            let proposal = record.proposals[index]
+            try PlannerProposalValidator.validate(proposal, canvas: record.canvas, nodes: record.nodes)
+            let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
+            record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
+            record.nodes = nodes
+            record.proposals[index].status = .applied
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .proposalApplied,
+                proposalId: proposalId,
+                summary: proposal.summary
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
         }
-        let proposal = record.proposals[index]
-        try PlannerProposalValidator.validate(proposal, canvas: record.canvas, nodes: record.nodes)
-        let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
-        record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
-        record.nodes = nodes
-        record.proposals[index].status = .applied
-        record.events.append(event(
-            canvasId: canvasId,
-            type: .proposalApplied,
-            proposalId: proposalId,
-            summary: proposal.summary
-        ))
-        document.canvases[canvasId] = record
-        try save()
-        return record
     }
 
     func preview(
@@ -1112,11 +1125,19 @@ final class PlannerStore {
         seedNodes: [PlanningNode],
         service: PlannerCoreService
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
-        let record = try record(for: canvas, seedNodes: seedNodes)
-        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: record.nodes)
-        let approved = service.approve(proposal)
-        let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
-        return (approved, nodes)
+        try withLock {
+            let record = try record(for: canvas, seedNodes: seedNodes)
+            try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: record.nodes)
+            let approved = service.approve(proposal)
+            let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
+            return (approved, nodes)
+        }
+    }
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
     }
 
     private func requireRecord(canvasId: String) throws -> CanvasRecord {
