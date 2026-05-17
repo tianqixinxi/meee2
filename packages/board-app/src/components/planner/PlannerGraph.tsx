@@ -95,6 +95,12 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
     return plannerState.nodes.find((node) => node.id === selectedNodeId) ?? null
   }, [plannerState, selectedNodeId])
 
+  const hasActionableDrift = useMemo(() => {
+    return (plannerState?.states ?? []).some((state) =>
+      state.needsOwnerReview || state.runState === 'blocked' || state.runState === 'planning',
+    )
+  }, [plannerState])
+
   useEffect(() => {
     let cancelled = false
     const heartbeat = () => {
@@ -138,21 +144,42 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
       .finally(() => setBusy(false))
   }, [canvasId])
 
-  const handleInspectDrift = useCallback(() => {
-    setBusy(true)
-    setError(null)
-    inspectPlannerDrift(canvasId)
-      .then((next) => {
-        setProposal(next)
-        setPlannerState((current) => current && next
-          ? { ...current, proposals: upsertProposal(current.proposals, next) }
-          : current)
-        setPreviewActive(false)
-        if (!next) setError('No blocked or owner-review state found.')
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to inspect planner drift'))
-      .finally(() => setBusy(false))
-  }, [canvasId])
+  const handlePlannerSubmit = useCallback((message: string) => {
+    const trimmed = message.trim()
+    const shouldInspect = shouldInspectDrift(trimmed, plannerState, hasActionableDrift)
+    if (shouldInspect) {
+      setBusy(true)
+      setError(null)
+      inspectPlannerDrift(canvasId)
+        .then((next) => {
+          if (!next) {
+            if (trimmed) {
+              return generatePlannerProposal(canvasId, trimmed).then((generated) => {
+                setProposal(generated)
+                setPlannerState((current) => current && generated
+                  ? { ...current, proposals: upsertProposal(current.proposals, generated) }
+                  : current)
+                setPreviewActive(false)
+              })
+            }
+            setError('No blocked, planning, or owner-review state found.')
+            return undefined
+          }
+          setProposal(next)
+          setPlannerState((current) => current
+            ? { ...current, proposals: upsertProposal(current.proposals, next) }
+            : current)
+          setPreviewActive(false)
+          return undefined
+        })
+        .catch((err) => setError((err as Error).message || 'Failed to inspect planner drift'))
+        .finally(() => setBusy(false))
+      return
+    }
+
+    if (!trimmed) return
+    handleGenerate(trimmed)
+  }, [canvasId, handleGenerate, hasActionableDrift, plannerState])
 
   const handleApplyPreview = useCallback(() => {
     if (!proposal) return
@@ -306,8 +333,9 @@ function PlannerGraphInner({ canvasId, canvasName, onOpenSubCanvas }: Props) {
               busy={busy}
               error={error}
               access={plannerState?.access ?? null}
-              onGenerate={handleGenerate}
-              onInspectDrift={handleInspectDrift}
+              nodeCount={plannerState?.nodes.length ?? 0}
+              hasActionableDrift={hasActionableDrift}
+              onSubmit={handlePlannerSubmit}
               onApplyPreview={handleApplyPreview}
               onApprove={handleApprove}
               onApply={handleApply}
@@ -392,6 +420,29 @@ function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {
     default:
       return '#8c8980'
   }
+}
+
+function shouldInspectDrift(
+  message: string,
+  state: PlannerCanvasState | null,
+  hasActionableDrift: boolean,
+): boolean {
+  if (!state || state.nodes.length === 0) return false
+  if (!message.trim()) return hasActionableDrift
+  const normalized = message.toLowerCase()
+  return hasActionableDrift && [
+    'blocked',
+    'drift',
+    'fix',
+    'repair',
+    'review',
+    'stuck',
+    '卡',
+    '修',
+    '检查',
+    '跑偏',
+    '阻塞',
+  ].some((keyword) => normalized.includes(keyword))
 }
 
 function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): PlanProposal[] {

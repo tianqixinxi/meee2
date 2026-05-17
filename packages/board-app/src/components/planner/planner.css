@@ -545,6 +545,18 @@
   padding: 12px;
 }
 
+.planner-dialog__message--user {
+  justify-self: end;
+  max-width: 88%;
+  border-color: rgba(204, 120, 92, 0.18);
+  background: rgba(204, 120, 92, 0.16);
+}
+
+.planner-dialog__message--planner {
+  justify-self: start;
+  max-width: 100%;
+}
+
 .planner-dialog__message--error {
   border-color: rgba(194, 106, 106, 0.28);
   background: rgba(194, 106, 106, 0.12);
@@ -568,6 +580,106 @@
   line-height: 1.35;
 }
 
+.planner-markdown {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.planner-markdown > :first-child {
+  margin-top: 0;
+}
+
+.planner-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.planner-markdown p,
+.planner-markdown ul,
+.planner-markdown ol,
+.planner-markdown blockquote,
+.planner-markdown pre,
+.planner-markdown table {
+  margin: 0 0 10px;
+}
+
+.planner-markdown h1,
+.planner-markdown h2,
+.planner-markdown h3,
+.planner-markdown h4 {
+  margin: 12px 0 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.planner-markdown h1 {
+  font-size: 16px;
+}
+
+.planner-markdown h2 {
+  font-size: 14px;
+}
+
+.planner-markdown ul,
+.planner-markdown ol {
+  padding-left: 20px;
+}
+
+.planner-markdown li {
+  margin: 3px 0;
+}
+
+.planner-markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(245, 244, 239, 0.07);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.planner-markdown pre {
+  overflow-x: auto;
+  padding: 10px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(18, 18, 16, 0.86);
+}
+
+.planner-markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+}
+
+.planner-markdown blockquote {
+  padding-left: 10px;
+  border-left: 3px solid rgba(168, 165, 155, 0.28);
+  color: var(--text-dim);
+}
+
+.planner-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.planner-markdown th,
+.planner-markdown td {
+  padding: 6px 7px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  text-align: left;
+  vertical-align: top;
+}
+
+.planner-markdown th {
+  color: var(--text-dim);
+  font-weight: 650;
+}
+
 .planner-dialog__actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -580,6 +692,10 @@
   padding: 12px 14px 14px;
   border-top: 1px solid rgba(168, 165, 155, 0.16);
   background: rgba(35, 35, 32, 0.96);
+}
+
+.planner-dialog__composer textarea {
+  resize: none;
 }
 
 .planner-proposal-panel__header {
