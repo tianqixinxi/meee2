@@ -23,6 +23,7 @@ import {
   proposePlannerGraphChange,
   refinePlannerNode,
   submitPlannerNodeOutput,
+  updatePlannerDeliveryNodeAssignee,
 } from '../../api'
 import type { TeamMember } from '../../api'
 import type {
@@ -37,6 +38,8 @@ import type {
   PlannerNodeOutputStatus,
   PlanningNode,
   Session,
+  WorkflowRun,
+  RunNodeState,
 } from '../../types'
 import { IntegrationArtifactPicker } from '../IntegrationArtifactPicker'
 import type { PlannerMode } from './RunSelector'
@@ -59,7 +62,7 @@ const ARTIFACT_KINDS: PlannerArtifactKind[] = [
   'generic',
 ]
 
-type InspectorTab = 'execution' | 'plan' | 'evidence'
+type InspectorTab = 'action' | 'plan' | 'execution' | 'evidence'
 type ActionPanel = 'start' | 'bind' | 'subCanvas' | 'refine' | 'doer'
 
 interface Props {
@@ -67,6 +70,8 @@ interface Props {
   canvasId: string
   mode: PlannerMode
   state: NodeStateSnapshot | null
+  selectedDeliveryId?: string | null
+  runNodeState?: RunNodeState | null
   ownerLabel?: string
   ownerAvatarUrl?: string
   doerLabel?: string
@@ -78,6 +83,7 @@ interface Props {
   onArtifactAttached?: () => void
   onProposalCreated?: (proposal: PlanProposal) => void
   onNodeMutated?: (state: PlannerGraphState) => void
+  onDeliveryMutated?: (run: WorkflowRun) => void
 }
 
 export function NodeInspectorModal({
@@ -85,8 +91,8 @@ export function NodeInspectorModal({
   canvasId,
   mode,
   state,
-  ownerLabel,
-  ownerAvatarUrl,
+  selectedDeliveryId = null,
+  runNodeState = null,
   doerLabel,
   access = null,
   sessions = [],
@@ -96,8 +102,9 @@ export function NodeInspectorModal({
   onArtifactAttached,
   onProposalCreated,
   onNodeMutated,
+  onDeliveryMutated,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<InspectorTab>('execution')
+  const [activeTab, setActiveTab] = useState<InspectorTab>('action')
   const [openPanel, setOpenPanel] = useState<ActionPanel | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -116,20 +123,34 @@ export function NodeInspectorModal({
 
   const runState = state?.runState ?? node.status
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
-  const artifactRefs = node.artifactRefs ?? state?.artifactRefs ?? []
+  const artifactRefs = mode === 'run'
+    ? (runNodeState?.outputRefs?.length ? runNodeState.outputRefs : runNodeState?.artifactIds ?? [])
+    : (node.artifactRefs ?? state?.artifactRefs ?? [])
   const blockers = state?.blockers ?? []
   const consumes = node.ioSchema?.consumes ?? []
   const produces = node.ioSchema?.produces ?? []
   const deps = node.dependsOnNodeIds ?? []
   const runnerLabel = displayRunner(node.dispatch?.runner ?? null)
   const nextAction = node.nextAction?.trim() || null
-  const activeSessionId = node.sessionId?.trim() || null
+  const activeSessionId = (mode === 'run' ? runNodeState?.sessionId ?? node.sessionId : node.sessionId)?.trim() || null
   const isDesignMode = mode === 'design'
   const isRunMode = mode === 'run'
+  const responsibleId = (isRunMode ? runNodeState?.assigneeId ?? node.doerId : node.doerId)?.trim() ?? ''
+  const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)
+  const responsibleFallback = (isRunMode ? responsibleId : (doerLabel ?? node.doerId)).trim()
+  const responsibleLabel = (responsibleMember?.displayName ?? responsibleFallback) || 'Unassigned'
+  const actionStatus = displayRunState(String(runState))
+  const actionNextStep = nextAction
+    ?? (isRunMode
+      ? (activeSessionId ? 'Open the active session or submit output when the work is done.' : 'Start work or attach an existing session.')
+      : (responsibleLabel === 'Unassigned' ? 'Assign a responsible person before this step is executed.' : 'Edit the Plan or expand this step if it is too large.'))
+  const primaryActionLabel = isDesignMode
+    ? (responsibleLabel === 'Unassigned' ? 'Assign person' : 'Edit plan')
+    : (responsibleLabel === 'Unassigned' ? 'Assign person' : activeSessionId ? 'Open session' : 'Start work')
 
   const role = access?.role ?? 'owner'
   const isOwner = role === 'owner'
-  const isAssignedDoer = role === 'doer' && Boolean(access?.actorId) && node.doerId === access?.actorId
+  const isAssignedDoer = role === 'doer' && Boolean(access?.actorId) && responsibleId === access?.actorId
   const canActOnNode = isOwner || isAssignedDoer
   const permissionTooltip = canActOnNode
     ? undefined
@@ -201,8 +222,28 @@ export function NodeInspectorModal({
       })
   }
 
-  const togglePanel = (panel: ActionPanel) => {
+  const runDeliveryAction = (work: () => Promise<WorkflowRun>) => {
+    setActionBusy(true)
     setActionError(null)
+    work()
+      .then((run) => {
+        setActionBusy(false)
+        setOpenPanel(null)
+        onDeliveryMutated?.(run)
+        onClose()
+      })
+      .catch((err) => {
+        setActionBusy(false)
+        setActionError((err as Error).message || 'Action failed')
+      })
+  }
+
+  const togglePanel = (panel: ActionPanel | null) => {
+    setActionError(null)
+    if (!panel) {
+      setOpenPanel(null)
+      return
+    }
     setOpenPanel((current) => (current === panel ? null : panel))
   }
 
@@ -254,7 +295,7 @@ export function NodeInspectorModal({
           <div className="planner-node-modal__header-tags">
             <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>{runState}</span>
             <span className="planner-node-modal__kind">{nodeKind}</span>
-            {state?.needsOwnerReview && <span className="planner-node-modal__state planner-node-modal__state--review">owner review</span>}
+            {state?.needsOwnerReview && <span className="planner-node-modal__state planner-node-modal__state--review">needs approval</span>}
           </div>
           <h2>{node.title}</h2>
         </div>
@@ -275,29 +316,80 @@ export function NodeInspectorModal({
         )}
 
         <div className="planner-node-modal__tabs" role="tablist" aria-label="Node detail sections">
-          <button type="button" className={activeTab === 'execution' ? 'is-active' : ''} onClick={() => setActiveTab('execution')}>Execution</button>
+          <button type="button" className={activeTab === 'action' ? 'is-active' : ''} onClick={() => setActiveTab('action')}>Action</button>
           <button type="button" className={activeTab === 'plan' ? 'is-active' : ''} onClick={() => setActiveTab('plan')}>Plan</button>
-          <button type="button" className={activeTab === 'evidence' ? 'is-active' : ''} onClick={() => setActiveTab('evidence')}>Evidence</button>
+          <button type="button" className={activeTab === 'execution' ? 'is-active' : ''} onClick={() => setActiveTab('execution')}>Work</button>
+          <button type="button" className={activeTab === 'evidence' ? 'is-active' : ''} onClick={() => setActiveTab('evidence')}>Outputs</button>
         </div>
+
+        {activeTab === 'action' && (
+          <>
+            <div className="planner-node-modal__section planner-node-modal__action">
+              <div className="planner-node-modal__action-summary">
+                <div>
+                  <em>Status</em>
+                  <strong>{actionStatus}</strong>
+                </div>
+                <div>
+                  <em>Responsible</em>
+                  <strong>{responsibleLabel}</strong>
+                </div>
+              </div>
+              <div className="planner-node-modal__next-action">
+                <Signpost size={13} aria-hidden />
+                <div><em>Next step</em><strong>{actionNextStep}</strong></div>
+              </div>
+              <div className="planner-node-actions__buttons">
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={!canActOnNode || actionBusy}
+                  title={permissionTooltip}
+                  onClick={() => {
+                    if (isDesignMode) {
+                      setActiveTab(responsibleLabel === 'Unassigned' ? 'execution' : 'plan')
+                      togglePanel(responsibleLabel === 'Unassigned' ? 'doer' : 'refine')
+                    } else {
+                      setActiveTab('execution')
+                      togglePanel(responsibleLabel === 'Unassigned' ? 'doer' : activeSessionId ? null : 'start')
+                    }
+                  }}
+                >
+                  {primaryActionLabel}
+                </button>
+                {isRunMode && (
+                  <button type="button" disabled={!canActOnNode || actionBusy} onClick={() => setActiveTab('evidence')}>
+                    Submit output
+                  </button>
+                )}
+                {isDesignMode && (
+                  <button type="button" disabled={!canActOnNode || actionBusy} onClick={() => togglePanel('subCanvas')}>
+                    Expand into sub-flow
+                  </button>
+                )}
+              </div>
+              {actionError && <p className="planner-node-actions__error">{actionError}</p>}
+            </div>
+          </>
+        )}
 
         {activeTab === 'execution' && (
           <>
             <div className="planner-node-modal__section">
-              <h3>Responsible people</h3>
+              <h3>Responsible person</h3>
               <div className="planner-node-modal__people">
-                <span className={`planner-node-modal__avatar${ownerAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-                  {ownerAvatarUrl ? <img src={ownerAvatarUrl} alt="" /> : <UserRound size={14} />}
+                <span className="planner-node-modal__avatar" aria-hidden>
+                  <UserRound size={14} />
                 </span>
-                <div><em>Owner</em><strong>{ownerLabel ?? 'canvas owner'}</strong></div>
-                <div><em>Doer</em><strong>{(doerLabel ?? node.doerId) || 'Unassigned'}</strong></div>
+                <div><em>Responsible</em><strong>{responsibleLabel}</strong></div>
                 <button
                   type="button"
                   className="planner-node-modal__assign-doer"
-                  disabled={!canActOnNode || actionBusy || !isDesignMode}
-                  title={isDesignMode ? permissionTooltip : 'Assign doer from Design mode.'}
+                  disabled={!canActOnNode || actionBusy || (isRunMode && !selectedDeliveryId)}
+                  title={isRunMode && !selectedDeliveryId ? 'Select a Delivery before assigning work.' : permissionTooltip}
                   onClick={() => togglePanel('doer')}
                 >
-                  <UserRound size={12} aria-hidden /> Assign doer
+                  <UserRound size={12} aria-hidden /> Assign person
                 </button>
               </div>
               {openPanel === 'doer' && (
@@ -307,21 +399,27 @@ export function NodeInspectorModal({
                   ) : (
                     <div className="planner-node-actions__members">
                       {teamMembers.map((member) => {
-                        const current = member.userId === node.doerId
+                        const current = member.userId === responsibleId
                         return (
                           <button
                             key={member.userId}
                             type="button"
                             className={`planner-node-actions__member${current ? ' is-current' : ''}`}
                             disabled={actionBusy || current}
-                            onClick={() =>
+                            onClick={() => {
+                              if (isRunMode && selectedDeliveryId) {
+                                runDeliveryAction(() =>
+                                  updatePlannerDeliveryNodeAssignee(canvasId, selectedDeliveryId, node.id, member.userId),
+                                )
+                                return
+                              }
                               runProposalAction(() =>
                                 proposePlannerGraphChange(canvasId, {
-                                  summary: `Assign ${member.displayName} as doer of ${node.title}`,
+                                  summary: `Assign ${member.displayName} as responsible person of ${node.title}`,
                                   changes: [{ kind: 'updateNode', nodeId: node.id, doerId: member.userId }],
                                 }),
                               )
-                            }
+                            }}
                           >
                             <span className="planner-node-modal__avatar" aria-hidden>
                               {member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <UserRound size={12} />}
@@ -344,7 +442,7 @@ export function NodeInspectorModal({
                   type="button"
                   disabled={!isRunMode || !canActOnNode || actionBusy || !isStepNode || Boolean(activeSessionId)}
                   title={
-                    !isRunMode ? 'Start work from Run mode.'
+                    !isRunMode ? 'Start work from Work mode.'
                       : activeSessionId ? 'This node already has an active session. Complete or split it before starting another.'
                         : !canActOnNode ? permissionTooltip
                           : !isStepNode ? 'Only step nodes can start work.'
@@ -357,7 +455,7 @@ export function NodeInspectorModal({
                 <button
                   type="button"
                   disabled={!isRunMode || !canActOnNode || actionBusy || Boolean(activeSessionId)}
-                  title={!isRunMode ? 'Attach sessions from Run mode.' : activeSessionId ? 'This node already has an active session.' : permissionTooltip}
+                  title={!isRunMode ? 'Attach sessions from Work mode.' : activeSessionId ? 'This node already has an active session.' : permissionTooltip}
                   onClick={() => togglePanel('bind')}
                 >
                   <GitBranch size={12} aria-hidden /> Attach existing session
@@ -384,7 +482,7 @@ export function NodeInspectorModal({
                     disabled={actionBusy}
                     onClick={() => runDirectAction(() => dispatchPlannerNodeSession(canvasId, node.id, dispatchRunner))}
                   >
-                    <Rocket size={12} aria-hidden /> Start session
+                    <Rocket size={12} aria-hidden /> Start work
                   </button>
                 </div>
               )}
@@ -393,16 +491,16 @@ export function NodeInspectorModal({
             </div>
 
             <div className="planner-node-modal__section">
-              <h3>Current run</h3>
+              <h3>Current Delivery</h3>
               <div className="planner-node-modal__grid">
                 <span>Active session</span>
                 <strong className="is-mono">{activeSessionId ?? 'none'}</strong>
                 <span>Runner</span>
                 <strong><GitBranch size={12} aria-hidden /> {runnerLabel}</strong>
-                <span>Run state</span>
+                <span>Work state</span>
                 <strong>{displayRunState(node.workflowRunState ?? 'pending')}</strong>
                 <span>Mode</span>
-                <strong>{node.executionMode}</strong>
+                <strong>Work</strong>
               </div>
             </div>
           </>
@@ -413,10 +511,10 @@ export function NodeInspectorModal({
             <div className="planner-node-modal__section planner-node-actions">
               <h3><Sparkles size={13} aria-hidden /> Plan changes</h3>
               <div className="planner-node-actions__buttons">
-                <button type="button" disabled={!isDesignMode || !canActOnNode || actionBusy} title={isDesignMode ? permissionTooltip : 'Revise topology from Design mode.'} onClick={() => togglePanel('refine')}>
+                <button type="button" disabled={!isDesignMode || !canActOnNode || actionBusy} title={isDesignMode ? permissionTooltip : 'Revise topology from Plan mode.'} onClick={() => togglePanel('refine')}>
                   <Sparkles size={12} aria-hidden /> Revise this step
                 </button>
-                <button type="button" disabled={!isDesignMode || !canActOnNode || actionBusy} title={isDesignMode ? permissionTooltip : 'Expand topology from Design mode.'} onClick={() => togglePanel('subCanvas')}>
+                <button type="button" disabled={!isDesignMode || !canActOnNode || actionBusy} title={isDesignMode ? permissionTooltip : 'Expand topology from Plan mode.'} onClick={() => togglePanel('subCanvas')}>
                   <Layers size={12} aria-hidden /> Expand into sub-flow
                 </button>
               </div>
@@ -509,7 +607,7 @@ export function NodeInspectorModal({
         {activeTab === 'evidence' && (
           <>
             <div className="planner-node-modal__section planner-node-output">
-              <h3><Plus size={13} aria-hidden /> Add output</h3>
+              <h3><Plus size={13} aria-hidden /> Submit output</h3>
               <label className="planner-node-actions__field">
                 <span>Message</span>
                 <textarea
@@ -534,7 +632,7 @@ export function NodeInspectorModal({
                   <select value={outputNext} onChange={(event) => setOutputNext(event.target.value as PlannerNodeOutputNext)}>
                     <option value="complete">Complete</option>
                     <option value="blocked">Blocked</option>
-                    <option value="needs_owner_review">Needs owner review</option>
+                    <option value="needs_owner_review">Needs approval</option>
                   </select>
                 </label>
               </div>
@@ -608,7 +706,7 @@ export function NodeInspectorModal({
 
               <div className="planner-node-modal__attach">
                 <span className="planner-node-modal__attach-label">
-                  <Plus size={11} aria-hidden /> Add output from
+                  <Plus size={11} aria-hidden /> Choose output source
                 </span>
                 <div className="planner-node-modal__attach-providers">
                   <button type="button" className={attachProvider === 'github' ? 'is-active' : ''} onClick={() => setAttachProvider((current) => (current === 'github' ? null : 'github'))}>

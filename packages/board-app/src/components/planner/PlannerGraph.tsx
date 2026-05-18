@@ -1,15 +1,15 @@
 import {
   Background,
   Controls,
-  MiniMap,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { MessageSquare, X } from 'lucide-react'
+import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   abortPlannerRun,
   applyPlannerProposal,
@@ -42,9 +42,10 @@ import {
 } from '../../teamDirectory'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
+import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { RunHistoryView } from './RunHistoryView'
-import { RunSelector, type PlannerMode } from './RunSelector'
+import { RunSelector, type PlannerMode, type StartDeliveryInput } from './RunSelector'
 import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
 import './planner.css'
 
@@ -59,6 +60,12 @@ interface Props {
 const nodeTypes = {
   plannerNode: PlannerNodeCard,
 }
+
+const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
+const PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
+const DEFAULT_PANEL_WIDTH = 420
+const MIN_PANEL_WIDTH = 340
+const MAX_PANEL_WIDTH = 680
 
 export function PlannerGraph(props: Props) {
   return (
@@ -75,11 +82,13 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   const [previewActive, setPreviewActive] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
-  const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(false)
+  const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(() => readStoredPanelCollapsed())
+  const [plannerPanelWidth, setPlannerPanelWidth] = useState(() => readStoredPanelWidth())
   const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingVisibility, setPendingVisibility] = useState<PlannerCanvasVisibility | null>(null)
   // P2 Run layer — Design vs Run mode + the run being viewed.
   const [mode, setMode] = useState<PlannerMode>('design')
   const [runs, setRuns] = useState<WorkflowRun[]>([])
@@ -180,6 +189,31 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
     setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
   }, [])
+
+  useEffect(() => {
+    window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
+  }, [plannerPanelCollapsed])
+
+  useEffect(() => {
+    window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
+  }, [plannerPanelWidth])
+
+  const handlePanelResizeStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = plannerPanelWidth
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      setPlannerPanelWidth(clampPanelWidth(startWidth + startX - moveEvent.clientX))
+    }
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      document.body.classList.remove('planner-panel-resizing')
+    }
+    document.body.classList.add('planner-panel-resizing')
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+  }, [plannerPanelWidth])
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -456,33 +490,33 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
     setPlannerState(next)
   }, [])
 
-  // Gap 5 — owner-only canvas visibility. Applies immediately (canvas metadata,
-  // not a graph proposal); the updated canvas record is merged back into state.
-  const handleSetVisibility = useCallback((visibility: PlannerCanvasVisibility) => {
+  // Gap 5 — owner-only canvas visibility. This is canvas metadata rather than
+  // graph topology, but it changes who can see the planning space, so require
+  // explicit confirmation before applying.
+  const handleConfirmVisibility = useCallback((visibility: PlannerCanvasVisibility) => {
     setBusy(true)
     setError(null)
     setPlannerCanvasVisibility(canvasId, visibility)
       .then((canvas) => {
         setPlannerState((current) => current ? { ...current, canvas } : current)
+        setPendingVisibility(null)
       })
       .catch((err) => setError((err as Error).message || 'Failed to update canvas visibility'))
       .finally(() => setBusy(false))
   }, [canvasId])
 
-  // P2 Run layer — start / select / abort a workflow run. Decision A: a run
-  // is one execution of the blueprint; the graph itself stays the design.
-  const handleStartRun = useCallback(() => {
+  const handleStartRun = useCallback((input: StartDeliveryInput) => {
     setBusy(true)
     setError(null)
-    startPlannerRun(canvasId)
+    startPlannerRun(canvasId, input)
       .then((run) => {
         setRuns((current) => [...current, run])
         setSelectedRunId(run.id)
         setMode('run')
-        // The fresh run resets per-node execution state — re-pull the graph.
+        // The fresh Delivery resets per-node execution state — re-pull the graph.
         loadState()
       })
-      .catch((err) => setError((err as Error).message || 'Failed to start run'))
+      .catch((err) => setError((err as Error).message || 'Failed to start delivery'))
       .finally(() => setBusy(false))
   }, [canvasId, loadState])
 
@@ -493,23 +527,29 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .then((run) => {
         setRuns((current) => current.map((item) => (item.id === run.id ? run : item)))
       })
-      .catch((err) => setError((err as Error).message || 'Failed to abort run'))
+      .catch((err) => setError((err as Error).message || 'Failed to abort delivery'))
       .finally(() => setBusy(false))
   }, [])
 
   const canvasVisibility: PlannerCanvasVisibility = plannerState?.canvas.visibility ?? 'private'
   const isCanvasOwner = (plannerState?.access?.role ?? 'owner') === 'owner'
+  const plannerMainStyle = {
+    '--planner-panel-width': `${plannerPanelWidth}px`,
+  } as CSSProperties
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
-      <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
+      <div
+        className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
+        style={plannerMainStyle}
+      >
         <button
           type="button"
           className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
           onClick={() => setPlannerPanelCollapsed((value) => !value)}
           aria-label={plannerPanelCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
         >
-          {plannerPanelCollapsed ? <MessageSquare size={16} aria-hidden /> : <X size={15} aria-hidden />}
+          {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
         </button>
         <div className="planner-flow">
           <div className="planner-flow__header">
@@ -537,17 +577,17 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               >
                 <button
                   type="button"
-                  className={canvasVisibility === 'private' ? 'is-active' : ''}
+                  className={`planner-flow__visibility-option is-private${canvasVisibility === 'private' ? ' is-active' : ''}`}
                   disabled={busy || canvasVisibility === 'private'}
-                  onClick={() => handleSetVisibility('private')}
+                  onClick={() => setPendingVisibility('private')}
                 >
                   Private
                 </button>
                 <button
                   type="button"
-                  className={canvasVisibility === 'public' ? 'is-active' : ''}
+                  className={`planner-flow__visibility-option is-public${canvasVisibility === 'public' ? ' is-active' : ''}`}
                   disabled={busy || canvasVisibility === 'public'}
-                  onClick={() => handleSetVisibility('public')}
+                  onClick={() => setPendingVisibility('public')}
                 >
                   Public
                 </button>
@@ -561,16 +601,59 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               </span>
             )}
           </div>
+          {pendingVisibility && (
+            <div
+              className="planner-visibility-confirm-backdrop"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setPendingVisibility(null)
+              }}
+            >
+              <div
+                className={`planner-visibility-confirm planner-visibility-confirm--${pendingVisibility}`}
+                role="dialog"
+                aria-modal="true"
+                aria-label="Confirm canvas visibility"
+              >
+                <div className="planner-visibility-confirm__header">
+                  <span>{pendingVisibility === 'public' ? 'Make canvas public?' : 'Make canvas private?'}</span>
+                  <strong>{plannerState?.canvas.title ?? canvasName}</strong>
+                </div>
+                <p>
+                  {pendingVisibility === 'public'
+                    ? 'People with workspace access will be able to view this canvas. Topology edits still stay owner-controlled.'
+                    : 'Only you and explicitly allowed local access can view this canvas. Shared viewers may lose visibility.'}
+                </p>
+                <div className="planner-visibility-confirm__actions">
+                  <button type="button" className="ghost" onClick={() => setPendingVisibility(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={pendingVisibility === 'public' ? 'primary' : 'ghost'}
+                    disabled={busy}
+                    onClick={() => handleConfirmVisibility(pendingVisibility)}
+                  >
+                    {pendingVisibility === 'public' ? 'Confirm public' : 'Confirm private'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {/* U5 — onboarding: blueprint exists but has never been executed. */}
           {mode === 'run' && runs.length === 0 && (plannerState?.nodes.length ?? 0) > 0 && (
             <div className="planner-onboarding-card" role="note">
-              <strong>Blueprint is ready ✓</strong>
+              <strong>Plan is ready</strong>
               <p>
-                A <b>run</b> executes this blueprint once — each run tracks its own
-                progress, AI sessions and artifacts. The blueprint itself never runs.
+                Start a named <b>Delivery</b> when you have a real request to execute.
+                Sessions and outputs belong to that Delivery, not to the Plan.
               </p>
-              <button type="button" className="primary" disabled={busy} onClick={handleStartRun}>
-                ▶ Start the first run
+              <button
+                type="button"
+                className="primary"
+                disabled={busy}
+                onClick={() => handleStartRun({ title: `${canvasName} delivery` })}
+              >
+                ▶ Start delivery
               </button>
             </div>
           )}
@@ -605,21 +688,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               proOptions={{ hideAttribution: true }}
             >
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
-              <MiniMap
-                className="planner-flow__minimap"
-                position="bottom-right"
-                nodeColor={miniMapNodeFill}
-                nodeStrokeColor={miniMapNodeColor}
-                nodeBorderRadius={5}
-                nodeStrokeWidth={2}
-                bgColor="rgba(26, 26, 24, 0.98)"
-                maskColor="rgba(10, 10, 9, 0.34)"
-                maskStrokeColor="rgba(204, 120, 92, 0.72)"
-                maskStrokeWidth={1.5}
-                offsetScale={4}
-                pannable
-                zoomable
-              />
+              <PlannerOverviewMap nodes={flowNodes} edges={graph.edges} />
               <Controls className="planner-flow__controls" />
             </ReactFlow>
           ) : (
@@ -632,6 +701,12 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
 
         {!plannerPanelCollapsed && (
           <div className="planner-side">
+            <button
+              type="button"
+              className="planner-side__resize"
+              aria-label="Resize meee2 AI panel"
+              onPointerDown={handlePanelResizeStart}
+            />
             <PlannerProposalPanel
               proposal={proposal}
               previewActive={previewActive}
@@ -657,6 +732,8 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
           node={selectedNode}
           canvasId={canvasId}
           mode={mode}
+          selectedDeliveryId={selectedRun?.id ?? null}
+          runNodeState={selectedRun?.nodeStates[selectedNode.id] ?? null}
           onArtifactAttached={() => {
             // Re-pull graph state so the new artifact shows in the node list.
             fetchPlannerGraphState(canvasId)
@@ -686,6 +763,9 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
           teamMembers={teamMembers}
           onProposalCreated={handleNodeActionProposal}
           onNodeMutated={handleNodeMutated}
+          onDeliveryMutated={(run) => {
+            setRuns((current) => current.map((item) => (item.id === run.id ? run : item)))
+          }}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
         />
@@ -705,47 +785,20 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   )
 }
 
-function miniMapNodeFill(node: { data?: Record<string, unknown> }): string {
-  const data = node.data
-  const state = data?.state as { runState?: string; needsOwnerReview?: boolean } | null | undefined
-  const plannerNode = data?.node as { status?: string } | null | undefined
-  const status = state?.needsOwnerReview ? 'review' : state?.runState ?? plannerNode?.status
-  switch (status) {
-    case 'blocked':
-    case 'review':
-      return 'rgba(194, 106, 106, 0.72)'
-    case 'running':
-      return 'rgba(139, 169, 194, 0.72)'
-    case 'planning':
-      return 'rgba(212, 163, 115, 0.72)'
-    case 'done':
-      return 'rgba(127, 169, 130, 0.72)'
-    default:
-      return 'rgba(168, 165, 155, 0.56)'
-  }
+function readStoredPanelCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  return window.localStorage.getItem(PANEL_COLLAPSED_KEY) === '1'
 }
 
-// Stroke colors mirror the .planner-node--<runState> border-left tokens so the
-// minimap reads as a faithful miniature of the graph's status coloring.
-function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {
-  const data = node.data
-  const state = data?.state as { runState?: string; needsOwnerReview?: boolean } | null | undefined
-  const plannerNode = data?.node as { status?: string } | null | undefined
-  const status = state?.needsOwnerReview ? 'review' : state?.runState ?? plannerNode?.status
-  switch (status) {
-    case 'blocked':
-    case 'review':
-      return '#C26A6A' // --danger
-    case 'running':
-      return '#8BA9C2' // --info
-    case 'planning':
-      return '#D4A373' // --warning
-    case 'done':
-      return '#7FA982' // --success
-    case 'waiting':
-    default:
-      return '#A8A59B' // --text-dim
-  }
+function readStoredPanelWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_PANEL_WIDTH
+  const stored = Number(window.localStorage.getItem(PANEL_WIDTH_KEY))
+  if (!Number.isFinite(stored)) return DEFAULT_PANEL_WIDTH
+  return clampPanelWidth(stored)
+}
+
+function clampPanelWidth(width: number): number {
+  return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(width)))
 }
 
 function shouldInspectDrift(

@@ -10,8 +10,8 @@ interface Props {
 
 const STATUS_LABEL: Record<WorkflowRunStatus, string> = {
   active: 'In progress',
-  completed: 'Completed',
-  failed: 'Failed',
+  completed: 'Done',
+  failed: 'Needs attention',
   aborted: 'Aborted',
 }
 
@@ -38,8 +38,7 @@ function formatTime(iso: string | null | undefined): string {
 }
 
 /**
- * U6 — Run history. Lists every run of a canvas (newest first) with status,
- * progress and timeline. Selecting a run views it (workflow-run-spec §8.6).
+ * Lists every Delivery of a canvas (newest first) with status and progress.
  */
 export function RunHistoryView({ runs, selectedRunId, onSelectRun, onClose }: Props) {
   return (
@@ -49,21 +48,21 @@ export function RunHistoryView({ runs, selectedRunId, onSelectRun, onClose }: Pr
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <div className="planner-run-history" role="dialog" aria-modal="true" aria-label="Run history">
+      <div className="planner-run-history" role="dialog" aria-modal="true" aria-label="Delivery history">
         <button
           type="button"
           className="planner-proposal-modal__close"
           onClick={onClose}
-          aria-label="Close run history"
+          aria-label="Close delivery history"
         >
           <X size={15} aria-hidden />
         </button>
         <div className="planner-run-history__header">
-          <span>Execution history</span>
-          <h2>{runs.length} run{runs.length === 1 ? '' : 's'}</h2>
+          <span>Deliveries</span>
+          <h2>{runs.length} delivery{runs.length === 1 ? '' : 'ies'}</h2>
         </div>
         {runs.length === 0 ? (
-          <p className="planner-node-modal__empty">This blueprint has not been run yet.</p>
+          <p className="planner-node-modal__empty">This Plan has no Delivery yet.</p>
         ) : (
           <ul className="planner-run-history__list">
             {[...runs].reverse().map((run) => {
@@ -79,16 +78,16 @@ export function RunHistoryView({ runs, selectedRunId, onSelectRun, onClose }: Pr
                     }}
                   >
                     <span className={`planner-run-history__status is-${run.status}`}>
-                      {STATUS_GLYPH[run.status]} Run #{run.runIndex}
+                      {STATUS_GLYPH[run.status]} {run.title?.trim() || `Delivery #${run.runIndex}`}
                     </span>
                     <span className="planner-run-history__meta">
                       {STATUS_LABEL[run.status]} · {progress.done}/{progress.total} steps
                     </span>
                     <span className="planner-run-history__time">
-                      {formatTime(run.startedAt)}
+                      {formatTime(run.updatedAt || run.startedAt)}
                       {run.finishedAt ? ` → ${formatTime(run.finishedAt)}` : ''}
                     </span>
-                    <span className="planner-run-history__trigger">trigger: {run.trigger}</span>
+                    {run.summary && <span className="planner-run-history__trigger">{run.summary}</span>}
                   </button>
                 </li>
               )

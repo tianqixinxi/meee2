@@ -842,6 +842,7 @@ struct PlannerCrossCanvasSuggestion: Codable, Equatable {
 enum PlannerMonitorItemKind: String, Codable, Equatable {
     case node
     case proposal
+    case delivery
 }
 
 struct PlannerMonitorItem: Codable, Equatable {
@@ -851,6 +852,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var canvasTitle: String
     var nodeId: String?
     var nodeTitle: String?
+    var deliveryId: String?
     var proposalId: String?
     var proposalStatus: PlanProposalStatus?
     var summary: String
@@ -870,6 +872,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         canvasTitle: String,
         nodeId: String?,
         nodeTitle: String?,
+        deliveryId: String? = nil,
         proposalId: String?,
         proposalStatus: PlanProposalStatus?,
         summary: String,
@@ -886,6 +889,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.canvasTitle = canvasTitle
         self.nodeId = nodeId
         self.nodeTitle = nodeTitle
+        self.deliveryId = deliveryId
         self.proposalId = proposalId
         self.proposalStatus = proposalStatus
         self.summary = summary
@@ -2169,6 +2173,7 @@ final class PlannerStore {
         guard let runIdx = activeRunIndex(in: record) else { return }
         let advanced = WorkflowRunEngine.advance(record.runs[runIdx], nodes: record.nodes)
         record.runs[runIdx] = advanced
+        record.runs[runIdx].updatedAt = Date()
         if advanced.status != .active {
             record.activeRunId = nil
         }
@@ -2176,7 +2181,14 @@ final class PlannerStore {
 
     /// Start a fresh run over the canvas's current node structure. `runIndex`
     /// is one past the highest existing run. Becomes the active run.
-    func startRun(canvasId: String, trigger: String) throws -> WorkflowRun {
+    func startRun(
+        canvasId: String,
+        trigger: String,
+        title: String? = nil,
+        summary: String? = nil,
+        responsibleUserId: String? = nil,
+        linkedArtifactRefs: [String] = []
+    ) throws -> WorkflowRun {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
             let nextIndex = (record.runs.map { $0.runIndex }.max() ?? 0) + 1
@@ -2184,7 +2196,11 @@ final class PlannerStore {
                 canvasId: canvasId,
                 runIndex: nextIndex,
                 trigger: trigger,
-                nodes: record.nodes
+                nodes: record.nodes,
+                title: title,
+                summary: summary,
+                responsibleUserId: responsibleUserId,
+                linkedArtifactRefs: linkedArtifactRefs
             )
             record.runs.append(run)
             record.activeRunId = run.id
@@ -2221,6 +2237,7 @@ final class PlannerStore {
                 guard let idx = record.runs.firstIndex(where: { $0.id == runId }) else { continue }
                 record.runs[idx].status = .aborted
                 record.runs[idx].finishedAt = Date()
+                record.runs[idx].updatedAt = Date()
                 if record.activeRunId == runId {
                     record.activeRunId = nil
                 }
@@ -2325,6 +2342,9 @@ final class PlannerStore {
                 if !state.artifactIds.contains(artifact.id) {
                     state.artifactIds.append(artifact.id)
                 }
+                if !state.outputRefs.contains(artifact.reference) {
+                    state.outputRefs.append(artifact.reference)
+                }
             }
             recomputeActiveRun(&record)
             record.events.append(event(
@@ -2419,6 +2439,20 @@ final class PlannerStore {
             current.artifactRefs = artifactRefs
             record.nodes[sourceIndex] = current
             record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = current.workflowRunState ?? state.runState
+                if output.status == .done || output.status == .blocked {
+                    state.finishedAt = state.finishedAt ?? Date()
+                }
+                for artifact in newArtifacts {
+                    if !state.artifactIds.contains(artifact.id) {
+                        state.artifactIds.append(artifact.id)
+                    }
+                    if !state.outputRefs.contains(artifact.reference) {
+                        state.outputRefs.append(artifact.reference)
+                    }
+                }
+            }
 
             var routes: [PlannerOutputRoute] = []
             let outputEvent = event(
@@ -2478,9 +2512,15 @@ final class PlannerStore {
                 if record.nodes[targetIndex].doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     record.nodes[targetIndex].status = .blocked
                     record.nodes[targetIndex].workflowRunState = .gateWait
+                    mirrorIntoActiveRun(&record, nodeId: record.nodes[targetIndex].id) { state in
+                        state.runState = .gateWait
+                    }
                 } else if record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                     record.nodes[targetIndex].status = .waiting
                     record.nodes[targetIndex].workflowRunState = .readyToStart
+                    mirrorIntoActiveRun(&record, nodeId: record.nodes[targetIndex].id) { state in
+                        state.runState = .readyToStart
+                    }
                 }
                 routes.append(PlannerOutputRoute(
                     target: target,
@@ -2491,9 +2531,41 @@ final class PlannerStore {
                 ))
             }
 
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save()
             return (record, routes)
+        }
+    }
+
+    func updateRunNodeAssignee(
+        canvasId: String,
+        runId: String,
+        nodeId: String,
+        assigneeId: String?
+    ) throws -> WorkflowRun {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard record.nodes.contains(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            guard let runIndex = record.runs.firstIndex(where: { $0.id == runId }) else {
+                throw PlannerCoreError.runNotFound(runId)
+            }
+            let trimmed = assigneeId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var state = record.runs[runIndex].nodeStates[nodeId] ?? RunNodeState(nodeId: nodeId)
+            state.assigneeId = trimmed.isEmpty ? nil : trimmed
+            record.runs[runIndex].nodeStates[nodeId] = state
+            record.runs[runIndex].updatedAt = Date()
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: trimmed.isEmpty ? "Cleared delivery assignee" : "Updated delivery assignee"
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record.runs[runIndex]
         }
     }
 
@@ -3044,10 +3116,21 @@ enum PlannerBoardBridge {
     static func startRun(
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
-        actorUserId: String? = nil
+        actorUserId: String? = nil,
+        title: String? = nil,
+        summary: String? = nil,
+        responsibleUserId: String? = nil,
+        linkedArtifactRefs: [String] = []
     ) throws -> WorkflowRun {
         _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        return try store.startRun(canvasId: canvasId, trigger: actorUserId ?? "unknown")
+        return try store.startRun(
+            canvasId: canvasId,
+            trigger: actorUserId ?? "unknown",
+            title: title,
+            summary: summary,
+            responsibleUserId: responsibleUserId,
+            linkedArtifactRefs: linkedArtifactRefs
+        )
     }
 
     /// All runs of a canvas — run history, creation order.
@@ -3071,6 +3154,27 @@ enum PlannerBoardBridge {
     /// Human-terminate a run.
     static func abortRun(runId: String) throws -> WorkflowRun {
         try store.abortRun(runId: runId)
+    }
+
+    static func updateRunNodeAssignee(
+        runId: String,
+        nodeId: String,
+        assigneeId: String?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> WorkflowRun {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        return try store.updateRunNodeAssignee(
+            canvasId: canvasId,
+            runId: runId,
+            nodeId: nodeId,
+            assigneeId: assigneeId
+        )
     }
 
     static func attachArtifact(
@@ -3341,6 +3445,38 @@ enum PlannerBoardBridge {
             let visibleNodes = state.access.role == .doer
                 ? state.nodes.filter { $0.doerId == actorId }
                 : state.nodes
+
+            let runs = (try? store.runs(canvasId: state.canvas.id)) ?? []
+            for run in runs {
+                let runStates = Array(run.nodeStates.values)
+                let attentionCount = runStates.filter { nodeState in
+                    nodeState.runState == .failed || nodeState.runState == .gateWait
+                }.count
+                let doneCount = runStates.filter { $0.runState == .done }.count
+                let totalCount = max(runStates.count, 1)
+                let includeForDoer = state.access.role != .doer || runStates.contains { nodeState in
+                    return nodeState.assigneeId == actorId
+                }
+                guard includeForDoer else { continue }
+                items.append(PlannerMonitorItem(
+                    id: "delivery-\(run.id)",
+                    kind: .delivery,
+                    canvasId: state.canvas.id,
+                    canvasTitle: state.canvas.title,
+                    nodeId: nil,
+                    nodeTitle: nil,
+                    deliveryId: run.id,
+                    proposalId: nil,
+                    proposalStatus: nil,
+                    summary: run.title,
+                    runState: nil,
+                    blockers: run.summary.map { [$0] } ?? [],
+                    needsOwnerReview: attentionCount > 0,
+                    doerId: run.responsibleUserId,
+                    riskRank: attentionCount > 0 ? 1 : (run.status == .active ? 3 : 5),
+                    nextAction: "\(doneCount)/\(totalCount) steps"
+                ))
+            }
 
             for node in visibleNodes {
                 guard let snapshot = statesByNodeId[node.id],

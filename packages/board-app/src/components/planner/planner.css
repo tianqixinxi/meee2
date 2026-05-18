@@ -121,7 +121,7 @@
   position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 440px);
+  grid-template-columns: minmax(0, 1fr) var(--planner-panel-width, 420px);
 }
 
 .planner-main--panel-collapsed {
@@ -172,6 +172,46 @@
   stroke-width: 2;
 }
 
+.planner-flow__edge .react-flow__edge-path {
+  stroke: rgba(168, 165, 155, 0.28);
+  stroke-width: 1.5;
+}
+
+.planner-flow__edge--not-reached .react-flow__edge-path {
+  stroke: rgba(168, 165, 155, 0.34);
+  stroke-width: 1.7;
+  stroke-dasharray: 4 6;
+}
+
+.planner-flow__edge--done .react-flow__edge-path {
+  stroke: rgba(127, 169, 130, 0.45);
+}
+
+.planner-flow__edge--attention .react-flow__edge-path {
+  stroke: rgba(194, 106, 106, 0.76);
+  stroke-width: 2;
+  stroke-dasharray: 8 7;
+  animation: planner-edge-flow 900ms linear infinite;
+}
+
+.planner-flow__edge--flow .react-flow__edge-path {
+  stroke: rgba(139, 169, 194, 0.7);
+  stroke-width: 2;
+  stroke-dasharray: 10 8;
+  animation: planner-edge-flow 860ms linear infinite;
+}
+
+.planner-flow__edge--preview .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2.2;
+  stroke-dasharray: 7 6;
+  animation: planner-edge-flow 760ms linear infinite;
+}
+
+@keyframes planner-edge-flow {
+  to { stroke-dashoffset: -18; }
+}
+
 .planner-flow__controls {
   overflow: hidden;
   border: 1px solid rgba(168, 165, 155, 0.18);
@@ -188,32 +228,102 @@
   fill: var(--text);
 }
 
-.planner-flow__minimap {
+.planner-overview-map {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 18;
   width: 220px;
   height: 144px;
-  margin: 0 12px 12px 0;
   overflow: hidden;
   border: 1px solid rgba(168, 165, 155, 0.22);
   border-radius: var(--radius-sm);
   background: rgba(26, 26, 24, 0.98);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.32);
+  color: var(--text-faint);
 }
 
-.planner-flow__minimap .react-flow__minimap-svg {
+.planner-overview-map svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.planner-flow__minimap .react-flow__minimap-mask {
-  fill: rgba(10, 10, 9, 0.34);
-  stroke: rgba(204, 120, 92, 0.72);
+.planner-overview-map > span {
+  display: grid;
+  height: 100%;
+  place-items: center;
+  font-size: 11px;
 }
 
-.planner-flow__minimap .react-flow__minimap-node {
-  stroke-width: 2;
-  fill-opacity: 1;
+.planner-overview-map__frame {
+  fill: rgba(30, 30, 28, 0.98);
+  stroke: rgba(168, 165, 155, 0.14);
+}
+
+.planner-overview-map__edge {
+  fill: none;
+  stroke: rgba(168, 165, 155, 0.22);
+  stroke-width: 1.35;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  shape-rendering: crispEdges;
   vector-effect: non-scaling-stroke;
+}
+
+.planner-overview-map__edge.is-attention,
+.planner-overview-map__edge.is-flow,
+.planner-overview-map__edge.is-preview {
+  stroke-width: 1.55;
+}
+
+.planner-overview-map__edge.is-attention {
+  stroke: rgba(194, 106, 106, 0.74);
+}
+
+.planner-overview-map__edge.is-flow {
+  stroke: rgba(139, 169, 194, 0.72);
+}
+
+.planner-overview-map__edge.is-preview {
+  stroke: rgba(204, 120, 92, 0.86);
+}
+
+.planner-overview-map__edge.is-done {
+  stroke: rgba(127, 169, 130, 0.54);
+}
+
+.planner-overview-map__edge.is-not-reached {
+  stroke: rgba(168, 165, 155, 0.36);
+  stroke-dasharray: 3 3;
+}
+
+.planner-overview-map__node {
+  fill: #2f2e2a;
+  stroke: rgba(168, 165, 155, 0.52);
+  stroke-width: 1.15;
+  shape-rendering: crispEdges;
+  vector-effect: non-scaling-stroke;
+}
+
+.planner-overview-map__node.is-done {
+  fill: #334033;
+  stroke: rgba(127, 169, 130, 0.78);
+}
+
+.planner-overview-map__node.is-attention {
+  fill: #503231;
+  stroke: rgba(194, 106, 106, 0.88);
+}
+
+.planner-overview-map__node.is-active {
+  fill: #33404a;
+  stroke: rgba(139, 169, 194, 0.82);
+}
+
+.planner-overview-map__node.is-not-reached {
+  fill: #2d2c29;
+  stroke: rgba(168, 165, 155, 0.52);
 }
 
 .planner-modal-backdrop {
@@ -525,6 +635,7 @@
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.24);
   color: var(--text);
   cursor: grab;
+  transition: opacity 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
 }
 
 .planner-node.is-selected {
@@ -554,6 +665,54 @@
 
 .planner-node--done {
   border-left-color: var(--success);
+}
+
+.planner-node--perception-done {
+  border-color: rgba(127, 169, 130, 0.24);
+  border-left-color: var(--success);
+  background: rgba(38, 45, 38, 0.92);
+}
+
+.planner-node--perception-attention {
+  border-color: rgba(194, 106, 106, 0.42);
+  border-left-color: var(--danger);
+  background: linear-gradient(180deg, rgba(55, 39, 37, 0.98), rgba(43, 35, 33, 0.96));
+  box-shadow: 0 0 0 1px rgba(194, 106, 106, 0.12), 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.planner-node--perception-active {
+  border-color: rgba(139, 169, 194, 0.36);
+  border-left-color: var(--info);
+  background: linear-gradient(180deg, rgba(39, 45, 50, 0.98), rgba(36, 39, 42, 0.96));
+}
+
+.planner-node--perception-active::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  border-radius: inherit;
+  border: 1px solid rgba(139, 169, 194, 0.18);
+  animation: planner-node-active-pulse 1.8s ease-in-out infinite;
+}
+
+.planner-node--perception-not-reached {
+  opacity: 0.62;
+  filter: saturate(0.72);
+  border-color: rgba(168, 165, 155, 0.14);
+  border-left-color: rgba(168, 165, 155, 0.28);
+  background: rgba(39, 38, 36, 0.86);
+}
+
+@keyframes planner-node-active-pulse {
+  0%, 100% {
+    opacity: 0.26;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.58;
+    transform: scale(1.012);
+  }
 }
 
 .planner-node--kind-session {
@@ -732,6 +891,41 @@
   line-height: 1.28;
 }
 
+.planner-node__responsible {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 9px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.planner-node__person-avatar {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  border: 1px dashed rgba(168, 165, 155, 0.45);
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.04);
+  color: var(--text-faint);
+}
+
+.planner-node__person-avatar.has-image {
+  border-style: solid;
+  border-color: rgba(168, 165, 155, 0.26);
+}
+
+.planner-node__person-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
 /* Secondary metadata: compact chip row, tighter and quieter than the title. */
 .planner-node__meta {
   flex-wrap: wrap;
@@ -880,7 +1074,19 @@
   color: var(--text);
 }
 
+.planner-node__primary-action {
+  width: 100%;
+  justify-content: center;
+  padding: 6px 9px;
+  border-color: rgba(204, 120, 92, 0.28);
+  background: rgba(204, 120, 92, 0.12);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .planner-side {
+  position: relative;
   min-height: 0;
   overflow: hidden;
   display: grid;
@@ -892,7 +1098,7 @@
 .planner-dialog-toggle {
   position: absolute;
   top: 12px;
-  right: 440px;
+  right: var(--planner-panel-width, 420px);
   z-index: 30;
   width: 30px;
   height: 30px;
@@ -914,6 +1120,42 @@
 .planner-dialog-toggle:hover {
   background: rgba(50, 49, 46, 0.96);
   color: var(--text);
+}
+
+.planner-side__resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  z-index: 3;
+  width: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.planner-side__resize::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 4px;
+  width: 1px;
+  background: rgba(168, 165, 155, 0.16);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.planner-side__resize:hover::after,
+.planner-panel-resizing .planner-side__resize::after {
+  background: rgba(204, 120, 92, 0.68);
+  box-shadow: 0 0 0 2px rgba(204, 120, 92, 0.12);
+}
+
+.planner-panel-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .planner-proposal-panel,
@@ -1656,6 +1898,16 @@
   padding: 18px 148px 28px 240px;
 }
 
+.planner-monitor__search input {
+  width: min(520px, 100%);
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(18, 18, 16, 0.72);
+  color: var(--text);
+  font-size: 13px;
+  padding: 10px 12px;
+}
+
 .planner-monitor__group {
   display: grid;
   gap: 9px;
@@ -1807,6 +2059,10 @@
     border-left: 0;
   }
 
+  .planner-side__resize {
+    display: none;
+  }
+
   .planner-dialog-toggle {
     right: 12px;
     border-right: 1px solid rgba(168, 165, 155, 0.2);
@@ -1900,6 +2156,13 @@
   .planner-flow__controls {
     transform: scale(0.9);
     transform-origin: bottom left;
+  }
+
+  .planner-overview-map {
+    width: 154px;
+    height: 100px;
+    right: 10px;
+    bottom: 10px;
   }
 
   .planner-node {
@@ -2034,30 +2297,47 @@
 
 .planner-flow__visibility {
   display: inline-flex;
-  border: 1px solid rgba(168, 165, 155, 0.2);
-  border-radius: var(--radius-sm);
-  background: rgba(31, 31, 29, 0.86);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 8px;
+  background: rgba(31, 31, 29, 0.78);
   overflow: hidden;
 }
 
 .planner-flow__visibility button {
-  border: none;
+  min-width: 68px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-faint);
   font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
-  padding: 5px 10px;
+  padding: 5px 9px;
   cursor: pointer;
 }
 
-.planner-flow__visibility button:not(:last-child) {
-  border-right: 1px solid rgba(168, 165, 155, 0.16);
+.planner-flow__visibility button.is-private {
+  color: rgba(245, 244, 239, 0.58);
 }
 
-.planner-flow__visibility button.is-active {
-  color: var(--text);
+.planner-flow__visibility button.is-private.is-active {
+  border-color: rgba(168, 165, 155, 0.34);
   background: rgba(245, 244, 239, 0.08);
+  color: rgba(245, 244, 239, 0.86);
+}
+
+.planner-flow__visibility button.is-public {
+  color: rgba(139, 169, 194, 0.86);
+}
+
+.planner-flow__visibility button.is-public.is-active {
+  border-color: rgba(139, 169, 194, 0.42);
+  background: rgba(139, 169, 194, 0.17);
+  color: #d8e9f7;
+  box-shadow: inset 0 0 0 1px rgba(139, 169, 194, 0.12);
 }
 
 .planner-flow__visibility button:disabled {
@@ -2077,11 +2357,71 @@
   letter-spacing: 0.03em;
 }
 
+.planner-visibility-confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 42;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(18, 18, 16, 0.42);
+}
+
+.planner-visibility-confirm {
+  width: min(420px, calc(100vw - 36px));
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: var(--radius);
+  background: rgba(35, 35, 32, 0.98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+}
+
+.planner-visibility-confirm--public {
+  border-color: rgba(139, 169, 194, 0.34);
+}
+
+.planner-visibility-confirm--private {
+  border-color: rgba(168, 165, 155, 0.28);
+}
+
+.planner-visibility-confirm__header {
+  display: grid;
+  gap: 4px;
+}
+
+.planner-visibility-confirm__header span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.planner-visibility-confirm__header strong {
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.planner-visibility-confirm p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.planner-visibility-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* -- Gaps 1-4 + 6: node actions in the inspector modal ------------------- */
 
 .planner-node-modal__tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border: 1px solid rgba(168, 165, 155, 0.16);
@@ -2102,6 +2442,38 @@
 .planner-node-modal__tabs button.is-active {
   background: rgba(245, 244, 239, 0.08);
   color: var(--text);
+}
+
+.planner-node-modal__action {
+  gap: 11px;
+}
+
+.planner-node-modal__action-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.planner-node-modal__action-summary > div {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+}
+
+.planner-node-modal__action-summary em {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.planner-node-modal__action-summary strong {
+  color: var(--text);
+  font-size: 13px;
 }
 
 .planner-node-output {
@@ -2426,6 +2798,7 @@
 /* -- P2 Run layer: mode toggle + run selector --------------------------- */
 
 .planner-run-selector {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2543,6 +2916,50 @@
   gap: 5px;
   color: var(--text-faint);
   font-size: 11px;
+}
+
+.planner-delivery-start {
+  position: absolute;
+  top: 48px;
+  left: 14px;
+  z-index: 35;
+  width: min(320px, calc(100vw - 36px));
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(24, 24, 22, 0.98);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.46);
+}
+
+.planner-delivery-start label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.planner-delivery-start input,
+.planner-delivery-start textarea {
+  width: 100%;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-xs, 4px);
+  background: rgba(10, 10, 9, 0.68);
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 7px 8px;
+  resize: vertical;
+}
+
+.planner-delivery-start__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
 }
 
 /* -- P2 Run layer: onboarding / node card mode / history / link attach --- */

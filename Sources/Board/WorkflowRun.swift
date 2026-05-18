@@ -64,6 +64,20 @@ struct NodeAttempt: Codable, Equatable {
 /// Named `RunNodeState` (not the spec's `NodeRunState`) because `NodeRunState`
 /// is already an enum elsewhere in the planner core.
 struct RunNodeState: Codable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case nodeId
+        case runState
+        case attempts
+        case sessionId
+        case chatThreadId
+        case assigneeId
+        case artifactIds
+        case outputRefs
+        case startedAt
+        case finishedAt
+        case nextAction
+    }
+
     var nodeId: String
     /// Current run-state of the node in this run.
     var runState: PlannerWorkflowRunState
@@ -74,8 +88,13 @@ struct RunNodeState: Codable, Equatable {
     /// not modelled; re-dispatch starts a new attempt instead.
     var sessionId: String?
     var chatThreadId: String?
+    /// Actual responsible person for this node in this delivery. Falls back to
+    /// the blueprint node's default assignee when nil.
+    var assigneeId: String?
     /// Artifacts produced by this node *in this run*.
     var artifactIds: [String]
+    /// User-facing output references produced by this node in this run.
+    var outputRefs: [String]
     var startedAt: Date?
     var finishedAt: Date?
     /// What the user should do next for this node, recomputed by
@@ -88,7 +107,9 @@ struct RunNodeState: Codable, Equatable {
         attempts: [NodeAttempt] = [],
         sessionId: String? = nil,
         chatThreadId: String? = nil,
+        assigneeId: String? = nil,
         artifactIds: [String] = [],
+        outputRefs: [String] = [],
         startedAt: Date? = nil,
         finishedAt: Date? = nil,
         nextAction: RunNextAction? = nil
@@ -98,10 +119,27 @@ struct RunNodeState: Codable, Equatable {
         self.attempts = attempts
         self.sessionId = sessionId
         self.chatThreadId = chatThreadId
+        self.assigneeId = assigneeId
         self.artifactIds = artifactIds
+        self.outputRefs = outputRefs
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.nextAction = nextAction
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.nodeId = try container.decode(String.self, forKey: .nodeId)
+        self.runState = try container.decode(PlannerWorkflowRunState.self, forKey: .runState)
+        self.attempts = try container.decodeIfPresent([NodeAttempt].self, forKey: .attempts) ?? []
+        self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        self.chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
+        self.assigneeId = try container.decodeIfPresent(String.self, forKey: .assigneeId)
+        self.artifactIds = try container.decodeIfPresent([String].self, forKey: .artifactIds) ?? []
+        self.outputRefs = try container.decodeIfPresent([String].self, forKey: .outputRefs) ?? []
+        self.startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        self.finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        self.nextAction = try container.decodeIfPresent(RunNextAction.self, forKey: .nextAction)
     }
 }
 
@@ -109,10 +147,34 @@ struct RunNodeState: Codable, Equatable {
 
 /// One execution of a planner canvas's blueprint.
 struct WorkflowRun: Codable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case canvasId
+        case runIndex
+        case title
+        case summary
+        case responsibleUserId
+        case linkedArtifactRefs
+        case updatedAt
+        case status
+        case trigger
+        case startedAt
+        case finishedAt
+        case nodeStates
+        case events
+    }
+
     var id: String
     var canvasId: String
     /// 1-based, auto-incrementing within the canvas. Run #1, #2, …
     var runIndex: Int
+    /// User-facing delivery name. The internal run index remains only a
+    /// secondary/debug identifier.
+    var title: String
+    var summary: String?
+    var responsibleUserId: String?
+    var linkedArtifactRefs: [String]
+    var updatedAt: Date
     var status: WorkflowRunStatus
     /// Who/what started the run — an actor id, `"schedule"`, or
     /// `"template-instantiate"`.
@@ -128,6 +190,11 @@ struct WorkflowRun: Codable, Equatable {
         id: String,
         canvasId: String,
         runIndex: Int,
+        title: String? = nil,
+        summary: String? = nil,
+        responsibleUserId: String? = nil,
+        linkedArtifactRefs: [String] = [],
+        updatedAt: Date? = nil,
         status: WorkflowRunStatus = .active,
         trigger: String,
         startedAt: Date = Date(),
@@ -138,12 +205,43 @@ struct WorkflowRun: Codable, Equatable {
         self.id = id
         self.canvasId = canvasId
         self.runIndex = runIndex
+        self.title = WorkflowRun.normalizedTitle(title, runIndex: runIndex)
+        self.summary = summary
+        self.responsibleUserId = responsibleUserId
+        self.linkedArtifactRefs = linkedArtifactRefs
+        self.updatedAt = updatedAt ?? startedAt
         self.status = status
         self.trigger = trigger
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.nodeStates = nodeStates
         self.events = events
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.canvasId = try container.decode(String.self, forKey: .canvasId)
+        self.runIndex = try container.decode(Int.self, forKey: .runIndex)
+        self.title = WorkflowRun.normalizedTitle(
+            try container.decodeIfPresent(String.self, forKey: .title),
+            runIndex: runIndex
+        )
+        self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        self.responsibleUserId = try container.decodeIfPresent(String.self, forKey: .responsibleUserId)
+        self.linkedArtifactRefs = try container.decodeIfPresent([String].self, forKey: .linkedArtifactRefs) ?? []
+        self.status = try container.decode(WorkflowRunStatus.self, forKey: .status)
+        self.trigger = try container.decode(String.self, forKey: .trigger)
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
+        self.finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        self.updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? finishedAt ?? startedAt
+        self.nodeStates = try container.decodeIfPresent([String: RunNodeState].self, forKey: .nodeStates) ?? [:]
+        self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
+    }
+
+    private static func normalizedTitle(_ title: String?, runIndex: Int) -> String {
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Delivery #\(runIndex)" : trimmed
     }
 }
 
@@ -157,16 +255,30 @@ extension WorkflowRun {
         runIndex: Int,
         trigger: String,
         nodes: [PlanningNode],
+        title: String? = nil,
+        summary: String? = nil,
+        responsibleUserId: String? = nil,
+        linkedArtifactRefs: [String] = [],
         now: Date = Date()
     ) -> WorkflowRun {
         var states: [String: RunNodeState] = [:]
         for node in nodes {
-            states[node.id] = RunNodeState(nodeId: node.id, runState: .pending)
+            let defaultAssignee = node.doerId.trimmingCharacters(in: .whitespacesAndNewlines)
+            states[node.id] = RunNodeState(
+                nodeId: node.id,
+                runState: .pending,
+                assigneeId: defaultAssignee.isEmpty ? nil : defaultAssignee
+            )
         }
         return WorkflowRun(
             id: "run-\(canvasId)-\(runIndex)-\(UUID().uuidString.lowercased().prefix(8))",
             canvasId: canvasId,
             runIndex: runIndex,
+            title: title,
+            summary: summary,
+            responsibleUserId: responsibleUserId,
+            linkedArtifactRefs: linkedArtifactRefs,
+            updatedAt: now,
             status: .active,
             trigger: trigger,
             startedAt: now,
@@ -189,12 +301,18 @@ extension WorkflowRun {
             let artifactIds = artifacts
                 .filter { $0.nodeId == node.id }
                 .map { $0.id }
+            let outputRefs = artifacts
+                .filter { $0.nodeId == node.id }
+                .map { $0.reference }
+            let defaultAssignee = node.doerId.trimmingCharacters(in: .whitespacesAndNewlines)
             states[node.id] = RunNodeState(
                 nodeId: node.id,
                 runState: runState,
                 attempts: [],
                 sessionId: node.sessionId,
-                artifactIds: artifactIds
+                assigneeId: defaultAssignee.isEmpty ? nil : defaultAssignee,
+                artifactIds: artifactIds,
+                outputRefs: outputRefs
             )
         }
         let inferredStatus = inferStatus(from: nodes.map { $0.workflowRunState ?? .pending })
@@ -202,6 +320,9 @@ extension WorkflowRun {
             id: "run-\(canvasId)-1-migrated",
             canvasId: canvasId,
             runIndex: 1,
+            title: "Existing work",
+            summary: "Created from planner state saved before Delivery tracking.",
+            updatedAt: now,
             status: inferredStatus,
             trigger: "migration",
             startedAt: now,

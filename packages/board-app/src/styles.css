@@ -189,6 +189,7 @@ textarea {
 .workspace-rail__button {
   position: relative;
   display: inline-flex;
+  box-sizing: border-box;
   width: 42px;
   height: 42px;
   flex: 0 0 42px;
@@ -204,6 +205,7 @@ textarea {
 .workspace-rail__avatar {
   overflow: hidden;
   margin-bottom: 6px;
+  padding: 0;
   border-radius: 999px;
   border-color: rgba(204, 120, 92, 0.18);
   background: color-mix(in srgb, var(--accent) 18%, var(--bg-paper));
@@ -216,8 +218,9 @@ textarea {
 
 .workspace-rail__avatar.has-image {
   border-color: rgba(168, 165, 155, 0.2);
-  background: rgba(245, 244, 239, 0.06);
+  background: transparent;
   color: transparent;
+  line-height: 0;
 }
 
 .workspace-rail__avatar.has-user-icon {
@@ -230,6 +233,7 @@ textarea {
   display: block;
   width: 100%;
   height: 100%;
+  border-radius: inherit;
   object-fit: cover;
 }
 
@@ -245,7 +249,7 @@ textarea {
 .workspace-rail__avatar.has-image:active,
 .workspace-rail__avatar.has-image:focus {
   border-color: rgba(168, 165, 155, 0.28);
-  background: rgba(245, 244, 239, 0.06);
+  background: transparent;
   color: transparent;
 }
 
@@ -1530,19 +1534,23 @@ textarea {
   }
 
   .canvas-toolbar {
-    top: 12px;
-    left: 10px;
-    width: min(260px, calc(100vw - 76px));
+    inset: 0;
+    width: auto;
   }
 
-  .canvas-toolbar__main {
-    max-width: 100%;
+  .canvas-toolbar__switcher {
+    left: 62px;
+    bottom: 12px;
   }
 
   .canvas-toolbar__trigger {
-    max-width: 100%;
+    max-width: min(230px, calc(100vw - 132px));
     grid-template-columns: 16px minmax(0, 1fr) auto 14px;
     gap: 7px;
+  }
+
+  .canvas-toolbar__switcher-label {
+    display: none;
   }
 
   .canvas-toolbar__badge {
@@ -1550,6 +1558,7 @@ textarea {
   }
 
   .canvas-toolbar__panel {
+    bottom: calc(100% + 8px);
     width: min(300px, calc(100vw - 76px));
   }
 }
@@ -1646,30 +1655,28 @@ textarea {
 
 .canvas-toolbar {
   position: absolute;
-  top: 18px;
-  left: 18px;
+  inset: 0;
   z-index: 240;
-  width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
-  pointer-events: auto;
+  width: auto;
+  pointer-events: none;
   color: var(--text);
 }
 
 html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
-  left: calc(var(--titlebar-lights-right, 72px) + 44px);
-  width: min(360px, calc(100vw - var(--titlebar-lights-right, 72px) - 64px));
+  width: auto;
 }
 
-.canvas-toolbar__main {
+.canvas-toolbar__switcher {
+  position: absolute;
   display: inline-flex;
   align-items: center;
-  max-width: 100%;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-paper) 84%, rgba(0, 0, 0, 0.28));
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(14px);
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.canvas-toolbar__switcher {
+  left: 74px;
+  bottom: 18px;
 }
 
 .canvas-toolbar__trigger,
@@ -1686,20 +1693,28 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .canvas-toolbar__trigger {
   min-width: 0;
-  max-width: 300px;
-  height: 30px;
+  max-width: 240px;
+  height: 34px;
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto 14px;
+  grid-template-columns: 16px auto minmax(0, 1fr) 14px;
   align-items: center;
   gap: 7px;
   padding: 0 9px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
   text-align: left;
 }
 
 .canvas-toolbar__info {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
 }
 
 .canvas-toolbar__trigger:hover,
@@ -1708,6 +1723,23 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 .canvas-toolbar__submit:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
+}
+
+.canvas-toolbar__switcher-label {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.canvas-toolbar__switcher-current {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .canvas-toolbar__name {
@@ -1735,7 +1767,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .canvas-toolbar__panel {
   position: absolute;
-  top: calc(100% + 7px);
+  bottom: calc(100% + 8px);
   left: 0;
   z-index: 250;
   width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
@@ -1750,11 +1782,42 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   backdrop-filter: blur(14px);
 }
 
+.canvas-toolbar__search {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  margin-bottom: 7px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--text-faint);
+}
+
+.canvas-toolbar__search input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.canvas-toolbar__empty {
+  padding: 14px 8px;
+  color: var(--text-faint);
+  font-size: 12px;
+  text-align: center;
+}
+
 .canvas-toolbar__list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: min(260px, calc(100vh - 260px));
+  max-height: min(260px, calc(100vh - 286px));
   overflow: auto;
 }
 
@@ -1806,9 +1869,31 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   flex-shrink: 0;
 }
 
+.canvas-toolbar__visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-weight: 700;
+}
+
+.canvas-toolbar__visibility--public {
+  border-color: rgba(139, 169, 194, 0.28);
+  background: rgba(139, 169, 194, 0.12);
+  color: #B9D4EA;
+}
+
+.canvas-toolbar__visibility--private {
+  border-color: rgba(168, 165, 155, 0.2);
+  background: rgba(245, 244, 239, 0.055);
+  color: var(--text-dim);
+}
+
 .canvas-toolbar__actions {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 4px;
   padding-top: 6px;
   margin-top: 6px;
@@ -1915,8 +2000,154 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   background: color-mix(in srgb, var(--accent) 84%, #221512);
 }
 
+.canvas-toolbar__scope-toggle button:first-child.is-selected {
+  color: var(--text);
+  background: rgba(245, 244, 239, 0.12);
+}
+
+.canvas-toolbar__scope-toggle button:last-child.is-selected {
+  color: #10202b;
+  background: #B9D4EA;
+}
+
 .canvas-confirm-modal {
   width: min(440px, calc(100vw - 32px));
+}
+
+.canvas-info-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+
+.canvas-info-modal__tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.canvas-info-modal__tabs button {
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.canvas-info-modal__tabs button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.canvas-info-modal__tabs button.is-active {
+  color: #19110F;
+  background: color-mix(in srgb, var(--accent) 84%, #221512);
+}
+
+.canvas-info-modal__body {
+  gap: 10px;
+}
+
+.canvas-info-modal__body p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.canvas-info-modal__row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.canvas-info-modal__row span,
+.canvas-info-modal__settings label > span {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.canvas-info-modal__row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.canvas-info-modal__row strong.is-mono {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.canvas-info-modal__settings {
+  display: grid;
+  gap: 10px;
+}
+
+.canvas-info-modal__settings label {
+  display: grid;
+  gap: 6px;
+}
+
+.canvas-info-modal__settings input {
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #242421;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 10px;
+  outline: none;
+}
+
+.canvas-info-modal__settings input:focus {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+}
+
+.canvas-info-modal__settings button {
+  justify-self: start;
+}
+
+.canvas-info-modal__danger {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.canvas-info-modal__danger svg {
+  color: #FCA5A5;
+}
+
+.canvas-info-modal__danger strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.canvas-info-modal__danger p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .arrange-confirm-modal {

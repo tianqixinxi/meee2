@@ -11,16 +11,21 @@ export function runNextActionLabel(action: RunNextAction): string {
     case 'waiting-on-upstream':
       return 'Waiting on upstream steps'
     case 'ready-to-dispatch':
-      return 'Ready — dispatch or bind a session'
+      return 'Ready to start work'
     case 'in-progress':
       return 'In progress — open the session'
     case 'gate-review':
       return 'Awaiting gate review'
     case 'confirm-artifacts':
-      return 'Done — confirm artifacts are attached'
+      return 'Done — review output'
     case 'needs-attention':
       return 'Failed — needs attention'
   }
+}
+
+export interface StartDeliveryInput {
+  title: string
+  summary?: string
 }
 
 interface Props {
@@ -29,7 +34,7 @@ interface Props {
   runs: WorkflowRun[]
   selectedRunId: string | null
   onSelectRun: (runId: string) => void
-  onStartRun: () => void
+  onStartRun: (input: StartDeliveryInput) => void
   onAbortRun: (runId: string) => void
   onViewHistory: () => void
   busy: boolean
@@ -37,8 +42,8 @@ interface Props {
 
 const STATUS_LABEL: Record<WorkflowRunStatus, string> = {
   active: 'In progress',
-  completed: 'Completed',
-  failed: 'Failed',
+  completed: 'Done',
+  failed: 'Needs attention',
   aborted: 'Aborted',
 }
 
@@ -58,10 +63,20 @@ function runProgress(run: WorkflowRun): { done: number; total: number } {
   }
 }
 
-/**
- * Top-bar control for the planner: a Design/Run mode toggle plus, in Run mode,
- * a selector over the canvas's workflow runs (workflow-run-spec §8.2).
- */
+function runTitle(run: WorkflowRun): string {
+  return run.title?.trim() || `Delivery #${run.runIndex}`
+}
+
+function runRiskCount(run: WorkflowRun): number {
+  return Object.values(run.nodeStates).filter(
+    (state) =>
+      state.runState === 'failed' ||
+      state.runState === 'gate-wait' ||
+      state.nextAction === 'needs-attention' ||
+      state.nextAction === 'gate-review',
+  ).length
+}
+
 export function RunSelector({
   mode,
   onModeChange,
@@ -74,7 +89,19 @@ export function RunSelector({
   busy,
 }: Props) {
   const [open, setOpen] = useState(false)
+  const [startOpen, setStartOpen] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [summaryDraft, setSummaryDraft] = useState('')
   const selectedRun = runs.find((run) => run.id === selectedRunId) ?? null
+  const submitStart = () => {
+    const title = titleDraft.trim()
+    if (!title) return
+    onStartRun({ title, summary: summaryDraft.trim() || undefined })
+    setTitleDraft('')
+    setSummaryDraft('')
+    setStartOpen(false)
+    setOpen(false)
+  }
 
   return (
     <div className="planner-run-selector">
@@ -83,17 +110,17 @@ export function RunSelector({
           type="button"
           className={mode === 'design' ? 'is-active' : ''}
           onClick={() => onModeChange('design')}
-          title="Design mode — edit the blueprint (steps, dependencies, gates). Changes go through proposals."
+          title="Plan mode — edit the workflow blueprint. Changes go through proposals."
         >
-          <Pencil size={12} aria-hidden /> Design
+          <Pencil size={12} aria-hidden /> Plan
         </button>
         <button
           type="button"
           className={mode === 'run' ? 'is-active' : ''}
           onClick={() => onModeChange('run')}
-          title="Run mode — watch one execution of the blueprint."
+          title="Work mode — execute one named delivery from this Plan."
         >
-          <Play size={12} aria-hidden /> Run
+          <Play size={12} aria-hidden /> Work
         </button>
       </div>
 
@@ -104,10 +131,10 @@ export function RunSelector({
               type="button"
               className="planner-run-selector__start primary"
               disabled={busy}
-              onClick={onStartRun}
-              title="A run executes this blueprint once — it tracks its own progress, sessions and artifacts."
+              onClick={() => setStartOpen(true)}
+              title="Start a named Delivery from this Plan."
             >
-              <Play size={12} aria-hidden /> Start first run
+              <Play size={12} aria-hidden /> Start delivery
             </button>
           ) : (
             <div className="planner-run-selector__picker">
@@ -120,11 +147,11 @@ export function RunSelector({
                 {selectedRun ? (
                   <>
                     <span>{STATUS_GLYPH[selectedRun.status]}</span>
-                    Run #{selectedRun.runIndex}
+                    {runTitle(selectedRun)}
                     <em>{STATUS_LABEL[selectedRun.status]}</em>
                   </>
                 ) : (
-                  <span>Select a run</span>
+                  <span>Select delivery</span>
                 )}
                 <ChevronDown size={13} aria-hidden />
               </button>
@@ -144,9 +171,10 @@ export function RunSelector({
                         }}
                       >
                         <span>{STATUS_GLYPH[run.status]}</span>
-                        Run #{run.runIndex}
+                        {runTitle(run)}
                         <em>
                           {progress.done}/{progress.total} steps · {STATUS_LABEL[run.status]}
+                          {runRiskCount(run) > 0 ? ` · ${runRiskCount(run)} needs attention` : ''}
                         </em>
                       </button>
                     )
@@ -161,7 +189,7 @@ export function RunSelector({
                       setOpen(false)
                     }}
                   >
-                    <History size={12} aria-hidden /> View all runs
+                    <History size={12} aria-hidden /> View all deliveries
                   </button>
                   <button
                     type="button"
@@ -169,11 +197,10 @@ export function RunSelector({
                     className="planner-run-selector__menu-action"
                     disabled={busy}
                     onClick={() => {
-                      onStartRun()
-                      setOpen(false)
+                      setStartOpen(true)
                     }}
                   >
-                    <Play size={12} aria-hidden /> Start new run
+                    <Play size={12} aria-hidden /> Start delivery
                   </button>
                   {selectedRun?.status === 'active' && (
                     <button
@@ -186,7 +213,7 @@ export function RunSelector({
                         setOpen(false)
                       }}
                     >
-                      <Square size={12} aria-hidden /> Abort run #{selectedRun.runIndex}
+                      <Square size={12} aria-hidden /> Abort delivery
                     </button>
                   )}
                 </div>
@@ -194,11 +221,44 @@ export function RunSelector({
             </div>
           )}
           {selectedRun && (
-            <span className="planner-run-selector__progress" aria-label="Run progress">
+            <span className="planner-run-selector__progress" aria-label="Delivery progress">
               <History size={12} aria-hidden />
               {runProgress(selectedRun).done}/{runProgress(selectedRun).total} steps
             </span>
           )}
+        </div>
+      )}
+      {startOpen && (
+        <div className="planner-delivery-start" role="dialog" aria-label="Start delivery">
+          <label>
+            Delivery name
+            <input
+              autoFocus
+              value={titleDraft}
+              onChange={(event) => setTitleDraft(event.target.value)}
+              placeholder="e.g. Planner MVP"
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') submitStart()
+                if (event.key === 'Escape') setStartOpen(false)
+              }}
+            />
+          </label>
+          <label>
+            Summary
+            <textarea
+              value={summaryDraft}
+              onChange={(event) => setSummaryDraft(event.target.value)}
+              placeholder="What should this delivery accomplish?"
+            />
+          </label>
+          <div className="planner-delivery-start__actions">
+            <button type="button" onClick={() => setStartOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className="primary" disabled={busy || !titleDraft.trim()} onClick={submitStart}>
+              Start delivery
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -427,6 +427,9 @@ public final class BoardServer {
         // P1 Run layer — start / list / inspect / abort workflow runs.
         server.POST["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.startPlannerRun)
         server.GET["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.listPlannerRuns)
+        server.POST["/api/planner/canvases/:id/deliveries"] = BoardServer.cors(BoardAPI.startPlannerRun)
+        server.GET["/api/planner/canvases/:id/deliveries"] = BoardServer.cors(BoardAPI.listPlannerRuns)
+        server.PATCH["/api/planner/canvases/:id/deliveries/:deliveryId/nodes/:nodeId/assignee"] = BoardServer.cors(BoardAPI.updatePlannerDeliveryNodeAssignee)
         server.GET["/api/planner/runs/:runId"] = BoardServer.cors(BoardAPI.getPlannerRun)
         server.POST["/api/planner/runs/:runId/abort"] = BoardServer.cors(BoardAPI.abortPlannerRun)
         server.GET["/api/coordination-groups"] = BoardServer.cors(BoardAPI.listCoordinationGroups)

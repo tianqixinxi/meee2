@@ -15,6 +15,7 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 export function WorkspaceMonitor() {
   const [monitor, setMonitor] = useState<PlannerMonitorState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
 
   const loadMonitor = useCallback(() => {
     setError(null)
@@ -28,17 +29,35 @@ export function WorkspaceMonitor() {
   }, [loadMonitor])
 
   const groups = useMemo(() => {
-    const items = monitor?.items ?? []
+    const term = query.trim().toLowerCase()
+    const items = (monitor?.items ?? []).filter((item) => {
+      if (!term) return true
+      return [
+        item.summary,
+        item.canvasTitle,
+        item.nodeTitle ?? '',
+        item.nextAction ?? '',
+      ].some((value) => value.toLowerCase().includes(term))
+    })
     return [
+      { key: 'delivery', label: 'Deliveries', items: items.filter((item) => item.kind === 'delivery') },
       { key: 'risk', label: 'Blocked / Review', items: items.filter((item) => item.riskRank <= 1) },
       { key: 'active', label: 'Running / Planning', items: items.filter((item) => item.riskRank === 2 || item.riskRank === 3) },
       { key: 'waiting', label: 'Waiting', items: items.filter((item) => item.riskRank >= 4) },
     ]
-  }, [monitor])
+  }, [monitor, query])
 
   return (
     <section className="planner-monitor" aria-label="Workspace monitor">
       <div className="planner-monitor__body">
+        <div className="planner-monitor__search">
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search deliveries, canvases, nodes"
+            aria-label="Search deliveries"
+          />
+        </div>
         {error && <div className="planner-proposal-panel__error">{error}</div>}
         {!monitor && !error ? (
           <div className="planner-empty-state">

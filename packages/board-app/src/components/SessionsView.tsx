@@ -12,13 +12,13 @@ type SessionFilter = 'all' | 'attention' | 'unread'
 
 export function SessionsView({ state, unreadSids }: Props) {
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<SessionFilter>('all')
+  const [filter, setFilter] = useState<SessionFilter>('attention')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
   const sessions = state?.sessions ?? []
   const attentionCount = useMemo(
-    () => sessions.filter((session) => sessionNeedsAttention(session)).length,
-    [sessions],
+    () => sessions.filter((session) => sessionNeedsAttention(session) || unreadSids.has(session.id)).length,
+    [sessions, unreadSids],
   )
   const unreadCount = useMemo(
     () => sessions.filter((session) => unreadSids.has(session.id)).length,
@@ -29,11 +29,11 @@ export function SessionsView({ state, unreadSids }: Props) {
     return sessions
       .filter((session) => sessionMatchesQuery(session, normalized))
       .filter((session) => {
-        if (filter === 'attention') return sessionNeedsAttention(session)
+        if (filter === 'attention') return sessionNeedsAttention(session) || unreadSids.has(session.id)
         if (filter === 'unread') return unreadSids.has(session.id)
         return true
       })
-      .sort(compareSessions)
+      .sort((a, b) => compareSessions(a, b, unreadSids))
   }, [filter, query, sessions, unreadSids])
 
   const openSession = async (session: Session) => {
@@ -119,7 +119,7 @@ function SessionRow({
   unread: boolean
   onOpen: () => void
 }) {
-  const attention = sessionNeedsAttention(session)
+  const attention = sessionNeedsAttention(session) || unread
   const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
   return (
     <article
@@ -159,7 +159,7 @@ function SessionRow({
         {context && <span>{context}</span>}
       </div>
       <div className="sessions-row__signal">
-        {attention ? attentionReason(session) : session.lastActivity ? relativeTime(session.lastActivity) : 'No activity'}
+        {attention ? attentionReason(session, unread) : session.lastActivity ? relativeTime(session.lastActivity) : 'No activity'}
       </div>
       <div className="sessions-row__actions">
         {openError && <span>Open failed</span>}
@@ -203,7 +203,7 @@ function sessionNeedsAttention(session: Session): boolean {
     || Boolean(session.pendingPermissionTool)
 }
 
-function attentionReason(session: Session): string {
+function attentionReason(session: Session, unread = false): string {
   if (session.pendingPermissionTool) {
     return `Permission required: ${session.pendingPermissionTool}`
   }
@@ -215,6 +215,9 @@ function attentionReason(session: Session): string {
   }
   if (session.status === 'waitingForUser') {
     return 'Waiting for user response'
+  }
+  if (unread) {
+    return 'Unread session activity'
   }
   return 'Permission required'
 }
@@ -250,8 +253,10 @@ function sessionMatchesQuery(session: Session, query: string): boolean {
   return values.some((value) => value?.toLowerCase().includes(query))
 }
 
-function compareSessions(a: Session, b: Session): number {
-  const attentionDelta = Number(sessionNeedsAttention(b)) - Number(sessionNeedsAttention(a))
+function compareSessions(a: Session, b: Session, unreadSids: Set<string>): number {
+  const attentionDelta =
+    Number(sessionNeedsAttention(b) || unreadSids.has(b.id)) -
+    Number(sessionNeedsAttention(a) || unreadSids.has(a.id))
   if (attentionDelta !== 0) return attentionDelta
   const workingDelta = Number(isWorkingSession(b)) - Number(isWorkingSession(a))
   if (workingDelta !== 0) return workingDelta

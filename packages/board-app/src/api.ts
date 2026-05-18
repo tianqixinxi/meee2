@@ -834,19 +834,29 @@ export function dispatchPlannerNodeSession(
 
 // -- P1/P3: Workflow Run layer --------------------------------------------
 
-/** Start a new workflow run over the canvas's current node structure. */
-export async function startPlannerRun(canvasId: string): Promise<WorkflowRun> {
+export interface StartPlannerDeliveryInput {
+  title: string
+  summary?: string
+  responsibleUserId?: string | null
+  linkedArtifactRefs?: string[]
+}
+
+/** Start a new Delivery over the canvas's current Plan. */
+export async function startPlannerRun(
+  canvasId: string,
+  input?: StartPlannerDeliveryInput,
+): Promise<WorkflowRun> {
   const res = await jsonRequest<{ run: WorkflowRun }>(
-    `/api/planner/canvases/${encodeURIComponent(canvasId)}/runs`,
-    { method: 'POST', body: '{}' },
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries`,
+    { method: 'POST', body: JSON.stringify(input ?? {}) },
   )
   return res.run
 }
 
-/** Run history for a canvas (creation order). */
+/** Delivery history for a canvas (creation order). */
 export async function fetchPlannerRuns(canvasId: string): Promise<WorkflowRun[]> {
   const res = await jsonRequest<{ runs: WorkflowRun[] }>(
-    `/api/planner/canvases/${encodeURIComponent(canvasId)}/runs`,
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries`,
   )
   return res.runs
 }
@@ -864,6 +874,19 @@ export async function abortPlannerRun(runId: string): Promise<WorkflowRun> {
   const res = await jsonRequest<{ run: WorkflowRun }>(
     `/api/planner/runs/${encodeURIComponent(runId)}/abort`,
     { method: 'POST', body: '{}' },
+  )
+  return res.run
+}
+
+export async function updatePlannerDeliveryNodeAssignee(
+  canvasId: string,
+  deliveryId: string,
+  nodeId: string,
+  assigneeId: string | null,
+): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries/${encodeURIComponent(deliveryId)}/nodes/${encodeURIComponent(nodeId)}/assignee`,
+    { method: 'PATCH', body: JSON.stringify({ assigneeId }) },
   )
   return res.run
 }

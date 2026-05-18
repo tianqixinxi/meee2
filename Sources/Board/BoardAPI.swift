@@ -420,11 +420,58 @@ enum BoardAPI {
 
     /// POST /api/planner/canvases/:id/runs — start a new workflow run.
     static func startPlannerRun(_ req: HttpRequest) -> HttpResponse {
+        struct StartRunRequest: Decodable {
+            let title: String?
+            let summary: String?
+            let responsibleUserId: String?
+            let linkedArtifactRefs: [String]?
+        }
+
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
+        let body = decodeJSONBody(req, as: StartRunRequest.self)
+        let title = body?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title?.isEmpty != true else {
+            return errorResponse("bad_request", "delivery title is required", status: 400)
+        }
         do {
             let run = try PlannerBoardBridge.startRun(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId(),
+                title: title,
+                summary: body?.summary,
+                responsibleUserId: body?.responsibleUserId,
+                linkedArtifactRefs: body?.linkedArtifactRefs ?? []
+            )
+            return jsonResponse(WorkflowRunEnvelope(run: run))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// PATCH /api/planner/canvases/:id/deliveries/:deliveryId/nodes/:nodeId/assignee
+    static func updatePlannerDeliveryNodeAssignee(_ req: HttpRequest) -> HttpResponse {
+        struct AssigneeRequest: Decodable {
+            let assigneeId: String?
+        }
+
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let deliveryId = req.params[":deliveryId"], !deliveryId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas, delivery, or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: AssigneeRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"assigneeId\": String?}", status: 400)
+        }
+        do {
+            let run = try PlannerBoardBridge.updateRunNodeAssignee(
+                runId: deliveryId,
+                nodeId: nodeId,
+                assigneeId: body.assigneeId,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()

@@ -10,25 +10,27 @@ import type {
 import type { PlannerMode } from './RunSelector'
 
 export type PlannerPreviewKind = 'none' | 'added' | 'updated'
+export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active'
+export type PlannerEdgePerception = PlannerNodePerception | 'preview' | 'flow'
 
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
   previewKind: PlannerPreviewKind
+  perception: PlannerNodePerception
   /** Design vs Run mode — the card collapses execution fields in Design. */
   mode: PlannerMode
   /** This node's state in the selected run, when one is being viewed. */
   runNodeState: RunNodeState | null
-  ownerLabel?: string
-  ownerAvatarUrl?: string
-  doerLabel?: string
-  doerAvatarUrl?: string
+  hasSelectedDelivery: boolean
+  responsibleLabel?: string
+  responsibleAvatarUrl?: string
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
-export type PlannerGraphEdge = Edge<{ preview: boolean }>
+export type PlannerGraphEdge = Edge<{ preview: boolean; perception: PlannerEdgePerception }>
 
 interface PlannerGraphInput {
   nodes: PlanningNode[]
@@ -69,19 +71,35 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         node,
         state: stateByNodeId.get(node.id) ?? null,
         previewKind,
+        perception: perceptionForNode(
+          node,
+          stateByNodeId.get(node.id) ?? null,
+          input.mode,
+          input.runNodeStates?.[node.id] ?? null,
+        ),
         mode: input.mode,
         runNodeState: input.runNodeStates?.[node.id] ?? null,
-        ownerLabel: resolveUserLabel(input.ownerId, input.displayNameByUserId),
-        ownerAvatarUrl: resolveUserAvatar(input.ownerId, input.avatarUrlByUserId),
-        doerLabel: resolveUserLabel(node.doerId, input.displayNameByUserId),
-        doerAvatarUrl: resolveUserAvatar(node.doerId, input.avatarUrlByUserId),
+        hasSelectedDelivery: Boolean(input.runNodeStates),
+        responsibleLabel: resolveUserLabel(
+          input.mode === 'run'
+            ? input.runNodeStates?.[node.id]?.assigneeId ?? node.doerId
+            : node.doerId,
+          input.displayNameByUserId,
+        ),
+        responsibleAvatarUrl: resolveUserAvatar(
+          input.mode === 'run'
+            ? input.runNodeStates?.[node.id]?.assigneeId ?? node.doerId
+            : node.doerId,
+          input.avatarUrlByUserId,
+        ),
         onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
       },
     }
   })
 
-  const edges = buildDependencyEdges(previewNodes, input.edges)
+  const perceptionByNodeId = new Map(graphNodes.map((node) => [node.id, node.data.perception]))
+  const edges = buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges)
   return { nodes: graphNodes, edges }
 }
 
@@ -184,36 +202,33 @@ function applyUpdateOverlay(
 
 function buildDependencyEdges(
   previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
+  perceptionByNodeId: Map<string, PlannerNodePerception>,
   stateEdges?: PlannerGraphStateEdge[],
 ): PlannerGraphEdge[] {
   const nodeIds = new Set(previewNodes.map((item) => item.node.id))
   if (stateEdges?.length) {
     return stateEdges
       .filter((edge) => nodeIds.has(edge.sourceNodeId) && nodeIds.has(edge.targetNodeId))
-      .map((edge) => ({
+      .map((edge) => edgeFor({
         id: edge.id,
         source: edge.sourceNodeId,
         target: edge.targetNodeId,
-        type: 'smoothstep',
-        animated: edge.kind === 'subCanvas',
-        data: { preview: false },
+        perception: edgePerception(edge.sourceNodeId, edge.targetNodeId, perceptionByNodeId, false),
+        preview: false,
+        forceAnimated: edge.kind === 'subCanvas',
       }))
   }
   const edges: PlannerGraphEdge[] = []
   for (const current of previewNodes) {
     for (const dependencyId of current.node.dependsOnNodeIds ?? []) {
       if (!nodeIds.has(dependencyId)) continue
-      edges.push({
+      edges.push(edgeFor({
         id: `planner-edge-${dependencyId}-${current.node.id}`,
         source: dependencyId,
         target: current.node.id,
-        type: 'smoothstep',
-        animated: current.previewKind !== 'none',
-        data: {
-          preview: current.previewKind !== 'none',
-        },
-        className: current.previewKind !== 'none' ? 'planner-flow__edge--preview' : undefined,
-      })
+        perception: edgePerception(dependencyId, current.node.id, perceptionByNodeId, current.previewKind !== 'none'),
+        preview: current.previewKind !== 'none',
+      }))
     }
   }
 
@@ -221,19 +236,89 @@ function buildDependencyEdges(
   for (let index = 1; index < previewNodes.length; index += 1) {
     const previous = previewNodes[index - 1]
     const current = previewNodes[index]
-    edges.push({
+    edges.push(edgeFor({
       id: `planner-edge-${previous.node.id}-${current.node.id}`,
       source: previous.node.id,
       target: current.node.id,
-      type: 'smoothstep',
-      animated: current.previewKind !== 'none',
-      data: {
-        preview: current.previewKind !== 'none',
-      },
-      className: current.previewKind !== 'none' ? 'planner-flow__edge--preview' : undefined,
-    })
+      perception: edgePerception(previous.node.id, current.node.id, perceptionByNodeId, current.previewKind !== 'none'),
+      preview: current.previewKind !== 'none',
+    }))
   }
   return edges
+}
+
+function edgeFor(input: {
+  id: string
+  source: string
+  target: string
+  perception: PlannerEdgePerception
+  preview: boolean
+  forceAnimated?: boolean
+}): PlannerGraphEdge {
+  return {
+    id: input.id,
+    source: input.source,
+    target: input.target,
+    type: 'smoothstep',
+    animated: input.forceAnimated || input.perception === 'flow' || input.perception === 'attention' || input.perception === 'preview',
+    data: {
+      preview: input.preview,
+      perception: input.perception,
+    },
+    className: [
+      'planner-flow__edge',
+      `planner-flow__edge--${input.perception}`,
+      input.preview ? 'planner-flow__edge--preview' : '',
+    ].filter(Boolean).join(' '),
+  }
+}
+
+function edgePerception(
+  sourceNodeId: string,
+  targetNodeId: string,
+  perceptionByNodeId: Map<string, PlannerNodePerception>,
+  preview: boolean,
+): PlannerEdgePerception {
+  if (preview) return 'preview'
+  const source = perceptionByNodeId.get(sourceNodeId)
+  const target = perceptionByNodeId.get(targetNodeId)
+  if (target === 'attention') return 'attention'
+  if (source === 'active' || target === 'active') return 'flow'
+  if (source === 'done' && target === 'done') return 'done'
+  if (target === 'not-reached') return 'not-reached'
+  return target ?? 'not-reached'
+}
+
+function perceptionForNode(
+  node: PlanningNode,
+  state: NodeStateSnapshot | null,
+  mode: PlannerMode,
+  runNodeState: RunNodeState | null,
+): PlannerNodePerception {
+  if (mode === 'run') {
+    switch (runNodeState?.runState) {
+      case 'done':
+        return 'done'
+      case 'failed':
+      case 'gate-wait':
+      case 'ready_to_start':
+        return 'attention'
+      case 'dispatched':
+      case 'running':
+        return 'active'
+      case 'pending':
+      case undefined:
+      case null:
+        return runNodeState?.nextAction === 'ready-to-dispatch' ? 'attention' : 'not-reached'
+    }
+  }
+
+  if (state?.needsOwnerReview || state?.runState === 'blocked' || state?.runState === 'planning' || node.status === 'blocked' || node.status === 'planning') {
+    return 'attention'
+  }
+  if (state?.runState === 'done' || node.status === 'done') return 'done'
+  if (state?.runState === 'running' || node.status === 'running') return 'active'
+  return 'not-reached'
 }
 
 function buildNodePositions(nodes: PlanningNode[]): Map<string, { x: number; y: number }> {

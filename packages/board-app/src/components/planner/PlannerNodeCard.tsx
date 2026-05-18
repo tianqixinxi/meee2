@@ -3,10 +3,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock3,
-  ExternalLink,
-  FileText,
-  GitBranch,
-  Info,
   PlayCircle,
   Route,
   Signpost,
@@ -50,20 +46,28 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const designStatus = data.state?.runState ?? node.status
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
-  const statusLabel = isRunMode ? runStatus : kindLabel(nodeKind)
+  const statusLabel = isRunMode
+    ? workStatusLabel(runStatus, data.hasSelectedDelivery)
+    : planStatusLabel(designStatus)
   const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
   const blockers = data.state?.blockers ?? []
   const needsOwnerReview = Boolean(data.state?.needsOwnerReview)
-  const artifactRefs = isRunMode
-    ? (runNodeState?.artifactIds ?? [])
-    : (node.artifactRefs ?? data.state?.artifactRefs ?? [])
   const sessionId = isRunMode
     ? (runNodeState?.sessionId ?? node.sessionId ?? null)
     : node.sessionId?.trim() || null
-  const startingSession = !sessionId && node.workflowRunState === 'dispatched'
   const nextAction = isRunMode
-    ? (runNodeState?.nextAction ? runNextActionLabel(runNodeState.nextAction) : null)
-    : (node.nextAction?.trim() || null)
+    ? nextWorkAction(runNodeState, data.hasSelectedDelivery)
+    : nextPlanAction(node, data.responsibleLabel)
+  const primaryAction = primaryActionLabel({
+    mode: data.mode,
+    hasSelectedDelivery: data.hasSelectedDelivery,
+    runStatus,
+    sessionId,
+    responsibleLabel: data.responsibleLabel,
+    nodeKind,
+    blockers,
+    needsOwnerReview,
+  })
 
   return (
     <div
@@ -72,6 +76,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--${borderClass}`,
         `planner-node--kind-${nodeKind}`,
         `planner-node--mode-${data.mode}`,
+        `planner-node--perception-${data.perception}`,
         selected ? 'is-selected' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
       ].filter(Boolean).join(' ')}
@@ -88,49 +93,15 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             {data.previewKind === 'added' ? 'new' : 'changed'}
           </span>
         )}
-        <span
-          className={`planner-node__owner-avatar${data.ownerAvatarUrl ? ' has-image' : ''}`}
-          title={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}
-          aria-label={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}
-        >
-          {data.ownerAvatarUrl ? <img src={data.ownerAvatarUrl} alt="" /> : <UserRound size={12} aria-hidden />}
-        </span>
       </div>
 
       <div className="planner-node__title">{node.title}</div>
 
-      {node.gate && (
-        <div className="planner-node__gate">
-          <Signpost size={11} aria-hidden />
-          {node.gate.label}
-        </div>
-      )}
-
-      <div className="planner-node__meta" aria-label="Node metadata">
-        <span className="planner-node__chip" title={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}>
-          <span className={`planner-node__mini-avatar${data.ownerAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-            {data.ownerAvatarUrl ? <img src={data.ownerAvatarUrl} alt="" /> : <UserRound size={9} />}
-          </span>
-          {data.ownerLabel ?? 'Owner'}
+      <div className="planner-node__responsible" aria-label="Responsible person">
+        <span className={`planner-node__person-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+          {data.responsibleAvatarUrl ? <img src={data.responsibleAvatarUrl} alt="" /> : <UserRound size={13} />}
         </span>
-        <span className="planner-node__chip" title={`Doer: ${data.doerLabel ?? node.doerId}`}>
-          <span className={`planner-node__mini-avatar${data.doerAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-            {data.doerAvatarUrl ? <img src={data.doerAvatarUrl} alt="" /> : <UserRound size={9} />}
-          </span>
-          {(data.doerLabel ?? node.doerId) || 'Unassigned'}
-        </span>
-        {(sessionId || startingSession) && (
-          <span className="planner-node__chip is-mono" title={sessionId ? `Session ${sessionId}` : 'Session starting'}>
-            <GitBranch size={10} aria-hidden />
-            {sessionId ? 'session' : 'starting'}
-          </span>
-        )}
-        {artifactRefs.length > 0 && (
-          <span className="planner-node__chip is-artifact" title={artifactRefs.join('\n')}>
-            <FileText size={10} aria-hidden />
-            {artifactRefs.length} output{artifactRefs.length > 1 ? 's' : ''}
-          </span>
-        )}
+        <span>{data.responsibleLabel || 'Unassigned'}</span>
       </div>
 
       {nextAction && (
@@ -138,21 +109,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           <Signpost size={11} aria-hidden />
           <span>{nextAction}</span>
         </div>
-      )}
-
-      {node.subCanvasId && (
-        <button
-          type="button"
-          className="planner-node__subcanvas nodrag"
-          onClick={(event) => {
-            event.stopPropagation()
-            data.onOpenSubCanvas?.(node.subCanvasId as string)
-          }}
-          title="Open sub-canvas"
-        >
-          <ExternalLink size={12} aria-hidden />
-          Open sub-canvas
-        </button>
       )}
 
       {blockers.length > 0 && (
@@ -166,23 +122,26 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       {needsOwnerReview && (
         <div className="planner-node__owner-action">
           <AlertTriangle size={12} aria-hidden />
-          Owner action required
+          Needs approval
         </div>
       )}
 
       <div className="planner-node__footer">
         <button
           type="button"
-          className="planner-node__details nodrag"
+          className="planner-node__primary-action nodrag"
           onClick={(event) => {
             event.stopPropagation()
-            data.onOpenDetails?.(node.id)
+            if (primaryAction === 'Open sub-flow' && node.subCanvasId) {
+              data.onOpenSubCanvas?.(node.subCanvasId)
+            } else {
+              data.onOpenDetails?.(node.id)
+            }
           }}
-          aria-label={`Open details for ${node.title}`}
-          title="Node details"
+          aria-label={`${primaryAction} for ${node.title}`}
+          title={primaryAction}
         >
-          <Info size={12} aria-hidden />
-          Details
+          {primaryAction}
         </button>
       </div>
       <Handle type="source" position={Position.Right} className="planner-node__handle" />
@@ -190,22 +149,81 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   )
 }
 
-function designKind(node: PlannerGraphNode['data']['node']): string {
-  return node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
+function planStatusLabel(status: string): string {
+  switch (status) {
+    case 'blocked':
+      return 'Needs attention'
+    case 'done':
+      return 'Done'
+    case 'running':
+      return 'In progress'
+    case 'planning':
+      return 'Planning'
+    case 'waiting':
+    default:
+      return 'Not started'
+  }
 }
 
-function kindLabel(kind: string): string {
-  switch (kind) {
-    case 'session':
-      return 'session'
-    case 'artifact':
-      return 'artifact'
-    case 'subCanvas':
-      return 'sub-canvas'
-    case 'external':
-      return 'external'
-    case 'step':
-    default:
-      return 'step'
+function workStatusLabel(status: PlannerWorkflowRunState, hasSelectedDelivery: boolean): string {
+  if (!hasSelectedDelivery) return 'Select delivery'
+  switch (status) {
+    case 'pending':
+      return 'Not started'
+    case 'ready_to_start':
+      return 'Ready'
+    case 'dispatched':
+    case 'running':
+      return 'In progress'
+    case 'gate-wait':
+    case 'failed':
+      return 'Needs attention'
+    case 'done':
+      return 'Done'
   }
+}
+
+function nextPlanAction(node: PlannerGraphNode['data']['node'], responsibleLabel?: string): string {
+  if (!responsibleLabel) return 'Assign a responsible person'
+  if (node.subCanvasId) return 'Sub-flow available'
+  return node.nextAction?.trim() || 'Review the step plan'
+}
+
+function nextWorkAction(
+  runNodeState: PlannerGraphNode['data']['runNodeState'],
+  hasSelectedDelivery: boolean,
+): string {
+  if (!hasSelectedDelivery) return 'Choose a Delivery to see execution state'
+  if (!runNodeState?.nextAction) return 'Ready for the next action'
+  return runNextActionLabel(runNodeState.nextAction)
+}
+
+function primaryActionLabel(input: {
+  mode: PlannerGraphNode['data']['mode']
+  hasSelectedDelivery: boolean
+  runStatus: PlannerWorkflowRunState
+  sessionId: string | null
+  responsibleLabel?: string
+  nodeKind: string
+  blockers: string[]
+  needsOwnerReview: boolean
+}): string {
+  if (input.mode === 'design') {
+    if (!input.responsibleLabel) return 'Assign person'
+    if (input.nodeKind === 'subCanvas') return 'Open sub-flow'
+    return 'Edit plan'
+  }
+  if (!input.hasSelectedDelivery) return 'Select delivery'
+  if (!input.responsibleLabel) return 'Assign person'
+  if (input.runStatus === 'done') return 'View output'
+  if (input.runStatus === 'failed' || input.runStatus === 'gate-wait' || input.needsOwnerReview || input.blockers.length > 0) {
+    return 'Resolve'
+  }
+  if (input.sessionId || input.runStatus === 'running' || input.runStatus === 'dispatched') return 'Open session'
+  if (input.runStatus === 'ready_to_start' || input.runStatus === 'pending') return 'Start work'
+  return 'Open'
+}
+
+function designKind(node: PlannerGraphNode['data']['node']): string {
+  return node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
 }

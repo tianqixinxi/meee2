@@ -553,7 +553,7 @@ export interface NodeStateSnapshot {
   needsOwnerReview: boolean
 }
 
-export type PlannerMonitorItemKind = 'node' | 'proposal'
+export type PlannerMonitorItemKind = 'node' | 'proposal' | 'delivery'
 
 export interface PlannerMonitorItem {
   id: string
@@ -562,6 +562,7 @@ export interface PlannerMonitorItem {
   canvasTitle: string
   nodeId?: string | null
   nodeTitle?: string | null
+  deliveryId?: string | null
   proposalId?: string | null
   proposalStatus?: PlanProposalStatus | null
   summary: string
@@ -627,7 +628,9 @@ export interface RunNodeState {
   attempts: NodeAttempt[]
   sessionId?: string | null
   chatThreadId?: string | null
+  assigneeId?: string | null
   artifactIds: string[]
+  outputRefs: string[]
   startedAt?: string | null
   finishedAt?: string | null
   nextAction?: RunNextAction | null
@@ -637,6 +640,11 @@ export interface WorkflowRun {
   id: string
   canvasId: string
   runIndex: number
+  title: string
+  summary?: string | null
+  responsibleUserId?: string | null
+  linkedArtifactRefs: string[]
+  updatedAt: string
   status: WorkflowRunStatus
   trigger: string
   startedAt: string
