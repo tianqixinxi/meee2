@@ -117,6 +117,7 @@ struct PlannerNodeLayout: Codable, Equatable {
 
 enum PlannerWorkflowRunState: String, Codable, Equatable {
     case pending
+    case readyToStart = "ready_to_start"
     case dispatched
     case running
     case gateWait = "gate-wait"
@@ -186,7 +187,7 @@ struct PlannerNodeDispatch: Codable, Equatable {
     var fallbackRunner: PlannerDispatchRunner?
 }
 
-enum PlannerArtifactKind: String, Codable, Equatable {
+enum PlannerArtifactKind: String, Codable, Equatable, CaseIterable {
     case ideaDraft = "idea-draft"
     case prd
     case implPR = "impl-pr"
@@ -535,23 +536,25 @@ enum PlannerWorkflowGuidance {
         let hasDependencies = !(node.dependsOnNodeIds?.isEmpty ?? true)
 
         switch runState {
+        case .readyToStart:
+            return "Ready — start work or attach an existing session."
         case .gateWait:
             return "Owner: review the gate and approve or send it back."
         case .failed:
             if hasBlockers {
-                return "Failed — clear the blockers, then re-dispatch."
+                return "Failed — clear the blockers, then start work again."
             }
-            return "Failed — inspect the failure and re-dispatch."
+            return "Failed — inspect the failure and start work again."
         case .pending:
             if hasDependencies {
-                return "Waiting on an upstream step — dispatch once it clears."
+                return "Waiting on an upstream step — start work once it clears."
             }
-            return "Ready — dispatch this step to start work."
+            return "Ready — start work on this step."
         case .dispatched:
             if hasSession {
-                return "Dispatched — open the session to follow progress."
+                return "Started — open the session to follow progress."
             }
-            return "Dispatched — waiting for the session to spin up."
+            return "Starting — waiting for the session to spin up."
         case .running:
             return "In progress — open the session to monitor work."
         case .done:
@@ -736,11 +739,76 @@ enum PlannerEventType: String, Codable, Equatable {
     case nodeCreated = "node.created"
     case nodeUpdated = "node.updated"
     case nodeStateChanged = "node.state_changed"
+    case nodeOutputSubmitted = "node.output_submitted"
     case proposalCreated = "proposal.created"
     case proposalApproved = "proposal.approved"
     case proposalApplied = "proposal.applied"
     case proposalRejected = "proposal.rejected"
     case artifactAttached = "artifact.attached"
+}
+
+enum PlannerNodeOutputStatus: String, Codable, Equatable {
+    case done
+    case blocked
+    case needsReview = "needs_review"
+}
+
+enum PlannerNodeOutputNext: String, Codable, Equatable {
+    case complete
+    case blocked
+    case needsOwnerReview = "needs_owner_review"
+}
+
+struct PlannerNodeOutputMessage: Codable, Equatable {
+    var summary: String
+    var routeTo: [String]
+}
+
+struct PlannerNodeOutputArtifact: Codable, Equatable {
+    var kind: PlannerArtifactKind
+    var title: String
+    var reference: String
+    var routeTo: [String]
+}
+
+struct PlannerNodeOutput: Codable, Equatable {
+    var nodeId: String
+    var status: PlannerNodeOutputStatus
+    var message: PlannerNodeOutputMessage?
+    var artifacts: [PlannerNodeOutputArtifact]
+    var next: PlannerNodeOutputNext
+}
+
+struct PlannerRouteTarget: Codable, Equatable {
+    var id: String
+    var label: String
+    var kind: String
+    var hasDoer: Bool
+    var hasSession: Bool
+}
+
+struct PlannerNodeContract: Codable, Equatable {
+    var canvas: PlanningCanvas
+    var node: PlanningNode
+    var upstreamNodes: [PlanningNode]
+    var downstreamNodes: [PlanningNode]
+    var allowedRouteTargets: [PlannerRouteTarget]
+    var expectedArtifactKinds: [PlannerArtifactKind]
+    var completionCriteria: [String]
+}
+
+struct PlannerOutputRoute: Codable, Equatable {
+    var target: String
+    var targetNodeId: String?
+    var targetSessionId: String?
+    var routedMessage: String?
+    var artifactRefs: [String]
+}
+
+struct PlannerNodeOutputResult: Codable, Equatable {
+    var graph: PlannerGraphState
+    var routes: [PlannerOutputRoute]
+    var hint: String?
 }
 
 struct PlannerEvent: Codable, Equatable {
@@ -854,6 +922,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case unknownNodeKind(String)
     /// A change carries a change `kind` outside the known PlanChange.Kind set.
     case unknownChangeKind(String)
+    case invalidNodeOutput(String)
+    case activeSessionExists(nodeId: String)
 
     var errorDescription: String? {
         switch self {
@@ -887,6 +957,10 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "meee2 AI proposal uses unknown node kind: \(kind)"
         case .unknownChangeKind(let kind):
             return "meee2 AI proposal uses unknown change kind: \(kind)"
+        case .invalidNodeOutput(let hint):
+            return hint
+        case .activeSessionExists(let nodeId):
+            return "node \(nodeId) already has an active session; complete or split the node before starting another"
         }
     }
 }
@@ -2020,7 +2094,7 @@ final class PlannerStore {
     /// two status dimensions consistent on the node.
     private static func nodeStatus(for runState: PlannerWorkflowRunState) -> PlanningNodeStatus {
         switch runState {
-        case .pending:
+        case .pending, .readyToStart:
             return .waiting
         case .dispatched, .running:
             return .running
@@ -2045,7 +2119,7 @@ final class PlannerStore {
             return hasGate ? .gateWait : .done
         case .failed:
             return .failed
-        case .pending, .dispatched, .running, .gateWait:
+        case .pending, .readyToStart, .dispatched, .running, .gateWait:
             return sessionRunState
         }
     }
@@ -2266,6 +2340,163 @@ final class PlannerStore {
         }
     }
 
+    func nodeContract(canvasId: String, nodeId: String) throws -> PlannerNodeContract {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            guard let node = record.nodes.first(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            return makeNodeContract(record: record, node: node)
+        }
+    }
+
+    func submitNodeOutput(
+        canvasId: String,
+        nodeId: String,
+        output: PlannerNodeOutput
+    ) throws -> (record: CanvasRecord, routes: [PlannerOutputRoute]) {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard output.nodeId == nodeId else {
+                throw PlannerCoreError.invalidNodeOutput("node output nodeId must match the URL node id")
+            }
+            guard let sourceIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+
+            let downstreamNodeIds = Set(record.nodes.filter { ($0.dependsOnNodeIds ?? []).contains(nodeId) }.map(\.id))
+            let allowedTargets = downstreamNodeIds.union(["owner"])
+            let routeTargets = allOutputRouteTargets(output)
+            let invalidTargets = routeTargets.filter { !allowedTargets.contains($0) }
+            if let invalid = invalidTargets.sorted().first {
+                let allowed = allowedTargets.sorted().joined(separator: ", ")
+                throw PlannerCoreError.invalidNodeOutput(
+                    "Invalid routeTo '\(invalid)'. Route only to downstream nodes or owner. Allowed: \(allowed)."
+                )
+            }
+            let summary = output.message?.summary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if output.status == .done && summary.isEmpty && output.artifacts.isEmpty {
+                throw PlannerCoreError.invalidNodeOutput(
+                    "A done node output must include a message summary or at least one artifact."
+                )
+            }
+
+            var current = record.nodes[sourceIndex]
+            switch output.status {
+            case .done:
+                current.status = .done
+                current.workflowRunState = .done
+            case .blocked:
+                current.status = .blocked
+                current.workflowRunState = .failed
+            case .needsReview:
+                current.status = .blocked
+                current.workflowRunState = .gateWait
+            }
+
+            var artifactRefs = current.artifactRefs ?? []
+            var newArtifacts: [PlannerArtifact] = []
+            for item in output.artifacts {
+                let reference = item.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !reference.isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("Artifact reference cannot be empty.")
+                }
+                let artifact = PlannerArtifact(
+                    id: "artifact-\(stableSuffix(reference))",
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    kind: item.kind,
+                    title: item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : item.title,
+                    reference: reference,
+                    status: output.status.rawValue,
+                    createdAt: Date()
+                )
+                newArtifacts.append(artifact)
+                if !artifactRefs.contains(reference) {
+                    artifactRefs.append(reference)
+                }
+            }
+            current.artifactRefs = artifactRefs
+            record.nodes[sourceIndex] = current
+            record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
+
+            var routes: [PlannerOutputRoute] = []
+            let outputEvent = event(
+                canvasId: canvasId,
+                type: .nodeOutputSubmitted,
+                nodeId: nodeId,
+                summary: summary.isEmpty ? "Output submitted for \(current.title)" : summary,
+                artifactRefs: newArtifacts.map(\.reference)
+            )
+            record.events.append(outputEvent)
+            for artifact in newArtifacts {
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .artifactAttached,
+                    nodeId: nodeId,
+                    summary: artifact.title,
+                    artifactRefs: [artifact.reference]
+                ))
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Node output moved \(current.title) to \(output.status.rawValue)"
+            ))
+
+            let routedMessage = summary.isEmpty ? nil : summary
+            for target in routeTargets.sorted() {
+                if target == "owner" {
+                    routes.append(PlannerOutputRoute(
+                        target: target,
+                        targetNodeId: nil,
+                        targetSessionId: nil,
+                        routedMessage: routedMessage,
+                        artifactRefs: newArtifacts.filter { artifact in outputArtifact(artifact.reference, routesTo: target, in: output) }.map(\.reference)
+                    ))
+                    continue
+                }
+                guard let targetIndex = record.nodes.firstIndex(where: { $0.id == target }) else { continue }
+                let routedArtifacts = newArtifacts.filter { artifact in
+                    outputArtifact(artifact.reference, routesTo: target, in: output)
+                }
+                if routedMessage != nil, output.message?.routeTo.contains(target) == true {
+                    appendContextSource(
+                        to: &record.nodes[targetIndex],
+                        title: "Output from \(current.title)",
+                        reference: "planner-output://\(outputEvent.id)"
+                    )
+                }
+                for artifact in routedArtifacts {
+                    appendContextSource(
+                        to: &record.nodes[targetIndex],
+                        title: artifact.title,
+                        reference: artifact.reference
+                    )
+                }
+                if record.nodes[targetIndex].doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    record.nodes[targetIndex].status = .blocked
+                    record.nodes[targetIndex].workflowRunState = .gateWait
+                } else if record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    record.nodes[targetIndex].status = .waiting
+                    record.nodes[targetIndex].workflowRunState = .readyToStart
+                }
+                routes.append(PlannerOutputRoute(
+                    target: target,
+                    targetNodeId: target,
+                    targetSessionId: record.nodes[targetIndex].sessionId,
+                    routedMessage: routedMessage,
+                    artifactRefs: routedArtifacts.map(\.reference)
+                ))
+            }
+
+            document.canvases[canvasId] = record
+            try save()
+            return (record, routes)
+        }
+    }
+
     func updateNodeLayout(canvasId: String, nodeId: String, layout: PlannerNodeLayout) throws -> CanvasRecord {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -2299,11 +2530,14 @@ final class PlannerStore {
             guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
                 throw PlannerCoreError.nodeNotFound(nodeId)
             }
+            guard !hasActiveSessionLocked(nodeId: nodeId, nodes: record.nodes) else {
+                throw PlannerCoreError.activeSessionExists(nodeId: nodeId)
+            }
             record.nodes[index].sessionId = sessionId
             record.nodes[index].chatThreadId = sessionId
             record.nodes[index].source = .session
-            record.nodes[index].nodeKind = .session
             record.nodes[index].workflowRunState = .running
+            record.nodes[index].status = .running
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -2348,6 +2582,9 @@ final class PlannerStore {
             guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
                 throw PlannerCoreError.nodeNotFound(nodeId)
             }
+            guard !hasActiveSessionLocked(nodeId: nodeId, nodes: record.nodes) else {
+                throw PlannerCoreError.activeSessionExists(nodeId: nodeId)
+            }
             let runner = dispatch.runner
             let runState: PlannerWorkflowRunState = runner == .human ? .gateWait : .dispatched
             record.nodes[index].dispatch = dispatch
@@ -2389,6 +2626,76 @@ final class PlannerStore {
             try save()
             return (record, record.nodes[index])
         }
+    }
+
+    private func hasActiveSessionLocked(nodeId: String, nodes: [PlanningNode]) -> Bool {
+        if let node = nodes.first(where: { $0.id == nodeId }),
+           node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+           node.workflowRunState != .done,
+           node.workflowRunState != .failed {
+            return true
+        }
+        return nodes.contains { node in
+            node.nodeKind == .session
+                && (node.dependsOnNodeIds ?? []).contains(nodeId)
+                && node.workflowRunState != .done
+                && node.workflowRunState != .failed
+        }
+    }
+
+    private func makeNodeContract(record: CanvasRecord, node: PlanningNode) -> PlannerNodeContract {
+        let upstreamIds = Set(node.dependsOnNodeIds ?? [])
+        let upstreamNodes = record.nodes.filter { upstreamIds.contains($0.id) }
+        let downstreamNodes = record.nodes.filter { ($0.dependsOnNodeIds ?? []).contains(node.id) }
+        let routeTargets = downstreamNodes.map { target in
+            PlannerRouteTarget(
+                id: target.id,
+                label: target.title,
+                kind: (target.nodeKind ?? .step).rawValue,
+                hasDoer: !target.doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                hasSession: target.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            )
+        } + [
+            PlannerRouteTarget(
+                id: "owner",
+                label: "Canvas owner",
+                kind: "owner",
+                hasDoer: true,
+                hasSession: false
+            )
+        ]
+        return PlannerNodeContract(
+            canvas: record.canvas,
+            node: node,
+            upstreamNodes: upstreamNodes,
+            downstreamNodes: downstreamNodes,
+            allowedRouteTargets: routeTargets,
+            expectedArtifactKinds: PlannerArtifactKind.allCases,
+            completionCriteria: [
+                node.ioSchema.completionSignal,
+                "Submit output with status done, blocked, or needs_review.",
+                "Route messages and artifacts only to downstream nodes or owner."
+            ]
+        )
+    }
+
+    private func allOutputRouteTargets(_ output: PlannerNodeOutput) -> Set<String> {
+        var targets = Set(output.message?.routeTo ?? [])
+        for artifact in output.artifacts {
+            targets.formUnion(artifact.routeTo)
+        }
+        return Set(targets.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+    }
+
+    private func outputArtifact(_ reference: String, routesTo target: String, in output: PlannerNodeOutput) -> Bool {
+        output.artifacts.contains { artifact in
+            artifact.reference == reference && artifact.routeTo.contains(target)
+        }
+    }
+
+    private func appendContextSource(to node: inout PlanningNode, title: String, reference: String) {
+        guard !node.contextSources.contains(where: { $0.reference == reference }) else { return }
+        node.contextSources.append(ContextSource(kind: .artifact, title: title, reference: reference))
     }
 
     private func mergeArtifacts(
@@ -2795,6 +3102,36 @@ enum PlannerBoardBridge {
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func nodeContract(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerNodeContract {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard state.nodes.contains(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        return try store.nodeContract(canvasId: canvasId, nodeId: nodeId)
+    }
+
+    static func submitNodeOutput(
+        nodeId: String,
+        output: PlannerNodeOutput,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerNodeOutputResult {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: output)
+        let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return PlannerNodeOutputResult(graph: graph, routes: submitted.routes, hint: nil)
     }
 
     static func updateNodeLayout(
@@ -3771,6 +4108,9 @@ enum PlannerPromptFactory {
     You are meee2 AI. Return only strict JSON for PlanProposal, or null when no proposal is needed.
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
+    Supported PlanChange kinds are addNode and updateNode.
+    updateNode may change title, status, ioSchema, contextSources, dependsOnNodeIds, doerId, nodeKind, subCanvasId, gate, dispatch, approvers, artifactRefs, workflowRunState, sessionId, chatThreadId, and source.
+    Use dependsOnNodeIds for graph dependencies. Use ioSchema/contextSources for contract changes. Use doerId only for explicit assignment proposals.
     """
 
     static func generatePrompt(goal: String, canvas: PlanningCanvas) -> String {

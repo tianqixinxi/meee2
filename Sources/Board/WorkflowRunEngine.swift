@@ -80,6 +80,8 @@ enum WorkflowRunEngine {
             return .gateReview
         case .dispatched, .running:
             return .inProgress
+        case .readyToStart:
+            return .readyToDispatch
         case .pending:
             let upstreamAllDone = deps.allSatisfy { depId in
                 states[depId]?.runState == .done

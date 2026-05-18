@@ -1,4 +1,4 @@
-import { ArrowLeft, GitPullRequest, Loader2, MessageSquareText, RefreshCw } from 'lucide-react'
+import { ArrowLeft, GitPullRequest, Loader2, MessageSquareText } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import {
   attachPlannerArtifactToNode,
@@ -12,12 +12,12 @@ import type { ExternalItem, ExternalItemsResult, PlannerArtifactKind } from '../
 /**
  * Phase 5 — Integration artifact picker.
  *
- * Lets the user *browse* GitHub / Lark external items and, when a target
- * planner node is supplied, attach the selected item as a PlannerArtifact.
+ * Lets the user browse GitHub / Lark external items and, when a target
+ * planner node is supplied, add the selected item as node output evidence.
  *
- * The attach goes through the EXISTING endpoint
+ * The output addition goes through the EXISTING endpoint
  * (`attachPlannerArtifactToNode`) — this component builds no parallel attach
- * path. Attachment is always an explicit user action: nothing auto-attaches.
+ * path. Adding output is always an explicit user action: nothing is inferred.
  */
 
 interface AttachTarget {
@@ -30,7 +30,7 @@ interface Props {
   /** Which provider to browse. */
   provider: 'github' | 'lark'
   /**
-   * When set, each item gets an "Attach" action that calls the existing
+   * When set, each item gets an "Add output" action that calls the existing
    * artifact endpoint. When omitted the picker is browse-only.
    */
   attachTarget?: AttachTarget
@@ -112,7 +112,7 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
       })
         .then(() => onAttached?.(item.reference, kind))
         .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : 'Attach failed')
+          setError(err instanceof Error ? err.message : 'Add output failed')
         })
         .finally(() => setAttachingId(null))
     },
@@ -157,15 +157,6 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
               </button>
             </div>
           )}
-          <button
-            type="button"
-            className="integration-picker__refresh"
-            onClick={load}
-            disabled={loading}
-            aria-label="Reload"
-          >
-            <RefreshCw size={13} aria-hidden />
-          </button>
           {onClose && (
             <button type="button" className="integration-picker__close" onClick={onClose}>
               Done
@@ -235,8 +226,8 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
 }
 
 /**
- * Per-item attach control — lets the user confirm (or override) the artifact
- * kind before attaching through the existing endpoint.
+ * Per-item output control — lets the user confirm (or override) the output
+ * kind before adding it through the existing endpoint.
  */
 function AttachControl({
   item,
@@ -268,9 +259,9 @@ function AttachControl({
         type="button"
         onClick={() => onAttach(item, kind)}
         disabled={busy}
-        title={`Attach to ${nodeTitle}`}
+        title={`Add output to ${nodeTitle}`}
       >
-        {busy ? 'Attaching…' : 'Attach'}
+        {busy ? 'Adding…' : 'Add output'}
       </button>
     </div>
   )

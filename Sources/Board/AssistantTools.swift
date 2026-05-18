@@ -28,9 +28,11 @@ enum AssistantTools {
         listChannelsDef(),
         getChannelMessagesDef(),
         readGraphStateDef(),
+        readNodeContractDef(),
         proposeGraphChangeDef(),
         bindSessionToNodeDef(),
         dispatchNodeSessionDef(),
+        submitNodeOutputDef(),
         attachArtifactToNodeDef(),
         createSubCanvasFromNodeDef(),
         updateNodeLayoutDef(),
@@ -87,12 +89,16 @@ enum AssistantTools {
             return runGetChannelMessages(args: args)
         case "read_graph_state":
             return runReadGraphState(args: args, settings: settings)
+        case "read_node_contract":
+            return runReadNodeContract(args: args, settings: settings)
         case "propose_graph_change":
             return runProposeGraphChange(args: args, settings: settings)
         case "bind_session_to_node":
             return runBindSessionToNode(args: args, settings: settings)
         case "dispatch_node_session":
             return runDispatchNodeSession(args: args, settings: settings)
+        case "submit_node_output":
+            return runSubmitNodeOutput(args: args, settings: settings)
         case "attach_artifact_to_node":
             return runAttachArtifactToNode(args: args, settings: settings)
         case "create_sub_canvas_from_node":
@@ -716,13 +722,13 @@ enum AssistantTools {
     private static func dispatchNodeSessionDef() -> ToolDef {
         ToolDef(
             name: "dispatch_node_session",
-            description: "Dispatch a graph node to BYOA local, CI agent, or human runner. Execution-layer action — applies directly, no proposal.",
+            description: "Start work for a graph node with Claude, Codex, or a human task. Execution-layer action — applies directly, no proposal.",
             inputSchema: [
                 "type": "object",
                 "properties": [
                     "canvasId": ["type": "string"],
                     "nodeId": ["type": "string"],
-                    "runner": ["type": "string", "enum": ["byoa-local", "ci-agent", "human"]]
+                    "runner": ["type": "string", "enum": ["claude", "codex", "human"]]
                 ],
                 "required": ["nodeId"]
             ]
@@ -733,7 +739,7 @@ enum AssistantTools {
         do {
             let canvasId = try plannerCanvasId(args: args, settings: settings)
             let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
-            let runner = PlannerDispatchRunner(rawValue: stringValue(args["runner"]) ?? "byoa-local") ?? .byoaLocal
+            let runner = PlannerDispatchRunner(rawValue: stringValue(args["runner"]) ?? "claude") ?? .claude
             let result = try PlannerBoardBridge.dispatchNode(
                 nodeId: nodeId,
                 runner: runner,
@@ -745,6 +751,136 @@ enum AssistantTools {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+
+    private static func readNodeContractDef() -> ToolDef {
+        ToolDef(
+            name: "read_node_contract",
+            description: "Read the execution contract for a planner node: upstream/downstream nodes, expected outputs, allowed route targets, and completion criteria.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"]
+                ],
+                "required": ["nodeId"]
+            ]
+        )
+    }
+
+    private static func runReadNodeContract(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let contract = try PlannerBoardBridge.nodeContract(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(contract))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func submitNodeOutputDef() -> ToolDef {
+        ToolDef(
+            name: "submit_node_output",
+            description: "Submit structured output for a planner node. meee2 validates routeTo and deterministically routes messages/artifacts to downstream nodes or owner.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "status": ["type": "string", "enum": ["done", "blocked", "needs_review"]],
+                    "message": [
+                        "type": "object",
+                        "properties": [
+                            "summary": ["type": "string"],
+                            "routeTo": ["type": "array", "items": ["type": "string"]]
+                        ]
+                    ],
+                    "artifacts": [
+                        "type": "array",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "kind": ["type": "string"],
+                                "title": ["type": "string"],
+                                "reference": ["type": "string"],
+                                "routeTo": ["type": "array", "items": ["type": "string"]]
+                            ]
+                        ]
+                    ],
+                    "next": ["type": "string", "enum": ["complete", "blocked", "needs_owner_review"]]
+                ],
+                "required": ["nodeId", "status", "next"]
+            ]
+        )
+    }
+
+    private static func runSubmitNodeOutput(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            var payload = args
+            payload["nodeId"] = nodeId
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let decoder = JSONDecoder()
+            let output = try decoder.decode(PlannerNodeOutput.self, from: data)
+            let result = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            routePlannerOutputMessages(result.routes)
+            return try .success(jsonPayload(result))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func routePlannerOutputMessages(_ routes: [PlannerOutputRoute]) {
+        for route in routes {
+            guard let sessionId = route.targetSessionId,
+                  let message = plannerOutputMessage(route: route) else { continue }
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
+                _ = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: message,
+                    injectedByHuman: false
+                )
+            } catch {
+                // Tool result still reports accepted output; routing failure is
+                // visible in graph state and can be retried by the operator.
+            }
+        }
+    }
+
+    private static func plannerOutputMessage(route: PlannerOutputRoute) -> String? {
+        var lines: [String] = []
+        if let message = route.routedMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            lines.append(message)
+        }
+        if !route.artifactRefs.isEmpty {
+            lines.append("Artifacts:")
+            lines.append(contentsOf: route.artifactRefs.map { "- \($0)" })
+        }
+        guard !lines.isEmpty else { return nil }
+        return [
+            "Planner routed upstream output to this node.",
+            "",
+            lines.joined(separator: "\n"),
+            "",
+            "Use read_node_contract before continuing, then submit_node_output when this node is complete or blocked."
+        ].joined(separator: "\n")
     }
 
     private static func attachArtifactToNodeDef() -> ToolDef {

@@ -16,17 +16,9 @@ import type { PlannerWorkflowRunState } from '../../types'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 import { runNextActionLabel } from './RunSelector'
 
-const statusIcons = {
-  blocked: AlertTriangle,
-  running: PlayCircle,
-  planning: Route,
-  waiting: Clock3,
-  done: CheckCircle2,
-}
-
-/** Icon per workflow run-state (Run mode). */
 const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   pending: Clock3,
+  ready_to_start: PlayCircle,
   dispatched: PlayCircle,
   running: PlayCircle,
   'gate-wait': Signpost,
@@ -34,11 +26,11 @@ const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   failed: AlertTriangle,
 }
 
-/** Map a run-state onto the card's existing border-color CSS class. */
 function runStateClass(runState: PlannerWorkflowRunState): string {
   switch (runState) {
     case 'pending':
       return 'waiting'
+    case 'ready_to_start':
     case 'dispatched':
     case 'running':
       return 'running'
@@ -50,35 +42,28 @@ function runStateClass(runState: PlannerWorkflowRunState): string {
   }
 }
 
-/**
- * Planner node card. Renders two ways (workflow-run-spec §8.4):
- *  · Design mode — the blueprint. No execution status; design fields only.
- *  · Run mode    — this node's state in the run being viewed: run-state badge,
- *                  bound session, next-action, produced artifacts.
- */
 export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>) {
   const node = data.node
   const isRunMode = data.mode === 'run'
   const runNodeState = data.runNodeState
-
+  const nodeKind = designKind(node)
   const designStatus = data.state?.runState ?? node.status
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
-  const statusLabel = isRunMode ? runStatus : kindLabel(designKind(node))
-
+  const statusLabel = isRunMode ? runStatus : kindLabel(nodeKind)
+  const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
   const blockers = data.state?.blockers ?? []
   const needsOwnerReview = Boolean(data.state?.needsOwnerReview)
-  const executorLabel = node.executorType === 'mock' ? 'local' : node.executorType
-  const nodeKind = designKind(node)
-  // Artifacts + session are execution facts — Run mode only.
-  const artifactRefs = isRunMode ? (node.artifactRefs ?? data.state?.artifactRefs ?? []) : []
-  const sessionId = isRunMode ? (runNodeState?.sessionId ?? node.sessionId) : null
-  const depCount = node.dependsOnNodeIds?.length ?? 0
-  // Run-mode next-action comes from WorkflowRunEngine; Design mode shows none.
-  const nextAction =
-    isRunMode && runNodeState?.nextAction ? runNextActionLabel(runNodeState.nextAction) : null
-
-  const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
+  const artifactRefs = isRunMode
+    ? (runNodeState?.artifactIds ?? [])
+    : (node.artifactRefs ?? data.state?.artifactRefs ?? [])
+  const sessionId = isRunMode
+    ? (runNodeState?.sessionId ?? node.sessionId ?? null)
+    : node.sessionId?.trim() || null
+  const startingSession = !sessionId && node.workflowRunState === 'dispatched'
+  const nextAction = isRunMode
+    ? (runNodeState?.nextAction ? runNextActionLabel(runNodeState.nextAction) : null)
+    : (node.nextAction?.trim() || null)
 
   return (
     <div
@@ -89,19 +74,15 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--mode-${data.mode}`,
         selected ? 'is-selected' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      ].filter(Boolean).join(' ')}
     >
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
-      {/* Primary row: status (Run) or kind (Design) + owner avatar. */}
       <div className="planner-node__header">
         <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
           <Icon size={13} aria-hidden />
           {statusLabel}
         </span>
-        <span className={`planner-node__kind-tag kind-${nodeKind}`}>{kindLabel(nodeKind)}</span>
         {data.previewKind !== 'none' && (
           <span className="planner-node__badge">
             {data.previewKind === 'added' ? 'new' : 'changed'}
@@ -125,37 +106,29 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {/* Metadata chips. Design info (owner/doer/executor/deps) always shows;
-          session + artifacts are execution facts shown only in Run mode. */}
       <div className="planner-node__meta" aria-label="Node metadata">
         <span className="planner-node__chip" title={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}>
-          <UserRound size={10} aria-hidden />
+          <span className={`planner-node__mini-avatar${data.ownerAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+            {data.ownerAvatarUrl ? <img src={data.ownerAvatarUrl} alt="" /> : <UserRound size={9} />}
+          </span>
           {data.ownerLabel ?? 'Owner'}
         </span>
         <span className="planner-node__chip" title={`Doer: ${data.doerLabel ?? node.doerId}`}>
-          <UserRound size={10} aria-hidden />
-          {data.doerLabel ?? node.doerId}
-        </span>
-        <span className="planner-node__chip" title={`Executor: ${executorLabel}`}>
-          <GitBranch size={10} aria-hidden />
-          {executorLabel}
-        </span>
-        {depCount > 0 && (
-          <span className="planner-node__chip" title={`${depCount} dependencies`}>
-            <Route size={10} aria-hidden />
-            {depCount} deps
+          <span className={`planner-node__mini-avatar${data.doerAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+            {data.doerAvatarUrl ? <img src={data.doerAvatarUrl} alt="" /> : <UserRound size={9} />}
           </span>
-        )}
-        {sessionId && (
-          <span className="planner-node__chip is-mono" title={`Session ${sessionId}`}>
-            {sessionId}
+          {(data.doerLabel ?? node.doerId) || 'Unassigned'}
+        </span>
+        {(sessionId || startingSession) && (
+          <span className="planner-node__chip is-mono" title={sessionId ? `Session ${sessionId}` : 'Session starting'}>
+            <GitBranch size={10} aria-hidden />
+            {sessionId ? 'session' : 'starting'}
           </span>
         )}
         {artifactRefs.length > 0 && (
           <span className="planner-node__chip is-artifact" title={artifactRefs.join('\n')}>
             <FileText size={10} aria-hidden />
-            {artifactLabel(artifactRefs[0])}
-            {artifactRefs.length > 1 && ` +${artifactRefs.length - 1}`}
+            {artifactRefs.length} output{artifactRefs.length > 1 ? 's' : ''}
           </span>
         )}
       </div>
@@ -170,7 +143,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       {node.subCanvasId && (
         <button
           type="button"
-          className="planner-node__subcanvas"
+          className="planner-node__subcanvas nodrag"
           onClick={(event) => {
             event.stopPropagation()
             data.onOpenSubCanvas?.(node.subCanvasId as string)
@@ -182,8 +155,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </button>
       )}
 
-      {/* Status-critical alerts — Run mode only (they describe execution). */}
-      {isRunMode && blockers.length > 0 && (
+      {blockers.length > 0 && (
         <div className="planner-node__blockers">
           <AlertTriangle size={12} aria-hidden />
           <span>{blockers[0]}</span>
@@ -191,7 +163,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {isRunMode && needsOwnerReview && (
+      {needsOwnerReview && (
         <div className="planner-node__owner-action">
           <AlertTriangle size={12} aria-hidden />
           Owner action required
@@ -199,10 +171,9 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       )}
 
       <div className="planner-node__footer">
-        <span>{node.executionMode}</span>
         <button
           type="button"
-          className="planner-node__details"
+          className="planner-node__details nodrag"
           onClick={(event) => {
             event.stopPropagation()
             data.onOpenDetails?.(node.id)
@@ -237,9 +208,4 @@ function kindLabel(kind: string): string {
     default:
       return 'step'
   }
-}
-
-function artifactLabel(ref: string): string {
-  const compact = ref.split('/').filter(Boolean).pop() ?? ref
-  return compact.length > 18 ? `${compact.slice(0, 15)}...` : compact
 }

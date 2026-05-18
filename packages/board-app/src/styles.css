@@ -390,8 +390,15 @@ textarea {
   font-size: 12px;
 }
 
+.sessions-workspace__tools {
+  flex: 0 1 420px;
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
 .sessions-search {
-  flex: 0 1 360px;
+  width: min(100%, 420px);
   display: flex;
   align-items: center;
   gap: 7px;
@@ -416,6 +423,49 @@ textarea {
 .sessions-search input:focus {
   background: transparent;
   box-shadow: none;
+}
+
+.sessions-filters {
+  display: inline-flex;
+  gap: 5px;
+  padding: 3px;
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: var(--radius-sm);
+  background: rgba(36, 36, 33, 0.68);
+}
+
+.sessions-filter {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.sessions-filter:hover,
+.sessions-filter.is-active {
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text);
+}
+
+.sessions-filter em {
+  min-width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.075);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: normal;
 }
 
 .sessions-empty {
@@ -989,6 +1039,8 @@ textarea {
 
 .team-member-card,
 .team-view__contract,
+.team-view__empty,
+.team-view__guidance,
 .team-view__error {
   border: 1px solid rgba(168, 165, 155, 0.18);
   border-radius: var(--radius-sm);
@@ -1116,9 +1168,37 @@ textarea {
 }
 
 .team-view__contract,
+.team-view__empty,
+.team-view__guidance,
 .team-view__error {
   margin-top: 14px;
   padding: 14px 16px;
+}
+
+.team-view__guidance {
+  margin: 0 0 14px;
+  background: rgba(38, 38, 35, 0.78);
+}
+
+.team-view__guidance strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.team-view__guidance p {
+  margin: 5px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.team-view__empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .team-view__contract {
@@ -1223,6 +1303,10 @@ textarea {
   background: rgba(204, 120, 92, 0.08);
 }
 
+.sessions-row--unread {
+  border-color: rgba(139, 169, 194, 0.28);
+}
+
 .sessions-row__identity {
   min-width: 0;
   display: grid;
@@ -1275,7 +1359,8 @@ textarea {
 }
 
 .sessions-row__count,
-.sessions-row__attention {
+.sessions-row__attention,
+.sessions-row__unread {
   min-width: 18px;
   height: 18px;
   display: inline-flex;
@@ -1292,6 +1377,14 @@ textarea {
   width: auto;
   padding: 0 7px;
   border: 1px solid rgba(204, 120, 92, 0.25);
+}
+
+.sessions-row__unread {
+  width: auto;
+  padding: 0 7px;
+  border: 1px solid rgba(139, 169, 194, 0.28);
+  background: rgba(139, 169, 194, 0.14);
+  color: #b9d2e6;
 }
 
 .sessions-row__meta {
@@ -1382,6 +1475,39 @@ textarea {
     min-width: 52px;
     gap: 8px;
     padding: 42px 6px 10px;
+  }
+
+  .sessions-workspace__inner {
+    width: calc(100% - 24px);
+    padding-top: 24px;
+  }
+
+  .sessions-workspace__header {
+    display: grid;
+  }
+
+  .sessions-workspace__tools {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .sessions-search {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .sessions-filters {
+    width: 100%;
+    overflow: auto;
+  }
+
+  .sessions-table__head {
+    display: none;
+  }
+
+  .sessions-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
 
   .workspace-rail__avatar,
@@ -1522,7 +1648,7 @@ textarea {
   position: absolute;
   top: 18px;
   left: 18px;
-  z-index: 160;
+  z-index: 240;
   width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
   pointer-events: auto;
   color: var(--text);
@@ -1611,10 +1737,10 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   position: absolute;
   top: calc(100% + 7px);
   left: 0;
-  z-index: 170;
+  z-index: 250;
   width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
   max-height: min(420px, calc(100vh - 86px));
-  overflow: auto;
+  overflow: visible;
   margin-top: 0;
   padding: 7px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
@@ -1628,7 +1754,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 230px;
+  max-height: min(260px, calc(100vh - 260px));
   overflow: auto;
 }
 

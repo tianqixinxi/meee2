@@ -30,6 +30,7 @@ const RAIL_WIDTH = 64
 export function WorkspaceRail({
   state,
   mode,
+  unreadSids,
   userProfile,
   onModeChange,
   onPreferences,
@@ -57,12 +58,16 @@ export function WorkspaceRail({
 
   const counts = useMemo(() => {
     const sessions = state?.sessions ?? []
-    return {
-      attention: sessions.filter((session) =>
-        sessionNeedsAttention(session),
-      ).length,
+    const actionableSessionIds = new Set<string>()
+    for (const session of sessions) {
+      if (sessionNeedsAttention(session) || unreadSids.has(session.id)) {
+        actionableSessionIds.add(session.id)
+      }
     }
-  }, [state?.sessions])
+    return {
+      sessions: actionableSessionIds.size,
+    }
+  }, [state?.sessions, unreadSids])
 
   return (
     <nav className="workspace-rail" aria-label="Workspace">
@@ -87,8 +92,8 @@ export function WorkspaceRail({
           label="Sessions"
           active={mode === 'sessions'}
           onClick={() => onModeChange('sessions')}
-          badge={counts.attention > 0 ? counts.attention : undefined}
-          tone={counts.attention > 0 ? 'attention' : 'default'}
+          badge={counts.sessions > 0 ? counts.sessions : undefined}
+          tone={counts.sessions > 0 ? 'attention' : 'default'}
         >
           <List size={20} />
         </RailButton>

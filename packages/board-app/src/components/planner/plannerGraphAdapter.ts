@@ -22,6 +22,7 @@ export interface PlannerNodeData extends Record<string, unknown> {
   ownerLabel?: string
   ownerAvatarUrl?: string
   doerLabel?: string
+  doerAvatarUrl?: string
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
 }
@@ -73,6 +74,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         ownerLabel: resolveUserLabel(input.ownerId, input.displayNameByUserId),
         ownerAvatarUrl: resolveUserAvatar(input.ownerId, input.avatarUrlByUserId),
         doerLabel: resolveUserLabel(node.doerId, input.displayNameByUserId),
+        doerAvatarUrl: resolveUserAvatar(node.doerId, input.avatarUrlByUserId),
         onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
       },

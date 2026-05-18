@@ -315,7 +315,7 @@ export type PlanningNodeStatus = 'waiting' | 'running' | 'blocked' | 'done' | 'p
 export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
-export type PlannerWorkflowRunState = 'pending' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
+export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
 export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
 export type PlannerArtifactKind =
   | 'idea-draft'
@@ -397,6 +397,7 @@ export type PlannerEventType =
   | 'node.created'
   | 'node.updated'
   | 'node.state_changed'
+  | 'node.output_submitted'
   | 'proposal.created'
   | 'proposal.approved'
   | 'proposal.applied'
@@ -412,6 +413,61 @@ export interface PlannerEvent {
   summary: string
   artifactRefs: string[]
   createdAt: string
+}
+
+export type PlannerNodeOutputStatus = 'done' | 'blocked' | 'needs_review'
+export type PlannerNodeOutputNext = 'complete' | 'blocked' | 'needs_owner_review'
+
+export interface PlannerNodeOutputMessage {
+  summary: string
+  routeTo: string[]
+}
+
+export interface PlannerNodeOutputArtifact {
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  routeTo: string[]
+}
+
+export interface PlannerNodeOutput {
+  nodeId: string
+  status: PlannerNodeOutputStatus
+  message?: PlannerNodeOutputMessage | null
+  artifacts: PlannerNodeOutputArtifact[]
+  next: PlannerNodeOutputNext
+}
+
+export interface PlannerRouteTarget {
+  id: string
+  label: string
+  kind: string
+  hasDoer: boolean
+  hasSession: boolean
+}
+
+export interface PlannerNodeContract {
+  canvas: PlanningCanvas
+  node: PlanningNode
+  upstreamNodes: PlanningNode[]
+  downstreamNodes: PlanningNode[]
+  allowedRouteTargets: PlannerRouteTarget[]
+  expectedArtifactKinds: PlannerArtifactKind[]
+  completionCriteria: string[]
+}
+
+export interface PlannerOutputRoute {
+  target: string
+  targetNodeId?: string | null
+  targetSessionId?: string | null
+  routedMessage?: string | null
+  artifactRefs: string[]
+}
+
+export interface PlannerNodeOutputResult {
+  graph: PlannerGraphState
+  routes: PlannerOutputRoute[]
+  hint?: string | null
 }
 
 export interface PlanningNode {

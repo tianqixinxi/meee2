@@ -16,6 +16,7 @@ interface Props {
   onApplyPreview: () => void
   onApprove: () => void
   onApply: () => void
+  onApproveAndApply: () => void
   onReject: () => void
   onCreateDeliveryPipeline?: () => void
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
@@ -35,6 +36,7 @@ export function PlannerProposalPanel({
   onApplyPreview,
   onApprove,
   onApply,
+  onApproveAndApply,
   onReject,
   onCreateDeliveryPipeline,
   reviewRequestTick,
@@ -72,7 +74,7 @@ export function PlannerProposalPanel({
               <div className="planner-dialog__message-meta">
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
-                {previewActive && <span>preview active</span>}
+                {previewActive && <span>Previewing proposal</span>}
               </div>
               <MarkdownMessage markdown={proposalChatMarkdown(proposal)} />
               <div className="planner-dialog__actions planner-dialog__actions--single">
@@ -131,7 +133,7 @@ export function PlannerProposalPanel({
           placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to change the graph'}
           rows={5}
         />
-        <div className="planner-proposal-panel__buttons">
+        <div className="planner-proposal-panel__buttons" aria-label="Send message">
           <button
             type="button"
             className="primary"
@@ -143,9 +145,9 @@ export function PlannerProposalPanel({
               setMessage('')
             }}
             title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
+            aria-label="Send to meee2 AI"
           >
             <Send size={14} aria-hidden />
-            Send
           </button>
         </div>
       </div>
@@ -172,10 +174,9 @@ export function PlannerProposalPanel({
               <p>{proposal.changes.length} proposed graph {proposal.changes.length === 1 ? 'change' : 'changes'}</p>
             </div>
             <div className="planner-proposal-modal__flow" aria-label="Proposal action order">
-              <span className={previewActive ? 'is-done' : ''}>1 Preview graph</span>
-              <span className={proposal.status === 'approved' || proposal.status === 'applied' ? 'is-done' : ''}>2 Approve</span>
-              <span className={proposal.status === 'applied' ? 'is-done' : ''}>3 Apply to live graph</span>
-              <em>Reject can be used before apply</em>
+              <span className={previewActive ? 'is-done' : ''}>1 Preview changes</span>
+              <span className={proposal.status === 'applied' ? 'is-done' : ''}>2 Approve and apply</span>
+              <em>Reject before apply if the proposal is wrong</em>
             </div>
             <MarkdownMessage markdown={proposalMarkdown(proposal)} />
             <div className="planner-proposal-modal__actions">
@@ -190,28 +191,20 @@ export function PlannerProposalPanel({
                 }
               >
                 <Eye size={14} aria-hidden />
-                {previewActive ? 'Update preview' : 'Preview graph'}
-              </button>
-              <button
-                type="button"
-                disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
-                onClick={onApprove}
-                title="Owner sign-off. Marks the proposal approved — it still does NOT touch the live graph."
-              >
-                <Check size={14} aria-hidden />
-                Approve proposal
+                Preview changes
               </button>
               <button
                 type="button"
                 className="primary"
-                disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
+                disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !canApproveAndApply(proposal, access)}
                 onClick={() => {
-                  onApply()
+                  onApproveAndApply()
                   setReviewOpen(false)
                 }}
                 title="Write the approved changes into the live graph. This is the only step that mutates the real workflow."
               >
-                Apply to live
+                <Check size={14} aria-hidden />
+                Approve and apply
               </button>
               <button
                 type="button"
@@ -223,6 +216,28 @@ export function PlannerProposalPanel({
               >
                 Reject
               </button>
+              <details className="planner-proposal-modal__advanced">
+                <summary>Advanced</summary>
+                <div>
+                  <button
+                    type="button"
+                    disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
+                    onClick={onApprove}
+                  >
+                    Approve only
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
+                    onClick={() => {
+                      onApply()
+                      setReviewOpen(false)
+                    }}
+                  >
+                    Apply approved
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
         </div>
@@ -261,8 +276,8 @@ function workflowGuideCopy(
   if (proposal?.status === 'pending') {
     return previewActive
       ? {
-          title: 'Approve the proposal if the preview is right',
-          body: 'Preview is only a temporary graph. Approve first, then apply it to the live workflow.',
+          title: 'Approve and apply if the preview is right',
+          body: 'Preview is temporary. The main action approves the proposal and applies it to the live workflow.',
         }
       : {
           title: 'Preview this proposal',
@@ -271,8 +286,8 @@ function workflowGuideCopy(
   }
   if (proposal?.status === 'approved') {
     return {
-      title: 'Apply to live graph',
-      body: 'The owner has approved this proposal. Apply it to make the workflow state real.',
+      title: 'Apply the approved proposal',
+      body: 'This proposal is already approved. Use Approve and apply to make it live.',
     }
   }
   if (nodeCount === 0) {
@@ -284,13 +299,23 @@ function workflowGuideCopy(
   if (hasActionableDrift) {
     return {
       title: 'Inspect blocked or review nodes',
-      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open Details on a node for bindings and artifacts.',
+      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open a node for execution or evidence details.',
     }
   }
   return {
-    title: 'Dispatch the next step',
-    body: 'Open a node Details modal, bind a session only when you know the relation, then dispatch or attach artifacts.',
+    title: 'Start the next step',
+    body: 'Open a node, start work or attach a known existing session, then submit structured output when the step is done or blocked.',
   }
+}
+
+function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null): boolean {
+  if (proposal.status === 'pending') {
+    return Boolean(access?.canApproveProposal && access?.canApplyProposal)
+  }
+  if (proposal.status === 'approved') {
+    return Boolean(access?.canApplyProposal)
+  }
+  return false
 }
 
 function MarkdownMessage({ markdown }: { markdown: string }) {
@@ -328,21 +353,33 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
 function proposalMarkdown(proposal: PlanProposal): string {
   const rows = proposal.changes.map((change) => {
     if (change.kind === 'addNode') {
-      return `| add node | ${escapeMarkdown(change.node?.title ?? 'Untitled node')} |`
+      const node = change.node
+      return `| add node | ${escapeMarkdown(node?.title ?? 'Untitled node')} | ${escapeMarkdown(changeDetails([
+        node?.nodeKind,
+        node?.status,
+        node?.doerId ? `doer ${node.doerId}` : null,
+        node?.dependsOnNodeIds?.length ? `${node.dependsOnNodeIds.length} deps` : null,
+        node?.ioSchema ? schemaSummary(node.ioSchema) : null,
+        node?.contextSources?.length ? `${node.contextSources.length} context` : null,
+      ]))} |`
     }
     const target = change.title ?? change.nodeId ?? 'Unknown node'
-    const details = [
-      change.status,
-      change.ioSchema ? 'schema' : null,
-      change.contextSources ? 'context' : null,
+    const details = changeDetails([
+      change.title ? `title -> ${change.title}` : null,
+      change.status ? `status -> ${change.status}` : null,
+      change.ioSchema ? schemaSummary(change.ioSchema) : null,
+      change.contextSources ? `${change.contextSources.length} context source${change.contextSources.length === 1 ? '' : 's'}` : null,
       change.dependsOnNodeIds ? `${change.dependsOnNodeIds.length} deps` : null,
-      change.subCanvasId ? 'sub-canvas' : null,
-      change.nodeKind ? change.nodeKind : null,
+      change.doerId ? `doer -> ${change.doerId}` : null,
+      change.subCanvasId ? `sub-canvas -> ${change.subCanvasId}` : null,
+      change.nodeKind ? `kind -> ${change.nodeKind}` : null,
+      change.gate ? `gate -> ${change.gate.label}` : null,
+      change.dispatch ? `runner -> ${change.dispatch.runner}` : null,
       change.workflowRunState ? change.workflowRunState : null,
       change.sessionId ? 'session bind' : null,
-      change.artifactRefs ? `${change.artifactRefs.length} artifacts` : null,
-    ].filter(Boolean).join(', ')
-    return `| update node | ${escapeMarkdown(target)}${details ? ` (${escapeMarkdown(details)})` : ''} |`
+      change.artifactRefs ? `${change.artifactRefs.length} outputs` : null,
+    ])
+    return `| update node | ${escapeMarkdown(target)} | ${escapeMarkdown(details || 'metadata update')} |`
   })
 
   return [
@@ -350,8 +387,8 @@ function proposalMarkdown(proposal: PlanProposal): string {
     '',
     `Status: **${proposal.status}**`,
     '',
-    '| Change | Target |',
-    '|---|---|',
+    '| Change | Target | Detail |',
+    '|---|---|---|',
     ...rows,
   ].join('\n')
 }
@@ -374,4 +411,14 @@ function proposalChatMarkdown(proposal: PlanProposal): string {
 
 function escapeMarkdown(value: string): string {
   return value.replace(/\|/g, '\\|')
+}
+
+function changeDetails(values: Array<string | null | undefined>): string {
+  return values.filter(Boolean).join(', ')
+}
+
+function schemaSummary(schema: { consumes: string[]; produces: string[]; completionSignal: string }): string {
+  const consumes = schema.consumes.length ? `in ${schema.consumes.join('+')}` : 'no input'
+  const produces = schema.produces.length ? `out ${schema.produces.join('+')}` : 'no output'
+  return `schema ${consumes} -> ${produces}; done=${schema.completionSignal}`
 }

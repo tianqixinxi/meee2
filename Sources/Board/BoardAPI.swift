@@ -789,7 +789,7 @@ enum BoardAPI {
             // the session node, and records the spawn intent right here.
             let result = try PlannerBoardBridge.dispatchNode(
                 nodeId: nodeId,
-                runner: body?.runner ?? .byoaLocal,
+                runner: body?.runner ?? .claude,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
@@ -853,6 +853,52 @@ enum BoardAPI {
                 artifacts: state.artifacts,
                 edges: state.edges
             ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func getPlannerNodeContract(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        do {
+            let contract = try PlannerBoardBridge.nodeContract(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(contract)
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func submitPlannerNodeOutput(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let output = decodeJSONBody(req, as: PlannerNodeOutput.self) else {
+            return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
+        }
+        do {
+            let result = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            routePlannerOutputMessages(result.routes)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1012,8 +1058,11 @@ enum BoardAPI {
              .updateNodeNoFields,
              .crossCanvasNodeReference,
              .unknownNodeKind,
-             .unknownChangeKind:
+             .unknownChangeKind,
+             .invalidNodeOutput:
             return errorResponse("planner_error", err.localizedDescription, status: 400)
+        case .activeSessionExists:
+            return errorResponse("active_session_exists", err.localizedDescription, status: 409)
         }
     }
 
@@ -1070,6 +1119,47 @@ enum BoardAPI {
             lines.append("Gate: \(gate.label)")
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func routePlannerOutputMessages(_ routes: [PlannerOutputRoute]) {
+        for route in routes {
+            guard let sessionId = route.targetSessionId,
+                  let message = plannerOutputMessage(route: route) else { continue }
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
+                _ = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: message,
+                    injectedByHuman: false
+                )
+            } catch {
+                MWarn("[PlannerOutput] route to session \(sessionId.prefix(8)) failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private static func plannerOutputMessage(route: PlannerOutputRoute) -> String? {
+        var lines: [String] = []
+        if let routedMessage = route.routedMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !routedMessage.isEmpty {
+            lines.append(routedMessage)
+        }
+        if !route.artifactRefs.isEmpty {
+            lines.append("Artifacts:")
+            for ref in route.artifactRefs {
+                lines.append("- \(ref)")
+            }
+        }
+        guard !lines.isEmpty else { return nil }
+        return [
+            "Planner routed upstream output to this node.",
+            "",
+            lines.joined(separator: "\n"),
+            "",
+            "Use read_node_contract before continuing, then submit_node_output when this node is complete or blocked."
+        ].joined(separator: "\n")
     }
 
     private static func currentBoardSessions() -> [SessionDTO] {

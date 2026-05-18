@@ -5,19 +5,36 @@ import type { BoardState, Session } from '../types'
 
 interface Props {
   state: BoardState | null
+  unreadSids: Set<string>
 }
 
-export function SessionsView({ state }: Props) {
+type SessionFilter = 'all' | 'attention' | 'unread'
+
+export function SessionsView({ state, unreadSids }: Props) {
   const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<SessionFilter>('all')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
   const sessions = state?.sessions ?? []
+  const attentionCount = useMemo(
+    () => sessions.filter((session) => sessionNeedsAttention(session)).length,
+    [sessions],
+  )
+  const unreadCount = useMemo(
+    () => sessions.filter((session) => unreadSids.has(session.id)).length,
+    [sessions, unreadSids],
+  )
   const visibleSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return sessions
       .filter((session) => sessionMatchesQuery(session, normalized))
+      .filter((session) => {
+        if (filter === 'attention') return sessionNeedsAttention(session)
+        if (filter === 'unread') return unreadSids.has(session.id)
+        return true
+      })
       .sort(compareSessions)
-  }, [query, sessions])
+  }, [filter, query, sessions, unreadSids])
 
   const openSession = async (session: Session) => {
     setOpeningId(session.id)
@@ -35,14 +52,21 @@ export function SessionsView({ state }: Props) {
             <h1>Sessions</h1>
             <p>Live local AI sessions. meee2 AI nodes only attach after explicit binding.</p>
           </div>
-          <label className="sessions-search">
-            <Search size={14} aria-hidden />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search title, plugin, project, status"
-            />
-          </label>
+          <div className="sessions-workspace__tools">
+            <label className="sessions-search">
+              <Search size={14} aria-hidden />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search title, plugin, project, status"
+              />
+            </label>
+            <div className="sessions-filters" aria-label="Session filters">
+              <FilterButton label="All" count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
+              <FilterButton label="Attention" count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
+              <FilterButton label="Unread" count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
+            </div>
+          </div>
         </div>
         {sessions.length === 0 ? (
           <div className="sessions-empty">
@@ -70,6 +94,7 @@ export function SessionsView({ state }: Props) {
                   session={session}
                   opening={openingId === session.id}
                   openError={openErrorId === session.id}
+                  unread={unreadSids.has(session.id)}
                   onOpen={() => openSession(session)}
                 />
               ))}
@@ -85,18 +110,24 @@ function SessionRow({
   session,
   opening,
   openError,
+  unread,
   onOpen,
 }: {
   session: Session
   opening: boolean
   openError: boolean
+  unread: boolean
   onOpen: () => void
 }) {
   const attention = sessionNeedsAttention(session)
   const context = session.currentTask || session.latestRecap?.content || session.recentMessages[0]?.text || ''
   return (
     <article
-      className={`sessions-row${attention ? ' sessions-row--attention' : ''}`}
+      className={[
+        'sessions-row',
+        attention ? 'sessions-row--attention' : '',
+        unread ? 'sessions-row--unread' : '',
+      ].filter(Boolean).join(' ')}
       onDoubleClick={onOpen}
       title="Double-click to open original session"
     >
@@ -108,6 +139,7 @@ function SessionRow({
           <div className="sessions-row__title">
             <strong>{session.title || shortId(session.id)}</strong>
             <div className="sessions-row__badges">
+              {unread && <span className="sessions-row__unread">Unread</span>}
               {attention && <span className="sessions-row__attention">Attention</span>}
               {session.inboxPending > 0 && <span className="sessions-row__count">{session.inboxPending}</span>}
             </div>
@@ -137,6 +169,30 @@ function SessionRow({
         </button>
       </div>
     </article>
+  )
+}
+
+function FilterButton({
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className={`sessions-filter${active ? ' is-active' : ''}`}
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      <em>{count}</em>
+    </button>
   )
 }
 

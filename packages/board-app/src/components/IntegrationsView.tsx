@@ -31,7 +31,7 @@ const CARDS: IntegrationCard[] = [
     id: 'github',
     name: 'GitHub',
     accent: '#D6D2CA',
-    description: 'PRs, commits, checks, releases',
+    description: 'Browse PRs, commits and checks as explicit node output sources',
     scopes: ['Repository', 'Pull requests', 'CI checks'],
     signals: ['artifact: impl-pr', 'artifact: main-merge', 'event: check-result'],
     Icon: GitPullRequest,
@@ -40,7 +40,7 @@ const CARDS: IntegrationCard[] = [
     id: 'lark',
     name: 'Lark',
     accent: '#8BA9C2',
-    description: 'Docs, meetings, sign-off records',
+    description: 'Browse docs and meeting records as explicit node output sources',
     scopes: ['Wiki / Docs', 'Meetings', 'Approval notes'],
     signals: ['artifact: idea-draft', 'artifact: prd', 'gate: sign-off'],
     Icon: MessageSquareText,
@@ -110,9 +110,9 @@ export function IntegrationsView(_props: Props) {
           <strong>Runtime boundary</strong>
         </div>
         <p>
-          Integrations provide readable artifacts and dispatch context. They do not auto-link
-          existing sessions to graph nodes. To attach an item as an artifact, open a planner node
-          and use its "Attach artifact" action.
+          Integrations are not new Planner node types. They provide readable output sources only.
+          To use GitHub or Lark in a workflow, open a node, go to Evidence, and add the selected
+          item as output. Existing sessions are never auto-linked to nodes.
         </p>
       </section>
     </section>

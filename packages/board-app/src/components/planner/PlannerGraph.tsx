@@ -362,6 +362,44 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .finally(() => setBusy(false))
   }, [canvasId, canvasName, proposal])
 
+  const handleApproveAndApply = useCallback(() => {
+    if (!proposal) return
+    setBusy(true)
+    setError(null)
+    const applyApproved = (proposalId: string) => applyPlannerProposal(canvasId, proposalId)
+    const work = proposal.status === 'pending'
+      ? approvePlannerProposal(canvasId, proposal.id).then((next) => {
+          if (!next) throw new Error('Proposal approval did not return an approved proposal')
+          return applyApproved(next.id)
+        })
+      : applyApproved(proposal.id)
+    work
+      .then((result) => {
+        setProposal(result.proposal)
+        setPlannerState((current) => {
+          const canvas = current?.canvas ?? {
+            id: canvasId,
+            ownerId: 'local-owner',
+            title: canvasName,
+            plannerContext: `canvas:${canvasId}`,
+          }
+          return {
+            canvas,
+            nodes: result.nodes,
+            states: result.states,
+            proposals: upsertProposal(current?.proposals ?? [], result.proposal),
+            access: current?.access ?? defaultPlannerAccess(),
+            activities: current?.activities ?? [],
+            artifacts: current?.artifacts ?? [],
+            edges: current?.edges ?? [],
+          }
+        })
+        setPreviewActive(false)
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to approve and apply meee2 AI proposal'))
+      .finally(() => setBusy(false))
+  }, [canvasId, canvasName, proposal])
+
   const handleReject = useCallback(() => {
     if (!proposal) return
     setBusy(true)
@@ -560,6 +598,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
                 setSelectedNodeId(null)
                 setNodeModalOpen(false)
               }}
+              nodesDraggable
               fitView={!window.matchMedia('(max-width: 720px)').matches}
               minZoom={0.35}
               maxZoom={1.6}
@@ -571,13 +610,13 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
                 position="bottom-right"
                 nodeColor={miniMapNodeFill}
                 nodeStrokeColor={miniMapNodeColor}
-                nodeBorderRadius={4}
-                nodeStrokeWidth={3}
-                bgColor="rgba(31, 31, 29, 0.96)"
-                maskColor="rgba(20, 20, 18, 0.62)"
-                maskStrokeColor="rgba(204, 120, 92, 0.55)"
-                maskStrokeWidth={2}
-                offsetScale={6}
+                nodeBorderRadius={5}
+                nodeStrokeWidth={2}
+                bgColor="rgba(26, 26, 24, 0.98)"
+                maskColor="rgba(10, 10, 9, 0.34)"
+                maskStrokeColor="rgba(204, 120, 92, 0.72)"
+                maskStrokeWidth={1.5}
+                offsetScale={4}
                 pannable
                 zoomable
               />
@@ -605,6 +644,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               onApplyPreview={handleApplyPreview}
               onApprove={handleApprove}
               onApply={handleApply}
+              onApproveAndApply={handleApproveAndApply}
               onReject={handleReject}
               onCreateDeliveryPipeline={handleCreateDeliveryPipeline}
               reviewRequestTick={reviewRequestTick}
@@ -667,19 +707,21 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
 
 function miniMapNodeFill(node: { data?: Record<string, unknown> }): string {
   const data = node.data
-  const plannerNode = data?.node as { nodeKind?: string; source?: string } | null | undefined
-  const kind = plannerNode?.nodeKind ?? (plannerNode?.source === 'session' ? 'session' : 'step')
-  switch (kind) {
-    case 'session':
-      return 'rgba(38, 45, 50, 0.94)'
-    case 'artifact':
-      return 'rgba(48, 43, 34, 0.94)'
-    case 'subCanvas':
-      return 'rgba(51, 44, 40, 0.94)'
-    case 'external':
-      return 'rgba(54, 53, 50, 0.72)'
+  const state = data?.state as { runState?: string; needsOwnerReview?: boolean } | null | undefined
+  const plannerNode = data?.node as { status?: string } | null | undefined
+  const status = state?.needsOwnerReview ? 'review' : state?.runState ?? plannerNode?.status
+  switch (status) {
+    case 'blocked':
+    case 'review':
+      return 'rgba(194, 106, 106, 0.72)'
+    case 'running':
+      return 'rgba(139, 169, 194, 0.72)'
+    case 'planning':
+      return 'rgba(212, 163, 115, 0.72)'
+    case 'done':
+      return 'rgba(127, 169, 130, 0.72)'
     default:
-      return 'rgba(44, 43, 41, 0.94)'
+      return 'rgba(168, 165, 155, 0.56)'
   }
 }
 

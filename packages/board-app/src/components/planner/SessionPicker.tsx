@@ -13,8 +13,8 @@ interface Props {
 
 /**
  * Reusable local-session picker. Mirrors `SessionsView` styling but is a compact
- * modal: search + a scrollable list, one click binds. Used by Gap 2 (bind an
- * existing session to a planner node). Picking returns a `PlanProposal` upstream.
+ * modal: search + a scrollable list, one click attaches an existing session to
+ * a planner node's single active-session slot.
  */
 export function SessionPicker({ sessions, busy = false, onPick, onClose }: Props) {
   const [query, setQuery] = useState('')
@@ -34,7 +34,7 @@ export function SessionPicker({ sessions, busy = false, onPick, onClose }: Props
         className="planner-session-picker"
         role="dialog"
         aria-modal="true"
-        aria-label="Bind an existing session"
+        aria-label="Attach an existing session"
       >
         <button
           type="button"
@@ -45,8 +45,8 @@ export function SessionPicker({ sessions, busy = false, onPick, onClose }: Props
           <X size={15} aria-hidden />
         </button>
         <div className="planner-session-picker__header">
-          <h3>Bind an existing session</h3>
-          <p>Pick a local session to attach to this node. Binding creates a proposal — nothing changes until you apply it.</p>
+          <h3>Attach an existing session</h3>
+          <p>Pick one local session for this node. A node can have only one active session.</p>
         </div>
         <label className="planner-session-picker__search">
           <Search size={13} aria-hidden />
@@ -60,7 +60,7 @@ export function SessionPicker({ sessions, busy = false, onPick, onClose }: Props
         {sessions.length === 0 ? (
           <div className="planner-session-picker__empty">
             <Terminal size={16} aria-hidden />
-            <span>No local sessions to bind.</span>
+            <span>No local sessions to attach.</span>
           </div>
         ) : visibleSessions.length === 0 ? (
           <div className="planner-session-picker__empty">

@@ -87,6 +87,23 @@ export function TeamView({ state, activeCanvas, userProfile }: Props) {
 
         {error && <div className="team-view__error">{error}</div>}
 
+        <div className="team-view__guidance" aria-label="Assignment flow">
+          <div>
+            <strong>How assignment reaches Planner cards</strong>
+            <p>
+              Open a node, use Execution to assign a doer, then the card shows that member's resolved avatar and name.
+              Starting or attaching a session is still explicit per node; meee2 does not infer a session from assignment.
+            </p>
+          </div>
+        </div>
+
+        {members.length === 0 && (
+          <div className="team-view__empty">
+            <User size={16} aria-hidden />
+            <span>No team members are available yet. Owner and doer chips will use the fixed user placeholder until profiles exist.</span>
+          </div>
+        )}
+
         <div className="team-view__grid">
           {members.map((member) => (
             <TeamMemberCard

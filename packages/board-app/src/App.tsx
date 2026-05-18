@@ -477,7 +477,7 @@ export default function App() {
               onOpenSubCanvas={handleSetActiveCanvas}
             />
           ) : workspaceMode === 'sessions' ? (
-            <SessionsView state={boardState.state} />
+            <SessionsView state={boardState.state} unreadSids={unreadSids} />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView state={boardState.state} />
           ) : workspaceMode === 'team' ? (

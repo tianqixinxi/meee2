@@ -264,33 +264,33 @@ final class PlannerCoreTests: XCTestCase {
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .failed), blockers: nil),
-            "Failed — inspect the failure and re-dispatch."
+            "Failed — inspect the failure and start work again."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .failed), blockers: ["upstream broke"]),
-            "Failed — clear the blockers, then re-dispatch."
+            "Failed — clear the blockers, then start work again."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .pending), blockers: nil),
-            "Ready — dispatch this step to start work."
+            "Ready — start work on this step."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(
                 for: guidanceNode(runState: .pending, dependsOn: ["node-upstream"]),
                 blockers: nil
             ),
-            "Waiting on an upstream step — dispatch once it clears."
+            "Waiting on an upstream step — start work once it clears."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .dispatched), blockers: nil),
-            "Dispatched — waiting for the session to spin up."
+            "Starting — waiting for the session to spin up."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(
                 for: guidanceNode(runState: .dispatched, sessionId: "sess-1"),
                 blockers: nil
             ),
-            "Dispatched — open the session to follow progress."
+            "Started — open the session to follow progress."
         )
         XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .running), blockers: nil),
@@ -1813,6 +1813,133 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(moved.nodes.first { $0.id == node.id }?.layout?.x, 10)
     }
 
+    func testNodeContractListsOnlyDownstreamAndOwnerRouteTargets() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let contract = try PlannerBoardBridge.nodeContract(
+            nodeId: "canvas-a-node-1",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(contract.node.id, "canvas-a-node-1")
+        XCTAssertTrue(contract.downstreamNodes.contains { $0.id == "canvas-a-node-2" })
+        XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-2" })
+        XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "owner" })
+        XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
+    }
+
+    func testSubmitNodeOutputRoutesArtifactToDownstreamReadyToStart() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: "canvas-a-node-1",
+            output: PlannerNodeOutput(
+                nodeId: "canvas-a-node-1",
+                status: .done,
+                message: PlannerNodeOutputMessage(
+                    summary: "Idea draft is ready",
+                    routeTo: ["canvas-a-node-2"]
+                ),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .ideaDraft,
+                        title: "Idea draft",
+                        reference: "lark://doc/idea",
+                        routeTo: ["canvas-a-node-2"]
+                    )
+                ],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(result.graph.nodes.first { $0.id == "canvas-a-node-1" }?.status, .done)
+        let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-2" })
+        XCTAssertEqual(downstream.workflowRunState, .readyToStart)
+        XCTAssertTrue(downstream.contextSources.contains { $0.reference == "lark://doc/idea" })
+        XCTAssertTrue(result.graph.artifacts.contains { $0.reference == "lark://doc/idea" })
+        XCTAssertTrue(result.routes.contains { $0.targetNodeId == "canvas-a-node-2" })
+    }
+
+    func testSubmitNodeOutputRejectsInvalidRouteWithoutMutation() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        XCTAssertThrowsError(try PlannerBoardBridge.submitNodeOutput(
+            nodeId: "canvas-a-node-1",
+            output: PlannerNodeOutput(
+                nodeId: "canvas-a-node-1",
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Invalid route", routeTo: ["canvas-a-node-3"]),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            guard case .invalidNodeOutput(let hint) = error as? PlannerCoreError else {
+                return XCTFail("Expected invalidNodeOutput, got \(error)")
+            }
+            XCTAssertTrue(hint.contains("Allowed"))
+        }
+
+        let reloaded = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        XCTAssertEqual(reloaded.nodes.first { $0.id == "canvas-a-node-1" }?.status, .running)
+        XCTAssertFalse(reloaded.nodes.first { $0.id == "canvas-a-node-3" }?.contextSources.contains {
+            $0.reference.hasPrefix("planner-output://")
+        } == true)
+    }
+
+    func testSubmitNodeOutputToUnassignedDownstreamNeedsOwnerReview() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let proposal = try PlannerBoardBridge.graphChangeProposal(
+            summary: "Unassign downstream",
+            changes: [.updateNode(id: "canvas-a-node-2", doerId: "")],
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: "canvas-a-node-1",
+            output: PlannerNodeOutput(
+                nodeId: "canvas-a-node-1",
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Needs assignment", routeTo: ["canvas-a-node-2"]),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-2" })
+        XCTAssertEqual(downstream.status, .blocked)
+        XCTAssertEqual(downstream.workflowRunState, .gateWait)
+        XCTAssertTrue(result.graph.states.first { $0.nodeId == downstream.id }?.needsOwnerReview == true)
+    }
+
     // MARK: - Phase 2: dispatch 真执行 (now execution-layer / direct)
 
     /// Dispatching a step to a spawning runner (claude/codex/byoa-local) is an
@@ -2010,9 +2137,9 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(run.status, .failed)
     }
 
-    /// Direct dispatch is idempotent — re-dispatching the same node to a
-    /// spawning runner does not spawn a second session node.
-    func testDispatchDirectDoesNotDoubleSpawnSessionNode() throws {
+    /// Direct dispatch occupies the node's single active-session slot; a second
+    /// dispatch must fail instead of creating another session.
+    func testDispatchDirectRejectsSecondActiveSession() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let before = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
@@ -2023,17 +2150,17 @@ final class PlannerCoreTests: XCTestCase {
             for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
         )
         XCTAssertEqual(once.graph.nodes.filter { $0.nodeKind == .session }.count, 1)
-        let twice = try PlannerBoardBridge.dispatchNode(
+        XCTAssertThrowsError(try PlannerBoardBridge.dispatchNode(
             nodeId: step.id, runner: .byoaLocal,
             for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
-        )
-        XCTAssertEqual(twice.graph.nodes.filter { $0.nodeKind == .session }.count, 1)
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .activeSessionExists(nodeId: step.id))
+        }
     }
 
     /// `applyNodeChange` is idempotent — re-applying an identical dispatch
     /// change does not spawn a second session node.
     func testDispatchApplyDoesNotDoubleSpawnSessionNode() throws {
-        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let step = try XCTUnwrap(record.nodes.first { ($0.nodeKind ?? .step) == .step })
 

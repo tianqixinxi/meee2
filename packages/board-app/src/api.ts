@@ -15,6 +15,9 @@ import type {
   PlannerGraphState,
   WorkflowRun,
   PlannerMonitorState,
+  PlannerNodeContract,
+  PlannerNodeOutput,
+  PlannerNodeOutputResult,
   PlanningNode,
   PlannerNodeLayout,
   PlanChange,
@@ -818,7 +821,7 @@ export function bindPlannerSessionToNode(
 export function dispatchPlannerNodeSession(
   canvasId: string,
   nodeId: string,
-  runner: PlannerDispatchRunner = 'byoa-local',
+  runner: PlannerDispatchRunner = 'claude',
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
@@ -863,6 +866,29 @@ export async function abortPlannerRun(runId: string): Promise<WorkflowRun> {
     { method: 'POST', body: '{}' },
   )
   return res.run
+}
+
+export function fetchPlannerNodeContract(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerNodeContract> {
+  return jsonRequest<PlannerNodeContract>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contract`,
+  )
+}
+
+export function submitPlannerNodeOutput(
+  canvasId: string,
+  nodeId: string,
+  output: PlannerNodeOutput,
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/output`,
+    {
+      method: 'POST',
+      body: JSON.stringify(output),
+    },
+  )
 }
 
 export function attachPlannerArtifactToNode(

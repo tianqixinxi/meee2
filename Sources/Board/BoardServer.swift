@@ -420,6 +420,8 @@ public final class BoardServer {
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/bind-session"] = BoardServer.cors(BoardAPI.bindPlannerSessionToNode)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/dispatch"] = BoardServer.cors(BoardAPI.dispatchPlannerNodeSession)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/artifacts"] = BoardServer.cors(BoardAPI.attachPlannerArtifactToNode)
+        server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/layout"] = BoardServer.cors(BoardAPI.updatePlannerNodeLayout)
         // P1 Run layer — start / list / inspect / abort workflow runs.
