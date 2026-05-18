@@ -13,6 +13,7 @@ import type {
   PlannerActivity,
   PlannerCanvasState,
   PlannerGraphState,
+  WorkflowRun,
   PlannerMonitorState,
   PlanningNode,
   PlannerNodeLayout,
@@ -826,6 +827,42 @@ export function dispatchPlannerNodeSession(
       body: JSON.stringify({ runner }),
     },
   )
+}
+
+// -- P1/P3: Workflow Run layer --------------------------------------------
+
+/** Start a new workflow run over the canvas's current node structure. */
+export async function startPlannerRun(canvasId: string): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/runs`,
+    { method: 'POST', body: '{}' },
+  )
+  return res.run
+}
+
+/** Run history for a canvas (creation order). */
+export async function fetchPlannerRuns(canvasId: string): Promise<WorkflowRun[]> {
+  const res = await jsonRequest<{ runs: WorkflowRun[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/runs`,
+  )
+  return res.runs
+}
+
+/** A single run's full execution state. */
+export async function fetchPlannerRun(runId: string): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/runs/${encodeURIComponent(runId)}`,
+  )
+  return res.run
+}
+
+/** Human-terminate a run. */
+export async function abortPlannerRun(runId: string): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/runs/${encodeURIComponent(runId)}/abort`,
+    { method: 'POST', body: '{}' },
+  )
+  return res.run
 }
 
 export function attachPlannerArtifactToNode(

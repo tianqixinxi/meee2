@@ -416,6 +416,76 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Run layer (P1)
+
+    /// POST /api/planner/canvases/:id/runs — start a new workflow run.
+    static func startPlannerRun(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let run = try PlannerBoardBridge.startRun(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(WorkflowRunEnvelope(run: run))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// GET /api/planner/canvases/:id/runs — run history for a canvas.
+    static func listPlannerRuns(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let runs = try PlannerBoardBridge.runs(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(WorkflowRunsEnvelope(runs: runs))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// GET /api/planner/runs/:runId — a single run's full execution state.
+    static func getPlannerRun(_ req: HttpRequest) -> HttpResponse {
+        guard let runId = req.params[":runId"], !runId.isEmpty else {
+            return errorResponse("bad_request", "missing run id", status: 400)
+        }
+        do {
+            let run = try PlannerBoardBridge.run(runId: runId)
+            return jsonResponse(WorkflowRunEnvelope(run: run))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// POST /api/planner/runs/:runId/abort — human-terminate a run.
+    static func abortPlannerRun(_ req: HttpRequest) -> HttpResponse {
+        guard let runId = req.params[":runId"], !runId.isEmpty else {
+            return errorResponse("bad_request", "missing run id", status: 400)
+        }
+        do {
+            let run = try PlannerBoardBridge.abortRun(runId: runId)
+            return jsonResponse(WorkflowRunEnvelope(run: run))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func generatePlannerProposal(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
@@ -928,7 +998,7 @@ enum BoardAPI {
 
     private static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
         switch err {
-        case .canvasNotFound, .proposalNotFound:
+        case .canvasNotFound, .proposalNotFound, .runNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
         case .permissionDenied:
             return errorResponse("forbidden", err.localizedDescription, status: 403)

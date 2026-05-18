@@ -642,6 +642,43 @@ textarea {
   padding-top: 12px;
 }
 
+/* U7 — Configure (auth) block + footer actions */
+.integration-card__configure {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid rgba(212, 163, 115, 0.26);
+  border-radius: var(--radius-sm);
+  background: rgba(212, 163, 115, 0.08);
+}
+
+.integration-card__configure-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.integration-card__configure code {
+  font-size: 11px;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.integration-card__configure-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.integration-card__footer-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
 /* -- Integration artifact picker ------------------------------------------ */
 
 .integration-picker {

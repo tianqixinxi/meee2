@@ -51,9 +51,13 @@ export function IntegrationsView(_props: Props) {
   const [statuses, setStatuses] = useState<IntegrationStatus[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [openProvider, setOpenProvider] = useState<IntegrationId | null>(null)
+  // U7 — bump to re-probe connection status after the user runs `ccops set`.
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
     let cancelled = false
+    setStatuses(null)
+    setLoadError(null)
     fetchIntegrationStatus()
       .then((res) => {
         if (!cancelled) setStatuses(res.integrations)
@@ -64,7 +68,7 @@ export function IntegrationsView(_props: Props) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [reloadKey])
 
   const statusById = (id: IntegrationId): IntegrationStatus | null =>
     statuses?.find((item) => item.id === id) ?? null
@@ -95,6 +99,7 @@ export function IntegrationsView(_props: Props) {
             onToggle={() =>
               setOpenProvider((current) => (current === card.id ? null : card.id))
             }
+            onRecheck={() => setReloadKey((key) => key + 1)}
           />
         ))}
       </div>
@@ -120,12 +125,14 @@ function IntegrationCardView({
   loading,
   open,
   onToggle,
+  onRecheck,
 }: {
   card: IntegrationCard
   status: IntegrationStatus | null
   loading: boolean
   open: boolean
   onToggle: () => void
+  onRecheck: () => void
 }) {
   const Icon = card.Icon
   const connected = status?.connected ?? false
@@ -170,12 +177,20 @@ function IntegrationCardView({
         </div>
       </div>
 
-      {/* Auth / connection detail — for GitHub this is the ccops token hint. */}
+      {/* U7 — Configure: when not connected, surface the exact auth step
+          (GitHub = ccops token, Lark = install lark-cli) + a re-check. */}
       {!connected && status?.reason && (
-        <p className="integration-card__hint">
-          {card.id === 'github' ? <KeyRound size={12} aria-hidden /> : null}
+        <div className="integration-card__configure">
+          <span className="integration-card__configure-label">
+            <KeyRound size={12} aria-hidden /> Configure
+          </span>
           <code>{status.reason}</code>
-        </p>
+          <p className="integration-card__configure-hint">
+            {card.id === 'github'
+              ? 'Run the command above in a terminal, then re-check.'
+              : 'Install / sign in to lark-cli, then re-check.'}
+          </p>
+        </div>
       )}
 
       <div className="integration-card__footer">
@@ -183,9 +198,16 @@ function IntegrationCardView({
           {connected ? <CheckCircle2 size={13} aria-hidden /> : <KeyRound size={13} aria-hidden />}
           {connected ? 'Available to meee2 AI' : 'Connection required'}
         </div>
-        <button type="button" onClick={onToggle} disabled={loading || !connected}>
-          {open ? 'Hide' : 'Browse'}
-        </button>
+        <div className="integration-card__footer-actions">
+          {!connected && (
+            <button type="button" onClick={onRecheck} disabled={loading}>
+              {loading ? 'Checking…' : 'Re-check'}
+            </button>
+          )}
+          <button type="button" onClick={onToggle} disabled={loading || !connected}>
+            {open ? 'Hide' : 'Browse'}
+          </button>
+        </div>
       </div>
 
       {open && connected && (

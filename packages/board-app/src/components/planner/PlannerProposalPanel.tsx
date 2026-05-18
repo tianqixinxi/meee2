@@ -183,6 +183,11 @@ export function PlannerProposalPanel({
                 type="button"
                 disabled={busy}
                 onClick={onApplyPreview}
+                title={
+                  previewActive
+                    ? 'Re-render the temporary preview graph — use this after the proposal changed. The live graph is still untouched.'
+                    : 'Render the proposal as a temporary preview graph. Nothing in the live graph changes.'
+                }
               >
                 <Eye size={14} aria-hidden />
                 {previewActive ? 'Update preview' : 'Preview graph'}
@@ -191,6 +196,7 @@ export function PlannerProposalPanel({
                 type="button"
                 disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
                 onClick={onApprove}
+                title="Owner sign-off. Marks the proposal approved — it still does NOT touch the live graph."
               >
                 <Check size={14} aria-hidden />
                 Approve proposal
@@ -203,6 +209,7 @@ export function PlannerProposalPanel({
                   onApply()
                   setReviewOpen(false)
                 }}
+                title="Write the approved changes into the live graph. This is the only step that mutates the real workflow."
               >
                 Apply to live
               </button>

@@ -422,6 +422,11 @@ public final class BoardServer {
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/artifacts"] = BoardServer.cors(BoardAPI.attachPlannerArtifactToNode)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/layout"] = BoardServer.cors(BoardAPI.updatePlannerNodeLayout)
+        // P1 Run layer — start / list / inspect / abort workflow runs.
+        server.POST["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.startPlannerRun)
+        server.GET["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.listPlannerRuns)
+        server.GET["/api/planner/runs/:runId"] = BoardServer.cors(BoardAPI.getPlannerRun)
+        server.POST["/api/planner/runs/:runId/abort"] = BoardServer.cors(BoardAPI.abortPlannerRun)
         server.GET["/api/coordination-groups"] = BoardServer.cors(BoardAPI.listCoordinationGroups)
         server.POST["/api/coordination-groups/:id/sync"] = BoardServer.cors(BoardAPI.syncCoordinationGroup)
         server.POST["/api/coordination-groups/:id/ask"] = BoardServer.cors(BoardAPI.askCoordinationGroup)

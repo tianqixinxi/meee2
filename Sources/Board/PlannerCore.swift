@@ -197,6 +197,14 @@ enum PlannerArtifactKind: String, Codable, Equatable {
     case generic
 }
 
+/// Who produced an artifact. Artifact production is source-agnostic — a human,
+/// an AI agent/session, or an external integration can all attach evidence.
+enum PlannerArtifactProducer: String, Codable, Equatable {
+    case human
+    case agent
+    case integration
+}
+
 struct PlannerArtifact: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -206,6 +214,51 @@ struct PlannerArtifact: Codable, Equatable {
     var reference: String
     var status: String
     var createdAt: Date
+    /// Who produced this artifact. Defaults to `.integration` for artifacts
+    /// persisted before this field existed (the only attach path back then).
+    var producedBy: PlannerArtifactProducer
+    /// The workflow run this artifact belongs to. `nil` until the Run layer
+    /// (P1) lands; afterwards every artifact is scoped to the run that made it.
+    var runId: String?
+
+    init(
+        id: String,
+        canvasId: String,
+        nodeId: String,
+        kind: PlannerArtifactKind,
+        title: String,
+        reference: String,
+        status: String,
+        createdAt: Date,
+        producedBy: PlannerArtifactProducer = .integration,
+        runId: String? = nil
+    ) {
+        self.id = id
+        self.canvasId = canvasId
+        self.nodeId = nodeId
+        self.kind = kind
+        self.title = title
+        self.reference = reference
+        self.status = status
+        self.createdAt = createdAt
+        self.producedBy = producedBy
+        self.runId = runId
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        canvasId = try container.decode(String.self, forKey: .canvasId)
+        nodeId = try container.decode(String.self, forKey: .nodeId)
+        kind = try container.decode(PlannerArtifactKind.self, forKey: .kind)
+        title = try container.decode(String.self, forKey: .title)
+        reference = try container.decode(String.self, forKey: .reference)
+        status = try container.decode(String.self, forKey: .status)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        // Legacy artifacts predate these fields — fall back gracefully.
+        producedBy = try container.decodeIfPresent(PlannerArtifactProducer.self, forKey: .producedBy) ?? .integration
+        runId = try container.decodeIfPresent(String.self, forKey: .runId)
+    }
 }
 
 struct PlannerGraphEdge: Codable, Equatable {
@@ -793,6 +846,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case nodeNotFound(String)
     case updateNodeNoFields(String)
     case canvasNotFound(String)
+    case runNotFound(String)
     case permissionDenied(action: String, role: PlannerCanvasRole)
     /// A change references a node whose id belongs to a different canvas.
     case crossCanvasNodeReference(nodeId: String, expectedCanvas: String)
@@ -823,6 +877,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "updateNode change for \(id) must set title or status"
         case .canvasNotFound(let id):
             return "planning canvas not found: \(id)"
+        case .runNotFound(let id):
+            return "workflow run not found: \(id)"
         case .permissionDenied(let action, let role):
             return "meee2 AI \(action) is not allowed for \(role.rawValue)"
         case .crossCanvasNodeReference(let nodeId, let expectedCanvas):
@@ -1571,23 +1627,33 @@ final class PlannerStore {
         var proposals: [PlanProposal]
         var events: [PlannerEvent]
         var artifacts: [PlannerArtifact]
+        /// Execution-layer history (P1 Run layer). Empty for canvases persisted
+        /// before the Run layer existed — `loadDocument` synthesises Run #1.
+        var runs: [WorkflowRun]
+        /// The run that execution-layer mutations currently mirror into. `nil`
+        /// when no run is in progress (e.g. a finished canvas awaiting re-run).
+        var activeRunId: String?
 
         init(
             canvas: PlanningCanvas,
             nodes: [PlanningNode],
             proposals: [PlanProposal],
             events: [PlannerEvent] = [],
-            artifacts: [PlannerArtifact] = []
+            artifacts: [PlannerArtifact] = [],
+            runs: [WorkflowRun] = [],
+            activeRunId: String? = nil
         ) {
             self.canvas = canvas
             self.nodes = nodes
             self.proposals = proposals
             self.events = events
             self.artifacts = artifacts
+            self.runs = runs
+            self.activeRunId = activeRunId
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events, artifacts
+            case canvas, nodes, proposals, events, artifacts, runs, activeRunId
         }
 
         init(from decoder: Decoder) throws {
@@ -1597,6 +1663,8 @@ final class PlannerStore {
             self.proposals = try container.decode([PlanProposal].self, forKey: .proposals)
             self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
             self.artifacts = try container.decodeIfPresent([PlannerArtifact].self, forKey: .artifacts) ?? []
+            self.runs = try container.decodeIfPresent([WorkflowRun].self, forKey: .runs) ?? []
+            self.activeRunId = try container.decodeIfPresent(String.self, forKey: .activeRunId)
         }
     }
 
@@ -1877,11 +1945,13 @@ final class PlannerStore {
             // Mirror the run state onto the originating step node. A step
             // that owns a gate finishes into `gateWait` (awaiting review)
             // rather than `done`.
+            var mirroredStepRunState: PlannerWorkflowRunState?
             if let stepIndex = record.nodes.firstIndex(where: { $0.id == stepNodeId }) {
                 let stepRunState = Self.stepRunState(
                     for: runState,
                     hasGate: record.nodes[stepIndex].gate != nil
                 )
+                mirroredStepRunState = stepRunState
                 if record.nodes[stepIndex].workflowRunState != stepRunState {
                     record.nodes[stepIndex].workflowRunState = stepRunState
                     record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
@@ -1890,6 +1960,24 @@ final class PlannerStore {
             }
 
             guard changed else { return record }
+            // Mirror the run-state feedback into the active run. Safe to do
+            // after the `changed` guard — when nothing changed, session id and
+            // run state already match, so the mirror would be a no-op anyway.
+            let sessionNodeId = record.nodes[sessionIndex].id
+            mirrorIntoActiveRun(&record, nodeId: sessionNodeId) { state in
+                state.sessionId = sessionId
+                state.chatThreadId = sessionId
+                state.runState = runState
+                if runState == .done || runState == .failed {
+                    state.finishedAt = state.finishedAt ?? Date()
+                }
+            }
+            if let mirroredStepRunState {
+                mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
+                    state.runState = mirroredStepRunState
+                }
+            }
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save()
             return record
@@ -1975,6 +2063,101 @@ final class PlannerStore {
         return record
     }
 
+    // MARK: - Run layer (P1)
+
+    /// Index of the canvas's active run, if one is in progress.
+    private func activeRunIndex(in record: CanvasRecord) -> Int? {
+        guard let id = record.activeRunId else { return nil }
+        return record.runs.firstIndex { $0.id == id }
+    }
+
+    /// Mirror a node's execution-state change into the canvas's active run.
+    ///
+    /// Behaviour-preserving by design: `PlanningNode` stays the read projection
+    /// every existing surface uses, while the run accumulates the source of
+    /// truth. A no-op when the canvas has no active run (e.g. a post-P1 canvas
+    /// that has not started a run yet) — old behaviour is unchanged.
+    private func mirrorIntoActiveRun(
+        _ record: inout CanvasRecord,
+        nodeId: String,
+        mutate: (inout RunNodeState) -> Void
+    ) {
+        guard let runIdx = activeRunIndex(in: record) else { return }
+        var state = record.runs[runIdx].nodeStates[nodeId] ?? RunNodeState(nodeId: nodeId)
+        mutate(&state)
+        record.runs[runIdx].nodeStates[nodeId] = state
+    }
+
+    /// Recompute the active run (status + per-node `nextAction`) after an
+    /// execution-layer mutation. Decision B lives in `WorkflowRunEngine`. When
+    /// the run reaches a terminal status it stops being the active run.
+    private func recomputeActiveRun(_ record: inout CanvasRecord) {
+        guard let runIdx = activeRunIndex(in: record) else { return }
+        let advanced = WorkflowRunEngine.advance(record.runs[runIdx], nodes: record.nodes)
+        record.runs[runIdx] = advanced
+        if advanced.status != .active {
+            record.activeRunId = nil
+        }
+    }
+
+    /// Start a fresh run over the canvas's current node structure. `runIndex`
+    /// is one past the highest existing run. Becomes the active run.
+    func startRun(canvasId: String, trigger: String) throws -> WorkflowRun {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            let nextIndex = (record.runs.map { $0.runIndex }.max() ?? 0) + 1
+            let run = WorkflowRun.start(
+                canvasId: canvasId,
+                runIndex: nextIndex,
+                trigger: trigger,
+                nodes: record.nodes
+            )
+            record.runs.append(run)
+            record.activeRunId = run.id
+            // Populate per-node next-actions for the fresh run (root nodes
+            // become `readyToDispatch`, the rest `waitingOnUpstream`).
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save()
+            return record.runs.last ?? run
+        }
+    }
+
+    /// All runs of a canvas, newest run last (creation order).
+    func runs(canvasId: String) throws -> [WorkflowRun] {
+        try withLock { try requireRecord(canvasId: canvasId).runs }
+    }
+
+    /// A single run looked up across all canvases.
+    func run(runId: String) -> WorkflowRun? {
+        withLock {
+            for (_, record) in document.canvases {
+                if let run = record.runs.first(where: { $0.id == runId }) {
+                    return run
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Human-terminate a run. Clears `activeRunId` if it was the active one.
+    func abortRun(runId: String) throws -> WorkflowRun {
+        try withLock {
+            for (canvasId, var record) in document.canvases {
+                guard let idx = record.runs.firstIndex(where: { $0.id == runId }) else { continue }
+                record.runs[idx].status = .aborted
+                record.runs[idx].finishedAt = Date()
+                if record.activeRunId == runId {
+                    record.activeRunId = nil
+                }
+                document.canvases[canvasId] = record
+                try save()
+                return record.runs[idx]
+            }
+            throw PlannerCoreError.runNotFound(runId)
+        }
+    }
+
     private func save() throws {
         try fileManager.createDirectory(
             at: fileURL.deletingLastPathComponent(),
@@ -2052,12 +2235,24 @@ final class PlannerStore {
             guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == artifact.nodeId }) else {
                 throw PlannerCoreError.nodeNotFound(artifact.nodeId)
             }
+            // Stamp the artifact with the active run so re-runs keep their own
+            // evidence separate (workflow-run-spec §6).
+            var artifact = artifact
+            if artifact.runId == nil {
+                artifact.runId = record.activeRunId
+            }
             record.artifacts = mergeArtifacts(record.artifacts, [artifact])
             var refs = record.nodes[nodeIndex].artifactRefs ?? []
             if !refs.contains(artifact.reference) {
                 refs.append(artifact.reference)
             }
             record.nodes[nodeIndex].artifactRefs = refs
+            mirrorIntoActiveRun(&record, nodeId: artifact.nodeId) { state in
+                if !state.artifactIds.contains(artifact.id) {
+                    state.artifactIds.append(artifact.id)
+                }
+            }
+            recomputeActiveRun(&record)
             record.events.append(event(
                 canvasId: canvasId,
                 type: .artifactAttached,
@@ -2115,6 +2310,20 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "Bound session to \(record.nodes[index].title)"
             ))
+            // Mirror into the active run: a bind starts a new attempt. Q3 lock —
+            // one active session per (run, node); re-binding opens a fresh attempt.
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.sessionId = sessionId
+                state.chatThreadId = sessionId
+                state.runState = .running
+                state.startedAt = state.startedAt ?? Date()
+                state.attempts.append(NodeAttempt(
+                    index: state.attempts.count,
+                    sessionId: sessionId,
+                    runState: .running
+                ))
+            }
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save()
             return record
@@ -2150,6 +2359,11 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "Dispatched \(record.nodes[index].title) via \(runner.rawValue)"
             ))
+            // Mirror the dispatched step's run-state into the active run.
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = runState
+                state.startedAt = state.startedAt ?? Date()
+            }
             // Spawning runners materialize a `session` PlanningNode immediately
             // (the logic Phase 2 runs inside `applyNodeChange` for proposals).
             if runner.spawnsSession, record.nodes[index].nodeKind != .session {
@@ -2158,11 +2372,19 @@ final class PlannerStore {
                     node.nodeKind == .session && (node.dependsOnNodeIds ?? []).contains(nodeId)
                 }
                 if !alreadySpawned {
-                    record.nodes.append(
-                        PlannerCoreService.sessionNode(for: step, proposalId: "dispatch-\(UUID().uuidString.lowercased())")
+                    let sessionNode = PlannerCoreService.sessionNode(
+                        for: step,
+                        proposalId: "dispatch-\(UUID().uuidString.lowercased())"
                     )
+                    record.nodes.append(sessionNode)
+                    // The spawned session node is run-scoped too — give it a
+                    // pending RunNodeState in the active run.
+                    mirrorIntoActiveRun(&record, nodeId: sessionNode.id) { state in
+                        state.runState = .pending
+                    }
                 }
             }
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save()
             return (record, record.nodes[index])
@@ -2246,7 +2468,28 @@ final class PlannerStore {
               let decoded = try? decoder.decode(StoreDocument.self, from: data) else {
             return StoreDocument(canvases: [:])
         }
-        return decoded
+        // P1 Run layer migration: a canvas persisted before runs existed gets a
+        // synthetic Run #1 packed from its current per-node execution state.
+        var migrated = decoded
+        for (id, record) in migrated.canvases {
+            migrated.canvases[id] = migratedRecord(record)
+        }
+        return migrated
+    }
+
+    /// Pack a pre-Run-layer canvas's current execution state into Run #1.
+    /// Idempotent — a record that already has runs is returned unchanged.
+    private static func migratedRecord(_ record: CanvasRecord) -> CanvasRecord {
+        guard record.runs.isEmpty else { return record }
+        var updated = record
+        let runOne = WorkflowRun.migratedRunOne(
+            canvasId: record.canvas.id,
+            nodes: record.nodes,
+            artifacts: record.artifacts
+        )
+        updated.runs = [runOne]
+        updated.activeRunId = runOne.status == .active ? runOne.id : nil
+        return updated
     }
 }
 
@@ -2484,6 +2727,43 @@ enum PlannerBoardBridge {
         let result = try store.dispatchNode(canvasId: canvasId, nodeId: nodeId, dispatch: dispatch)
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         return (graph, result.dispatchedNode)
+    }
+
+    // MARK: - Run layer (P1)
+
+    /// Start a new workflow run over the canvas's current node structure.
+    /// `canvasState` is called first purely to ensure the store record exists
+    /// (seeded from the board snapshot).
+    static func startRun(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> WorkflowRun {
+        _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return try store.startRun(canvasId: canvasId, trigger: actorUserId ?? "unknown")
+    }
+
+    /// All runs of a canvas — run history, creation order.
+    static func runs(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [WorkflowRun] {
+        _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return try store.runs(canvasId: canvasId)
+    }
+
+    /// A single run by id, across all canvases.
+    static func run(runId: String) throws -> WorkflowRun {
+        guard let run = store.run(runId: runId) else {
+            throw PlannerCoreError.runNotFound(runId)
+        }
+        return run
+    }
+
+    /// Human-terminate a run.
+    static func abortRun(runId: String) throws -> WorkflowRun {
+        try store.abortRun(runId: runId)
     }
 
     static func attachArtifact(

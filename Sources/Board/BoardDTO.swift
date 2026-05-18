@@ -308,6 +308,14 @@ struct PlannerActivityEnvelope: Encodable {
 struct PlannerCanvasVisibilityEnvelope: Encodable {
     let canvas: PlanningCanvas
 }
+/// 响应单个 run 的端点(start / get / abort)。
+struct WorkflowRunEnvelope: Encodable {
+    let run: WorkflowRun
+}
+/// 响应 `GET /api/planner/canvases/:id/runs` —— run 历史。
+struct WorkflowRunsEnvelope: Encodable {
+    let runs: [WorkflowRun]
+}
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }

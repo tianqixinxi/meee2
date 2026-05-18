@@ -1873,6 +1873,143 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(dispatchedStep.workflowRunState, .gateWait)
     }
 
+    // MARK: - Run layer (P1)
+
+    func testStartRunCreatesActiveRunOverCurrentNodes() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let run = try PlannerBoardBridge.startRun(
+            for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
+        )
+        XCTAssertEqual(run.runIndex, 1)
+        XCTAssertEqual(run.status, .active)
+        XCTAssertFalse(run.nodeStates.isEmpty)
+        XCTAssertTrue(
+            run.nodeStates.values.allSatisfy { $0.runState == .pending },
+            "a fresh run starts every node at pending"
+        )
+    }
+
+    func testSecondRunIncrementsRunIndex() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let first = try PlannerBoardBridge.startRun(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let second = try PlannerBoardBridge.startRun(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        XCTAssertEqual(first.runIndex, 1)
+        XCTAssertEqual(second.runIndex, 2)
+        let runs = try PlannerBoardBridge.runs(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        XCTAssertEqual(runs.count, 2)
+    }
+
+    /// Execution-layer dispatch mirrors the step's run-state into the active
+    /// run's `nodeStates` (workflow-run-spec §6).
+    func testDispatchMirrorsRunStateIntoActiveRun() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let run = try PlannerBoardBridge.startRun(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let before = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let step = try XCTUnwrap(before.nodes.first { $0.nodeKind == .step })
+
+        _ = try PlannerBoardBridge.dispatchNode(
+            nodeId: step.id, runner: .byoaLocal, for: "canvas-a",
+            snapshot: snapshot, actorUserId: "owner-a"
+        )
+
+        let updatedRun = try PlannerBoardBridge.run(runId: run.id)
+        XCTAssertEqual(
+            updatedRun.nodeStates[step.id]?.runState, .dispatched,
+            "dispatch must mirror the step run-state into the active run"
+        )
+    }
+
+    func testAbortRunMarksAbortedAndFinishes() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let run = try PlannerBoardBridge.startRun(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let aborted = try PlannerBoardBridge.abortRun(runId: run.id)
+        XCTAssertEqual(aborted.status, .aborted)
+        XCTAssertNotNil(aborted.finishedAt)
+    }
+
+    /// A canvas persisted before the Run layer (`runs: []`) gets a synthetic
+    /// Run #1 the next time the store loads from disk (migration).
+    func testLegacyCanvasMigratesToRunOneOnLoad() throws {
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        // The seeded record has `runs: []` — it never started a run. Reloading
+        // the store triggers `loadDocument`'s Run-layer migration.
+        let reloaded = PlannerStore(fileURL: plannerStoreURL)
+        let runs = try reloaded.runs(canvasId: "canvas-a")
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.runIndex, 1)
+        XCTAssertEqual(runs.first?.trigger, "migration")
+    }
+
+    func testMigratedRunOnePacksPerNodeExecutionState() {
+        var node = PlanningNode(
+            id: "n1", canvasId: "canvas-x", title: "Impl",
+            ioSchema: IOSchema(consumes: [], produces: [], completionSignal: "done"),
+            contextSources: [], executionMode: .signOff, executorType: .mock,
+            doerId: "owner", status: .running
+        )
+        node.workflowRunState = .running
+        node.sessionId = "sess-1"
+        let run = WorkflowRun.migratedRunOne(canvasId: "canvas-x", nodes: [node], artifacts: [])
+        XCTAssertEqual(run.runIndex, 1)
+        XCTAssertEqual(run.nodeStates["n1"]?.runState, .running)
+        XCTAssertEqual(run.nodeStates["n1"]?.sessionId, "sess-1")
+    }
+
+    // MARK: - WorkflowRunEngine (P3)
+
+    /// Bare planning node for engine tests — `deps` sets `dependsOnNodeIds`.
+    private func planNode(_ id: String, deps: [String] = []) -> PlanningNode {
+        var node = PlanningNode(
+            id: id, canvasId: "c", title: id,
+            ioSchema: IOSchema(consumes: [], produces: [], completionSignal: "done"),
+            contextSources: [], executionMode: .signOff, executorType: .mock,
+            doerId: "owner", status: .waiting
+        )
+        node.dependsOnNodeIds = deps
+        return node
+    }
+
+    func testRunEngineMarksRootReadyAndDownstreamWaiting() {
+        let nodes = [planNode("a"), planNode("b", deps: ["a"])]
+        var run = WorkflowRun.start(canvasId: "c", runIndex: 1, trigger: "t", nodes: nodes)
+        run = WorkflowRunEngine.advance(run, nodes: nodes)
+        XCTAssertEqual(run.nodeStates["a"]?.nextAction, .readyToDispatch)
+        XCTAssertEqual(run.nodeStates["b"]?.nextAction, .waitingOnUpstream)
+    }
+
+    /// Decision B — a downstream node becomes `readyToDispatch` once every
+    /// upstream dependency is done. The engine never dispatches it itself.
+    func testRunEngineAdvancesDownstreamWhenUpstreamDone() {
+        let nodes = [planNode("a"), planNode("b", deps: ["a"])]
+        var run = WorkflowRun.start(canvasId: "c", runIndex: 1, trigger: "t", nodes: nodes)
+        run.nodeStates["a"]?.runState = .done
+        run = WorkflowRunEngine.advance(run, nodes: nodes)
+        XCTAssertEqual(run.nodeStates["a"]?.nextAction, .confirmArtifacts)
+        XCTAssertEqual(run.nodeStates["b"]?.nextAction, .readyToDispatch)
+    }
+
+    func testRunEngineRollsStatusToCompleted() {
+        let nodes = [planNode("a")]
+        var run = WorkflowRun.start(canvasId: "c", runIndex: 1, trigger: "t", nodes: nodes)
+        run.nodeStates["a"]?.runState = .done
+        run = WorkflowRunEngine.advance(run, nodes: nodes)
+        XCTAssertEqual(run.status, .completed)
+        XCTAssertNotNil(run.finishedAt)
+    }
+
+    func testRunEngineRollsStatusToFailed() {
+        let nodes = [planNode("a")]
+        var run = WorkflowRun.start(canvasId: "c", runIndex: 1, trigger: "t", nodes: nodes)
+        run.nodeStates["a"]?.runState = .failed
+        run = WorkflowRunEngine.advance(run, nodes: nodes)
+        XCTAssertEqual(run.status, .failed)
+    }
+
     /// Direct dispatch is idempotent — re-dispatching the same node to a
     /// spawning runner does not spawn a second session node.
     func testDispatchDirectDoesNotDoubleSpawnSessionNode() throws {

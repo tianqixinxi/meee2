@@ -11,20 +11,28 @@ import {
 import { MessageSquare, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  abortPlannerRun,
   applyPlannerProposal,
   applyPlannerProposalPreview,
   approvePlannerProposal,
   createPlannerDeliveryPipeline,
   fetchPlannerGraphState,
+  fetchPlannerRuns,
   fetchTeamMembers,
   generatePlannerProposal,
   inspectPlannerDrift,
   rejectPlannerProposal,
   sendPlannerActivity,
   setPlannerCanvasVisibility,
+  startPlannerRun,
   updatePlannerNodeLayout,
 } from '../../api'
-import type { PlanProposal, PlannerCanvasState, PlannerCanvasVisibility } from '../../types'
+import type {
+  PlanProposal,
+  PlannerCanvasState,
+  PlannerCanvasVisibility,
+  WorkflowRun,
+} from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
 import {
@@ -35,6 +43,8 @@ import {
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
+import { RunHistoryView } from './RunHistoryView'
+import { RunSelector, type PlannerMode } from './RunSelector'
 import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
 import './planner.css'
 
@@ -70,6 +80,11 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // P2 Run layer — Design vs Run mode + the run being viewed.
+  const [mode, setMode] = useState<PlannerMode>('design')
+  const [runs, setRuns] = useState<WorkflowRun[]>([])
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -84,9 +99,23 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .finally(() => setBusy(false))
   }, [canvasId])
 
+  const loadRuns = useCallback(() => {
+    fetchPlannerRuns(canvasId)
+      .then((next) => {
+        setRuns(next)
+        setSelectedRunId((current) => {
+          if (current && next.some((run) => run.id === current)) return current
+          const active = next.find((run) => run.status === 'active')
+          return active?.id ?? next[next.length - 1]?.id ?? null
+        })
+      })
+      .catch(() => setRuns([]))
+  }, [canvasId])
+
   useEffect(() => {
     loadState()
-  }, [loadState])
+    loadRuns()
+  }, [loadState, loadRuns])
 
   // Authoritative team member identities — used for avatar / name resolution.
   useEffect(() => {
@@ -123,6 +152,11 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
     }
   }, [boardState, plannerState, userProfile, teamMembers])
 
+  const selectedRun = useMemo(
+    () => runs.find((run) => run.id === selectedRunId) ?? null,
+    [runs, selectedRunId],
+  )
+
   const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
@@ -130,12 +164,14 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       edges: plannerState?.edges ?? [],
       proposal: previewActive ? null : proposal,
       ownerId: plannerState?.canvas.ownerId,
+      mode,
+      runNodeStates: selectedRun?.nodeStates,
       displayNameByUserId: teamDirectory.displayNameByUserId,
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
       onOpenDetails: handleOpenNodeDetails,
       onOpenSubCanvas,
     })
-  }, [plannerState, previewActive, proposal, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas])
+  }, [plannerState, previewActive, proposal, mode, selectedRun, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas])
 
   useEffect(() => {
     setFlowNodes(graph.nodes)
@@ -395,6 +431,34 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .finally(() => setBusy(false))
   }, [canvasId])
 
+  // P2 Run layer — start / select / abort a workflow run. Decision A: a run
+  // is one execution of the blueprint; the graph itself stays the design.
+  const handleStartRun = useCallback(() => {
+    setBusy(true)
+    setError(null)
+    startPlannerRun(canvasId)
+      .then((run) => {
+        setRuns((current) => [...current, run])
+        setSelectedRunId(run.id)
+        setMode('run')
+        // The fresh run resets per-node execution state — re-pull the graph.
+        loadState()
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to start run'))
+      .finally(() => setBusy(false))
+  }, [canvasId, loadState])
+
+  const handleAbortRun = useCallback((runId: string) => {
+    setBusy(true)
+    setError(null)
+    abortPlannerRun(runId)
+      .then((run) => {
+        setRuns((current) => current.map((item) => (item.id === run.id ? run : item)))
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to abort run'))
+      .finally(() => setBusy(false))
+  }, [])
+
   const canvasVisibility: PlannerCanvasVisibility = plannerState?.canvas.visibility ?? 'private'
   const isCanvasOwner = (plannerState?.access?.role ?? 'owner') === 'owner'
 
@@ -411,6 +475,17 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
         </button>
         <div className="planner-flow">
           <div className="planner-flow__header">
+            <RunSelector
+              mode={mode}
+              onModeChange={setMode}
+              runs={runs}
+              selectedRunId={selectedRunId}
+              onSelectRun={setSelectedRunId}
+              onStartRun={handleStartRun}
+              onAbortRun={handleAbortRun}
+              onViewHistory={() => setHistoryOpen(true)}
+              busy={busy}
+            />
             <div className={`planner-flow__state-badge${previewActive ? ' is-preview' : ''}`}>
               <span>{previewActive ? 'Preview' : 'Live graph'}</span>
               {previewActive && <em>not applied</em>}
@@ -448,6 +523,19 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               </span>
             )}
           </div>
+          {/* U5 — onboarding: blueprint exists but has never been executed. */}
+          {mode === 'run' && runs.length === 0 && (plannerState?.nodes.length ?? 0) > 0 && (
+            <div className="planner-onboarding-card" role="note">
+              <strong>Blueprint is ready ✓</strong>
+              <p>
+                A <b>run</b> executes this blueprint once — each run tracks its own
+                progress, AI sessions and artifacts. The blueprint itself never runs.
+              </p>
+              <button type="button" className="primary" disabled={busy} onClick={handleStartRun}>
+                ▶ Start the first run
+              </button>
+            </div>
+          )}
           {plannerState ? (
             <ReactFlow
               nodes={flowNodes}
@@ -528,6 +616,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
         <NodeInspectorModal
           node={selectedNode}
           canvasId={canvasId}
+          mode={mode}
           onArtifactAttached={() => {
             // Re-pull graph state so the new artifact shows in the node list.
             fetchPlannerGraphState(canvasId)
@@ -559,6 +648,17 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
           onNodeMutated={handleNodeMutated}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
+        />
+      )}
+      {historyOpen && (
+        <RunHistoryView
+          runs={runs}
+          selectedRunId={selectedRunId}
+          onSelectRun={(runId) => {
+            setSelectedRunId(runId)
+            setMode('run')
+          }}
+          onClose={() => setHistoryOpen(false)}
         />
       )}
     </section>

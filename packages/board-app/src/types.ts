@@ -543,6 +543,52 @@ export type PlannerGraphState = PlannerCanvasState & {
   edges: PlannerGraphEdge[]
 }
 
+// -- P1/P3: Workflow Run layer --------------------------------------------
+
+export type WorkflowRunStatus = 'active' | 'completed' | 'failed' | 'aborted'
+
+/** What the user should do next for a node within a run (WorkflowRunEngine). */
+export type RunNextAction =
+  | 'waiting-on-upstream'
+  | 'ready-to-dispatch'
+  | 'in-progress'
+  | 'gate-review'
+  | 'confirm-artifacts'
+  | 'needs-attention'
+
+export interface NodeAttempt {
+  index: number
+  sessionId?: string | null
+  runState: PlannerWorkflowRunState
+  startedAt: string
+  finishedAt?: string | null
+  outcome?: string | null
+}
+
+export interface RunNodeState {
+  nodeId: string
+  runState: PlannerWorkflowRunState
+  attempts: NodeAttempt[]
+  sessionId?: string | null
+  chatThreadId?: string | null
+  artifactIds: string[]
+  startedAt?: string | null
+  finishedAt?: string | null
+  nextAction?: RunNextAction | null
+}
+
+export interface WorkflowRun {
+  id: string
+  canvasId: string
+  runIndex: number
+  status: WorkflowRunStatus
+  trigger: string
+  startedAt: string
+  finishedAt?: string | null
+  nodeStates: Record<string, RunNodeState>
+  events: PlannerEvent[]
+}
+
 // -- Phase 5: Integrations (真接入) ----------------------------------------
 
 export type IntegrationId = 'github' | 'lark'

@@ -5,7 +5,9 @@ import type {
   PlanProposal,
   PlannerGraphEdge as PlannerGraphStateEdge,
   PlanningNode,
+  RunNodeState,
 } from '../../types'
+import type { PlannerMode } from './RunSelector'
 
 export type PlannerPreviewKind = 'none' | 'added' | 'updated'
 
@@ -13,6 +15,10 @@ export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
   previewKind: PlannerPreviewKind
+  /** Design vs Run mode — the card collapses execution fields in Design. */
+  mode: PlannerMode
+  /** This node's state in the selected run, when one is being viewed. */
+  runNodeState: RunNodeState | null
   ownerLabel?: string
   ownerAvatarUrl?: string
   doerLabel?: string
@@ -29,6 +35,9 @@ interface PlannerGraphInput {
   edges?: PlannerGraphStateEdge[]
   proposal?: PlanProposal | null
   ownerId?: string
+  mode: PlannerMode
+  /** nodeId → run state, from the run being viewed (Run mode only). */
+  runNodeStates?: Record<string, RunNodeState>
   displayNameByUserId?: Record<string, string>
   avatarUrlByUserId?: Record<string, string>
   onOpenDetails?: (nodeId: string) => void
@@ -59,6 +68,8 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         node,
         state: stateByNodeId.get(node.id) ?? null,
         previewKind,
+        mode: input.mode,
+        runNodeState: input.runNodeStates?.[node.id] ?? null,
         ownerLabel: resolveUserLabel(input.ownerId, input.displayNameByUserId),
         ownerAvatarUrl: resolveUserAvatar(input.ownerId, input.avatarUrlByUserId),
         doerLabel: resolveUserLabel(node.doerId, input.displayNameByUserId),

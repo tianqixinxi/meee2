@@ -119,6 +119,10 @@ struct PlannerGraphContext: Codable, Equatable {
         var status: String
         var doerId: String
         var dependsOnNodeIds: [String]
+        /// Current IO contract of the node. Exposed so the model can *refine*
+        /// an existing node's schema via `updateNode` — without it the model
+        /// cannot see what it would be changing.
+        var ioSchema: IOSchema
     }
 
     struct Edge: Codable, Equatable {
@@ -174,7 +178,8 @@ struct PlannerGraphContext: Codable, Equatable {
                 title: node.title,
                 status: node.status.rawValue,
                 doerId: node.doerId,
-                dependsOnNodeIds: node.dependsOnNodeIds ?? []
+                dependsOnNodeIds: node.dependsOnNodeIds ?? [],
+                ioSchema: node.ioSchema
             )
         }
         self.edges = state.edges.map { edge in
@@ -237,7 +242,15 @@ enum PlannerAdapterPromptFactory {
 
     A PlanChange is either:
     - addNode:    {"kind": "addNode", "node": <PlanningNode>}
-    - updateNode: {"kind": "updateNode", "nodeId": "<existing node id>", ...fields}
+    - updateNode: {"kind": "updateNode", "nodeId": "<existing node id>", <changed design fields>}
+      updateNode may change ONLY these design fields — include only the ones
+      you actually change: title, status, ioSchema, contextSources,
+      dependsOnNodeIds.
+      To refine a node's IO contract, set its ioSchema. Every node's CURRENT
+      ioSchema is given in context.nodes[].ioSchema, so you can adjust it in
+      place rather than guessing.
+      Do NOT set execution-layer fields (sessionId / workflowRunState) via
+      updateNode — those belong to a workflow run, not the graph design.
 
     A PlanningNode requires at least:
       id, canvasId, title,

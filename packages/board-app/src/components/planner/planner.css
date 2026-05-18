@@ -2299,3 +2299,257 @@
   color: var(--text-faint);
   font-size: 12px;
 }
+
+/* -- P2 Run layer: mode toggle + run selector --------------------------- */
+
+.planner-run-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.planner-run-selector__mode {
+  display: inline-flex;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(31, 31, 29, 0.86);
+  overflow: hidden;
+}
+
+.planner-run-selector__mode button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 5px 11px;
+  cursor: pointer;
+}
+
+.planner-run-selector__mode button:not(:last-child) {
+  border-right: 1px solid rgba(168, 165, 155, 0.16);
+}
+
+.planner-run-selector__mode button.is-active {
+  color: var(--text);
+  background: rgba(245, 244, 239, 0.08);
+}
+
+.planner-run-selector__runs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.planner-run-selector__picker {
+  position: relative;
+}
+
+.planner-run-selector__current,
+.planner-run-selector__start {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(31, 31, 29, 0.86);
+  color: var(--text);
+  font-size: 11px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.planner-run-selector__current em,
+.planner-run-selector__menu em {
+  color: var(--text-faint);
+  font-style: normal;
+  font-size: 10px;
+}
+
+.planner-run-selector__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  display: grid;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(24, 24, 22, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+.planner-run-selector__menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs, 4px);
+  cursor: pointer;
+}
+
+.planner-run-selector__menu button:hover,
+.planner-run-selector__menu button.is-active {
+  background: rgba(245, 244, 239, 0.08);
+}
+
+.planner-run-selector__menu-divider {
+  height: 1px;
+  margin: 3px 0;
+  background: rgba(168, 165, 155, 0.16);
+}
+
+.planner-run-selector__menu-action {
+  color: var(--text-faint) !important;
+}
+
+.planner-run-selector__progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* -- P2 Run layer: onboarding / node card mode / history / link attach --- */
+
+.planner-onboarding-card {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  width: min(420px, calc(100% - 36px));
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid rgba(204, 120, 92, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(28, 27, 25, 0.98);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+}
+
+.planner-onboarding-card strong {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.planner-onboarding-card p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.planner-onboarding-card button {
+  justify-self: start;
+}
+
+/* Design-mode status pill reads as a type tag, not an execution state. */
+.planner-node__status--design {
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Run history modal */
+.planner-run-history {
+  position: relative;
+  width: min(560px, calc(100vw - 48px));
+  max-height: 72vh;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-md, 10px);
+  background: rgba(24, 24, 22, 0.99);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+}
+
+.planner-run-history__header span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.planner-run-history__header h2 {
+  margin: 2px 0 14px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.planner-run-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.planner-run-history__list button {
+  width: 100%;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(31, 31, 29, 0.7);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.planner-run-history__list button.is-active {
+  border-color: rgba(204, 120, 92, 0.5);
+}
+
+.planner-run-history__status {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.planner-run-history__status.is-failed {
+  color: #c26a6a;
+}
+
+.planner-run-history__status.is-completed {
+  color: #7fa982;
+}
+
+.planner-run-history__meta,
+.planner-run-history__time,
+.planner-run-history__trigger {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Generic "Link / file" artifact attach form (U4) */
+.planner-node-modal__attach-link {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.planner-node-modal__attach-link input {
+  padding: 6px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-xs, 4px);
+  background: rgba(20, 20, 18, 0.9);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.planner-node-modal__attach-link button {
+  justify-self: start;
+}

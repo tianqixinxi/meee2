@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import {
+  attachPlannerArtifactToNode,
   bindPlannerSessionToNode,
   createPlannerSubCanvasFromNode,
   dispatchPlannerNodeSession,
@@ -33,13 +34,20 @@ import type {
   Session,
 } from '../../types'
 import { IntegrationArtifactPicker } from '../IntegrationArtifactPicker'
+import type { PlannerMode } from './RunSelector'
 import { SessionPicker } from './SessionPicker'
 
-/** Runner choices offered for Gap 1 dispatch. Mirrors the spec's list. */
-const DISPATCH_RUNNERS: { value: PlannerDispatchRunner; label: string }[] = [
+/** Runner choices offered for Gap 1 dispatch. `note` surfaces a runner whose
+ *  execution path is not wired up yet, so the user is not misled. */
+const DISPATCH_RUNNERS: { value: PlannerDispatchRunner; label: string; note?: string }[] = [
   { value: 'claude', label: 'claude' },
   { value: 'codex', label: 'codex' },
   { value: 'byoa-local', label: 'byoa-local' },
+  {
+    value: 'ci-agent',
+    label: 'ci-agent',
+    note: 'Proposal-only — records dispatch intent, does not spawn a session yet.',
+  },
   { value: 'human', label: 'human' },
 ]
 
@@ -47,6 +55,8 @@ interface Props {
   node: PlanningNode
   /** Canvas the node belongs to — required to attach artifacts. */
   canvasId: string
+  /** Design vs Run mode — gates which node actions are offered (U3). */
+  mode: PlannerMode
   state: NodeStateSnapshot | null
   ownerLabel?: string
   ownerAvatarUrl?: string
@@ -82,6 +92,7 @@ interface Props {
 export function NodeInspectorModal({
   node,
   canvasId,
+  mode,
   state,
   ownerLabel,
   ownerAvatarUrl,
@@ -98,7 +109,10 @@ export function NodeInspectorModal({
   // Which integration the artifact picker is browsing, if any. The picker is
   // node-scoped: attaching is always an explicit user action through the
   // existing attach endpoint — nothing is auto-guessed.
-  const [attachProvider, setAttachProvider] = useState<'github' | 'lark' | null>(null)
+  const [attachProvider, setAttachProvider] = useState<'github' | 'lark' | 'link' | null>(null)
+  // U4 — source-agnostic attach: a human can paste any link/reference.
+  const [linkRef, setLinkRef] = useState('')
+  const [linkTitle, setLinkTitle] = useState('')
   const runState = state?.runState ?? node.status
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
   const artifactRefs = node.artifactRefs ?? state?.artifactRefs ?? []
@@ -300,6 +314,9 @@ export function NodeInspectorModal({
             <Rocket size={13} aria-hidden /> Node actions
           </h3>
           <div className="planner-node-actions__buttons">
+            {/* Execution-layer actions — Run mode only (U3). */}
+            {mode === 'run' && (
+              <>
             <button
               type="button"
               disabled={!canActOnNode || actionBusy || !isStepNode}
@@ -324,10 +341,18 @@ export function NodeInspectorModal({
             >
               <GitBranch size={12} aria-hidden /> Bind session
             </button>
+              </>
+            )}
+            {/* Governance-layer actions — Design mode only (U3 / U9). */}
+            {mode === 'design' && (
+              <>
             <button
               type="button"
               disabled={!canActOnNode || actionBusy}
-              title={permissionTooltip}
+              title={
+                permissionTooltip ??
+                'Break this step into its own nested workflow — the node becomes a container pointing to a child canvas. Goes through a proposal.'
+              }
               onClick={() => togglePanel('subCanvas')}
             >
               <Layers size={12} aria-hidden /> Break into sub-canvas
@@ -335,11 +360,16 @@ export function NodeInspectorModal({
             <button
               type="button"
               disabled={!canActOnNode || actionBusy}
-              title={permissionTooltip}
+              title={
+                permissionTooltip ??
+                'Ask meee2 AI to refine just this node in place (split it, adjust its IO schema) — stays in the current graph. Goes through a proposal.'
+              }
               onClick={() => togglePanel('refine')}
             >
               <Sparkles size={12} aria-hidden /> Refine with meee2 AI
             </button>
+              </>
+            )}
           </div>
 
           {openPanel === 'dispatch' && (
@@ -363,6 +393,11 @@ export function NodeInspectorModal({
                   ))}
                 </select>
               </label>
+              {DISPATCH_RUNNERS.find((runner) => runner.value === dispatchRunner)?.note && (
+                <p className="planner-node-actions__notice">
+                  {DISPATCH_RUNNERS.find((runner) => runner.value === dispatchRunner)?.note}
+                </p>
+              )}
               <button
                 type="button"
                 className="primary planner-node-actions__submit"
@@ -528,12 +563,22 @@ export function NodeInspectorModal({
             <p className="planner-node-modal__empty">No artifacts attached.</p>
           )}
 
-          {/* Phase 5 — explicit, node-scoped artifact attach from integrations. */}
+          {/* U4 — source-agnostic artifact attach. A human can paste any link;
+              GitHub / Lark are convenience sources, not the only path. */}
           <div className="planner-node-modal__attach">
             <span className="planner-node-modal__attach-label">
-              <Plus size={11} aria-hidden /> Attach artifact from
+              <Plus size={11} aria-hidden /> Attach artifact
             </span>
             <div className="planner-node-modal__attach-providers">
+              <button
+                type="button"
+                className={attachProvider === 'link' ? 'is-active' : ''}
+                onClick={() =>
+                  setAttachProvider((current) => (current === 'link' ? null : 'link'))
+                }
+              >
+                <FileText size={12} aria-hidden /> Link / file
+              </button>
               <button
                 type="button"
                 className={attachProvider === 'github' ? 'is-active' : ''}
@@ -553,7 +598,39 @@ export function NodeInspectorModal({
                 <MessageSquareText size={12} aria-hidden /> Lark
               </button>
             </div>
-            {attachProvider && (
+            {attachProvider === 'link' && (
+              <div className="planner-node-modal__attach-link">
+                <input
+                  type="text"
+                  placeholder="URL / reference (PR, doc, file path…)"
+                  value={linkRef}
+                  onChange={(event) => setLinkRef(event.target.value)}
+                />
+                <input
+                  type="text"
+                  placeholder="Title (optional)"
+                  value={linkTitle}
+                  onChange={(event) => setLinkTitle(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={actionBusy || linkRef.trim().length === 0}
+                  onClick={() =>
+                    runDirectAction(() =>
+                      attachPlannerArtifactToNode(canvasId, node.id, {
+                        kind: 'generic',
+                        reference: linkRef.trim(),
+                        title: linkTitle.trim() || linkRef.trim(),
+                      }),
+                    )
+                  }
+                >
+                  <Plus size={12} aria-hidden /> Attach
+                </button>
+              </div>
+            )}
+            {(attachProvider === 'github' || attachProvider === 'lark') && (
               <div className="planner-node-modal__attach-picker">
                 <IntegrationArtifactPicker
                   provider={attachProvider}

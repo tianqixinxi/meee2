@@ -53,6 +53,19 @@ Plugin SDK: `meee2-plugin-kit/` (shared dylib, defines `SessionPlugin` open clas
 - **Comments**: Chinese inline comments are fine. Doc comments describe *why*, not *what*.
 - **Minimum**: macOS 13.0, Swift 5.7.
 
+## Docs & Specs — what belongs in this repo
+
+**Design/planning docs do NOT belong in this repo.** PRDs, feature plans, UI-gap specs,
+workflow/run specs, decision records — anything describing *what to build and why* —
+live in the private workspace (`meee2-workspace/doc/`: `prd/`, `decisions/`, …), never
+committed here.
+
+Only **codebase reference docs** belong in `docs/` — material that explains the code as
+it exists now: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SCHEMAS.md`](docs/SCHEMAS.md),
+plugin/packaging guides. Rule of thumb: if it would go stale when the *plan* changes
+(not the code), it's a spec — keep it out of the repo. Implementation PRs reference a
+PRD only by `slug`, never by path or content.
+
 ## Debugging
 
 Most debug loops follow one pattern: **tail the log + trigger the action + grep the trace**.
