@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, Route } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, Route, Signpost } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import type { NodeRunState, PlannerMonitorState } from '../../types'
@@ -72,6 +72,12 @@ export function WorkspaceMonitor() {
                         <h3>{item.nodeTitle ?? item.summary}</h3>
                         {item.blockers.length > 0 && (
                           <p>{item.blockers.join('; ')}</p>
+                        )}
+                        {item.nextAction && (
+                          <p className="planner-monitor-item__next-action">
+                            <Signpost size={11} aria-hidden />
+                            <span>{item.nextAction}</span>
+                          </p>
                         )}
                       </div>
                       <div className="planner-monitor-item__side">

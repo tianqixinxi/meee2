@@ -134,6 +134,7 @@ enum BoardAPI {
         }
         let matchedSpawnIntents = BoardLayoutStore.shared.applySpawnIntents(candidates: spawnCandidates)
         deliverMatchedSpawnPrompts(matchedSpawnIntents)
+        feedPlannerSessionRunStates(sessions)
         // 过滤 "__" 开头的自动频道（每个 session 的 operator channel 等）
         // 不在 UI 里显示，保持 channel 列表干净
         let channels = ChannelRegistry.shared.list()
@@ -163,6 +164,17 @@ enum BoardAPI {
 
     private static func deliverMatchedSpawnPrompts(_ matches: [BoardLayoutStore.MatchedSpawnIntent]) {
         for match in matches {
+            // Phase 2 — runState 回流: a spawn intent tagged `planner:<stepId>`
+            // has just matched a real session. Bind that session id onto the
+            // step's session PlanningNode and seed its run state. This is the
+            // only point where the step→sessionId link is known directly.
+            if let record = PlannerSessionRunStateBridge.observe(
+                sessionId: match.sessionId,
+                purpose: match.intent.purpose,
+                status: .active
+            ) {
+                MLog("[BoardAPI] bound planner session sid=\(match.sessionId.prefix(8)) purpose=\(match.intent.purpose ?? "-") canvas=\(record.canvas.id)")
+            }
             guard let prompt = match.intent.initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !prompt.isEmpty else { continue }
             do {
@@ -177,6 +189,20 @@ enum BoardAPI {
             } catch {
                 MWarn("[BoardAPI] failed to inject spawn initial prompt sid=\(match.sessionId.prefix(8)): \(error)")
             }
+        }
+    }
+
+    /// Phase 2 — runState 回流: on every state poll, push the current status of
+    /// each live session into the planner graph. `observeBound` is keyed by
+    /// `sessionId` and no-ops for any session that is not a bound planner
+    /// session node, so this is cheap for the common (non-planner) case.
+    private static func feedPlannerSessionRunStates(_ sessions: [SessionDTO]) {
+        for session in sessions {
+            let status = SessionStatus.from(rawString: session.status)
+            PlannerSessionRunStateBridge.observeBound(
+                sessionId: session.id,
+                status: status
+            )
         }
     }
 
@@ -311,6 +337,38 @@ enum BoardAPI {
         }
     }
 
+    /// PATCH /api/planner/canvases/:id/visibility
+    ///
+    /// Owner-only. Body: `{"visibility": "public" | "private"}`.
+    static func setPlannerCanvasVisibility(_ req: HttpRequest) -> HttpResponse {
+        struct VisibilityRequest: Decodable {
+            let visibility: PlannerCanvasVisibility
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: VisibilityRequest.self) else {
+            return errorResponse(
+                "invalid_json",
+                "body must be {\"visibility\": \"public\"|\"private\"}",
+                status: 400
+            )
+        }
+        do {
+            let canvas = try PlannerBoardBridge.setCanvasVisibility(
+                body.visibility,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(PlannerCanvasVisibilityEnvelope(canvas: canvas))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func getPlannerWorkspaceMonitor(_ req: HttpRequest) -> HttpResponse {
         do {
             let monitor = try PlannerBoardBridge.workspaceMonitor(
@@ -366,12 +424,39 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
         }
         let goal = (json["goal"] as? String) ?? ""
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorUserId = PlannerPermission.currentActorId()
+        let settings = AssistantAPI.parseSettings(json["settings"] as? [String: Any])
+
         do {
+            // Phase 8: route through the swappable planner agent runtime
+            // (PlannerAgentRuntimeRegistry.shared) as a `.userGoal` event,
+            // instead of calling the adapter/heuristic directly. The runtime
+            // output is validated again by saveAdapterProposal before it can
+            // touch the store, so a swapped-in runtime is still untrusted.
+            let context = json["context"] as? String
+            if let proposal = try runPlannerRuntimeProposal(
+                event: .userGoal(canvasId: canvasId, goal: goal, context: context),
+                canvasId: canvasId,
+                settings: settings,
+                snapshot: snapshot,
+                actorUserId: actorUserId
+            ) {
+                MLog("[Planner] generatePlannerProposal canvas=\(canvasId) path=runtime provider=\(settings.provider.rawValue)")
+                return jsonResponse(
+                    PlannerProposalEnvelope(proposal: proposal),
+                    status: 201,
+                    reason: "Created"
+                )
+            }
+            // Runtime timed out — keep the existing heuristic proposal so demo
+            // / offline flows still work.
+            MLog("[Planner] generatePlannerProposal canvas=\(canvasId) path=fallback-heuristic")
             let proposal = try PlannerBoardBridge.generateProposal(
                 goal: goal,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
+                snapshot: snapshot,
+                actorUserId: actorUserId
             )
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -381,15 +466,86 @@ enum BoardAPI {
         }
     }
 
+    /// Run the planner agent runtime synchronously (the HTTP handler is sync)
+    /// for a proposal-producing event, persist the first proposal, and return
+    /// it. Returns `nil` when the runtime timed out (caller falls back to the
+    /// heuristic) or when the runtime returned no proposal (e.g. a healthy
+    /// graph on `.driftInspection`). A `PlannerCoreError` (RBAC / validation)
+    /// is rethrown so the caller maps it to the right HTTP status.
+    private static func runPlannerRuntimeProposal(
+        event: PlannerAgentEvent,
+        canvasId: String,
+        settings: AssistantSettings,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String?
+    ) throws -> PlanProposal? {
+        let state = try PlannerBoardBridge.graphState(
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+
+        let runtime = PlannerAgentRuntimeRegistry.shared
+        let group = DispatchGroup()
+        group.enter()
+        var outcome: PlannerAgentOutcome?
+        var runtimeError: Error?
+        Task.detached {
+            do {
+                outcome = try await runtime.handle(event, state: state, settings: settings)
+            } catch {
+                runtimeError = error
+            }
+            group.leave()
+        }
+        if group.wait(timeout: .now() + 120) == .timedOut {
+            MWarn("[Planner] planner runtime timed out for canvas=\(canvasId)")
+            return nil
+        }
+
+        if let runtimeError {
+            // Validation / RBAC failures are real client errors — surface them.
+            if let coreError = runtimeError as? PlannerCoreError {
+                throw coreError
+            }
+            // Runtime infrastructure error — fall back gracefully.
+            MWarn("[Planner] planner runtime errored for canvas=\(canvasId): \(runtimeError.localizedDescription)")
+            return nil
+        }
+        guard let outcome else { return nil }
+        guard let proposal = outcome.proposals.first else {
+            // Runtime decided no action was needed (e.g. healthy graph).
+            MLog("[Planner] planner runtime no-action for canvas=\(canvasId): \(outcome.noActionReason ?? "(no reason)")")
+            return nil
+        }
+
+        // The runtime is untrusted: re-run full RBAC + validation against the
+        // live canvas state before the proposal can be persisted.
+        return try PlannerBoardBridge.saveAdapterProposal(
+            proposal,
+            for: canvasId,
+            snapshot: snapshot,
+            actorUserId: actorUserId
+        )
+    }
+
     static func inspectPlannerDrift(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorUserId = PlannerPermission.currentActorId()
+        let settings = AssistantAPI.parseSettings(nil)
         do {
-            let proposal = try PlannerBoardBridge.driftProposal(
-                for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
+            // Phase 8: route the drift endpoint through the planner agent
+            // runtime as a `.driftInspection` event. A healthy graph yields a
+            // nil proposal (same response shape the old driftProposal had).
+            let proposal = try runPlannerRuntimeProposal(
+                event: .driftInspection(canvasId: canvasId),
+                canvasId: canvasId,
+                settings: settings,
+                snapshot: snapshot,
+                actorUserId: actorUserId
             )
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
         } catch let err as PlannerCoreError {
@@ -446,7 +602,8 @@ enum BoardAPI {
             let preview = try PlannerBoardBridge.applyPreview(
                 proposal: body.proposal,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot()
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
             )
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: preview.proposal,
@@ -519,14 +676,27 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body must be {\"sessionId\": String}", status: 400)
         }
         do {
-            let proposal = try PlannerBoardBridge.bindSessionProposal(
+            // bind-session is an EXECUTION-LAYER action — it applies DIRECTLY,
+            // no proposal / owner approval. Returns the updated graph state.
+            let state = try PlannerBoardBridge.bindSession(
                 nodeId: nodeId,
                 sessionId: body.sessionId,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -544,14 +714,30 @@ enum BoardAPI {
         }
         let body = decodeJSONBody(req, as: DispatchRequest.self)
         do {
-            let proposal = try PlannerBoardBridge.dispatchNodeProposal(
+            // dispatch is an EXECUTION-LAYER action — it applies DIRECTLY,
+            // no proposal / owner approval. Sets dispatch + run state, spawns
+            // the session node, and records the spawn intent right here.
+            let result = try PlannerBoardBridge.dispatchNode(
                 nodeId: nodeId,
                 runner: body?.runner ?? .byoaLocal,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+            recordPlannerDispatchIntent(canvasId: canvasId, node: result.dispatchedNode)
+            BoardServer.shared.broadcastStateChanged()
+            let state = result.graph
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -753,31 +939,48 @@ enum BoardAPI {
              .missingNodeForAdd,
              .missingNodeId,
              .nodeNotFound,
-             .updateNodeNoFields:
+             .updateNodeNoFields,
+             .crossCanvasNodeReference,
+             .unknownNodeKind,
+             .unknownChangeKind:
             return errorResponse("planner_error", err.localizedDescription, status: 400)
         }
     }
 
     private static func recordPlannerDispatchIntents(canvasId: String, proposal: PlanProposal, nodes: [PlanningNode]) {
-        guard let cwd = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId) else { return }
         let changedNodeIds = Set(proposal.changes.compactMap { change in
             change.nodeId ?? change.node?.id
         })
         for node in nodes where changedNodeIds.contains(node.id) && node.workflowRunState == .dispatched {
-            guard let dispatch = node.dispatch, dispatch.runner == .byoaLocal else { continue }
-            let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedCommand = command?.isEmpty == false ? command! : "claude"
-            let provider = resolvedCommand.lowercased().contains("codex") ? "codex" : "claude"
-            _ = try? BoardLayoutStore.shared.recordSpawnIntent(
-                canvasId: canvasId,
-                cwd: cwd,
-                command: resolvedCommand,
-                provider: provider,
-                purpose: "planner:\(node.id)",
-                initialPrompt: plannerDispatchPrompt(for: node),
-                layoutHint: nil
-            )
+            recordPlannerDispatchIntent(canvasId: canvasId, node: node)
         }
+    }
+
+    /// Record the CLI spawn intent for a single dispatched node. Shared by the
+    /// proposal-apply path (`recordPlannerDispatchIntents`) and the direct
+    /// dispatch endpoint. `ci-agent` / `human` produce no intent
+    /// (`spawnsSession` is false for both).
+    private static func recordPlannerDispatchIntent(canvasId: String, node: PlanningNode) {
+        guard node.workflowRunState == .dispatched else { return }
+        guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return }
+        guard let cwd = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId) else { return }
+        let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedCommand = command?.isEmpty == false
+            ? command!
+            : (dispatch.runner.spawnCommand ?? "claude")
+        let provider = resolvedCommand.lowercased().contains("codex") ? "codex" : "claude"
+        // Purpose is tagged with the *step* node id; the session PlanningNode
+        // (created alongside the dispatch) `dependsOnNodeIds` this step, so
+        // `PlannerSessionRunStateBridge` can resolve step → session.
+        _ = try? BoardLayoutStore.shared.recordSpawnIntent(
+            canvasId: canvasId,
+            cwd: cwd,
+            command: resolvedCommand,
+            provider: provider,
+            purpose: "planner:\(node.id)",
+            initialPrompt: plannerDispatchPrompt(for: node),
+            layoutHint: nil
+        )
     }
 
     private static func plannerDispatchPrompt(for node: PlanningNode) -> String {
@@ -874,6 +1077,97 @@ enum BoardAPI {
             teams: BoardDTOBuilder.meee2OnlineTeams(),
             sessionSync: meee2OnlineSessionSyncList()
         ))
+    }
+
+    // MARK: - GET /api/team/members
+
+    /// Team member directory — the authoritative identity source the planner
+    /// graph keys `ownerAvatarUrlByUserId` / doer avatar lookups by `userId`.
+    ///
+    /// Data sources, in priority order:
+    ///   1. The connected meee2 Online user (current actor) — name + avatar.
+    ///   2. Doer ids referenced by planner nodes across every local canvas.
+    ///   3. Other users seen via planner activity heartbeats.
+    ///
+    /// TODO(team): backfill from meee2 Online team members API once available.
+    /// meee2 Online DOES expose `GET /api/v1/team/members`, but that route is
+    /// cookie/session authenticated (`createClient()` + `auth.getUser()`); the
+    /// desktop app only holds the Supabase anon key + a stored `userId`, which
+    /// cannot satisfy that route nor read the RLS-protected `meee2_members`
+    /// table directly. There is no `meee2_list_team_members` RPC. When such a
+    /// remote source exists, merge its `{userId, displayName, avatarUrl, role}`
+    /// rows here as the highest-priority layer; the DTO contract is final.
+    static func getTeamMembers(_ req: HttpRequest) -> HttpResponse {
+        var byUserId: [String: TeamMemberDTO] = [:]
+
+        // (1) The connected meee2 Online user.
+        let defaults = UserDefaults.standard
+        let connected = defaults.bool(forKey: "meee2Connected")
+        let currentUserId = defaults.string(forKey: "meee2UserId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if connected, !currentUserId.isEmpty {
+            let userName = defaultString(defaults, key: "meee2UserName", fallback: nil)
+            let userEmail = defaultString(defaults, key: "meee2UserEmail", fallback: nil)
+            let avatarUrl = defaultString(defaults, key: "meee2UserAvatarUrl", fallback: nil)
+            let displayName: String
+            if !userName.isEmpty {
+                displayName = userName
+            } else if !userEmail.isEmpty {
+                displayName = userEmail.components(separatedBy: "@").first ?? userEmail
+            } else {
+                displayName = "meee2 user"
+            }
+            let teamRole = BoardDTOBuilder.meee2OnlineTeams().first?.role
+            byUserId[currentUserId] = TeamMemberDTO(
+                userId: currentUserId,
+                displayName: displayName,
+                avatarUrl: avatarUrl.isEmpty ? nil : avatarUrl,
+                role: teamRole
+            )
+        }
+
+        // (2) Planner-node doers across every local canvas. Identity here is
+        // partial (no avatar / no membership role) until the remote source
+        // above is wired up.
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorId = PlannerPermission.currentActorId()
+        for canvas in snapshot.canvases {
+            guard let state = try? PlannerBoardBridge.canvasState(
+                for: canvas.id,
+                snapshot: snapshot,
+                actorUserId: actorId
+            ) else { continue }
+            for node in state.nodes {
+                let doerId = node.doerId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !doerId.isEmpty, byUserId[doerId] == nil else { continue }
+                byUserId[doerId] = TeamMemberDTO(
+                    userId: doerId,
+                    displayName: doerId,
+                    avatarUrl: nil,
+                    role: nil
+                )
+            }
+            // (3) Other users seen via planner activity heartbeats.
+            for activity in state.activities {
+                let uid = activity.userId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !uid.isEmpty, byUserId[uid] == nil else { continue }
+                let name = activity.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+                byUserId[uid] = TeamMemberDTO(
+                    userId: uid,
+                    displayName: name.isEmpty ? uid : name,
+                    avatarUrl: nil,
+                    role: nil
+                )
+            }
+        }
+
+        let members = byUserId.values.sorted { lhs, rhs in
+            // Connected user first, then alphabetically by display name.
+            if lhs.userId == currentUserId { return true }
+            if rhs.userId == currentUserId { return false }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+        return jsonResponse(TeamMembersEnvelope(members: members))
     }
 
     static func openMeee2OnlineConnect(_ req: HttpRequest) -> HttpResponse {

@@ -617,6 +617,278 @@ textarea {
   padding: 14px 16px;
 }
 
+/* -- Phase 5: integration token hint + browse panel ----------------------- */
+
+.integration-card__hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(212, 163, 115, 0.26);
+  border-radius: var(--radius-sm);
+  background: rgba(212, 163, 115, 0.08);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.integration-card__hint code {
+  font-size: 11px;
+  word-break: break-word;
+}
+
+.integration-card__panel {
+  border-top: 1px solid rgba(168, 165, 155, 0.14);
+  padding-top: 12px;
+}
+
+/* -- Integration artifact picker ------------------------------------------ */
+
+.integration-picker {
+  display: grid;
+  gap: 10px;
+}
+
+.integration-picker__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.integration-picker__title,
+.integration-picker__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.integration-picker__back {
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.integration-picker__bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.integration-picker__tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.integration-picker__tabs button,
+.integration-picker__refresh,
+.integration-picker__close {
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.integration-picker__tabs button.is-active {
+  border-color: rgba(127, 169, 130, 0.34);
+  color: #bfe4cb;
+  background: rgba(127, 169, 130, 0.12);
+}
+
+.integration-picker__crumb {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-family: var(--mono, monospace);
+}
+
+.integration-picker__error,
+.integration-picker__notice,
+.integration-picker__empty {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.integration-picker__error {
+  border: 1px solid rgba(212, 115, 115, 0.3);
+  background: rgba(212, 115, 115, 0.1);
+  color: #e5a3a3;
+}
+
+.integration-picker__notice {
+  border: 1px solid rgba(212, 163, 115, 0.26);
+  background: rgba(212, 163, 115, 0.08);
+  color: #e5c199;
+}
+
+.integration-picker__empty {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+}
+
+.integration-picker__empty .spin {
+  animation: integration-spin 1s linear infinite;
+}
+
+@keyframes integration-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.integration-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.integration-picker__item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.03);
+}
+
+.integration-picker__item-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.integration-picker__item-main strong {
+  font-size: 12px;
+}
+
+.integration-picker__item-main em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.integration-picker__item-main code {
+  font-size: 10px;
+  color: var(--text-dim);
+  word-break: break-all;
+}
+
+.integration-picker__item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.integration-picker__item-actions button,
+.integration-picker__item-actions a {
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.integration-picker__attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.integration-picker__attach select {
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.9);
+  color: var(--text);
+  font-size: 11px;
+  padding: 3px 5px;
+}
+
+.integration-picker__attach button {
+  border: 1px solid rgba(127, 169, 130, 0.34);
+  border-radius: var(--radius-sm);
+  background: rgba(127, 169, 130, 0.14);
+  color: #bfe4cb;
+  font-size: 11px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+/* -- NodeInspectorModal attach entry point -------------------------------- */
+
+.planner-node-modal__attach {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(168, 165, 155, 0.18);
+  display: grid;
+  gap: 8px;
+}
+
+.planner-node-modal__attach-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.planner-node-modal__attach-providers {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.planner-node-modal__attach-providers button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.planner-node-modal__attach-providers button.is-active {
+  border-color: rgba(127, 169, 130, 0.34);
+  color: #bfe4cb;
+  background: rgba(127, 169, 130, 0.12);
+}
+
+.planner-node-modal__attach-picker {
+  margin-top: 4px;
+  padding: 10px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(34, 33, 31, 0.6);
+}
+
 .team-view {
   position: absolute;
   inset: 0;
@@ -758,6 +1030,40 @@ textarea {
   font-size: 10px;
   font-style: normal;
   text-transform: uppercase;
+}
+
+.team-member-card__roles em.team-member-card__team-role {
+  border-color: rgba(120, 150, 200, 0.3);
+  color: var(--text-dim);
+}
+
+.team-member-card__access {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.team-member-card__access strong {
+  text-transform: capitalize;
+}
+
+.team-member-card__access--owner {
+  color: #c79a3a;
+}
+
+.team-member-card__access--doer {
+  color: #5b9a6b;
+}
+
+.team-member-card__access--suggestion {
+  color: #6f8fc4;
+}
+
+.team-member-card__access--viewer {
+  color: var(--text-faint);
 }
 
 .team-member-card__meta {

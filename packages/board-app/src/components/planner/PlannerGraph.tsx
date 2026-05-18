@@ -16,20 +16,23 @@ import {
   approvePlannerProposal,
   createPlannerDeliveryPipeline,
   fetchPlannerGraphState,
+  fetchTeamMembers,
   generatePlannerProposal,
   inspectPlannerDrift,
   rejectPlannerProposal,
   sendPlannerActivity,
+  setPlannerCanvasVisibility,
   updatePlannerNodeLayout,
 } from '../../api'
-import type { PlanProposal, PlannerCanvasState, PlanningNode } from '../../types'
+import type { PlanProposal, PlannerCanvasState, PlannerCanvasVisibility } from '../../types'
 import type { BoardState } from '../../types'
-import type { UserProfile } from '../../api'
+import type { TeamMember, UserProfile } from '../../api'
 import {
   buildTeamDirectory,
   teamAvatarUrlByUserId,
   teamDisplayNameByUserId,
 } from '../../teamDirectory'
+import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
@@ -64,6 +67,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(false)
   const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -84,33 +88,54 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
     loadState()
   }, [loadState])
 
+  // Authoritative team member identities — used for avatar / name resolution.
+  useEffect(() => {
+    let cancelled = false
+    fetchTeamMembers()
+      .then((res) => {
+        if (!cancelled) setTeamMembers(res.members)
+      })
+      .catch(() => {
+        if (!cancelled) setTeamMembers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const handleOpenNodeDetails = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId)
     setNodeModalOpen(true)
   }, [])
 
-  const graph = useMemo(() => {
+  const teamDirectory = useMemo(() => {
     const members = buildTeamDirectory({
       userProfile,
       boardState,
       canvasOwnerId: plannerState?.canvas.ownerId,
       nodes: plannerState?.nodes ?? [],
       activities: plannerState?.activities ?? [],
+      teamMembers,
     })
-    const displayNameByUserId = teamDisplayNameByUserId(members)
-    const avatarUrlByUserId = teamAvatarUrlByUserId(members)
+    return {
+      displayNameByUserId: teamDisplayNameByUserId(members),
+      avatarUrlByUserId: teamAvatarUrlByUserId(members),
+    }
+  }, [boardState, plannerState, userProfile, teamMembers])
+
+  const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
       proposal: previewActive ? null : proposal,
       ownerId: plannerState?.canvas.ownerId,
-      displayNameByUserId,
-      avatarUrlByUserId,
+      displayNameByUserId: teamDirectory.displayNameByUserId,
+      avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
       onOpenDetails: handleOpenNodeDetails,
       onOpenSubCanvas,
     })
-  }, [boardState, plannerState, previewActive, proposal, userProfile, handleOpenNodeDetails, onOpenSubCanvas])
+  }, [plannerState, previewActive, proposal, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas])
 
   useEffect(() => {
     setFlowNodes(graph.nodes)
@@ -333,6 +358,46 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .finally(() => setBusy(false))
   }, [canvasId])
 
+  // GOVERNANCE-layer node actions (sub-canvas / refine / assign doer) return a
+  // PlanProposal. Thread it into the same proposal state the generate / drift /
+  // delivery-pipeline flows feed, so the user lands in the existing
+  // PlannerProposalPanel approve/apply gate.
+  // Bumped whenever a governance node action creates a proposal —
+  // PlannerProposalPanel watches this to auto-open the review modal.
+  const [reviewRequestTick, setReviewRequestTick] = useState(0)
+  const handleNodeActionProposal = useCallback((next: PlanProposal) => {
+    setProposal(next)
+    setPlannerState((current) => current
+      ? { ...current, proposals: upsertProposal(current.proposals, next) }
+      : current)
+    setPreviewActive(false)
+    setNodeModalOpen(false)
+    setReviewRequestTick((tick) => tick + 1)
+  }, [])
+
+  // EXECUTION-layer node actions (bind session / dispatch) apply DIRECTLY — no
+  // proposal, no owner approval. Just merge the returned graph state. Must NOT
+  // touch `reviewRequestTick` / the proposal review modal.
+  const handleNodeMutated = useCallback((next: PlannerCanvasState) => {
+    setPlannerState(next)
+  }, [])
+
+  // Gap 5 — owner-only canvas visibility. Applies immediately (canvas metadata,
+  // not a graph proposal); the updated canvas record is merged back into state.
+  const handleSetVisibility = useCallback((visibility: PlannerCanvasVisibility) => {
+    setBusy(true)
+    setError(null)
+    setPlannerCanvasVisibility(canvasId, visibility)
+      .then((canvas) => {
+        setPlannerState((current) => current ? { ...current, canvas } : current)
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to update canvas visibility'))
+      .finally(() => setBusy(false))
+  }, [canvasId])
+
+  const canvasVisibility: PlannerCanvasVisibility = plannerState?.canvas.visibility ?? 'private'
+  const isCanvasOwner = (plannerState?.access?.role ?? 'owner') === 'owner'
+
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
       <div className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}>
@@ -345,9 +410,43 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
           {plannerPanelCollapsed ? <MessageSquare size={16} aria-hidden /> : <X size={15} aria-hidden />}
         </button>
         <div className="planner-flow">
-          <div className={`planner-flow__state-badge${previewActive ? ' is-preview' : ''}`}>
-            <span>{previewActive ? 'Preview' : 'Live graph'}</span>
-            {previewActive && <em>not applied</em>}
+          <div className="planner-flow__header">
+            <div className={`planner-flow__state-badge${previewActive ? ' is-preview' : ''}`}>
+              <span>{previewActive ? 'Preview' : 'Live graph'}</span>
+              {previewActive && <em>not applied</em>}
+            </div>
+            {/* Gap 5 — canvas visibility. Owner gets a toggle; others see a badge. */}
+            {isCanvasOwner ? (
+              <div
+                className="planner-flow__visibility"
+                role="group"
+                aria-label="Canvas visibility"
+              >
+                <button
+                  type="button"
+                  className={canvasVisibility === 'private' ? 'is-active' : ''}
+                  disabled={busy || canvasVisibility === 'private'}
+                  onClick={() => handleSetVisibility('private')}
+                >
+                  Private
+                </button>
+                <button
+                  type="button"
+                  className={canvasVisibility === 'public' ? 'is-active' : ''}
+                  disabled={busy || canvasVisibility === 'public'}
+                  onClick={() => handleSetVisibility('public')}
+                >
+                  Public
+                </button>
+              </div>
+            ) : (
+              <span
+                className="planner-flow__visibility-badge"
+                title="Only the canvas owner can change visibility."
+              >
+                {canvasVisibility === 'public' ? 'Public' : 'Private'}
+              </span>
+            )}
           </div>
           {plannerState ? (
             <ReactFlow
@@ -381,15 +480,16 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
               <MiniMap
                 className="planner-flow__minimap"
+                position="bottom-right"
                 nodeColor={miniMapNodeFill}
                 nodeStrokeColor={miniMapNodeColor}
-                nodeBorderRadius={3}
-                nodeStrokeWidth={2}
+                nodeBorderRadius={4}
+                nodeStrokeWidth={3}
                 bgColor="rgba(31, 31, 29, 0.96)"
-                maskColor="rgba(245, 244, 239, 0.08)"
-                maskStrokeColor="rgba(245, 244, 239, 0.24)"
-                maskStrokeWidth={1}
-                offsetScale={8}
+                maskColor="rgba(20, 20, 18, 0.62)"
+                maskStrokeColor="rgba(204, 120, 92, 0.55)"
+                maskStrokeWidth={2}
+                offsetScale={6}
                 pannable
                 zoomable
               />
@@ -419,6 +519,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               onApply={handleApply}
               onReject={handleReject}
               onCreateDeliveryPipeline={handleCreateDeliveryPipeline}
+              reviewRequestTick={reviewRequestTick}
             />
           </div>
         )}
@@ -426,69 +527,41 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       {nodeModalOpen && selectedNode && (
         <NodeInspectorModal
           node={selectedNode}
+          canvasId={canvasId}
+          onArtifactAttached={() => {
+            // Re-pull graph state so the new artifact shows in the node list.
+            fetchPlannerGraphState(canvasId)
+              .then((state) => setPlannerState(state))
+              .catch(() => {
+                // Best-effort; the attach itself already succeeded.
+              })
+          }}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
+          ownerLabel={
+            plannerState?.canvas.ownerId
+              ? teamDirectory.displayNameByUserId[plannerState.canvas.ownerId]
+              : undefined
+          }
+          ownerAvatarUrl={
+            plannerState?.canvas.ownerId
+              ? teamDirectory.avatarUrlByUserId[plannerState.canvas.ownerId]
+              : undefined
+          }
+          doerLabel={
+            selectedNode.doerId
+              ? teamDirectory.displayNameByUserId[selectedNode.doerId] ?? selectedNode.doerId
+              : undefined
+          }
+          access={plannerState?.access ?? null}
+          sessions={boardState?.sessions ?? []}
+          teamMembers={teamMembers}
+          onProposalCreated={handleNodeActionProposal}
+          onNodeMutated={handleNodeMutated}
           onClose={() => setNodeModalOpen(false)}
+          onOpenSubCanvas={onOpenSubCanvas}
         />
       )}
     </section>
-  )
-}
-
-function NodeInspectorModal({
-  node,
-  state,
-  onClose,
-}: {
-  node: PlanningNode
-  state: PlannerCanvasState['states'][number] | null
-  onClose: () => void
-}) {
-  return (
-    <div
-      className="planner-modal-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-    >
-      <div className="planner-node-modal" role="dialog" aria-modal="true" aria-label="Node details">
-        <button type="button" className="planner-node-modal__close" onClick={onClose} aria-label="Close node details">
-          <X size={15} aria-hidden />
-        </button>
-        <div className="planner-node-modal__header">
-          <span>{state?.runState ?? node.status}</span>
-          <h2>{node.title}</h2>
-        </div>
-        <div className="planner-node-modal__grid">
-          <span>Executor</span>
-          <strong>{node.executorType} / {node.executionMode}</strong>
-          <span>Kind</span>
-          <strong>{node.nodeKind ?? (node.source === 'session' ? 'session' : 'step')}</strong>
-          <span>Workflow</span>
-          <strong>{node.workflowRunState ?? 'pending'}</strong>
-          <span>Doer</span>
-          <strong>{node.doerId}</strong>
-          <span>Trigger</span>
-          <strong>{node.trigger?.label ?? 'manual / none'}</strong>
-          <span>Gate</span>
-          <strong>{node.gate?.label ?? 'none'}</strong>
-          <span>Consumes</span>
-          <strong>{node.ioSchema.consumes.length > 0 ? node.ioSchema.consumes.join(', ') : 'none'}</strong>
-          <span>Produces</span>
-          <strong>{node.ioSchema.produces.length > 0 ? node.ioSchema.produces.join(', ') : 'none'}</strong>
-          <span>Artifacts</span>
-          <strong>{(node.artifactRefs ?? state?.artifactRefs ?? []).length > 0
-            ? (node.artifactRefs ?? state?.artifactRefs ?? []).join(', ')
-            : 'none'}</strong>
-          <span>Dependencies</span>
-          <strong>{node.dependsOnNodeIds?.length ?? 0}</strong>
-        </div>
-        {state?.blockers.length ? (
-          <div className="planner-node-modal__blockers">
-            {state.blockers.map((blocker) => <span key={blocker}>{blocker}</span>)}
-          </div>
-        ) : null}
-      </div>
-    </div>
   )
 }
 
@@ -510,6 +583,8 @@ function miniMapNodeFill(node: { data?: Record<string, unknown> }): string {
   }
 }
 
+// Stroke colors mirror the .planner-node--<runState> border-left tokens so the
+// minimap reads as a faithful miniature of the graph's status coloring.
 function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {
   const data = node.data
   const state = data?.state as { runState?: string; needsOwnerReview?: boolean } | null | undefined
@@ -518,16 +593,16 @@ function miniMapNodeColor(node: { data?: Record<string, unknown> }): string {
   switch (status) {
     case 'blocked':
     case 'review':
-      return '#c26a6a'
+      return '#C26A6A' // --danger
     case 'running':
-      return '#8ba9c2'
+      return '#8BA9C2' // --info
     case 'planning':
-      return '#c9a45d'
+      return '#D4A373' // --warning
     case 'done':
-      return '#79ad87'
+      return '#7FA982' // --success
     case 'waiting':
     default:
-      return '#8c8980'
+      return '#A8A59B' // --text-dim
   }
 }
 

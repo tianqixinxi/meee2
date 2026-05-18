@@ -1,17 +1,24 @@
-import { BookOpenText, CheckCircle2, GitPullRequest, KeyRound, MessageSquareText, ShieldCheck } from 'lucide-react'
+import {
+  BookOpenText,
+  CheckCircle2,
+  GitPullRequest,
+  KeyRound,
+  MessageSquareText,
+  ShieldCheck,
+} from 'lucide-react'
 import type { CSSProperties } from 'react'
-import type { BoardState } from '../types'
+import { useEffect, useState } from 'react'
+import { fetchIntegrationStatus } from '../api'
+import type { BoardState, IntegrationId, IntegrationStatus } from '../types'
+import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
 
 interface Props {
   state: BoardState | null
 }
 
-type IntegrationStatus = 'ready' | 'not-configured'
-
 interface IntegrationCard {
-  id: string
+  id: IntegrationId
   name: string
-  status: IntegrationStatus
   accent: string
   description: string
   scopes: string[]
@@ -19,33 +26,48 @@ interface IntegrationCard {
   Icon: typeof GitPullRequest
 }
 
-export function IntegrationsView({ state }: Props) {
-  const plugins = new Set((state?.sessions ?? []).map((session) => session.pluginId.toLowerCase()))
-  const githubReady = [...plugins].some((plugin) => plugin.includes('github'))
-  const larkReady = [...plugins].some((plugin) => plugin.includes('lark') || plugin.includes('feishu'))
+const CARDS: IntegrationCard[] = [
+  {
+    id: 'github',
+    name: 'GitHub',
+    accent: '#D6D2CA',
+    description: 'PRs, commits, checks, releases',
+    scopes: ['Repository', 'Pull requests', 'CI checks'],
+    signals: ['artifact: impl-pr', 'artifact: main-merge', 'event: check-result'],
+    Icon: GitPullRequest,
+  },
+  {
+    id: 'lark',
+    name: 'Lark',
+    accent: '#8BA9C2',
+    description: 'Docs, meetings, sign-off records',
+    scopes: ['Wiki / Docs', 'Meetings', 'Approval notes'],
+    signals: ['artifact: idea-draft', 'artifact: prd', 'gate: sign-off'],
+    Icon: MessageSquareText,
+  },
+]
 
-  const cards: IntegrationCard[] = [
-    {
-      id: 'github',
-      name: 'GitHub',
-      status: githubReady ? 'ready' : 'not-configured',
-      accent: '#D6D2CA',
-      description: 'PRs, commits, checks, releases',
-      scopes: ['Repository', 'Pull requests', 'CI checks'],
-      signals: ['artifact: impl-pr', 'artifact: main-merge', 'event: check-result'],
-      Icon: GitPullRequest,
-    },
-    {
-      id: 'lark',
-      name: 'Lark',
-      status: larkReady ? 'ready' : 'not-configured',
-      accent: '#8BA9C2',
-      description: 'Docs, meetings, sign-off records',
-      scopes: ['Wiki / Docs', 'Meetings', 'Approval notes'],
-      signals: ['artifact: idea-draft', 'artifact: prd', 'gate: sign-off'],
-      Icon: MessageSquareText,
-    },
-  ]
+export function IntegrationsView(_props: Props) {
+  const [statuses, setStatuses] = useState<IntegrationStatus[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [openProvider, setOpenProvider] = useState<IntegrationId | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchIntegrationStatus()
+      .then((res) => {
+        if (!cancelled) setStatuses(res.integrations)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Failed to load status')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const statusById = (id: IntegrationId): IntegrationStatus | null =>
+    statuses?.find((item) => item.id === id) ?? null
 
   return (
     <section className="integrations-view" aria-label="Integrations">
@@ -60,9 +82,20 @@ export function IntegrationsView({ state }: Props) {
         </div>
       </header>
 
+      {loadError && <p className="integration-picker__error">{loadError}</p>}
+
       <div className="integrations-view__grid">
-        {cards.map((card) => (
-          <IntegrationCardView key={card.id} card={card} />
+        {CARDS.map((card) => (
+          <IntegrationCardView
+            key={card.id}
+            card={card}
+            status={statusById(card.id)}
+            loading={statuses === null && loadError === null}
+            open={openProvider === card.id}
+            onToggle={() =>
+              setOpenProvider((current) => (current === card.id ? null : card.id))
+            }
+          />
         ))}
       </div>
 
@@ -71,16 +104,38 @@ export function IntegrationsView({ state }: Props) {
           <KeyRound size={15} aria-hidden />
           <strong>Runtime boundary</strong>
         </div>
-        <p>Integrations provide readable artifacts and dispatch context. They do not auto-link existing sessions to graph nodes.</p>
+        <p>
+          Integrations provide readable artifacts and dispatch context. They do not auto-link
+          existing sessions to graph nodes. To attach an item as an artifact, open a planner node
+          and use its "Attach artifact" action.
+        </p>
       </section>
     </section>
   )
 }
 
-function IntegrationCardView({ card }: { card: IntegrationCard }) {
+function IntegrationCardView({
+  card,
+  status,
+  loading,
+  open,
+  onToggle,
+}: {
+  card: IntegrationCard
+  status: IntegrationStatus | null
+  loading: boolean
+  open: boolean
+  onToggle: () => void
+}) {
   const Icon = card.Icon
+  const connected = status?.connected ?? false
+  const statusLabel = loading ? 'Checking…' : connected ? 'Connected' : 'Setup needed'
+
   return (
-    <article className="integration-card" style={{ '--integration-accent': card.accent } as CSSProperties}>
+    <article
+      className="integration-card"
+      style={{ '--integration-accent': card.accent } as CSSProperties}
+    >
       <div className="integration-card__top">
         <div className="integration-card__icon">
           <Icon size={19} aria-hidden />
@@ -89,15 +144,17 @@ function IntegrationCardView({ card }: { card: IntegrationCard }) {
           <h2>{card.name}</h2>
           <p>{card.description}</p>
         </div>
-        <span className={`integration-card__status is-${card.status}`}>
-          {card.status === 'ready' ? 'Detected' : 'Setup needed'}
+        <span className={`integration-card__status is-${connected ? 'ready' : 'not-configured'}`}>
+          {statusLabel}
         </span>
       </div>
 
       <div className="integration-card__section">
         <span>Access</span>
         <div className="integration-card__chips">
-          {card.scopes.map((scope) => <em key={scope}>{scope}</em>)}
+          {card.scopes.map((scope) => (
+            <em key={scope}>{scope}</em>
+          ))}
         </div>
       </div>
 
@@ -113,15 +170,29 @@ function IntegrationCardView({ card }: { card: IntegrationCard }) {
         </div>
       </div>
 
+      {/* Auth / connection detail — for GitHub this is the ccops token hint. */}
+      {!connected && status?.reason && (
+        <p className="integration-card__hint">
+          {card.id === 'github' ? <KeyRound size={12} aria-hidden /> : null}
+          <code>{status.reason}</code>
+        </p>
+      )}
+
       <div className="integration-card__footer">
         <div>
-          {card.status === 'ready' ? <CheckCircle2 size={13} aria-hidden /> : <KeyRound size={13} aria-hidden />}
-          {card.status === 'ready' ? 'Available to meee2 AI' : 'Connection flow next'}
+          {connected ? <CheckCircle2 size={13} aria-hidden /> : <KeyRound size={13} aria-hidden />}
+          {connected ? 'Available to meee2 AI' : 'Connection required'}
         </div>
-        <button type="button" disabled>
-          Configure
+        <button type="button" onClick={onToggle} disabled={loading || !connected}>
+          {open ? 'Hide' : 'Browse'}
         </button>
       </div>
+
+      {open && connected && (
+        <div className="integration-card__panel">
+          <IntegrationArtifactPicker provider={card.id} onClose={onToggle} />
+        </div>
+      )}
     </article>
   )
 }

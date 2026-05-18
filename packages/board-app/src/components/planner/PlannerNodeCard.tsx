@@ -31,6 +31,9 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const executorLabel = node.executorType === 'mock' ? 'local' : node.executorType
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
   const artifactRefs = node.artifactRefs ?? data.state?.artifactRefs ?? []
+  const depCount = node.dependsOnNodeIds?.length ?? 0
+  // Phase 6 — server-derived workflow-guidance line. Read-only; never edited here.
+  const nextAction = node.nextAction?.trim() || null
 
   return (
     <div
@@ -43,73 +46,78 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       ].filter(Boolean).join(' ')}
     >
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
+
+      {/* Primary row: status + kind tag stay prominent, owner avatar anchored right. */}
       <div className="planner-node__header">
         <span className="planner-node__status">
-          <Icon size={14} aria-hidden />
+          <Icon size={13} aria-hidden />
           {runState}
         </span>
+        <span className={`planner-node__kind-tag kind-${nodeKind}`}>{kindLabel(nodeKind)}</span>
+        {data.previewKind !== 'none' && (
+          <span className="planner-node__badge">
+            {data.previewKind === 'added' ? 'new' : 'changed'}
+          </span>
+        )}
         <span
           className={`planner-node__owner-avatar${data.ownerAvatarUrl ? ' has-image' : ''}`}
           title={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}
           aria-label={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}
         >
-          {data.ownerAvatarUrl && <img src={data.ownerAvatarUrl} alt="" />}
-        </span>
-        <span className="planner-node__header-badges">
-          {data.previewKind !== 'none' && (
-            <span className="planner-node__badge">
-              {data.previewKind === 'added' ? 'new' : 'changed'}
-            </span>
-          )}
+          {data.ownerAvatarUrl ? <img src={data.ownerAvatarUrl} alt="" /> : <UserRound size={12} aria-hidden />}
         </span>
       </div>
 
-      <div className={`planner-node__kind-label kind-${nodeKind}`}>{kindLabel(nodeKind)}</div>
       <div className="planner-node__title">{node.title}</div>
 
       {node.gate && (
         <div className="planner-node__gate">
-          <Signpost size={12} aria-hidden />
+          <Signpost size={11} aria-hidden />
           {node.gate.label}
         </div>
       )}
 
-      <div className="planner-node__meta">
-        <span>
-          <UserRound size={12} aria-hidden />
-          Owner {data.ownerLabel ?? 'Owner'}
+      {/* Secondary metadata compacted into a single wrapping chip row. */}
+      <div className="planner-node__meta" aria-label="Node metadata">
+        <span className="planner-node__chip" title={`Owner: ${data.ownerLabel ?? 'canvas owner'}`}>
+          <UserRound size={10} aria-hidden />
+          {data.ownerLabel ?? 'Owner'}
         </span>
-        <span>
-          <UserRound size={12} aria-hidden />
-          Doer {data.doerLabel ?? node.doerId}
+        <span className="planner-node__chip" title={`Doer: ${data.doerLabel ?? node.doerId}`}>
+          <UserRound size={10} aria-hidden />
+          {data.doerLabel ?? node.doerId}
         </span>
-        <span>
-          <GitBranch size={12} aria-hidden />
+        <span className="planner-node__chip" title={`Executor: ${executorLabel}`}>
+          <GitBranch size={10} aria-hidden />
           {executorLabel}
         </span>
-        {(node.dependsOnNodeIds?.length ?? 0) > 0 && (
-          <span>
-            <Route size={12} aria-hidden />
-            {node.dependsOnNodeIds?.length} deps
+        {depCount > 0 && (
+          <span className="planner-node__chip" title={`${depCount} dependencies`}>
+            <Route size={10} aria-hidden />
+            {depCount} deps
+          </span>
+        )}
+        {node.sessionId && (
+          <span className="planner-node__chip is-mono" title={`Session ${node.sessionId}`}>
+            {node.sessionId}
+          </span>
+        )}
+        {artifactRefs.length > 0 && (
+          <span
+            className="planner-node__chip is-artifact"
+            title={artifactRefs.join('\n')}
+          >
+            <FileText size={10} aria-hidden />
+            {artifactLabel(artifactRefs[0])}
+            {artifactRefs.length > 1 && ` +${artifactRefs.length - 1}`}
           </span>
         )}
       </div>
 
-      {node.sessionId && (
-        <div className="planner-node__session-ref">
-          session {node.sessionId}
-        </div>
-      )}
-
-      {artifactRefs.length > 0 && (
-        <div className="planner-node__artifacts" aria-label="Artifacts">
-          {artifactRefs.slice(0, 2).map((ref) => (
-            <span key={ref} title={ref}>
-              <FileText size={11} aria-hidden />
-              {artifactLabel(ref)}
-            </span>
-          ))}
-          {artifactRefs.length > 2 && <span>+{artifactRefs.length - 2}</span>}
+      {nextAction && (
+        <div className="planner-node__next-action" title={nextAction}>
+          <Signpost size={11} aria-hidden />
+          <span>{nextAction}</span>
         </div>
       )}
 
@@ -128,6 +136,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </button>
       )}
 
+      {/* Status-critical alerts kept full-width and prominent. */}
       {blockers.length > 0 && (
         <div className="planner-node__blockers">
           <AlertTriangle size={12} aria-hidden />
@@ -182,5 +191,5 @@ function kindLabel(kind: string): string {
 
 function artifactLabel(ref: string): string {
   const compact = ref.split('/').filter(Boolean).pop() ?? ref
-  return compact.length > 22 ? `${compact.slice(0, 19)}...` : compact
+  return compact.length > 18 ? `${compact.slice(0, 15)}...` : compact
 }

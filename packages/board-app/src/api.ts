@@ -19,6 +19,10 @@ import type {
   PlanChange,
   PlannerArtifactKind,
   PlannerDispatchRunner,
+  PlannerCanvasVisibility,
+  PlanningCanvas,
+  IntegrationStatus,
+  ExternalItemsResult,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -792,34 +796,36 @@ export async function createPlannerDeliveryPipeline(canvasId: string): Promise<P
   return response.proposal
 }
 
-export async function bindPlannerSessionToNode(
+// bind-session and dispatch are EXECUTION-LAYER actions: they apply DIRECTLY
+// (no proposal / owner-approval gate, gated only by canUpdateAssignedNode) and
+// return the updated graph state — same shape as attach-artifact / layout.
+
+export function bindPlannerSessionToNode(
   canvasId: string,
   nodeId: string,
   sessionId: string,
-): Promise<PlanProposal | null> {
-  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/bind-session`,
     {
       method: 'POST',
       body: JSON.stringify({ sessionId }),
     },
   )
-  return response.proposal
 }
 
-export async function dispatchPlannerNodeSession(
+export function dispatchPlannerNodeSession(
   canvasId: string,
   nodeId: string,
   runner: PlannerDispatchRunner = 'byoa-local',
-): Promise<PlanProposal | null> {
-  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
     {
       method: 'POST',
       body: JSON.stringify({ runner }),
     },
   )
-  return response.proposal
 }
 
 export function attachPlannerArtifactToNode(
@@ -841,6 +847,123 @@ export function attachPlannerArtifactToNode(
   )
 }
 
+// -- integrations (Phase 5: 真接入) ----------------------------------------
+//
+// Read-only browsing endpoints. The actual attach still goes through
+// attachPlannerArtifactToNode above — these only let the user pick an item.
+
+/** Demo fixtures, consistent with the PLANNER_DEMO_MODE pattern elsewhere. */
+function demoIntegrationStatus(): { integrations: IntegrationStatus[] } {
+  return {
+    integrations: [
+      { id: 'github', name: 'GitHub', connected: true, reason: null },
+      {
+        id: 'lark',
+        name: 'Lark',
+        connected: true,
+        reason: 'Doc browsing not yet wired — see TODO(lark).',
+      },
+    ],
+  }
+}
+
+function demoGithubRepos(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2',
+        title: 'tianqixinxi/meee2',
+        subtitle: 'private',
+        reference: 'https://github.com/tianqixinxi/meee2',
+        suggestedArtifactKind: 'generic',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoGithubPulls(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2#42',
+        title: '#42 Add planner graph workflow shell',
+        subtitle: 'merged → main',
+        reference: 'https://github.com/tianqixinxi/meee2/pull/42',
+        suggestedArtifactKind: 'main-merge',
+      },
+      {
+        id: 'tianqixinxi/meee2#48',
+        title: '#48 Phase 5 integrations',
+        subtitle: 'open → main',
+        reference: 'https://github.com/tianqixinxi/meee2/pull/48',
+        suggestedArtifactKind: 'impl-pr',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoGithubIssues(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2#7',
+        title: '#7 Planner artifact picker',
+        subtitle: 'open',
+        reference: 'https://github.com/tianqixinxi/meee2/issues/7',
+        suggestedArtifactKind: 'idea-draft',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoLarkDocs(): ExternalItemsResult {
+  return {
+    provider: 'lark',
+    items: [],
+    notice: 'TODO(lark): doc search not wired yet. Contract is final; list is empty.',
+  }
+}
+
+/** GET /api/integrations/status — per-integration connection status. */
+export function fetchIntegrationStatus(): Promise<{ integrations: IntegrationStatus[] }> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoIntegrationStatus())
+  return jsonRequest<{ integrations: IntegrationStatus[] }>('/api/integrations/status')
+}
+
+/** GET /api/integrations/github/repos — repos the GitHub token can see. */
+export function fetchGithubRepos(): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubRepos())
+  return jsonRequest<ExternalItemsResult>('/api/integrations/github/repos')
+}
+
+/** GET /api/integrations/github/repos/:owner/:repo/pulls */
+export function fetchGithubPulls(owner: string, repo: string): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubPulls())
+  return jsonRequest<ExternalItemsResult>(
+    `/api/integrations/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`,
+  )
+}
+
+/** GET /api/integrations/github/repos/:owner/:repo/issues */
+export function fetchGithubIssues(owner: string, repo: string): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubIssues())
+  return jsonRequest<ExternalItemsResult>(
+    `/api/integrations/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+  )
+}
+
+/** GET /api/integrations/lark/docs — see TODO(lark) on the backend. */
+export function fetchLarkDocs(): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoLarkDocs())
+  return jsonRequest<ExternalItemsResult>('/api/integrations/lark/docs')
+}
+
 export async function createPlannerSubCanvasFromNode(
   canvasId: string,
   nodeId: string,
@@ -854,6 +977,34 @@ export async function createPlannerSubCanvasFromNode(
     },
   )
   return response.proposal
+}
+
+/**
+ * PATCH …/canvases/:id/visibility — owner-only public/private toggle. This is
+ * canvas metadata, not a graph proposal, so it applies immediately and returns
+ * the updated canvas record.
+ */
+export async function setPlannerCanvasVisibility(
+  canvasId: string,
+  visibility: PlannerCanvasVisibility,
+): Promise<PlanningCanvas> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      id: canvasId,
+      ownerId: DEMO_OWNER_ID,
+      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      plannerContext: `canvas:${canvasId}`,
+      visibility,
+    })
+  }
+  const response = await jsonRequest<{ canvas: PlanningCanvas }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/visibility`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ visibility }),
+    },
+  )
+  return response.canvas
 }
 
 export function updatePlannerNodeLayout(
@@ -916,6 +1067,47 @@ export function fetchUserProfile(): Promise<UserProfile> {
     })
   }
   return jsonRequest<UserProfile>('/api/user-profile')
+}
+
+/** One identity in the team member directory, keyed by `userId`. */
+export interface TeamMember {
+  userId: string
+  displayName: string
+  avatarUrl?: string | null
+  /** Team-level membership role, or null when known only from local signals. */
+  role?: string | null
+}
+
+/**
+ * Authoritative team member directory for the planner graph. The graph keys
+ * avatar / displayName lookups by `userId` from this source.
+ */
+export function fetchTeamMembers(): Promise<{ members: TeamMember[] }> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      members: [
+        {
+          userId: DEMO_OWNER_ID,
+          displayName: 'Demo Owner',
+          avatarUrl: null,
+          role: 'owner',
+        },
+        {
+          userId: 'demo-doer-anna',
+          displayName: 'Anna Doer',
+          avatarUrl: null,
+          role: 'member',
+        },
+        {
+          userId: 'demo-doer-ben',
+          displayName: 'Ben Builder',
+          avatarUrl: null,
+          role: 'member',
+        },
+      ],
+    })
+  }
+  return jsonRequest<{ members: TeamMember[] }>('/api/team/members')
 }
 
 export function openMeee2OnlineConnect(): Promise<{ ok: boolean }> {

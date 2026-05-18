@@ -1,8 +1,8 @@
-import { GitBranch, User, UsersRound } from 'lucide-react'
+import { GitBranch, ShieldCheck, User, UsersRound } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-import { fetchPlannerGraphState, type UserProfile } from '../api'
-import { buildTeamDirectory, type PlannerTeamMember } from '../teamDirectory'
-import type { BoardState, CanvasInfo, PlannerGraphState } from '../types'
+import { fetchPlannerGraphState, fetchTeamMembers, type TeamMember, type UserProfile } from '../api'
+import { buildTeamDirectory, canvasRoleByUserId, type PlannerTeamMember } from '../teamDirectory'
+import type { BoardState, CanvasInfo, PlannerCanvasRole, PlannerGraphState } from '../types'
 
 interface Props {
   state: BoardState | null
@@ -12,6 +12,7 @@ interface Props {
 
 export function TeamView({ state, activeCanvas, userProfile }: Props) {
   const [graphState, setGraphState] = useState<PlannerGraphState | null>(null)
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -33,6 +34,21 @@ export function TeamView({ state, activeCanvas, userProfile }: Props) {
     }
   }, [activeCanvas?.id])
 
+  // Authoritative member identities (display name + avatar + team role).
+  useEffect(() => {
+    let cancelled = false
+    fetchTeamMembers()
+      .then((res) => {
+        if (!cancelled) setTeamMembers(res.members)
+      })
+      .catch(() => {
+        if (!cancelled) setTeamMembers([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const members = useMemo(() => buildTeamDirectory({
     userProfile,
     boardState: state,
@@ -40,7 +56,17 @@ export function TeamView({ state, activeCanvas, userProfile }: Props) {
     canvasOwnerId: graphState?.canvas.ownerId ?? activeCanvas?.ownerUserId,
     nodes: graphState?.nodes ?? [],
     activities: graphState?.activities ?? [],
-  }), [activeCanvas, graphState, state, userProfile])
+    teamMembers,
+  }), [activeCanvas, graphState, state, userProfile, teamMembers])
+
+  // Each member's role on the *current* canvas (owner / doer / viewer /
+  // suggestion) — derived from planner access + node doerIds + canvas owner.
+  const canvasRoles = useMemo(() => canvasRoleByUserId({
+    members,
+    ownerId: graphState?.canvas.ownerId ?? activeCanvas?.ownerUserId,
+    nodes: graphState?.nodes ?? [],
+    access: graphState?.access ?? null,
+  }), [members, graphState, activeCanvas])
 
   const assignedCount = members.reduce((total, member) => total + member.assignedNodeCount, 0)
 
@@ -63,7 +89,11 @@ export function TeamView({ state, activeCanvas, userProfile }: Props) {
 
         <div className="team-view__grid">
           {members.map((member) => (
-            <TeamMemberCard key={member.userId} member={member} />
+            <TeamMemberCard
+              key={member.userId}
+              member={member}
+              canvasRole={canvasRoles[member.userId] ?? 'viewer'}
+            />
           ))}
         </div>
 
@@ -83,7 +113,21 @@ export function TeamView({ state, activeCanvas, userProfile }: Props) {
   )
 }
 
-function TeamMemberCard({ member }: { member: PlannerTeamMember }) {
+/** Human-readable explanation of what a canvas role can do. */
+const CANVAS_ROLE_DETAIL: Record<PlannerCanvasRole, string> = {
+  owner: 'Full control — approve, apply and reject proposals.',
+  doer: 'May update their assigned nodes; proposals need owner approval.',
+  suggestion: 'May create proposals only — no direct node edits.',
+  viewer: 'Read-only on this canvas.',
+}
+
+function TeamMemberCard({
+  member,
+  canvasRole,
+}: {
+  member: PlannerTeamMember
+  canvasRole: PlannerCanvasRole
+}) {
   return (
     <article className="team-member-card">
       <div className={`team-member-card__avatar${member.avatarUrl ? ' has-image' : ''}`}>
@@ -96,6 +140,14 @@ function TeamMemberCard({ member }: { member: PlannerTeamMember }) {
         </div>
         <div className="team-member-card__roles">
           {member.roles.map((role) => <em key={role}>{role}</em>)}
+          {member.teamRole && <em className="team-member-card__team-role">team: {member.teamRole}</em>}
+        </div>
+        <div
+          className={`team-member-card__access team-member-card__access--${canvasRole}`}
+          title={CANVAS_ROLE_DETAIL[canvasRole]}
+        >
+          <ShieldCheck size={13} aria-hidden />
+          <span>Canvas access: <strong>{canvasRole}</strong></span>
         </div>
       </div>
       <div className="team-member-card__meta">

@@ -1,11 +1,54 @@
 import Foundation
 import Meee2PluginKit
 
+/// Who can see a planning canvas. `private` (the default) restricts the canvas
+/// to its owner plus anyone holding a role on it (doer / assigned); `public`
+/// makes it visible to every actor.
+enum PlannerCanvasVisibility: String, Codable, Equatable {
+    case `public`
+    case `private`
+}
+
 struct PlanningCanvas: Codable, Equatable {
     var id: String
     var ownerId: String
     var title: String
     var plannerContext: String
+    /// Visibility tier. Defaults to `.private`. Persisted canvases that predate
+    /// this field decode as `.private` (see the custom decoder below).
+    var visibility: PlannerCanvasVisibility
+
+    init(
+        id: String,
+        ownerId: String,
+        title: String,
+        plannerContext: String,
+        visibility: PlannerCanvasVisibility = .private
+    ) {
+        self.id = id
+        self.ownerId = ownerId
+        self.title = title
+        self.plannerContext = plannerContext
+        self.visibility = visibility
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, ownerId, title, plannerContext, visibility
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.ownerId = try container.decode(String.self, forKey: .ownerId)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.plannerContext = try container.decode(String.self, forKey: .plannerContext)
+        // Schema migration: legacy canvases persisted before `visibility`
+        // existed default to `.private` (the safe, least-permissive tier).
+        self.visibility = try container.decodeIfPresent(
+            PlannerCanvasVisibility.self,
+            forKey: .visibility
+        ) ?? .private
+    }
 }
 
 struct IOSchema: Codable, Equatable {
@@ -28,13 +71,13 @@ struct ContextSource: Codable, Equatable {
     var reference: String
 }
 
-enum ExecutionMode: String, Codable, Equatable {
+enum ExecutionMode: String, Codable, Equatable, CaseIterable {
     case auto
     case signOff = "sign-off"
     case human
 }
 
-enum ExecutorType: String, Codable, Equatable {
+enum ExecutorType: String, Codable, Equatable, CaseIterable {
     case claude
     case codex
     case cursor
@@ -44,7 +87,7 @@ enum ExecutorType: String, Codable, Equatable {
     case mock
 }
 
-enum PlanningNodeStatus: String, Codable, Equatable {
+enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     case waiting
     case running
     case blocked
@@ -96,9 +139,43 @@ struct PlannerNodeGate: Codable, Equatable {
 }
 
 enum PlannerDispatchRunner: String, Codable, Equatable {
+    /// Spawns a local Claude session (the BYOA default).
+    case claude
+    /// Spawns a local Codex session.
+    case codex
+    /// Spawns a local CLI session, command picked from `PlannerNodeDispatch.command`.
     case byoaLocal = "byoa-local"
+    /// Proposal-only runner — no execution wired up yet (CI worker). Phase 2
+    /// leaves this as a pure proposal: dispatch records intent but never spawns
+    /// a session node. See `PlannerDispatchRunner.spawnsSession`.
     case ciAgent = "ci-agent"
+    /// No session — the step waits at a human gate (`workflowRunState == .gateWait`).
     case human
+
+    /// Runners that produce a real spawned session (and therefore a `session`
+    /// PlanningNode at apply time). `ciAgent` is proposal-only; `human` gates.
+    var spawnsSession: Bool {
+        switch self {
+        case .claude, .codex, .byoaLocal:
+            return true
+        case .ciAgent, .human:
+            return false
+        }
+    }
+
+    /// CLI command used when spawning a session for this runner.
+    var spawnCommand: String? {
+        switch self {
+        case .claude:
+            return "claude"
+        case .codex:
+            return "codex"
+        case .byoaLocal:
+            return "claude"
+        case .ciAgent, .human:
+            return nil
+        }
+    }
 }
 
 struct PlannerNodeDispatch: Codable, Equatable {
@@ -323,6 +400,114 @@ struct PlanningNode: Codable, Equatable {
         self.eventRefs = eventRefs
         self.workflowRunState = workflowRunState
     }
+
+    // MARK: - Workflow guidance (Phase 6)
+
+    /// Stored keys. `nextAction` is intentionally absent — it is a *derived*
+    /// guidance string (see `nextAction`), not part of the on-disk shape, so
+    /// it must never be decoded or persisted. `encode(to:)` adds it for the
+    /// API response only.
+    private enum CodingKeys: String, CodingKey {
+        case id, canvasId, title, ioSchema, contextSources, executionMode
+        case executorType, doerId, status, sessionId, chatThreadId, source
+        case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
+        case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
+    }
+
+    /// Extra (encode-only) keys layered on top of the stored shape.
+    private enum DerivedCodingKeys: String, CodingKey {
+        case nextAction
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(canvasId, forKey: .canvasId)
+        try container.encode(title, forKey: .title)
+        try container.encode(ioSchema, forKey: .ioSchema)
+        try container.encode(contextSources, forKey: .contextSources)
+        try container.encode(executionMode, forKey: .executionMode)
+        try container.encode(executorType, forKey: .executorType)
+        try container.encode(doerId, forKey: .doerId)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(chatThreadId, forKey: .chatThreadId)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(dependsOnNodeIds, forKey: .dependsOnNodeIds)
+        try container.encodeIfPresent(subCanvasId, forKey: .subCanvasId)
+        try container.encodeIfPresent(nodeKind, forKey: .nodeKind)
+        try container.encodeIfPresent(layout, forKey: .layout)
+        try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(gate, forKey: .gate)
+        try container.encodeIfPresent(dispatch, forKey: .dispatch)
+        try container.encodeIfPresent(approvers, forKey: .approvers)
+        try container.encodeIfPresent(artifactRefs, forKey: .artifactRefs)
+        try container.encodeIfPresent(eventRefs, forKey: .eventRefs)
+        try container.encodeIfPresent(workflowRunState, forKey: .workflowRunState)
+        // Derived guidance — encode-only, never decoded back.
+        var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
+        try derived.encodeIfPresent(nextAction, forKey: .nextAction)
+    }
+
+    /// A short imperative "what to do next" guidance line for this node,
+    /// derived purely from `workflowRunState` plus node context (gate,
+    /// review mode, bound session). Pure function of stored fields — never
+    /// persisted, never set by the LLM/adapter. `nil` for nodes that carry
+    /// no actionable workflow state (e.g. a node with no `workflowRunState`).
+    var nextAction: String? {
+        PlannerWorkflowGuidance.nextAction(for: self, blockers: nil)
+    }
+}
+
+/// Derives the per-node workflow-guidance string (Phase 6). Pure, stateless —
+/// the single source of truth so the graph-state response and the workspace
+/// monitor agree. Guidance is computed from `workflowRunState` and node
+/// context; it is never stored or proposed.
+enum PlannerWorkflowGuidance {
+    /// - Parameters:
+    ///   - node: the planning node to derive guidance for.
+    ///   - blockers: optional blocker list from the node's `NodeStateSnapshot`.
+    ///     When provided it sharpens `pending`/`failed` guidance; pass `nil`
+    ///     when only the node is in hand.
+    static func nextAction(for node: PlanningNode, blockers: [String]?) -> String? {
+        // Only `step` nodes carry actionable workflow guidance. Session /
+        // artifact / sub-canvas nodes are tracked elsewhere.
+        if let kind = node.nodeKind, kind != .step { return nil }
+        guard let runState = node.workflowRunState else { return nil }
+
+        let hasGate = node.gate != nil
+        let hasBlockers = !(blockers?.isEmpty ?? true)
+        let needsOwnerReview = node.executionMode == .signOff
+        let hasSession = node.sessionId != nil
+        let hasDependencies = !(node.dependsOnNodeIds?.isEmpty ?? true)
+
+        switch runState {
+        case .gateWait:
+            return "Owner: review the gate and approve or send it back."
+        case .failed:
+            if hasBlockers {
+                return "Failed — clear the blockers, then re-dispatch."
+            }
+            return "Failed — inspect the failure and re-dispatch."
+        case .pending:
+            if hasDependencies {
+                return "Waiting on an upstream step — dispatch once it clears."
+            }
+            return "Ready — dispatch this step to start work."
+        case .dispatched:
+            if hasSession {
+                return "Dispatched — open the session to follow progress."
+            }
+            return "Dispatched — waiting for the session to spin up."
+        case .running:
+            return "In progress — open the session to monitor work."
+        case .done:
+            if hasGate || needsOwnerReview {
+                return "Done — verify the delivery evidence and close the gate."
+            }
+            return "Done — confirm the artifact is attached."
+        }
+    }
 }
 
 enum PlanProposalStatus: String, Codable, Equatable {
@@ -359,6 +544,7 @@ struct PlanChange: Codable, Equatable {
     var sessionId: String?
     var chatThreadId: String?
     var source: PlanningNodeSource?
+    var doerId: String?
 
     init(
         kind: Kind,
@@ -381,7 +567,8 @@ struct PlanChange: Codable, Equatable {
         workflowRunState: PlannerWorkflowRunState? = nil,
         sessionId: String? = nil,
         chatThreadId: String? = nil,
-        source: PlanningNodeSource? = nil
+        source: PlanningNodeSource? = nil,
+        doerId: String? = nil
     ) {
         self.kind = kind
         self.node = node
@@ -404,6 +591,7 @@ struct PlanChange: Codable, Equatable {
         self.sessionId = sessionId
         self.chatThreadId = chatThreadId
         self.source = source
+        self.doerId = doerId
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
@@ -429,7 +617,8 @@ struct PlanChange: Codable, Equatable {
         workflowRunState: PlannerWorkflowRunState? = nil,
         sessionId: String? = nil,
         chatThreadId: String? = nil,
-        source: PlanningNodeSource? = nil
+        source: PlanningNodeSource? = nil,
+        doerId: String? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .updateNode,
@@ -452,7 +641,8 @@ struct PlanChange: Codable, Equatable {
             workflowRunState: workflowRunState,
             sessionId: sessionId,
             chatThreadId: chatThreadId,
-            source: source
+            source: source,
+            doerId: doerId
         )
     }
 }
@@ -548,6 +738,43 @@ struct PlannerMonitorItem: Codable, Equatable {
     var needsOwnerReview: Bool
     var doerId: String?
     var riskRank: Int
+    /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
+    /// for proposal items or nodes with no actionable workflow state.
+    var nextAction: String?
+
+    init(
+        id: String,
+        kind: PlannerMonitorItemKind,
+        canvasId: String,
+        canvasTitle: String,
+        nodeId: String?,
+        nodeTitle: String?,
+        proposalId: String?,
+        proposalStatus: PlanProposalStatus?,
+        summary: String,
+        runState: NodeRunState?,
+        blockers: [String],
+        needsOwnerReview: Bool,
+        doerId: String?,
+        riskRank: Int,
+        nextAction: String? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.canvasId = canvasId
+        self.canvasTitle = canvasTitle
+        self.nodeId = nodeId
+        self.nodeTitle = nodeTitle
+        self.proposalId = proposalId
+        self.proposalStatus = proposalStatus
+        self.summary = summary
+        self.runState = runState
+        self.blockers = blockers
+        self.needsOwnerReview = needsOwnerReview
+        self.doerId = doerId
+        self.riskRank = riskRank
+        self.nextAction = nextAction
+    }
 }
 
 struct PlannerMonitorState: Codable, Equatable {
@@ -567,6 +794,12 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case updateNodeNoFields(String)
     case canvasNotFound(String)
     case permissionDenied(action: String, role: PlannerCanvasRole)
+    /// A change references a node whose id belongs to a different canvas.
+    case crossCanvasNodeReference(nodeId: String, expectedCanvas: String)
+    /// A change carries a node `kind` outside the known PlanningNodeKind set.
+    case unknownNodeKind(String)
+    /// A change carries a change `kind` outside the known PlanChange.Kind set.
+    case unknownChangeKind(String)
 
     var errorDescription: String? {
         switch self {
@@ -592,6 +825,12 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "planning canvas not found: \(id)"
         case .permissionDenied(let action, let role):
             return "meee2 AI \(action) is not allowed for \(role.rawValue)"
+        case .crossCanvasNodeReference(let nodeId, let expectedCanvas):
+            return "meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
+        case .unknownNodeKind(let kind):
+            return "meee2 AI proposal uses unknown node kind: \(kind)"
+        case .unknownChangeKind(let kind):
+            return "meee2 AI proposal uses unknown change kind: \(kind)"
         }
     }
 }
@@ -657,18 +896,90 @@ enum PlannerPermission {
             throw PlannerCoreError.permissionDenied(action: action.rawValue, role: access.role)
         }
     }
+
+    /// Enforce node-scoped execution-state mutations (dispatch / layout /
+    /// bind-session / attach-artifact). The owner may touch any node; a doer
+    /// may touch ONLY a node where `node.doerId == access.actorId`; a viewer
+    /// is always denied. `node` is the target node; pass `nil` when the node
+    /// is missing so the caller still surfaces `nodeNotFound` separately.
+    static func requireNodeUpdate(
+        on node: PlanningNode,
+        access: PlannerAccess
+    ) throws {
+        // Base capability gate (owner + doer pass, viewer/suggestion denied).
+        try require(.updateAssignedNode, access: access)
+        // Owner is unrestricted; a doer is confined to their own node.
+        guard access.role == .owner || node.doerId == access.actorId else {
+            throw PlannerCoreError.permissionDenied(
+                action: PlannerPermissionAction.updateAssignedNode.rawValue,
+                role: access.role
+            )
+        }
+    }
 }
 
 enum PlannerProposalValidator {
+    /// Known `PlanningNode.nodeKind` raw values an LLM is allowed to emit.
+    static let knownNodeKinds: Set<String> = [
+        PlanningNodeKind.step.rawValue,
+        PlanningNodeKind.session.rawValue,
+        PlanningNodeKind.artifact.rawValue,
+        PlanningNodeKind.subCanvas.rawValue,
+        PlanningNodeKind.external.rawValue
+    ]
+
+    /// Known `PlanChange.Kind` raw values an LLM is allowed to emit.
+    static let knownChangeKinds: Set<String> = [
+        PlanChange.Kind.addNode.rawValue,
+        PlanChange.Kind.updateNode.rawValue
+    ]
+
     static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
         let decoder = JSONDecoder()
+        var lastDecodeError: Error?
         for candidate in jsonCandidates(from: rawOutput) {
             guard let data = candidate.data(using: .utf8) else { continue }
-            if let proposal = try? decoder.decode(PlanProposal.self, from: data) {
-                return proposal
+            do {
+                return try decoder.decode(PlanProposal.self, from: data)
+            } catch {
+                lastDecodeError = error
+            }
+            // Strict decode failed — surface a precise error for an unknown
+            // `kind` value instead of an opaque "not valid JSON". A strict
+            // String-backed enum rejects unknown raw values, so without this
+            // a typo'd kind would look like malformed JSON to the caller.
+            if let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                try assertKnownKinds(in: obj)
             }
         }
+        // Log the exact decode failure (which field / value) — the thrown
+        // error stays a generic case, but the log pinpoints the cause.
+        if let lastDecodeError {
+            NSLog("[PlannerProposalValidator] proposal decode failed: %@",
+                  String(describing: lastDecodeError))
+        }
         throw PlannerCoreError.invalidPlannerProposalJSON
+    }
+
+    /// Scan a loosely-typed proposal object for unknown change/node `kind`
+    /// values before strict decoding swallows them as a generic JSON error.
+    private static func assertKnownKinds(in object: [String: Any]) throws {
+        guard let changes = object["changes"] as? [[String: Any]] else { return }
+        for change in changes {
+            if let changeKind = change["kind"] as? String,
+               !knownChangeKinds.contains(changeKind) {
+                throw PlannerCoreError.unknownChangeKind(changeKind)
+            }
+            if let node = change["node"] as? [String: Any],
+               let nodeKind = node["nodeKind"] as? String,
+               !knownNodeKinds.contains(nodeKind) {
+                throw PlannerCoreError.unknownNodeKind(nodeKind)
+            }
+            if let nodeKind = change["nodeKind"] as? String,
+               !knownNodeKinds.contains(nodeKind) {
+                throw PlannerCoreError.unknownNodeKind(nodeKind)
+            }
+        }
     }
 
     static func validate(
@@ -683,7 +994,13 @@ enum PlannerProposalValidator {
             throw PlannerCoreError.emptyProposalChanges
         }
 
-        let nodeIds = Set(nodes.map(\.id))
+        let existingNodeIds = Set(nodes.map(\.id))
+        // Node ids the proposal itself introduces — a valid target for an
+        // intra-proposal `dependsOnNodeIds` reference.
+        let addedNodeIds = Set(proposal.changes.compactMap { $0.node?.id })
+        // Every node id this canvas may legitimately reference.
+        let canvasNodeIds = existingNodeIds.union(addedNodeIds)
+
         for change in proposal.changes {
             switch change.kind {
             case .addNode:
@@ -691,9 +1008,29 @@ enum PlannerProposalValidator {
                 guard node.canvasId == canvas.id else {
                     throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: node.canvasId)
                 }
+                if let kind = node.nodeKind, !knownNodeKinds.contains(kind.rawValue) {
+                    throw PlannerCoreError.unknownNodeKind(kind.rawValue)
+                }
+                try assertSameCanvasReferences(
+                    nodeId: node.id,
+                    dependsOnNodeIds: node.dependsOnNodeIds,
+                    canvasNodeIds: canvasNodeIds,
+                    canvasId: canvas.id
+                )
             case .updateNode:
                 guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
-                guard nodeIds.contains(nodeId) else { throw PlannerCoreError.nodeNotFound(nodeId) }
+                guard existingNodeIds.contains(nodeId) else {
+                    throw PlannerCoreError.nodeNotFound(nodeId)
+                }
+                if let kind = change.nodeKind, !knownNodeKinds.contains(kind.rawValue) {
+                    throw PlannerCoreError.unknownNodeKind(kind.rawValue)
+                }
+                try assertSameCanvasReferences(
+                    nodeId: nodeId,
+                    dependsOnNodeIds: change.dependsOnNodeIds,
+                    canvasNodeIds: canvasNodeIds,
+                    canvasId: canvas.id
+                )
                 guard change.title != nil ||
                     change.status != nil ||
                     change.ioSchema != nil ||
@@ -711,11 +1048,31 @@ enum PlannerProposalValidator {
                     change.workflowRunState != nil ||
                     change.sessionId != nil ||
                     change.chatThreadId != nil ||
-                    change.source != nil else {
+                    change.source != nil ||
+                    change.doerId != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             }
         }
+    }
+
+    /// Reject `dependsOnNodeIds` entries that point at nodes outside this
+    /// canvas. A reference is cross-canvas when it is neither an existing
+    /// canvas node nor a node introduced by the same proposal.
+    private static func assertSameCanvasReferences(
+        nodeId: String,
+        dependsOnNodeIds: [String]?,
+        canvasNodeIds: Set<String>,
+        canvasId: String
+    ) throws {
+        for dependencyId in dependsOnNodeIds ?? [] {
+            guard !canvasNodeIds.contains(dependencyId) else { continue }
+            throw PlannerCoreError.crossCanvasNodeReference(
+                nodeId: dependencyId,
+                expectedCanvas: canvasId
+            )
+        }
+        _ = nodeId
     }
 
     private static func jsonCandidates(from rawOutput: String) -> [String] {
@@ -830,6 +1187,9 @@ final class PlannerCoreService {
 
         var updatedNodes = nodes
         var dependencyInvalidationNodeIds = Set<String>()
+        // Step nodes whose dispatch (set by this proposal) requires a spawned
+        // session node — collected during the change pass, materialized after.
+        var dispatchSpawnStepIds: [String] = []
         for change in proposal.changes {
             switch change.kind {
             case .addNode:
@@ -877,6 +1237,15 @@ final class PlannerCoreService {
                 }
                 if let dispatch = change.dispatch {
                     updatedNodes[index].dispatch = dispatch
+                    // A dispatch proposal that targets a spawning runner and
+                    // moves the step into `dispatched` should, at apply time,
+                    // materialize a `session` PlanningNode + an edge from this
+                    // step to it. `human` / `ci-agent` never reach here.
+                    if dispatch.runner.spawnsSession,
+                       change.workflowRunState == .dispatched,
+                       updatedNodes[index].nodeKind != .session {
+                        dispatchSpawnStepIds.append(nodeId)
+                    }
                 }
                 if let approvers = change.approvers {
                     updatedNodes[index].approvers = approvers
@@ -899,6 +1268,9 @@ final class PlannerCoreService {
                 if let source = change.source {
                     updatedNodes[index].source = source
                 }
+                if let doerId = change.doerId {
+                    updatedNodes[index].doerId = doerId
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
@@ -916,7 +1288,47 @@ final class PlannerCoreService {
                 updatedNodes[index].status = .planning
             }
         }
+
+        // Phase 2 — dispatch 真执行: materialize a `session` PlanningNode for each
+        // step that this proposal dispatched to a spawning runner. The session
+        // node `dependsOnNodeIds` the step, so `graphEdges` derives the
+        // step → session edge automatically. The spawned `sessionId` is unknown
+        // here — it is bound later when the spawn intent matches a real session
+        // (see `PlannerSessionRunStateBridge`).
+        for stepId in dispatchSpawnStepIds {
+            guard let step = updatedNodes.first(where: { $0.id == stepId }) else { continue }
+            // Idempotency: if a session node for this step already exists
+            // (re-apply, duplicate change), don't spawn a second one.
+            let alreadySpawned = updatedNodes.contains { node in
+                node.nodeKind == .session && (node.dependsOnNodeIds ?? []).contains(stepId)
+            }
+            guard !alreadySpawned else { continue }
+            updatedNodes.append(Self.sessionNode(for: step, proposalId: proposal.id))
+        }
         return updatedNodes
+    }
+
+    /// Build the `session`-kind PlanningNode created when a step node is
+    /// dispatched to a spawning runner. The node depends on the originating
+    /// step so the graph edge (step → session) is derived; `sessionId` stays
+    /// nil until the spawned session is observed and bound.
+    static func sessionNode(for step: PlanningNode, proposalId: String) -> PlanningNode {
+        PlanningNode(
+            id: "node-session-\(step.id)-\(proposalId)",
+            canvasId: step.canvasId,
+            title: "Session · \(step.title)",
+            ioSchema: step.ioSchema,
+            contextSources: step.contextSources,
+            executionMode: step.executionMode,
+            executorType: step.executorType,
+            doerId: step.doerId,
+            status: .running,
+            source: .session,
+            dependsOnNodeIds: [step.id],
+            nodeKind: .session,
+            dispatch: step.dispatch,
+            workflowRunState: .dispatched
+        )
     }
 
     func readNodeState(nodes: [PlanningNode]) -> [NodeStateSnapshot] {
@@ -1219,11 +1631,16 @@ final class PlannerStore {
     ) throws -> CanvasRecord {
         try withLock {
             if let existing = document.canvases[canvas.id] {
-                if existing.canvas == canvas {
+                // `visibility` is owned by the store, not by the per-request
+                // `PlanningCanvas` projection (which defaults to `.private`).
+                // Preserve the persisted tier so a read never clobbers it.
+                var incoming = canvas
+                incoming.visibility = existing.canvas.visibility
+                if existing.canvas == incoming {
                     return existing
                 }
                 var updated = existing
-                updated.canvas = canvas
+                updated.canvas = incoming
                 document.canvases[canvas.id] = updated
                 try save()
                 return updated
@@ -1231,6 +1648,21 @@ final class PlannerStore {
 
             let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
             document.canvases[canvas.id] = record
+            try save()
+            return record
+        }
+    }
+
+    /// Owner-driven visibility change. Persisted under the store lock like
+    /// every other mutation.
+    func setCanvasVisibility(
+        _ visibility: PlannerCanvasVisibility,
+        canvasId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            record.canvas.visibility = visibility
+            document.canvases[canvasId] = record
             try save()
             return record
         }
@@ -1382,6 +1814,154 @@ final class PlannerStore {
         }
     }
 
+    /// Phase 2 — runState 回流.
+    ///
+    /// Called when a spawned planner session (tagged `purpose=planner:<stepId>`)
+    /// is observed. `stepId` is the *step* node id from the purpose tag.
+    /// This binds `sessionId` onto the step's `session` PlanningNode (the one
+    /// that `dependsOnNodeIds` the step) and writes `runState` onto both the
+    /// session node and — when meaningful — the step node, so the step reflects
+    /// the live execution state of its child session.
+    ///
+    /// Returns the updated record, or `nil` if no session node is found for the
+    /// step (e.g. the step was dispatched to `human`, never spawning a session).
+    /// Persisted under the store lock, like every other mutation here.
+    @discardableResult
+    func applySessionRunState(
+        stepNodeId: String,
+        sessionId: String,
+        runState: PlannerWorkflowRunState
+    ) throws -> CanvasRecord? {
+        try withLock {
+            try applySessionRunStateLocked(
+                stepNodeId: stepNodeId,
+                sessionId: sessionId,
+                runState: runState
+            )
+        }
+    }
+
+    /// Lock-free core of `applySessionRunState` — callers must already hold the
+    /// store lock (`withLock`). Binds `sessionId` onto the step's session node
+    /// and mirrors the run state onto the step.
+    private func applySessionRunStateLocked(
+        stepNodeId: String,
+        sessionId: String,
+        runState: PlannerWorkflowRunState
+    ) throws -> CanvasRecord? {
+        // The session node may live in any canvas — find the owning record.
+        for (canvasId, var record) in document.canvases {
+            guard let sessionIndex = record.nodes.firstIndex(where: { node in
+                node.nodeKind == .session
+                    && (node.dependsOnNodeIds ?? []).contains(stepNodeId)
+            }) else { continue }
+
+            var changed = false
+            if record.nodes[sessionIndex].sessionId != sessionId {
+                record.nodes[sessionIndex].sessionId = sessionId
+                record.nodes[sessionIndex].chatThreadId = sessionId
+                changed = true
+            }
+            if record.nodes[sessionIndex].workflowRunState != runState {
+                record.nodes[sessionIndex].workflowRunState = runState
+                record.nodes[sessionIndex].status = Self.nodeStatus(for: runState)
+                changed = true
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: record.nodes[sessionIndex].id,
+                    summary: "\(record.nodes[sessionIndex].title) -> \(runState.rawValue)"
+                ))
+            }
+
+            // Mirror the run state onto the originating step node. A step
+            // that owns a gate finishes into `gateWait` (awaiting review)
+            // rather than `done`.
+            if let stepIndex = record.nodes.firstIndex(where: { $0.id == stepNodeId }) {
+                let stepRunState = Self.stepRunState(
+                    for: runState,
+                    hasGate: record.nodes[stepIndex].gate != nil
+                )
+                if record.nodes[stepIndex].workflowRunState != stepRunState {
+                    record.nodes[stepIndex].workflowRunState = stepRunState
+                    record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
+                    changed = true
+                }
+            }
+
+            guard changed else { return record }
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+        return nil
+    }
+
+    /// Phase 2 — runState 回流, status-driven path.
+    ///
+    /// Update an already-bound planner session node (looked up by its
+    /// `sessionId`) plus its originating step. Used when SessionMonitor
+    /// observes a status change on a session whose spawn intent was already
+    /// consumed (so the `purpose` tag is no longer available). No-op if no
+    /// session node currently carries `sessionId`.
+    @discardableResult
+    func applyRunStateForSession(
+        sessionId: String,
+        runState: PlannerWorkflowRunState
+    ) throws -> CanvasRecord? {
+        try withLock {
+            for (_, record) in document.canvases {
+                guard let sessionNode = record.nodes.first(where: {
+                    $0.nodeKind == .session && $0.sessionId == sessionId
+                }) else { continue }
+                let stepNodeId = (sessionNode.dependsOnNodeIds ?? []).first
+                // Reuse the step-keyed path so step + session stay consistent.
+                if let stepNodeId {
+                    return try applySessionRunStateLocked(
+                        stepNodeId: stepNodeId,
+                        sessionId: sessionId,
+                        runState: runState
+                    )
+                }
+            }
+            return nil
+        }
+    }
+
+    /// Map a workflow run state to the legacy `PlanningNodeStatus`, keeping the
+    /// two status dimensions consistent on the node.
+    private static func nodeStatus(for runState: PlannerWorkflowRunState) -> PlanningNodeStatus {
+        switch runState {
+        case .pending:
+            return .waiting
+        case .dispatched, .running:
+            return .running
+        case .gateWait:
+            return .blocked
+        case .done:
+            return .done
+        case .failed:
+            return .blocked
+        }
+    }
+
+    /// A step node finishing its spawned session: if it carries a gate it
+    /// parks at `gateWait` (awaiting approval); otherwise it is `done`.
+    /// Non-terminal session states propagate verbatim.
+    private static func stepRunState(
+        for sessionRunState: PlannerWorkflowRunState,
+        hasGate: Bool
+    ) -> PlannerWorkflowRunState {
+        switch sessionRunState {
+        case .done:
+            return hasGate ? .gateWait : .done
+        case .failed:
+            return .failed
+        case .pending, .dispatched, .running, .gateWait:
+            return sessionRunState
+        }
+    }
+
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
@@ -1510,6 +2090,85 @@ final class PlannerStore {
         }
     }
 
+    /// Execution-layer mutation: bind an existing session onto a node DIRECTLY,
+    /// no proposal / owner gate. Sets `sessionId`, mirrors it onto
+    /// `chatThreadId`, marks the node as session-sourced and moves it to
+    /// `running`. Permission is enforced by the caller (`requireNodeUpdate`).
+    func bindSession(
+        canvasId: String,
+        nodeId: String,
+        sessionId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            record.nodes[index].sessionId = sessionId
+            record.nodes[index].chatThreadId = sessionId
+            record.nodes[index].source = .session
+            record.nodes[index].nodeKind = .session
+            record.nodes[index].workflowRunState = .running
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Bound session to \(record.nodes[index].title)"
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    /// Execution-layer mutation: dispatch a node DIRECTLY, no proposal / owner
+    /// gate. Sets `dispatch` + `workflowRunState`, and for spawning runners
+    /// (claude/codex/byoa-local) materializes the `session` PlanningNode +
+    /// derived step → session edge immediately. `human` gates at `gateWait`;
+    /// `ci-agent` records no session node (proposal-less no-op per existing
+    /// behavior). Returns the updated record plus the dispatched node so the
+    /// caller can record the spawn intent. Permission is enforced by the
+    /// caller (`requireNodeUpdate`).
+    func dispatchNode(
+        canvasId: String,
+        nodeId: String,
+        dispatch: PlannerNodeDispatch
+    ) throws -> (record: CanvasRecord, dispatchedNode: PlanningNode) {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let runner = dispatch.runner
+            let runState: PlannerWorkflowRunState = runner == .human ? .gateWait : .dispatched
+            record.nodes[index].dispatch = dispatch
+            record.nodes[index].workflowRunState = runState
+            record.nodes[index].status = runner == .human ? .blocked : .running
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Dispatched \(record.nodes[index].title) via \(runner.rawValue)"
+            ))
+            // Spawning runners materialize a `session` PlanningNode immediately
+            // (the logic Phase 2 runs inside `applyNodeChange` for proposals).
+            if runner.spawnsSession, record.nodes[index].nodeKind != .session {
+                let step = record.nodes[index]
+                let alreadySpawned = record.nodes.contains { node in
+                    node.nodeKind == .session && (node.dependsOnNodeIds ?? []).contains(nodeId)
+                }
+                if !alreadySpawned {
+                    record.nodes.append(
+                        PlannerCoreService.sessionNode(for: step, proposalId: "dispatch-\(UUID().uuidString.lowercased())")
+                    )
+                }
+            }
+            document.canvases[canvasId] = record
+            try save()
+            return (record, record.nodes[index])
+        }
+    }
+
     private func mergeArtifacts(
         _ existing: [PlannerArtifact],
         _ incoming: [PlannerArtifact]
@@ -1620,6 +2279,9 @@ enum PlannerBoardBridge {
         )
         let nodes = record.nodes
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
+        // Visibility gate: a private canvas is only readable by its owner or a
+        // role-holder. A bare viewer on a private canvas is not a member.
+        try requireCanvasVisible(record.canvas, access: access)
         return (
             record.canvas,
             nodes,
@@ -1715,6 +2377,37 @@ enum PlannerBoardBridge {
         .saved(in: store, canvas: canvas, seedNodes: [])
     }
 
+    /// Persist a proposal produced by a `PlannerAdapter` (a real LLM/CLI).
+    ///
+    /// Re-runs full RBAC + `PlannerProposalValidator` against the live canvas
+    /// state — the adapter is untrusted, so its output is validated again here
+    /// before it can touch the store. Adapter-produced ids are namespaced so
+    /// they never collide with the heuristic fallback's ids.
+    static func saveAdapterProposal(
+        _ proposal: PlanProposal,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanProposal {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        let normalized = PlanProposal(
+            id: "proposal-\(canvasId)-adapter-\(UUID().uuidString.lowercased())",
+            canvasId: canvasId,
+            summary: proposal.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Generate meee2 AI graph for \(state.canvas.title)"
+                : proposal.summary,
+            changes: proposal.changes,
+            status: .pending
+        )
+        return try normalized.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+    }
+
     static func graphChangeProposal(
         summary: String,
         changes: [PlanChange],
@@ -1741,71 +2434,56 @@ enum PlannerBoardBridge {
         )
     }
 
-    static func bindSessionProposal(
+    /// Execution-layer action: bind a session to a node DIRECTLY (no proposal,
+    /// no owner approval). Gated only by `requireNodeUpdate`. Returns the
+    /// updated graph state — same shape as `attachArtifact` / `updateNodeLayout`.
+    static func bindSession(
         nodeId: String,
         sessionId: String,
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> PlanProposal {
+    ) throws -> PlannerGraphState {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        try PlannerPermission.require(.createProposal, access: state.access)
         guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
             throw PlannerCoreError.nodeNotFound(nodeId)
         }
-        return try PlanProposal(
-            id: "proposal-\(nodeId)-bind-session-\(UUID().uuidString.lowercased())",
-            canvasId: canvasId,
-            summary: "Bind session to \(node.title)",
-            changes: [
-                .updateNode(
-                    id: nodeId,
-                    nodeKind: .session,
-                    workflowRunState: .running,
-                    sessionId: sessionId,
-                    chatThreadId: sessionId,
-                    source: .session
-                )
-            ],
-            status: .pending
-        )
-        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
+        // bind-session is a node execution-state mutation: owner anywhere, doer
+        // only on their own node, viewer denied.
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.bindSession(canvasId: canvasId, nodeId: nodeId, sessionId: sessionId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
-    static func dispatchNodeProposal(
+    /// Execution-layer action: dispatch a node DIRECTLY (no proposal, no owner
+    /// approval). Gated only by `requireNodeUpdate`. Sets dispatch + run state
+    /// and, for spawning runners, materializes the session node + edge in one
+    /// locked operation. Returns the updated graph state plus the dispatched
+    /// node so the caller can record the spawn intent.
+    static func dispatchNode(
         nodeId: String,
         runner: PlannerDispatchRunner,
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> PlanProposal {
+    ) throws -> (graph: PlannerGraphState, dispatchedNode: PlanningNode) {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        try PlannerPermission.require(.createProposal, access: state.access)
         guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
             throw PlannerCoreError.nodeNotFound(nodeId)
         }
+        // dispatch is a node execution-state mutation: owner anywhere, doer
+        // only on their own node, viewer denied.
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         let dispatch = PlannerNodeDispatch(
             runner: runner,
             skill: node.dispatch?.skill ?? "m3-coding",
             actor: node.doerId,
-            command: runner == .byoaLocal ? "claude" : nil,
+            command: runner.spawnCommand,
             fallbackRunner: runner == .ciAgent ? .byoaLocal : nil
         )
-        return try PlanProposal(
-            id: "proposal-\(nodeId)-dispatch-\(UUID().uuidString.lowercased())",
-            canvasId: canvasId,
-            summary: "Dispatch \(node.title) via \(runner.rawValue)",
-            changes: [
-                .updateNode(
-                    id: nodeId,
-                    status: runner == .human ? .blocked : .running,
-                    dispatch: dispatch,
-                    workflowRunState: runner == .human ? .gateWait : .dispatched
-                )
-            ],
-            status: .pending
-        )
-        .saved(in: store, canvas: state.canvas, seedNodes: [], validationNodes: state.nodes)
+        let result = try store.dispatchNode(canvasId: canvasId, nodeId: nodeId, dispatch: dispatch)
+        let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return (graph, result.dispatchedNode)
     }
 
     static func attachArtifact(
@@ -1819,10 +2497,12 @@ enum PlannerBoardBridge {
         actorUserId: String? = nil
     ) throws -> PlannerGraphState {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        try PlannerPermission.require(.updateAssignedNode, access: state.access)
-        guard state.nodes.contains(where: { $0.id == nodeId }) else {
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
             throw PlannerCoreError.nodeNotFound(nodeId)
         }
+        // attach-artifact is a node execution-state mutation: owner anywhere,
+        // doer only on their own node, viewer denied.
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         let artifact = PlannerArtifact(
             id: "artifact-\(canvasId)-\(nodeId)-\(UUID().uuidString.lowercased())",
             canvasId: canvasId,
@@ -1845,7 +2525,12 @@ enum PlannerBoardBridge {
         actorUserId: String? = nil
     ) throws -> PlannerGraphState {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        try PlannerPermission.require(.updateAssignedNode, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        // layout is a node execution-state mutation: owner anywhere, doer only
+        // on their own node, viewer denied.
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         _ = try store.updateNodeLayout(canvasId: canvasId, nodeId: nodeId, layout: layout)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
@@ -1948,14 +2633,16 @@ enum PlannerBoardBridge {
     static func applyPreview(
         proposal: PlanProposal,
         for canvasId: String,
-        snapshot: BoardLayoutStore.Snapshot
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
-        _ = try requireCanvas(canvasId, in: snapshot)
         guard proposal.canvasId == canvasId else {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
         }
-        let boardCanvas = try requireCanvas(canvasId, in: snapshot)
-        let canvas = planningCanvas(from: boardCanvas, actorUserId: nil)
+        // apply-preview previews an owner-only apply — gate it identically.
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.applyProposal, access: state.access)
+        let canvas = state.canvas
         let preview = try store.preview(
             proposal: proposal,
             canvas: canvas,
@@ -2010,11 +2697,28 @@ enum PlannerBoardBridge {
     ) throws -> PlannerMonitorState {
         var items: [PlannerMonitorItem] = []
         for boardCanvas in snapshot.canvases {
-            let state = try canvasState(
-                for: boardCanvas.id,
-                snapshot: snapshot,
-                actorUserId: actorUserId
+            // Skip canvases the actor cannot see — a private canvas only shows
+            // up in the monitor for its owner / role-holders.
+            let state: (
+                canvas: PlanningCanvas,
+                nodes: [PlanningNode],
+                states: [NodeStateSnapshot],
+                proposals: [PlanProposal],
+                access: PlannerAccess,
+                activities: [PlannerActivity],
+                events: [PlannerEvent],
+                artifacts: [PlannerArtifact],
+                edges: [PlannerGraphEdge]
             )
+            do {
+                state = try canvasState(
+                    for: boardCanvas.id,
+                    snapshot: snapshot,
+                    actorUserId: actorUserId
+                )
+            } catch PlannerCoreError.permissionDenied {
+                continue
+            }
             let actorId = state.access.actorId
             let statesByNodeId = Dictionary(uniqueKeysWithValues: state.states.map { ($0.nodeId, $0) })
             let visibleNodes = state.access.role == .doer
@@ -2039,7 +2743,11 @@ enum PlannerBoardBridge {
                     blockers: snapshot.blockers,
                     needsOwnerReview: snapshot.needsOwnerReview,
                     doerId: node.doerId,
-                    riskRank: rank
+                    riskRank: rank,
+                    nextAction: PlannerWorkflowGuidance.nextAction(
+                        for: node,
+                        blockers: snapshot.blockers
+                    )
                 ))
             }
 
@@ -2081,6 +2789,50 @@ enum PlannerBoardBridge {
             throw PlannerCoreError.canvasNotFound(canvasId)
         }
         return canvas
+    }
+
+    /// Whether `access` is allowed to *see* `canvas`. A `public` canvas is
+    /// visible to everyone; a `private` canvas is visible only to its owner or
+    /// to an actor that holds a role on it (doer / assigned to a node). A bare
+    /// viewer with no role on a private canvas is not a member.
+    static func canViewCanvas(_ canvas: PlanningCanvas, access: PlannerAccess) -> Bool {
+        switch canvas.visibility {
+        case .public:
+            return true
+        case .private:
+            // owner / doer are members; viewer (no role) is not.
+            return access.role == .owner || access.role == .doer
+        }
+    }
+
+    /// Throw `permissionDenied` if `access` cannot see `canvas`.
+    private static func requireCanvasVisible(
+        _ canvas: PlanningCanvas,
+        access: PlannerAccess
+    ) throws {
+        guard canViewCanvas(canvas, access: access) else {
+            throw PlannerCoreError.permissionDenied(action: "view canvas", role: access.role)
+        }
+    }
+
+    /// Owner-only update of a canvas's visibility tier. Returns the updated
+    /// `PlanningCanvas`. Used by `PATCH .../canvases/:id/visibility`.
+    static func setCanvasVisibility(
+        _ visibility: PlannerCanvasVisibility,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanningCanvas {
+        let boardCanvas = try requireCanvas(canvasId, in: snapshot)
+        let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
+        var record = try store.record(for: canvas, seedNodes: [])
+        let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
+        // Only the owner may change visibility.
+        guard access.role == .owner else {
+            throw PlannerCoreError.permissionDenied(action: "set canvas visibility", role: access.role)
+        }
+        record = try store.setCanvasVisibility(visibility, canvasId: canvasId)
+        return record.canvas
     }
 
     private static func planningCanvas(
@@ -2180,6 +2932,91 @@ private extension PlanProposal {
             canvas: canvas,
             seedNodes: seedNodes,
             validationNodes: validationNodes
+        )
+    }
+}
+
+/// Phase 2 — runState 回流.
+///
+/// Bridges observed session status back into the planner graph. Spawned
+/// planner sessions carry a `purpose` tag of the form `planner:<stepNodeId>`
+/// (see `BoardLayoutStore.recordSpawnIntent` callers). When a session with
+/// such a tag is observed — newly bound or with a changed status — this maps
+/// `SessionStatus` → `PlannerWorkflowRunState` and persists it via
+/// `PlannerStore.applySessionRunState`, which holds the store lock.
+enum PlannerSessionRunStateBridge {
+    static let purposePrefix = "planner:"
+
+    /// Extract the step node id out of a `planner:<stepNodeId>` purpose tag.
+    /// Returns `nil` for any non-planner purpose (`global`, etc.).
+    static func stepNodeId(fromPurpose purpose: String?) -> String? {
+        guard let purpose,
+              purpose.hasPrefix(purposePrefix) else { return nil }
+        let id = String(purpose.dropFirst(purposePrefix.count))
+        return id.isEmpty ? nil : id
+    }
+
+    /// Map a live `SessionStatus` to the node `workflowRunState`.
+    ///
+    /// - working states (thinking / tooling / active / compacting) → `running`
+    /// - `idle` / `waitingForUser` → `dispatched` (session alive, not finished)
+    /// - `permissionRequired` → `gateWait` (blocked awaiting a human)
+    /// - `completed` → `done`
+    /// - `dead` → `failed`
+    static func runState(for status: SessionStatus) -> PlannerWorkflowRunState {
+        switch status {
+        case .thinking, .tooling, .active, .compacting:
+            return .running
+        case .idle, .waitingForUser:
+            return .dispatched
+        case .permissionRequired:
+            return .gateWait
+        case .completed:
+            return .done
+        case .dead:
+            return .failed
+        }
+    }
+
+    /// Observe a session status change for a possibly-planner-tagged session.
+    /// No-ops when `purpose` is not a planner tag or no session node is found.
+    /// `store` defaults to the shared planner store but is injectable for tests.
+    ///
+    /// Used at spawn-intent match time, when the `purpose` tag (and thus the
+    /// step node id) is still known — this is what *binds* the session id.
+    @discardableResult
+    static func observe(
+        sessionId: String,
+        purpose: String?,
+        status: SessionStatus,
+        store: PlannerStore = PlannerBoardBridge.store
+    ) -> PlannerStore.CanvasRecord? {
+        guard let stepNodeId = stepNodeId(fromPurpose: purpose) else { return nil }
+        return try? store.applySessionRunState(
+            stepNodeId: stepNodeId,
+            sessionId: sessionId,
+            runState: runState(for: status)
+        )
+    }
+
+    /// Observe a status change for an already-bound planner session — keyed by
+    /// `sessionId` only (the spawn intent's `purpose` tag has been consumed).
+    /// No-op if no planner session node carries this `sessionId`.
+    @discardableResult
+    static func observeBound(
+        sessionId: String,
+        status: SessionStatus,
+        store: PlannerStore = PlannerBoardBridge.store
+    ) -> PlannerStore.CanvasRecord? {
+        // TODO(evolution): emit PlannerAgentEvent.nodeRunStateChanged here —
+        // once the persisted record gives us the canvas id + step node id, feed
+        // a `.nodeRunStateChanged(canvasId:, nodeId:, runState:)` event into
+        // `PlannerAgentRuntimeRegistry.shared` so a replacement runtime can
+        // react to run-state changes. Deliberately NOT wired yet: the Phase 8
+        // abstraction must merely be ready for auto-evolution, not perform it.
+        try? store.applyRunStateForSession(
+            sessionId: sessionId,
+            runState: runState(for: status)
         )
     }
 }
@@ -2416,7 +3253,7 @@ enum PlannerDeliveryPipelineTemplate {
 
     private static func executorType(for runner: PlannerDispatchRunner) -> ExecutorType {
         switch runner {
-        case .byoaLocal:
+        case .claude, .codex, .byoaLocal:
             return .claude
         case .ciAgent:
             return .mock

@@ -374,6 +374,7 @@ public final class BoardServer {
         server.POST["/api/user-profile/settings"] = BoardServer.cors(BoardAPI.openMeee2Settings)
         server.PATCH["/api/user-profile"] = BoardServer.cors(BoardAPI.updateUserProfile)
         server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee2Online)
+        server.GET["/api/team/members"] = BoardServer.cors(BoardAPI.getTeamMembers)
         server.GET["/api/automations"] = BoardServer.cors(BoardAPI.listAutomations)
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
@@ -406,6 +407,7 @@ public final class BoardServer {
         server.POST["/api/planner/activity"] = BoardServer.cors(BoardAPI.updatePlannerActivity)
         server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)
         server.GET["/api/planner/canvases/:id/graph"] = BoardServer.cors(BoardAPI.getPlannerGraphState)
+        server.PATCH["/api/planner/canvases/:id/visibility"] = BoardServer.cors(BoardAPI.setPlannerCanvasVisibility)
         server.POST["/api/planner/canvases/:id/proposals/generate"] = BoardServer.cors(BoardAPI.generatePlannerProposal)
         server.POST["/api/planner/canvases/:id/proposals/refine"] = BoardServer.cors(BoardAPI.refinePlannerProposal)
         server.POST["/api/planner/canvases/:id/proposals/inspect-drift"] = BoardServer.cors(BoardAPI.inspectPlannerDrift)
@@ -426,6 +428,15 @@ public final class BoardServer {
         server.POST["/api/coordination-groups/:id/pause"] = BoardServer.cors(BoardAPI.pauseCoordinationGroup)
         server.POST["/api/coordination-groups/:id/resume"] = BoardServer.cors(BoardAPI.resumeCoordinationGroup)
         server.DELETE["/api/coordination-groups/:id/members/:sessionId"] = BoardServer.cors(BoardAPI.removeCoordinationMember)
+
+        // Phase 5 — Integrations (真接入). Read-only browsing of external
+        // items. The actual artifact attach still goes through the existing
+        // /api/planner/canvases/:id/nodes/:nodeId/artifacts endpoint.
+        server.GET["/api/integrations/status"] = BoardServer.cors(IntegrationsAPI.getStatus)
+        server.GET["/api/integrations/github/repos"] = BoardServer.cors(IntegrationsAPI.getGithubRepos)
+        server.GET["/api/integrations/github/repos/:owner/:repo/pulls"] = BoardServer.cors(IntegrationsAPI.getGithubPulls)
+        server.GET["/api/integrations/github/repos/:owner/:repo/issues"] = BoardServer.cors(IntegrationsAPI.getGithubIssues)
+        server.GET["/api/integrations/lark/docs"] = BoardServer.cors(IntegrationsAPI.getLarkDocs)
 
         // External chat session push (browser extension content scripts at
         // chatgpt.com / claude.ai). All CORS-wrapped — they hit localhost

@@ -1,5 +1,5 @@
-import type { BoardState, CanvasInfo, PlannerActivity, PlanningNode } from './types'
-import type { UserProfile } from './api'
+import type { BoardState, CanvasInfo, PlannerActivity, PlannerCanvasRole, PlanningNode } from './types'
+import type { TeamMember, UserProfile } from './api'
 
 export type PlannerTeamRole = 'owner' | 'doer' | 'active' | 'agent'
 
@@ -12,6 +12,8 @@ export interface PlannerTeamMember {
   selectedNodeId?: string | null
   selectedSessionId?: string | null
   lastActiveAt?: string | null
+  /** Team-level membership role from `/api/team/members`, when known. */
+  teamRole?: string | null
 }
 
 interface BuildTeamDirectoryInput {
@@ -21,32 +23,52 @@ interface BuildTeamDirectoryInput {
   canvasOwnerId?: string | null
   nodes?: PlanningNode[]
   activities?: PlannerActivity[]
+  /**
+   * Authoritative team member identities from `/api/team/members`, keyed by
+   * `userId`. When present these override the names/avatars inferred from
+   * nodes + activities, so the graph resolves real people.
+   */
+  teamMembers?: TeamMember[]
 }
 
 export function buildTeamDirectory(input: BuildTeamDirectoryInput): PlannerTeamMember[] {
   const members = new Map<string, PlannerTeamMember>()
   const ownerId = input.canvasOwnerId || input.activeCanvas?.ownerUserId || 'local-owner'
 
+  // Authoritative identity source — index by userId for fast override lookup.
+  const realById = new Map<string, TeamMember>()
+  for (const real of input.teamMembers ?? []) {
+    const uid = real.userId?.trim()
+    if (uid) realById.set(uid, real)
+  }
+
+  const ownerReal = realById.get(ownerId)
   upsertMember(members, {
     userId: ownerId,
-    displayName: ownerDisplayName(input.userProfile),
-    avatarUrl: input.userProfile?.connected ? input.userProfile.userAvatarUrl || undefined : undefined,
+    displayName: ownerReal?.displayName || ownerDisplayName(input.userProfile),
+    avatarUrl: ownerReal?.avatarUrl
+      || (input.userProfile?.connected ? input.userProfile.userAvatarUrl || undefined : undefined),
     roles: ['owner'],
     assignedNodeCount: 0,
+    teamRole: ownerReal?.role ?? null,
   })
 
   for (const activity of input.activities ?? []) {
+    const real = realById.get(activity.userId)
     upsertMember(members, {
       userId: activity.userId,
-      displayName: activity.userId === ownerId ? ownerDisplayName(input.userProfile) : activity.displayName,
-      avatarUrl: activity.userId === ownerId && input.userProfile?.connected
-        ? input.userProfile.userAvatarUrl || undefined
-        : undefined,
+      displayName: real?.displayName
+        || (activity.userId === ownerId ? ownerDisplayName(input.userProfile) : activity.displayName),
+      avatarUrl: real?.avatarUrl
+        || (activity.userId === ownerId && input.userProfile?.connected
+          ? input.userProfile.userAvatarUrl || undefined
+          : undefined),
       roles: [activity.userId === ownerId ? 'owner' : 'active'],
       assignedNodeCount: 0,
       selectedNodeId: activity.selectedNodeId,
       selectedSessionId: activity.selectedSessionId,
       lastActiveAt: activity.lastActiveAt,
+      teamRole: real?.role ?? null,
     })
   }
 
@@ -54,12 +76,16 @@ export function buildTeamDirectory(input: BuildTeamDirectoryInput): PlannerTeamM
     const doerId = node.doerId?.trim()
     if (!doerId) continue
     const existing = members.get(doerId)
+    const real = realById.get(doerId)
     upsertMember(members, {
       userId: doerId,
-      displayName: existing?.displayName ?? inferMemberName(doerId, ownerId, input.userProfile),
-      avatarUrl: existing?.avatarUrl,
+      displayName: real?.displayName
+        ?? existing?.displayName
+        ?? inferMemberName(doerId, ownerId, input.userProfile),
+      avatarUrl: real?.avatarUrl ?? existing?.avatarUrl,
       roles: [isAgentId(doerId) ? 'agent' : 'doer'],
       assignedNodeCount: 1,
+      teamRole: real?.role ?? existing?.teamRole ?? null,
     })
   }
 
@@ -73,11 +99,59 @@ export function buildTeamDirectory(input: BuildTeamDirectoryInput): PlannerTeamM
     })
   }
 
+  // Fold in any authoritative members not yet discovered from local signals,
+  // so the directory reflects the full team — not only people touching nodes.
+  for (const real of realById.values()) {
+    if (members.has(real.userId)) continue
+    upsertMember(members, {
+      userId: real.userId,
+      displayName: real.displayName || real.userId,
+      avatarUrl: real.avatarUrl || undefined,
+      roles: [isAgentId(real.userId) ? 'agent' : 'active'],
+      assignedNodeCount: 0,
+      teamRole: real.role ?? null,
+    })
+  }
+
   return [...members.values()].sort((a, b) => {
     const rank = memberRank(a) - memberRank(b)
     if (rank !== 0) return rank
     return a.displayName.localeCompare(b.displayName)
   })
+}
+
+/**
+ * Each member's role *on the current canvas* — owner / doer / suggestion /
+ * viewer — derived the same way the backend `PlannerPermission.access` does:
+ * the canvas owner is `owner`, anyone assigned to a node is a `doer`, the
+ * canvas actor's own `access.role` is authoritative for themselves, everyone
+ * else is a `viewer`.
+ */
+export function canvasRoleByUserId(input: {
+  members: PlannerTeamMember[]
+  ownerId?: string | null
+  nodes?: PlanningNode[]
+  access?: { actorId: string; role: PlannerCanvasRole } | null
+}): Record<string, PlannerCanvasRole> {
+  const ownerId = (input.ownerId ?? '').trim()
+  const doerIds = new Set(
+    (input.nodes ?? [])
+      .map((node) => node.doerId?.trim())
+      .filter((id): id is string => Boolean(id)),
+  )
+  const out: Record<string, PlannerCanvasRole> = {}
+  for (const member of input.members) {
+    if (input.access && member.userId === input.access.actorId) {
+      out[member.userId] = input.access.role
+    } else if (ownerId && member.userId === ownerId) {
+      out[member.userId] = 'owner'
+    } else if (doerIds.has(member.userId)) {
+      out[member.userId] = 'doer'
+    } else {
+      out[member.userId] = 'viewer'
+    }
+  }
+  return out
 }
 
 export function teamDisplayNameByUserId(members: PlannerTeamMember[]): Record<string, string> {
@@ -110,6 +184,7 @@ function upsertMember(map: Map<string, PlannerTeamMember>, next: PlannerTeamMemb
     selectedNodeId: next.selectedNodeId ?? existing.selectedNodeId,
     selectedSessionId: next.selectedSessionId ?? existing.selectedSessionId,
     lastActiveAt: latestTime(existing.lastActiveAt, next.lastActiveAt),
+    teamRole: next.teamRole ?? existing.teamRole ?? null,
   })
 }
 

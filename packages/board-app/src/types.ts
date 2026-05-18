@@ -271,11 +271,16 @@ export interface CanvasList {
   memberships: CanvasSessionMembership[]
 }
 
+/** Who can see a planning canvas. Mirrors Swift `PlannerCanvasVisibility`. */
+export type PlannerCanvasVisibility = 'public' | 'private'
+
 export interface PlanningCanvas {
   id: string
   ownerId: string
   title: string
   plannerContext: string
+  /** Visibility tier. Legacy canvases predating the field decode as `private`. */
+  visibility?: PlannerCanvasVisibility
 }
 
 export interface IOSchema {
@@ -311,7 +316,7 @@ export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
 export type PlannerWorkflowRunState = 'pending' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
-export type PlannerDispatchRunner = 'byoa-local' | 'ci-agent' | 'human'
+export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
 export type PlannerArtifactKind =
   | 'idea-draft'
   | 'prd'
@@ -433,6 +438,13 @@ export interface PlanningNode {
   artifactRefs?: string[] | null
   eventRefs?: string[] | null
   workflowRunState?: PlannerWorkflowRunState | null
+  /**
+   * Derived workflow-guidance line ("what to do next"), computed server-side
+   * from `workflowRunState` + node context. Encode-only / read-only — never
+   * persisted, never set by the LLM or the adapter. May be absent for nodes
+   * with no actionable workflow state.
+   */
+  nextAction?: string | null
 }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
@@ -460,6 +472,11 @@ export interface PlanChange {
   sessionId?: string | null
   chatThreadId?: string | null
   source?: PlanningNodeSource | null
+  /**
+   * Reassigns a node's doer. Used by the assign-doer UI (Gap 6) to produce a
+   * lightweight `updateNode` proposal that touches only `doerId`.
+   */
+  doerId?: string | null
 }
 
 export interface PlanProposal {
@@ -497,6 +514,11 @@ export interface PlannerMonitorItem {
   needsOwnerReview: boolean
   doerId?: string | null
   riskRank: number
+  /**
+   * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
+   * for proposal items or nodes with no actionable workflow state.
+   */
+  nextAction?: string | null
 }
 
 export interface PlannerMonitorState {
@@ -519,6 +541,39 @@ export interface PlannerCanvasState {
 export type PlannerGraphState = PlannerCanvasState & {
   artifacts: PlannerArtifact[]
   edges: PlannerGraphEdge[]
+}
+
+// -- Phase 5: Integrations (真接入) ----------------------------------------
+
+export type IntegrationId = 'github' | 'lark'
+
+/** Per-integration connection status from GET /api/integrations/status. */
+export interface IntegrationStatus {
+  id: IntegrationId
+  name: string
+  connected: boolean
+  /** Human-readable explanation when not connected (includes the fix hint). */
+  reason?: string | null
+}
+
+/** A selectable external item (GitHub repo/PR/issue, Lark doc, ...). */
+export interface ExternalItem {
+  /** Stable identifier, e.g. "owner/repo#42". */
+  id: string
+  title: string
+  subtitle?: string | null
+  /** The value written into the artifact's reference field (usually a URL). */
+  reference: string
+  /** Backend-suggested PlannerArtifactKind; the user may override it. */
+  suggestedArtifactKind: PlannerArtifactKind
+}
+
+/** Envelope returned by the integration browsing endpoints. */
+export interface ExternalItemsResult {
+  provider: string
+  items: ExternalItem[]
+  /** Set when data degraded (upstream unreachable / not wired); else null. */
+  notice?: string | null
 }
 
 export interface SelectedCanvasElementContext {

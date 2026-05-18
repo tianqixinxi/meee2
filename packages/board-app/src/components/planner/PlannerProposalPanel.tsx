@@ -1,5 +1,5 @@
-import { Check, Eye, GitBranch, Send, X } from 'lucide-react'
-import { useState } from 'react'
+import { Check, Eye, GitBranch, Info, Send, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PlanProposal, PlannerAccess } from '../../types'
@@ -18,6 +18,9 @@ interface Props {
   onApply: () => void
   onReject: () => void
   onCreateDeliveryPipeline?: () => void
+  /** Incremented when a node action (dispatch/bind/…) creates a proposal —
+   *  triggers the review modal so the action has a visible result. */
+  reviewRequestTick?: number
 }
 
 export function PlannerProposalPanel({
@@ -34,10 +37,16 @@ export function PlannerProposalPanel({
   onApply,
   onReject,
   onCreateDeliveryPipeline,
+  reviewRequestTick,
 }: Props) {
   const [message, setMessage] = useState('')
   const [lastUserMessage, setLastUserMessage] = useState('')
   const [reviewOpen, setReviewOpen] = useState(false)
+
+  // A node action just produced a proposal — surface it immediately.
+  useEffect(() => {
+    if (reviewRequestTick && reviewRequestTick > 0) setReviewOpen(true)
+  }, [reviewRequestTick])
   const canCreateProposal = access?.canCreateProposal ?? true
   const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
@@ -79,17 +88,24 @@ export function PlannerProposalPanel({
               </div>
             </div>
           ) : (
-            <div className="planner-dialog__message planner-dialog__message--planner">
+            <div className="planner-dialog__hint" role="note">
+              <div className="planner-dialog__hint-label">
+                <Info size={11} aria-hidden />
+                <span>How this works</span>
+              </div>
               <MarkdownMessage markdown={guidance} />
               {nodeCount === 0 && onCreateDeliveryPipeline && (
-                <div className="planner-dialog__actions">
+                <div className="planner-dialog__secondary">
+                  <span>Prefer a head start?</span>
                   <button
                     type="button"
+                    className="planner-dialog__link-action"
                     disabled={busy || !canCreateProposal}
                     onClick={onCreateDeliveryPipeline}
+                    title="Drops in the meee2 delivery skeleton as a proposal — you still refine and approve it with meee2 AI."
                   >
-                    <GitBranch size={14} aria-hidden />
-                    Create delivery pipeline
+                    <GitBranch size={12} aria-hidden />
+                    Start from the meee2 delivery skeleton
                   </button>
                 </div>
               )}
@@ -254,8 +270,8 @@ function workflowGuideCopy(
   }
   if (nodeCount === 0) {
     return {
-      title: 'Create a workflow',
-      body: 'Describe the outcome you want, or start from the delivery pipeline template.',
+      title: 'Co-create a workflow with meee2 AI',
+      body: 'Describe the outcome you want and we shape the graph together. The delivery skeleton is just an optional starting point.',
     }
   }
   if (hasActionableDrift) {
@@ -283,22 +299,22 @@ function MarkdownMessage({ markdown }: { markdown: string }) {
 function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string {
   if (nodeCount === 0) {
     return [
-      'Tell me the outcome you want.',
+      'Describe the outcome you want in the box below.',
       '',
-      'I will turn it into a meee2 AI proposal first. You approve before the graph changes.',
+      'meee2 AI drafts it as a proposal — you refine it and approve before anything lands in the graph.',
     ].join('\n')
   }
   if (hasActionableDrift) {
     return [
-      'I found graph state that may need attention.',
+      'This graph has nodes that may need attention.',
       '',
-      'Send a message, or send with the input empty, and I will inspect the drift before proposing a fix.',
+      'Send a message — or send with the box empty — and meee2 AI will inspect the drift before proposing a fix.',
     ].join('\n')
   }
   return [
-    'Ask meee2 AI to adjust the graph.',
+    'Ask meee2 AI to adjust the graph in the box below.',
     '',
-    'I will decide whether this should create new plan work or inspect the current state.',
+    'It decides whether to create new plan work or inspect the current state.',
   ].join('\n')
 }
 

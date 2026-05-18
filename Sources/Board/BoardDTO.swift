@@ -221,6 +221,23 @@ struct UserProfileSessionSyncDTO: Encodable {
     let enabled: Bool
 }
 
+/// One identity in the team member directory — the authoritative source the
+/// planner graph keys avatar / displayName lookups by `userId`.
+struct TeamMemberDTO: Encodable {
+    let userId: String
+    let displayName: String
+    let avatarUrl: String?
+    /// Team-level role from meee2 Online membership (`owner` / `admin` /
+    /// `member`). `nil` when the member was discovered only locally (e.g. a
+    /// planner-node doer) and no membership role is known.
+    let role: String?
+}
+
+/// `GET /api/team/members` body.
+struct TeamMembersEnvelope: Encodable {
+    let members: [TeamMemberDTO]
+}
+
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body
 struct ErrorDTO: Encodable {
     struct Inner: Encodable {
@@ -286,6 +303,10 @@ struct PlannerMonitorEnvelope: Encodable {
 }
 struct PlannerActivityEnvelope: Encodable {
     let activity: PlannerActivity
+}
+/// 响应 `PATCH /api/planner/canvases/:id/visibility`。
+struct PlannerCanvasVisibilityEnvelope: Encodable {
+    let canvas: PlanningCanvas
 }
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }

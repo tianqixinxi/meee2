@@ -682,7 +682,7 @@ enum AssistantTools {
     private static func bindSessionToNodeDef() -> ToolDef {
         ToolDef(
             name: "bind_session_to_node",
-            description: "Create a pending proposal to explicitly bind an existing session to a graph node.",
+            description: "Bind an existing session to a graph node. Execution-layer action — applies directly, no proposal.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -700,14 +700,14 @@ enum AssistantTools {
             let canvasId = try plannerCanvasId(args: args, settings: settings)
             let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
             let sessionId = try requiredPlannerString(args["sessionId"], name: "sessionId")
-            let proposal = try PlannerBoardBridge.bindSessionProposal(
+            let state = try PlannerBoardBridge.bindSession(
                 nodeId: nodeId,
                 sessionId: sessionId,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return try .success(jsonPayload(["proposal": proposal]))
+            return try .success(jsonPayload(state))
         } catch {
             return .failure(error.localizedDescription)
         }
@@ -716,7 +716,7 @@ enum AssistantTools {
     private static func dispatchNodeSessionDef() -> ToolDef {
         ToolDef(
             name: "dispatch_node_session",
-            description: "Create a pending proposal to dispatch a graph node to BYOA local, CI agent, or human runner.",
+            description: "Dispatch a graph node to BYOA local, CI agent, or human runner. Execution-layer action — applies directly, no proposal.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -734,14 +734,14 @@ enum AssistantTools {
             let canvasId = try plannerCanvasId(args: args, settings: settings)
             let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
             let runner = PlannerDispatchRunner(rawValue: stringValue(args["runner"]) ?? "byoa-local") ?? .byoaLocal
-            let proposal = try PlannerBoardBridge.dispatchNodeProposal(
+            let result = try PlannerBoardBridge.dispatchNode(
                 nodeId: nodeId,
                 runner: runner,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return try .success(jsonPayload(["proposal": proposal]))
+            return try .success(jsonPayload(result.graph))
         } catch {
             return .failure(error.localizedDescription)
         }
