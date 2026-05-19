@@ -28,6 +28,7 @@ import type {
   ExternalItemsResult,
   AgentScanResult,
   CanvasSideEffectsResult,
+  IntegrationInstallResult,
   IntegrationRunbookResult,
 } from './types'
 
@@ -1044,6 +1045,14 @@ export function fetchAgentScan(): Promise<AgentScanResult> {
 export function fetchCanvasSideEffects(canvasId: string): Promise<CanvasSideEffectsResult> {
   return jsonRequest<CanvasSideEffectsResult>(
     `/api/integrations/side-effects?canvasId=${encodeURIComponent(canvasId)}`,
+  )
+}
+
+/** POST /api/integrations/:id/install — Pattern A one-click install. */
+export function installIntegration(integrationId: string): Promise<IntegrationInstallResult> {
+  return jsonRequest<IntegrationInstallResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/install`,
+    { method: 'POST', body: '{}' },
   )
 }
 

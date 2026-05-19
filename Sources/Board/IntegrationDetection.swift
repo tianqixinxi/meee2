@@ -33,8 +33,44 @@ struct IntegrationCredentialProbe: Codable, Equatable {
     var value: String
 }
 
-/// One integration the catalog knows how to detect (and, in P3, guide).
-struct IntegrationDescriptor: Codable, Equatable {
+/// How a given integration is installed. The catalog stores this structured
+/// so `IntegrationInstaller` can drive a true one-click install (Pattern A —
+/// remote OAuth) instead of generating a placeholder-filled runbook.
+enum IntegrationInstall: Equatable {
+    /// Remote MCP server — Claude Code uses `--transport http` natively;
+    /// Codex bridges via the `mcp-remote` stdio shim. OAuth pops on first use.
+    case remoteHttp(url: String)
+    /// Local stdio MCP server (npx package). Needs env credentials.
+    case localStdio(command: String, args: [String], envKeys: [String])
+    /// Deliberately not supported by the installer (e.g. official package
+    /// archived). `reason` is surfaced in the UI.
+    case unsupported(reason: String)
+}
+
+extension IntegrationInstall: Encodable {
+    private enum Keys: String, CodingKey {
+        case kind, url, command, args, envKeys, reason
+    }
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        switch self {
+        case .remoteHttp(let url):
+            try container.encode("remoteHttp", forKey: .kind)
+            try container.encode(url, forKey: .url)
+        case .localStdio(let command, let args, let envKeys):
+            try container.encode("localStdio", forKey: .kind)
+            try container.encode(command, forKey: .command)
+            try container.encode(args, forKey: .args)
+            try container.encode(envKeys, forKey: .envKeys)
+        case .unsupported(let reason):
+            try container.encode("unsupported", forKey: .kind)
+            try container.encode(reason, forKey: .reason)
+        }
+    }
+}
+
+/// One integration the catalog knows how to detect + install + guide.
+struct IntegrationDescriptor: Encodable, Equatable {
     var id: String
     var name: String
     var category: String
@@ -44,7 +80,9 @@ struct IntegrationDescriptor: Codable, Equatable {
     /// Credential probes. Empty → MCP-only integration; `connected` then needs
     /// only the MCP server.
     var credentialProbes: [IntegrationCredentialProbe]
-    /// One-line setup hint, surfaced in the runbook (P3).
+    /// Structured install spec used by `IntegrationInstaller`.
+    var install: IntegrationInstall
+    /// One-line setup hint, surfaced in the runbook (Pattern B fallback).
     var setupHint: String
 }
 
@@ -55,7 +93,7 @@ struct AgentScanEnvelope: Encodable {
 }
 
 /// Detection result for one (agent, integration) cell of the matrix.
-struct AgentIntegrationStatus: Codable, Equatable {
+struct AgentIntegrationStatus: Encodable, Equatable {
     var agent: String              // "claude-code" | "codex"
     var integrationId: String
     var integrationName: String
@@ -66,6 +104,9 @@ struct AgentIntegrationStatus: Codable, Equatable {
     /// Matched signals — e.g. ["mcp:github", "ccops:GITHUB_TOKEN"].
     var via: [String]
     var evidence: String           // human-readable
+    /// Install spec (mirrored from the descriptor) so the UI can pick the
+    /// right primary action per row (Install vs Set up vs disabled).
+    var install: IntegrationInstall
 }
 
 // MARK: - Catalog
@@ -82,6 +123,11 @@ enum IntegrationCatalog {
                 .init(kind: .env, value: "GITHUB_TOKEN"),
                 .init(kind: .cliAuth, value: "gh auth status")
             ],
+            install: .localStdio(
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-github"],
+                envKeys: ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+            ),
             setupHint: "Add the GitHub MCP server and a GITHUB_TOKEN (repo scope)."
         ),
         IntegrationDescriptor(
@@ -91,7 +137,8 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "LINEAR_API_KEY"),
                 .init(kind: .env, value: "LINEAR_API_KEY")
             ],
-            setupHint: "Add the Linear MCP server and a LINEAR_API_KEY."
+            install: .remoteHttp(url: "https://mcp.linear.app/mcp"),
+            setupHint: "One-click install: Linear's hosted MCP server with OAuth."
         ),
         IntegrationDescriptor(
             id: "slack", name: "Slack", category: "comms",
@@ -100,6 +147,11 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "SLACK_BOT_TOKEN"),
                 .init(kind: .env, value: "SLACK_BOT_TOKEN")
             ],
+            install: .localStdio(
+                command: "npx",
+                args: ["-y", "@slack/mcp-server"],
+                envKeys: ["SLACK_BOT_TOKEN"]
+            ),
             setupHint: "Add the Slack MCP server and a SLACK_BOT_TOKEN."
         ),
         IntegrationDescriptor(
@@ -109,7 +161,8 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "NOTION_TOKEN"),
                 .init(kind: .env, value: "NOTION_TOKEN")
             ],
-            setupHint: "Add the Notion MCP server and a NOTION_TOKEN."
+            install: .remoteHttp(url: "https://mcp.notion.com/mcp"),
+            setupHint: "One-click install: Notion's hosted MCP server with OAuth."
         ),
         IntegrationDescriptor(
             id: "figma", name: "Figma", category: "design",
@@ -118,7 +171,8 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "FIGMA_TOKEN"),
                 .init(kind: .env, value: "FIGMA_ACCESS_TOKEN")
             ],
-            setupHint: "Add the Figma MCP server and a Figma access token."
+            install: .remoteHttp(url: "https://mcp.figma.com/mcp"),
+            setupHint: "One-click install: Figma's hosted MCP server with OAuth."
         ),
         IntegrationDescriptor(
             id: "supabase", name: "Supabase", category: "data",
@@ -127,6 +181,11 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "SUPABASE_ACCESS_TOKEN"),
                 .init(kind: .env, value: "SUPABASE_ACCESS_TOKEN")
             ],
+            install: .localStdio(
+                command: "npx",
+                args: ["-y", "@supabase/mcp-server"],
+                envKeys: ["SUPABASE_ACCESS_TOKEN"]
+            ),
             setupHint: "Add the Supabase MCP server and a SUPABASE_ACCESS_TOKEN."
         ),
         IntegrationDescriptor(
@@ -136,7 +195,8 @@ enum IntegrationCatalog {
                 .init(kind: .ccops, value: "SENTRY_AUTH_TOKEN"),
                 .init(kind: .env, value: "SENTRY_AUTH_TOKEN")
             ],
-            setupHint: "Add the Sentry MCP server and a SENTRY_AUTH_TOKEN."
+            install: .remoteHttp(url: "https://mcp.sentry.dev/mcp"),
+            setupHint: "One-click install: Sentry's hosted MCP server with OAuth."
         ),
         IntegrationDescriptor(
             id: "postgres", name: "Postgres", category: "data",
@@ -145,7 +205,10 @@ enum IntegrationCatalog {
                 .init(kind: .env, value: "DATABASE_URL"),
                 .init(kind: .ccops, value: "DATABASE_URL")
             ],
-            setupHint: "Add the Postgres MCP server and a DATABASE_URL."
+            install: .unsupported(
+                reason: "Official @modelcontextprotocol/server-postgres is archived (known SQL-injection bypass). Needs a vetted replacement."
+            ),
+            setupHint: "Postgres MCP install is disabled — see install.reason."
         ),
         IntegrationDescriptor(
             id: "lark", name: "Lark", category: "comms",
@@ -153,7 +216,12 @@ enum IntegrationCatalog {
             credentialProbes: [
                 .init(kind: .cliAuth, value: "lark-cli auth status")
             ],
-            setupHint: "Install lark-cli and run `lark-cli auth login`."
+            install: .localStdio(
+                command: "npx",
+                args: ["-y", "@larksuiteoapi/lark-mcp", "mcp"],
+                envKeys: ["LARK_APP_ID", "LARK_APP_SECRET"]
+            ),
+            setupHint: "Add the Lark MCP server and a Lark App ID + Secret."
         )
     ]
 }
@@ -214,7 +282,8 @@ enum IntegrationDetector {
                     evidence: evidence(
                         descriptor: descriptor, agent: agent,
                         mcpConfigured: mcpConfigured, credentialPresent: credentialPresent
-                    )
+                    ),
+                    install: descriptor.install
                 ))
             }
         }

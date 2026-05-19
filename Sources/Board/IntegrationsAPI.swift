@@ -154,6 +154,23 @@ enum IntegrationsAPI {
         }
     }
 
+    /// POST /api/integrations/:id/install
+    /// Pattern A 一键 —— 对 `.remoteHttp` 类的 integration,直接调
+    /// `claude mcp add --transport http` + 写 Codex 的 toml mcp-remote 桥。
+    /// 其它类型(stdio / unsupported)抛错;前端按 install.kind 决定走这条还是
+    /// fallback 到 runbook。
+    static func installIntegration(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        do {
+            let result = try IntegrationInstaller.install(integrationId: id)
+            return BoardAPI.jsonResponse(result)
+        } catch {
+            return BoardAPI.errorResponse("integration_error", error.localizedDescription, status: 400)
+        }
+    }
+
     /// POST /api/integrations/:id/runbook
     /// P3 —— 为某个 integration 生成 agent 无关的 Markdown runbook(落
     /// `~/.meee2/runbooks/connect-<id>.md`),返回内容 + 派发命令。

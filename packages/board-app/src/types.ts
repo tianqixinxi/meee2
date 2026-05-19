@@ -682,6 +682,13 @@ export interface ExternalItemsResult {
 
 export type IntegrationConnState = 'connected' | 'partial' | 'missing'
 
+/** Structured install spec per integration. Frontend picks the primary
+ *  action(Install / Set up / disabled)from `kind`. */
+export type IntegrationInstall =
+  | { kind: 'remoteHttp'; url: string }
+  | { kind: 'localStdio'; command: string; args: string[]; envKeys: string[] }
+  | { kind: 'unsupported'; reason: string }
+
 /** One (agent, integration) cell of the detection matrix. */
 export interface AgentIntegrationStatus {
   agent: string
@@ -693,6 +700,15 @@ export interface AgentIntegrationStatus {
   credentialPresent: boolean
   via: string[]
   evidence: string
+  install: IntegrationInstall
+}
+
+/** Result of `POST /api/integrations/:id/install` (Pattern A one-click). */
+export interface IntegrationInstallResult {
+  integrationId: string
+  claudeOK: boolean
+  codexOK: boolean
+  messages: string[]
 }
 
 export interface AgentScanResult {

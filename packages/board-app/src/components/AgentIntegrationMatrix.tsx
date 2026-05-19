@@ -1,10 +1,12 @@
 import { RefreshCw, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchAgentScan, generateIntegrationRunbook } from '../api'
+import { fetchAgentScan, generateIntegrationRunbook, installIntegration } from '../api'
 import type {
   AgentIntegrationStatus,
   AgentScanResult,
   IntegrationConnState,
+  IntegrationInstall,
+  IntegrationInstallResult,
   IntegrationRunbookResult,
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
@@ -44,6 +46,7 @@ export function AgentIntegrationMatrix() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [runbook, setRunbook] = useState<IntegrationRunbookResult | null>(null)
+  const [installResult, setInstallResult] = useState<IntegrationInstallResult | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [browsingId, setBrowsingId] = useState<'github' | 'lark' | null>(null)
 
@@ -89,12 +92,29 @@ export function AgentIntegrationMatrix() {
       .finally(() => setBusyId(null))
   }
 
+  /** Pattern A — true one-click install for `.remoteHttp` integrations. */
+  const handleInstall = (id: string) => {
+    setBusyId(id)
+    setError(null)
+    installIntegration(id)
+      .then((result) => {
+        setInstallResult(result)
+        load() // re-scan so the matrix reflects the new state
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'install failed'))
+      .finally(() => setBusyId(null))
+  }
+
   const rowFullyConnected = (row: IntegrationRow) =>
     agents.length > 0 && agents.every((agent) => row.byAgent[agent]?.state === 'connected')
 
   /** Browse uses the credential (gh / lark-cli) — MCP need not be configured. */
   const rowHasBrowse = (row: IntegrationRow) =>
     BROWSABLE.has(row.id) && agents.some((agent) => row.byAgent[agent]?.credentialPresent)
+
+  /** Install spec is per-integration; pick from any agent row (all the same). */
+  const installFor = (row: IntegrationRow): IntegrationInstall | undefined =>
+    agents.map((agent) => row.byAgent[agent]?.install).find((spec) => spec !== undefined)
 
   return (
     <section className="agent-matrix" aria-label="Agent integration matrix">
@@ -142,16 +162,40 @@ export function AgentIntegrationMatrix() {
                   )
                 })}
                 <td className="agent-matrix__action">
-                  {!rowFullyConnected(row) && (
-                    <button
-                      type="button"
-                      className="agent-matrix__setup"
-                      disabled={busyId === row.id}
-                      onClick={() => handleSetup(row.id)}
-                    >
-                      {busyId === row.id ? '…' : 'Set up'}
-                    </button>
-                  )}
+                  {!rowFullyConnected(row) && (() => {
+                    const install = installFor(row)
+                    if (install?.kind === 'remoteHttp') {
+                      return (
+                        <button
+                          type="button"
+                          className="agent-matrix__install"
+                          disabled={busyId === row.id}
+                          onClick={() => handleInstall(row.id)}
+                          title={`One-click install via ${install.url} (OAuth on first use)`}
+                        >
+                          {busyId === row.id ? '…' : 'Install'}
+                        </button>
+                      )
+                    }
+                    if (install?.kind === 'unsupported') {
+                      return (
+                        <button type="button" className="agent-matrix__setup" disabled title={install.reason}>
+                          Unsupported
+                        </button>
+                      )
+                    }
+                    // localStdio (token-based) — fall back to runbook flow.
+                    return (
+                      <button
+                        type="button"
+                        className="agent-matrix__setup"
+                        disabled={busyId === row.id}
+                        onClick={() => handleSetup(row.id)}
+                      >
+                        {busyId === row.id ? '…' : 'Set up'}
+                      </button>
+                    )
+                  })()}
                   {rowHasBrowse(row) && (
                     <button
                       type="button"
@@ -186,6 +230,36 @@ export function AgentIntegrationMatrix() {
             provider={browsingId}
             onClose={() => setBrowsingId(null)}
           />
+        </div>
+      )}
+
+      {installResult && (
+        <div
+          className="agent-matrix__runbook-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setInstallResult(null)
+          }}
+        >
+          <div className="agent-matrix__runbook" role="dialog" aria-modal="true" aria-label="Install result">
+            <button
+              type="button"
+              className="agent-matrix__runbook-close"
+              onClick={() => setInstallResult(null)}
+              aria-label="Close install result"
+            >
+              <X size={15} aria-hidden />
+            </button>
+            <h3>
+              Installed {installResult.integrationId}
+              {' '}
+              <em style={{ fontStyle: 'normal', fontSize: 12, color: 'var(--text-faint)' }}>
+                Claude {installResult.claudeOK ? '✓' : '✗'} · Codex {installResult.codexOK ? '✓' : '✗'}
+              </em>
+            </h3>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+              {installResult.messages.map((msg, idx) => (<li key={idx}>{msg}</li>))}
+            </ul>
+          </div>
         </div>
       )}
 

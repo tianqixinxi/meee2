@@ -168,6 +168,32 @@ public final class MCPConfigManager {
     ///
     /// Foundation 没有内建 TOML parser；这里做一个窄用途的 table block upsert，
     /// 只替换我们自己的 `[mcp_servers.meee2]` 段，保留其他用户配置原样。
+    /// Upsert an arbitrary MCP server entry in `~/.codex/config.toml`. Used by
+    /// `IntegrationInstaller` to install third-party integrations (Linear /
+    /// Notion / Figma / …) the same way we install meee2's own server here.
+    /// Idempotent — re-running with the same args is a no-op.
+    public func upsertCodexMCPServer(
+        name: String,
+        command: String,
+        args: [String]
+    ) throws {
+        let header = "[mcp_servers.\(name)]"
+        let argsBlock = args.map { tomlString($0) }.joined(separator: ", ")
+        let block = """
+        \(header)
+        command = \(tomlString(command))
+        args = [\(argsBlock)]
+        """
+        let original = (try? String(contentsOf: codexConfigPath, encoding: .utf8)) ?? ""
+        let next = upsertTomlTableBlock(in: original, tableHeader: header, block: block)
+        guard next != original else { return }
+        try FileManager.default.createDirectory(
+            at: codexConfigPath.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try next.write(to: codexConfigPath, atomically: true, encoding: .utf8)
+    }
+
     private func ensureCodexMCPServer(nodeBin: String, serverPath: String) {
         let block = """
         [mcp_servers.\(serverName)]
