@@ -7185,6 +7185,42 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   cursor: pointer;
 }
 
+.agent-matrix__browse {
+  margin-left: 6px;
+  padding: 4px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.3);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-matrix__browse-panel {
+  max-width: 1080px;
+  margin: 12px auto 18px;
+  padding: 14px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 18, 0.9);
+}
+
+.agent-matrix__browse-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.agent-matrix__browse-close {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
 .agent-matrix__runbook-backdrop {
   position: fixed;
   inset: 0;

@@ -102,18 +102,6 @@ enum IntegrationsAPI {
 
     // MARK: - DTO（契约）
 
-    /// 单个集成的连接状态。`connected` = 可用；`reason` 解释未连接原因。
-    struct IntegrationStatusDTO: Encodable {
-        let id: String          // "github" | "lark"
-        let name: String
-        let connected: Bool
-        let reason: String?     // 未连接时的人类可读说明（含修复建议）
-    }
-
-    struct IntegrationStatusEnvelope: Encodable {
-        let integrations: [IntegrationStatusDTO]
-    }
-
     /// 可被选中的外部条目通用形态。前端据 `kind` 选择 PlannerArtifactKind。
     struct ExternalItemDTO: Encodable {
         let id: String              // 稳定标识，如 "owner/repo#42"
@@ -133,31 +121,6 @@ enum IntegrationsAPI {
     }
 
     // MARK: - 路由处理器
-
-    /// GET /api/integrations/status
-    static func getStatus(_ req: HttpRequest) -> HttpResponse {
-        let token = githubToken()
-        let github = IntegrationStatusDTO(
-            id: "github",
-            name: "GitHub",
-            connected: token != nil,
-            reason: token != nil
-                ? nil
-                : "GITHUB_TOKEN not found in ccops. Run: ccops set GITHUB_TOKEN --value <token>"
-        )
-        // Lark 走 lark-cli；探测 CLI 是否安装即可，真实鉴权由 lark-cli 自身维护。
-        let larkProbe = IntegrationsAPI.envRun("lark-cli", ["--version"])
-        let larkConnected = larkProbe.code == 0
-        let lark = IntegrationStatusDTO(
-            id: "lark",
-            name: "Lark",
-            connected: larkConnected,
-            reason: larkConnected
-                ? "Doc browsing not yet wired — see TODO(lark)."
-                : "lark-cli not available on PATH."
-        )
-        return BoardAPI.jsonResponse(IntegrationStatusEnvelope(integrations: [github, lark]))
-    }
 
     /// GET /api/integrations/agent-scan
     /// agent × integration 检测矩阵(P1)。扫本地 Claude Code / Codex 的 MCP

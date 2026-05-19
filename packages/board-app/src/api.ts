@@ -25,7 +25,6 @@ import type {
   PlannerDispatchRunner,
   PlannerCanvasVisibility,
   PlanningCanvas,
-  IntegrationStatus,
   ExternalItemsResult,
   AgentScanResult,
   CanvasSideEffectsResult,
@@ -942,20 +941,6 @@ export function attachPlannerArtifactToNode(
 // attachPlannerArtifactToNode above — these only let the user pick an item.
 
 /** Demo fixtures, consistent with the PLANNER_DEMO_MODE pattern elsewhere. */
-function demoIntegrationStatus(): { integrations: IntegrationStatus[] } {
-  return {
-    integrations: [
-      { id: 'github', name: 'GitHub', connected: true, reason: null },
-      {
-        id: 'lark',
-        name: 'Lark',
-        connected: true,
-        reason: 'Doc browsing not yet wired — see TODO(lark).',
-      },
-    ],
-  }
-}
-
 function demoGithubRepos(): ExternalItemsResult {
   return {
     provider: 'github',
@@ -1020,11 +1005,6 @@ function demoLarkDocs(): ExternalItemsResult {
 }
 
 /** GET /api/integrations/status — per-integration connection status. */
-export function fetchIntegrationStatus(): Promise<{ integrations: IntegrationStatus[] }> {
-  if (PLANNER_DEMO_MODE) return Promise.resolve(demoIntegrationStatus())
-  return jsonRequest<{ integrations: IntegrationStatus[] }>('/api/integrations/status')
-}
-
 /** GET /api/integrations/github/repos — repos the GitHub token can see. */
 export function fetchGithubRepos(): Promise<ExternalItemsResult> {
   if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubRepos())

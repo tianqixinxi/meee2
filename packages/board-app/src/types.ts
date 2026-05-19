@@ -655,16 +655,8 @@ export interface WorkflowRun {
 
 // -- Phase 5: Integrations (真接入) ----------------------------------------
 
+/** Provider id for an integration browse endpoint (GitHub PRs / Lark docs). */
 export type IntegrationId = 'github' | 'lark'
-
-/** Per-integration connection status from GET /api/integrations/status. */
-export interface IntegrationStatus {
-  id: IntegrationId
-  name: string
-  connected: boolean
-  /** Human-readable explanation when not connected (includes the fix hint). */
-  reason?: string | null
-}
 
 /** A selectable external item (GitHub repo/PR/issue, Lark doc, ...). */
 export interface ExternalItem {

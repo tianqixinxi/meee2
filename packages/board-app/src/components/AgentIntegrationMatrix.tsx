@@ -7,6 +7,10 @@ import type {
   IntegrationConnState,
   IntegrationRunbookResult,
 } from '../types'
+import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
+
+/** Integrations whose backend exposes a browse endpoint (PRs / docs / …). */
+const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
 
 const STATE_GLYPH: Record<IntegrationConnState, string> = {
   connected: '✓',
@@ -41,6 +45,7 @@ export function AgentIntegrationMatrix() {
   const [loading, setLoading] = useState(false)
   const [runbook, setRunbook] = useState<IntegrationRunbookResult | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [browsingId, setBrowsingId] = useState<'github' | 'lark' | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -86,6 +91,10 @@ export function AgentIntegrationMatrix() {
 
   const rowFullyConnected = (row: IntegrationRow) =>
     agents.length > 0 && agents.every((agent) => row.byAgent[agent]?.state === 'connected')
+
+  /** Browse uses the credential (gh / lark-cli) — MCP need not be configured. */
+  const rowHasBrowse = (row: IntegrationRow) =>
+    BROWSABLE.has(row.id) && agents.some((agent) => row.byAgent[agent]?.credentialPresent)
 
   return (
     <section className="agent-matrix" aria-label="Agent integration matrix">
@@ -143,11 +152,41 @@ export function AgentIntegrationMatrix() {
                       {busyId === row.id ? '…' : 'Set up'}
                     </button>
                   )}
+                  {rowHasBrowse(row) && (
+                    <button
+                      type="button"
+                      className="agent-matrix__browse"
+                      onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
+                      title={`Browse ${row.name} items`}
+                    >
+                      Browse
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      )}
+
+      {browsingId && (
+        <div className="agent-matrix__browse-panel">
+          <div className="agent-matrix__browse-header">
+            <strong>Browse {browsingId}</strong>
+            <button
+              type="button"
+              onClick={() => setBrowsingId(null)}
+              aria-label="Close browse"
+              className="agent-matrix__browse-close"
+            >
+              <X size={14} aria-hidden />
+            </button>
+          </div>
+          <IntegrationArtifactPicker
+            provider={browsingId}
+            onClose={() => setBrowsingId(null)}
+          />
+        </div>
       )}
 
       {runbook && (

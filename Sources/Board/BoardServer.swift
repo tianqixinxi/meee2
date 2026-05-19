@@ -442,7 +442,6 @@ public final class BoardServer {
         // Phase 5 — Integrations (真接入). Read-only browsing of external
         // items. The actual artifact attach still goes through the existing
         // /api/planner/canvases/:id/nodes/:nodeId/artifacts endpoint.
-        server.GET["/api/integrations/status"] = BoardServer.cors(IntegrationsAPI.getStatus)
         server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
         server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
         server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)
