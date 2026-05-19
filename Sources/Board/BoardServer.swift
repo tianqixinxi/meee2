@@ -443,6 +443,9 @@ public final class BoardServer {
         // items. The actual artifact attach still goes through the existing
         // /api/planner/canvases/:id/nodes/:nodeId/artifacts endpoint.
         server.GET["/api/integrations/status"] = BoardServer.cors(IntegrationsAPI.getStatus)
+        server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
+        server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
+        server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)
         server.GET["/api/integrations/github/repos"] = BoardServer.cors(IntegrationsAPI.getGithubRepos)
         server.GET["/api/integrations/github/repos/:owner/:repo/pulls"] = BoardServer.cors(IntegrationsAPI.getGithubPulls)
         server.GET["/api/integrations/github/repos/:owner/:repo/issues"] = BoardServer.cors(IntegrationsAPI.getGithubIssues)

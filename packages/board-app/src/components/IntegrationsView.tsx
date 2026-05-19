@@ -10,6 +10,7 @@ import type { CSSProperties } from 'react'
 import { useEffect, useState } from 'react'
 import { fetchIntegrationStatus } from '../api'
 import type { BoardState, IntegrationId, IntegrationStatus } from '../types'
+import { AgentIntegrationMatrix } from './AgentIntegrationMatrix'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
 
 interface Props {
@@ -87,6 +88,8 @@ export function IntegrationsView(_props: Props) {
       </header>
 
       {loadError && <p className="integration-picker__error">{loadError}</p>}
+
+      <AgentIntegrationMatrix />
 
       <div className="integrations-view__grid">
         {CARDS.map((card) => (

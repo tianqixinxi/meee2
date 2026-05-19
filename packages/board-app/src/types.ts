@@ -686,6 +686,54 @@ export interface ExternalItemsResult {
   notice?: string | null
 }
 
+// -- agent-integration-detection (检测 + runbook + 节点副作用) --------------
+
+export type IntegrationConnState = 'connected' | 'partial' | 'missing'
+
+/** One (agent, integration) cell of the detection matrix. */
+export interface AgentIntegrationStatus {
+  agent: string
+  integrationId: string
+  integrationName: string
+  category: string
+  state: IntegrationConnState
+  mcpConfigured: boolean
+  credentialPresent: boolean
+  via: string[]
+  evidence: string
+}
+
+export interface AgentScanResult {
+  agents: string[]
+  statuses: AgentIntegrationStatus[]
+}
+
+/** A node side-effect crossed with the detection matrix. */
+export interface NodeSideEffectCoverage {
+  integrationId: string
+  direction: string // 'reads' | 'writes'
+  connected: boolean
+}
+
+export interface NodeSideEffectInfo {
+  nodeId: string
+  title: string
+  sideEffects: NodeSideEffectCoverage[]
+}
+
+export interface CanvasSideEffectsResult {
+  canvasId: string
+  nodes: NodeSideEffectInfo[]
+}
+
+export interface IntegrationRunbookResult {
+  integrationId: string
+  path: string
+  content: string
+  /** agent id → shell command that drives that agent through the runbook. */
+  dispatch: Record<string, string>
+}
+
 export interface SelectedCanvasElementContext {
   id: string
   type: string

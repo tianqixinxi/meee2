@@ -159,6 +159,53 @@ enum IntegrationsAPI {
         return BoardAPI.jsonResponse(IntegrationStatusEnvelope(integrations: [github, lark]))
     }
 
+    /// GET /api/integrations/agent-scan
+    /// agent × integration 检测矩阵(P1)。扫本地 Claude Code / Codex 的 MCP
+    /// 配置 + 凭证,判断每个 integration 接没接通。
+    static func getAgentScan(_ req: HttpRequest) -> HttpResponse {
+        let statuses = IntegrationDetector.scan()
+        return BoardAPI.jsonResponse(AgentScanEnvelope(
+            agents: IntegrationDetector.agents,
+            statuses: statuses
+        ))
+    }
+
+    /// GET /api/integrations/side-effects?canvasId=<id>
+    /// P2 —— 一个 canvas 里每个节点的输入/输出触达哪些 integration 副作用,
+    /// 并交叉检测矩阵标出哪些副作用面没接通。
+    static func getCanvasSideEffects(_ req: HttpRequest) -> HttpResponse {
+        let canvasId = req.queryParams.first { $0.0 == "canvasId" }?.1 ?? ""
+        guard !canvasId.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing canvasId", status: 400)
+        }
+        do {
+            let graph = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            let nodes = NodeSideEffectInferrer.coverage(nodes: graph.nodes)
+            return BoardAPI.jsonResponse(CanvasSideEffectsEnvelope(canvasId: canvasId, nodes: nodes))
+        } catch {
+            return BoardAPI.errorResponse("integration_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// POST /api/integrations/:id/runbook
+    /// P3 —— 为某个 integration 生成 agent 无关的 Markdown runbook(落
+    /// `~/.meee2/runbooks/connect-<id>.md`),返回内容 + 派发命令。
+    static func generateRunbook(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        do {
+            let result = try IntegrationRunbookGenerator.generate(integrationId: id)
+            return BoardAPI.jsonResponse(result)
+        } catch {
+            return BoardAPI.errorResponse("integration_error", error.localizedDescription, status: 400)
+        }
+    }
+
     /// GET /api/integrations/github/repos
     /// 列出当前 token 可见的仓库（按最近 push 排序）。
     static func getGithubRepos(_ req: HttpRequest) -> HttpResponse {

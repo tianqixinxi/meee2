@@ -27,6 +27,9 @@ import type {
   PlanningCanvas,
   IntegrationStatus,
   ExternalItemsResult,
+  AgentScanResult,
+  CanvasSideEffectsResult,
+  IntegrationRunbookResult,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -1048,6 +1051,28 @@ export function fetchGithubIssues(owner: string, repo: string): Promise<External
 export function fetchLarkDocs(): Promise<ExternalItemsResult> {
   if (PLANNER_DEMO_MODE) return Promise.resolve(demoLarkDocs())
   return jsonRequest<ExternalItemsResult>('/api/integrations/lark/docs')
+}
+
+// -- agent-integration-detection -------------------------------------------
+
+/** GET /api/integrations/agent-scan — agent × integration detection matrix. */
+export function fetchAgentScan(): Promise<AgentScanResult> {
+  return jsonRequest<AgentScanResult>('/api/integrations/agent-scan')
+}
+
+/** GET /api/integrations/side-effects?canvasId= — per-node side effects. */
+export function fetchCanvasSideEffects(canvasId: string): Promise<CanvasSideEffectsResult> {
+  return jsonRequest<CanvasSideEffectsResult>(
+    `/api/integrations/side-effects?canvasId=${encodeURIComponent(canvasId)}`,
+  )
+}
+
+/** POST /api/integrations/:id/runbook — generate the connect runbook. */
+export function generateIntegrationRunbook(integrationId: string): Promise<IntegrationRunbookResult> {
+  return jsonRequest<IntegrationRunbookResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/runbook`,
+    { method: 'POST', body: '{}' },
+  )
 }
 
 export async function createPlannerSubCanvasFromNode(

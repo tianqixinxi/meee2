@@ -3093,3 +3093,39 @@
 .planner-node-modal__attach-link button {
   justify-self: start;
 }
+
+/* P2 — integration side effects in the node inspector */
+.planner-node-modal__side-effects {
+  display: grid;
+  gap: 8px;
+}
+
+.planner-node-modal__side-effect-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.planner-node-modal__side-effect-dir {
+  font-size: 11px;
+  color: var(--text-faint);
+  min-width: 84px;
+}
+
+.planner-node-modal__side-effect-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid rgba(127, 169, 130, 0.4);
+  border-radius: var(--radius-xs, 4px);
+  background: rgba(127, 169, 130, 0.1);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.planner-node-modal__side-effect-chip.is-missing {
+  border-color: rgba(194, 106, 106, 0.5);
+  background: rgba(194, 106, 106, 0.12);
+}

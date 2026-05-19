@@ -6,6 +6,7 @@ import {
   GitPullRequest,
   Layers,
   MessageSquareText,
+  Plug,
   Plus,
   Rocket,
   Route,
@@ -19,6 +20,7 @@ import {
   bindPlannerSessionToNode,
   createPlannerSubCanvasFromNode,
   dispatchPlannerNodeSession,
+  fetchCanvasSideEffects,
   fetchPlannerNodeContract,
   proposePlannerGraphChange,
   refinePlannerNode,
@@ -36,6 +38,7 @@ import type {
   PlannerNodeContract,
   PlannerNodeOutputNext,
   PlannerNodeOutputStatus,
+  NodeSideEffectCoverage,
   PlanningNode,
   Session,
   WorkflowRun,
@@ -120,6 +123,24 @@ export function NodeInspectorModal({
   const [outputStatus, setOutputStatus] = useState<PlannerNodeOutputStatus>('done')
   const [outputNext, setOutputNext] = useState<PlannerNodeOutputNext>('complete')
   const [routeTo, setRouteTo] = useState<string[]>([])
+  // P2 — integration side effects this node's IO touches.
+  const [sideEffects, setSideEffects] = useState<NodeSideEffectCoverage[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchCanvasSideEffects(canvasId)
+      .then((result) => {
+        if (cancelled) return
+        const entry = result.nodes.find((item) => item.nodeId === node.id)
+        setSideEffects(entry?.sideEffects ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setSideEffects([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasId, node.id])
 
   const runState = state?.runState ?? node.status
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
@@ -589,6 +610,42 @@ export function NodeInspectorModal({
                 <span>Produces</span><strong>{produces.length > 0 ? produces.join(', ') : 'none'}</strong>
                 <span>Completion</span><strong>{node.ioSchema.completionSignal || 'submit valid output'}</strong>
               </div>
+            </div>
+
+            {/* P2 — integration side effects this node's IO touches. */}
+            <div className="planner-node-modal__section">
+              <h3><Plug size={13} aria-hidden /> Integration side effects</h3>
+              {sideEffects.length === 0 ? (
+                <p className="planner-node-modal__empty">No integration side effects inferred.</p>
+              ) : (
+                <div className="planner-node-modal__side-effects">
+                  {(['reads', 'writes'] as const).map((dir) => {
+                    const items = sideEffects.filter((effect) => effect.direction === dir)
+                    if (items.length === 0) return null
+                    return (
+                      <div key={dir} className="planner-node-modal__side-effect-row">
+                        <span className="planner-node-modal__side-effect-dir">
+                          {dir === 'reads' ? '读 / input' : '写 / output'}
+                        </span>
+                        {items.map((effect) => (
+                          <span
+                            key={effect.integrationId}
+                            className={`planner-node-modal__side-effect-chip${effect.connected ? '' : ' is-missing'}`}
+                            title={
+                              effect.connected
+                                ? `${effect.integrationId} is connected`
+                                : `${effect.integrationId} is NOT connected — this side effect will break`
+                            }
+                          >
+                            {effect.integrationId}
+                            {!effect.connected && ' ⚠'}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="planner-node-modal__section">

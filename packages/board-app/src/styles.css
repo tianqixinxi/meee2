@@ -7082,3 +7082,186 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
     width: fit-content;
   }
 }
+
+/* -- agent-integration-detection: detection matrix ----------------------- */
+
+.agent-matrix {
+  max-width: 1080px;
+  margin: 0 auto 18px;
+  padding: 16px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-md, 10px);
+  background: rgba(31, 31, 29, 0.6);
+}
+
+.agent-matrix__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.agent-matrix__header span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.agent-matrix__header h2 {
+  margin: 2px 0 0;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.agent-matrix__rescan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(31, 31, 29, 0.86);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.agent-matrix__error {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #c26a6a;
+}
+
+.agent-matrix__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.agent-matrix__table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-faint);
+  font-weight: 500;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.16);
+}
+
+.agent-matrix__table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.08);
+}
+
+.agent-matrix__name {
+  color: var(--text);
+}
+
+.agent-matrix__name em {
+  margin-left: 6px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.agent-matrix__cell.is-connected {
+  color: #7fa982;
+}
+
+.agent-matrix__cell.is-partial {
+  color: #d4a373;
+}
+
+.agent-matrix__cell.is-missing {
+  color: #c26a6a;
+}
+
+.agent-matrix__setup {
+  padding: 4px 10px;
+  border: 1px solid rgba(204, 120, 92, 0.5);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-matrix__runbook-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 9, 0.6);
+}
+
+.agent-matrix__runbook {
+  position: relative;
+  width: min(680px, calc(100vw - 48px));
+  max-height: 80vh;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-md, 10px);
+  background: rgba(24, 24, 22, 0.99);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+}
+
+.agent-matrix__runbook h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.agent-matrix__runbook-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.agent-matrix__runbook-path {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.agent-matrix__runbook-content {
+  padding: 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 18, 0.9);
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-matrix__dispatch {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.agent-matrix__dispatch > span {
+  color: var(--text-faint);
+}
+
+.agent-matrix__dispatch strong {
+  color: var(--text);
+  margin-right: 6px;
+}
+
+.agent-matrix__dispatch code {
+  display: block;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs, 4px);
+  background: rgba(20, 20, 18, 0.9);
+  color: var(--text-dim);
+  word-break: break-all;
+}
