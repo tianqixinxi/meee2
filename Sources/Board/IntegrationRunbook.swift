@@ -104,7 +104,7 @@ enum IntegrationRunbookGenerator {
             lines.append("### \(stepNumber). 配置凭证")
             stepNumber += 1
             if let ccopsKey = descriptor.credentialProbes.first(where: { $0.kind == .ccops })?.value {
-                lines.append("- 用 meee2 的密钥管理器 ccops 设置凭证:")
+                lines.append("- 用 `ccops`(macOS Keychain 的密钥管理工具)存凭证:")
                 lines.append("  ```")
                 lines.append("  ccops set \(ccopsKey) --value \"<your token>\"")
                 lines.append("  ```")
