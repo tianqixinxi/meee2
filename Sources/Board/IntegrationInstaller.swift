@@ -44,6 +44,8 @@ enum IntegrationInstaller {
             throw IntegrationInstallError.unknownIntegration(integrationId)
         }
         switch descriptor.install {
+        case .claudePlugin(let marketplace, let name):
+            return installClaudePlugin(id: descriptor.id, displayName: descriptor.name, marketplace: marketplace, pluginName: name)
         case .remoteHttp(let url):
             return installRemoteHttp(id: descriptor.id, name: descriptor.name, url: url)
         case .localStdio:
@@ -51,6 +53,33 @@ enum IntegrationInstaller {
         case .unsupported(let reason):
             throw IntegrationInstallError.unsupported(reason: reason)
         }
+    }
+
+    /// Install via Claude Code's plugin marketplace —— `claude plugin install
+    /// <name>@<marketplace>`. Claude-side only (Codex has no plugin concept);
+    /// the plugin's own setup flow handles auth and any required MCP config.
+    private static func installClaudePlugin(
+        id: String, displayName: String, marketplace: String, pluginName: String
+    ) -> IntegrationInstallResult {
+        var messages: [String] = []
+        let result = shell("claude", ["plugin", "install", "\(pluginName)@\(marketplace)"])
+        let claudeOK = result.code == 0
+        if claudeOK {
+            messages.append("Claude Code: installed plugin \(pluginName)@\(marketplace) — skills, MCP server, and commands all wired.")
+            let trimmedStdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedStdout.isEmpty { messages.append("\(trimmedStdout)") }
+        } else {
+            let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let why = detail.isEmpty ? "exit \(result.code)" : detail
+            messages.append(
+                "Claude Code: `claude plugin install` failed (\(why)). " +
+                "Run manually: claude plugin install \(pluginName)@\(marketplace)"
+            )
+        }
+        messages.append("Codex: plugins are Claude-Code-only — no Codex config was written. The plugin will auth itself on first use in Claude Code.")
+        return IntegrationInstallResult(
+            integrationId: id, claudeOK: claudeOK, codexOK: false, messages: messages
+        )
     }
 
     private static func installRemoteHttp(id: String, name: String, url: String) -> IntegrationInstallResult {

@@ -37,6 +37,11 @@ struct IntegrationCredentialProbe: Codable, Equatable {
 /// so `IntegrationInstaller` can drive a true one-click install (Pattern A —
 /// remote OAuth) instead of generating a placeholder-filled runbook.
 enum IntegrationInstall: Equatable {
+    /// Anthropic / community plugin marketplace install —— `claude plugin
+    /// install <name>@<marketplace>`. Bundle (skill + MCP server + commands)
+    /// handled by Claude Code; auth happens inside the plugin's own flow.
+    /// Claude-side only — Codex doesn't have a plugin concept.
+    case claudePlugin(marketplace: String, name: String)
     /// Remote MCP server — Claude Code uses `--transport http` natively;
     /// Codex bridges via the `mcp-remote` stdio shim. OAuth pops on first use.
     case remoteHttp(url: String)
@@ -49,11 +54,15 @@ enum IntegrationInstall: Equatable {
 
 extension IntegrationInstall: Encodable {
     private enum Keys: String, CodingKey {
-        case kind, url, command, args, envKeys, reason
+        case kind, url, command, args, envKeys, reason, marketplace, name
     }
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
         switch self {
+        case .claudePlugin(let marketplace, let name):
+            try container.encode("claudePlugin", forKey: .kind)
+            try container.encode(marketplace, forKey: .marketplace)
+            try container.encode(name, forKey: .name)
         case .remoteHttp(let url):
             try container.encode("remoteHttp", forKey: .kind)
             try container.encode(url, forKey: .url)
@@ -111,24 +120,50 @@ struct AgentIntegrationStatus: Encodable, Equatable {
 
 // MARK: - Catalog
 
-/// Built-in, static catalog of common integrations. Remote/extensible catalog
-/// is deliberately out of scope for P1.
+/// Catalog of integrations. Composed (in priority order) of:
+///   1. `builtin` — curated, hand-tuned descriptors (better mcpServerNames,
+///      remote-OAuth URLs, etc.)
+///   2. `MarketplaceCatalogLoader` — every plugin in
+///      `~/.claude/plugins/marketplaces/*/.claude-plugin/marketplace.json`
+/// Deduped by `id` (builtin wins). Future: MCP Registry as source #3.
 enum IntegrationCatalog {
-    static let all: [IntegrationDescriptor] = [
+    /// Snapshot of the merged catalog. Computed each call — marketplace JSON
+    /// lives on local disk and scans aren't hot.
+    static var all: [IntegrationDescriptor] {
+        // Best-effort: refresh the registry cache in the background if it's
+        // stale. The current call returns whatever is already on disk (none on
+        // first run); the next scan picks up the refreshed data.
+        MCPRegistryClient.refreshAsyncIfStale()
+
+        var seen = Set<String>()
+        var result: [IntegrationDescriptor] = []
+        for descriptor in builtin {
+            seen.insert(descriptor.id)
+            result.append(descriptor)
+        }
+        for descriptor in MarketplaceCatalogLoader.load() where !seen.contains(descriptor.id) {
+            seen.insert(descriptor.id)
+            result.append(descriptor)
+        }
+        for descriptor in MCPRegistryClient.loadFromCache() where !seen.contains(descriptor.id) {
+            seen.insert(descriptor.id)
+            result.append(descriptor)
+        }
+        return result
+    }
+
+    /// Hand-curated descriptors for integrations with tuned install + signal
+    /// data. Other plugins discovered via the marketplace get generic
+    /// `.claudePlugin` install entries.
+    static let builtin: [IntegrationDescriptor] = [
         IntegrationDescriptor(
             id: "github", name: "GitHub", category: "dev",
             mcpServerNames: ["github"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "GITHUB_TOKEN"),
-                .init(kind: .env, value: "GITHUB_TOKEN"),
-                .init(kind: .cliAuth, value: "gh auth status")
-            ],
-            install: .localStdio(
-                command: "npx",
-                args: ["-y", "@modelcontextprotocol/server-github"],
-                envKeys: ["GITHUB_PERSONAL_ACCESS_TOKEN"]
-            ),
-            setupHint: "Add the GitHub MCP server and a GITHUB_TOKEN (repo scope)."
+            // claude plugin handles auth — drop env/cliAuth probes from
+            // connectivity (gh CLI auth alone doesn't expose tools to agents).
+            credentialProbes: [],
+            install: .claudePlugin(marketplace: "claude-plugins-official", name: "github"),
+            setupHint: "One-click install: GitHub plugin from Anthropic's official marketplace."
         ),
         IntegrationDescriptor(
             id: "linear", name: "Linear", category: "dev",
@@ -142,16 +177,9 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "slack", name: "Slack", category: "comms",
             mcpServerNames: ["slack"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "SLACK_BOT_TOKEN"),
-                .init(kind: .env, value: "SLACK_BOT_TOKEN")
-            ],
-            install: .localStdio(
-                command: "npx",
-                args: ["-y", "@slack/mcp-server"],
-                envKeys: ["SLACK_BOT_TOKEN"]
-            ),
-            setupHint: "Add the Slack MCP server and a SLACK_BOT_TOKEN."
+            credentialProbes: [],
+            install: .claudePlugin(marketplace: "claude-plugins-official", name: "slack"),
+            setupHint: "One-click install: Slack plugin from Anthropic's official marketplace."
         ),
         IntegrationDescriptor(
             id: "notion", name: "Notion", category: "docs",
@@ -172,16 +200,9 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "supabase", name: "Supabase", category: "data",
             mcpServerNames: ["supabase"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "SUPABASE_ACCESS_TOKEN"),
-                .init(kind: .env, value: "SUPABASE_ACCESS_TOKEN")
-            ],
-            install: .localStdio(
-                command: "npx",
-                args: ["-y", "@supabase/mcp-server"],
-                envKeys: ["SUPABASE_ACCESS_TOKEN"]
-            ),
-            setupHint: "Add the Supabase MCP server and a SUPABASE_ACCESS_TOKEN."
+            credentialProbes: [],
+            install: .claudePlugin(marketplace: "claude-plugins-official", name: "supabase"),
+            setupHint: "One-click install: Supabase plugin from Anthropic's official marketplace."
         ),
         IntegrationDescriptor(
             id: "sentry", name: "Sentry", category: "dev",
@@ -314,12 +335,18 @@ enum IntegrationDetector {
 
     // MARK: Config readers (user-level only — P1 decision #3)
 
-    /// Claude Code's MCP servers — across all scopes Claude Code reads:
+    /// Claude Code's MCP servers — across all scopes Claude Code reads, **plus**
+    /// the names of installed marketplace plugins (so a `.claudePlugin`
+    /// integration shows up as connected even when the plugin's MCP server is
+    /// internal). Returns the union of names.
+    ///
+    /// Sources:
     ///   1. `~/.claude.json` top-level `mcpServers`            (user scope)
     ///   2. `~/.claude.json` `projects.<path>.mcpServers`      (project scope,
     ///      what the Connectors UI / `claude mcp add` default writes to)
     ///   3. `~/.claude/settings.json` `mcpServers`             (settings scope)
-    /// Returns the union of configured server names.
+    ///   4. `~/.claude/plugins/installed_plugins.json` `plugins` keys
+    ///      (marketplace plugin installs — name stripped from "<name>@<mkt>")
     static func claudeMCPServerNames() -> [String] {
         var names = Set<String>()
 
@@ -348,6 +375,22 @@ enum IntegrationDetector {
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let servers = obj["mcpServers"] as? [String: Any] {
             servers.keys.forEach { names.insert($0) }
+        }
+
+        // (4) from ~/.claude/plugins/installed_plugins.json — plugin keys are
+        // "<name>@<marketplace>"; we record the bare name so a matrix row like
+        // "github" matches an installed "github@claude-plugins-official".
+        let installedPlugins = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("plugins")
+            .appendingPathComponent("installed_plugins.json")
+        if let data = try? Data(contentsOf: installedPlugins),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let plugins = obj["plugins"] as? [String: Any] {
+            for key in plugins.keys {
+                let bareName = key.split(separator: "@").first.map(String.init) ?? key
+                names.insert(bareName)
+            }
         }
 
         return Array(names)

@@ -7202,6 +7202,49 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   cursor: default;
 }
 
+.agent-matrix__filters {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.agent-matrix__search {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-sm);
+  background: rgba(20, 20, 18, 0.9);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-matrix__categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.agent-matrix__categories button {
+  padding: 3px 9px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.agent-matrix__categories button.is-active {
+  background: rgba(204, 120, 92, 0.18);
+  border-color: rgba(204, 120, 92, 0.5);
+  color: var(--text);
+}
+
+.agent-matrix__visible-count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .agent-matrix__browse {
   margin-left: 6px;
   padding: 4px 10px;

@@ -49,6 +49,8 @@ export function AgentIntegrationMatrix() {
   const [installResult, setInstallResult] = useState<IntegrationInstallResult | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [browsingId, setBrowsingId] = useState<'github' | 'lark' | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -80,8 +82,27 @@ export function AgentIntegrationMatrix() {
       }
       row.byAgent[status.agent] = status
     }
-    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
+    return [...byId.values()].sort(
+      (a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name),
+    )
   }, [scan])
+
+  /** Category histogram for the filter chips. */
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const row of rows) counts.set(row.category, (counts.get(row.category) ?? 0) + 1)
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])
+  }, [rows])
+
+  /** Filtered + search-narrowed rows actually rendered in the table. */
+  const visibleRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (categoryFilter && row.category !== categoryFilter) return false
+      if (q && !row.name.toLowerCase().includes(q) && !row.id.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [rows, searchQuery, categoryFilter])
 
   const handleSetup = (id: string) => {
     setBusyId(id)
@@ -131,6 +152,40 @@ export function AgentIntegrationMatrix() {
       {error && <p className="agent-matrix__error">{error}</p>}
 
       {scan && rows.length > 0 && (
+        <div className="agent-matrix__filters">
+          <input
+            type="search"
+            className="agent-matrix__search"
+            placeholder={`Search ${rows.length} integrations…`}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+          <div className="agent-matrix__categories" role="group" aria-label="Category filter">
+            <button
+              type="button"
+              className={categoryFilter === null ? 'is-active' : ''}
+              onClick={() => setCategoryFilter(null)}
+            >
+              All ({rows.length})
+            </button>
+            {categoryCounts.map(([cat, count]) => (
+              <button
+                key={cat}
+                type="button"
+                className={categoryFilter === cat ? 'is-active' : ''}
+                onClick={() => setCategoryFilter(cat === categoryFilter ? null : cat)}
+              >
+                {cat} ({count})
+              </button>
+            ))}
+          </div>
+          <span className="agent-matrix__visible-count">
+            Showing {visibleRows.length} of {rows.length}
+          </span>
+        </div>
+      )}
+
+      {scan && visibleRows.length > 0 && (
         <table className="agent-matrix__table">
           <thead>
             <tr>
@@ -142,7 +197,7 @@ export function AgentIntegrationMatrix() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
+            {visibleRows.map((row) => (
               <tr key={row.id}>
                 <td className="agent-matrix__name">
                   {row.name}
@@ -164,6 +219,19 @@ export function AgentIntegrationMatrix() {
                 <td className="agent-matrix__action">
                   {!rowFullyConnected(row) && (() => {
                     const install = installFor(row)
+                    if (install?.kind === 'claudePlugin') {
+                      return (
+                        <button
+                          type="button"
+                          className="agent-matrix__install"
+                          disabled={busyId === row.id}
+                          onClick={() => handleInstall(row.id)}
+                          title={`One-click install: claude plugin install ${install.name}@${install.marketplace}`}
+                        >
+                          {busyId === row.id ? '…' : 'Install'}
+                        </button>
+                      )
+                    }
                     if (install?.kind === 'remoteHttp') {
                       return (
                         <button

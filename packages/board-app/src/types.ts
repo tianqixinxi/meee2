@@ -685,6 +685,7 @@ export type IntegrationConnState = 'connected' | 'partial' | 'missing'
 /** Structured install spec per integration. Frontend picks the primary
  *  action(Install / Set up / disabled)from `kind`. */
 export type IntegrationInstall =
+  | { kind: 'claudePlugin'; marketplace: string; name: string }
   | { kind: 'remoteHttp'; url: string }
   | { kind: 'localStdio'; command: string; args: string[]; envKeys: string[] }
   | { kind: 'unsupported'; reason: string }
