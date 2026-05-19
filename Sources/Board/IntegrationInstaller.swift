@@ -57,7 +57,9 @@ enum IntegrationInstaller {
         var messages: [String] = []
 
         // Claude Code: native --transport http registration via the CLI.
-        let claude = shell("claude", ["mcp", "add", "--transport", "http", id, url])
+        // `--scope user` writes to the top-level mcpServers in ~/.claude.json
+        // so the install is visible to every project, not the cwd one.
+        let claude = shell("claude", ["mcp", "add", "--scope", "user", "--transport", "http", id, url])
         let claudeOK = claude.code == 0
         if claudeOK {
             messages.append("Claude Code: registered \(name) via `claude mcp add --transport http`.")

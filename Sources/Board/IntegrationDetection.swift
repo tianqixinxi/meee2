@@ -133,10 +133,9 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "linear", name: "Linear", category: "dev",
             mcpServerNames: ["linear"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "LINEAR_API_KEY"),
-                .init(kind: .env, value: "LINEAR_API_KEY")
-            ],
+            // Remote OAuth — credential lives in the MCP server's own session,
+            // not in env / ccops. MCP-configured == connected.
+            credentialProbes: [],
             install: .remoteHttp(url: "https://mcp.linear.app/mcp"),
             setupHint: "One-click install: Linear's hosted MCP server with OAuth."
         ),
@@ -157,20 +156,16 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "notion", name: "Notion", category: "docs",
             mcpServerNames: ["notion"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "NOTION_TOKEN"),
-                .init(kind: .env, value: "NOTION_TOKEN")
-            ],
+            // Remote OAuth — MCP-configured == connected.
+            credentialProbes: [],
             install: .remoteHttp(url: "https://mcp.notion.com/mcp"),
             setupHint: "One-click install: Notion's hosted MCP server with OAuth."
         ),
         IntegrationDescriptor(
             id: "figma", name: "Figma", category: "design",
             mcpServerNames: ["figma"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "FIGMA_TOKEN"),
-                .init(kind: .env, value: "FIGMA_ACCESS_TOKEN")
-            ],
+            // Remote OAuth — MCP-configured == connected.
+            credentialProbes: [],
             install: .remoteHttp(url: "https://mcp.figma.com/mcp"),
             setupHint: "One-click install: Figma's hosted MCP server with OAuth."
         ),
@@ -191,10 +186,8 @@ enum IntegrationCatalog {
         IntegrationDescriptor(
             id: "sentry", name: "Sentry", category: "dev",
             mcpServerNames: ["sentry"],
-            credentialProbes: [
-                .init(kind: .ccops, value: "SENTRY_AUTH_TOKEN"),
-                .init(kind: .env, value: "SENTRY_AUTH_TOKEN")
-            ],
+            // Remote OAuth — MCP-configured == connected.
+            credentialProbes: [],
             install: .remoteHttp(url: "https://mcp.sentry.dev/mcp"),
             setupHint: "One-click install: Sentry's hosted MCP server with OAuth."
         ),
@@ -321,17 +314,43 @@ enum IntegrationDetector {
 
     // MARK: Config readers (user-level only — P1 decision #3)
 
-    /// Claude Code's user-wide MCP config: `~/.claude.json` top-level
-    /// `mcpServers` map. Returns the configured server names.
+    /// Claude Code's MCP servers — across all scopes Claude Code reads:
+    ///   1. `~/.claude.json` top-level `mcpServers`            (user scope)
+    ///   2. `~/.claude.json` `projects.<path>.mcpServers`      (project scope,
+    ///      what the Connectors UI / `claude mcp add` default writes to)
+    ///   3. `~/.claude/settings.json` `mcpServers`             (settings scope)
+    /// Returns the union of configured server names.
     static func claudeMCPServerNames() -> [String] {
-        let path = URL(fileURLWithPath: NSHomeDirectory())
+        var names = Set<String>()
+
+        // (1) + (2) from ~/.claude.json
+        let claudeJSON = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".claude.json")
-        guard let data = try? Data(contentsOf: path),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = obj["mcpServers"] as? [String: Any] else {
-            return []
+        if let data = try? Data(contentsOf: claudeJSON),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let userScope = obj["mcpServers"] as? [String: Any] {
+                userScope.keys.forEach { names.insert($0) }
+            }
+            if let projects = obj["projects"] as? [String: Any] {
+                for (_, value) in projects {
+                    guard let project = value as? [String: Any],
+                          let projectServers = project["mcpServers"] as? [String: Any] else { continue }
+                    projectServers.keys.forEach { names.insert($0) }
+                }
+            }
         }
-        return Array(servers.keys)
+
+        // (3) from ~/.claude/settings.json
+        let settingsJSON = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude")
+            .appendingPathComponent("settings.json")
+        if let data = try? Data(contentsOf: settingsJSON),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let servers = obj["mcpServers"] as? [String: Any] {
+            servers.keys.forEach { names.insert($0) }
+        }
+
+        return Array(names)
     }
 
     /// Codex's MCP config: `~/.codex/config.toml` `[mcp_servers.<name>]` tables.
