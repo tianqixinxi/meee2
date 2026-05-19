@@ -62,8 +62,6 @@ enum IntegrationRunbookGenerator {
         var lines: [String] = []
         lines.append("# Runbook — 接入 \(descriptor.name) integration")
         lines.append("")
-        lines.append("> meee2 自动生成 · agent 无关 —— 可交给 Claude Code / Codex 执行,也可自己照做。")
-        lines.append("")
         lines.append("## 当前状态")
         for (label, status) in [("Claude Code", claude), ("Codex", codex)] {
             if let status {
