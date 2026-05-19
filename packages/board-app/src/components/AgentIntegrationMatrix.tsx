@@ -1,13 +1,21 @@
-import { RefreshCw, X } from 'lucide-react'
+import { RefreshCw, Sparkles, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchAgentScan, generateIntegrationRunbook, installIntegration } from '../api'
+import {
+  fetchAgentScan,
+  fetchCanvases,
+  generateIntegrationRunbook,
+  installIntegration,
+  recommendIntegrationWorkflow,
+} from '../api'
 import type {
   AgentIntegrationStatus,
   AgentScanResult,
+  CanvasList,
   IntegrationConnState,
   IntegrationInstall,
   IntegrationInstallResult,
   IntegrationRunbookResult,
+  PlanProposal,
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
 
@@ -51,6 +59,11 @@ export function AgentIntegrationMatrix() {
   const [browsingId, setBrowsingId] = useState<'github' | 'lark' | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
+  const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
+  const [recommendCanvasId, setRecommendCanvasId] = useState<string | null>(null)
+  const [recommendBusy, setRecommendBusy] = useState(false)
+  const [recommended, setRecommended] = useState<PlanProposal | null>(null)
+  const [recommendError, setRecommendError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -63,6 +76,55 @@ export function AgentIntegrationMatrix() {
   useEffect(() => {
     load()
   }, [load])
+
+  // Canvas list for the post-install "recommend a workflow" picker.
+  useEffect(() => {
+    let cancelled = false
+    fetchCanvases()
+      .then((list) => {
+        if (cancelled) return
+        setCanvasList(list)
+        setRecommendCanvasId(list.activeCanvasId || list.canvases[0]?.id || null)
+      })
+      .catch(() => {
+        /* canvas list is best-effort — recommend button just hides if missing */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Reset recommend state whenever a fresh install lands.
+  useEffect(() => {
+    if (installResult) {
+      setRecommended(null)
+      setRecommendError(null)
+    }
+  }, [installResult])
+
+  /** Ask the planner agent to propose a workflow that uses this integration
+   *  in the selected canvas. Closes the install modal on success — the user
+   *  flips over to the planner to review the new pending proposal. */
+  const handleRecommendWorkflow = (integrationId: string) => {
+    if (!recommendCanvasId) {
+      setRecommendError('Pick a canvas first.')
+      return
+    }
+    setRecommendBusy(true)
+    setRecommendError(null)
+    recommendIntegrationWorkflow(integrationId, recommendCanvasId)
+      .then((proposal) => {
+        if (!proposal) {
+          setRecommendError('Planner agent returned no proposal (timeout or no-action).')
+          return
+        }
+        setRecommended(proposal)
+      })
+      .catch((err: unknown) => {
+        setRecommendError(err instanceof Error ? err.message : 'Recommend failed')
+      })
+      .finally(() => setRecommendBusy(false))
+  }
 
   const agents = scan?.agents ?? []
 
@@ -327,6 +389,55 @@ export function AgentIntegrationMatrix() {
             <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
               {installResult.messages.map((msg, idx) => (<li key={idx}>{msg}</li>))}
             </ul>
+
+            {canvasList && canvasList.canvases.length > 0 && installResult.claudeOK && (
+              <div className="agent-matrix__recommend">
+                <div className="agent-matrix__recommend-header">
+                  <Sparkles size={13} aria-hidden />
+                  <strong>Use it in a workflow</strong>
+                </div>
+                {recommended ? (
+                  <p className="agent-matrix__recommend-success">
+                    ✓ Proposal <strong>{recommended.summary}</strong> created in canvas{' '}
+                    <code>{recommended.canvasId}</code>. Open the planner to review &amp; apply.
+                  </p>
+                ) : (
+                  <>
+                    <p>
+                      Let the planner agent propose a small workflow that exercises{' '}
+                      <strong>{installResult.integrationId}</strong>.
+                    </p>
+                    <div className="agent-matrix__recommend-controls">
+                      <label>
+                        Canvas:
+                        <select
+                          value={recommendCanvasId ?? ''}
+                          onChange={(event) => setRecommendCanvasId(event.target.value)}
+                          disabled={recommendBusy}
+                        >
+                          {canvasList.canvases.map((canvas) => (
+                            <option key={canvas.id} value={canvas.id}>
+                              {canvas.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="agent-matrix__install"
+                        disabled={recommendBusy || !recommendCanvasId}
+                        onClick={() => handleRecommendWorkflow(installResult.integrationId)}
+                      >
+                        {recommendBusy ? 'Thinking…' : 'Recommend workflow'}
+                      </button>
+                    </div>
+                    {recommendError && (
+                      <p className="agent-matrix__recommend-error">{recommendError}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

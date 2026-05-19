@@ -589,7 +589,10 @@ enum BoardAPI {
     /// heuristic) or when the runtime returned no proposal (e.g. a healthy
     /// graph on `.driftInspection`). A `PlannerCoreError` (RBAC / validation)
     /// is rethrown so the caller maps it to the right HTTP status.
-    private static func runPlannerRuntimeProposal(
+    ///
+    /// `internal` so the integration recommend-workflow endpoint can reuse it
+    /// without duplicating the runtime + save pipeline.
+    static func runPlannerRuntimeProposal(
         event: PlannerAgentEvent,
         canvasId: String,
         settings: AssistantSettings,
@@ -1089,7 +1092,7 @@ enum BoardAPI {
         }
     }
 
-    private static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
+    static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
         switch err {
         case .canvasNotFound, .proposalNotFound, .runNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)

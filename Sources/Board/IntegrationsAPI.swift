@@ -154,6 +154,57 @@ enum IntegrationsAPI {
         }
     }
 
+    /// POST /api/integrations/:id/recommend-workflow
+    /// 装完一个 integration 之后,让 planner agent 在指定 canvas 上提议一份
+    /// 使用这个 integration 的小流程(2-4 步)—— 形成「装好就能用」的闭环。
+    /// Body: `{ "canvasId": "...", "settings"?: {...} }`. 复用 BoardAPI 的
+    /// runPlannerRuntimeProposal 走 .userGoal 事件 + 验证 + 入库。
+    static func recommendWorkflow(_ req: HttpRequest) -> HttpResponse {
+        guard let integrationId = req.params[":id"], !integrationId.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        guard let descriptor = IntegrationCatalog.all.first(where: { $0.id == integrationId }) else {
+            return BoardAPI.errorResponse("integration_error", "unknown integration: \(integrationId)", status: 404)
+        }
+        guard let json = BoardAPI.parseJSONBody(req) else {
+            return BoardAPI.errorResponse("invalid_json", "body must include canvasId", status: 400)
+        }
+        guard let canvasId = (json["canvasId"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) else {
+            return BoardAPI.errorResponse("bad_request", "missing canvasId", status: 400)
+        }
+        let settings = AssistantAPI.parseSettings(json["settings"] as? [String: Any])
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let actorUserId = PlannerPermission.currentActorId()
+
+        let goal = "I just installed the \(descriptor.name) integration. Propose a small, useful workflow (2 to 4 step nodes) that exercises \(descriptor.name): typical inputs, what each step does, and where \(descriptor.name) tools are read/written. Keep nodes concrete and grounded in this canvas's existing structure if any."
+        let context = descriptor.setupHint.isEmpty ? nil : descriptor.setupHint
+
+        do {
+            if let proposal = try BoardAPI.runPlannerRuntimeProposal(
+                event: .userGoal(canvasId: canvasId, goal: goal, context: context),
+                canvasId: canvasId,
+                settings: settings,
+                snapshot: snapshot,
+                actorUserId: actorUserId
+            ) {
+                return BoardAPI.jsonResponse(
+                    PlannerProposalEnvelope(proposal: proposal),
+                    status: 201,
+                    reason: "Created"
+                )
+            }
+            return BoardAPI.errorResponse(
+                "planner_error",
+                "Planner runtime returned no proposal (timeout or no-action).",
+                status: 503
+            )
+        } catch let err as PlannerCoreError {
+            return BoardAPI.mapPlannerCoreError(err)
+        } catch {
+            return BoardAPI.errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     /// POST /api/integrations/:id/install
     /// Pattern A 一键 —— 对 `.remoteHttp` 类的 integration,直接调
     /// `claude mcp add --transport http` + 写 Codex 的 toml mcp-remote 桥。

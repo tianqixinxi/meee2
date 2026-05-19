@@ -7245,6 +7245,62 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   color: var(--text-faint);
 }
 
+.agent-matrix__recommend {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid rgba(204, 120, 92, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(204, 120, 92, 0.07);
+}
+
+.agent-matrix__recommend-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.agent-matrix__recommend p {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.agent-matrix__recommend-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-matrix__recommend-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.agent-matrix__recommend-controls select {
+  padding: 4px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: var(--radius-xs, 4px);
+  background: rgba(20, 20, 18, 0.9);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-matrix__recommend-error {
+  color: #c26a6a !important;
+}
+
+.agent-matrix__recommend-success {
+  color: var(--text) !important;
+}
+
 .agent-matrix__browse {
   margin-left: 6px;
   padding: 4px 10px;

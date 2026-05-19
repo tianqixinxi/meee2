@@ -1056,6 +1056,20 @@ export function installIntegration(integrationId: string): Promise<IntegrationIn
   )
 }
 
+/** POST /api/integrations/:id/recommend-workflow —— planner agent 提议
+ *  一份使用刚装好这个 integration 的小流程到 `canvasId`,产物是一条
+ *  pending PlanProposal,会在 planner UI 的审批闸门里出现。 */
+export async function recommendIntegrationWorkflow(
+  integrationId: string,
+  canvasId: string,
+): Promise<PlanProposal | null> {
+  const result = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/recommend-workflow`,
+    { method: 'POST', body: JSON.stringify({ canvasId }) },
+  )
+  return result?.proposal ?? null
+}
+
 /** POST /api/integrations/:id/runbook — generate the connect runbook. */
 export function generateIntegrationRunbook(integrationId: string): Promise<IntegrationRunbookResult> {
   return jsonRequest<IntegrationRunbookResult>(
