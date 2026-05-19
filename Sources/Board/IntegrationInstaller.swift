@@ -87,11 +87,54 @@ enum IntegrationInstaller {
             messages.append("Codex: failed to write config.toml — \(error.localizedDescription)")
         }
 
-        messages.append("OAuth will be triggered automatically the first time an agent calls a \(name) tool — no token paste required.")
+        // Kick off OAuth NOW so the user authorizes during the install flow,
+        // not later when an agent first calls a tool. mcp-remote (the same
+        // stdio shim we just wired Codex through) handles the OAuth dance —
+        // first start = open browser, user authorizes, token cached in
+        // ~/.mcp-auth/. We spawn it detached; the meee2 process doesn't wait.
+        let oauthSpawned = spawnOAuthHandshake(url: url)
+        if oauthSpawned {
+            messages.append(
+                "Browser is opening for \(name) OAuth — click Allow there and you're done. " +
+                "Token caches to ~/.mcp-auth/ so both agents pick it up on next use."
+            )
+        } else {
+            messages.append(
+                "Could not auto-launch mcp-remote for OAuth — first agent call to \(name) " +
+                "will trigger it instead."
+            )
+        }
 
         return IntegrationInstallResult(
             integrationId: id, claudeOK: claudeOK, codexOK: codexOK, messages: messages
         )
+    }
+
+    /// Spawn `npx -y mcp-remote <url>` detached. On first start it opens a
+    /// browser tab for the integration's OAuth and caches the token in
+    /// `~/.mcp-auth/`. We force-terminate after a generous timeout so the
+    /// process doesn't linger indefinitely. Returns true if the spawn started.
+    @discardableResult
+    private static func spawnOAuthHandshake(url: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["npx", "-y", "mcp-remote", url]
+        // Detach stdio — mcp-remote is a long-lived stdio MCP shim; we don't
+        // want it inheriting our pipes or blocking on stdin.
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return false
+        }
+        // Belt-and-suspenders: if it's still running 5 minutes later (long
+        // past any reasonable OAuth flow), reap it.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 300) {
+            if process.isRunning { process.terminate() }
+        }
+        return true
     }
 
     /// PATH-resolved subprocess. Returns exit code + stdout + stderr.
