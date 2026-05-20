@@ -154,11 +154,11 @@ enum PlannerDispatchRunner: String, Codable, Equatable {
     var spawnCommand: String? {
         switch self {
         case .claude:
-            return "claude"
+            return AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
         case .codex:
-            return "codex"
+            return AgentLaunchCommand.fullAccessCommand(forProvider: "codex")
         case .byoaLocal:
-            return "claude"
+            return AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
         case .ciAgent, .human:
             return nil
         }

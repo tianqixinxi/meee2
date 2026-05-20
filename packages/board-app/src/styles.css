@@ -3606,13 +3606,16 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 /* toasts */
 .toasts {
   position: fixed;
-  bottom: 14px;
-  right: 14px;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
-  z-index: 20;
-  max-width: 340px;
+  z-index: 80;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
 }
 .toast {
   background: var(--bg-elevated);
@@ -3622,6 +3625,9 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   padding: 8px 10px;
   font-size: 12px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  width: fit-content;
+  max-width: 100%;
+  pointer-events: auto;
 }
 .toast.error {
   border-left-color: var(--danger);

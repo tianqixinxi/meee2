@@ -302,7 +302,7 @@ function PlannerGraphInner({
           detachPlannerNodeSession(canvasId, nodeId)
             .then(handleGraphStateChanged)
             .catch(() => undefined)
-          notifyError('Session was stale and has been unbound. Create a new session.')
+          notifyError('Session was stale and has been unbound. Replace the session to continue.')
           return
         }
         notifyError('Failed to open session')

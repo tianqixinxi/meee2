@@ -57,6 +57,25 @@ final class PlannerCoreTests: XCTestCase {
         plannerStoreURL = nil
     }
 
+    func testAgentLaunchCommandUsesProviderSpecificFullAccessFlags() {
+        XCTAssertEqual(
+            AgentLaunchCommand.fullAccessCommand(forProvider: "claude"),
+            "claude --dangerously-skip-permissions"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.fullAccessCommand(forProvider: "codex"),
+            "codex --dangerously-bypass-approvals-and-sandbox"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.normalize(command: "claude").command,
+            "claude --dangerously-skip-permissions"
+        )
+        XCTAssertEqual(
+            AgentLaunchCommand.normalize(command: "codex").command,
+            "codex --dangerously-bypass-approvals-and-sandbox"
+        )
+    }
+
     func testNodeMockGeneratesNodesForOneCanvas() {
         let nodes = service.nodeMock(canvasId: "canvas-a")
 

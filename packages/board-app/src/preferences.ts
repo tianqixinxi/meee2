@@ -11,7 +11,9 @@ export const BOARD_PREFERENCES_CHANGED = 'meee2:board-preferences-changed'
 export const DEFAULT_SPAWN_PROVIDER: SpawnProvider = 'claude'
 
 export function commandForSpawnProvider(provider: SpawnProvider): string {
-  return provider === 'codex' ? 'codex' : 'claude'
+  return provider === 'codex'
+    ? 'codex --dangerously-bypass-approvals-and-sandbox'
+    : 'claude --dangerously-skip-permissions'
 }
 
 export function spawnProviderLabel(provider: SpawnProvider): string {

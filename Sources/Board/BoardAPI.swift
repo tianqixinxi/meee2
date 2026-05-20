@@ -1423,23 +1423,26 @@ enum BoardAPI {
         guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return nil }
         let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedCommand = command?.isEmpty == false
+        let rawCommand = command?.isEmpty == false
             ? command!
             : (dispatch.runner.spawnCommand ?? "claude")
-        let provider = resolvedCommand.lowercased().contains("codex") ? "codex" : "claude"
+        let launch = AgentLaunchCommand.normalize(
+            command: rawCommand,
+            fallbackProvider: dispatch.runner.rawValue
+        )
         // Purpose is tagged with the *step* node id; the session PlanningNode
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
         try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
-            command: resolvedCommand,
-            provider: provider,
+            command: launch.command,
+            provider: launch.provider,
             purpose: "planner:\(node.id)",
             initialPrompt: plannerDispatchPrompt(for: node),
             layoutHint: nil
         )
-        return PlannerDispatchSpawnRequest(cwd: cwd, command: resolvedCommand)
+        return PlannerDispatchSpawnRequest(cwd: cwd, command: launch.command)
     }
 
     private static func plannerDispatchPrompt(for node: PlanningNode) -> String {
@@ -2567,7 +2570,7 @@ enum BoardAPI {
 
     /// POST /api/sessions/spawn
     /// Body: `{"cwd": "/abs/or/~path", "command": "claude", "createIfMissing": false, "termProgram": "ghostty"}`
-    /// 行为：按 cwd 打开一个新 Ghostty 窗口，并在里面跑 command（默认 "claude"）。
+    /// 行为：按 cwd 打开一个新 Ghostty 窗口，并在里面跑 command（默认 Claude full-access mode）。
     /// 用 Claude Code 现有的 OAuth（`~/.claude/`）——新起的 `claude` 进程会直接读。
     static func spawnSession(_ req: HttpRequest) -> HttpResponse {
         guard let json = parseJSONBody(req) else {
@@ -2585,7 +2588,10 @@ enum BoardAPI {
         // 转 URL-绝对路径
         cwd = (cwd as NSString).standardizingPath
 
-        let command = (json["command"] as? String) ?? "claude"
+        let command = AgentLaunchCommand.normalize(
+            command: (json["command"] as? String) ?? "",
+            fallbackProvider: "claude"
+        ).command
         let termProgram = (json["termProgram"] as? String)
         let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
 
@@ -2604,9 +2610,9 @@ enum BoardAPI {
         let command: String
         switch provider {
         case "claude":
-            command = "claude"
+            command = AgentLaunchCommand.fullAccessCommand(forProvider: "claude")
         case "codex":
-            command = "codex"
+            command = AgentLaunchCommand.fullAccessCommand(forProvider: "codex")
         default:
             return errorResponse("bad_request", "provider must be 'claude' or 'codex'", status: 400)
         }

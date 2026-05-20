@@ -335,10 +335,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
                 event.stopPropagation()
                 data.onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))
               }}
-              aria-label={`Create a new session for ${node.title}`}
-              title="Create a new session for this node"
+              aria-label={`Replace session for ${node.title}`}
+              title="Replace the current session binding"
             >
-              New session
+              Replace session
             </button>
           )}
         </div>
