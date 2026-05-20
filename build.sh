@@ -24,7 +24,7 @@ echo "Building meee2..."
 if [ "${SKIP_WEB_BUILD:-0}" != "1" ] && command -v pnpm &>/dev/null && [ -d "packages/board-app" ]; then
     echo "Building web frontend..."
     pnpm install --frozen-lockfile=false
-    pnpm -F @meee1/board-app build
+    pnpm -r --filter @meee1/board-app... build
 fi
 
 # Universal binary path: pass --arch arm64 --arch x86_64 for SwiftPM's
