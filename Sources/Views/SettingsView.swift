@@ -25,6 +25,9 @@ public struct SettingsView: View {
     /// 用户选择的屏幕 ID
     @AppStorage("selectedScreenId") private var selectedScreenId: String = "builtin"
 
+    /// 是否展示灵动岛窗口
+    @AppStorage("showIsland") private var showIsland: Bool = true
+
     /// 是否自动展开
     @AppStorage("autoExpandEnabled") private var autoExpandEnabled: Bool = true
 
@@ -155,12 +158,21 @@ public struct SettingsView: View {
     private var generalSettings: some View {
         Form {
             Section("Screen Selection") {
+                Toggle("Show Dynamic Island", isOn: $showIsland)
+                    .onChange(of: showIsland) { _ in
+                        NotificationCenter.default.post(
+                            name: .islandVisibilityChanged,
+                            object: nil
+                        )
+                    }
+
                 Picker("Display Island on:", selection: $selectedScreenId) {
                     ForEach(availableScreens, id: \.id) { screen in
                         Text(screen.name)
                             .tag(screen.id)
                     }
                 }
+                .disabled(!showIsland)
                 .onChange(of: selectedScreenId) { _ in
                     NotificationCenter.default.post(
                         name: .screenSelectionChanged,
@@ -169,7 +181,7 @@ public struct SettingsView: View {
                 }
 
                 // 显示当前选中屏幕的详细信息
-                if let screen = NSScreen.screens.first(where: { $0.screenId == selectedScreenId }) {
+                if showIsland, let screen = NSScreen.screens.first(where: { $0.screenId == selectedScreenId }) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Resolution:")
@@ -202,8 +214,9 @@ public struct SettingsView: View {
 
             Section("Compact View") {
                 Toggle("Show session info in compact view", isOn: $showSessionInCompact)
+                    .disabled(!showIsland)
 
-                if showSessionInCompact {
+                if showIsland && showSessionInCompact {
                     HStack {
                         Text("Carousel interval:")
                         Spacer()
@@ -216,6 +229,7 @@ public struct SettingsView: View {
 
             Section("Auto Expand & Close") {
                 Toggle("Auto expand when needs attention", isOn: $autoExpandEnabled)
+                    .disabled(!showIsland)
 
                 HStack {
                     Text("Auto close after:")
@@ -224,6 +238,7 @@ public struct SettingsView: View {
                     Text("\(Int(autoCloseInterval))s")
                         .frame(width: 40)
                 }
+                .disabled(!showIsland)
             }
 
             Section("Sound Notifications") {
@@ -1475,6 +1490,7 @@ struct Meee2OnlineUser: Codable {
 
 public extension Notification.Name {
     static let screenSelectionChanged = Notification.Name("screenSelectionChanged")
+    static let islandVisibilityChanged = Notification.Name("islandVisibilityChanged")
 }
 
 // MARK: - Preview
