@@ -1,8 +1,12 @@
 import { Background, ReactFlow, ReactFlowProvider } from '@xyflow/react'
-import { Check, Eye, Info, Send, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, Info, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+  fetchLocalAssistantSessionMessages,
+  type LocalAssistantSessionMessage,
+} from '../../api'
 import type { PlanProposal, PlannerAccess } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
@@ -33,7 +37,7 @@ const reviewNodeTypes = {
 
 interface PlannerChatMessage {
   id: string
-  role: 'user' | 'planner'
+  role: 'user' | 'planner' | 'injected'
   markdown: string
   meta?: string[]
 }
@@ -59,13 +63,46 @@ export function PlannerProposalPanel({
   const handledClearRevisionRef = useRef(0)
   const [message, setMessage] = useState('')
   const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
+  const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
   const isTemplate = variant === 'template'
 
   useEffect(() => {
     setHistory(readChatHistory(canvasId))
+    setHistoryOpen(false)
   }, [canvasId])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchLocalAssistantSessionMessages(canvasId)
+      .then(({ sessionId, messages }) => {
+        if (cancelled) return
+        setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
+      })
+      .catch(() => {
+        // Local Claude transcript sync is best-effort; local draft history still works.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasId])
+
+  useEffect(() => {
+    if (busy) return
+    let cancelled = false
+    fetchLocalAssistantSessionMessages(canvasId)
+      .then(({ sessionId, messages }) => {
+        if (cancelled) return
+        setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
+      })
+      .catch(() => {
+        // The session file may not exist yet; keep the visible chat unchanged.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [busy, canvasId])
 
   useEffect(() => {
     writeChatHistory(canvasId, history)
@@ -145,32 +182,46 @@ export function PlannerProposalPanel({
             hasActionableDrift={hasActionableDrift}
           />
           {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
-          {history.map((item) => (
-            <div
-              key={item.id}
-              className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : 'planner'}`}
-            >
-              {item.meta && item.meta.length > 0 && (
-                <div className="planner-dialog__message-meta">
-                  {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
+          {history.length > 0 && (
+            <div className={`planner-dialog__history${historyOpen ? ' is-open' : ''}`}>
+              <button
+                type="button"
+                className="planner-dialog__history-toggle"
+                onClick={() => setHistoryOpen((value) => !value)}
+                aria-expanded={historyOpen}
+              >
+                <ChevronDown size={13} aria-hidden />
+                <span>History</span>
+                <em>{history.length}</em>
+              </button>
+              {historyOpen && history.map((item) => (
+                <div
+                  key={item.id}
+                  className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
+                >
+                  {item.meta && item.meta.length > 0 && (
+                    <div className="planner-dialog__message-meta">
+                      {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
+                    </div>
+                  )}
+                  <MarkdownMessage markdown={item.markdown} />
+                  {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
+                    <div className="planner-dialog__actions planner-dialog__actions--single">
+                      <button
+                        type="button"
+                        className="planner-proposal__preview"
+                        disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
+                        onClick={() => setReviewOpen(true)}
+                      >
+                        <Eye size={14} aria-hidden />
+                        Review changes
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-              <MarkdownMessage markdown={item.markdown} />
-              {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
-                <div className="planner-dialog__actions planner-dialog__actions--single">
-                  <button
-                    type="button"
-                    className="planner-proposal__preview"
-                    disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
-                    onClick={() => setReviewOpen(true)}
-                  >
-                    <Eye size={14} aria-hidden />
-                    Review changes
-                  </button>
-                </div>
-              )}
+              ))}
             </div>
-          ))}
+          )}
           {thinking && (
             <div className="planner-dialog__message planner-dialog__message--planner planner-dialog__message--thinking">
               <span>meee2 AI is thinking</span>
@@ -403,10 +454,10 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
     if (!raw) return []
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return []
-    return parsed
+    const history = parsed
       .map((item): PlannerChatMessage | null => {
         if (!item || typeof item !== 'object') return null
-        if (item.role !== 'user' && item.role !== 'planner') return null
+        if (item.role !== 'user' && item.role !== 'planner' && item.role !== 'injected') return null
         if (typeof item.id !== 'string' || typeof item.markdown !== 'string') return null
         const meta = Array.isArray(item.meta)
           ? item.meta.filter((value: unknown): value is string => typeof value === 'string')
@@ -419,7 +470,7 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
         }
       })
       .filter((item): item is PlannerChatMessage => Boolean(item))
-      .slice(-80)
+    return normalizeChatHistoryOrder(history).slice(-80)
   } catch {
     return []
   }
@@ -428,7 +479,7 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
 function writeChatHistory(canvasId: string, history: PlannerChatMessage[]) {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(history.slice(-80)))
+    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(normalizeChatHistoryOrder(history).slice(-80)))
   } catch {
     // History persistence is best-effort; chat actions still work without it.
   }
@@ -445,8 +496,54 @@ function clearChatHistory(canvasId: string) {
 
 function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessage): PlannerChatMessage[] {
   const index = history.findIndex((item) => item.id === next.id)
-  if (index < 0) return [...history, next].slice(-80)
-  return history.map((item, itemIndex) => (itemIndex === index ? next : item))
+  if (index < 0) return normalizeChatHistoryOrder([...history, next]).slice(-80)
+  return normalizeChatHistoryOrder(history.map((item, itemIndex) => (itemIndex === index ? next : item)))
+}
+
+function mergeClaudeSessionMessages(
+  history: PlannerChatMessage[],
+  sessionId: string,
+  messages: LocalAssistantSessionMessage[],
+): PlannerChatMessage[] {
+  const existingIds = new Set(history.map((item) => item.id))
+  const existingContent = new Set(history.map(contentKey))
+  const restored: PlannerChatMessage[] = []
+
+  for (const message of messages) {
+    const markdown = message.content.trim()
+    if (!markdown) continue
+    const role: PlannerChatMessage['role'] =
+      message.role === 'assistant' ? 'planner' : message.role === 'injected' ? 'injected' : 'user'
+    const id = message.id || `claude:${sessionId}:${role}:${restored.length}`
+    if (existingIds.has(id)) continue
+    const next: PlannerChatMessage = {
+      id,
+      role,
+      markdown,
+      meta: role === 'injected' ? ['session context'] : undefined,
+    }
+    const key = contentKey(next)
+    if (existingContent.has(key)) continue
+    existingContent.add(key)
+    restored.push(next)
+  }
+
+  if (restored.length === 0) return normalizeChatHistoryOrder(history)
+  return normalizeChatHistoryOrder([...history, ...restored]).slice(-80)
+}
+
+function normalizeChatHistoryOrder(history: PlannerChatMessage[]): PlannerChatMessage[] {
+  const conversational = history.filter((item) => !isProposalChatMessage(item))
+  const proposals = history.filter(isProposalChatMessage)
+  return [...conversational, ...proposals]
+}
+
+function isProposalChatMessage(item: PlannerChatMessage): boolean {
+  return item.id.startsWith('proposal:')
+}
+
+function contentKey(item: PlannerChatMessage): string {
+  return `${item.role}:${item.markdown.replace(/\s+/g, ' ').trim()}`
 }
 
 function MarkdownMessage({ markdown }: { markdown: string }) {
@@ -512,6 +609,8 @@ function proposalMarkdown(proposal: PlanProposal): string {
       change.doerId ? `doer -> ${change.doerId}` : null,
       change.subCanvasId ? `sub-canvas -> ${change.subCanvasId}` : null,
       change.nodeKind ? `kind -> ${change.nodeKind}` : null,
+      change.executionMode ? `gate -> ${change.executionMode === 'human' ? 'Human' : 'Auto'}` : null,
+      change.clearGate ? 'gate cleared' : null,
       change.gate ? `gate -> ${change.gate.label}` : null,
       change.dispatch ? `runner -> ${change.dispatch.runner}` : null,
       change.workflowRunState ? change.workflowRunState : null,

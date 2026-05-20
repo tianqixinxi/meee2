@@ -2292,6 +2292,89 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(artifact.producedBy, .agent)
     }
 
+    func testSubmitNodeOutputReplacesExistingArtifactSlot() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let node = PlanningNode(
+            id: "canvas-a-idea-fetch",
+            canvasId: "canvas-a",
+            title: "idea fetch",
+            schema: NodeSchema(inputs: ["lark_doc"], outputs: ["idea_list_kanban"], goal: "Fetch ideas"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step
+        )
+        let emptyPayload: BoardJSONValue = .object([
+            "version": .number(1),
+            "columns": .array([
+                .object(["id": .string("ideas"), "title": .string("Ideas")])
+            ]),
+            "items": .array([])
+        ])
+        let proposal = PlanProposal(
+            id: "proposal-placeholder",
+            canvasId: canvas.id,
+            summary: "Create placeholder",
+            changes: [
+                .attachArtifact(
+                    nodeId: node.id,
+                    kind: .kanban,
+                    title: "Idea List",
+                    reference: "idea_list_kanban",
+                    payload: emptyPayload
+                )
+            ],
+            status: .pending
+        )
+
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: canvas, seedNodes: [node])
+        _ = try PlannerBoardBridge.store.approveProposal(proposalId: proposal.id, canvasId: canvas.id)
+        let applied = try PlannerBoardBridge.store.applyProposal(
+            proposalId: proposal.id,
+            canvasId: canvas.id,
+            service: service
+        )
+        let placeholder = try XCTUnwrap(applied.artifacts.first { $0.reference == "idea_list_kanban" })
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Ideas fetched", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .kanban,
+                        title: "Idea List Kanban",
+                        reference: "idea_list_kanban",
+                        payload: kanbanPayload(subCanvasId: nil),
+                        routeTo: []
+                    )
+                ],
+                next: .complete
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let artifacts = result.graph.artifacts.filter {
+            $0.nodeId == node.id && $0.reference == "idea_list_kanban"
+        }
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(artifacts.first?.id, placeholder.id)
+        XCTAssertEqual(artifacts.first?.title, "Idea List Kanban")
+        XCTAssertEqual(artifacts.first?.payload, kanbanPayload(subCanvasId: nil))
+    }
+
     func testNodeContractListsOnlyDownstreamAndOwnerRouteTargets() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")

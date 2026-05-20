@@ -1,8 +1,23 @@
 import Foundation
 
+public struct Meee2MCPStatus: Encodable {
+    public let configured: Bool
+    public let configCommand: String?
+    public let configArgs: [String]
+    public let expectedServerPath: String
+    public let serverPath: String?
+    public let serverExists: Bool
+    public let nodeAvailable: Bool
+    public let launches: Bool
+    public let tools: [String]
+    public let missingRequiredTools: [String]
+    public let error: String?
+    public let checkedAt: Date
+}
+
 /// 幂等地把 meee2 的 MCP server 写进 Claude 和 Codex 的全局 MCP 配置，
-/// 让任何 Claude Code / Codex session 都能原生调 `send_message` /
-/// `read_inbox` 等 tool。应用启动时调一次，无变化就是个 noop。
+/// 让任何 Claude Code / Codex session 都能原生调 `read_node_contract` /
+/// `submit_node_output` 等 tool。应用启动时调一次，无变化就是个 noop。
 ///
 /// 为什么不另外写一个 `~/.claude/mcp.json`：Claude Code 目前的 user-wide
 /// MCP 配置就是 `~/.claude.json` 里那个 `mcpServers` 顶级字段；单独的
@@ -21,16 +36,13 @@ public final class MCPConfigManager {
     /// 里 TOOLS 数组里的 name 字段保持同步——加新 tool 时两边都要改）。
     /// 这些名字按 Claude Code 的 MCP 命名约定 `mcp__<server>__<tool>`，会被
     /// 写进 `~/.claude/settings.json` 的 permissions.allow，让 agent 调用
-    /// 这些 tool 时不再触发 PermissionRequest 弹框（agent 间自治协作的关键
-    /// 一公里——否则每次 send_message 都要人审批）。
+    /// 这些 tool 时不再触发 PermissionRequest 弹框。
     private let mcpToolNames: [String] = [
-        "mcp__meee2__send_message",
-        "mcp__meee2__list_channels",
         "mcp__meee2__list_sessions",
         "mcp__meee2__read_inbox",
-        "mcp__meee2__create_channel",
-        "mcp__meee2__add_member",
-        "mcp__meee2__leave_channel"
+        "mcp__meee2__read_node_contract",
+        "mcp__meee2__submit_node_output",
+        "mcp__meee2__attach_artifact_to_node"
     ]
 
     private var configPath: URL {
@@ -53,6 +65,74 @@ public final class MCPConfigManager {
     }
 
     private init() {}
+
+    public func diagnoseMeee2Server() -> Meee2MCPStatus {
+        let expectedServerPath = resolveServerScriptPath()
+        let rootObject = readConfig() ?? [:]
+        let mcpServers = (rootObject["mcpServers"] as? [String: Any]) ?? [:]
+        let entry = mcpServers[serverName] as? [String: Any]
+        let configCommand = entry?["command"] as? String
+        let configArgs = entry?["args"] as? [String] ?? []
+        let configured = configCommand != nil && !configArgs.isEmpty
+        let command = configCommand ?? "node"
+        let args = configArgs.isEmpty ? [expectedServerPath] : configArgs
+        let serverPath = args.first ?? expectedServerPath
+        let serverExists = FileManager.default.fileExists(atPath: serverPath)
+        let nodeAvailable = commandAvailable(command)
+        let requiredTools = ["read_node_contract", "submit_node_output", "attach_artifact_to_node"]
+
+        guard serverExists else {
+            return Meee2MCPStatus(
+                configured: configured,
+                configCommand: configCommand,
+                configArgs: configArgs,
+                expectedServerPath: expectedServerPath,
+                serverPath: serverPath,
+                serverExists: false,
+                nodeAvailable: nodeAvailable,
+                launches: false,
+                tools: [],
+                missingRequiredTools: requiredTools,
+                error: "Meee2 MCP server.js was not found at \(serverPath).",
+                checkedAt: Date()
+            )
+        }
+
+        guard nodeAvailable else {
+            return Meee2MCPStatus(
+                configured: configured,
+                configCommand: configCommand,
+                configArgs: configArgs,
+                expectedServerPath: expectedServerPath,
+                serverPath: serverPath,
+                serverExists: true,
+                nodeAvailable: false,
+                launches: false,
+                tools: [],
+                missingRequiredTools: requiredTools,
+                error: "Node.js command '\(command)' is not available in PATH.",
+                checkedAt: Date()
+            )
+        }
+
+        let probe = probeServer(command: command, args: args)
+        let missing = requiredTools.filter { !probe.tools.contains($0) }
+        let launches = probe.error == nil && missing.isEmpty
+        return Meee2MCPStatus(
+            configured: configured,
+            configCommand: configCommand,
+            configArgs: configArgs,
+            expectedServerPath: expectedServerPath,
+            serverPath: serverPath,
+            serverExists: true,
+            nodeAvailable: true,
+            launches: launches,
+            tools: probe.tools,
+            missingRequiredTools: missing,
+            error: probe.error ?? (missing.isEmpty ? nil : "Meee2 MCP launched but is missing required planner tools: \(missing.joined(separator: ", "))."),
+            checkedAt: Date()
+        )
+    }
 
     /// 应用启动时调；无论现在是啥状态都收敛到"已注册，命令指向当前的 server.js
     /// 绝对路径"。
@@ -125,7 +205,7 @@ public final class MCPConfigManager {
             NSLog("[MCPConfigManager] updated meee2 MCP server path → \(expectedServerPath)")
         }
 
-        // 把 meee2 的 7 个 MCP tool 加进 settings.json 的 permissions.allow，
+        // 把 meee2 的 MCP tool 加进 settings.json 的 permissions.allow，
         // agent 调用就不再被 PermissionRequest 弹框拦住。幂等：已经全部都在
         // 就静默退出。
         ensurePermissionsAllowlist()
@@ -134,7 +214,7 @@ public final class MCPConfigManager {
 
     /// 确保 meee2 的 MCP tool 全部在 `~/.claude/settings.json` 的
     /// `permissions.allow` 里。读 → merge → 原子写。文件缺失时创建一个
-    /// 只包含我们这 7 条的最小文档（不破坏 SettingsConfigManager 的 hooks
+    /// 只包含我们这些 tool 的最小文档（不破坏 SettingsConfigManager 的 hooks
     /// 流，因为它走自己的 ensureHooksConfigured，会再次 read+merge 自己的
     /// 字段，不依赖整个文件状态）。
     private func ensurePermissionsAllowlist() {
@@ -142,9 +222,15 @@ public final class MCPConfigManager {
         var permissions = (rootObject["permissions"] as? [String: Any]) ?? [:]
         var allow = (permissions["allow"] as? [String]) ?? []
 
+        let supportedMeee2Tools = Set(mcpToolNames)
+        let originalCount = allow.count
+        allow = allow.filter { name in
+            !name.hasPrefix("mcp__meee2__") || supportedMeee2Tools.contains(name)
+        }
+
         let existing = Set(allow)
         let missing = mcpToolNames.filter { !existing.contains($0) }
-        if missing.isEmpty {
+        if missing.isEmpty && allow.count == originalCount {
             // 全部已在，不动磁盘
             return
         }
@@ -157,7 +243,8 @@ public final class MCPConfigManager {
             return
         }
         let names = missing.joined(separator: ", ")
-        NSLog("[MCPConfigManager] permissions.allow added \(missing.count) meee2 MCP tool(s): \(names)")
+        let removedCount = originalCount - allow.count + missing.count
+        NSLog("[MCPConfigManager] permissions.allow synced meee2 MCP tools; added \(missing.count), removed \(removedCount). Added: \(names)")
     }
 
     /// Codex 的 MCP 配置是 TOML：
@@ -266,6 +353,91 @@ public final class MCPConfigManager {
             }
         }
         return "\"\(escaped)\""
+    }
+
+    private func commandAvailable(_ command: String) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["which", command]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+
+    private func probeServer(command: String, args: [String]) -> (tools: [String], error: String?) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = [command] + args
+
+        let stdin = Pipe()
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        let input = """
+        {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"meee2-health","version":"0"}}}
+        {"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
+        {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+
+        """
+
+        do {
+            try process.run()
+            if let data = input.data(using: .utf8) {
+                stdin.fileHandleForWriting.write(data)
+            }
+            stdin.fileHandleForWriting.closeFile()
+        } catch {
+            return ([], "Failed to launch Meee2 MCP server: \(error.localizedDescription)")
+        }
+
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            process.waitUntilExit()
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + 2.0) == .timedOut {
+            process.terminate()
+            return ([], "Meee2 MCP server did not answer tools/list within 2 seconds.")
+        }
+
+        let out = stdout.fileHandleForReading.readDataToEndOfFile()
+        let err = stderr.fileHandleForReading.readDataToEndOfFile()
+        let stderrText = String(data: err, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stdoutText = String(data: out, encoding: .utf8) ?? ""
+
+        if process.terminationStatus != 0 {
+            let detail = stderrText.isEmpty ? "exit \(process.terminationStatus)" : stderrText
+            return ([], "Meee2 MCP server exited before listing tools: \(detail)")
+        }
+
+        var tools: [String] = []
+        for line in stdoutText.split(separator: "\n") {
+            guard let data = String(line).data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let id = object["id"] as? Int,
+                  id == 2,
+                  let result = object["result"] as? [String: Any],
+                  let rawTools = result["tools"] as? [[String: Any]] else {
+                continue
+            }
+            tools = rawTools.compactMap { $0["name"] as? String }
+        }
+
+        guard !tools.isEmpty else {
+            let detail = stderrText.isEmpty ? "No tools/list response was returned." : stderrText
+            return ([], "Meee2 MCP server launched but did not return tools: \(detail)")
+        }
+        return (tools.sorted(), nil)
     }
 
     // MARK: - Path resolution (mirror SettingsConfigManager.getBridgeScriptPath)

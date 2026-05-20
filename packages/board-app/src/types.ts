@@ -29,6 +29,21 @@ export interface UsageStats {
   model: string
 }
 
+export interface Meee2MCPStatus {
+  configured: boolean
+  configCommand: string | null
+  configArgs: string[]
+  expectedServerPath: string
+  serverPath: string | null
+  serverExists: boolean
+  nodeAvailable: boolean
+  launches: boolean
+  tools: string[]
+  missingRequiredTools: string[]
+  error: string | null
+  checkedAt: string
+}
+
 export interface Session {
   id: string
   title: string
@@ -371,6 +386,20 @@ export interface PlannerArtifact {
   payload?: unknown
 }
 
+export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'
+
+export interface PlannerArtifactContent {
+  artifactId: string
+  type: PlannerArtifactPayloadType | string
+  mimeType: string
+  filename?: string | null
+  size?: number | null
+  sha256?: string | null
+  blobRef?: string | null
+  content?: string | null
+  payload?: unknown
+}
+
 export interface KanbanArtifactPayload {
   version: 1
   columns: Array<{ id: string; title: string }>
@@ -470,6 +499,8 @@ export interface PlannerNodeContract {
   downstreamNodes: PlanningNode[]
   allowedRouteTargets: PlannerRouteTarget[]
   expectedArtifactKinds: PlannerArtifactKind[]
+  inlinePayloadLimitBytes?: number
+  artifactPayloadTypes?: PlannerArtifactPayloadType[]
   completionCriteria: string[]
 }
 
@@ -511,6 +542,7 @@ export interface PlanningNode {
   artifactRefs?: string[] | null
   eventRefs?: string[] | null
   workflowRunState?: PlannerWorkflowRunState | null
+  blockedReason?: string | null
   /**
    * Derived workflow-guidance line ("what to do next"), computed server-side
    * from `workflowRunState` + node context. Encode-only / read-only — never
@@ -545,6 +577,8 @@ export interface PlanChange {
   nodeKind?: PlanningNodeKind | null
   layout?: PlannerNodeLayout | null
   trigger?: PlannerNodeTrigger | null
+  executionMode?: ExecutionMode | null
+  clearGate?: boolean | null
   gate?: PlannerNodeGate | null
   dispatch?: PlannerNodeDispatch | null
   approvers?: string[] | null

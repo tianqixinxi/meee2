@@ -15,7 +15,7 @@ export type PlannerPreviewKind = 'none' | 'added' | 'updated'
 export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active' | 'neutral'
 export type PlannerEdgePerception = PlannerNodePerception | 'preview' | 'flow'
 export type IOArtifactDirection = 'input' | 'output'
-export type IOArtifactKind = 'text' | 'integration' | 'html' | 'kanban'
+export type IOArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
 export interface IOArtifactVisibility {
   inputs: string[]
   outputs: string[]
@@ -46,14 +46,16 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
   onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
+  onChangeGateMode?: (nodeId: string, mode: 'human' | 'auto') => void
   canChangeStatus?: boolean
   onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onCancelSessionCreation?: (nodeId: string) => void
-  onDeleteNode?: (nodeId: string) => void
+  onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
   creatingSession?: boolean
+  showResponsibleInfo?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -77,14 +79,16 @@ interface PlannerGraphInput {
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
   onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
+  onChangeGateMode?: (nodeId: string, mode: 'human' | 'auto') => void
   canChangeStatus?: boolean
   onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onCancelSessionCreation?: (nodeId: string) => void
-  onDeleteNode?: (nodeId: string) => void
+  onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
   creatingSessionNodeIds?: Set<string>
+  showResponsibleInfo?: boolean
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -146,6 +150,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onOpenSubCanvas: input.onOpenSubCanvas,
         onOpenKanbanItem: input.onOpenKanbanItem,
         onChangeStatus: input.onChangeStatus,
+        onChangeGateMode: input.onChangeGateMode,
         canChangeStatus: input.canChangeStatus ?? false,
         onCreateSession: input.onCreateSession,
         onOpenSession: input.onOpenSession,
@@ -153,6 +158,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onCancelSessionCreation: input.onCancelSessionCreation,
         onDeleteNode: input.onDeleteNode,
         creatingSession: input.creatingSessionNodeIds?.has(node.id) ?? false,
+        showResponsibleInfo: input.showResponsibleInfo ?? true,
       },
     }
   })
@@ -195,7 +201,7 @@ function buildVisibleIOArtifactNodes(input: {
       .filter((item) => (sourceNode.schema?.inputs ?? []).includes(item))
       .map((item, index) => {
         const binding = sourceNode.contextSources.find((source) => normalizeIOKey(source.title) === normalizeIOKey(item))
-        return { item, index, direction: 'input' as const, artifact: null, reference: binding?.reference ?? item, inputReference: binding?.reference ?? null }
+        return { item, index, direction: 'input' as const, artifact: null, artifacts: [] as PlannerArtifact[], reference: binding?.reference ?? item, inputReference: binding?.reference ?? null }
       })
     const outputCandidates = dedupeIOArtifactItems([
       ...(sourceNode.schema?.outputs ?? []),
@@ -205,18 +211,22 @@ function buildVisibleIOArtifactNodes(input: {
     ])
     const outputs = visible.outputs
       .filter((item) => outputCandidates.includes(item))
-      .map((item, index) => ({
-        item,
-        index,
-        direction: 'output' as const,
-        artifact: sourceGraphNode.data.artifacts.find((artifact) =>
+      .map((item, index) => {
+        const artifacts = sortArtifactsForDisplay(sourceGraphNode.data.artifacts.filter((artifact) =>
           artifact.reference === item || normalizeIOKey(artifact.reference) === normalizeIOKey(item) || normalizeIOKey(artifact.title) === normalizeIOKey(item),
-        ) ?? null,
-        reference: item,
-      }))
+        ))
+        return {
+          item,
+          index,
+          direction: 'output' as const,
+          artifact: artifacts[0] ?? null,
+          artifacts,
+          reference: item,
+        }
+      })
     for (const entry of [...inputs, ...outputs]) {
       const id = ioArtifactNodeId(sourceNode.id, entry.direction, entry.item)
-      const artifactKind = entry.artifact?.kind === 'kanban' ? 'kanban' : artifactKindFor(entry.reference)
+      const artifactKind = entry.artifact ? artifactKindForArtifact(entry.artifact, entry.reference) : artifactKindFor(entry.reference)
       const xOffset = entry.direction === 'input' ? -300 : 360
       const height = artifactKind === 'kanban' ? 280 : 120
       const yOffset = entry.index * (artifactKind === 'kanban' ? 292 : 112)
@@ -253,7 +263,6 @@ function buildVisibleIOArtifactNodes(input: {
           data: {
             node: artifactNode,
             state: null,
-            artifacts: entry.artifact ? [entry.artifact] : [],
             previewKind: 'none',
             perception: 'neutral',
             mode: sourceGraphNode.data.mode,
@@ -269,6 +278,7 @@ function buildVisibleIOArtifactNodes(input: {
             onOpenKanbanItem: input.onOpenKanbanItem,
             onBindInput: input.onBindInput,
             canChangeStatus: false,
+            artifacts: entry.artifacts,
             onHideIOArtifact: input.onHideIOArtifact,
           },
         },
@@ -326,6 +336,9 @@ function artifactKindFor(value: string): IOArtifactKind {
   if (normalized.includes('kanban') || normalized.includes('看板')) {
     return 'kanban'
   }
+  if (normalized.includes('json') || normalized.endsWith('.json')) {
+    return 'json'
+  }
   if (normalized.includes('html') || normalized.includes('webpage') || normalized.includes('web-page')) {
     return 'html'
   }
@@ -340,6 +353,41 @@ function artifactKindFor(value: string): IOArtifactKind {
     return 'integration'
   }
   return 'text'
+}
+
+function artifactKindForArtifact(artifact: PlannerArtifact, fallback: string): IOArtifactKind {
+  const payload = artifact.payload && typeof artifact.payload === 'object' && !Array.isArray(artifact.payload)
+    ? artifact.payload as Record<string, unknown>
+    : null
+  const type = payload?.type
+  if (artifact.kind === 'kanban') return 'kanban'
+  if (type === 'text' || type === 'integration' || type === 'html' || type === 'kanban' || type === 'json' || type === 'file') {
+    return type
+  }
+  if (payload?.blobRef && typeof payload.blobRef === 'string') {
+    return artifactKindFor(String(payload.filename ?? payload.mimeType ?? fallback))
+  }
+  return artifactKindFor(artifact.reference || fallback)
+}
+
+function sortArtifactsForDisplay(artifacts: PlannerArtifact[]): PlannerArtifact[] {
+  return [...artifacts].sort((a, b) => artifactDisplayScore(b) - artifactDisplayScore(a))
+}
+
+function artifactDisplayScore(artifact: PlannerArtifact): number {
+  const payload = artifact.payload && typeof artifact.payload === 'object' && !Array.isArray(artifact.payload)
+    ? artifact.payload as Record<string, unknown>
+    : null
+  const columns = Array.isArray(payload?.columns) ? payload.columns.length : 0
+  const items = Array.isArray(payload?.items) ? payload.items.length : 0
+  const hasBlob = typeof payload?.blobRef === 'string' && payload.blobRef.length > 0
+  const createdAt = Date.parse(String(artifact.createdAt))
+  return (items > 0 ? 10_000 + items : 0)
+    + (hasBlob ? 5_000 : 0)
+    + (payload?.type === 'kanban' ? 2_000 : 0)
+    + (artifact.kind === 'kanban' ? 1_000 : 0)
+    + (columns > 0 ? 100 : 0)
+    + (Number.isFinite(createdAt) ? createdAt / 1_000_000_000_000 : 0)
 }
 
 function normalizeIOKey(value: string): string {
@@ -449,9 +497,10 @@ function applyUpdateOverlay(
       nodeKind: change.nodeKind ?? overlay[index].node.nodeKind,
       layout: change.layout ?? overlay[index].node.layout,
       trigger: change.trigger ?? overlay[index].node.trigger,
-      gate: change.gate ?? overlay[index].node.gate,
+      executionMode: change.executionMode ?? overlay[index].node.executionMode,
+      gate: change.clearGate ? null : (change.gate ?? overlay[index].node.gate),
       dispatch: change.dispatch ?? overlay[index].node.dispatch,
-      approvers: change.approvers ?? overlay[index].node.approvers,
+      approvers: change.clearGate ? null : (change.approvers ?? overlay[index].node.approvers),
       artifactRefs: change.artifactRefs ?? overlay[index].node.artifactRefs,
       eventRefs: change.eventRefs ?? overlay[index].node.eventRefs,
       workflowRunState: change.workflowRunState ?? overlay[index].node.workflowRunState,
@@ -522,7 +571,7 @@ function edgeFor(input: {
     id: input.id,
     source: input.source,
     target: input.target,
-    type: 'smoothstep',
+    type: 'bezier',
     animated: false,
     markerEnd: {
       type: MarkerType.ArrowClosed,
@@ -612,15 +661,23 @@ function buildNodePositions(nodes: PlanningNode[]): Map<string, { x: number; y: 
     return depth
   }
 
-  const rowByDepth = new Map<number, number>()
-  const positionByNodeId = new Map<string, { x: number; y: number }>()
+  const nodesByDepth = new Map<number, PlanningNode[]>()
   for (const node of nodes) {
     const depth = depthFor(node)
-    const row = rowByDepth.get(depth) ?? 0
-    rowByDepth.set(depth, row + 1)
-    positionByNodeId.set(node.id, {
-      x: depth * 390,
-      y: row * 270,
+    const depthNodes = nodesByDepth.get(depth) ?? []
+    depthNodes.push(node)
+    nodesByDepth.set(depth, depthNodes)
+  }
+
+  const positionByNodeId = new Map<string, { x: number; y: number }>()
+  for (const [depth, depthNodes] of nodesByDepth) {
+    const sorted = [...depthNodes].sort((a, b) => a.title.localeCompare(b.title))
+    const startY = -((sorted.length - 1) * 270) / 2
+    sorted.forEach((node, row) => {
+      positionByNodeId.set(node.id, {
+        x: depth * 390,
+        y: startY + row * 270,
+      })
     })
   }
   return positionByNodeId

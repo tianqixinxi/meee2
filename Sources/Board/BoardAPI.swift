@@ -106,6 +106,12 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - GET /api/system/meee2-mcp-status
+
+    static func getMeee2MCPStatus(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(MCPConfigManager.shared.diagnoseMeee2Server())
+    }
+
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
@@ -203,7 +209,169 @@ enum BoardAPI {
                 sessionId: session.id,
                 status: status
             )
+            syncPlannerSessionOutputArtifacts(sessionId: session.id)
         }
+    }
+
+    private static func syncPlannerSessionOutputArtifacts(sessionId: String? = nil, canvasId: String? = nil) {
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let canvases = snapshot.canvases.filter { canvasId == nil || $0.id == canvasId }
+        for canvas in canvases {
+            guard let state = try? PlannerBoardBridge.canvasState(
+                for: canvas.id,
+                snapshot: snapshot,
+                actorUserId: PlannerPermission.currentActorId()
+            ) else { continue }
+            for node in state.nodes where (node.nodeKind ?? .step) == .step {
+                guard let boundSessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !boundSessionId.isEmpty,
+                      sessionId == nil || sessionId == boundSessionId else { continue }
+                syncPlannerSessionOutputArtifact(canvasId: canvas.id, node: node, sessionId: boundSessionId, existingArtifacts: state.artifacts)
+            }
+        }
+    }
+
+    private static func syncPlannerSessionOutputArtifact(
+        canvasId: String,
+        node: PlanningNode,
+        sessionId: String,
+        existingArtifacts: [PlannerArtifact]
+    ) {
+        guard let outputRef = node.schema.outputs.first(where: { $0.localizedCaseInsensitiveContains("kanban") })
+                ?? node.schema.outputs.first else { return }
+        guard !existingArtifacts.contains(where: {
+            $0.nodeId == node.id && (
+                $0.reference == outputRef ||
+                $0.reference.caseInsensitiveCompare(outputRef) == .orderedSame
+            )
+        }) else { return }
+        guard let transcriptPath = SessionStore.shared.get(sessionId)?.transcriptPath else { return }
+        let entries = FullTranscriptReader.readTail(transcriptPath: transcriptPath, limit: 12)
+        guard let latestText = latestVisibleAssistantText(entries),
+              let payload = kanbanPayloadFromMarkdownTable(latestText) else { return }
+        let artifact = PlannerNodeOutputArtifact(
+            kind: .kanban,
+            title: outputRef.replacingOccurrences(of: "_", with: " ").capitalized,
+            reference: outputRef,
+            payload: payload,
+            routeTo: []
+        )
+        let output = PlannerNodeOutput(
+            nodeId: node.id,
+            status: .done,
+            message: PlannerNodeOutputMessage(summary: "Extracted \(kanbanItemCount(payload)) item(s) into \(outputRef).", routeTo: []),
+            artifacts: [artifact],
+            next: .complete
+        )
+        do {
+            let result = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: node.id,
+                output: output,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            routePlannerOutputMessages(result.routes)
+            BoardServer.shared.broadcastStateChanged()
+        } catch {
+            MWarn("[PlannerArtifactSync] fallback sync failed canvas=\(canvasId) node=\(node.id) sid=\(sessionId.prefix(8)): \(error.localizedDescription)")
+        }
+    }
+
+    private static func latestVisibleAssistantText(_ entries: [FullTranscriptEntry]) -> String? {
+        for entry in entries.reversed() where entry.type == "assistant" {
+            let text = entry.blocks
+                .filter { $0.type == "text" }
+                .compactMap(\.text)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !looksLikeLocalCommandEcho($0) }
+                .joined(separator: "\n\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return text }
+        }
+        return nil
+    }
+
+    private static func looksLikeLocalCommandEcho(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("$ ")
+            || trimmed.hasPrefix("❯ ")
+            || trimmed.hasPrefix("> ")
+            || trimmed.localizedCaseInsensitiveContains("Bash(")
+            || trimmed.localizedCaseInsensitiveContains("Read(")
+    }
+
+    private static func kanbanPayloadFromMarkdownTable(_ text: String) -> BoardJSONValue? {
+        let rows = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("|") && $0.hasSuffix("|") }
+            .map { line in
+                line.dropFirst().dropLast().split(separator: "|", omittingEmptySubsequences: false)
+                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
+        guard rows.count >= 2 else { return nil }
+        let header = rows[0].map { $0.lowercased() }
+        let bodyRows = rows.dropFirst().filter { row in
+            !row.allSatisfy { cell in
+                let stripped = cell.replacingOccurrences(of: "-", with: "")
+                    .replacingOccurrences(of: ":", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return stripped.isEmpty
+            }
+        }
+        let titleIndex = header.firstIndex(where: { $0.contains("idea") || $0.contains("title") || $0.contains("name") }) ?? min(1, max(header.count - 1, 0))
+        let statusIndex = header.firstIndex(where: { $0.contains("status") })
+        let notesIndex = header.firstIndex(where: { $0.contains("note") || $0.contains("description") || $0.contains("summary") })
+        var columnsById: [String: String] = [:]
+        var items: [BoardJSONValue] = []
+        for (index, row) in bodyRows.enumerated() {
+            guard row.indices.contains(titleIndex) else { continue }
+            let title = row[titleIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let status = statusIndex.flatMap { row.indices.contains($0) ? row[$0] : nil }?
+                .replacingOccurrences(of: "📋", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let columnTitle = status?.isEmpty == false ? status! : "Backlog"
+            let columnId = slug(columnTitle)
+            columnsById[columnId] = columnTitle
+            var item: [String: BoardJSONValue] = [
+                "id": .string("item-\(index + 1)"),
+                "columnId": .string(columnId),
+                "title": .string(title),
+                "subCanvasId": .null
+            ]
+            if let notes = notesIndex.flatMap({ row.indices.contains($0) ? row[$0] : nil })?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !notes.isEmpty, notes != "-" {
+                item["description"] = .string(notes)
+            }
+            items.append(.object(item))
+        }
+        guard !items.isEmpty else { return nil }
+        let columns: [BoardJSONValue] = columnsById
+            .sorted { $0.value < $1.value }
+            .map { BoardJSONValue.object(["id": .string($0.key), "title": .string($0.value)]) }
+        return .object([
+            "type": .string("kanban"),
+            "version": .number(1),
+            "columns": .array(columns),
+            "items": .array(items)
+        ])
+    }
+
+    private static func kanbanItemCount(_ payload: BoardJSONValue) -> Int {
+        guard let items = payload.objectValue?["items"],
+              case .array(let values) = items else { return 0 }
+        return values.count
+    }
+
+    private static func slug(_ raw: String) -> String {
+        let normalized = raw
+            .lowercased()
+            .map { char in char.isLetter || char.isNumber ? char : "-" }
+            .reduce(into: "") { $0.append($1) }
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return normalized.isEmpty ? "backlog" : normalized
     }
 
     // MARK: - Coordination groups
@@ -286,6 +454,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
         do {
+            syncPlannerSessionOutputArtifacts(canvasId: canvasId)
             let state = try PlannerBoardBridge.canvasState(
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -314,6 +483,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
         do {
+            syncPlannerSessionOutputArtifacts(canvasId: canvasId)
             let state = try PlannerBoardBridge.graphState(
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
@@ -577,6 +747,7 @@ enum BoardAPI {
         let snapshot = BoardLayoutStore.shared.snapshot()
         let actorUserId = PlannerPermission.currentActorId()
         let settings = AssistantAPI.parseSettings(json["settings"] as? [String: Any])
+            .withCanvasDefaults(canvasId: canvasId)
 
         do {
             // Phase 8: route through the swappable planner agent runtime
@@ -689,6 +860,7 @@ enum BoardAPI {
         let snapshot = BoardLayoutStore.shared.snapshot()
         let actorUserId = PlannerPermission.currentActorId()
         let settings = AssistantAPI.parseSettings(nil)
+            .withCanvasDefaults(canvasId: canvasId)
         do {
             // Phase 8: route the drift endpoint through the planner agent
             // runtime as a `.driftInspection` event. A healthy graph yields a
@@ -860,6 +1032,7 @@ enum BoardAPI {
     static func dispatchPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
         struct DispatchRequest: Decodable {
             let runner: PlannerDispatchRunner?
+            let cwd: String?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -877,7 +1050,11 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            let spawnRequest = try recordPlannerDispatchIntent(canvasId: canvasId, node: result.dispatchedNode)
+            let spawnRequest = try recordPlannerDispatchIntent(
+                canvasId: canvasId,
+                node: result.dispatchedNode,
+                cwdOverride: body?.cwd
+            )
             if let spawnRequest {
                 switch startTerminalSession(
                     cwd: spawnRequest.cwd,
@@ -1110,6 +1287,44 @@ enum BoardAPI {
         }
     }
 
+    static func updatePlannerNodeGate(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateGateRequest: Decodable {
+            let executionMode: ExecutionMode
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateGateRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"executionMode\":\"human\"|\"auto\"}", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.updateNodeGate(
+                nodeId: nodeId,
+                executionMode: body.executionMode,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func deletePlannerNode(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -1187,6 +1402,29 @@ enum BoardAPI {
         }
     }
 
+    static func getPlannerArtifactContent(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let artifactId = req.params[":artifactId"], !artifactId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or artifact id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let artifact = state.artifacts.first(where: { $0.id == artifactId }) else {
+                return errorResponse("not_found", "artifact not found", status: 404)
+            }
+            let content = try PlannerArtifactStorage.content(for: artifact)
+            return jsonResponse(content)
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func createPlannerSubCanvasFromNode(_ req: HttpRequest) -> HttpResponse {
         struct CreateSubCanvasRequest: Decodable {
             let title: String?
@@ -1225,9 +1463,12 @@ enum BoardAPI {
         struct OpenKanbanItemRequest: Decodable {
             let title: String?
             let scope: String?
+            let existingSubCanvasId: String?
         }
         struct OpenKanbanItemResponse: Encodable {
             let subCanvasId: String
+            let action: String
+            let message: String
             let graph: PlannerGraphStateEnvelope
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
@@ -1238,6 +1479,33 @@ enum BoardAPI {
         let body = decodeJSONBody(req, as: OpenKanbanItemRequest.self)
         let scope: BoardLayoutStore.CanvasScope = body?.scope == "team" ? .team : .personal
         do {
+            let existingSubCanvasId = body?.existingSubCanvasId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let existingSubCanvasId, !existingSubCanvasId.isEmpty {
+                let snapshot = BoardLayoutStore.shared.snapshot()
+                if snapshot.canvases.contains(where: { $0.id == existingSubCanvasId }) {
+                    let state = try PlannerBoardBridge.graphState(
+                        for: canvasId,
+                        snapshot: snapshot,
+                        actorUserId: PlannerPermission.currentActorId()
+                    )
+                    return jsonResponse(OpenKanbanItemResponse(
+                        subCanvasId: existingSubCanvasId,
+                        action: "opened",
+                        message: "Opened existing sub-canvas.",
+                        graph: PlannerGraphStateEnvelope(
+                            canvas: state.canvas,
+                            nodes: state.nodes,
+                            states: state.states,
+                            proposals: state.proposals,
+                            access: state.access,
+                            activities: state.activities,
+                            events: state.events,
+                            artifacts: state.artifacts,
+                            edges: state.edges
+                        )
+                    ))
+                }
+            }
             let title = (body?.title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
                 ?? "Kanban item"
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: title, scope: scope)
@@ -1255,6 +1523,10 @@ enum BoardAPI {
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(OpenKanbanItemResponse(
                 subCanvasId: subCanvas.id,
+                action: existingSubCanvasId?.isEmpty == false ? "replaced_missing" : "created",
+                message: existingSubCanvasId?.isEmpty == false
+                    ? "Previous sub-canvas was missing; created and linked a new one."
+                    : "Created and linked a sub-canvas.",
                 graph: PlannerGraphStateEnvelope(
                     canvas: state.canvas,
                     nodes: state.nodes,
@@ -1405,7 +1677,7 @@ enum BoardAPI {
             change.nodeId ?? change.node?.id
         })
         for node in nodes where changedNodeIds.contains(node.id) && node.workflowRunState == .dispatched {
-            _ = try? recordPlannerDispatchIntent(canvasId: canvasId, node: node)
+            _ = try? recordPlannerDispatchIntent(canvasId: canvasId, node: node, cwdOverride: nil)
         }
     }
 
@@ -1418,10 +1690,14 @@ enum BoardAPI {
     /// proposal-apply path (`recordPlannerDispatchIntents`) and the direct
     /// dispatch endpoint. `ci-agent` / `human` produce no intent
     /// (`spawnsSession` is false for both).
-    private static func recordPlannerDispatchIntent(canvasId: String, node: PlanningNode) throws -> PlannerDispatchSpawnRequest? {
+    private static func recordPlannerDispatchIntent(
+        canvasId: String,
+        node: PlanningNode,
+        cwdOverride: String?
+    ) throws -> PlannerDispatchSpawnRequest? {
         guard node.workflowRunState == .dispatched else { return nil }
         guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return nil }
-        let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let cwd = try explicitSessionCwd(cwdOverride) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
         let rawCommand = command?.isEmpty == false
             ? command!
@@ -1439,18 +1715,22 @@ enum BoardAPI {
             command: launch.command,
             provider: launch.provider,
             purpose: "planner:\(node.id)",
-            initialPrompt: plannerDispatchPrompt(for: node),
+            initialPrompt: plannerDispatchPrompt(for: node, canvasId: canvasId),
             layoutHint: nil
         )
         return PlannerDispatchSpawnRequest(cwd: cwd, command: launch.command)
     }
 
-    private static func plannerDispatchPrompt(for node: PlanningNode) -> String {
+    private static func plannerDispatchPrompt(for node: PlanningNode, canvasId: String) -> String {
         var lines = [
             "You are executing a meee2 AI planner node.",
+            "Canvas ID: \(canvasId)",
+            "Node ID: \(node.id)",
             "Node: \(node.title)",
             "Doer: \(node.doerId)",
-            "Completion signal: \(node.schema.goal)"
+            "Completion signal: \(node.schema.goal)",
+            "Before doing the work, call read_node_contract with this canvasId and nodeId.",
+            "When complete, blocked, or needing owner review, call submit_node_output with the same canvasId and nodeId."
         ]
         if !node.schema.inputs.isEmpty {
             lines.append("Consumes: \(node.schema.inputs.joined(separator: ", "))")
@@ -1551,8 +1831,24 @@ enum BoardAPI {
                       !m.isArchived,
                       !realSids.contains(cliSid) else { return nil }
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
-            }
+        }
         return realSessions + syntheticDesktopSessions
+    }
+
+    private static func explicitSessionCwd(_ raw: String?) throws -> String? {
+        var value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !value.isEmpty else { return nil }
+        if value.hasPrefix("~") {
+            value = NSHomeDirectory() + String(value.dropFirst(1))
+        }
+        let normalized = (value as NSString).standardizingPath
+        guard normalized.hasPrefix("/") else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd must be an absolute path"])
+        }
+        guard normalized != "/" && normalized != NSHomeDirectory() else {
+            throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd is too broad"])
+        }
+        return normalized
     }
 
     // MARK: - GET /api/user-profile
@@ -2618,7 +2914,7 @@ enum BoardAPI {
         }
         let termProgram = json["termProgram"] as? String
         do {
-            let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+            let cwd = try explicitSessionCwd(json["cwd"] as? String) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
             try BoardLayoutStore.shared.recordSpawnIntent(
                 canvasId: canvasId,
                 cwd: cwd,

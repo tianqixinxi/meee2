@@ -15,6 +15,7 @@ import {
   UserRound,
 } from 'lucide-react'
 import type {
+  PlannerArtifactContent,
   KanbanArtifactPayload,
   PlannerArtifact,
   PlannerDispatchRunner,
@@ -23,9 +24,10 @@ import type {
   RunNextAction,
 } from '../../types'
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
+import { getPlannerArtifactContent } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 
-type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban'
+type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
 const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'working', 'blocked', 'done']
 
 interface CanvasIOItem {
@@ -69,6 +71,36 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     setArtifactInputDraft(data.inputReference ?? '')
   }, [data.inputReference])
   const node = data.node
+  const [deleteArmed, setDeleteArmed] = useState(false)
+  useEffect(() => {
+    setDeleteArmed(false)
+  }, [node.id])
+  useEffect(() => {
+    if (!deleteArmed) return undefined
+    const timer = window.setTimeout(() => setDeleteArmed(false), 2500)
+    return () => window.clearTimeout(timer)
+  }, [deleteArmed])
+  const virtualArtifact = data.virtual && designKind(data.node) === 'artifact'
+  const primaryArtifact = virtualArtifact ? selectPrimaryArtifact(data.artifacts) : undefined
+  const renderKind = artifactRenderKind(primaryArtifact, data.artifactKind ?? 'text')
+  const [artifactContent, setArtifactContent] = useState<PlannerArtifactContent | null>(null)
+  const [artifactContentError, setArtifactContentError] = useState<string | null>(null)
+  useEffect(() => {
+    setArtifactContent(null)
+    setArtifactContentError(null)
+    if (!virtualArtifact || !primaryArtifact) return undefined
+    let cancelled = false
+    getPlannerArtifactContent(primaryArtifact.canvasId, primaryArtifact.id)
+      .then((content) => {
+        if (!cancelled) setArtifactContent(content)
+      })
+      .catch((error) => {
+        if (!cancelled) setArtifactContentError(error?.message || 'Failed to load artifact')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [virtualArtifact, primaryArtifact?.canvasId, primaryArtifact?.id])
   const isRunMode = data.mode === 'run'
   const runNodeState = data.runNodeState
   const nodeKind = designKind(node)
@@ -76,16 +108,22 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
   if (data.virtual && nodeKind === 'artifact') {
-    const artifact = data.artifacts[0]
-    const kanban = data.artifactKind === 'kanban'
-      ? parseKanbanPayload(artifact?.payload) ?? emptyKanbanPayload(node.title)
+    const artifact = primaryArtifact
+    const inlineKanban = renderKind === 'kanban'
+      ? parseKanbanPayload(artifact?.payload) ?? parseKanbanPayload(artifactContent?.payload)
+      : null
+    const contentKanban = renderKind === 'kanban'
+      ? parseMarkdownKanbanPayload(artifactContent?.content)
+      : null
+    const kanban = renderKind === 'kanban'
+      ? (contentKanban && (inlineKanban?.items.length ?? 0) === 0 ? contentKanban : inlineKanban ?? contentKanban ?? (artifact ? emptyKanbanPayload(node.title) : null))
       : null
     return (
       <div
         className={[
           'planner-node',
           'planner-node--artifact-node',
-          `planner-node--artifact-${data.artifactKind ?? 'text'}`,
+          `planner-node--artifact-${renderKind}`,
           `planner-node--artifact-${data.artifactDirection ?? 'output'}`,
           selected ? 'is-selected' : '',
         ].filter(Boolean).join(' ')}
@@ -93,7 +131,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         <Handle type="target" position={Position.Left} className="planner-node__handle" />
         <div className="planner-node__header">
           <span className="planner-node__status planner-node__status--design">
-            <ArtifactIcon kind={data.artifactKind ?? 'text'} size={13} />
+            <ArtifactIcon kind={renderKind} size={13} />
             Artifact
           </span>
           <div className="planner-node__header-actions">
@@ -149,13 +187,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             </button>
           </div>
         )}
-        {kanban && (
-          <KanbanArtifactPreview
-            artifact={artifact}
-            payload={kanban}
-            onOpenItem={data.onOpenKanbanItem}
-          />
-        )}
+        <ArtifactPreview
+          artifact={artifact}
+          kind={renderKind}
+          kanban={kanban}
+          content={artifactContent}
+          error={artifactContentError}
+          onOpenKanbanItem={data.onOpenKanbanItem}
+        />
         <Handle type="source" position={Position.Right} className="planner-node__handle" />
       </div>
     )
@@ -164,7 +203,11 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     ? workStatusLabel(runStatus, data.hasSelectedDelivery)
     : planStatusLabel(designStatus)
   const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
-  const blockers = data.state?.blockers ?? []
+  const blockers = data.state?.blockers?.length
+    ? data.state.blockers
+    : node.status === 'blocked' && node.blockedReason?.trim()
+      ? [node.blockedReason.trim()]
+      : []
   const sessionId = isRunMode
     ? (runNodeState?.sessionId ?? node.sessionId ?? null)
     : node.sessionId?.trim() || null
@@ -185,6 +228,8 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     creatingSession: Boolean(data.creatingSession),
   })
   const primaryActionDisabled = primaryAction === 'Creating session...'
+  const showResponsibleInfo = data.showResponsibleInfo ?? true
+  const gateLabel = gateModeLabel(node)
 
   return (
     <div
@@ -232,31 +277,19 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             {data.previewKind === 'added' ? 'new' : 'changed'}
           </span>
         )}
-        {!data.virtual && data.onDeleteNode && (
-          <button
-            type="button"
-            className="planner-node__delete nodrag"
-            title="Delete node"
-            aria-label={`Delete ${node.title}`}
-            onClick={(event) => {
-              event.stopPropagation()
-              data.onDeleteNode?.(node.id)
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-          >
-            <Trash2 size={13} aria-hidden />
-          </button>
-        )}
+        <div className="planner-node__header-actions">
+          {showResponsibleInfo && (
+            <span className="planner-node__owner-pill" title={`Owner: ${data.responsibleLabel || 'Unassigned'}`}>
+              <span className={`planner-node__mini-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+                {data.responsibleAvatarUrl ? <img src={data.responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
+              </span>
+              <span>{data.responsibleLabel || 'Unassigned'}</span>
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="planner-node__title">{node.title}</div>
-
-      <div className="planner-node__responsible" aria-label="Responsible person">
-        <span className={`planner-node__person-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-          {data.responsibleAvatarUrl ? <img src={data.responsibleAvatarUrl} alt="" /> : <UserRound size={13} />}
-        </span>
-        <span>{data.responsibleLabel || 'Unassigned'}</span>
-      </div>
 
       {nodeKind === 'step' && (
         <div className="planner-node__meta" aria-label="Runtime">
@@ -264,6 +297,32 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <Code2 size={10} aria-hidden />
             Runtime: {runtimeLabelForNode(node.executorType)}
           </span>
+          {!isRunMode && data.canChangeStatus && data.onChangeGateMode ? (
+            <label
+              className="planner-node__chip planner-node__gate-select nodrag nopan"
+              title="Change gate mode"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Signpost size={10} aria-hidden />
+              Gate: {gateLabel}
+              <select
+                value={gateLabel.toLowerCase()}
+                aria-label={`Gate mode for ${node.title}`}
+                onChange={(event) => data.onChangeGateMode?.(node.id, event.target.value as 'human' | 'auto')}
+                onClick={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <option value="human">Human</option>
+                <option value="auto">Auto</option>
+              </select>
+              <ChevronDown size={10} aria-hidden />
+            </label>
+          ) : (
+            <span className="planner-node__chip">
+              <Signpost size={10} aria-hidden />
+              Gate: {gateLabel}
+            </span>
+          )}
         </div>
       )}
 
@@ -289,30 +348,32 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {primaryAction && (
+      {(primaryAction || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
-          <button
-            type="button"
-            className="planner-node__primary-action nodrag"
-            disabled={primaryActionDisabled}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (primaryActionDisabled) return
-              if (primaryAction === 'Open sub-flow' && node.subCanvasId) {
-                data.onOpenSubCanvas?.(node.subCanvasId)
-              } else if (primaryAction === 'Create session') {
-                data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
-              } else if (primaryAction === 'Open session' && sessionId) {
-                data.onOpenSession?.(sessionId, node.id)
-              } else {
-                data.onOpenDetails?.(node.id)
-              }
-            }}
-            aria-label={`${primaryAction} for ${node.title}`}
-            title={primaryAction}
-          >
-            {primaryAction}
-          </button>
+          {primaryAction && (
+            <button
+              type="button"
+              className="planner-node__primary-action nodrag"
+              disabled={primaryActionDisabled}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (primaryActionDisabled) return
+                if (primaryAction === 'Open sub-flow' && node.subCanvasId) {
+                  data.onOpenSubCanvas?.(node.subCanvasId)
+                } else if (primaryAction === 'Create session') {
+                  data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
+                } else if (primaryAction === 'Open session' && sessionId) {
+                  data.onOpenSession?.(sessionId, node.id)
+                } else {
+                  data.onOpenDetails?.(node.id)
+                }
+              }}
+              aria-label={`${primaryAction} for ${node.title}`}
+              title={primaryAction}
+            >
+              {primaryAction}
+            </button>
+          )}
           {primaryAction === 'Creating session...' && data.onCancelSessionCreation && (
             <button
               type="button"
@@ -339,6 +400,33 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               title="Replace the current session binding"
             >
               Replace session
+            </button>
+          )}
+          {!data.virtual && data.onDeleteNode && (
+            <button
+              type="button"
+              className={`planner-node__delete planner-node__delete--footer nodrag nopan${deleteArmed ? ' is-confirming' : ''}`}
+              title={deleteArmed ? 'Click again to delete' : 'Delete node'}
+              aria-label={deleteArmed ? `Confirm delete ${node.title}` : `Delete ${node.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                event.preventDefault()
+                if (!deleteArmed) {
+                  setDeleteArmed(true)
+                  return
+                }
+                setDeleteArmed(false)
+                data.onDeleteNode?.(node.id, node.title)
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation()
+              }}
+              onMouseDown={(event) => {
+                event.stopPropagation()
+              }}
+            >
+              <Trash2 size={13} aria-hidden />
+              <span>{deleteArmed ? 'Confirm' : 'Delete'}</span>
             </button>
           )}
         </div>
@@ -389,7 +477,97 @@ function ArtifactIcon({ kind, size }: { kind: CanvasArtifactKind; size: number }
   if (kind === 'integration') return <Plug size={size} aria-hidden />
   if (kind === 'html') return <Code2 size={size} aria-hidden />
   if (kind === 'kanban') return <Route size={size} aria-hidden />
+  if (kind === 'json' || kind === 'file') return <Code2 size={size} aria-hidden />
   return <FileText size={size} aria-hidden />
+}
+
+function ArtifactPreview({
+  artifact,
+  kind,
+  kanban,
+  content,
+  error,
+  onOpenKanbanItem,
+}: {
+  artifact?: PlannerArtifact
+  kind: CanvasArtifactKind
+  kanban: KanbanArtifactPayload | null
+  content: PlannerArtifactContent | null
+  error: string | null
+  onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
+}) {
+  if (!artifact) {
+    return <div className="planner-node__artifact-empty">Waiting for output</div>
+  }
+  if (error) {
+    return <div className="planner-node__artifact-empty">{error}</div>
+  }
+  if (kind === 'kanban' && kanban) {
+    return <KanbanArtifactPreview artifact={artifact} payload={kanban} onOpenItem={onOpenKanbanItem} />
+  }
+  if (kind === 'html') {
+    const html = content?.content ?? inlineString(artifact.payload, 'html')
+    return html ? (
+      <iframe
+        className="planner-node__html-preview"
+        title={artifact.title}
+        sandbox=""
+        srcDoc={html}
+      />
+    ) : (
+      <ArtifactMetadata artifact={artifact} content={content} label="HTML artifact" />
+    )
+  }
+  if (kind === 'json') {
+    const value = content?.content ?? inlineString(artifact.payload, 'json') ?? JSON.stringify(content?.payload ?? artifact.payload ?? {}, null, 2)
+    return <pre className="planner-node__artifact-pre">{value}</pre>
+  }
+  if (kind === 'integration') {
+    return <IntegrationArtifactPreview artifact={artifact} content={content} />
+  }
+  if (kind === 'file') {
+    return <ArtifactMetadata artifact={artifact} content={content} label="File artifact" />
+  }
+  const text = content?.content ?? inlineString(artifact.payload, 'text')
+  return text ? <pre className="planner-node__artifact-pre">{text}</pre> : <ArtifactMetadata artifact={artifact} content={content} label="Text artifact" />
+}
+
+function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerArtifact; content: PlannerArtifactContent | null }) {
+  const payload = objectPayload(artifact.payload)
+  const url = stringField(payload, 'url') ?? (artifact.reference.includes('://') ? artifact.reference : null)
+  const provider = stringField(payload, 'provider') ?? artifact.kind
+  const summary = stringField(payload, 'summary') ?? content?.content
+  return (
+    <div className="planner-node__integration-preview">
+      <strong>{provider}</strong>
+      {summary && <span>{summary}</span>}
+      {url ? (
+        <a href={url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+          {url}
+        </a>
+      ) : (
+        <code>{artifact.reference}</code>
+      )}
+    </div>
+  )
+}
+
+function ArtifactMetadata({
+  artifact,
+  content,
+  label,
+}: {
+  artifact: PlannerArtifact
+  content: PlannerArtifactContent | null
+  label: string
+}) {
+  return (
+    <div className="planner-node__artifact-meta">
+      <strong>{label}</strong>
+      <span>{content?.filename ?? artifact.reference}</span>
+      {typeof content?.size === 'number' && <small>{formatBytes(content.size)}</small>}
+    </div>
+  )
 }
 
 function KanbanArtifactPreview({
@@ -424,7 +602,7 @@ function KanbanArtifactPreview({
                 >
                   <span>{item.title}</span>
                   {item.description && <small>{item.description}</small>}
-                  <em>{item.subCanvasId ? 'Open' : 'Expand'}</em>
+                  <em>{item.subCanvasId ? 'Open sub canvas' : 'Create sub canvas'}</em>
                 </button>
               )) : (
                 <div className="planner-node__kanban-empty">No items</div>
@@ -435,6 +613,55 @@ function KanbanArtifactPreview({
       })}
     </div>
   )
+}
+
+function artifactRenderKind(artifact: PlannerArtifact | undefined, fallback: CanvasArtifactKind): CanvasArtifactKind {
+  const payload = objectPayload(artifact?.payload)
+  const type = stringField(payload, 'type')
+  if (artifact?.kind === 'kanban') return 'kanban'
+  if (type === 'text' || type === 'html' || type === 'kanban' || type === 'integration' || type === 'json' || type === 'file') {
+    return type
+  }
+  return fallback
+}
+
+function selectPrimaryArtifact(artifacts: PlannerArtifact[]): PlannerArtifact | undefined {
+  return [...artifacts].sort((a, b) => artifactDisplayScore(b) - artifactDisplayScore(a))[0]
+}
+
+function artifactDisplayScore(artifact: PlannerArtifact): number {
+  const payload = objectPayload(artifact.payload)
+  const inlineKanban = parseKanbanPayload(artifact.payload)
+  const hasBlob = typeof payload?.blobRef === 'string' && payload.blobRef.trim().length > 0
+  const createdAt = Date.parse(String(artifact.createdAt))
+  return ((inlineKanban?.items.length ?? 0) > 0 ? 10_000 + inlineKanban!.items.length : 0)
+    + (hasBlob ? 5_000 : 0)
+    + (payload?.type === 'kanban' ? 2_000 : 0)
+    + (artifact.kind === 'kanban' ? 1_000 : 0)
+    + ((inlineKanban?.columns.length ?? 0) > 0 ? 100 : 0)
+    + (Number.isFinite(createdAt) ? createdAt / 1_000_000_000_000 : 0)
+}
+
+function inlineString(payload: unknown, field: 'text' | 'html' | 'json'): string | null {
+  const object = objectPayload(payload)
+  return stringField(object, field)
+}
+
+function objectPayload(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null
+}
+
+function stringField(object: Record<string, unknown> | null, field: string): string | null {
+  const value = object?.[field]
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function parseKanbanPayload(payload: unknown): KanbanArtifactPayload | null {
@@ -465,6 +692,74 @@ function parseKanbanPayload(payload: unknown): KanbanArtifactPayload | null {
     }))
   if (columns.length === 0) return null
   return { version: 1, columns, items }
+}
+
+function parseMarkdownKanbanPayload(content: string | null | undefined): KanbanArtifactPayload | null {
+  if (!content?.trim()) return null
+  const tableRows = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('|') && line.endsWith('|'))
+    .map(splitMarkdownTableRow)
+  if (tableRows.length < 2) return null
+
+  const header = tableRows[0].map((cell) => cell.toLowerCase())
+  const rows = tableRows.slice(1).filter((row) => !isMarkdownSeparatorRow(row))
+  const titleIndex = header.findIndex((cell) => cell.includes('idea') || cell.includes('title') || cell.includes('name'))
+  if (titleIndex < 0) return null
+  const descriptionIndex = header.findIndex((cell) => cell.includes('description') || cell.includes('note') || cell.includes('summary'))
+  const priorityIndex = header.findIndex((cell) => cell.includes('priority'))
+  const statusIndex = header.findIndex((cell) => cell.includes('status') || cell.includes('column'))
+
+  const columns = new Map<string, { id: string; title: string }>()
+  const items: KanbanArtifactPayload['items'] = []
+  rows.forEach((row, index) => {
+    const title = row[titleIndex]?.trim()
+    if (!title) return
+    const rawStatus = statusIndex >= 0 ? cleanupMarkdownCell(row[statusIndex]) : ''
+    const columnTitle = rawStatus || 'Backlog'
+    const columnId = slugifyKanbanId(columnTitle, columns.size + 1)
+    if (!columns.has(columnId)) columns.set(columnId, { id: columnId, title: columnTitle })
+    const description = descriptionIndex >= 0 ? cleanupMarkdownCell(row[descriptionIndex]) : ''
+    const priority = priorityIndex >= 0 ? cleanupMarkdownCell(row[priorityIndex]) : ''
+    const details = [
+      priority ? `Priority: ${priority}` : '',
+      description,
+    ].filter(Boolean).join('\n')
+    items.push({
+      id: `item-${index + 1}`,
+      columnId,
+      title: cleanupMarkdownCell(title),
+      description: details || undefined,
+      subCanvasId: null,
+    })
+  })
+
+  if (items.length === 0 || columns.size === 0) return null
+  return { version: 1, columns: Array.from(columns.values()), items }
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  return line.slice(1, -1).split('|').map(cleanupMarkdownCell)
+}
+
+function isMarkdownSeparatorRow(row: string[]): boolean {
+  return row.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+}
+
+function cleanupMarkdownCell(value: string): string {
+  return value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/\*\*/g, '')
+    .trim()
+}
+
+function slugifyKanbanId(value: string, fallbackIndex: number): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || `column-${fallbackIndex}`
 }
 
 function emptyKanbanPayload(title: string): KanbanArtifactPayload {
@@ -514,7 +809,7 @@ function buildCanvasIOItems(data: PlannerGraphNode['data']): {
       key: `output:${ref || index}`,
       label: compactArtifactLabel(artifactTitle(artifact, ref)),
       reference: artifact?.reference ?? ref,
-      artifactKind: artifact?.kind === 'kanban' ? 'kanban' : classifyArtifactKind(artifact?.reference ?? ref),
+      artifactKind: artifactRenderKind(artifact, classifyArtifactKind(artifact?.reference ?? ref)),
     }
   })
   const pendingOutputItems = (node.schema?.outputs ?? [])
@@ -575,8 +870,14 @@ function classifyArtifactKind(reference: string): CanvasArtifactKind {
   if (normalized.includes('kanban') || normalized.includes('看板')) {
     return 'kanban'
   }
+  if (normalized.includes('json') || normalized.endsWith('.json')) {
+    return 'json'
+  }
   if (normalized.includes('html') || normalized.includes('webpage') || normalized.includes('web-page')) {
     return 'html'
+  }
+  if (normalized.includes('file') || normalized.includes('attachment')) {
+    return 'file'
   }
   if (
     normalized.includes('://')
@@ -717,4 +1018,10 @@ function runtimeLabelForNode(executorType: PlannerGraphNode['data']['node']['exe
   if (executorType === 'human') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
   if (executorType === 'mock') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
   return `${executorType} / fallback ${spawnProviderLabel(loadSpawnProvider())}`
+}
+
+function gateModeLabel(node: PlannerGraphNode['data']['node']): 'Human' | 'Auto' {
+  if (node.executionMode === 'human') return 'Human'
+  if ((node.gate?.approvers ?? []).length > 0) return 'Human'
+  return 'Auto'
 }

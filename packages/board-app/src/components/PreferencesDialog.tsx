@@ -38,7 +38,7 @@ interface Props {
  * 偏好设置面板。两个 section：
  *   1. 新 session 的默认 provider（Claude / Codex）。
  *   2. Global assistant 的 LLM 设置：provider / apiKey / baseUrl / model /
- *      enabled tools。默认 provider='local' 走 `claude -p`（不需要 key）。
+ *      enabled tools。默认 provider='local' 走本地 Claude 稳定 session（不需要 key）。
  */
 export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
@@ -348,9 +348,9 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
 
             {llm.provider === 'local' && (
               <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
-                Local mode shells out to <code>claude -p</code> using your existing
-                ~/.claude OAuth — no API key needed. Streams output via the same
-                tool-use loop as hosted providers.
+                Local mode shells out to Claude Code using your existing
+                ~/.claude OAuth and a stable local session. Streams output via
+                the same tool-use loop as hosted providers.
               </div>
             )}
 

@@ -7,7 +7,7 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { PanelRightClose, PanelRightOpen } from 'lucide-react'
+import { AlertTriangle, PanelRightClose, PanelRightOpen, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -20,6 +20,7 @@ import {
   deletePlannerNode,
   detachPlannerNodeSession,
   dispatchPlannerNodeSession,
+  fetchMeee2MCPStatus,
   fetchPlannerGraphState,
   fetchState,
   fetchTeamMembers,
@@ -28,6 +29,7 @@ import {
   openKanbanItemSubCanvas,
   rejectPlannerProposal,
   sendPlannerActivity,
+  updatePlannerNodeGate,
   updatePlannerNodeLayout,
   updatePlannerNodeStatus,
 } from '../../api'
@@ -37,6 +39,7 @@ import type {
   PlannerArtifact,
   PlannerDispatchRunner,
   PlannerGraphState,
+  Meee2MCPStatus,
   PlanningNode,
   PlanningNodeStatus,
 } from '../../types'
@@ -57,6 +60,7 @@ import './planner.css'
 interface Props {
   canvasId: string
   canvasName: string
+  workspacePath?: string
   variant?: 'board' | 'template'
   userProfile?: UserProfile | null
   boardState?: BoardState | null
@@ -87,6 +91,7 @@ export function PlannerGraph(props: Props) {
 function PlannerGraphInner({
   canvasId,
   canvasName,
+  workspacePath = '',
   variant = 'board',
   userProfile = null,
   boardState = null,
@@ -113,6 +118,8 @@ function PlannerGraphInner({
   const [error, setError] = useState<string | null>(null)
   const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string } | null>(null)
   const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
+  const [mcpStatus, setMCPStatus] = useState<Meee2MCPStatus | null>(null)
+  const [mcpStatusError, setMCPStatusError] = useState<string | null>(null)
   // Bumped whenever a new proposal is created from chat, drift inspection, or
   // node actions. PlannerProposalPanel watches this to auto-open review.
   const [reviewRequestTick, setReviewRequestTick] = useState(0)
@@ -132,6 +139,20 @@ function PlannerGraphInner({
   useEffect(() => {
     loadState()
   }, [loadState])
+
+  const refreshMCPStatus = useCallback(() => {
+    setMCPStatusError(null)
+    fetchMeee2MCPStatus()
+      .then((status) => setMCPStatus(status))
+      .catch((err) => {
+        setMCPStatus(null)
+        setMCPStatusError((err as Error).message || 'Failed to check Meee2 MCP status')
+      })
+  }, [])
+
+  useEffect(() => {
+    refreshMCPStatus()
+  }, [refreshMCPStatus, canvasId])
 
   useEffect(() => {
     if (clearRevision <= 0) return
@@ -171,20 +192,26 @@ function PlannerGraphInner({
     onNotify?.('error', message)
   }, [onNotify])
 
+  const warnMCPWritebackIfNeeded = useCallback(() => {
+    if (!mcpStatusError && mcpStatus?.launches !== false) return
+    const detail = mcpStatusError || mcpStatus?.error || 'Meee2 MCP is not available.'
+    onNotify?.('error', `Artifact write-back is unavailable: ${detail}`)
+  }, [mcpStatus, mcpStatusError, onNotify])
+
   const teamDirectory = useMemo(() => {
     const members = buildTeamDirectory({
       userProfile,
       boardState,
       canvasOwnerId: plannerState?.canvas.ownerId,
       nodes: plannerState?.nodes ?? [],
-      activities: plannerState?.activities ?? [],
+      activities: [],
       teamMembers,
     })
     return {
       displayNameByUserId: teamDisplayNameByUserId(members),
       avatarUrlByUserId: teamAvatarUrlByUserId(members),
     }
-  }, [boardState, plannerState, userProfile, teamMembers])
+  }, [boardState, plannerState?.canvas.ownerId, plannerState?.nodes, userProfile, teamMembers])
 
   const handleGraphStateChanged = useCallback((state: PlannerGraphState) => {
     setPlannerState(state)
@@ -197,32 +224,51 @@ function PlannerGraphInner({
     title: string,
     subCanvasId?: string | null,
   ) => {
-    if (subCanvasId) {
-      onOpenSubCanvas?.(subCanvasId)
-      return
-    }
     setBusy(true)
     setError(null)
     openKanbanItemSubCanvas(canvasId, artifact.id, itemId, {
       title,
       scope: plannerState?.canvas.visibility === 'public' ? 'team' : 'personal',
+      existingSubCanvasId: subCanvasId ?? null,
     })
       .then((result) => {
         handleGraphStateChanged(result.graph)
+        if (result.action === 'created') {
+          onNotify?.('success', 'Sub-canvas created and linked.')
+        } else if (result.action === 'replaced_missing') {
+          onNotify?.('success', result.message || 'Previous sub-canvas was missing; created and linked a new one.')
+        }
         onOpenSubCanvas?.(result.subCanvasId)
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to open kanban item sub-canvas'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError, onOpenSubCanvas, plannerState?.canvas.visibility])
+  }, [canvasId, handleGraphStateChanged, notifyError, onNotify, onOpenSubCanvas, plannerState?.canvas.visibility])
 
   const handleChangeNodeStatus = useCallback((nodeId: string, status: PlanningNodeStatus) => {
+    const node = plannerState?.nodes.find((item) => item.id === nodeId)
+    const validationMessage = node ? validateStatusChange(node, status) : null
+    if (validationMessage) {
+      notifyError(validationMessage)
+      return
+    }
     setBusy(true)
     setError(null)
     updatePlannerNodeStatus(canvasId, nodeId, status)
       .then(handleGraphStateChanged)
       .catch((err) => notifyError((err as Error).message || 'Failed to update node status'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError])
+  }, [canvasId, handleGraphStateChanged, notifyError, plannerState?.nodes])
+
+  const handleChangeNodeGateMode = useCallback((nodeId: string, mode: 'human' | 'auto') => {
+    const node = plannerState?.nodes.find((item) => item.id === nodeId)
+    if (!node || gateModeForPlanningNode(node) === mode) return
+    setBusy(true)
+    setError(null)
+    updatePlannerNodeGate(canvasId, nodeId, mode)
+      .then(handleGraphStateChanged)
+      .catch((err) => notifyError((err as Error).message || 'Failed to update gate mode'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError, plannerState?.nodes])
 
   const handleBindNodeInput = useCallback((nodeId: string, input: string, reference: string) => {
     const trimmed = reference.trim()
@@ -240,13 +286,19 @@ function PlannerGraphInner({
   }, [canvasId, handleGraphStateChanged, notifyError])
 
   const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
+    const cwd = workspacePath.trim()
+    if (!cwd) {
+      notifyError('Current canvas workspace is not ready yet.')
+      return
+    }
+    warnMCPWritebackIfNeeded()
     setBusy(true)
     setError(null)
     fetchState()
       .catch(() => null)
       .then((beforeState) => {
         const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
-        return dispatchPlannerNodeSession(canvasId, nodeId, runner)
+        return dispatchPlannerNodeSession(canvasId, nodeId, runner, cwd)
           .then((state) => {
             handleGraphStateChanged(state)
             setCreatingSessionNodeIds((current) => new Set(current).add(nodeId))
@@ -261,9 +313,15 @@ function PlannerGraphInner({
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to create node session'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError])
+  }, [canvasId, handleGraphStateChanged, notifyError, warnMCPWritebackIfNeeded, workspacePath])
 
   const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
+    const cwd = workspacePath.trim()
+    if (!cwd) {
+      notifyError('Current canvas workspace is not ready yet.')
+      return
+    }
+    warnMCPWritebackIfNeeded()
     setBusy(true)
     setError(null)
     fetchState()
@@ -272,7 +330,7 @@ function PlannerGraphInner({
         const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
         return detachPlannerNodeSession(canvasId, nodeId)
           .then(handleGraphStateChanged)
-          .then(() => dispatchPlannerNodeSession(canvasId, nodeId, runner))
+          .then(() => dispatchPlannerNodeSession(canvasId, nodeId, runner, cwd))
           .then((state) => {
             handleGraphStateChanged(state)
             setCreatingSessionNodeIds((current) => new Set(current).add(nodeId))
@@ -287,7 +345,7 @@ function PlannerGraphInner({
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to create a new node session'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError])
+  }, [canvasId, handleGraphStateChanged, notifyError, warnMCPWritebackIfNeeded, workspacePath])
 
   const handleOpenNodeSession = useCallback((sessionId: string, nodeId: string) => {
     const trimmed = sessionId.trim()
@@ -399,6 +457,7 @@ function PlannerGraphInner({
       onOpenKanbanItem: handleOpenKanbanItem,
       onBindInput: handleBindNodeInput,
       onChangeStatus: handleChangeNodeStatus,
+      onChangeGateMode: handleChangeNodeGateMode,
       canChangeStatus: variant !== 'template',
       onCreateSession: handleCreateNodeSession,
       onOpenSession: handleOpenNodeSession,
@@ -407,8 +466,32 @@ function PlannerGraphInner({
       onDeleteNode: handleDeleteNode,
       onHideIOArtifact: handleHideIOArtifact,
       creatingSessionNodeIds,
+      showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
     })
-  }, [plannerState, ioArtifactVisibility, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas, handleOpenKanbanItem, handleBindNodeInput, handleChangeNodeStatus, handleCreateNodeSession, handleOpenNodeSession, handleReplaceNodeSession, handleCancelNodeSessionCreation, handleDeleteNode, handleHideIOArtifact, creatingSessionNodeIds, variant])
+  }, [
+    plannerState?.nodes,
+    plannerState?.states,
+    plannerState?.edges,
+    plannerState?.artifacts,
+    plannerState?.canvas.ownerId,
+    plannerState?.canvas.visibility,
+    ioArtifactVisibility,
+    teamDirectory,
+    handleOpenNodeDetails,
+    onOpenSubCanvas,
+    handleOpenKanbanItem,
+    handleBindNodeInput,
+    handleChangeNodeStatus,
+    handleChangeNodeGateMode,
+    handleCreateNodeSession,
+    handleOpenNodeSession,
+    handleReplaceNodeSession,
+    handleCancelNodeSessionCreation,
+    handleDeleteNode,
+    handleHideIOArtifact,
+    creatingSessionNodeIds,
+    variant,
+  ])
 
   const reviewGraph = useMemo(() => {
     if (!plannerState || !proposal) return { nodes: [], edges: [] }
@@ -425,7 +508,16 @@ function PlannerGraphInner({
       displayNameByUserId: teamDirectory.displayNameByUserId,
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
     })
-  }, [plannerState, proposal, ioArtifactVisibility, teamDirectory])
+  }, [
+    plannerState?.nodes,
+    plannerState?.states,
+    plannerState?.edges,
+    plannerState?.artifacts,
+    plannerState?.canvas.ownerId,
+    proposal,
+    ioArtifactVisibility,
+    teamDirectory,
+  ])
 
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
@@ -652,13 +744,20 @@ function PlannerGraphInner({
             access: current?.access ?? defaultPlannerAccess(),
             activities: current?.activities ?? [],
             artifacts: current?.artifacts ?? [],
-            edges: current?.edges ?? [],
+            edges: [],
           }
         })
+        window.setTimeout(() => {
+          if (window.matchMedia('(max-width: 720px)').matches) {
+            reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 260 })
+            return
+          }
+          reactFlow.fitView({ padding: 0.14, duration: 260 })
+        }, 80)
       })
       .catch((err) => setError((err as Error).message || 'Failed to approve and apply meee2 AI proposal'))
       .finally(() => setBusy(false))
-  }, [canvasId, canvasName, proposal])
+  }, [canvasId, canvasName, proposal, reactFlow])
 
   const handleReject = useCallback(() => {
     if (!proposal) return
@@ -697,6 +796,7 @@ function PlannerGraphInner({
   const plannerMainStyle = {
     '--planner-panel-width': `${plannerPanelWidth}px`,
   } as CSSProperties
+  const mcpWarning = mcpStatusError || (mcpStatus && !mcpStatus.launches ? mcpStatus.error || 'Meee2 MCP is not available.' : null)
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
@@ -713,6 +813,22 @@ function PlannerGraphInner({
           {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
         </button>
         <div className="planner-flow">
+          {mcpWarning && (
+            <div className="planner-mcp-banner" role="status">
+              <AlertTriangle size={16} aria-hidden />
+              <div className="planner-mcp-banner__copy">
+                <strong>Meee2 MCP is not connected</strong>
+                <span>
+                  Native sessions can run, but node artifacts cannot be submitted back to this canvas.
+                  Reconnect or restart the session after fixing MCP.
+                </span>
+                <em>{mcpWarning}</em>
+              </div>
+              <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
+                <RefreshCw size={14} aria-hidden />
+              </button>
+            </div>
+          )}
           {plannerState ? (
             <ReactFlow
               nodes={flowNodes}
@@ -790,6 +906,7 @@ function PlannerGraphInner({
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
           onSendToAI={handleSendNodeActionToAI}
+          showOwnerInfo={plannerState?.canvas.visibility !== 'private'}
           visibleIOArtifacts={ioArtifactVisibility[selectedNode.id] ?? { inputs: [], outputs: [] }}
           onToggleIOArtifact={handleToggleIOArtifact}
           onClose={() => setNodeModalOpen(false)}
@@ -851,6 +968,12 @@ function normalizeStringList(value: unknown): string[] {
     : []
 }
 
+function gateModeForPlanningNode(node: PlanningNode): 'human' | 'auto' {
+  if (node.executionMode === 'human') return 'human'
+  if ((node.gate?.approvers ?? []).length > 0) return 'human'
+  return 'auto'
+}
+
 function buildPlannerGenerationContext(
   state: PlannerCanvasState | null,
   activeProposal: PlanProposal | null,
@@ -901,6 +1024,9 @@ function compactProposal(proposal: PlanProposal) {
       status: change.status,
       schema: change.schema,
       dependsOnNodeIds: change.dependsOnNodeIds,
+      executionMode: change.executionMode,
+      clearGate: change.clearGate,
+      gate: change.gate,
       node: change.node ? compactPlanningNode(change.node) : undefined,
     })),
   }
@@ -912,6 +1038,7 @@ function compactPlanningNode(node: PlanningNode) {
     title: node.title,
     nodeKind: node.nodeKind ?? 'step',
     status: node.status,
+    executionMode: node.executionMode,
     schema: node.schema,
     dependsOnNodeIds: node.dependsOnNodeIds ?? [],
     doerId: node.doerId,
@@ -943,6 +1070,40 @@ function shouldInspectDrift(
     '跑偏',
     '阻塞',
   ].some((keyword) => normalized.includes(keyword))
+}
+
+function validateStatusChange(node: PlanningNode, status: PlanningNodeStatus): string | null {
+  if ((node.nodeKind ?? 'step') !== 'step') return null
+  if (status !== 'ready' && status !== 'working' && status !== 'done') return null
+
+  const missingInputs = missingRequiredInputs(node)
+  if (missingInputs.length > 0) {
+    return `Cannot mark "${node.title}" as ${status}: missing required input ${missingInputs.join(', ')}.`
+  }
+
+  const needsSession = status === 'working' || status === 'done'
+  const humanStep = node.executionMode === 'human' || node.executorType === 'human'
+  const hasSession = Boolean(node.sessionId?.trim())
+  if (needsSession && !humanStep && !hasSession) {
+    return `Cannot mark "${node.title}" as ${status}: create or bind a run session first.`
+  }
+
+  return null
+}
+
+function missingRequiredInputs(node: PlanningNode): string[] {
+  const inputs = node.schema?.inputs ?? []
+  if (inputs.length === 0) return []
+  const bound = new Set(
+    (node.contextSources ?? [])
+      .filter((source) => source.reference.trim().length > 0)
+      .map((source) => normalizeInputName(source.title)),
+  )
+  return inputs.filter((input) => !bound.has(normalizeInputName(input)))
+}
+
+function normalizeInputName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): PlanProposal[] {

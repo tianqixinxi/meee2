@@ -15,5 +15,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@meee1/board-core": "^0.1.1",
+    "@meee1/board-persistence-http": "^0.1.1"
   }
 }

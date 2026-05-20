@@ -6,7 +6,14 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      '@meee1/board-core':
+        specifier: ^0.1.1
+        version: 0.1.1
+      '@meee1/board-persistence-http':
+        specifier: ^0.1.1
+        version: 0.1.1
 
   packages/board-app:
     dependencies:
@@ -506,6 +513,12 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@meee1/board-core@0.1.1':
+    resolution: {integrity: sha512-MOQODvc7jS+TlkRA4bk7cF28yLEB+RdvJsKbyjZRvjjdUZ00mD6CvM+ZTSK00T9wyGVP+CgivIP+Y/XSPEbrvw==}
+
+  '@meee1/board-persistence-http@0.1.1':
+    resolution: {integrity: sha512-4RVtQTehWLXwrWbbq9jFEqCHrT48Lo7PqC2/eHl/27UneKHQlJLgEbGs7JN0h1WvoMu95nw2e9v+lXwyj6K+zQ==}
 
   '@mermaid-js/parser@0.6.3':
     resolution: {integrity: sha512-lnjOhe7zyHjc+If7yT4zoedx2vo4sHaTmtkl1+or8BRTnCtDmcTpAjpzDSfCZrshM5bCoz0GyidzadJAH1xobA==}
@@ -2711,6 +2724,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@meee1/board-core@0.1.1': {}
+
+  '@meee1/board-persistence-http@0.1.1':
+    dependencies:
+      '@meee1/board-core': 0.1.1
 
   '@mermaid-js/parser@0.6.3':
     dependencies:

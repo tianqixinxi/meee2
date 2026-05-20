@@ -38,6 +38,7 @@ interface Props {
   onProposalCreated?: (proposal: PlanProposal) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string) => void
+  showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
     nodeId: string,
@@ -60,6 +61,7 @@ export function NodeInspectorModal({
   onProposalCreated,
   onGraphStateChanged,
   onSendToAI,
+  showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
 }: Props) {
@@ -71,7 +73,13 @@ export function NodeInspectorModal({
   const isTemplate = variant === 'template'
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
   const runState = state?.runState ?? node.status
-  const blockers = isTemplate ? [] : state?.blockers ?? []
+  const blockers = isTemplate
+    ? []
+    : state?.blockers?.length
+      ? state.blockers
+      : node.status === 'blocked' && node.blockedReason?.trim()
+        ? [node.blockedReason.trim()]
+        : []
   const inputs = dedupeStrings(node.schema?.inputs ?? [])
   const outputs = dedupeStrings(node.schema?.outputs ?? [])
   const inputBindings = inputBindingMap(inputs, node.contextSources ?? [])
@@ -175,7 +183,8 @@ export function NodeInspectorModal({
           {!isTemplate && (
             <InfoTile label="Status" value={displayRunState(String(runState))} />
           )}
-          <InfoTile label="Owner" value={responsibleLabel} />
+          {showOwnerInfo && <InfoTile label="Owner" value={responsibleLabel} />}
+          <InfoTile label="Gate" value={gateModeLabel(node)} />
           <InfoTile label="Type" value={nodeKind} />
         </div>
 
@@ -239,19 +248,21 @@ export function NodeInspectorModal({
               >
                 <Layers size={12} aria-hidden /> Expand sub-canvas
               </button>
-              <button
-                type="button"
-                disabled={actionBusy || !canAssignOwner}
-                title={permissionTooltip}
-                onClick={() => {
-                  setActionError(null)
-                  setAssignOpen((value) => !value)
-                }}
-              >
-                <UserRound size={12} aria-hidden /> Assign owner
-              </button>
+              {showOwnerInfo && (
+                <button
+                  type="button"
+                  disabled={actionBusy || !canAssignOwner}
+                  title={permissionTooltip}
+                  onClick={() => {
+                    setActionError(null)
+                    setAssignOpen((value) => !value)
+                  }}
+                >
+                  <UserRound size={12} aria-hidden /> Assign owner
+                </button>
+              )}
             </div>
-            {assignOpen && (
+            {showOwnerInfo && assignOpen && (
               <div className="planner-node-actions__panel">
                 {teamMembers.length === 0 ? (
                   <p className="planner-node-modal__empty">No team members available to assign.</p>
@@ -492,6 +503,12 @@ function compactLabel(value: string): string {
   const withoutQuery = value.trim().split('?')[0]
   const parts = withoutQuery.split(/[/:#]/).filter(Boolean)
   return parts[parts.length - 1]?.trim() || value
+}
+
+function gateModeLabel(node: PlanningNode): 'Human' | 'Auto' {
+  if (node.executionMode === 'human') return 'Human'
+  if ((node.gate?.approvers ?? []).length > 0) return 'Human'
+  return 'Auto'
 }
 
 function displayRunState(runState: string): string {

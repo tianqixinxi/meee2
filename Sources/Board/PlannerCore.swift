@@ -377,6 +377,7 @@ struct PlanningNode: Codable, Equatable {
     var artifactRefs: [String]?
     var eventRefs: [String]?
     var workflowRunState: PlannerWorkflowRunState?
+    var blockedReason: String?
 
     init(
         id: String,
@@ -401,7 +402,8 @@ struct PlanningNode: Codable, Equatable {
         approvers: [String]? = nil,
         artifactRefs: [String]? = nil,
         eventRefs: [String]? = nil,
-        workflowRunState: PlannerWorkflowRunState? = nil
+        workflowRunState: PlannerWorkflowRunState? = nil,
+        blockedReason: String? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -426,6 +428,7 @@ struct PlanningNode: Codable, Equatable {
         self.artifactRefs = artifactRefs
         self.eventRefs = eventRefs
         self.workflowRunState = workflowRunState
+        self.blockedReason = blockedReason
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -439,6 +442,7 @@ struct PlanningNode: Codable, Equatable {
         case executorType, doerId, status, sessionId, chatThreadId, source
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
         case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
+        case blockedReason
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -471,6 +475,7 @@ struct PlanningNode: Codable, Equatable {
         artifactRefs = try container.decodeIfPresent([String].self, forKey: .artifactRefs)
         eventRefs = try container.decodeIfPresent([String].self, forKey: .eventRefs)
         workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
+        blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -498,6 +503,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(artifactRefs, forKey: .artifactRefs)
         try container.encodeIfPresent(eventRefs, forKey: .eventRefs)
         try container.encodeIfPresent(workflowRunState, forKey: .workflowRunState)
+        try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
@@ -601,6 +607,8 @@ struct PlanChange: Codable, Equatable {
     var nodeKind: PlanningNodeKind?
     var layout: PlannerNodeLayout?
     var trigger: PlannerNodeTrigger?
+    var executionMode: ExecutionMode?
+    var clearGate: Bool?
     var gate: PlannerNodeGate?
     var dispatch: PlannerNodeDispatch?
     var approvers: [String]?
@@ -616,7 +624,7 @@ struct PlanChange: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case kind, node, nodeId, title, status, schema, contextSources
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
-        case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
+        case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
     }
 
@@ -633,6 +641,8 @@ struct PlanChange: Codable, Equatable {
         nodeKind: PlanningNodeKind? = nil,
         layout: PlannerNodeLayout? = nil,
         trigger: PlannerNodeTrigger? = nil,
+        executionMode: ExecutionMode? = nil,
+        clearGate: Bool? = nil,
         gate: PlannerNodeGate? = nil,
         dispatch: PlannerNodeDispatch? = nil,
         approvers: [String]? = nil,
@@ -657,6 +667,8 @@ struct PlanChange: Codable, Equatable {
         self.nodeKind = nodeKind
         self.layout = layout
         self.trigger = trigger
+        self.executionMode = executionMode
+        self.clearGate = clearGate
         self.gate = gate
         self.dispatch = dispatch
         self.approvers = approvers
@@ -684,6 +696,8 @@ struct PlanChange: Codable, Equatable {
         nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
         layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
         trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
+        executionMode = try container.decodeIfPresent(ExecutionMode.self, forKey: .executionMode)
+        clearGate = try container.decodeIfPresent(Bool.self, forKey: .clearGate)
         gate = try container.decodeIfPresent(PlannerNodeGate.self, forKey: .gate)
         dispatch = try container.decodeIfPresent(PlannerNodeDispatch.self, forKey: .dispatch)
         approvers = try container.decodeIfPresent([String].self, forKey: .approvers)
@@ -711,6 +725,8 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(nodeKind, forKey: .nodeKind)
         try container.encodeIfPresent(layout, forKey: .layout)
         try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(executionMode, forKey: .executionMode)
+        try container.encodeIfPresent(clearGate, forKey: .clearGate)
         try container.encodeIfPresent(gate, forKey: .gate)
         try container.encodeIfPresent(dispatch, forKey: .dispatch)
         try container.encodeIfPresent(approvers, forKey: .approvers)
@@ -764,6 +780,8 @@ struct PlanChange: Codable, Equatable {
         nodeKind: PlanningNodeKind? = nil,
         layout: PlannerNodeLayout? = nil,
         trigger: PlannerNodeTrigger? = nil,
+        executionMode: ExecutionMode? = nil,
+        clearGate: Bool? = nil,
         gate: PlannerNodeGate? = nil,
         dispatch: PlannerNodeDispatch? = nil,
         approvers: [String]? = nil,
@@ -788,6 +806,8 @@ struct PlanChange: Codable, Equatable {
             nodeKind: nodeKind,
             layout: layout,
             trigger: trigger,
+            executionMode: executionMode,
+            clearGate: clearGate,
             gate: gate,
             dispatch: dispatch,
             approvers: approvers,
@@ -894,6 +914,8 @@ struct PlannerNodeContract: Codable, Equatable {
     var downstreamNodes: [PlanningNode]
     var allowedRouteTargets: [PlannerRouteTarget]
     var expectedArtifactKinds: [PlannerArtifactKind]
+    var inlinePayloadLimitBytes: Int
+    var artifactPayloadTypes: [PlannerArtifactPayloadType]
     var completionCriteria: [String]
 }
 
@@ -1275,6 +1297,8 @@ enum PlannerProposalValidator {
                     change.nodeKind != nil ||
                     change.layout != nil ||
                     change.trigger != nil ||
+                    change.executionMode != nil ||
+                    change.clearGate == true ||
                     change.gate != nil ||
                     change.dispatch != nil ||
                     change.approvers != nil ||
@@ -1477,6 +1501,13 @@ final class PlannerCoreService {
                 if let trigger = change.trigger {
                     updatedNodes[index].trigger = trigger
                 }
+                if let executionMode = change.executionMode {
+                    updatedNodes[index].executionMode = executionMode
+                }
+                if change.clearGate == true {
+                    updatedNodes[index].gate = nil
+                    updatedNodes[index].approvers = nil
+                }
                 if let gate = change.gate {
                     updatedNodes[index].gate = gate
                 }
@@ -1669,7 +1700,11 @@ final class PlannerCoreService {
     private func blockers(for node: PlanningNode) -> [String] {
         switch node.status {
         case .blocked:
-            return ["Node is blocked and needs meee2 AI attention"]
+            let reason = node.blockedReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let reason, !reason.isEmpty {
+                return [reason]
+            }
+            return ["Blocked: no reason was provided by the session."]
         default:
             return []
         }
@@ -1791,8 +1826,7 @@ final class PlannerStore {
         var proposals: [PlanProposal]
         var events: [PlannerEvent]
         var artifacts: [PlannerArtifact]
-        /// Execution-layer history (P1 Run layer). Empty for canvases persisted
-        /// before the Run layer existed — `loadDocument` synthesises Run #1.
+        /// Execution-layer history (P1 Run layer).
         var runs: [WorkflowRun]
         /// The run that execution-layer mutations currently mirror into. `nil`
         /// when no run is in progress (e.g. a finished canvas awaiting re-run).
@@ -1836,13 +1870,18 @@ final class PlannerStore {
         var canvases: [String: CanvasRecord]
     }
 
+    private struct StoreIndex: Codable {
+        var canvasIds: [String]
+        var updatedAt: Date
+    }
+
     static let shared = PlannerStore(
         fileURL: URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".meee2", isDirectory: true)
-            .appendingPathComponent("planner-canvases.json")
+            .appendingPathComponent("planner", isDirectory: true)
     )
 
-    private let fileURL: URL
+    private let rootURL: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder
     private let decoder = JSONDecoder()
@@ -1850,11 +1889,13 @@ final class PlannerStore {
     private var document: StoreDocument
 
     init(fileURL: URL, fileManager: FileManager = .default) {
-        self.fileURL = fileURL
+        self.rootURL = fileURL.pathExtension == "json"
+            ? fileURL.deletingPathExtension()
+            : fileURL
         self.fileManager = fileManager
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        self.document = Self.loadDocument(fileURL: fileURL, fileManager: fileManager, decoder: decoder)
+        self.document = Self.loadDocument(rootURL: rootURL, fileManager: fileManager, decoder: decoder)
     }
 
     func record(
@@ -1874,13 +1915,13 @@ final class PlannerStore {
                 var updated = existing
                 updated.canvas = incoming
                 document.canvases[canvas.id] = updated
-                try save()
+                try save(canvasId: canvas.id)
                 return updated
             }
 
             let record = CanvasRecord(canvas: canvas, nodes: seedNodes, proposals: [])
             document.canvases[canvas.id] = record
-            try save()
+            try save(canvasId: canvas.id)
             return record
         }
     }
@@ -1895,7 +1936,7 @@ final class PlannerStore {
             var record = try requireRecord(canvasId: canvasId)
             record.canvas.visibility = visibility
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -1914,7 +1955,7 @@ final class PlannerStore {
             }
             record.nodes = replacementNodes
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -1935,7 +1976,7 @@ final class PlannerStore {
             }
             record.nodes = seedNodes
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -1950,7 +1991,7 @@ final class PlannerStore {
             record.runs = []
             record.activeRunId = nil
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -1980,7 +2021,7 @@ final class PlannerStore {
                 ))
             }
             document.canvases[canvas.id] = record
-            try save()
+            try save(canvasId: canvas.id)
             return proposal
         }
     }
@@ -2005,7 +2046,7 @@ final class PlannerStore {
                 summary: record.proposals[index].summary
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record.proposals[index]
         }
     }
@@ -2030,7 +2071,7 @@ final class PlannerStore {
                 summary: record.proposals[index].summary
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record.proposals[index]
         }
     }
@@ -2063,7 +2104,7 @@ final class PlannerStore {
                 summary: proposal.summary
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2173,7 +2214,7 @@ final class PlannerStore {
             }
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
         return nil
@@ -2263,7 +2304,9 @@ final class PlannerStore {
         guard let record = document.canvases[canvasId] else {
             throw PlannerCoreError.canvasNotFound(canvasId)
         }
-        return record
+        var normalized = record
+        normalized.artifacts = mergeArtifacts([], record.artifacts)
+        return normalized
     }
 
     // MARK: - Run layer (P1)
@@ -2333,7 +2376,7 @@ final class PlannerStore {
             // become `readyToDispatch`, the rest `waitingOnUpstream`).
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record.runs.last ?? run
         }
     }
@@ -2367,20 +2410,38 @@ final class PlannerStore {
                     record.activeRunId = nil
                 }
                 document.canvases[canvasId] = record
-                try save()
+                try save(canvasId: canvasId)
                 return record.runs[idx]
             }
             throw PlannerCoreError.runNotFound(runId)
         }
     }
 
-    private func save() throws {
-        try fileManager.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+    private func save(canvasId: String) throws {
+        guard let record = document.canvases[canvasId] else {
+            throw PlannerCoreError.canvasNotFound(canvasId)
+        }
+        let directory = canvasDirectory(canvasId: canvasId)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try encoder.encode(record)
+        try data.write(to: directory.appendingPathComponent("state.json"), options: .atomic)
+        try saveIndex()
+    }
+
+    private func saveIndex() throws {
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        let index = StoreIndex(
+            canvasIds: document.canvases.keys.sorted(),
+            updatedAt: Date()
         )
-        let data = try encoder.encode(document)
-        try data.write(to: fileURL, options: .atomic)
+        let data = try encoder.encode(index)
+        try data.write(to: rootURL.appendingPathComponent("index.json"), options: .atomic)
+    }
+
+    private func canvasDirectory(canvasId: String) -> URL {
+        rootURL
+            .appendingPathComponent("canvases", isDirectory: true)
+            .appendingPathComponent(Self.safePathComponent(canvasId), isDirectory: true)
     }
 
     private func events(
@@ -2465,6 +2526,14 @@ final class PlannerStore {
             // Stamp the artifact with the active run so re-runs keep their own
             // evidence separate (workflow-run-spec §6).
             var artifact = artifact
+            if let existingId = artifactIdForSlot(
+                existing: record.artifacts,
+                canvasId: canvasId,
+                nodeId: artifact.nodeId,
+                reference: artifact.reference
+            ) {
+                artifact.id = existingId
+            }
             if artifact.runId == nil {
                 artifact.runId = record.activeRunId
             }
@@ -2491,7 +2560,7 @@ final class PlannerStore {
                 artifactRefs: [artifact.reference]
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2513,6 +2582,9 @@ final class PlannerStore {
             let previous = record.nodes[nodeIndex].status
             guard previous != status else { return record }
             record.nodes[nodeIndex].status = status
+            if status != .blocked {
+                record.nodes[nodeIndex].blockedReason = nil
+            }
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -2520,7 +2592,60 @@ final class PlannerStore {
                 summary: "\(record.nodes[nodeIndex].title) -> \(status.rawValue)"
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    func updateNodeGate(
+        canvasId: String,
+        nodeId: String,
+        executionMode: ExecutionMode
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let nodeKind = record.nodes[nodeIndex].nodeKind ?? .step
+            guard nodeKind == .step else {
+                throw PlannerCoreError.invalidNodeOutput("Only step nodes can change gate mode.")
+            }
+            var node = record.nodes[nodeIndex]
+            node.executionMode = executionMode
+            switch executionMode {
+            case .human:
+                let approverCandidates = (node.approvers ?? [])
+                    + (node.gate?.approvers ?? [])
+                    + [record.canvas.ownerId, node.doerId]
+                var seenApprovers = Set<String>()
+                let approvers = approverCandidates.compactMap { raw -> String? in
+                    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !value.isEmpty, !seenApprovers.contains(value) else { return nil }
+                    seenApprovers.insert(value)
+                    return value
+                }
+                node.approvers = approvers
+                node.gate = PlannerNodeGate(
+                    type: node.gate?.type ?? "human",
+                    label: node.gate?.label ?? "Human review",
+                    requiredArtifactRefs: node.gate?.requiredArtifactRefs ?? [],
+                    approvers: approvers,
+                    onFailGotoNodeId: node.gate?.onFailGotoNodeId
+                )
+            case .auto:
+                node.gate = nil
+                node.approvers = nil
+            }
+            record.nodes[nodeIndex] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "\(node.title) gate -> \(executionMode.rawValue)"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2570,7 +2695,7 @@ final class PlannerStore {
             ))
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2619,6 +2744,7 @@ final class PlannerStore {
             var current = record.nodes[sourceIndex]
             switch output.status {
             case .done:
+                current.blockedReason = nil
                 if current.executionMode == .human {
                     current.status = .working
                     current.workflowRunState = .gateWait
@@ -2629,9 +2755,11 @@ final class PlannerStore {
             case .blocked:
                 current.status = .blocked
                 current.workflowRunState = .failed
+                current.blockedReason = summary.isEmpty ? nil : summary
             case .needsReview:
                 current.status = .working
                 current.workflowRunState = .gateWait
+                current.blockedReason = summary.isEmpty ? nil : summary
             }
 
             var artifactRefs = current.artifactRefs ?? []
@@ -2641,8 +2769,14 @@ final class PlannerStore {
                 guard !reference.isEmpty else {
                     throw PlannerCoreError.invalidNodeOutput("Artifact reference cannot be empty.")
                 }
+                let artifactId = artifactIdForSlot(
+                    existing: record.artifacts,
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    reference: reference
+                ) ?? "artifact-\(canvasId)-\(nodeId)-\(stableSuffix(reference))"
                 let artifact = PlannerArtifact(
-                    id: "artifact-\(stableSuffix(reference))",
+                    id: artifactId,
                     canvasId: canvasId,
                     nodeId: nodeId,
                     kind: item.kind,
@@ -2754,7 +2888,7 @@ final class PlannerStore {
 
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return (record, routes)
         }
     }
@@ -2787,7 +2921,7 @@ final class PlannerStore {
                 summary: "Set input \(input) for \(node.title)"
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2806,11 +2940,17 @@ final class PlannerStore {
             guard record.artifacts[artifactIndex].kind == .kanban else {
                 throw PlannerCoreError.invalidNodeOutput("Artifact \(artifactId) is not a kanban artifact.")
             }
-            guard let updatedPayload = setKanbanItemSubCanvas(
-                payload: record.artifacts[artifactIndex].payload,
+            let payload = record.artifacts[artifactIndex].payload
+            let kanbanPayload = setKanbanItemSubCanvas(
+                payload: payload,
                 itemId: itemId,
                 subCanvasId: subCanvasId
-            ) else {
+            ) ?? setKanbanItemSubCanvas(
+                payload: kanbanPayloadFromContentArtifact(record.artifacts[artifactIndex]),
+                itemId: itemId,
+                subCanvasId: subCanvasId
+            )
+            guard let updatedPayload = kanbanPayload else {
                 throw PlannerCoreError.invalidNodeOutput("Kanban item \(itemId) was not found.")
             }
             record.artifacts[artifactIndex].payload = updatedPayload
@@ -2822,9 +2962,120 @@ final class PlannerStore {
                 artifactRefs: [record.artifacts[artifactIndex].reference]
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
+    }
+
+    private func setKanbanItemSubCanvas(
+        payload: BoardJSONValue?,
+        itemId: String,
+        subCanvasId: String
+    ) -> BoardJSONValue? {
+        guard case .object(var object) = payload,
+              case .array(let rawItems)? = object["items"] else {
+            return nil
+        }
+        var didUpdate = false
+        let items = rawItems.map { value -> BoardJSONValue in
+            guard case .object(var item) = value,
+                  case .string(let id)? = item["id"],
+                  id == itemId else {
+                return value
+            }
+            item["subCanvasId"] = .string(subCanvasId)
+            didUpdate = true
+            return .object(item)
+        }
+        guard didUpdate else { return nil }
+        object["items"] = .array(items)
+        return .object(object)
+    }
+
+    private func kanbanPayloadFromContentArtifact(_ artifact: PlannerArtifact) -> BoardJSONValue? {
+        guard artifact.kind == .kanban,
+              let content = try? PlannerArtifactStorage.content(for: artifact).content,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return kanbanPayloadFromMarkdownTable(content)
+    }
+
+    private func kanbanPayloadFromMarkdownTable(_ content: String) -> BoardJSONValue? {
+        let rows = content
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("|") && $0.hasSuffix("|") }
+            .map { line in
+                line.dropFirst().dropLast().split(separator: "|", omittingEmptySubsequences: false)
+                    .map { cleanupMarkdownCell(String($0)) }
+            }
+        guard rows.count >= 2 else { return nil }
+        let header = rows[0].map { $0.lowercased() }
+        let bodyRows = rows.dropFirst().filter { !isMarkdownSeparatorRow($0) }
+        guard let titleIndex = header.firstIndex(where: { $0.contains("idea") || $0.contains("title") || $0.contains("name") }) else {
+            return nil
+        }
+        let descriptionIndex = header.firstIndex(where: { $0.contains("description") || $0.contains("note") || $0.contains("summary") })
+        let priorityIndex = header.firstIndex(where: { $0.contains("priority") })
+        let statusIndex = header.firstIndex(where: { $0.contains("status") || $0.contains("column") })
+        var columnsById: [String: String] = [:]
+        var items: [BoardJSONValue] = []
+        for (index, row) in bodyRows.enumerated() {
+            guard row.indices.contains(titleIndex) else { continue }
+            let title = row[titleIndex].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { continue }
+            let rawStatus = statusIndex.flatMap { row.indices.contains($0) ? row[$0] : nil }?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let columnTitle = rawStatus?.isEmpty == false ? rawStatus! : "Backlog"
+            let columnId = stableSuffix(columnTitle)
+            columnsById[columnId] = columnTitle
+            var descriptionParts: [String] = []
+            if let priority = priorityIndex.flatMap({ row.indices.contains($0) ? row[$0] : nil })?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !priority.isEmpty, priority != "-" {
+                descriptionParts.append("Priority: \(priority)")
+            }
+            if let description = descriptionIndex.flatMap({ row.indices.contains($0) ? row[$0] : nil })?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !description.isEmpty, description != "-" {
+                descriptionParts.append(description)
+            }
+            var item: [String: BoardJSONValue] = [
+                "id": .string("item-\(index + 1)"),
+                "columnId": .string(columnId),
+                "title": .string(title),
+                "subCanvasId": .null
+            ]
+            if !descriptionParts.isEmpty {
+                item["description"] = .string(descriptionParts.joined(separator: "\n"))
+            }
+            items.append(.object(item))
+        }
+        guard !items.isEmpty else { return nil }
+        let columns = columnsById
+            .sorted { $0.value < $1.value }
+            .map { BoardJSONValue.object(["id": .string($0.key), "title": .string($0.value)]) }
+        return .object([
+            "version": .number(1),
+            "columns": .array(columns),
+            "items": .array(items)
+        ])
+    }
+
+    private func isMarkdownSeparatorRow(_ row: [String]) -> Bool {
+        row.allSatisfy { cell in
+            let trimmed = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return true }
+            return trimmed.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private func cleanupMarkdownCell(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "<br>", with: "\n")
+            .replacingOccurrences(of: "<br/>", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n")
+            .replacingOccurrences(of: "**", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func updateRunNodeAssignee(
@@ -2853,7 +3104,7 @@ final class PlannerStore {
                 summary: trimmed.isEmpty ? "Cleared delivery assignee" : "Updated delivery assignee"
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record.runs[runIndex]
         }
     }
@@ -2872,7 +3123,7 @@ final class PlannerStore {
                 summary: "Updated layout for \(record.nodes[index].title)"
             ))
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2920,7 +3171,7 @@ final class PlannerStore {
             }
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -2964,7 +3215,7 @@ final class PlannerStore {
             }
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return (record, record.nodes[index])
         }
     }
@@ -3001,7 +3252,7 @@ final class PlannerStore {
             ))
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -3035,7 +3286,7 @@ final class PlannerStore {
             ))
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
-            try save()
+            try save(canvasId: canvasId)
             return record
         }
     }
@@ -3083,9 +3334,12 @@ final class PlannerStore {
             downstreamNodes: downstreamNodes,
             allowedRouteTargets: routeTargets,
             expectedArtifactKinds: PlannerArtifactKind.allCases,
+            inlinePayloadLimitBytes: PlannerArtifactStorage.inlinePayloadLimitBytes,
+            artifactPayloadTypes: PlannerArtifactPayloadType.allCases,
             completionCriteria: [
                 node.schema.goal,
                 "Submit output with status done, blocked, or needs_review.",
+                "Small artifact payloads may be inline; large text/html/json/file content must be submitted as payload.file.path inside the session cwd or canvas workspace.",
                 "Route messages and artifacts only to downstream nodes or owner."
             ]
         )
@@ -3114,36 +3368,58 @@ final class PlannerStore {
         _ existing: [PlannerArtifact],
         _ incoming: [PlannerArtifact]
     ) -> [PlannerArtifact] {
-        var byId = Dictionary(uniqueKeysWithValues: existing.map { ($0.id, $0) })
+        var result = existing
         for artifact in incoming {
-            byId[artifact.id] = artifact
+            var next = artifact
+            if let existingSlot = result.first(where: { sameArtifactSlot($0, next) }),
+               artifactMergeScore(existingSlot) > artifactMergeScore(next) {
+                continue
+            }
+            if let existingSlot = result.first(where: { sameArtifactSlot($0, next) }) {
+                next.id = existingSlot.id
+            }
+            result.removeAll { existing in
+                existing.id == next.id || sameArtifactSlot(existing, next)
+            }
+            result.append(next)
         }
-        return byId.values.sorted { $0.createdAt < $1.createdAt }
+        return result.sorted { $0.createdAt < $1.createdAt }
     }
 
-    private func setKanbanItemSubCanvas(
-        payload: BoardJSONValue?,
-        itemId: String,
-        subCanvasId: String
-    ) -> BoardJSONValue? {
-        guard case .object(var object) = payload,
-              case .array(let rawItems)? = object["items"] else {
-            return nil
+    private func artifactIdForSlot(
+        existing: [PlannerArtifact],
+        canvasId: String,
+        nodeId: String,
+        reference: String
+    ) -> String? {
+        existing.first { artifact in
+            artifact.canvasId == canvasId
+                && artifact.nodeId == nodeId
+                && normalizeArtifactReference(artifact.reference) == normalizeArtifactReference(reference)
+        }?.id
+    }
+
+    private func sameArtifactSlot(_ lhs: PlannerArtifact, _ rhs: PlannerArtifact) -> Bool {
+        lhs.canvasId == rhs.canvasId
+            && lhs.nodeId == rhs.nodeId
+            && normalizeArtifactReference(lhs.reference) == normalizeArtifactReference(rhs.reference)
+    }
+
+    private func normalizeArtifactReference(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func artifactMergeScore(_ artifact: PlannerArtifact) -> Int {
+        var score = 0
+        if artifact.kind != .generic { score += 100 }
+        if artifact.producedBy == .agent { score += 50 }
+        guard let payload = artifact.payload?.objectValue else { return score }
+        score += 1_000
+        if payload["blobRef"]?.stringValue?.isEmpty == false { score += 2_000 }
+        if case .array(let items)? = payload["items"], !items.isEmpty {
+            score += 10_000 + items.count
         }
-        var didUpdate = false
-        let items = rawItems.map { value -> BoardJSONValue in
-            guard case .object(var item) = value,
-                  case .string(let id)? = item["id"],
-                  id == itemId else {
-                return value
-            }
-            item["subCanvasId"] = .string(subCanvasId)
-            didUpdate = true
-            return .object(item)
-        }
-        guard didUpdate else { return nil }
-        object["items"] = .array(items)
-        return .object(object)
+        return score
     }
 
     private func derivedArtifacts(from nodes: [PlanningNode], canvasId: String) -> [PlannerArtifact] {
@@ -3235,16 +3511,39 @@ final class PlannerStore {
     }
 
     private static func loadDocument(
-        fileURL: URL,
+        rootURL: URL,
         fileManager: FileManager,
         decoder: JSONDecoder
     ) -> StoreDocument {
-        guard fileManager.fileExists(atPath: fileURL.path),
-              let data = try? Data(contentsOf: fileURL),
-              let decoded = try? decoder.decode(StoreDocument.self, from: data) else {
+        let canvasesURL = rootURL.appendingPathComponent("canvases", isDirectory: true)
+        guard let canvasDirectories = try? fileManager.contentsOfDirectory(
+            at: canvasesURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
             return StoreDocument(canvases: [:])
         }
-        return decoded
+        var canvases: [String: CanvasRecord] = [:]
+        for directory in canvasDirectories {
+            let resourceValues = try? directory.resourceValues(forKeys: [.isDirectoryKey])
+            guard resourceValues?.isDirectory == true else { continue }
+            let stateURL = directory.appendingPathComponent("state.json")
+            guard fileManager.fileExists(atPath: stateURL.path),
+                  let data = try? Data(contentsOf: stateURL),
+                  let record = try? decoder.decode(CanvasRecord.self, from: data) else {
+                continue
+            }
+            canvases[record.canvas.id] = record
+        }
+        return StoreDocument(canvases: canvases)
+    }
+
+    private static func safePathComponent(_ raw: String) -> String {
+        let mapped = raw.map { char in
+            char.isLetter || char.isNumber || char == "." || char == "-" || char == "_" ? char : "-"
+        }
+        let value = String(mapped).trimmingCharacters(in: CharacterSet(charactersIn: ".-_/ "))
+        return value.isEmpty ? "canvas" : value
     }
 }
 
@@ -3631,8 +3930,16 @@ enum PlannerBoardBridge {
         // attach-artifact is a node execution-state mutation: owner anywhere,
         // doer only on their own node, viewer denied.
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        let artifactId = "artifact-\(canvasId)-\(nodeId)-\(UUID().uuidString.lowercased())"
+        let workspacePath = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        let normalizedPayload = try PlannerArtifactStorage.normalizePayload(
+            payload,
+            canvasId: canvasId,
+            artifactId: artifactId,
+            workspacePath: workspacePath
+        )
         let artifact = PlannerArtifact(
-            id: "artifact-\(canvasId)-\(nodeId)-\(UUID().uuidString.lowercased())",
+            id: artifactId,
             canvasId: canvasId,
             nodeId: nodeId,
             kind: kind,
@@ -3640,7 +3947,7 @@ enum PlannerBoardBridge {
             reference: reference,
             status: status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "attached" : status,
             createdAt: Date(),
-            payload: payload
+            payload: normalizedPayload
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
@@ -3662,6 +3969,25 @@ enum PlannerBoardBridge {
         }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         _ = try store.updateNodeStatus(canvasId: canvasId, nodeId: nodeId, status: status)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func updateNodeGate(
+        nodeId: String,
+        executionMode: ExecutionMode,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        guard (node.nodeKind ?? .step) == .step else {
+            throw PlannerCoreError.invalidNodeOutput("Only step nodes can change gate mode.")
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.updateNodeGate(canvasId: canvasId, nodeId: nodeId, executionMode: executionMode)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
@@ -3747,9 +4073,32 @@ enum PlannerBoardBridge {
             throw PlannerCoreError.nodeNotFound(nodeId)
         }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
-        let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: output)
+        let workspacePath = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+        var normalizedOutput = output
+        normalizedOutput.artifacts = try output.artifacts.map { artifact in
+            let reference = artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            let artifactId = "artifact-\(canvasId)-\(nodeId)-\(stableArtifactSuffix(reference))"
+            let payload = try PlannerArtifactStorage.normalizePayload(
+                artifact.payload,
+                canvasId: canvasId,
+                artifactId: artifactId,
+                workspacePath: workspacePath
+            )
+            var next = artifact
+            next.payload = payload
+            return next
+        }
+        let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: normalizedOutput)
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         return PlannerNodeOutputResult(graph: graph, routes: submitted.routes, hint: nil)
+    }
+
+    private static func stableArtifactSuffix(_ raw: String) -> String {
+        let normalized = raw
+            .lowercased()
+            .map { char in char.isLetter || char.isNumber ? char : "-" }
+            .reduce(into: "") { $0.append($1) }
+        return normalized.isEmpty ? UUID().uuidString.lowercased() : normalized
     }
 
     static func updateNodeLayout(
@@ -4759,7 +5108,7 @@ enum PlannerPromptFactory {
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
     Supported PlanChange kinds are addNode and updateNode.
-    updateNode may change title, status, schema, contextSources, dependsOnNodeIds, doerId, nodeKind, subCanvasId, gate, dispatch, approvers, artifactRefs, workflowRunState, sessionId, chatThreadId, and source.
+    updateNode may change title, status, schema, contextSources, dependsOnNodeIds, doerId, nodeKind, subCanvasId, executionMode, clearGate, gate, dispatch, approvers, artifactRefs, workflowRunState, sessionId, chatThreadId, and source.
     Use dependsOnNodeIds for graph dependencies. Use schema/contextSources for contract changes. Use doerId only for explicit assignment proposals.
     """
 

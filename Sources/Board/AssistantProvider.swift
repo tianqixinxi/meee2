@@ -65,6 +65,25 @@ struct AssistantSettings {
     let selectedElements: [AssistantSelectedElement]
 }
 
+extension AssistantSettings {
+    func withCanvasDefaults(canvasId nextCanvasId: String, canvasName nextCanvasName: String? = nil) -> AssistantSettings {
+        let trimmedCanvasId = nextCanvasId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCanvasName = (nextCanvasName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return AssistantSettings(
+            provider: provider,
+            apiKey: apiKey,
+            baseUrl: baseUrl,
+            model: model,
+            enabledTools: enabledTools,
+            scope: scope,
+            canvasId: canvasId.isEmpty ? trimmedCanvasId : canvasId,
+            workspacePath: workspacePath,
+            canvasName: canvasName == "Canvas" && !trimmedCanvasName.isEmpty ? trimmedCanvasName : canvasName,
+            selectedElements: selectedElements
+        )
+    }
+}
+
 struct AssistantSelectedElement {
     let id: String
     let type: String
@@ -493,10 +512,16 @@ struct LocalClaudeProvider: AssistantProvider {
         AsyncThrowingStream { continuation in
             Task.detached {
                 do {
+                    let sessionId = AssistantLocalSessionStore.shared.sessionId(forCanvasId: settings.canvasId)
                     try runProcess(
                         systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
                         messages: messages,
                         workspacePath: settings.workspacePath,
+                        sessionId: sessionId,
+                        sessionName: AssistantLocalSessionStore.sessionName(
+                            canvasId: settings.canvasId,
+                            canvasName: settings.canvasName
+                        ),
                         continuation: continuation
                     )
                 } catch {
@@ -529,6 +554,8 @@ struct LocalClaudeProvider: AssistantProvider {
         systemPrompt: String,
         messages: [ChatMessage],
         workspacePath rawWorkspacePath: String,
+        sessionId: String,
+        sessionName: String,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
         let claudePath = resolveClaudeBinary()
@@ -537,14 +564,11 @@ struct LocalClaudeProvider: AssistantProvider {
         let stdout = Pipe()
         let stderr = Pipe()
 
-        let args = [
-            "-p",
-            "--append-system-prompt", systemPrompt,
-            "--no-session-persistence",
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose"
-        ]
+        let args = claudeArguments(
+            systemPrompt: systemPrompt,
+            sessionId: sessionId,
+            sessionName: sessionName
+        )
         if let p = claudePath {
             process.executableURL = URL(fileURLWithPath: p)
             process.arguments = args
@@ -658,6 +682,18 @@ struct LocalClaudeProvider: AssistantProvider {
         }
         continuation.yield(.turnDone(stopReason: nil))
         continuation.finish()
+    }
+
+    func claudeArguments(systemPrompt: String, sessionId: String, sessionName: String) -> [String] {
+        [
+            "-p",
+            "--append-system-prompt", systemPrompt,
+            "--session-id", sessionId,
+            "--name", sessionName,
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose"
+        ]
     }
 
     struct ParsedToolFence: Equatable { let id: String; let name: String; let args: String }

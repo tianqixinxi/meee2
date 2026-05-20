@@ -512,6 +512,7 @@ export default function App() {
             <PlannerGraph
               canvasId={activeWorkspaceCanvasId}
               canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+              workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
               userProfile={userProfile}
               boardState={boardState.state}
               clearRevision={plannerClearRevision}

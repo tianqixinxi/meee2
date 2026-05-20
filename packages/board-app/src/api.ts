@@ -4,6 +4,7 @@ import type {
   Message,
   MessageStatus,
   Mode,
+  Meee2MCPStatus,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -16,6 +17,7 @@ import type {
   WorkflowRun,
   PlannerMonitorState,
   PlannerNodeContract,
+  PlannerArtifactContent,
   PlannerNodeOutput,
   PlannerNodeOutputResult,
   PlanningNode,
@@ -358,6 +360,9 @@ function applyDemoChanges(nodes: PlanningNode[], proposal: PlanProposal): Planni
         contextSources: change.contextSources ?? node.contextSources,
         dependsOnNodeIds: change.dependsOnNodeIds ?? node.dependsOnNodeIds,
         subCanvasId: change.subCanvasId ?? node.subCanvasId,
+        executionMode: change.executionMode ?? node.executionMode,
+        gate: change.clearGate ? null : (change.gate ?? node.gate),
+        approvers: change.clearGate ? null : (change.approvers ?? node.approvers),
       } : node)
     }
   }
@@ -397,6 +402,26 @@ async function jsonRequest<T>(
 export function fetchState(): Promise<BoardState> {
   if (PLANNER_DEMO_MODE) return Promise.resolve(demoBoardState())
   return jsonRequest<BoardState>('/api/state')
+}
+
+export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      configured: true,
+      configCommand: 'node',
+      configArgs: ['/demo/Bridge/mcp-meee2/server.js'],
+      expectedServerPath: '/demo/Bridge/mcp-meee2/server.js',
+      serverPath: '/demo/Bridge/mcp-meee2/server.js',
+      serverExists: true,
+      nodeAvailable: true,
+      launches: true,
+      tools: ['read_node_contract', 'submit_node_output', 'attach_artifact_to_node'],
+      missingRequiredTools: [],
+      error: null,
+      checkedAt: new Date().toISOString(),
+    })
+  }
+  return jsonRequest<Meee2MCPStatus>('/api/system/meee2-mcp-status')
 }
 
 // -- coordination groups ---------------------------------------------------
@@ -543,12 +568,13 @@ export function resolveCanvasConflict(
 export function spawnGlobalSession(
   canvasId: string,
   provider: SpawnProvider,
+  cwd?: string,
 ): Promise<{ ok: boolean; cwd: string; command: string }> {
   return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
     `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
     {
       method: 'POST',
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify({ provider, cwd }),
     },
   )
 }
@@ -851,12 +877,27 @@ export function dispatchPlannerNodeSession(
   canvasId: string,
   nodeId: string,
   runner: PlannerDispatchRunner = 'claude',
+  cwd?: string,
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
     {
       method: 'POST',
-      body: JSON.stringify({ runner }),
+      body: JSON.stringify({ runner, cwd }),
+    },
+  )
+}
+
+export function updatePlannerNodeGate(
+  canvasId: string,
+  nodeId: string,
+  executionMode: 'human' | 'auto',
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/gate`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ executionMode }),
     },
   )
 }
@@ -969,6 +1010,15 @@ export function submitPlannerNodeOutput(
   )
 }
 
+export function getPlannerArtifactContent(
+  canvasId: string,
+  artifactId: string,
+): Promise<PlannerArtifactContent> {
+  return jsonRequest<PlannerArtifactContent>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/content`,
+  )
+}
+
 export function attachPlannerArtifactToNode(
   canvasId: string,
   nodeId: string,
@@ -1049,9 +1099,9 @@ export function openKanbanItemSubCanvas(
   canvasId: string,
   artifactId: string,
   itemId: string,
-  input: { title?: string; scope?: CanvasScope },
-): Promise<{ subCanvasId: string; graph: PlannerGraphState }> {
-  return jsonRequest<{ subCanvasId: string; graph: PlannerGraphState }>(
+  input: { title?: string; scope?: CanvasScope; existingSubCanvasId?: string | null },
+): Promise<{ subCanvasId: string; action: 'opened' | 'created' | 'replaced_missing'; message: string; graph: PlannerGraphState }> {
+  return jsonRequest<{ subCanvasId: string; action: 'opened' | 'created' | 'replaced_missing'; message: string; graph: PlannerGraphState }>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/kanban-items/${encodeURIComponent(itemId)}/sub-canvas`,
     {
       method: 'POST',
@@ -1783,6 +1833,23 @@ export async function assistantChat(
     if (ev.type === 'error') throw new ApiRequestError('assistant', ev.message, 500)
   }
   return { content }
+}
+
+export interface LocalAssistantSessionMessage {
+  id: string
+  role: 'user' | 'assistant' | 'injected'
+  content: string
+  timestamp?: string | null
+}
+
+export async function fetchLocalAssistantSessionMessages(
+  canvasId: string,
+  limit = 80,
+): Promise<{ sessionId: string; messages: LocalAssistantSessionMessage[] }> {
+  const params = new URLSearchParams()
+  if (canvasId) params.set('canvasId', canvasId)
+  params.set('limit', String(limit))
+  return jsonRequest(`/api/assistant/local-session/messages?${params.toString()}`)
 }
 
 // -- transcript ------------------------------------------------------------

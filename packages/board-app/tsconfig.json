@@ -20,5 +20,8 @@
     "forceConsistentCasingInFileNames": true
   },
   "include": ["src"],
-  "references": []
+  "references": [
+    { "path": "../board-core" },
+    { "path": "../board-persistence-http" }
+  ]
 }
