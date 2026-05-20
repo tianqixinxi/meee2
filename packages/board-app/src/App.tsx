@@ -48,7 +48,11 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
-const MIN_CANVAS_LOADING_MS = import.meta.env.VITE_PLANNER_DEMO === '1' ? 0 : 3000
+// Minimum loading-overlay duration when an uncached canvas is hydrated.
+// Previously 3000ms — that made every fresh canvas switch feel sluggish even
+// when the real fetch returned in <100ms. 250ms is enough to smooth flicker
+// for sub-perceptual loads without an artificial wait.
+const MIN_CANVAS_LOADING_MS = import.meta.env.VITE_PLANNER_DEMO === '1' ? 0 : 250
 
 async function loadCanvasHydratedState(
   canvasId: string,
@@ -479,7 +483,13 @@ export default function App() {
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} unreadSids={unreadSids} />
           ) : workspaceMode === 'integrations' ? (
-            <IntegrationsView state={boardState.state} />
+            <IntegrationsView
+              state={boardState.state}
+              onJumpToCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
           ) : workspaceMode === 'team' ? (
             <TeamView
               state={boardState.state}

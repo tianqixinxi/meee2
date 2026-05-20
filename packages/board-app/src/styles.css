@@ -7298,7 +7298,15 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 }
 
 .agent-matrix__recommend-success {
-  color: var(--text) !important;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.agent-matrix__recommend-success span {
+  color: var(--text-dim);
 }
 
 .agent-matrix__browse {

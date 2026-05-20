@@ -4,6 +4,9 @@ import { AgentIntegrationMatrix } from './AgentIntegrationMatrix'
 
 interface Props {
   state: BoardState | null
+  /** Jump to a canvas in planner mode — used by the post-install
+   *  recommend-workflow flow to take the user straight to the new proposal. */
+  onJumpToCanvas?: (canvasId: string) => void
 }
 
 /**
@@ -15,7 +18,7 @@ interface Props {
  * 流程已收掉(被 AgentIntegrationMatrix 覆盖)。`Props.state` 暂留以保持
  * App.tsx 的调用签名,本组件未使用。
  */
-export function IntegrationsView(_props: Props) {
+export function IntegrationsView(props: Props) {
   return (
     <section className="integrations-view" aria-label="Integrations">
       <header className="integrations-view__header">
@@ -29,7 +32,7 @@ export function IntegrationsView(_props: Props) {
         </div>
       </header>
 
-      <AgentIntegrationMatrix />
+      <AgentIntegrationMatrix onJumpToCanvas={props.onJumpToCanvas} />
 
       <section className="integrations-view__contract">
         <div>

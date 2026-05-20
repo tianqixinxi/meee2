@@ -44,12 +44,18 @@ interface IntegrationRow {
   byAgent: Record<string, AgentIntegrationStatus>
 }
 
+interface Props {
+  /** Jump to a canvas in planner mode — used by the post-install
+   *  recommend-workflow flow to take the user straight to the new proposal. */
+  onJumpToCanvas?: (canvasId: string) => void
+}
+
 /**
  * Agent × integration detection matrix (agent-integration-detection P4).
  * Rows = integrations, columns = local agents, cells = connected/partial/
  * missing. A not-fully-connected row offers "Set up" → generates a runbook.
  */
-export function AgentIntegrationMatrix() {
+export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [scan, setScan] = useState<AgentScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -397,10 +403,21 @@ export function AgentIntegrationMatrix() {
                   <strong>Use it in a workflow</strong>
                 </div>
                 {recommended ? (
-                  <p className="agent-matrix__recommend-success">
-                    ✓ Proposal <strong>{recommended.summary}</strong> created in canvas{' '}
-                    <code>{recommended.canvasId}</code>. Open the planner to review &amp; apply.
-                  </p>
+                  <div className="agent-matrix__recommend-success">
+                    <button
+                      type="button"
+                      className="agent-matrix__install"
+                      onClick={() => {
+                        if (onJumpToCanvas) onJumpToCanvas(recommended.canvasId)
+                        setInstallResult(null)
+                      }}
+                    >
+                      Open canvas →
+                    </button>
+                    <span>
+                      Proposal “{recommended.summary}” is waiting in that canvas's review queue.
+                    </span>
+                  </div>
                 ) : (
                   <>
                     <p>
