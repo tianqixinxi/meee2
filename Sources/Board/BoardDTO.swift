@@ -199,6 +199,7 @@ struct SyncTeamDTO: Encodable {
 
 struct UserProfileDTO: Encodable {
     let connected: Bool
+    let userId: String
     let displayName: String
     let userName: String
     let userEmail: String
@@ -327,6 +328,7 @@ struct CanvasInfoDTO: Encodable {
     let id: String
     let name: String
     let scope: String
+    let kind: String
     let isDefault: Bool
     let workspacePath: String
     let teamId: String?

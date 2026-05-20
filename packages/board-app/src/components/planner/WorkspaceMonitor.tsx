@@ -6,9 +6,9 @@ import './planner.css'
 
 const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
   blocked: AlertTriangle,
-  running: PlayCircle,
-  planning: Route,
-  waiting: Clock3,
+  working: PlayCircle,
+  draft: Route,
+  ready: Clock3,
   done: CheckCircle2,
 }
 
@@ -41,9 +41,9 @@ export function WorkspaceMonitor() {
     })
     return [
       { key: 'delivery', label: 'Deliveries', items: items.filter((item) => item.kind === 'delivery') },
-      { key: 'risk', label: 'Blocked / Review', items: items.filter((item) => item.riskRank <= 1) },
-      { key: 'active', label: 'Running / Planning', items: items.filter((item) => item.riskRank === 2 || item.riskRank === 3) },
-      { key: 'waiting', label: 'Waiting', items: items.filter((item) => item.riskRank >= 4) },
+      { key: 'risk', label: 'Blocked', items: items.filter((item) => item.riskRank <= 1) },
+      { key: 'active', label: 'Working / Draft', items: items.filter((item) => item.riskRank === 2 || item.riskRank === 3) },
+      { key: 'ready', label: 'Ready', items: items.filter((item) => item.riskRank >= 4) },
     ]
   }, [monitor, query])
 
@@ -75,7 +75,7 @@ export function WorkspaceMonitor() {
                 {group.items.map((item) => {
                   const Icon = item.kind === 'proposal'
                     ? GitPullRequestArrow
-                    : stateIcons[item.runState ?? 'waiting'] ?? Clock3
+                    : stateIcons[item.runState ?? 'ready'] ?? Clock3
                   return (
                     <article key={item.id} className={`planner-monitor-item planner-monitor-item--rank-${item.riskRank}`}>
                       <div className="planner-monitor-item__icon">
@@ -101,7 +101,6 @@ export function WorkspaceMonitor() {
                       </div>
                       <div className="planner-monitor-item__side">
                         {item.doerId && <span>{item.doerId}</span>}
-                        {item.needsOwnerReview && <em>review</em>}
                       </div>
                     </article>
                   )

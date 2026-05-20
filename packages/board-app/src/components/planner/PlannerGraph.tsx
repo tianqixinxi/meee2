@@ -8,30 +8,37 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
-  abortPlannerRun,
   applyPlannerProposal,
-  applyPlannerProposalPreview,
   approvePlannerProposal,
-  createPlannerDeliveryPipeline,
+  activateSession,
+  abandonPlannerNodeSession,
+  bindPlannerSessionToNode,
+  bindPlannerNodeInput,
+  deletePlannerNode,
+  detachPlannerNodeSession,
+  dispatchPlannerNodeSession,
   fetchPlannerGraphState,
-  fetchPlannerRuns,
+  fetchState,
   fetchTeamMembers,
   generatePlannerProposal,
   inspectPlannerDrift,
+  openKanbanItemSubCanvas,
   rejectPlannerProposal,
   sendPlannerActivity,
-  setPlannerCanvasVisibility,
-  startPlannerRun,
   updatePlannerNodeLayout,
+  updatePlannerNodeStatus,
 } from '../../api'
 import type {
   PlanProposal,
   PlannerCanvasState,
-  PlannerCanvasVisibility,
-  WorkflowRun,
+  PlannerArtifact,
+  PlannerDispatchRunner,
+  PlannerGraphState,
+  PlanningNode,
+  PlanningNodeStatus,
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
@@ -44,17 +51,18 @@ import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
-import { RunHistoryView } from './RunHistoryView'
-import { RunSelector, type PlannerMode, type StartDeliveryInput } from './RunSelector'
-import { buildPlannerGraph, type PlannerGraphNode } from './plannerGraphAdapter'
+import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphNode } from './plannerGraphAdapter'
 import './planner.css'
 
 interface Props {
   canvasId: string
   canvasName: string
+  variant?: 'board' | 'template'
   userProfile?: UserProfile | null
   boardState?: BoardState | null
+  clearRevision?: number
   onOpenSubCanvas?: (canvasId: string) => void
+  onNotify?: (kind: 'success' | 'error', text: string) => void
 }
 
 const nodeTypes = {
@@ -63,6 +71,7 @@ const nodeTypes = {
 
 const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
 const PANEL_COLLAPSED_KEY = 'meee2.planner.aiPanelCollapsed'
+const IO_ARTIFACT_VISIBILITY_KEY_PREFIX = 'meee2.planner.ioArtifacts'
 const DEFAULT_PANEL_WIDTH = 420
 const MIN_PANEL_WIDTH = 340
 const MAX_PANEL_WIDTH = 680
@@ -75,25 +84,38 @@ export function PlannerGraph(props: Props) {
   )
 }
 
-function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardState = null, onOpenSubCanvas }: Props) {
+function PlannerGraphInner({
+  canvasId,
+  canvasName,
+  variant = 'board',
+  userProfile = null,
+  boardState = null,
+  clearRevision = 0,
+  onOpenSubCanvas,
+  onNotify,
+}: Props) {
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
-  const [previewActive, setPreviewActive] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(() => readStoredPanelCollapsed())
   const [plannerPanelWidth, setPlannerPanelWidth] = useState(() => readStoredPanelWidth())
+  const [ioArtifactVisibility, setIOArtifactVisibility] = useState<Record<string, IOArtifactVisibility>>(
+    () => readStoredIOArtifactVisibility(canvasId),
+  )
+  const ioArtifactVisibilityCanvasRef = useRef(canvasId)
+  const handledClearRevisionRef = useRef(0)
+  const fitViewCanvasRef = useRef<string | null>(null)
   const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [pendingVisibility, setPendingVisibility] = useState<PlannerCanvasVisibility | null>(null)
-  // P2 Run layer — Design vs Run mode + the run being viewed.
-  const [mode, setMode] = useState<PlannerMode>('design')
-  const [runs, setRuns] = useState<WorkflowRun[]>([])
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
-  const [historyOpen, setHistoryOpen] = useState(false)
+  const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string } | null>(null)
+  const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
+  // Bumped whenever a new proposal is created from chat, drift inspection, or
+  // node actions. PlannerProposalPanel watches this to auto-open review.
+  const [reviewRequestTick, setReviewRequestTick] = useState(0)
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -102,29 +124,28 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .then((state) => {
         setPlannerState(state)
         setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
-        setPreviewActive(false)
       })
       .catch((err) => setError((err as Error).message || 'Failed to load meee2 AI state'))
       .finally(() => setBusy(false))
   }, [canvasId])
 
-  const loadRuns = useCallback(() => {
-    fetchPlannerRuns(canvasId)
-      .then((next) => {
-        setRuns(next)
-        setSelectedRunId((current) => {
-          if (current && next.some((run) => run.id === current)) return current
-          const active = next.find((run) => run.status === 'active')
-          return active?.id ?? next[next.length - 1]?.id ?? null
-        })
-      })
-      .catch(() => setRuns([]))
-  }, [canvasId])
-
   useEffect(() => {
     loadState()
-    loadRuns()
-  }, [loadState, loadRuns])
+  }, [loadState])
+
+  useEffect(() => {
+    if (clearRevision <= 0) return
+    if (handledClearRevisionRef.current === clearRevision) return
+    handledClearRevisionRef.current = clearRevision
+    setProposal(null)
+    setSelectedNodeId(null)
+    setNodeModalOpen(false)
+    setIOArtifactVisibility({})
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(ioArtifactVisibilityKey(canvasId))
+    }
+    loadState()
+  }, [canvasId, clearRevision, loadState])
 
   // Authoritative team member identities — used for avatar / name resolution.
   useEffect(() => {
@@ -146,6 +167,10 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
     setNodeModalOpen(true)
   }, [])
 
+  const notifyError = useCallback((message: string) => {
+    onNotify?.('error', message)
+  }, [onNotify])
+
   const teamDirectory = useMemo(() => {
     const members = buildTeamDirectory({
       userProfile,
@@ -161,34 +186,273 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
     }
   }, [boardState, plannerState, userProfile, teamMembers])
 
-  const selectedRun = useMemo(
-    () => runs.find((run) => run.id === selectedRunId) ?? null,
-    [runs, selectedRunId],
-  )
+  const handleGraphStateChanged = useCallback((state: PlannerGraphState) => {
+    setPlannerState(state)
+    setProposal(state.proposals.find((item) => item.status === 'pending' || item.status === 'approved') ?? null)
+  }, [])
+
+  const handleOpenKanbanItem = useCallback((
+    artifact: PlannerArtifact,
+    itemId: string,
+    title: string,
+    subCanvasId?: string | null,
+  ) => {
+    if (subCanvasId) {
+      onOpenSubCanvas?.(subCanvasId)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    openKanbanItemSubCanvas(canvasId, artifact.id, itemId, {
+      title,
+      scope: plannerState?.canvas.visibility === 'public' ? 'team' : 'personal',
+    })
+      .then((result) => {
+        handleGraphStateChanged(result.graph)
+        onOpenSubCanvas?.(result.subCanvasId)
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to open kanban item sub-canvas'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError, onOpenSubCanvas, plannerState?.canvas.visibility])
+
+  const handleChangeNodeStatus = useCallback((nodeId: string, status: PlanningNodeStatus) => {
+    setBusy(true)
+    setError(null)
+    updatePlannerNodeStatus(canvasId, nodeId, status)
+      .then(handleGraphStateChanged)
+      .catch((err) => notifyError((err as Error).message || 'Failed to update node status'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
+  const handleBindNodeInput = useCallback((nodeId: string, input: string, reference: string) => {
+    const trimmed = reference.trim()
+    if (!trimmed) return
+    setBusy(true)
+    setError(null)
+    bindPlannerNodeInput(canvasId, nodeId, {
+      input,
+      reference: trimmed,
+      title: input,
+    })
+      .then(handleGraphStateChanged)
+      .catch((err) => notifyError((err as Error).message || 'Failed to save input'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
+  const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
+    setBusy(true)
+    setError(null)
+    fetchState()
+      .catch(() => null)
+      .then((beforeState) => {
+        const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
+        return dispatchPlannerNodeSession(canvasId, nodeId, runner)
+          .then((state) => {
+            handleGraphStateChanged(state)
+            setCreatingSessionNodeIds((current) => new Set(current).add(nodeId))
+            void pollForBoundNodeSession(canvasId, nodeId, existingSessionIds, handleGraphStateChanged, () => {
+              setCreatingSessionNodeIds((current) => {
+                const next = new Set(current)
+                next.delete(nodeId)
+                return next
+              })
+            })
+          })
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to create node session'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
+  const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
+    setBusy(true)
+    setError(null)
+    fetchState()
+      .catch(() => null)
+      .then((beforeState) => {
+        const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
+        return detachPlannerNodeSession(canvasId, nodeId)
+          .then(handleGraphStateChanged)
+          .then(() => dispatchPlannerNodeSession(canvasId, nodeId, runner))
+          .then((state) => {
+            handleGraphStateChanged(state)
+            setCreatingSessionNodeIds((current) => new Set(current).add(nodeId))
+            void pollForBoundNodeSession(canvasId, nodeId, existingSessionIds, handleGraphStateChanged, () => {
+              setCreatingSessionNodeIds((current) => {
+                const next = new Set(current)
+                next.delete(nodeId)
+                return next
+              })
+            })
+          })
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to create a new node session'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
+  const handleOpenNodeSession = useCallback((sessionId: string, nodeId: string) => {
+    const trimmed = sessionId.trim()
+    if (!trimmed) return
+    setBusy(true)
+    setError(null)
+    activateSession(trimmed)
+      .then((ok) => {
+        if (ok) return
+        const sessionStillVisible = (boardState?.sessions ?? []).some((session) => session.id === trimmed)
+        if (!sessionStillVisible && nodeId) {
+          detachPlannerNodeSession(canvasId, nodeId)
+            .then(handleGraphStateChanged)
+            .catch(() => undefined)
+          notifyError('Session was stale and has been unbound. Create a new session.')
+          return
+        }
+        notifyError('Failed to open session')
+      })
+      .finally(() => setBusy(false))
+  }, [boardState?.sessions, canvasId, handleGraphStateChanged, notifyError])
+
+  const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
+    setBusy(true)
+    setError(null)
+    abandonPlannerNodeSession(canvasId, nodeId)
+      .then((state) => {
+        handleGraphStateChanged(state)
+        setCreatingSessionNodeIds((current) => {
+          const next = new Set(current)
+          next.delete(nodeId)
+          return next
+        })
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to cancel session creation'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
+  const handleDeleteNode = useCallback((nodeId: string) => {
+    setBusy(true)
+    setError(null)
+    deletePlannerNode(canvasId, nodeId)
+      .then((state) => {
+        handleGraphStateChanged(state)
+        setSelectedNodeId((current) => current === nodeId ? null : current)
+        setNodeModalOpen((open) => selectedNodeId === nodeId ? false : open)
+        setIOArtifactVisibility((current) => {
+          const next = { ...current }
+          delete next[nodeId]
+          for (const [sourceNodeId, visible] of Object.entries(next)) {
+            const sourceNode = state.nodes.find((node) => node.id === sourceNodeId)
+            if (!sourceNode) {
+              delete next[sourceNodeId]
+              continue
+            }
+            next[sourceNodeId] = {
+              inputs: visible.inputs.filter((item) => sourceNode.schema.inputs.includes(item)),
+              outputs: visible.outputs.filter((item) => sourceNode.schema.outputs.includes(item)),
+            }
+            if (next[sourceNodeId].inputs.length === 0 && next[sourceNodeId].outputs.length === 0) {
+              delete next[sourceNodeId]
+            }
+          }
+          return next
+        })
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to delete node'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError, selectedNodeId])
+
+  const handleHideIOArtifact = useCallback((
+    nodeId: string,
+    direction: IOArtifactDirection,
+    item: string,
+  ) => {
+    setIOArtifactVisibility((current) => {
+      const existing = current[nodeId]
+      if (!existing) return current
+      const directionKey: keyof IOArtifactVisibility = direction === 'input' ? 'inputs' : 'outputs'
+      const nextEntry = {
+        ...existing,
+        [directionKey]: existing[directionKey].filter((value) => value !== item),
+      }
+      const next = { ...current }
+      if (nextEntry.inputs.length === 0 && nextEntry.outputs.length === 0) {
+        delete next[nodeId]
+      } else {
+        next[nodeId] = nextEntry
+      }
+      return next
+    })
+  }, [])
 
   const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
-      proposal: previewActive ? null : proposal,
+      artifacts: plannerState?.artifacts ?? [],
+      proposal: null,
       ownerId: plannerState?.canvas.ownerId,
-      mode,
-      runNodeStates: selectedRun?.nodeStates,
+      mode: 'design',
+      runNodeStates: undefined,
+      ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
       onOpenDetails: handleOpenNodeDetails,
       onOpenSubCanvas,
+      onOpenKanbanItem: handleOpenKanbanItem,
+      onBindInput: handleBindNodeInput,
+      onChangeStatus: handleChangeNodeStatus,
+      canChangeStatus: variant !== 'template',
+      onCreateSession: handleCreateNodeSession,
+      onOpenSession: handleOpenNodeSession,
+      onReplaceSession: handleReplaceNodeSession,
+      onCancelSessionCreation: handleCancelNodeSessionCreation,
+      onDeleteNode: handleDeleteNode,
+      onHideIOArtifact: handleHideIOArtifact,
+      creatingSessionNodeIds,
     })
-  }, [plannerState, previewActive, proposal, mode, selectedRun, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas])
+  }, [plannerState, ioArtifactVisibility, teamDirectory, handleOpenNodeDetails, onOpenSubCanvas, handleOpenKanbanItem, handleBindNodeInput, handleChangeNodeStatus, handleCreateNodeSession, handleOpenNodeSession, handleReplaceNodeSession, handleCancelNodeSessionCreation, handleDeleteNode, handleHideIOArtifact, creatingSessionNodeIds, variant])
+
+  const reviewGraph = useMemo(() => {
+    if (!plannerState || !proposal) return { nodes: [], edges: [] }
+    return buildPlannerGraph({
+      nodes: plannerState.nodes,
+      states: plannerState.states,
+      edges: plannerState.edges,
+      artifacts: plannerState.artifacts,
+      proposal,
+      ownerId: plannerState.canvas.ownerId,
+      mode: 'design',
+      runNodeStates: undefined,
+      ioArtifactVisibility,
+      displayNameByUserId: teamDirectory.displayNameByUserId,
+      avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
+    })
+  }, [plannerState, proposal, ioArtifactVisibility, teamDirectory])
 
   useEffect(() => {
-    setFlowNodes(graph.nodes)
+    setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
   }, [graph.nodes])
 
   const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
     setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
   }, [])
+
+  const handleNodeDragStop = useCallback((node: PlannerGraphNode) => {
+    if (node.data.virtual) return
+    const layout = {
+      x: node.position.x,
+      y: node.position.y,
+      width: node.width ?? node.measured?.width ?? null,
+      height: node.height ?? node.measured?.height ?? null,
+    }
+    setPlannerState((current) => current
+      ? {
+        ...current,
+        nodes: current.nodes.map((item) => item.id === node.data.node.id ? { ...item, layout } : item),
+      }
+      : current)
+    updatePlannerNodeLayout(canvasId, node.data.node.id, layout)
+      .then(handleGraphStateChanged)
+      .catch((err) => notifyError((err as Error).message || 'Failed to save node position'))
+  }, [canvasId, handleGraphStateChanged, notifyError])
 
   useEffect(() => {
     window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
@@ -197,6 +461,40 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   useEffect(() => {
     window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
   }, [plannerPanelWidth])
+
+  useEffect(() => {
+    if (ioArtifactVisibilityCanvasRef.current !== canvasId) return
+    writeStoredIOArtifactVisibility(canvasId, ioArtifactVisibility)
+  }, [canvasId, ioArtifactVisibility])
+
+  useEffect(() => {
+    ioArtifactVisibilityCanvasRef.current = canvasId
+    setIOArtifactVisibility(readStoredIOArtifactVisibility(canvasId))
+  }, [canvasId])
+
+  const handleToggleIOArtifact = useCallback((
+    nodeId: string,
+    direction: keyof IOArtifactVisibility,
+    item: string,
+    visible: boolean,
+  ) => {
+    const normalized = item.trim()
+    if (!normalized) return
+    setIOArtifactVisibility((current) => {
+      const existing = current[nodeId] ?? { inputs: [], outputs: [] }
+      const nextList = visible
+        ? Array.from(new Set([...existing[direction], normalized]))
+        : existing[direction].filter((value) => value !== normalized)
+      const nextEntry = { ...existing, [direction]: nextList }
+      const next = { ...current }
+      if (nextEntry.inputs.length === 0 && nextEntry.outputs.length === 0) {
+        delete next[nodeId]
+      } else {
+        next[nodeId] = nextEntry
+      }
+      return next
+    })
+  }, [])
 
   const handlePanelResizeStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -216,6 +514,12 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   }, [plannerPanelWidth])
 
   useEffect(() => {
+    if (plannerState && graph.nodes.length === 0) {
+      fitViewCanvasRef.current = canvasId
+      return
+    }
+    if (!plannerState || graph.nodes.length === 0 || fitViewCanvasRef.current === canvasId) return
+    fitViewCanvasRef.current = canvasId
     const timer = window.setTimeout(() => {
       if (window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
@@ -224,7 +528,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       reactFlow.fitView({ padding: 0.12, duration: 220 })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [graph.nodes.length, graph.edges.length, canvasId, reactFlow])
+  }, [plannerState, graph.nodes.length, canvasId, reactFlow])
 
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null
@@ -235,7 +539,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
 
   const hasActionableDrift = useMemo(() => {
     return (plannerState?.states ?? []).some((state) =>
-      state.needsOwnerReview || state.runState === 'blocked' || state.runState === 'planning',
+      state.runState === 'blocked' || state.runState === 'draft',
     )
   }, [plannerState])
 
@@ -270,17 +574,17 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
   const handleGenerate = useCallback((goal: string) => {
     setBusy(true)
     setError(null)
-    generatePlannerProposal(canvasId, goal)
+    generatePlannerProposal(canvasId, goal, buildPlannerGenerationContext(plannerState, proposal))
       .then((next) => {
         setProposal(next)
         setPlannerState((current) => current && next
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
-        setPreviewActive(false)
+        if (next) setReviewRequestTick((tick) => tick + 1)
       })
       .catch((err) => setError((err as Error).message || 'Failed to generate meee2 AI proposal'))
       .finally(() => setBusy(false))
-  }, [canvasId])
+  }, [canvasId, plannerState, proposal])
 
   const handlePlannerSubmit = useCallback((message: string) => {
     const trimmed = message.trim()
@@ -292,22 +596,22 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
         .then((next) => {
           if (!next) {
             if (trimmed) {
-              return generatePlannerProposal(canvasId, trimmed).then((generated) => {
+              return generatePlannerProposal(canvasId, trimmed, buildPlannerGenerationContext(plannerState, proposal)).then((generated) => {
                 setProposal(generated)
                 setPlannerState((current) => current && generated
                   ? { ...current, proposals: upsertProposal(current.proposals, generated) }
                   : current)
-                setPreviewActive(false)
+                if (generated) setReviewRequestTick((tick) => tick + 1)
               })
             }
-            setError('No blocked, planning, or owner-review state found.')
+            setError('No blocked or draft state found.')
             return undefined
           }
           setProposal(next)
           setPlannerState((current) => current
             ? { ...current, proposals: upsertProposal(current.proposals, next) }
             : current)
-          setPreviewActive(false)
+          setReviewRequestTick((tick) => tick + 1)
           return undefined
         })
         .catch((err) => setError((err as Error).message || 'Failed to inspect meee2 AI drift'))
@@ -317,84 +621,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
 
     if (!trimmed) return
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, plannerState])
-
-  const handleApplyPreview = useCallback(() => {
-    if (!proposal) return
-    setBusy(true)
-    setError(null)
-    applyPlannerProposalPreview(canvasId, proposal)
-      .then((preview) => {
-        setPlannerState((current) => {
-          const canvas = current?.canvas ?? {
-            id: canvasId,
-            ownerId: 'local-owner',
-            title: canvasName,
-            plannerContext: `canvas:${canvasId}`,
-          }
-          return {
-            canvas,
-            nodes: preview.nodes,
-            states: preview.states,
-            proposals: current?.proposals ?? [],
-            access: current?.access ?? defaultPlannerAccess(),
-            activities: current?.activities ?? [],
-            artifacts: current?.artifacts ?? [],
-            edges: current?.edges ?? [],
-          }
-        })
-        setPreviewActive(true)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to apply meee2 AI preview'))
-      .finally(() => setBusy(false))
-  }, [canvasId, canvasName, proposal])
-
-  const handleApprove = useCallback(() => {
-    if (!proposal) return
-    setBusy(true)
-    setError(null)
-    approvePlannerProposal(canvasId, proposal.id)
-      .then((next) => {
-        if (!next) return
-        setProposal(next)
-        setPlannerState((current) => current
-          ? { ...current, proposals: upsertProposal(current.proposals, next) }
-          : current)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to approve meee2 AI proposal'))
-      .finally(() => setBusy(false))
-  }, [canvasId, proposal])
-
-  const handleApply = useCallback(() => {
-    if (!proposal) return
-    setBusy(true)
-    setError(null)
-    applyPlannerProposal(canvasId, proposal.id)
-      .then((result) => {
-        setProposal(result.proposal)
-        setPlannerState((current) => {
-          const canvas = current?.canvas ?? {
-            id: canvasId,
-            ownerId: 'local-owner',
-            title: canvasName,
-            plannerContext: `canvas:${canvasId}`,
-          }
-          return {
-            canvas,
-            nodes: result.nodes,
-            states: result.states,
-            proposals: upsertProposal(current?.proposals ?? [], result.proposal),
-            access: current?.access ?? defaultPlannerAccess(),
-            activities: current?.activities ?? [],
-            artifacts: current?.artifacts ?? [],
-            edges: current?.edges ?? [],
-          }
-        })
-        setPreviewActive(false)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to apply meee2 AI proposal'))
-      .finally(() => setBusy(false))
-  }, [canvasId, canvasName, proposal])
+  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal])
 
   const handleApproveAndApply = useCallback(() => {
     if (!proposal) return
@@ -428,7 +655,6 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
             edges: current?.edges ?? [],
           }
         })
-        setPreviewActive(false)
       })
       .catch((err) => setError((err as Error).message || 'Failed to approve and apply meee2 AI proposal'))
       .finally(() => setBusy(false))
@@ -450,89 +676,24 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
       .finally(() => setBusy(false))
   }, [canvasId, proposal])
 
-  const handleCreateDeliveryPipeline = useCallback(() => {
-    setBusy(true)
-    setError(null)
-    createPlannerDeliveryPipeline(canvasId)
-      .then((next) => {
-        if (!next) return
-        setProposal(next)
-        setPlannerState((current) => current
-          ? { ...current, proposals: upsertProposal(current.proposals, next) }
-          : current)
-        setPreviewActive(false)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to create delivery pipeline proposal'))
-      .finally(() => setBusy(false))
-  }, [canvasId])
-
   // GOVERNANCE-layer node actions (sub-canvas / refine / assign doer) return a
   // PlanProposal. Thread it into the same proposal state the generate / drift /
-  // delivery-pipeline flows feed, so the user lands in the existing
-  // PlannerProposalPanel approve/apply gate.
-  // Bumped whenever a governance node action creates a proposal —
-  // PlannerProposalPanel watches this to auto-open the review modal.
-  const [reviewRequestTick, setReviewRequestTick] = useState(0)
+  // AI-dialog flows feed, so the user lands in the existing approve/apply gate.
   const handleNodeActionProposal = useCallback((next: PlanProposal) => {
     setProposal(next)
     setPlannerState((current) => current
       ? { ...current, proposals: upsertProposal(current.proposals, next) }
       : current)
-    setPreviewActive(false)
     setNodeModalOpen(false)
     setReviewRequestTick((tick) => tick + 1)
   }, [])
 
-  // EXECUTION-layer node actions (bind session / dispatch) apply DIRECTLY — no
-  // proposal, no owner approval. Just merge the returned graph state. Must NOT
-  // touch `reviewRequestTick` / the proposal review modal.
-  const handleNodeMutated = useCallback((next: PlannerCanvasState) => {
-    setPlannerState(next)
+  const handleSendNodeActionToAI = useCallback((message: string) => {
+    setPlannerPanelCollapsed(false)
+    setPlannerDraftMessage({ id: Date.now(), text: message })
+    setNodeModalOpen(false)
   }, [])
 
-  // Gap 5 — owner-only canvas visibility. This is canvas metadata rather than
-  // graph topology, but it changes who can see the planning space, so require
-  // explicit confirmation before applying.
-  const handleConfirmVisibility = useCallback((visibility: PlannerCanvasVisibility) => {
-    setBusy(true)
-    setError(null)
-    setPlannerCanvasVisibility(canvasId, visibility)
-      .then((canvas) => {
-        setPlannerState((current) => current ? { ...current, canvas } : current)
-        setPendingVisibility(null)
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to update canvas visibility'))
-      .finally(() => setBusy(false))
-  }, [canvasId])
-
-  const handleStartRun = useCallback((input: StartDeliveryInput) => {
-    setBusy(true)
-    setError(null)
-    startPlannerRun(canvasId, input)
-      .then((run) => {
-        setRuns((current) => [...current, run])
-        setSelectedRunId(run.id)
-        setMode('run')
-        // The fresh Delivery resets per-node execution state — re-pull the graph.
-        loadState()
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to start delivery'))
-      .finally(() => setBusy(false))
-  }, [canvasId, loadState])
-
-  const handleAbortRun = useCallback((runId: string) => {
-    setBusy(true)
-    setError(null)
-    abortPlannerRun(runId)
-      .then((run) => {
-        setRuns((current) => current.map((item) => (item.id === run.id ? run : item)))
-      })
-      .catch((err) => setError((err as Error).message || 'Failed to abort delivery'))
-      .finally(() => setBusy(false))
-  }, [])
-
-  const canvasVisibility: PlannerCanvasVisibility = plannerState?.canvas.visibility ?? 'private'
-  const isCanvasOwner = (plannerState?.access?.role ?? 'owner') === 'owner'
   const plannerMainStyle = {
     '--planner-panel-width': `${plannerPanelWidth}px`,
   } as CSSProperties
@@ -552,111 +713,6 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
           {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
         </button>
         <div className="planner-flow">
-          <div className="planner-flow__header">
-            <RunSelector
-              mode={mode}
-              onModeChange={setMode}
-              runs={runs}
-              selectedRunId={selectedRunId}
-              onSelectRun={setSelectedRunId}
-              onStartRun={handleStartRun}
-              onAbortRun={handleAbortRun}
-              onViewHistory={() => setHistoryOpen(true)}
-              busy={busy}
-            />
-            <div className={`planner-flow__state-badge${previewActive ? ' is-preview' : ''}`}>
-              <span>{previewActive ? 'Preview' : 'Live graph'}</span>
-              {previewActive && <em>not applied</em>}
-            </div>
-            {/* Gap 5 — canvas visibility. Owner gets a toggle; others see a badge. */}
-            {isCanvasOwner ? (
-              <div
-                className="planner-flow__visibility"
-                role="group"
-                aria-label="Canvas visibility"
-              >
-                <button
-                  type="button"
-                  className={`planner-flow__visibility-option is-private${canvasVisibility === 'private' ? ' is-active' : ''}`}
-                  disabled={busy || canvasVisibility === 'private'}
-                  onClick={() => setPendingVisibility('private')}
-                >
-                  Private
-                </button>
-                <button
-                  type="button"
-                  className={`planner-flow__visibility-option is-public${canvasVisibility === 'public' ? ' is-active' : ''}`}
-                  disabled={busy || canvasVisibility === 'public'}
-                  onClick={() => setPendingVisibility('public')}
-                >
-                  Public
-                </button>
-              </div>
-            ) : (
-              <span
-                className="planner-flow__visibility-badge"
-                title="Only the canvas owner can change visibility."
-              >
-                {canvasVisibility === 'public' ? 'Public' : 'Private'}
-              </span>
-            )}
-          </div>
-          {pendingVisibility && (
-            <div
-              className="planner-visibility-confirm-backdrop"
-              onMouseDown={(event) => {
-                if (event.target === event.currentTarget) setPendingVisibility(null)
-              }}
-            >
-              <div
-                className={`planner-visibility-confirm planner-visibility-confirm--${pendingVisibility}`}
-                role="dialog"
-                aria-modal="true"
-                aria-label="Confirm canvas visibility"
-              >
-                <div className="planner-visibility-confirm__header">
-                  <span>{pendingVisibility === 'public' ? 'Make canvas public?' : 'Make canvas private?'}</span>
-                  <strong>{plannerState?.canvas.title ?? canvasName}</strong>
-                </div>
-                <p>
-                  {pendingVisibility === 'public'
-                    ? 'People with workspace access will be able to view this canvas. Topology edits still stay owner-controlled.'
-                    : 'Only you and explicitly allowed local access can view this canvas. Shared viewers may lose visibility.'}
-                </p>
-                <div className="planner-visibility-confirm__actions">
-                  <button type="button" className="ghost" onClick={() => setPendingVisibility(null)}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className={pendingVisibility === 'public' ? 'primary' : 'ghost'}
-                    disabled={busy}
-                    onClick={() => handleConfirmVisibility(pendingVisibility)}
-                  >
-                    {pendingVisibility === 'public' ? 'Confirm public' : 'Confirm private'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-          {/* U5 — onboarding: blueprint exists but has never been executed. */}
-          {mode === 'run' && runs.length === 0 && (plannerState?.nodes.length ?? 0) > 0 && (
-            <div className="planner-onboarding-card" role="note">
-              <strong>Plan is ready</strong>
-              <p>
-                Start a named <b>Delivery</b> when you have a real request to execute.
-                Sessions and outputs belong to that Delivery, not to the Plan.
-              </p>
-              <button
-                type="button"
-                className="primary"
-                disabled={busy}
-                onClick={() => handleStartRun({ title: `${canvasName} delivery` })}
-              >
-                ▶ Start delivery
-              </button>
-            </div>
-          )}
           {plannerState ? (
             <ReactFlow
               nodes={flowNodes}
@@ -667,16 +723,7 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
                 setSelectedNodeId(node.data.node.id)
                 setNodeModalOpen(true)
               }}
-              onNodeDragStop={(_, node) => {
-                updatePlannerNodeLayout(canvasId, node.data.node.id, {
-                  x: node.position.x,
-                  y: node.position.y,
-                  width: node.width ?? node.measured?.width ?? null,
-                  height: node.height ?? node.measured?.height ?? null,
-                }).catch(() => {
-                  // Layout persistence should not interrupt graph interaction.
-                })
-              }}
+              onNodeDragStop={(_, node) => handleNodeDragStop(node)}
               onPaneClick={() => {
                 setSelectedNodeId(null)
                 setNodeModalOpen(false)
@@ -708,20 +755,20 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
               onPointerDown={handlePanelResizeStart}
             />
             <PlannerProposalPanel
+              canvasId={canvasId}
               proposal={proposal}
-              previewActive={previewActive}
+              variant={variant}
+              previewGraph={reviewGraph}
               busy={busy}
               error={error}
               access={plannerState?.access ?? null}
               nodeCount={plannerState?.nodes.length ?? 0}
               hasActionableDrift={hasActionableDrift}
               onSubmit={handlePlannerSubmit}
-              onApplyPreview={handleApplyPreview}
-              onApprove={handleApprove}
-              onApply={handleApply}
               onApproveAndApply={handleApproveAndApply}
               onReject={handleReject}
-              onCreateDeliveryPipeline={handleCreateDeliveryPipeline}
+              draftMessage={plannerDraftMessage}
+              clearRevision={clearRevision}
               reviewRequestTick={reviewRequestTick}
             />
           </div>
@@ -731,54 +778,22 @@ function PlannerGraphInner({ canvasId, canvasName, userProfile = null, boardStat
         <NodeInspectorModal
           node={selectedNode}
           canvasId={canvasId}
-          mode={mode}
-          selectedDeliveryId={selectedRun?.id ?? null}
-          runNodeState={selectedRun?.nodeStates[selectedNode.id] ?? null}
-          onArtifactAttached={() => {
-            // Re-pull graph state so the new artifact shows in the node list.
-            fetchPlannerGraphState(canvasId)
-              .then((state) => setPlannerState(state))
-              .catch(() => {
-                // Best-effort; the attach itself already succeeded.
-              })
-          }}
+          variant={variant}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
-          ownerLabel={
-            plannerState?.canvas.ownerId
-              ? teamDirectory.displayNameByUserId[plannerState.canvas.ownerId]
-              : undefined
-          }
-          ownerAvatarUrl={
-            plannerState?.canvas.ownerId
-              ? teamDirectory.avatarUrlByUserId[plannerState.canvas.ownerId]
-              : undefined
-          }
           doerLabel={
             selectedNode.doerId
               ? teamDirectory.displayNameByUserId[selectedNode.doerId] ?? selectedNode.doerId
               : undefined
           }
           access={plannerState?.access ?? null}
-          sessions={boardState?.sessions ?? []}
           teamMembers={teamMembers}
           onProposalCreated={handleNodeActionProposal}
-          onNodeMutated={handleNodeMutated}
-          onDeliveryMutated={(run) => {
-            setRuns((current) => current.map((item) => (item.id === run.id ? run : item)))
-          }}
+          onGraphStateChanged={handleGraphStateChanged}
+          onSendToAI={handleSendNodeActionToAI}
+          visibleIOArtifacts={ioArtifactVisibility[selectedNode.id] ?? { inputs: [], outputs: [] }}
+          onToggleIOArtifact={handleToggleIOArtifact}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
-        />
-      )}
-      {historyOpen && (
-        <RunHistoryView
-          runs={runs}
-          selectedRunId={selectedRunId}
-          onSelectRun={(runId) => {
-            setSelectedRunId(runId)
-            setMode('run')
-          }}
-          onClose={() => setHistoryOpen(false)}
         />
       )}
     </section>
@@ -795,6 +810,112 @@ function readStoredPanelWidth(): number {
   const stored = Number(window.localStorage.getItem(PANEL_WIDTH_KEY))
   if (!Number.isFinite(stored)) return DEFAULT_PANEL_WIDTH
   return clampPanelWidth(stored)
+}
+
+function ioArtifactVisibilityKey(canvasId: string): string {
+  return `${IO_ARTIFACT_VISIBILITY_KEY_PREFIX}.${canvasId}`
+}
+
+function readStoredIOArtifactVisibility(canvasId: string): Record<string, IOArtifactVisibility> {
+  if (typeof window === 'undefined') return {}
+  try {
+    return normalizeIOArtifactVisibility(JSON.parse(window.localStorage.getItem(ioArtifactVisibilityKey(canvasId)) ?? '{}'))
+  } catch {
+    return {}
+  }
+}
+
+function writeStoredIOArtifactVisibility(canvasId: string, value: Record<string, IOArtifactVisibility>) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(ioArtifactVisibilityKey(canvasId), JSON.stringify(value))
+}
+
+function normalizeIOArtifactVisibility(raw: unknown): Record<string, IOArtifactVisibility> {
+  if (!raw || typeof raw !== 'object') return {}
+  const result: Record<string, IOArtifactVisibility> = {}
+  for (const [nodeId, entry] of Object.entries(raw as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object') continue
+    const input = entry as Partial<Record<keyof IOArtifactVisibility, unknown>>
+    const inputs = normalizeStringList(input.inputs)
+    const outputs = normalizeStringList(input.outputs)
+    if (inputs.length > 0 || outputs.length > 0) {
+      result[nodeId] = { inputs, outputs }
+    }
+  }
+  return result
+}
+
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)))
+    : []
+}
+
+function buildPlannerGenerationContext(
+  state: PlannerCanvasState | null,
+  activeProposal: PlanProposal | null,
+): string | undefined {
+  if (!state) return undefined
+  const openProposals = state.proposals.filter((item) =>
+    item.status === 'pending' || item.status === 'approved',
+  )
+  const activeOpenProposal = activeProposal && (activeProposal.status === 'pending' || activeProposal.status === 'approved')
+    ? activeProposal
+    : null
+  const context = {
+    instruction: [
+      'Evolve the current canvas; do not replace it.',
+      'Use committedNodes as existing canvas content.',
+      'Use activeProposal as the current UI preview if present.',
+      'If activeProposal has addNode changes that should remain, include those addNode definitions again in the new proposal, with refinements folded in.',
+      'For committed nodes, prefer updateNode over adding duplicates.',
+    ],
+    canvas: {
+      id: state.canvas.id,
+      title: state.canvas.title,
+    },
+    committedNodes: state.nodes.map(compactPlanningNode),
+    edges: (state.edges ?? []).map((edge) => ({
+      sourceNodeId: edge.sourceNodeId,
+      targetNodeId: edge.targetNodeId,
+      kind: edge.kind,
+    })),
+    activeProposal: activeOpenProposal ? compactProposal(activeOpenProposal) : null,
+    openProposals: openProposals
+      .filter((item) => item.id !== activeOpenProposal?.id)
+      .slice(-3)
+      .map(compactProposal),
+  }
+  return JSON.stringify(context)
+}
+
+function compactProposal(proposal: PlanProposal) {
+  return {
+    id: proposal.id,
+    summary: proposal.summary,
+    status: proposal.status,
+    changes: proposal.changes.map((change) => ({
+      kind: change.kind,
+      nodeId: change.nodeId,
+      title: change.title,
+      status: change.status,
+      schema: change.schema,
+      dependsOnNodeIds: change.dependsOnNodeIds,
+      node: change.node ? compactPlanningNode(change.node) : undefined,
+    })),
+  }
+}
+
+function compactPlanningNode(node: PlanningNode) {
+  return {
+    id: node.id,
+    title: node.title,
+    nodeKind: node.nodeKind ?? 'step',
+    status: node.status,
+    schema: node.schema,
+    dependsOnNodeIds: node.dependsOnNodeIds ?? [],
+    doerId: node.doerId,
+  }
 }
 
 function clampPanelWidth(width: number): number {
@@ -828,6 +949,69 @@ function upsertProposal(proposals: PlanProposal[], proposal: PlanProposal): Plan
   const index = proposals.findIndex((item) => item.id === proposal.id)
   if (index < 0) return [...proposals, proposal]
   return proposals.map((item, itemIndex) => itemIndex === index ? proposal : item)
+}
+
+function mergeGraphNodesPreservingPositions(
+  nextNodes: PlannerGraphNode[],
+  currentNodes: PlannerGraphNode[],
+): PlannerGraphNode[] {
+  if (currentNodes.length === 0) return nextNodes
+  const currentById = new Map(currentNodes.map((node) => [node.id, node]))
+  return nextNodes.map((nextNode) => {
+    const current = currentById.get(nextNode.id)
+    if (!current) return nextNode
+    return {
+      ...nextNode,
+      position: current.position,
+      selected: current.selected,
+      dragging: current.dragging,
+    }
+  })
+}
+
+async function pollForBoundNodeSession(
+  canvasId: string,
+  nodeId: string,
+  existingSessionIds: Set<string>,
+  onState: (state: PlannerGraphState) => void,
+  onDone: () => void,
+) {
+  let sawNewSession = false
+  try {
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      await delay(attempt < 4 ? 900 : 1800)
+      try {
+        const boardState = await fetchState()
+        const newSession = boardState.sessions.find((session) => !existingSessionIds.has(session.id))
+        if (newSession) {
+          sawNewSession = true
+          try {
+            const bound = await bindPlannerSessionToNode(canvasId, nodeId, newSession.id)
+            onState(bound)
+            if (bound.nodes.find((item) => item.id === nodeId)?.sessionId) return
+          } catch {
+            // The backend spawn-intent matcher may still bind it on the next state refresh.
+          }
+        }
+        const state = await fetchPlannerGraphState(canvasId)
+        onState(state)
+        const node = state.nodes.find((item) => item.id === nodeId)
+        if (node?.sessionId) return
+        if (node?.workflowRunState !== 'dispatched' && node?.workflowRunState !== 'running') return
+      } catch {
+        // The terminal session may not have reported yet; keep polling.
+      }
+    }
+    if (sawNewSession) return
+    const state = await fetchPlannerGraphState(canvasId)
+    onState(state)
+  } finally {
+    onDone()
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 function defaultPlannerAccess() {

@@ -177,6 +177,24 @@ final class DefaultPlannerAgentRuntime: PlannerAgentRuntime {
             }
             return goal.isEmpty ? context : "\(goal)\n\nContext:\n\(context)"
         }()
+        if let proposal = targetedNodeRevisionProposal(goal: effectiveGoal, state: state) {
+            return PlannerAgentOutcome(
+                proposals: [proposal],
+                rationale: "Converted an explicit node revision into a focused updateNode proposal."
+            )
+        }
+        if let proposal = workflowProposal(goal: effectiveGoal, state: state) {
+            return PlannerAgentOutcome(
+                proposals: [proposal],
+                rationale: "Parsed an explicit workflow chain from the owner goal."
+            )
+        }
+        if let proposal = explicitNodeProposal(goal: effectiveGoal, state: state) {
+            return PlannerAgentOutcome(
+                proposals: [proposal],
+                rationale: "Parsed an explicit node contract from the owner goal."
+            )
+        }
         do {
             let proposal = try await adapter.generateProposal(for: state, goal: effectiveGoal)
             return PlannerAgentOutcome(
@@ -197,28 +215,96 @@ final class DefaultPlannerAgentRuntime: PlannerAgentRuntime {
         }
     }
 
+    private func targetedNodeRevisionProposal(goal: String, state: PlannerGraphState) -> PlanProposal? {
+        guard goal.localizedCaseInsensitiveContains("#revise"),
+              let nodeId = taggedNodeId(in: goal),
+              let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            return nil
+        }
+        let normalizedGoal = goal.lowercased()
+        guard normalizedGoal.contains("html") else { return nil }
+
+        let outputs = node.schema.outputs.isEmpty
+            ? ["html_file"]
+            : node.schema.outputs.map(htmlArtifactName)
+        let schema = NodeSchema(
+            inputs: node.schema.inputs,
+            outputs: dedupeStrings(outputs),
+            goal: htmlRevisionGoal(node.schema.goal)
+        )
+        return PlanProposal(
+            id: "proposal-\(node.canvasId)-revise-\(node.id)-\(UUID().uuidString.lowercased())",
+            canvasId: node.canvasId,
+            summary: "Revise \(node.title) to output HTML",
+            changes: [
+                .updateNode(id: node.id, status: .draft, schema: schema)
+            ],
+            status: .pending
+        )
+    }
+
+    private func taggedNodeId(in value: String) -> String? {
+        guard let range = value.range(of: "@node:") else { return nil }
+        let tail = value[range.upperBound...]
+        let id = tail.prefix { character in
+            character.isLetter || character.isNumber || character == "-" || character == "_" || character == "."
+        }
+        let result = String(id).trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
+    }
+
+    private func htmlArtifactName(_ value: String) -> String {
+        let slugged = slug(value).replacingOccurrences(of: "-", with: "_")
+        guard !slugged.isEmpty else { return "html_file" }
+        if slugged.contains("html") { return slugged }
+        return "\(slugged)_html"
+    }
+
+    private func htmlRevisionGoal(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().contains("html") {
+            return trimmed.isEmpty ? "Produce an HTML artifact." : trimmed
+        }
+        if trimmed.isEmpty {
+            return "Produce an HTML artifact."
+        }
+        return "\(trimmed). Produce an HTML artifact instead of plain text."
+    }
+
+    private func dedupeStrings(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty, !seen.contains(normalized) else { continue }
+            seen.insert(normalized)
+            result.append(normalized)
+        }
+        return result
+    }
+
     // MARK: .driftInspection
 
     /// Reuse the existing drift heuristic: produce a corrective proposal for the
-    /// first blocked / needs-review node, or `noActionReason` if the graph is
+    /// first blocked node, or `noActionReason` if the graph is
     /// healthy.
     private func handleDriftInspection(state: PlannerGraphState) -> PlannerAgentOutcome {
-        guard let blocked = state.states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
+        guard let blocked = state.states.first(where: { $0.runState == .blocked }),
               let node = state.nodes.first(where: { $0.id == blocked.nodeId }) else {
-            return .noAction("planner graph is healthy — no blocked or needs-review nodes")
+            return .noAction("planner graph is healthy — no blocked nodes")
         }
         let proposal = PlanProposal(
             id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift or review need for \(node.title)",
+            summary: "meee2 AI detected drift for \(node.title)",
             changes: [
-                .updateNode(id: node.id, title: "\(node.title) (needs owner review)", status: .planning)
+                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .draft)
             ],
             status: .pending
         )
         return PlannerAgentOutcome(
             proposals: [proposal],
-            rationale: "Node \(node.id) is blocked or flagged for owner review; proposed flagging it for replanning."
+            rationale: "Node \(node.id) is blocked; proposed moving it back to draft for replanning."
         )
     }
 
@@ -243,7 +329,7 @@ final class DefaultPlannerAgentRuntime: PlannerAgentRuntime {
         let correctiveGoal = """
         Node "\(node.title)" (id: \(node.id)) reported run-state "failed".
         Propose ONE small corrective change to recover this node — e.g. retry, \
-        rescope, or flag it for owner review. Keep the proposal pending.
+        rescope, or flag it for human diagnosis. Keep the proposal pending.
         """
         let adapter = adapterFactory(settings)
         do {
@@ -263,19 +349,276 @@ final class DefaultPlannerAgentRuntime: PlannerAgentRuntime {
                 canvasId: node.canvasId,
                 summary: "meee2 AI flagged \(node.title) after a run failure",
                 changes: [
-                    .updateNode(id: node.id, title: "\(node.title) (failed — needs owner review)", status: .planning)
+                    .updateNode(id: node.id, title: "\(node.title) (failed — needs attention)", status: .draft)
                 ],
                 status: .pending
             )
             return PlannerAgentOutcome(
                 proposals: [fallback],
-                rationale: "Node \(node.id) failed; planner adapter unavailable (\(error.localizedDescription)), flagged the node for owner review instead.",
+                rationale: "Node \(node.id) failed; planner adapter unavailable (\(error.localizedDescription)), flagged the node for replanning instead.",
                 risks: ["Heuristic fallback — the failed node needs human diagnosis."]
             )
         }
     }
 
     // MARK: Heuristic fallback
+
+    private func explicitNodeProposal(goal: String, state: PlannerGraphState) -> PlanProposal? {
+        guard let spec = parseExplicitNodeSpec(goal) else { return nil }
+        let canvas = state.canvas
+        let proposalUUID = UUID().uuidString.lowercased()
+        let schema = NodeSchema(
+            inputs: spec.inputs,
+            outputs: spec.outputs,
+            goal: explicitNodeGoal(title: spec.title, inputs: spec.inputs, outputs: spec.outputs)
+        )
+
+        if let existing = state.nodes.first(where: { $0.title.caseInsensitiveCompare(spec.title) == .orderedSame }) {
+            let changes: [PlanChange] = [
+                .updateNode(id: existing.id, status: .draft, schema: schema)
+            ] + kanbanArtifactChanges(for: spec, nodeId: existing.id)
+            return PlanProposal(
+                id: "proposal-\(canvas.id)-node-\(proposalUUID)",
+                canvasId: canvas.id,
+                summary: "Update \(existing.title) contract",
+                changes: changes,
+                status: .pending
+            )
+        }
+
+        var existingIds = Set(state.nodes.map(\.id))
+        let node = PlanningNode(
+            id: uniqueNodeId(canvasId: canvas.id, title: spec.title, existingIds: &existingIds),
+            canvasId: canvas.id,
+            title: spec.title,
+            schema: schema,
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: canvas.ownerId,
+            status: .ready,
+            nodeKind: .step
+        )
+        let changes: [PlanChange] = [
+            .addNode(node)
+        ] + kanbanArtifactChanges(for: spec, nodeId: node.id)
+        return PlanProposal(
+            id: "proposal-\(canvas.id)-node-\(proposalUUID)",
+            canvasId: canvas.id,
+            summary: "Create \(spec.title)",
+            changes: changes,
+            status: .pending
+        )
+    }
+
+    private struct ExplicitNodeSpec {
+        var title: String
+        var inputs: [String]
+        var outputs: [String]
+    }
+
+    private func parseExplicitNodeSpec(_ goal: String) -> ExplicitNodeSpec? {
+        let firstLine = goal
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !firstLine.isEmpty else { return nil }
+
+        let pattern = #"^\s*(?:create|add)(?:\s+node)?\s*:\s*(.+?)\s*\(\s*input\s*=\s*([^,)]*)\s*,\s*output\s*=\s*([^)]+)\)\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let range = NSRange(firstLine.startIndex..<firstLine.endIndex, in: firstLine)
+        guard let match = regex.firstMatch(in: firstLine, range: range), match.numberOfRanges == 4,
+              let titleRange = Range(match.range(at: 1), in: firstLine),
+              let inputRange = Range(match.range(at: 2), in: firstLine),
+              let outputRange = Range(match.range(at: 3), in: firstLine) else {
+            return nil
+        }
+
+        let title = String(firstLine[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let inputs = parseContractItems(String(firstLine[inputRange]))
+        let outputs = parseContractItems(String(firstLine[outputRange]))
+        guard !title.isEmpty, !inputs.isEmpty, !outputs.isEmpty else { return nil }
+        return ExplicitNodeSpec(title: title, inputs: inputs, outputs: outputs)
+    }
+
+    private func parseContractItems(_ raw: String) -> [String] {
+        dedupeStrings(
+            raw
+                .split(whereSeparator: { character in
+                    character == "|" || character == ";" || character == "+"
+                })
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        )
+    }
+
+    private func explicitNodeGoal(title: String, inputs: [String], outputs: [String]) -> String {
+        let inputText = inputs.joined(separator: ", ")
+        let outputText = outputs.joined(separator: ", ")
+        return "\(displayTitle(title)) takes \(inputText) and produces \(outputText)."
+    }
+
+    private func kanbanArtifactChanges(for spec: ExplicitNodeSpec, nodeId: String) -> [PlanChange] {
+        spec.outputs
+            .filter { isKanbanLikeOutput($0) }
+            .map { output in
+                .attachArtifact(
+                    nodeId: nodeId,
+                    kind: .kanban,
+                    title: output,
+                    reference: output,
+                    payload: defaultKanbanPayload(for: output, nodeTitle: spec.title)
+                )
+            }
+    }
+
+    private func isKanbanLikeOutput(_ value: String) -> Bool {
+        let normalized = value.lowercased()
+        return normalized.contains("kanban")
+            || normalized.contains("看板")
+            || normalized.contains("list")
+            || normalized.contains("board")
+    }
+
+    private func defaultKanbanPayload(for output: String, nodeTitle: String) -> BoardJSONValue {
+        let semanticText = "\(nodeTitle) \(output)".lowercased()
+        let columnTitle: String
+        if semanticText.contains("idea") || semanticText.contains("灵感") || semanticText.contains("想法") {
+            columnTitle = "Idea list"
+        } else if semanticText.contains("prd") {
+            columnTitle = "PRD list"
+        } else if semanticText.contains("release") {
+            columnTitle = "Release list"
+        } else {
+            columnTitle = "Items"
+        }
+        let columnId = slug(columnTitle)
+        return .object([
+            "version": .number(1),
+            "columns": .array([
+                .object([
+                    "id": .string(columnId),
+                    "title": .string(columnTitle)
+                ])
+            ]),
+            "items": .array([])
+        ])
+    }
+
+    private func workflowProposal(goal: String, state: PlannerGraphState) -> PlanProposal? {
+        guard let steps = parseWorkflowSteps(goal), steps.count >= 2 else { return nil }
+        let canvas = state.canvas
+        let proposalUUID = UUID().uuidString.lowercased()
+        var existingIds = Set(state.nodes.map(\.id))
+        var changes: [PlanChange] = []
+        var previousId: String?
+        var previousOutput: String?
+
+        for (index, rawStep) in steps.enumerated() {
+            let title = displayTitle(rawStep)
+            let id = uniqueNodeId(canvasId: canvas.id, title: title, existingIds: &existingIds)
+            let output = slug(title)
+            let node = PlanningNode(
+                id: id,
+                canvasId: canvas.id,
+                title: title,
+                schema: NodeSchema(
+                    inputs: index == 0 ? ["owner idea"] : [previousOutput ?? "upstream output"],
+                    outputs: [output],
+                    goal: "Complete \(title)"
+                ),
+                contextSources: [],
+                executionMode: .human,
+                executorType: .mock,
+                doerId: canvas.ownerId,
+                status: .ready,
+                dependsOnNodeIds: previousId.map { [$0] } ?? [],
+                nodeKind: .step
+            )
+            changes.append(.addNode(node))
+            previousId = id
+            previousOutput = output
+        }
+
+        return PlanProposal(
+            id: "proposal-\(canvas.id)-workflow-\(proposalUUID)",
+            canvasId: canvas.id,
+            summary: "Create workflow: \(steps.map(displayTitle).joined(separator: " -> "))",
+            changes: changes,
+            status: .pending
+        )
+    }
+
+    private func parseWorkflowSteps(_ goal: String) -> [String]? {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("->") else { return nil }
+        let lower = trimmed.lowercased()
+        let chain: Substring
+        if let range = trimmed.range(of: "workflow:", options: .caseInsensitive) {
+            chain = trimmed[range.upperBound...]
+        } else if lower.hasPrefix("workflow ") {
+            chain = trimmed.dropFirst("workflow ".count)
+        } else if lower.hasPrefix("create nodes ") {
+            chain = trimmed.dropFirst("create nodes ".count)
+        } else {
+            chain = Substring(trimmed)
+        }
+
+        let steps = chain
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)[0]
+            .split(separator: "->")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return steps.count >= 2 ? steps : nil
+    }
+
+    private func uniqueNodeId(canvasId: String, title: String, existingIds: inout Set<String>) -> String {
+        let base = "\(canvasId)-\(slug(title))"
+        var candidate = base
+        var suffix = 2
+        while existingIds.contains(candidate) {
+            candidate = "\(base)-\(suffix)"
+            suffix += 1
+        }
+        existingIds.insert(candidate)
+        return candidate
+    }
+
+    private func slug(_ value: String) -> String {
+        let allowed = CharacterSet.alphanumerics
+        let parts = value.lowercased().unicodeScalars.reduce(into: [String]()) { result, scalar in
+            if allowed.contains(scalar) {
+                result.append(String(scalar))
+            } else if result.last != "-" {
+                result.append("-")
+            }
+        }
+        let slug = parts.joined().trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return slug.isEmpty ? "step" : slug
+    }
+
+    private func displayTitle(_ value: String) -> String {
+        value
+            .split(separator: " ")
+            .map { word in
+                let lower = word.lowercased()
+                switch lower {
+                case "prd-draft":
+                    return "PRD Draft"
+                case "pre-release":
+                    return "Pre-release"
+                case "prd":
+                    return "PRD"
+                case "pr":
+                    return "PR"
+                case "to":
+                    return "to"
+                default:
+                    return word.prefix(1).uppercased() + word.dropFirst()
+                }
+            }
+            .joined(separator: " ")
+    }
 
     /// The heuristic single-node proposal — mirrors `PlannerBoardBridge`'s
     /// offline `generateProposal` shape so the fallback is indistinguishable
@@ -288,18 +631,18 @@ final class DefaultPlannerAgentRuntime: PlannerAgentRuntime {
             id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
             title: title.isEmpty ? "Generated meee2 AI node" : title,
-            ioSchema: IOSchema(
-                consumes: ["owner goal", "meee2 AI context"],
-                produces: ["executable node output"],
-                completionSignal: "owner approves generated proposal"
+            schema: NodeSchema(
+                inputs: ["owner goal", "meee2 AI context"],
+                outputs: ["executable node output"],
+                goal: "complete the generated node"
             ),
             contextSources: [
                 ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
             ],
-            executionMode: .signOff,
+            executionMode: .human,
             executorType: .mock,
             doerId: canvas.ownerId,
-            status: .waiting
+            status: .ready
         )
         return PlanProposal(
             id: "proposal-\(canvas.id)-generate-\(proposalUUID)",

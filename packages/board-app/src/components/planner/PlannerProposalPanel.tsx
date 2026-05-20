@@ -1,57 +1,139 @@
-import { Check, Eye, GitBranch, Info, Send, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { Background, ReactFlow, ReactFlowProvider } from '@xyflow/react'
+import { Check, Eye, Info, Send, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { PlanProposal, PlannerAccess } from '../../types'
+import { PlannerNodeCard } from './PlannerNodeCard'
+import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
 
 interface Props {
+  canvasId: string
   proposal: PlanProposal | null
-  previewActive: boolean
+  variant?: 'board' | 'template'
+  previewGraph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
   busy: boolean
   error: string | null
   access: PlannerAccess | null
   nodeCount: number
   hasActionableDrift: boolean
   onSubmit: (message: string) => void
-  onApplyPreview: () => void
-  onApprove: () => void
-  onApply: () => void
   onApproveAndApply: () => void
   onReject: () => void
-  onCreateDeliveryPipeline?: () => void
+  draftMessage?: { id: number; text: string } | null
+  clearRevision?: number
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
   reviewRequestTick?: number
 }
 
+const reviewNodeTypes = {
+  plannerNode: PlannerNodeCard,
+}
+
+interface PlannerChatMessage {
+  id: string
+  role: 'user' | 'planner'
+  markdown: string
+  meta?: string[]
+}
+
 export function PlannerProposalPanel({
+  canvasId,
   proposal,
-  previewActive,
+  variant = 'board',
+  previewGraph,
   busy,
   error,
   access,
   nodeCount,
   hasActionableDrift,
   onSubmit,
-  onApplyPreview,
-  onApprove,
-  onApply,
   onApproveAndApply,
   onReject,
-  onCreateDeliveryPipeline,
+  draftMessage = null,
+  clearRevision = 0,
   reviewRequestTick,
 }: Props) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const handledClearRevisionRef = useRef(0)
   const [message, setMessage] = useState('')
-  const [lastUserMessage, setLastUserMessage] = useState('')
+  const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [thinking, setThinking] = useState(false)
+  const isTemplate = variant === 'template'
+
+  useEffect(() => {
+    setHistory(readChatHistory(canvasId))
+  }, [canvasId])
+
+  useEffect(() => {
+    writeChatHistory(canvasId, history)
+  }, [canvasId, history])
+
+  useEffect(() => {
+    if (clearRevision <= 0) return
+    if (handledClearRevisionRef.current === clearRevision) return
+    handledClearRevisionRef.current = clearRevision
+    clearChatHistory(canvasId)
+    setHistory([])
+    setReviewOpen(false)
+    setThinking(false)
+  }, [canvasId, clearRevision])
+
+  useEffect(() => {
+    if (!proposal) return
+    setThinking(false)
+    const nextMessage: PlannerChatMessage = {
+      id: `proposal:${proposal.id}`,
+      role: 'planner',
+      markdown: proposalChatMarkdown(proposal),
+      meta: [
+        proposal.status,
+        `${proposal.changes.length} ${proposal.changes.length === 1 ? 'change' : 'changes'}`,
+      ].filter(Boolean),
+    }
+    setHistory((current) => upsertChatMessage(current, nextMessage))
+  }, [proposal])
+
+  useEffect(() => {
+    if (error) setThinking(false)
+  }, [error])
+
+  useEffect(() => {
+    if (!busy) setThinking(false)
+  }, [busy])
 
   // A node action just produced a proposal — surface it immediately.
   useEffect(() => {
     if (reviewRequestTick && reviewRequestTick > 0) setReviewOpen(true)
   }, [reviewRequestTick])
+
+  useEffect(() => {
+    if (!draftMessage) return
+    setMessage(draftMessage.text)
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [draftMessage])
+
   const canCreateProposal = access?.canCreateProposal ?? true
   const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
+  const submitMessage = () => {
+    if (!canSend) return
+    const next = message.trim()
+    const displayMessage = next || 'Inspect the current graph drift.'
+    setHistory((current) => [
+      ...current,
+      {
+        id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        role: 'user',
+        markdown: displayMessage,
+      },
+    ])
+    setThinking(true)
+    onSubmit(next)
+    setMessage('')
+  }
 
   return (
     <aside className="planner-proposal-panel">
@@ -59,58 +141,72 @@ export function PlannerProposalPanel({
         <div className="planner-dialog__messages">
           <WorkflowGuide
             proposal={proposal}
-            previewActive={previewActive}
             nodeCount={nodeCount}
             hasActionableDrift={hasActionableDrift}
           />
           {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
-          {lastUserMessage && (
-            <div className="planner-dialog__message planner-dialog__message--user">
-              <MarkdownMessage markdown={lastUserMessage} />
+          {history.map((item) => (
+            <div
+              key={item.id}
+              className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : 'planner'}`}
+            >
+              {item.meta && item.meta.length > 0 && (
+                <div className="planner-dialog__message-meta">
+                  {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
+                </div>
+              )}
+              <MarkdownMessage markdown={item.markdown} />
+              {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
+                <div className="planner-dialog__actions planner-dialog__actions--single">
+                  <button
+                    type="button"
+                    className="planner-proposal__preview"
+                    disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
+                    onClick={() => setReviewOpen(true)}
+                  >
+                    <Eye size={14} aria-hidden />
+                    Review changes
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {thinking && (
+            <div className="planner-dialog__message planner-dialog__message--planner planner-dialog__message--thinking">
+              <span>meee2 AI is thinking</span>
+              <span className="planner-thinking-dots" aria-hidden>
+                <i />
+                <i />
+                <i />
+              </span>
             </div>
           )}
-          {proposal ? (
+          {proposal && !history.some((item) => item.id === `proposal:${proposal.id}`) ? (
             <div className="planner-dialog__message planner-dialog__message--planner">
               <div className="planner-dialog__message-meta">
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
-                {previewActive && <span>Previewing proposal</span>}
               </div>
               <MarkdownMessage markdown={proposalChatMarkdown(proposal)} />
               <div className="planner-dialog__actions planner-dialog__actions--single">
                 <button
                   type="button"
                   className="planner-proposal__preview"
-                  disabled={busy}
+                  disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected'}
                   onClick={() => setReviewOpen(true)}
                 >
                   <Eye size={14} aria-hidden />
-                  Review proposal
+                  Review changes
                 </button>
               </div>
             </div>
-          ) : (
+          ) : history.length === 0 && (
             <div className="planner-dialog__hint" role="note">
               <div className="planner-dialog__hint-label">
                 <Info size={11} aria-hidden />
                 <span>How this works</span>
               </div>
               <MarkdownMessage markdown={guidance} />
-              {nodeCount === 0 && onCreateDeliveryPipeline && (
-                <div className="planner-dialog__secondary">
-                  <span>Prefer a head start?</span>
-                  <button
-                    type="button"
-                    className="planner-dialog__link-action"
-                    disabled={busy || !canCreateProposal}
-                    onClick={onCreateDeliveryPipeline}
-                    title="Drops in the meee2 delivery skeleton as a proposal — you still refine and approve it with meee2 AI."
-                  >
-                    <GitBranch size={12} aria-hidden />
-                    Start from the meee2 delivery skeleton
-                  </button>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -118,16 +214,13 @@ export function PlannerProposalPanel({
 
       <div className="planner-dialog__composer">
         <textarea
+          ref={textareaRef}
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault()
-              if (!canSend) return
-              const next = message.trim()
-              setLastUserMessage(next || 'Inspect the current graph drift.')
-              onSubmit(next)
-              setMessage('')
+              submitMessage()
             }
           }}
           placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to change the graph'}
@@ -138,12 +231,7 @@ export function PlannerProposalPanel({
             type="button"
             className="primary"
             disabled={!canSend}
-            onClick={() => {
-              const next = message.trim()
-              setLastUserMessage(next || 'Inspect the current graph drift.')
-              onSubmit(next)
-              setMessage('')
-            }}
+            onClick={submitMessage}
             title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
             aria-label="Send to meee2 AI"
           >
@@ -159,7 +247,7 @@ export function PlannerProposalPanel({
             if (event.target === event.currentTarget) setReviewOpen(false)
           }}
         >
-          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label="Review proposal">
+          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label="Review changes">
             <button
               type="button"
               className="planner-proposal-modal__close"
@@ -171,28 +259,44 @@ export function PlannerProposalPanel({
             <div className="planner-proposal-modal__header">
               <span>{proposal.status}</span>
               <h2>{proposal.summary}</h2>
-              <p>{proposal.changes.length} proposed graph {proposal.changes.length === 1 ? 'change' : 'changes'}</p>
+              <p>Preview only. The canvas changes after you apply.</p>
             </div>
-            <div className="planner-proposal-modal__flow" aria-label="Proposal action order">
-              <span className={previewActive ? 'is-done' : ''}>1 Preview changes</span>
-              <span className={proposal.status === 'applied' ? 'is-done' : ''}>2 Approve and apply</span>
-              <em>Reject before apply if the proposal is wrong</em>
+            <div className="planner-proposal-modal__body">
+              <section className="planner-proposal-modal__changes" aria-label="Proposed changes">
+                <MarkdownMessage markdown={proposalMarkdown(proposal)} />
+              </section>
+              <section className="planner-proposal-modal__preview-canvas" aria-label="Preview canvas">
+                <div className="planner-proposal-modal__preview-head">
+                  <span>Preview</span>
+                  <em>{proposal.changes.length} {proposal.changes.length === 1 ? 'change' : 'changes'}</em>
+                </div>
+                <div className="planner-proposal-modal__preview-viewport">
+                  {previewGraph.nodes.length > 0 ? (
+                    <ReactFlowProvider>
+                      <ReactFlow
+                        nodes={previewGraph.nodes}
+                        edges={previewGraph.edges}
+                        nodeTypes={reviewNodeTypes}
+                        nodesDraggable={false}
+                        nodesConnectable={false}
+                        elementsSelectable={false}
+                        panOnDrag
+                        zoomOnScroll
+                        fitView
+                        minZoom={0.25}
+                        maxZoom={1.2}
+                        proOptions={{ hideAttribution: true }}
+                      >
+                        <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
+                      </ReactFlow>
+                    </ReactFlowProvider>
+                  ) : (
+                    <div className="planner-proposal-modal__preview-empty">No preview available</div>
+                  )}
+                </div>
+              </section>
             </div>
-            <MarkdownMessage markdown={proposalMarkdown(proposal)} />
             <div className="planner-proposal-modal__actions">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onApplyPreview}
-                title={
-                  previewActive
-                    ? 'Re-render the temporary preview graph — use this after the proposal changed. The live graph is still untouched.'
-                    : 'Render the proposal as a temporary preview graph. Nothing in the live graph changes.'
-                }
-              >
-                <Eye size={14} aria-hidden />
-                Preview changes
-              </button>
               <button
                 type="button"
                 className="primary"
@@ -201,10 +305,10 @@ export function PlannerProposalPanel({
                   onApproveAndApply()
                   setReviewOpen(false)
                 }}
-                title="Write the approved changes into the live graph. This is the only step that mutates the real workflow."
+                title={isTemplate ? 'Write the previewed changes into this template.' : 'Apply these changes to the canvas.'}
               >
                 <Check size={14} aria-hidden />
-                Approve and apply
+                {isTemplate ? 'Apply to template' : 'Apply to canvas'}
               </button>
               <button
                 type="button"
@@ -214,30 +318,8 @@ export function PlannerProposalPanel({
                   setReviewOpen(false)
                 }}
               >
-                Reject
+                {isTemplate ? 'Discard' : 'Reject'}
               </button>
-              <details className="planner-proposal-modal__advanced">
-                <summary>Advanced</summary>
-                <div>
-                  <button
-                    type="button"
-                    disabled={busy || proposal.status !== 'pending' || !access?.canApproveProposal}
-                    onClick={onApprove}
-                  >
-                    Approve only
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy || proposal.status !== 'approved' || !access?.canApplyProposal}
-                    onClick={() => {
-                      onApply()
-                      setReviewOpen(false)
-                    }}
-                  >
-                    Apply approved
-                  </button>
-                </div>
-              </details>
             </div>
           </div>
         </div>
@@ -248,16 +330,14 @@ export function PlannerProposalPanel({
 
 function WorkflowGuide({
   proposal,
-  previewActive,
   nodeCount,
   hasActionableDrift,
 }: {
   proposal: PlanProposal | null
-  previewActive: boolean
   nodeCount: number
   hasActionableDrift: boolean
 }) {
-  const copy = workflowGuideCopy(proposal, previewActive, nodeCount, hasActionableDrift)
+  const copy = workflowGuideCopy(proposal, nodeCount, hasActionableDrift)
   return (
     <div className="planner-workflow-guide" aria-label="Workflow next step">
       <span>Next</span>
@@ -269,42 +349,36 @@ function WorkflowGuide({
 
 function workflowGuideCopy(
   proposal: PlanProposal | null,
-  previewActive: boolean,
   nodeCount: number,
   hasActionableDrift: boolean,
 ): { title: string; body: string } {
   if (proposal?.status === 'pending') {
-    return previewActive
-      ? {
-          title: 'Approve and apply if the preview is right',
-          body: 'Preview is temporary. The main action approves the proposal and applies it to the live workflow.',
-        }
-      : {
-          title: 'Preview this proposal',
-          body: 'Review what meee2 AI wants to change before approving. Nothing has changed in the live graph yet.',
-        }
+    return {
+      title: 'Review these changes',
+      body: 'Open the preview modal. The canvas is unchanged until you apply.',
+    }
   }
   if (proposal?.status === 'approved') {
     return {
-      title: 'Apply the approved proposal',
-      body: 'This proposal is already approved. Use Approve and apply to make it live.',
+      title: 'Apply these changes',
+      body: 'This proposal is already approved. Apply it to update the canvas.',
     }
   }
   if (nodeCount === 0) {
     return {
-      title: 'Co-create a workflow with meee2 AI',
-      body: 'Describe the outcome you want and we shape the graph together. The delivery skeleton is just an optional starting point.',
+      title: 'Co-create the canvas with meee2 AI',
+      body: 'Describe the outcome you want and meee2 AI will shape the canvas with you.',
     }
   }
   if (hasActionableDrift) {
     return {
       title: 'Inspect blocked or review nodes',
-      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open a node for execution or evidence details.',
+      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open a node for details or outputs.',
     }
   }
   return {
     title: 'Start the next step',
-    body: 'Open a node, start work or attach a known existing session, then submit structured output when the step is done or blocked.',
+    body: 'Keep talking with meee2 AI or open a node to adjust details and attach outputs.',
   }
 }
 
@@ -316,6 +390,63 @@ function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null
     return Boolean(access?.canApplyProposal)
   }
   return false
+}
+
+function chatHistoryKey(canvasId: string): string {
+  return `meee2.planner.chatHistory.${canvasId}.v1`
+}
+
+function readChatHistory(canvasId: string): PlannerChatMessage[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(chatHistoryKey(canvasId))
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item): PlannerChatMessage | null => {
+        if (!item || typeof item !== 'object') return null
+        if (item.role !== 'user' && item.role !== 'planner') return null
+        if (typeof item.id !== 'string' || typeof item.markdown !== 'string') return null
+        const meta = Array.isArray(item.meta)
+          ? item.meta.filter((value: unknown): value is string => typeof value === 'string')
+          : undefined
+        return {
+          id: item.id,
+          role: item.role,
+          markdown: item.markdown,
+          meta,
+        }
+      })
+      .filter((item): item is PlannerChatMessage => Boolean(item))
+      .slice(-80)
+  } catch {
+    return []
+  }
+}
+
+function writeChatHistory(canvasId: string, history: PlannerChatMessage[]) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(history.slice(-80)))
+  } catch {
+    // History persistence is best-effort; chat actions still work without it.
+  }
+}
+
+function clearChatHistory(canvasId: string) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(chatHistoryKey(canvasId))
+  } catch {
+    // History persistence is best-effort.
+  }
+}
+
+function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessage): PlannerChatMessage[] {
+  const index = history.findIndex((item) => item.id === next.id)
+  if (index < 0) return [...history, next].slice(-80)
+  return history.map((item, itemIndex) => (itemIndex === index ? next : item))
 }
 
 function MarkdownMessage({ markdown }: { markdown: string }) {
@@ -346,7 +477,7 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
   return [
     'Ask meee2 AI to adjust the graph in the box below.',
     '',
-    'It decides whether to create new plan work or inspect the current state.',
+    'It decides whether to reshape the canvas or inspect the current state.',
   ].join('\n')
 }
 
@@ -359,15 +490,23 @@ function proposalMarkdown(proposal: PlanProposal): string {
         node?.status,
         node?.doerId ? `doer ${node.doerId}` : null,
         node?.dependsOnNodeIds?.length ? `${node.dependsOnNodeIds.length} deps` : null,
-        node?.ioSchema ? schemaSummary(node.ioSchema) : null,
+        node?.schema ? schemaSummary(node.schema) : null,
         node?.contextSources?.length ? `${node.contextSources.length} context` : null,
+      ]))} |`
+    }
+    if (change.kind === 'attachArtifact') {
+      const artifact = change.artifact
+      return `| attach artifact | ${escapeMarkdown(artifact?.title ?? change.nodeId ?? 'Artifact')} | ${escapeMarkdown(changeDetails([
+        artifact?.kind,
+        artifact?.reference,
+        artifact?.payload ? 'payload' : null,
       ]))} |`
     }
     const target = change.title ?? change.nodeId ?? 'Unknown node'
     const details = changeDetails([
       change.title ? `title -> ${change.title}` : null,
       change.status ? `status -> ${change.status}` : null,
-      change.ioSchema ? schemaSummary(change.ioSchema) : null,
+      change.schema ? schemaSummary(change.schema) : null,
       change.contextSources ? `${change.contextSources.length} context source${change.contextSources.length === 1 ? '' : 's'}` : null,
       change.dependsOnNodeIds ? `${change.dependsOnNodeIds.length} deps` : null,
       change.doerId ? `doer -> ${change.doerId}` : null,
@@ -398,6 +537,9 @@ function proposalChatMarkdown(proposal: PlanProposal): string {
     if (change.kind === 'addNode') {
       return `- Add ${escapeMarkdown(change.node?.title ?? 'Untitled node')}`
     }
+    if (change.kind === 'attachArtifact') {
+      return `- Attach ${escapeMarkdown(change.artifact?.title ?? 'artifact')}`
+    }
     return `- Update ${escapeMarkdown(change.title ?? change.nodeId ?? 'Unknown node')}`
   })
   const more = proposal.changes.length > 3 ? [`- +${proposal.changes.length - 3} more`] : []
@@ -417,8 +559,8 @@ function changeDetails(values: Array<string | null | undefined>): string {
   return values.filter(Boolean).join(', ')
 }
 
-function schemaSummary(schema: { consumes: string[]; produces: string[]; completionSignal: string }): string {
-  const consumes = schema.consumes.length ? `in ${schema.consumes.join('+')}` : 'no input'
-  const produces = schema.produces.length ? `out ${schema.produces.join('+')}` : 'no output'
-  return `schema ${consumes} -> ${produces}; done=${schema.completionSignal}`
+function schemaSummary(schema: { inputs: string[]; outputs: string[]; goal: string }): string {
+  const inputs = schema.inputs.length ? `in ${schema.inputs.join('+')}` : 'no input'
+  const outputs = schema.outputs.length ? `out ${schema.outputs.join('+')}` : 'no output'
+  return `schema ${inputs} -> ${outputs}; goal=${schema.goal}`
 }

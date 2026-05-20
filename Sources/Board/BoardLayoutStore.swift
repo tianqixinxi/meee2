@@ -81,6 +81,11 @@ public final class BoardLayoutStore {
         case team
     }
 
+    public enum CanvasKind: String, Codable, Equatable {
+        case board
+        case template
+    }
+
     public struct Point: Codable, Equatable {
         public let x: Double
         public let y: Double
@@ -161,6 +166,7 @@ public final class BoardLayoutStore {
         public var id: String
         public var name: String
         public var scope: CanvasScope
+        public var kind: CanvasKind?
         public var ownerUserId: String?
         public var teamId: String?
         public var isDefault: Bool
@@ -182,6 +188,7 @@ public final class BoardLayoutStore {
             id: String,
             name: String,
             scope: CanvasScope,
+            kind: CanvasKind? = .board,
             ownerUserId: String?,
             teamId: String?,
             isDefault: Bool,
@@ -202,6 +209,7 @@ public final class BoardLayoutStore {
             self.id = id
             self.name = name
             self.scope = scope
+            self.kind = kind
             self.ownerUserId = ownerUserId
             self.teamId = teamId
             self.isDefault = isDefault
@@ -728,7 +736,7 @@ public final class BoardLayoutStore {
     }
 
     @discardableResult
-    public func createCanvas(name rawName: String, scope: CanvasScope) throws -> Snapshot {
+    public func createCanvas(name rawName: String, scope: CanvasScope, kind: CanvasKind = .board) throws -> Snapshot {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             throw storeError("canvas name is required")
@@ -746,6 +754,7 @@ public final class BoardLayoutStore {
                 id: id,
                 name: name,
                 scope: scope,
+                kind: kind,
                 ownerUserId: scope == .personal ? context.userId : nil,
                 teamId: scope == .team ? context.teamId : nil,
                 isDefault: false,
@@ -962,6 +971,8 @@ public final class BoardLayoutStore {
                     "deleted": false,
                     "sessionKeys": memberships.map(\.sessionId),
                     "state": [
+                        "kind": (canvas.kind ?? .board).rawValue,
+                        "ownerUserId": canvas.ownerUserId ?? canvas.createdBy ?? "",
                         "layout": jsonObject(layout) ?? [:],
                         "memberships": jsonObject(memberships) ?? []
                     ]
@@ -1081,7 +1092,8 @@ public final class BoardLayoutStore {
                         id: remote.id,
                         name: remote.name,
                         scope: .team,
-                        ownerUserId: nil,
+                        kind: parsedCanvasKind(from: remote.state) ?? .board,
+                        ownerUserId: remote.state["ownerUserId"] as? String,
                         teamId: remote.teamId,
                         isDefault: false,
                         workspaceFolderName: nil,
@@ -1466,6 +1478,14 @@ public final class BoardLayoutStore {
             store.canvases[idx].updatedAt = remote.updatedAt ?? now
         }
         guard let object = anyObject(state) as? [String: Any] else { return }
+        if let parsedKind = parsedCanvasKind(from: object),
+           let idx = store.canvases.firstIndex(where: { $0.id == canvasId }) {
+            store.canvases[idx].kind = parsedKind
+        }
+        if let ownerUserId = object["ownerUserId"] as? String,
+           let idx = store.canvases.firstIndex(where: { $0.id == canvasId }) {
+            store.canvases[idx].ownerUserId = ownerUserId.isEmpty ? nil : ownerUserId
+        }
         if let rawLayout = object["layout"],
            let layout = decodeJSON(Layout.self, from: rawLayout) {
             store.layouts[canvasId] = layout
@@ -1478,6 +1498,11 @@ public final class BoardLayoutStore {
         } else {
             store.memberships[canvasId] = store.memberships[canvasId] ?? [:]
         }
+    }
+
+    private func parsedCanvasKind(from object: [String: Any]) -> CanvasKind? {
+        guard let rawKind = object["kind"] as? String else { return .board }
+        return CanvasKind(rawValue: rawKind)
     }
 
     private func jsonObject<T: Encodable>(_ value: T) -> Any? {

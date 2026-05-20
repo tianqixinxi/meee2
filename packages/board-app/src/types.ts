@@ -163,6 +163,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
+export type CanvasKind = 'board' | 'template'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
@@ -171,6 +172,7 @@ export interface CanvasInfo {
   id: string
   name: string
   scope: CanvasScope
+  kind?: CanvasKind
   isDefault: boolean
   workspacePath: string
   teamId?: string | null
@@ -279,14 +281,14 @@ export interface PlanningCanvas {
   ownerId: string
   title: string
   plannerContext: string
-  /** Visibility tier. Legacy canvases predating the field decode as `private`. */
+  /** Visibility tier for the canvas. */
   visibility?: PlannerCanvasVisibility
 }
 
-export interface IOSchema {
-  consumes: string[]
-  produces: string[]
-  completionSignal: string
+export interface NodeSchema {
+  inputs: string[]
+  outputs: string[]
+  goal: string
 }
 
 export type ContextSourceKind =
@@ -302,7 +304,7 @@ export interface ContextSource {
   reference: string
 }
 
-export type ExecutionMode = 'auto' | 'sign-off' | 'human'
+export type ExecutionMode = 'auto' | 'human'
 export type ExecutorType =
   | 'claude'
   | 'codex'
@@ -311,7 +313,7 @@ export type ExecutorType =
   | 'devin'
   | 'human'
   | 'mock'
-export type PlanningNodeStatus = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
+export type PlanningNodeStatus = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
 export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
@@ -319,6 +321,7 @@ export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched
 export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
 export type PlannerArtifactKind =
   | 'idea-draft'
+  | 'kanban'
   | 'prd'
   | 'impl-pr'
   | 'prerelease-verdict'
@@ -365,6 +368,19 @@ export interface PlannerArtifact {
   reference: string
   status: string
   createdAt: string
+  payload?: unknown
+}
+
+export interface KanbanArtifactPayload {
+  version: 1
+  columns: Array<{ id: string; title: string }>
+  items: Array<{
+    id: string
+    columnId: string
+    title: string
+    description?: string
+    subCanvasId?: string | null
+  }>
 }
 
 export interface PlannerGraphEdge {
@@ -427,6 +443,7 @@ export interface PlannerNodeOutputArtifact {
   kind: PlannerArtifactKind
   title: string
   reference: string
+  payload?: unknown
   routeTo: string[]
 }
 
@@ -474,7 +491,7 @@ export interface PlanningNode {
   id: string
   canvasId: string
   title: string
-  ioSchema: IOSchema
+  schema: NodeSchema
   contextSources: ContextSource[]
   executionMode: ExecutionMode
   executorType: ExecutorType
@@ -504,7 +521,16 @@ export interface PlanningNode {
 }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
-export type PlanChangeKind = 'addNode' | 'updateNode'
+export type PlanChangeKind = 'addNode' | 'updateNode' | 'attachArtifact'
+
+export interface PlanArtifactDraft {
+  nodeId?: string | null
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  status?: string | null
+  payload?: unknown
+}
 
 export interface PlanChange {
   kind: PlanChangeKind
@@ -512,7 +538,7 @@ export interface PlanChange {
   nodeId?: string | null
   title?: string | null
   status?: PlanningNodeStatus | null
-  ioSchema?: IOSchema | null
+  schema?: NodeSchema | null
   contextSources?: ContextSource[] | null
   dependsOnNodeIds?: string[] | null
   subCanvasId?: string | null
@@ -533,6 +559,7 @@ export interface PlanChange {
    * lightweight `updateNode` proposal that touches only `doerId`.
    */
   doerId?: string | null
+  artifact?: PlanArtifactDraft | null
 }
 
 export interface PlanProposal {
@@ -543,7 +570,7 @@ export interface PlanProposal {
   status: PlanProposalStatus
 }
 
-export type NodeRunState = 'waiting' | 'running' | 'blocked' | 'done' | 'planning'
+export type NodeRunState = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
 
 export interface NodeStateSnapshot {
   nodeId: string

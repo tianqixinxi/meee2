@@ -14,8 +14,7 @@ struct PlanningCanvas: Codable, Equatable {
     var ownerId: String
     var title: String
     var plannerContext: String
-    /// Visibility tier. Defaults to `.private`. Persisted canvases that predate
-    /// this field decode as `.private` (see the custom decoder below).
+    /// Visibility tier. Defaults to `.private` for newly created canvases.
     var visibility: PlannerCanvasVisibility
 
     init(
@@ -31,30 +30,18 @@ struct PlanningCanvas: Codable, Equatable {
         self.plannerContext = plannerContext
         self.visibility = visibility
     }
-
-    enum CodingKeys: String, CodingKey {
-        case id, ownerId, title, plannerContext, visibility
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(String.self, forKey: .id)
-        self.ownerId = try container.decode(String.self, forKey: .ownerId)
-        self.title = try container.decode(String.self, forKey: .title)
-        self.plannerContext = try container.decode(String.self, forKey: .plannerContext)
-        // Schema migration: legacy canvases persisted before `visibility`
-        // existed default to `.private` (the safe, least-permissive tier).
-        self.visibility = try container.decodeIfPresent(
-            PlannerCanvasVisibility.self,
-            forKey: .visibility
-        ) ?? .private
-    }
 }
 
-struct IOSchema: Codable, Equatable {
-    var consumes: [String]
-    var produces: [String]
-    var completionSignal: String
+struct NodeSchema: Codable, Equatable {
+    var inputs: [String]
+    var outputs: [String]
+    var goal: String
+
+    init(inputs: [String], outputs: [String], goal: String) {
+        self.inputs = inputs
+        self.outputs = outputs
+        self.goal = goal
+    }
 }
 
 struct ContextSource: Codable, Equatable {
@@ -73,7 +60,6 @@ struct ContextSource: Codable, Equatable {
 
 enum ExecutionMode: String, Codable, Equatable, CaseIterable {
     case auto
-    case signOff = "sign-off"
     case human
 }
 
@@ -88,11 +74,11 @@ enum ExecutorType: String, Codable, Equatable, CaseIterable {
 }
 
 enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
-    case waiting
-    case running
+    case draft
+    case ready
+    case working
     case blocked
     case done
-    case planning
 }
 
 enum PlanningNodeSource: String, Codable, Equatable {
@@ -189,6 +175,7 @@ struct PlannerNodeDispatch: Codable, Equatable {
 
 enum PlannerArtifactKind: String, Codable, Equatable, CaseIterable {
     case ideaDraft = "idea-draft"
+    case kanban
     case prd
     case implPR = "impl-pr"
     case prereleaseVerdict = "prerelease-verdict"
@@ -215,11 +202,10 @@ struct PlannerArtifact: Codable, Equatable {
     var reference: String
     var status: String
     var createdAt: Date
-    /// Who produced this artifact. Defaults to `.integration` for artifacts
-    /// persisted before this field existed (the only attach path back then).
+    var payload: BoardJSONValue?
+    /// Who produced this artifact.
     var producedBy: PlannerArtifactProducer
-    /// The workflow run this artifact belongs to. `nil` until the Run layer
-    /// (P1) lands; afterwards every artifact is scoped to the run that made it.
+    /// The workflow run this artifact belongs to.
     var runId: String?
 
     init(
@@ -231,6 +217,7 @@ struct PlannerArtifact: Codable, Equatable {
         reference: String,
         status: String,
         createdAt: Date,
+        payload: BoardJSONValue? = nil,
         producedBy: PlannerArtifactProducer = .integration,
         runId: String? = nil
     ) {
@@ -242,23 +229,9 @@ struct PlannerArtifact: Codable, Equatable {
         self.reference = reference
         self.status = status
         self.createdAt = createdAt
+        self.payload = payload
         self.producedBy = producedBy
         self.runId = runId
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        canvasId = try container.decode(String.self, forKey: .canvasId)
-        nodeId = try container.decode(String.self, forKey: .nodeId)
-        kind = try container.decode(PlannerArtifactKind.self, forKey: .kind)
-        title = try container.decode(String.self, forKey: .title)
-        reference = try container.decode(String.self, forKey: .reference)
-        status = try container.decode(String.self, forKey: .status)
-        createdAt = try container.decode(Date.self, forKey: .createdAt)
-        // Legacy artifacts predate these fields — fall back gracefully.
-        producedBy = try container.decodeIfPresent(PlannerArtifactProducer.self, forKey: .producedBy) ?? .integration
-        runId = try container.decodeIfPresent(String.self, forKey: .runId)
     }
 }
 
@@ -384,7 +357,7 @@ struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
     var title: String
-    var ioSchema: IOSchema
+    var schema: NodeSchema
     var contextSources: [ContextSource]
     var executionMode: ExecutionMode
     var executorType: ExecutorType
@@ -409,7 +382,7 @@ struct PlanningNode: Codable, Equatable {
         id: String,
         canvasId: String,
         title: String,
-        ioSchema: IOSchema,
+        schema: NodeSchema,
         contextSources: [ContextSource],
         executionMode: ExecutionMode,
         executorType: ExecutorType,
@@ -433,7 +406,7 @@ struct PlanningNode: Codable, Equatable {
         self.id = id
         self.canvasId = canvasId
         self.title = title
-        self.ioSchema = ioSchema
+        self.schema = schema
         self.contextSources = contextSources
         self.executionMode = executionMode
         self.executorType = executorType
@@ -462,7 +435,7 @@ struct PlanningNode: Codable, Equatable {
     /// it must never be decoded or persisted. `encode(to:)` adds it for the
     /// API response only.
     private enum CodingKeys: String, CodingKey {
-        case id, canvasId, title, ioSchema, contextSources, executionMode
+        case id, canvasId, title, schema, contextSources, executionMode
         case executorType, doerId, status, sessionId, chatThreadId, source
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
         case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
@@ -473,12 +446,39 @@ struct PlanningNode: Codable, Equatable {
         case nextAction
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        canvasId = try container.decode(String.self, forKey: .canvasId)
+        title = try container.decode(String.self, forKey: .title)
+        schema = try container.decode(NodeSchema.self, forKey: .schema)
+        contextSources = try container.decode([ContextSource].self, forKey: .contextSources)
+        executionMode = try container.decode(ExecutionMode.self, forKey: .executionMode)
+        executorType = try container.decode(ExecutorType.self, forKey: .executorType)
+        doerId = try container.decode(String.self, forKey: .doerId)
+        status = try container.decode(PlanningNodeStatus.self, forKey: .status)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
+        source = try container.decodeIfPresent(PlanningNodeSource.self, forKey: .source)
+        dependsOnNodeIds = try container.decodeIfPresent([String].self, forKey: .dependsOnNodeIds)
+        subCanvasId = try container.decodeIfPresent(String.self, forKey: .subCanvasId)
+        nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
+        layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
+        trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
+        gate = try container.decodeIfPresent(PlannerNodeGate.self, forKey: .gate)
+        dispatch = try container.decodeIfPresent(PlannerNodeDispatch.self, forKey: .dispatch)
+        approvers = try container.decodeIfPresent([String].self, forKey: .approvers)
+        artifactRefs = try container.decodeIfPresent([String].self, forKey: .artifactRefs)
+        eventRefs = try container.decodeIfPresent([String].self, forKey: .eventRefs)
+        workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
+    }
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(canvasId, forKey: .canvasId)
         try container.encode(title, forKey: .title)
-        try container.encode(ioSchema, forKey: .ioSchema)
+        try container.encode(schema, forKey: .schema)
         try container.encode(contextSources, forKey: .contextSources)
         try container.encode(executionMode, forKey: .executionMode)
         try container.encode(executorType, forKey: .executorType)
@@ -531,7 +531,7 @@ enum PlannerWorkflowGuidance {
 
         let hasGate = node.gate != nil
         let hasBlockers = !(blockers?.isEmpty ?? true)
-        let needsOwnerReview = node.executionMode == .signOff
+        let requiresHumanCompletion = node.executionMode == .human
         let hasSession = node.sessionId != nil
         let hasDependencies = !(node.dependsOnNodeIds?.isEmpty ?? true)
 
@@ -539,7 +539,7 @@ enum PlannerWorkflowGuidance {
         case .readyToStart:
             return "Ready — start work or attach an existing session."
         case .gateWait:
-            return "Owner: review the gate and approve or send it back."
+            return "Review the output and confirm or send it back."
         case .failed:
             if hasBlockers {
                 return "Failed — clear the blockers, then start work again."
@@ -558,8 +558,8 @@ enum PlannerWorkflowGuidance {
         case .running:
             return "In progress — open the session to monitor work."
         case .done:
-            if hasGate || needsOwnerReview {
-                return "Done — verify the delivery evidence and close the gate."
+            if hasGate || requiresHumanCompletion {
+                return "Done — verify the delivery evidence."
             }
             return "Done — confirm the artifact is attached."
         }
@@ -573,10 +573,20 @@ enum PlanProposalStatus: String, Codable, Equatable {
     case rejected
 }
 
+struct PlanArtifactDraft: Codable, Equatable {
+    var nodeId: String?
+    var kind: PlannerArtifactKind
+    var title: String
+    var reference: String
+    var status: String?
+    var payload: BoardJSONValue?
+}
+
 struct PlanChange: Codable, Equatable {
     enum Kind: String, Codable, Equatable {
         case addNode
         case updateNode
+        case attachArtifact
     }
 
     var kind: Kind
@@ -584,7 +594,7 @@ struct PlanChange: Codable, Equatable {
     var nodeId: String?
     var title: String?
     var status: PlanningNodeStatus?
-    var ioSchema: IOSchema?
+    var schema: NodeSchema?
     var contextSources: [ContextSource]?
     var dependsOnNodeIds: [String]?
     var subCanvasId: String?
@@ -601,6 +611,14 @@ struct PlanChange: Codable, Equatable {
     var chatThreadId: String?
     var source: PlanningNodeSource?
     var doerId: String?
+    var artifact: PlanArtifactDraft?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, node, nodeId, title, status, schema, contextSources
+        case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
+        case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
+        case sessionId, chatThreadId, source, doerId, artifact
+    }
 
     init(
         kind: Kind,
@@ -608,7 +626,7 @@ struct PlanChange: Codable, Equatable {
         nodeId: String?,
         title: String?,
         status: PlanningNodeStatus?,
-        ioSchema: IOSchema? = nil,
+        schema: NodeSchema? = nil,
         contextSources: [ContextSource]? = nil,
         dependsOnNodeIds: [String]? = nil,
         subCanvasId: String? = nil,
@@ -624,14 +642,15 @@ struct PlanChange: Codable, Equatable {
         sessionId: String? = nil,
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = nil,
-        doerId: String? = nil
+        doerId: String? = nil,
+        artifact: PlanArtifactDraft? = nil
     ) {
         self.kind = kind
         self.node = node
         self.nodeId = nodeId
         self.title = title
         self.status = status
-        self.ioSchema = ioSchema
+        self.schema = schema
         self.contextSources = contextSources
         self.dependsOnNodeIds = dependsOnNodeIds
         self.subCanvasId = subCanvasId
@@ -648,17 +667,97 @@ struct PlanChange: Codable, Equatable {
         self.chatThreadId = chatThreadId
         self.source = source
         self.doerId = doerId
+        self.artifact = artifact
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        node = try container.decodeIfPresent(PlanningNode.self, forKey: .node)
+        nodeId = try container.decodeIfPresent(String.self, forKey: .nodeId)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        status = try container.decodeIfPresent(PlanningNodeStatus.self, forKey: .status)
+        schema = try container.decodeIfPresent(NodeSchema.self, forKey: .schema)
+        contextSources = try container.decodeIfPresent([ContextSource].self, forKey: .contextSources)
+        dependsOnNodeIds = try container.decodeIfPresent([String].self, forKey: .dependsOnNodeIds)
+        subCanvasId = try container.decodeIfPresent(String.self, forKey: .subCanvasId)
+        nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
+        layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
+        trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
+        gate = try container.decodeIfPresent(PlannerNodeGate.self, forKey: .gate)
+        dispatch = try container.decodeIfPresent(PlannerNodeDispatch.self, forKey: .dispatch)
+        approvers = try container.decodeIfPresent([String].self, forKey: .approvers)
+        artifactRefs = try container.decodeIfPresent([String].self, forKey: .artifactRefs)
+        eventRefs = try container.decodeIfPresent([String].self, forKey: .eventRefs)
+        workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
+        sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
+        source = try container.decodeIfPresent(PlanningNodeSource.self, forKey: .source)
+        doerId = try container.decodeIfPresent(String.self, forKey: .doerId)
+        artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeIfPresent(node, forKey: .node)
+        try container.encodeIfPresent(nodeId, forKey: .nodeId)
+        try container.encodeIfPresent(title, forKey: .title)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(schema, forKey: .schema)
+        try container.encodeIfPresent(contextSources, forKey: .contextSources)
+        try container.encodeIfPresent(dependsOnNodeIds, forKey: .dependsOnNodeIds)
+        try container.encodeIfPresent(subCanvasId, forKey: .subCanvasId)
+        try container.encodeIfPresent(nodeKind, forKey: .nodeKind)
+        try container.encodeIfPresent(layout, forKey: .layout)
+        try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(gate, forKey: .gate)
+        try container.encodeIfPresent(dispatch, forKey: .dispatch)
+        try container.encodeIfPresent(approvers, forKey: .approvers)
+        try container.encodeIfPresent(artifactRefs, forKey: .artifactRefs)
+        try container.encodeIfPresent(eventRefs, forKey: .eventRefs)
+        try container.encodeIfPresent(workflowRunState, forKey: .workflowRunState)
+        try container.encodeIfPresent(sessionId, forKey: .sessionId)
+        try container.encodeIfPresent(chatThreadId, forKey: .chatThreadId)
+        try container.encodeIfPresent(source, forKey: .source)
+        try container.encodeIfPresent(doerId, forKey: .doerId)
+        try container.encodeIfPresent(artifact, forKey: .artifact)
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
         PlanChange(kind: .addNode, node: node, nodeId: nil, title: nil, status: nil)
     }
 
+    static func attachArtifact(
+        nodeId: String,
+        kind: PlannerArtifactKind,
+        title: String,
+        reference: String,
+        status: String = "attached",
+        payload: BoardJSONValue? = nil
+    ) -> PlanChange {
+        PlanChange(
+            kind: .attachArtifact,
+            node: nil,
+            nodeId: nodeId,
+            title: nil,
+            status: nil,
+            artifact: PlanArtifactDraft(
+                nodeId: nodeId,
+                kind: kind,
+                title: title,
+                reference: reference,
+                status: status,
+                payload: payload
+            )
+        )
+    }
+
     static func updateNode(
         id: String,
         title: String? = nil,
         status: PlanningNodeStatus? = nil,
-        ioSchema: IOSchema? = nil,
+        schema: NodeSchema? = nil,
         contextSources: [ContextSource]? = nil,
         dependsOnNodeIds: [String]? = nil,
         subCanvasId: String? = nil,
@@ -682,7 +781,7 @@ struct PlanChange: Codable, Equatable {
             nodeId: id,
             title: title,
             status: status,
-            ioSchema: ioSchema,
+            schema: schema,
             contextSources: contextSources,
             dependsOnNodeIds: dependsOnNodeIds,
             subCanvasId: subCanvasId,
@@ -712,11 +811,11 @@ struct PlanProposal: Codable, Equatable {
 }
 
 enum NodeRunState: String, Codable, Equatable {
-    case waiting
-    case running
+    case draft
+    case ready
+    case working
     case blocked
     case done
-    case planning
 }
 
 struct NodeStateSnapshot: Codable, Equatable {
@@ -768,6 +867,7 @@ struct PlannerNodeOutputArtifact: Codable, Equatable {
     var kind: PlannerArtifactKind
     var title: String
     var reference: String
+    var payload: BoardJSONValue?
     var routeTo: [String]
 }
 
@@ -1065,7 +1165,8 @@ enum PlannerProposalValidator {
     /// Known `PlanChange.Kind` raw values an LLM is allowed to emit.
     static let knownChangeKinds: Set<String> = [
         PlanChange.Kind.addNode.rawValue,
-        PlanChange.Kind.updateNode.rawValue
+        PlanChange.Kind.updateNode.rawValue,
+        PlanChange.Kind.attachArtifact.rawValue
     ]
 
     static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
@@ -1167,7 +1268,7 @@ enum PlannerProposalValidator {
                 )
                 guard change.title != nil ||
                     change.status != nil ||
-                    change.ioSchema != nil ||
+                    change.schema != nil ||
                     change.contextSources != nil ||
                     change.dependsOnNodeIds != nil ||
                     change.subCanvasId != nil ||
@@ -1185,6 +1286,19 @@ enum PlannerProposalValidator {
                     change.source != nil ||
                     change.doerId != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
+                }
+            case .attachArtifact:
+                guard let artifact = change.artifact else {
+                    throw PlannerCoreError.invalidNodeOutput("attachArtifact change is missing artifact")
+                }
+                let targetNodeId = artifact.nodeId ?? change.nodeId
+                guard let targetNodeId else { throw PlannerCoreError.missingNodeId }
+                guard canvasNodeIds.contains(targetNodeId) else {
+                    throw PlannerCoreError.nodeNotFound(targetNodeId)
+                }
+                guard !artifact.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("attachArtifact requires non-empty title and reference")
                 }
             }
         }
@@ -1232,28 +1346,28 @@ final class PlannerCoreService {
                 id: "\(canvasId)-node-1",
                 canvasId: canvasId,
                 title: "meee2 AI LLM Spike",
-                ioSchema: IOSchema(
-                    consumes: ["owner goal", "canvas context"],
-                    produces: ["initial meee2 AI proposal"],
-                    completionSignal: "proposal created"
+                schema: NodeSchema(
+                    inputs: ["owner goal", "canvas context"],
+                    outputs: ["initial meee2 AI proposal"],
+                    goal: "proposal created"
                 ),
                 contextSources: [
                     ContextSource(kind: .document, title: "Feature list", reference: "doc/meee2-feature-list-wjk-codex.md")
                 ],
-                executionMode: .signOff,
+                executionMode: .human,
                 executorType: .codex,
                 doerId: "A",
-                status: .running,
+                status: .working,
                 dependsOnNodeIds: []
             ),
             PlanningNode(
                 id: "\(canvasId)-node-2",
                 canvasId: canvasId,
                 title: "Canvas + Permission Shell",
-                ioSchema: IOSchema(
-                    consumes: ["node mock", "owner policy"],
-                    produces: ["owner-only canvas shell"],
-                    completionSignal: "shell renders mocked nodes"
+                schema: NodeSchema(
+                    inputs: ["node mock", "owner policy"],
+                    outputs: ["owner-only canvas shell"],
+                    goal: "shell renders mocked nodes"
                 ),
                 contextSources: [
                     ContextSource(kind: .repository, title: "Board module", reference: "Sources/Board")
@@ -1261,22 +1375,22 @@ final class PlannerCoreService {
                 executionMode: .human,
                 executorType: .human,
                 doerId: "B",
-                status: .waiting,
+                status: .ready,
                 dependsOnNodeIds: ["\(canvasId)-node-1"]
             ),
             PlanningNode(
                 id: "\(canvasId)-node-3",
                 canvasId: canvasId,
                 title: "Proposal Apply Contract",
-                ioSchema: IOSchema(
-                    consumes: ["approved plan proposal"],
-                    produces: ["updated planning nodes"],
-                    completionSignal: "approved proposal applied"
+                schema: NodeSchema(
+                    inputs: ["approved plan proposal"],
+                    outputs: ["updated planning nodes"],
+                    goal: "approved proposal applied"
                 ),
                 contextSources: [
                     ContextSource(kind: .artifact, title: "PlanProposal", reference: "PlannerCore.PlanProposal")
                 ],
-                executionMode: .signOff,
+                executionMode: .human,
                 executorType: .mock,
                 doerId: "A",
                 status: .blocked,
@@ -1286,10 +1400,10 @@ final class PlannerCoreService {
                 id: "\(canvasId)-node-4",
                 canvasId: canvasId,
                 title: "NodeState Read",
-                ioSchema: IOSchema(
-                    consumes: ["planning nodes"],
-                    produces: ["node state snapshots"],
-                    completionSignal: "blocked/running/done states visible"
+                schema: NodeSchema(
+                    inputs: ["planning nodes"],
+                    outputs: ["node state snapshots"],
+                    goal: "blocked/running/done states visible"
                 ),
                 contextSources: [
                     ContextSource(kind: .artifact, title: "PlanningNode", reference: "PlannerCore.PlanningNode")
@@ -1321,9 +1435,6 @@ final class PlannerCoreService {
 
         var updatedNodes = nodes
         var dependencyInvalidationNodeIds = Set<String>()
-        // Step nodes whose dispatch (set by this proposal) requires a spawned
-        // session node — collected during the change pass, materialized after.
-        var dispatchSpawnStepIds: [String] = []
         for change in proposal.changes {
             switch change.kind {
             case .addNode:
@@ -1343,8 +1454,8 @@ final class PlannerCoreService {
                 if let title = change.title {
                     updatedNodes[index].title = title
                 }
-                if let ioSchema = change.ioSchema {
-                    updatedNodes[index].ioSchema = ioSchema
+                if let schema = change.schema {
+                    updatedNodes[index].schema = schema
                     dependencyInvalidationNodeIds.insert(nodeId)
                 }
                 if let contextSources = change.contextSources {
@@ -1371,15 +1482,6 @@ final class PlannerCoreService {
                 }
                 if let dispatch = change.dispatch {
                     updatedNodes[index].dispatch = dispatch
-                    // A dispatch proposal that targets a spawning runner and
-                    // moves the step into `dispatched` should, at apply time,
-                    // materialize a `session` PlanningNode + an edge from this
-                    // step to it. `human` / `ci-agent` never reach here.
-                    if dispatch.runner.spawnsSession,
-                       change.workflowRunState == .dispatched,
-                       updatedNodes[index].nodeKind != .session {
-                        dispatchSpawnStepIds.append(nodeId)
-                    }
                 }
                 if let approvers = change.approvers {
                     updatedNodes[index].approvers = approvers
@@ -1408,6 +1510,8 @@ final class PlannerCoreService {
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
+            case .attachArtifact:
+                continue
             }
         }
 
@@ -1419,26 +1523,10 @@ final class PlannerCoreService {
                 guard !dependencyInvalidationNodeIds.contains(updatedNodes[index].id) else {
                     continue
                 }
-                updatedNodes[index].status = .planning
+                updatedNodes[index].status = .draft
             }
         }
 
-        // Phase 2 — dispatch 真执行: materialize a `session` PlanningNode for each
-        // step that this proposal dispatched to a spawning runner. The session
-        // node `dependsOnNodeIds` the step, so `graphEdges` derives the
-        // step → session edge automatically. The spawned `sessionId` is unknown
-        // here — it is bound later when the spawn intent matches a real session
-        // (see `PlannerSessionRunStateBridge`).
-        for stepId in dispatchSpawnStepIds {
-            guard let step = updatedNodes.first(where: { $0.id == stepId }) else { continue }
-            // Idempotency: if a session node for this step already exists
-            // (re-apply, duplicate change), don't spawn a second one.
-            let alreadySpawned = updatedNodes.contains { node in
-                node.nodeKind == .session && (node.dependsOnNodeIds ?? []).contains(stepId)
-            }
-            guard !alreadySpawned else { continue }
-            updatedNodes.append(Self.sessionNode(for: step, proposalId: proposal.id))
-        }
         return updatedNodes
     }
 
@@ -1451,12 +1539,12 @@ final class PlannerCoreService {
             id: "node-session-\(step.id)-\(proposalId)",
             canvasId: step.canvasId,
             title: "Session · \(step.title)",
-            ioSchema: step.ioSchema,
+            schema: step.schema,
             contextSources: step.contextSources,
             executionMode: step.executionMode,
             executorType: step.executorType,
             doerId: step.doerId,
-            status: .running,
+            status: .working,
             source: .session,
             dependsOnNodeIds: [step.id],
             nodeKind: .session,
@@ -1473,7 +1561,7 @@ final class PlannerCoreService {
                 runState: runState,
                 blockers: blockers(for: node),
                 artifactRefs: artifactRefs(for: node),
-                needsOwnerReview: node.status == .blocked || (node.status != .planning && node.executionMode == .signOff)
+                needsOwnerReview: false
             )
         }
     }
@@ -1492,15 +1580,15 @@ final class PlannerCoreService {
         if scopedStates.contains(where: { $0.runState == .blocked }) {
             runState = .blocked
         } else if pendingProposalCount > 0 || scopedStates.contains(where: { $0.needsOwnerReview }) {
-            runState = .planning
+            runState = .draft
         } else if !scopedStates.isEmpty && scopedStates.allSatisfy({ $0.runState == .done }) {
             runState = .done
-        } else if scopedStates.contains(where: { $0.runState == .running }) {
-            runState = .running
-        } else if scopedStates.contains(where: { $0.runState == .planning }) {
-            runState = .planning
+        } else if scopedStates.contains(where: { $0.runState == .working }) {
+            runState = .working
+        } else if scopedStates.contains(where: { $0.runState == .draft }) {
+            runState = .draft
         } else {
-            runState = .waiting
+            runState = .ready
         }
         return SubCanvasSummary(
             subCanvasId: subCanvasId,
@@ -1582,8 +1670,6 @@ final class PlannerCoreService {
         switch node.status {
         case .blocked:
             return ["Node is blocked and needs meee2 AI attention"]
-        case .planning:
-            return ["Node is replanning after dependency or schema change"]
         default:
             return []
         }
@@ -1600,13 +1686,13 @@ enum SessionToPlanningNodeMapper {
             id: "\(canvasId)-session-\(stableNodeSuffix(for: session.id))",
             canvasId: canvasId,
             title: session.title.isEmpty ? session.projectName : session.title,
-            ioSchema: IOSchema(
-                consumes: sessionInputHints(session),
-                produces: ["session output"],
-                completionSignal: completionSignal(for: session.status)
+            schema: NodeSchema(
+                inputs: sessionInputHints(session),
+                outputs: ["session output"],
+                goal: goal(for: session.status)
             ),
             contextSources: contextSources(session),
-            executionMode: session.status == .permissionRequired ? .signOff : .auto,
+            executionMode: session.status == .permissionRequired ? .human : .auto,
             executorType: executorType(pluginId: session.pluginId),
             doerId: doerId,
             status: nodeStatus(session.status),
@@ -1667,17 +1753,17 @@ enum SessionToPlanningNodeMapper {
     private static func nodeStatus(_ status: SessionStatus) -> PlanningNodeStatus {
         switch status {
         case .thinking, .tooling, .active, .compacting:
-            return .running
+            return .working
         case .permissionRequired, .dead:
             return .blocked
         case .completed:
             return .done
         case .idle, .waitingForUser:
-            return .waiting
+            return .ready
         }
     }
 
-    private static func completionSignal(for status: SessionStatus) -> String {
+    private static func goal(for status: SessionStatus) -> String {
         switch status {
         case .permissionRequired:
             return "owner permission required"
@@ -1833,6 +1919,42 @@ final class PlannerStore {
         }
     }
 
+    func seedNodesIfEmpty(
+        canvasId: String,
+        seedNodes: [PlanningNode]
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard record.nodes.isEmpty,
+                  record.proposals.isEmpty,
+                  record.events.isEmpty,
+                  record.artifacts.isEmpty,
+                  record.runs.isEmpty,
+                  !seedNodes.isEmpty else {
+                return record
+            }
+            record.nodes = seedNodes
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    func clearCanvasContent(canvasId: String) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            record.nodes = []
+            record.proposals = []
+            record.events = []
+            record.artifacts = []
+            record.runs = []
+            record.activeRunId = nil
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
     func saveProposal(
         _ proposal: PlanProposal,
         canvas: PlanningCanvas,
@@ -1931,7 +2053,8 @@ final class PlannerStore {
             record.proposals[index].status = .applied
             record.artifacts = mergeArtifacts(
                 record.artifacts,
-                derivedArtifacts(from: nodes, canvasId: canvasId)
+                proposalArtifacts(from: proposal, nodes: nodes, canvasId: canvasId)
+                    + derivedArtifacts(from: nodes, canvasId: canvasId)
             )
             record.events.append(event(
                 canvasId: canvasId,
@@ -1988,71 +2111,64 @@ final class PlannerStore {
     }
 
     /// Lock-free core of `applySessionRunState` — callers must already hold the
-    /// store lock (`withLock`). Binds `sessionId` onto the step's session node
-    /// and mirrors the run state onto the step.
+    /// store lock (`withLock`). Binds `sessionId` directly onto the step node
+    /// and mirrors the spawned session's run state onto that step.
     private func applySessionRunStateLocked(
         stepNodeId: String,
         sessionId: String,
         runState: PlannerWorkflowRunState
     ) throws -> CanvasRecord? {
-        // The session node may live in any canvas — find the owning record.
         for (canvasId, var record) in document.canvases {
-            guard let sessionIndex = record.nodes.firstIndex(where: { node in
+            guard let stepIndex = record.nodes.firstIndex(where: { $0.id == stepNodeId }) else {
+                continue
+            }
+            let legacySessionIndex = record.nodes.firstIndex(where: { node in
                 node.nodeKind == .session
                     && (node.dependsOnNodeIds ?? []).contains(stepNodeId)
-            }) else { continue }
+            })
 
             var changed = false
-            if record.nodes[sessionIndex].sessionId != sessionId {
-                record.nodes[sessionIndex].sessionId = sessionId
-                record.nodes[sessionIndex].chatThreadId = sessionId
+            let stepRunState = Self.stepRunState(
+                for: runState,
+                hasGate: record.nodes[stepIndex].gate != nil
+            )
+            if record.nodes[stepIndex].sessionId != sessionId {
+                record.nodes[stepIndex].sessionId = sessionId
+                record.nodes[stepIndex].chatThreadId = sessionId
+                record.nodes[stepIndex].source = .session
                 changed = true
             }
-            if record.nodes[sessionIndex].workflowRunState != runState {
-                record.nodes[sessionIndex].workflowRunState = runState
-                record.nodes[sessionIndex].status = Self.nodeStatus(for: runState)
+            if record.nodes[stepIndex].workflowRunState != stepRunState {
+                record.nodes[stepIndex].workflowRunState = stepRunState
+                record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
                 changed = true
                 record.events.append(event(
                     canvasId: canvasId,
                     type: .nodeStateChanged,
-                    nodeId: record.nodes[sessionIndex].id,
-                    summary: "\(record.nodes[sessionIndex].title) -> \(runState.rawValue)"
+                    nodeId: record.nodes[stepIndex].id,
+                    summary: "\(record.nodes[stepIndex].title) -> \(stepRunState.rawValue)"
                 ))
             }
-
-            // Mirror the run state onto the originating step node. A step
-            // that owns a gate finishes into `gateWait` (awaiting review)
-            // rather than `done`.
-            var mirroredStepRunState: PlannerWorkflowRunState?
-            if let stepIndex = record.nodes.firstIndex(where: { $0.id == stepNodeId }) {
-                let stepRunState = Self.stepRunState(
-                    for: runState,
-                    hasGate: record.nodes[stepIndex].gate != nil
-                )
-                mirroredStepRunState = stepRunState
-                if record.nodes[stepIndex].workflowRunState != stepRunState {
-                    record.nodes[stepIndex].workflowRunState = stepRunState
-                    record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
+            if let legacySessionIndex {
+                if record.nodes[legacySessionIndex].sessionId != sessionId {
+                    record.nodes[legacySessionIndex].sessionId = sessionId
+                    record.nodes[legacySessionIndex].chatThreadId = sessionId
+                    changed = true
+                }
+                if record.nodes[legacySessionIndex].workflowRunState != runState {
+                    record.nodes[legacySessionIndex].workflowRunState = runState
+                    record.nodes[legacySessionIndex].status = Self.nodeStatus(for: runState)
                     changed = true
                 }
             }
 
             guard changed else { return record }
-            // Mirror the run-state feedback into the active run. Safe to do
-            // after the `changed` guard — when nothing changed, session id and
-            // run state already match, so the mirror would be a no-op anyway.
-            let sessionNodeId = record.nodes[sessionIndex].id
-            mirrorIntoActiveRun(&record, nodeId: sessionNodeId) { state in
+            mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
                 state.sessionId = sessionId
                 state.chatThreadId = sessionId
-                state.runState = runState
-                if runState == .done || runState == .failed {
+                state.runState = stepRunState
+                if stepRunState == .done || stepRunState == .failed {
                     state.finishedAt = state.finishedAt ?? Date()
-                }
-            }
-            if let mirroredStepRunState {
-                mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
-                    state.runState = mirroredStepRunState
                 }
             }
             recomputeActiveRun(&record)
@@ -2077,6 +2193,15 @@ final class PlannerStore {
     ) throws -> CanvasRecord? {
         try withLock {
             for (_, record) in document.canvases {
+                if let step = record.nodes.first(where: {
+                    ($0.nodeKind ?? .step) == .step && $0.sessionId == sessionId
+                }) {
+                    return try applySessionRunStateLocked(
+                        stepNodeId: step.id,
+                        sessionId: sessionId,
+                        runState: runState
+                    )
+                }
                 guard let sessionNode = record.nodes.first(where: {
                     $0.nodeKind == .session && $0.sessionId == sessionId
                 }) else { continue }
@@ -2094,14 +2219,14 @@ final class PlannerStore {
         }
     }
 
-    /// Map a workflow run state to the legacy `PlanningNodeStatus`, keeping the
+    /// Map a workflow run state to the public `PlanningNodeStatus`, keeping the
     /// two status dimensions consistent on the node.
     private static func nodeStatus(for runState: PlannerWorkflowRunState) -> PlanningNodeStatus {
         switch runState {
         case .pending, .readyToStart:
-            return .waiting
+            return .ready
         case .dispatched, .running:
-            return .running
+            return .working
         case .gateWait:
             return .blocked
         case .done:
@@ -2300,6 +2425,17 @@ final class PlannerStore {
                         summary: "\(afterNode.title) -> \(afterNode.status.rawValue)"
                     ))
                 }
+            case .attachArtifact:
+                guard let draft = change.artifact,
+                      let nodeId = draft.nodeId ?? change.nodeId else { continue }
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .artifactAttached,
+                    nodeId: nodeId,
+                    proposalId: proposal.id,
+                    summary: draft.title,
+                    artifactRefs: [draft.reference]
+                ))
             }
         }
         for node in after where changedNodeIds.contains(node.id) && node.status == .done {
@@ -2360,6 +2496,85 @@ final class PlannerStore {
         }
     }
 
+    func updateNodeStatus(
+        canvasId: String,
+        nodeId: String,
+        status: PlanningNodeStatus
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let nodeKind = record.nodes[nodeIndex].nodeKind ?? .step
+            guard nodeKind == .step else {
+                throw PlannerCoreError.invalidNodeOutput("Only step nodes can change status.")
+            }
+            let previous = record.nodes[nodeIndex].status
+            guard previous != status else { return record }
+            record.nodes[nodeIndex].status = status
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "\(record.nodes[nodeIndex].title) -> \(status.rawValue)"
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    func deleteNode(canvasId: String, nodeId: String) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let deletedNode = record.nodes.remove(at: nodeIndex)
+            let remainingNodeIds = Set(record.nodes.map(\.id))
+            let deletedUpstreamIds = (deletedNode.dependsOnNodeIds ?? [])
+                .filter { $0 != nodeId && remainingNodeIds.contains($0) }
+            let deletedArtifactRefs = Set(record.artifacts
+                .filter { $0.nodeId == nodeId }
+                .map(\.reference))
+
+            record.nodes = record.nodes.map { node in
+                var node = node
+                if var dependsOnNodeIds = node.dependsOnNodeIds {
+                    let dependedOnDeletedNode = dependsOnNodeIds.contains(nodeId)
+                    dependsOnNodeIds.removeAll { $0 == nodeId }
+                    if dependedOnDeletedNode {
+                        for upstreamId in deletedUpstreamIds where upstreamId != node.id && !dependsOnNodeIds.contains(upstreamId) {
+                            dependsOnNodeIds.append(upstreamId)
+                        }
+                    }
+                    node.dependsOnNodeIds = dependsOnNodeIds
+                }
+                if !deletedArtifactRefs.isEmpty, var artifactRefs = node.artifactRefs {
+                    artifactRefs.removeAll { deletedArtifactRefs.contains($0) }
+                    node.artifactRefs = artifactRefs
+                }
+                return node
+            }
+            record.artifacts.removeAll { $0.nodeId == nodeId }
+            for runIndex in record.runs.indices {
+                record.runs[runIndex].nodeStates.removeValue(forKey: nodeId)
+                record.runs[runIndex].updatedAt = Date()
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "Deleted \(deletedNode.title)"
+            ))
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
     func nodeContract(canvasId: String, nodeId: String) throws -> PlannerNodeContract {
         try withLock {
             let record = try requireRecord(canvasId: canvasId)
@@ -2404,13 +2619,18 @@ final class PlannerStore {
             var current = record.nodes[sourceIndex]
             switch output.status {
             case .done:
-                current.status = .done
-                current.workflowRunState = .done
+                if current.executionMode == .human {
+                    current.status = .working
+                    current.workflowRunState = .gateWait
+                } else {
+                    current.status = .done
+                    current.workflowRunState = .done
+                }
             case .blocked:
                 current.status = .blocked
                 current.workflowRunState = .failed
             case .needsReview:
-                current.status = .blocked
+                current.status = .working
                 current.workflowRunState = .gateWait
             }
 
@@ -2429,7 +2649,8 @@ final class PlannerStore {
                     title: item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : item.title,
                     reference: reference,
                     status: output.status.rawValue,
-                    createdAt: Date()
+                    createdAt: Date(),
+                    payload: item.payload
                 )
                 newArtifacts.append(artifact)
                 if !artifactRefs.contains(reference) {
@@ -2441,7 +2662,7 @@ final class PlannerStore {
             record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
                 state.runState = current.workflowRunState ?? state.runState
-                if output.status == .done || output.status == .blocked {
+                if current.workflowRunState == .done || current.workflowRunState == .failed {
                     state.finishedAt = state.finishedAt ?? Date()
                 }
                 for artifact in newArtifacts {
@@ -2516,7 +2737,7 @@ final class PlannerStore {
                         state.runState = .gateWait
                     }
                 } else if record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                    record.nodes[targetIndex].status = .waiting
+                    record.nodes[targetIndex].status = .ready
                     record.nodes[targetIndex].workflowRunState = .readyToStart
                     mirrorIntoActiveRun(&record, nodeId: record.nodes[targetIndex].id) { state in
                         state.runState = .readyToStart
@@ -2535,6 +2756,74 @@ final class PlannerStore {
             document.canvases[canvasId] = record
             try save()
             return (record, routes)
+        }
+    }
+
+    func bindNodeInput(
+        canvasId: String,
+        nodeId: String,
+        input: String,
+        source: ContextSource
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let normalizedInput = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            var node = record.nodes[nodeIndex]
+            guard node.schema.inputs.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedInput }) else {
+                throw PlannerCoreError.invalidNodeOutput("Unknown input '\(input)' for node \(nodeId).")
+            }
+            node.contextSources.removeAll { existing in
+                existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedInput
+            }
+            node.contextSources.append(source)
+            record.nodes[nodeIndex] = node
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeUpdated,
+                nodeId: nodeId,
+                summary: "Set input \(input) for \(node.title)"
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    func bindKanbanItemSubCanvas(
+        canvasId: String,
+        artifactId: String,
+        itemId: String,
+        subCanvasId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let artifactIndex = record.artifacts.firstIndex(where: { $0.id == artifactId }) else {
+                throw PlannerCoreError.invalidNodeOutput("Kanban artifact not found.")
+            }
+            guard record.artifacts[artifactIndex].kind == .kanban else {
+                throw PlannerCoreError.invalidNodeOutput("Artifact \(artifactId) is not a kanban artifact.")
+            }
+            guard let updatedPayload = setKanbanItemSubCanvas(
+                payload: record.artifacts[artifactIndex].payload,
+                itemId: itemId,
+                subCanvasId: subCanvasId
+            ) else {
+                throw PlannerCoreError.invalidNodeOutput("Kanban item \(itemId) was not found.")
+            }
+            record.artifacts[artifactIndex].payload = updatedPayload
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .artifactAttached,
+                nodeId: record.artifacts[artifactIndex].nodeId,
+                summary: "Linked kanban item to sub-canvas",
+                artifactRefs: [record.artifacts[artifactIndex].reference]
+            ))
+            document.canvases[canvasId] = record
+            try save()
+            return record
         }
     }
 
@@ -2609,7 +2898,7 @@ final class PlannerStore {
             record.nodes[index].chatThreadId = sessionId
             record.nodes[index].source = .session
             record.nodes[index].workflowRunState = .running
-            record.nodes[index].status = .running
+            record.nodes[index].status = .working
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -2658,10 +2947,10 @@ final class PlannerStore {
                 throw PlannerCoreError.activeSessionExists(nodeId: nodeId)
             }
             let runner = dispatch.runner
-            let runState: PlannerWorkflowRunState = runner == .human ? .gateWait : .dispatched
+            let runState: PlannerWorkflowRunState = runner == .human ? .running : .dispatched
             record.nodes[index].dispatch = dispatch
             record.nodes[index].workflowRunState = runState
-            record.nodes[index].status = runner == .human ? .blocked : .running
+            record.nodes[index].status = .working
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -2673,30 +2962,81 @@ final class PlannerStore {
                 state.runState = runState
                 state.startedAt = state.startedAt ?? Date()
             }
-            // Spawning runners materialize a `session` PlanningNode immediately
-            // (the logic Phase 2 runs inside `applyNodeChange` for proposals).
-            if runner.spawnsSession, record.nodes[index].nodeKind != .session {
-                let step = record.nodes[index]
-                let alreadySpawned = record.nodes.contains { node in
-                    node.nodeKind == .session && (node.dependsOnNodeIds ?? []).contains(nodeId)
-                }
-                if !alreadySpawned {
-                    let sessionNode = PlannerCoreService.sessionNode(
-                        for: step,
-                        proposalId: "dispatch-\(UUID().uuidString.lowercased())"
-                    )
-                    record.nodes.append(sessionNode)
-                    // The spawned session node is run-scoped too — give it a
-                    // pending RunNodeState in the active run.
-                    mirrorIntoActiveRun(&record, nodeId: sessionNode.id) { state in
-                        state.runState = .pending
-                    }
-                }
-            }
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save()
             return (record, record.nodes[index])
+        }
+    }
+
+    func abandonNodeSession(canvasId: String, nodeId: String) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            guard record.nodes[index].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false else {
+                throw PlannerCoreError.activeSessionExists(nodeId: nodeId)
+            }
+            record.nodes[index].dispatch = nil
+            record.nodes[index].workflowRunState = nil
+            record.nodes[index].sessionId = nil
+            record.nodes[index].chatThreadId = nil
+            if record.nodes[index].status == .working {
+                record.nodes[index].status = .ready
+            }
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = .pending
+                state.sessionId = nil
+                state.chatThreadId = nil
+                state.startedAt = nil
+                state.finishedAt = nil
+                state.nextAction = nil
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Abandoned session creation for \(record.nodes[index].title)"
+            ))
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save()
+            return record
+        }
+    }
+
+    func detachNodeSession(canvasId: String, nodeId: String) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            record.nodes[index].dispatch = nil
+            record.nodes[index].workflowRunState = nil
+            record.nodes[index].sessionId = nil
+            record.nodes[index].chatThreadId = nil
+            if record.nodes[index].status == .working {
+                record.nodes[index].status = .ready
+            }
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = .pending
+                state.sessionId = nil
+                state.chatThreadId = nil
+                state.startedAt = nil
+                state.finishedAt = nil
+                state.nextAction = nil
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Detached session from \(record.nodes[index].title)"
+            ))
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save()
+            return record
         }
     }
 
@@ -2744,7 +3084,7 @@ final class PlannerStore {
             allowedRouteTargets: routeTargets,
             expectedArtifactKinds: PlannerArtifactKind.allCases,
             completionCriteria: [
-                node.ioSchema.completionSignal,
+                node.schema.goal,
                 "Submit output with status done, blocked, or needs_review.",
                 "Route messages and artifacts only to downstream nodes or owner."
             ]
@@ -2781,6 +3121,31 @@ final class PlannerStore {
         return byId.values.sorted { $0.createdAt < $1.createdAt }
     }
 
+    private func setKanbanItemSubCanvas(
+        payload: BoardJSONValue?,
+        itemId: String,
+        subCanvasId: String
+    ) -> BoardJSONValue? {
+        guard case .object(var object) = payload,
+              case .array(let rawItems)? = object["items"] else {
+            return nil
+        }
+        var didUpdate = false
+        let items = rawItems.map { value -> BoardJSONValue in
+            guard case .object(var item) = value,
+                  case .string(let id)? = item["id"],
+                  id == itemId else {
+                return value
+            }
+            item["subCanvasId"] = .string(subCanvasId)
+            didUpdate = true
+            return .object(item)
+        }
+        guard didUpdate else { return nil }
+        object["items"] = .array(items)
+        return .object(object)
+    }
+
     private func derivedArtifacts(from nodes: [PlanningNode], canvasId: String) -> [PlannerArtifact] {
         nodes.flatMap { node in
             (node.artifactRefs ?? []).map { ref in
@@ -2795,6 +3160,38 @@ final class PlannerStore {
                     createdAt: Date()
                 )
             }
+        }
+    }
+
+    private func proposalArtifacts(
+        from proposal: PlanProposal,
+        nodes: [PlanningNode],
+        canvasId: String
+    ) -> [PlannerArtifact] {
+        let nodeIds = Set(nodes.map(\.id))
+        return proposal.changes.enumerated().compactMap { index, change in
+            guard change.kind == .attachArtifact,
+                  let draft = change.artifact,
+                  let nodeId = draft.nodeId ?? change.nodeId,
+                  nodeIds.contains(nodeId) else {
+                return nil
+            }
+            let reference = draft.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let status = draft.status?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !reference.isEmpty else { return nil }
+            return PlannerArtifact(
+                id: "artifact-\(canvasId)-\(nodeId)-proposal-\(index)-\(stableSuffix(reference))",
+                canvasId: canvasId,
+                nodeId: nodeId,
+                kind: draft.kind,
+                title: title.isEmpty ? reference : title,
+                reference: reference,
+                status: status?.isEmpty == false ? status! : "attached",
+                createdAt: Date(),
+                payload: draft.payload,
+                producedBy: .agent
+            )
         }
     }
 
@@ -2847,28 +3244,7 @@ final class PlannerStore {
               let decoded = try? decoder.decode(StoreDocument.self, from: data) else {
             return StoreDocument(canvases: [:])
         }
-        // P1 Run layer migration: a canvas persisted before runs existed gets a
-        // synthetic Run #1 packed from its current per-node execution state.
-        var migrated = decoded
-        for (id, record) in migrated.canvases {
-            migrated.canvases[id] = migratedRecord(record)
-        }
-        return migrated
-    }
-
-    /// Pack a pre-Run-layer canvas's current execution state into Run #1.
-    /// Idempotent — a record that already has runs is returned unchanged.
-    private static func migratedRecord(_ record: CanvasRecord) -> CanvasRecord {
-        guard record.runs.isEmpty else { return record }
-        var updated = record
-        let runOne = WorkflowRun.migratedRunOne(
-            canvasId: record.canvas.id,
-            nodes: record.nodes,
-            artifacts: record.artifacts
-        )
-        updated.runs = [runOne]
-        updated.activeRunId = runOne.status == .active ? runOne.id : nil
-        return updated
+        return decoded
     }
 }
 
@@ -2893,12 +3269,18 @@ enum PlannerBoardBridge {
     ) {
         let boardCanvas = try requireCanvas(canvasId, in: snapshot)
         let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
-        var record = try store.record(for: canvas, seedNodes: [])
-        record = try store.replaceNodesIfUnmodified(
-            canvasId: canvas.id,
-            matching: service.nodeMock(canvasId: canvas.id),
-            with: []
-        )
+        let isTemplate = (boardCanvas.kind ?? .board) == .template
+        let seedNodes = isTemplate ? PlannerDeliveryPipelineTemplate.build(canvas: canvas).nodes : []
+        var record = try store.record(for: canvas, seedNodes: seedNodes)
+        if isTemplate {
+            record = try store.seedNodesIfEmpty(canvasId: canvas.id, seedNodes: seedNodes)
+        } else {
+            record = try store.replaceNodesIfUnmodified(
+                canvasId: canvas.id,
+                matching: service.nodeMock(canvasId: canvas.id),
+                with: []
+            )
+        }
         let nodes = record.nodes
         let access = PlannerPermission.access(for: record.canvas, nodes: nodes, actorId: actorUserId)
         // Visibility gate: a private canvas is only readable by its owner or a
@@ -2939,6 +3321,30 @@ enum PlannerBoardBridge {
         )
     }
 
+    static func clearCanvasContent(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.applyProposal, access: state.access)
+        let record = try store.clearCanvasContent(canvasId: canvasId)
+        return PlannerGraphState(
+            canvas: record.canvas,
+            nodes: record.nodes,
+            states: service.readNodeState(nodes: record.nodes),
+            proposals: record.proposals,
+            access: state.access,
+            activities: PlannerActivityStore.shared.activities(
+                for: record.canvas.id,
+                fallback: fallbackActivity(for: record.canvas, nodes: record.nodes, actorId: state.access.actorId)
+            ),
+            events: record.events,
+            artifacts: record.artifacts,
+            edges: graphEdges(for: record.nodes)
+        )
+    }
+
     static func recordActivity(
         canvasId: String,
         selectedNodeId: String?,
@@ -2976,18 +3382,18 @@ enum PlannerBoardBridge {
             id: "\(canvas.id)-proposal-node-\(proposalUUID)",
             canvasId: canvas.id,
             title: title.isEmpty ? "Generated meee2 AI node" : title,
-            ioSchema: IOSchema(
-                consumes: ["owner goal", "meee2 AI context"],
-                produces: ["executable node output"],
-                completionSignal: "owner approves generated proposal"
+            schema: NodeSchema(
+                inputs: ["owner goal", "meee2 AI context"],
+                outputs: ["executable node output"],
+                goal: "owner approves generated proposal"
             ),
             contextSources: [
                 ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
             ],
-            executionMode: .signOff,
+            executionMode: .human,
             executorType: .mock,
             doerId: canvas.ownerId,
-            status: .waiting
+            status: .ready
         )
         return try PlanProposal(
             id: "proposal-\(canvas.id)-generate-\(proposalUUID)",
@@ -3108,6 +3514,36 @@ enum PlannerBoardBridge {
         return (graph, result.dispatchedNode)
     }
 
+    static func abandonNodeSession(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.abandonNodeSession(canvasId: canvasId, nodeId: nodeId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func detachNodeSession(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.detachNodeSession(canvasId: canvasId, nodeId: nodeId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
     // MARK: - Run layer (P1)
 
     /// Start a new workflow run over the canvas's current node structure.
@@ -3183,6 +3619,7 @@ enum PlannerBoardBridge {
         title: String,
         reference: String,
         status: String,
+        payload: BoardJSONValue? = nil,
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
@@ -3202,9 +3639,86 @@ enum PlannerBoardBridge {
             title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : title,
             reference: reference,
             status: status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "attached" : status,
-            createdAt: Date()
+            createdAt: Date(),
+            payload: payload
         )
         _ = try store.attachArtifact(artifact, canvasId: canvasId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func updateNodeStatus(
+        nodeId: String,
+        status: PlanningNodeStatus,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        guard (node.nodeKind ?? .step) == .step else {
+            throw PlannerCoreError.invalidNodeOutput("Only step nodes can change status.")
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.updateNodeStatus(canvasId: canvasId, nodeId: nodeId, status: status)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func deleteNode(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.deleteNode(canvasId: canvasId, nodeId: nodeId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func bindNodeInput(
+        nodeId: String,
+        input: String,
+        source: ContextSource,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.bindNodeInput(canvasId: canvasId, nodeId: nodeId, input: input, source: source)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func bindKanbanItemSubCanvas(
+        artifactId: String,
+        itemId: String,
+        subCanvasId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let artifact = state.artifacts.first(where: { $0.id == artifactId }) else {
+            throw PlannerCoreError.invalidNodeOutput("Kanban artifact not found.")
+        }
+        guard let node = state.nodes.first(where: { $0.id == artifact.nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(artifact.nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.bindKanbanItemSubCanvas(
+            canvasId: canvasId,
+            artifactId: artifactId,
+            itemId: itemId,
+            subCanvasId: subCanvasId
+        )
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
@@ -3305,16 +3819,16 @@ enum PlannerBoardBridge {
     ) throws -> PlanProposal? {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.createProposal, access: state.access)
-        guard let blocked = state.states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
+        guard let blocked = state.states.first(where: { $0.runState == .blocked }),
               let node = state.nodes.first(where: { $0.id == blocked.nodeId }) else {
             return nil
         }
         return try PlanProposal(
             id: "proposal-\(node.id)-drift-\(UUID().uuidString.lowercased())",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift or review need for \(node.title)",
+            summary: "meee2 AI detected drift for \(node.title)",
             changes: [
-                .updateNode(id: node.id, title: "\(node.title) (needs owner review)", status: .planning)
+                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .draft)
             ],
             status: .pending
         )
@@ -3617,11 +4131,11 @@ enum PlannerBoardBridge {
         if state.runState == .blocked { return 0 }
         if state.needsOwnerReview { return 1 }
         switch state.runState {
-        case .running:
+        case .working:
             return 2
-        case .planning:
+        case .draft:
             return 3
-        case .waiting:
+        case .ready:
             return 4
         case .blocked:
             return 0
@@ -3636,7 +4150,7 @@ enum PlannerBoardBridge {
         actorId: String
     ) -> PlannerActivity {
         let selected = nodes.first { node in
-            node.doerId == actorId && (node.status == .running || node.status == .blocked || node.status == .planning)
+            node.doerId == actorId && (node.status == .working || node.status == .blocked || node.status == .draft)
         }
         return PlannerActivity(
             userId: actorId,
@@ -3786,16 +4300,16 @@ enum PlannerProposalFactory {
             id: "\(node.id)-refine\(suffix)",
             canvasId: node.canvasId,
             title: trimmedReason.isEmpty ? "\(node.title) refinement" : trimmedReason,
-            ioSchema: IOSchema(
-                consumes: [node.ioSchema.produces.joined(separator: ", ")],
-                produces: ["refined output"],
-                completionSignal: "refinement reviewed"
+            schema: NodeSchema(
+                inputs: [node.schema.outputs.joined(separator: ", ")],
+                outputs: ["refined output"],
+                goal: "refinement reviewed"
             ),
             contextSources: node.contextSources,
-            executionMode: .signOff,
+            executionMode: .human,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .planning,
+            status: .draft,
             dependsOnNodeIds: [node.id]
         )
         return PlanProposal(
@@ -3803,7 +4317,7 @@ enum PlannerProposalFactory {
             canvasId: node.canvasId,
             summary: "Refine \(node.title)",
             changes: [
-                .updateNode(id: node.id, status: .planning),
+                .updateNode(id: node.id, status: .draft),
                 .addNode(followUp)
             ],
             status: .pending
@@ -3929,18 +4443,18 @@ enum PlannerDeliveryPipelineTemplate {
             id: "\(canvas.id)-\(id)",
             canvasId: canvas.id,
             title: title,
-            ioSchema: IOSchema(
-                consumes: dependsOn.isEmpty ? ["owner intent"] : dependsOn,
-                produces: artifactRefs,
-                completionSignal: gate.label
+            schema: NodeSchema(
+                inputs: dependsOn.isEmpty ? ["owner intent"] : dependsOn,
+                outputs: artifactRefs,
+                goal: gate.label
             ),
             contextSources: artifactRefs.map {
                 ContextSource(kind: .artifact, title: $0, reference: $0)
             },
-            executionMode: dispatch.runner == .human ? .human : .signOff,
+            executionMode: dispatch.runner == .human ? .human : .auto,
             executorType: executorType(for: dispatch.runner),
             doerId: dispatch.actor,
-            status: .waiting,
+            status: .ready,
             dependsOnNodeIds: dependsOn.map { "\(canvas.id)-\($0)" },
             nodeKind: .step,
             layout: PlannerNodeLayout(x: x, y: y, width: 300, height: 168),
@@ -3965,10 +4479,10 @@ enum PlannerDeliveryPipelineTemplate {
             id: "\(canvas.id)-\(id)",
             canvasId: canvas.id,
             title: title,
-            ioSchema: IOSchema(
-                consumes: ["main branch update"],
-                produces: ["external release automation"],
-                completionSignal: "external:N6"
+            schema: NodeSchema(
+                inputs: ["main branch update"],
+                outputs: ["external release automation"],
+                goal: "external:N6"
             ),
             contextSources: [
                 ContextSource(kind: .artifact, title: "external automation", reference: "external:N6")
@@ -3976,7 +4490,7 @@ enum PlannerDeliveryPipelineTemplate {
             executionMode: .auto,
             executorType: .mock,
             doerId: "external",
-            status: .waiting,
+            status: .ready,
             dependsOnNodeIds: dependsOn.map { "\(canvas.id)-\($0)" },
             nodeKind: .external,
             layout: PlannerNodeLayout(x: x, y: y, width: 260, height: 132),
@@ -4029,7 +4543,7 @@ enum PlannerDriftAdvisor {
                 .updateNode(
                     id: node.id,
                     title: "\(node.title) (schema repair planned)",
-                    status: .planning,
+                    status: .draft,
                     contextSources: node.contextSources + [
                         ContextSource(
                             kind: .artifact,
@@ -4053,16 +4567,16 @@ enum PlannerDriftAdvisor {
             id: "\(node.id)-split",
             canvasId: node.canvasId,
             title: trimmedReason.isEmpty ? "\(node.title) split follow-up" : trimmedReason,
-            ioSchema: IOSchema(
-                consumes: node.ioSchema.consumes,
-                produces: ["split node output"],
-                completionSignal: "split output reviewed"
+            schema: NodeSchema(
+                inputs: node.schema.inputs,
+                outputs: ["split node output"],
+                goal: "split output reviewed"
             ),
             contextSources: node.contextSources,
-            executionMode: .signOff,
+            executionMode: .human,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .planning,
+            status: .draft,
             dependsOnNodeIds: [node.id]
         )
         let blockerSummary = state.blockers.isEmpty ? "blocked state" : state.blockers.joined(separator: "; ")
@@ -4071,7 +4585,7 @@ enum PlannerDriftAdvisor {
             canvasId: node.canvasId,
             summary: "Split \(node.title) because \(blockerSummary)",
             changes: [
-                .updateNode(id: node.id, status: .planning),
+                .updateNode(id: node.id, status: .draft),
                 .addNode(splitNode)
             ],
             status: .pending
@@ -4091,18 +4605,18 @@ final class MockPlannerAgent: PlannerAgent {
             id: "\(canvas.id)-planner-generated-1",
             canvasId: canvas.id,
             title: goal.isEmpty ? "Generated meee2 AI node" : goal,
-            ioSchema: IOSchema(
-                consumes: ["owner goal"],
-                produces: ["first executable output"],
-                completionSignal: "owner reviews generated proposal"
+            schema: NodeSchema(
+                inputs: ["owner goal"],
+                outputs: ["first executable output"],
+                goal: "complete the generated node"
             ),
             contextSources: [
                 ContextSource(kind: .document, title: "meee2 AI context", reference: canvas.plannerContext)
             ],
-            executionMode: .signOff,
+            executionMode: .human,
             executorType: .mock,
             doerId: canvas.ownerId,
-            status: .waiting
+            status: .ready
         )
         return PlanProposal(
             id: "proposal-\(canvas.id)-generate",
@@ -4118,9 +4632,9 @@ final class MockPlannerAgent: PlannerAgent {
     }
 
     func inspectDrift(nodes: [PlanningNode], states: [NodeStateSnapshot]) async throws -> PlanProposal? {
-        guard let state = states.first(where: { $0.runState == .blocked || $0.needsOwnerReview }),
+        guard let state = states.first(where: { $0.runState == .blocked }),
               let node = nodes.first(where: { $0.id == state.nodeId }) else {
-            if let planningState = states.first(where: { $0.runState == .planning }),
+            if let planningState = states.first(where: { $0.runState == .draft }),
                let planningNode = nodes.first(where: { $0.id == planningState.nodeId }) {
                 return PlannerDriftAdvisor.repairPlanningProposal(
                     for: planningNode,
@@ -4142,9 +4656,9 @@ final class MockPlannerAgent: PlannerAgent {
         return PlanProposal(
             id: "proposal-\(node.id)-drift",
             canvasId: node.canvasId,
-            summary: "meee2 AI detected drift or review need for \(node.title)",
+            summary: "meee2 AI detected drift for \(node.title)",
             changes: [
-                .updateNode(id: node.id, title: "\(node.title) (needs owner review)", status: .planning)
+                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .draft)
             ],
             status: .pending
         )
@@ -4245,8 +4759,8 @@ enum PlannerPromptFactory {
     You may propose topology changes, but the owner approval API is the only path that can apply them.
     Never invent another canvasId. Never update unknown node ids. Keep changes small and executable.
     Supported PlanChange kinds are addNode and updateNode.
-    updateNode may change title, status, ioSchema, contextSources, dependsOnNodeIds, doerId, nodeKind, subCanvasId, gate, dispatch, approvers, artifactRefs, workflowRunState, sessionId, chatThreadId, and source.
-    Use dependsOnNodeIds for graph dependencies. Use ioSchema/contextSources for contract changes. Use doerId only for explicit assignment proposals.
+    updateNode may change title, status, schema, contextSources, dependsOnNodeIds, doerId, nodeKind, subCanvasId, gate, dispatch, approvers, artifactRefs, workflowRunState, sessionId, chatThreadId, and source.
+    Use dependsOnNodeIds for graph dependencies. Use schema/contextSources for contract changes. Use doerId only for explicit assignment proposals.
     """
 
     static func generatePrompt(goal: String, canvas: PlanningCanvas) -> String {
@@ -4296,16 +4810,16 @@ enum PlannerPromptFactory {
 private extension NodeRunState {
     init(status: PlanningNodeStatus) {
         switch status {
-        case .waiting:
-            self = .waiting
-        case .running:
-            self = .running
+        case .draft:
+            self = .draft
+        case .ready:
+            self = .ready
+        case .working:
+            self = .working
         case .blocked:
             self = .blocked
         case .done:
             self = .done
-        case .planning:
-            self = .planning
         }
     }
 }

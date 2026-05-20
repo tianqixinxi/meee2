@@ -19,6 +19,7 @@ import type {
   PlannerNodeOutput,
   PlannerNodeOutputResult,
   PlanningNode,
+  PlanningNodeStatus,
   PlannerNodeLayout,
   PlanChange,
   PlannerArtifactKind,
@@ -30,6 +31,7 @@ import type {
   CanvasSideEffectsResult,
   IntegrationInstallResult,
   IntegrationRunbookResult,
+  ContextSourceKind,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -55,6 +57,7 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     id: DEMO_CANVAS_ID,
     name: 'meee2 AI Demo',
     scope: 'personal',
+    kind: 'board',
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
@@ -63,6 +66,7 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     id: DEMO_SUB_CANVAS_ID,
     name: 'Release Readiness',
     scope: 'personal',
+    kind: 'board',
     isDefault: false,
     workspacePath: '/demo/release-readiness',
     ownerUserId: DEMO_OWNER_ID,
@@ -75,17 +79,17 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       title: 'meee2 AI Core Contract',
       status: 'done',
       executorType: 'human',
-      executionMode: 'sign-off',
-      produces: ['contract.md', 'meee2-ai-dto'],
+      executionMode: 'human',
+      outputs: ['contract.md', 'meee2-ai-dto'],
     }),
     demoNode({
       id: 'state-api',
       title: 'Store-backed meee2 AI State API',
-      status: 'running',
+      status: 'working',
       executorType: 'codex',
       executionMode: 'auto',
-      consumes: ['contract.md'],
-      produces: ['GET /api/planner/canvases/:id/state'],
+      inputs: ['contract.md'],
+      outputs: ['GET /api/planner/canvases/:id/state'],
       dependsOnNodeIds: ['contract'],
     }),
     demoNode({
@@ -93,29 +97,29 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       title: 'Owner Proposal Shell',
       status: 'blocked',
       executorType: 'claude',
-      executionMode: 'sign-off',
-      consumes: ['meee2-ai-dto'],
-      produces: ['proposal-preview'],
+      executionMode: 'human',
+      inputs: ['meee2-ai-dto'],
+      outputs: ['proposal-preview'],
       dependsOnNodeIds: ['contract', 'state-api'],
     }),
     demoNode({
       id: 'react-flow-graph',
       title: 'React Flow meee2 AI Graph',
-      status: 'running',
+      status: 'working',
       executorType: 'codex',
       executionMode: 'auto',
-      consumes: ['meee2-ai-state'],
-      produces: ['graph-ui'],
+      inputs: ['meee2-ai-state'],
+      outputs: ['graph-ui'],
       dependsOnNodeIds: ['state-api'],
     }),
     demoNode({
       id: 'release-readiness',
       title: 'Release Readiness Sub-canvas',
-      status: 'planning',
+      status: 'draft',
       executorType: 'openClaw',
       executionMode: 'human',
-      consumes: ['graph-ui', 'proposal-preview'],
-      produces: ['review-checklist'],
+      inputs: ['graph-ui', 'proposal-preview'],
+      outputs: ['review-checklist'],
       dependsOnNodeIds: ['proposal-shell', 'react-flow-graph'],
       subCanvasId: DEMO_SUB_CANVAS_ID,
     }),
@@ -125,20 +129,20 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       id: 'qa-pass',
       canvasId: DEMO_SUB_CANVAS_ID,
       title: 'Rendered QA Pass',
-      status: 'running',
+      status: 'working',
       executorType: 'codex',
       executionMode: 'auto',
-      produces: ['screenshot', 'dom-check'],
+      outputs: ['screenshot', 'dom-check'],
     }),
     demoNode({
       id: 'handoff',
       canvasId: DEMO_SUB_CANVAS_ID,
       title: 'Owner Handoff Notes',
-      status: 'waiting',
+      status: 'ready',
       executorType: 'human',
-      executionMode: 'sign-off',
-      consumes: ['screenshot', 'dom-check'],
-      produces: ['handoff.md'],
+      executionMode: 'human',
+      inputs: ['screenshot', 'dom-check'],
+      outputs: ['handoff.md'],
       dependsOnNodeIds: ['qa-pass'],
     }),
   ],
@@ -151,8 +155,8 @@ function demoNode(input: {
   status: PlanningNode['status']
   executorType: PlanningNode['executorType']
   executionMode: PlanningNode['executionMode']
-  consumes?: string[]
-  produces?: string[]
+  inputs?: string[]
+  outputs?: string[]
   dependsOnNodeIds?: string[]
   sessionId?: string
   source?: PlanningNode['source']
@@ -163,10 +167,10 @@ function demoNode(input: {
     id: input.id,
     canvasId,
     title: input.title,
-    ioSchema: {
-      consumes: input.consumes ?? [],
-      produces: input.produces ?? [],
-      completionSignal: `${input.id}.done`,
+    schema: {
+      inputs: input.inputs ?? [],
+      outputs: input.outputs ?? [],
+      goal: `${input.id}.done`,
     },
     contextSources: [
       {
@@ -258,7 +262,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         userId: 'viewer-demo',
         displayName: 'Teammate viewer',
         currentCanvasId: safeCanvasId,
-        selectedNodeId: nodes.find((node) => node.status === 'running')?.id ?? null,
+        selectedNodeId: nodes.find((node) => node.status === 'working')?.id ?? null,
         selectedSessionId: null,
         lastActiveAt: now,
       },
@@ -309,9 +313,9 @@ function demoNodeState(node: PlanningNode) {
   return {
     nodeId: node.id,
     runState: node.status,
-    blockers: blocked ? ['Owner approval required before topology changes can apply.'] : [],
-    artifactRefs: node.ioSchema.produces.map((item) => `demo://${item}`),
-    needsOwnerReview: blocked,
+    blockers: blocked ? ['Blocked before topology changes can apply.'] : [],
+    artifactRefs: node.schema.outputs.map((item) => `demo://${item}`),
+    needsOwnerReview: false,
   }
 }
 
@@ -328,11 +332,11 @@ function nextDemoProposal(canvasId: string, summary: string, title: string): Pla
         id: `owner-review-${Date.now()}`,
         canvasId: safeCanvasId,
         title,
-        status: 'waiting',
+        status: 'ready',
         executorType: 'human',
-        executionMode: 'sign-off',
-        consumes: ['proposal-preview'],
-        produces: ['owner-decision'],
+        executionMode: 'human',
+        inputs: ['proposal-preview'],
+        outputs: ['owner-decision'],
         dependsOnNodeIds: demoNodesByCanvasId[safeCanvasId]?.slice(-1).map((node) => node.id) ?? [],
       }),
     }],
@@ -350,7 +354,7 @@ function applyDemoChanges(nodes: PlanningNode[], proposal: PlanProposal): Planni
         ...node,
         title: change.title ?? node.title,
         status: change.status ?? node.status,
-        ioSchema: change.ioSchema ?? node.ioSchema,
+        schema: change.schema ?? node.schema,
         contextSources: change.contextSources ?? node.contextSources,
         dependsOnNodeIds: change.dependsOnNodeIds ?? node.dependsOnNodeIds,
         subCanvasId: change.subCanvasId ?? node.subCanvasId,
@@ -443,7 +447,7 @@ export function fetchCanvases(): Promise<CanvasList> {
   return jsonRequest<CanvasList>('/api/canvases')
 }
 
-export function createCanvas(input: { name: string; scope: CanvasScope }): Promise<CanvasList> {
+export function createCanvas(input: { name: string; scope: CanvasScope; kind?: CanvasList['canvases'][number]['kind'] }): Promise<CanvasList> {
   if (PLANNER_DEMO_MODE) {
     const id = `demo-canvas-${Date.now()}`
     demoCanvasRecords = {
@@ -452,6 +456,7 @@ export function createCanvas(input: { name: string; scope: CanvasScope }): Promi
         id,
         name: input.name,
         scope: input.scope,
+        kind: input.kind ?? 'board',
         isDefault: false,
         workspacePath: `/demo/${id}`,
         ownerUserId: DEMO_OWNER_ID,
@@ -567,6 +572,26 @@ export function fetchPlannerGraphState(canvasId: string): Promise<PlannerGraphSt
   return jsonRequest<PlannerGraphState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`)
 }
 
+export function clearPlannerCanvasContent(canvasId: string): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    demoNodesByCanvasId[canvasId] = []
+    if (demoProposal?.canvasId === canvasId) demoProposal = null
+    const state = demoPlannerState(canvasId)
+    return Promise.resolve({
+      ...state,
+      artifacts: state.artifacts ?? [],
+      edges: state.edges ?? [],
+    })
+  }
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/clear`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
 export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
   if (PLANNER_DEMO_MODE) {
     const generatedAt = new Date().toISOString()
@@ -620,6 +645,7 @@ export function sendPlannerActivity(input: {
 export async function generatePlannerProposal(
   canvasId: string,
   goal: string,
+  context?: string,
 ): Promise<PlanProposal | null> {
   if (PLANNER_DEMO_MODE) {
     demoProposal = nextDemoProposal(
@@ -633,7 +659,7 @@ export async function generatePlannerProposal(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/generate`,
     {
       method: 'POST',
-      body: JSON.stringify({ goal }),
+      body: JSON.stringify(context?.trim() ? { goal, context } : { goal }),
     },
   )
   return response.proposal
@@ -652,8 +678,8 @@ export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposa
       changes: [{
         kind: 'updateNode',
         nodeId: blocked.id,
-        title: `${blocked.title} - owner reviewed`,
-        status: 'planning',
+        title: `${blocked.title} - needs attention`,
+        status: 'draft',
       }],
     }
     return demoProposal
@@ -835,6 +861,32 @@ export function dispatchPlannerNodeSession(
   )
 }
 
+export function abandonPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/abandon-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export function detachPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/detach-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
 // -- P1/P3: Workflow Run layer --------------------------------------------
 
 export interface StartPlannerDeliveryInput {
@@ -925,10 +977,82 @@ export function attachPlannerArtifactToNode(
     title?: string
     reference: string
     status?: string
+    payload?: unknown
   },
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function updatePlannerNodeStatus(
+  canvasId: string,
+  nodeId: string,
+  status: PlanningNodeStatus,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/status`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    },
+  )
+}
+
+export function deletePlannerNode(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    const nodes = demoNodesByCanvasId[canvasId] ?? []
+    demoNodesByCanvasId = {
+      ...demoNodesByCanvasId,
+      [canvasId]: nodes
+        .filter((node) => node.id !== nodeId)
+        .map((node) => ({
+          ...node,
+          dependsOnNodeIds: node.dependsOnNodeIds?.filter((dependencyId) => dependencyId !== nodeId),
+        })),
+    }
+    return fetchPlannerGraphState(canvasId)
+  }
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function bindPlannerNodeInput(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    input: string
+    reference: string
+    kind?: ContextSourceKind
+    title?: string
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/inputs`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function openKanbanItemSubCanvas(
+  canvasId: string,
+  artifactId: string,
+  itemId: string,
+  input: { title?: string; scope?: CanvasScope },
+): Promise<{ subCanvasId: string; graph: PlannerGraphState }> {
+  return jsonRequest<{ subCanvasId: string; graph: PlannerGraphState }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/kanban-items/${encodeURIComponent(itemId)}/sub-canvas`,
     {
       method: 'POST',
       body: JSON.stringify(input),
@@ -1137,6 +1261,7 @@ export function updatePlannerNodeLayout(
 
 export interface UserProfile {
   connected: boolean
+  userId: string
   displayName: string
   userName: string
   userEmail: string
@@ -1166,6 +1291,7 @@ export function fetchUserProfile(): Promise<UserProfile> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
       connected: false,
+      userId: DEMO_OWNER_ID,
       displayName: 'Demo User',
       userName: 'demo',
       userEmail: '',

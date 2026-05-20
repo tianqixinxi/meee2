@@ -809,6 +809,7 @@ enum AssistantTools {
                                 "kind": ["type": "string"],
                                 "title": ["type": "string"],
                                 "reference": ["type": "string"],
+                                "payload": ["type": "object"],
                                 "routeTo": ["type": "array", "items": ["type": "string"]]
                             ]
                         ]
@@ -895,7 +896,8 @@ enum AssistantTools {
                     "kind": ["type": "string"],
                     "title": ["type": "string"],
                     "reference": ["type": "string"],
-                    "status": ["type": "string"]
+                    "status": ["type": "string"],
+                    "payload": ["type": "object"]
                 ],
                 "required": ["nodeId", "reference"]
             ]
@@ -908,12 +910,14 @@ enum AssistantTools {
             let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
             let reference = try requiredPlannerString(args["reference"], name: "reference")
             let kind = PlannerArtifactKind(rawValue: stringValue(args["kind"]) ?? "") ?? .generic
+            let payload = try boardJSONValue(from: args["payload"])
             let state = try PlannerBoardBridge.attachArtifact(
                 nodeId: nodeId,
                 kind: kind,
                 title: stringValue(args["title"]) ?? reference,
                 reference: reference,
                 status: stringValue(args["status"]) ?? "attached",
+                payload: payload,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
@@ -2032,6 +2036,14 @@ enum AssistantTools {
     private static func anyValue(from value: BoardJSONValue) -> Any? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func boardJSONValue(from raw: Any?) throws -> BoardJSONValue? {
+        guard let raw else { return nil }
+        guard let value = BoardJSONValue.fromAny(raw) else {
+            throw toolError("payload must be JSON-compatible")
+        }
+        return value
     }
 
     private static func stringValue(_ raw: Any?) -> String? {

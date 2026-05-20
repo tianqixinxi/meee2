@@ -12,6 +12,7 @@ import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
+import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
@@ -30,6 +31,7 @@ import type {
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
   createCanvas,
+  clearPlannerCanvasContent,
   deleteCanvas,
   fetchCanvases,
   fetchUserProfile,
@@ -105,12 +107,17 @@ function fallbackCanvasList(): CanvasList {
       id: FALLBACK_CANVAS_ID,
       name: 'My',
       scope: 'personal',
+      kind: 'board',
       isDefault: true,
       workspacePath: '',
       ownerUserId: 'local-user',
       teamId: null,
     }],
   }
+}
+
+function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): 'board' | 'template' {
+  return canvas?.kind === 'template' ? 'template' : 'board'
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -123,6 +130,7 @@ function canvasListSignature(list: CanvasList): string {
         id: canvas.id,
         name: canvas.name,
         scope: canvas.scope,
+        kind: canvas.kind === 'template' ? 'template' : 'board',
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
         ownerUserId: canvas.ownerUserId ?? null,
@@ -321,6 +329,7 @@ export default function App() {
   }, [hydrated])
   const prevStatusRef = useRef<Record<string, string>>({})
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [plannerClearRevision, setPlannerClearRevision] = useState(0)
 
   // 检测 status 转换，同步红点：
   //   工作态 → 休息态 = "Claude 刚回复完"       → 标未读
@@ -399,6 +408,14 @@ export default function App() {
       })
   }, [applyCanvasList])
 
+  const handleCreateTemplate = useCallback((name: string, scope: CanvasScope) => {
+    return createCanvas({ name, scope, kind: 'template' })
+      .then((list) => {
+        applyCanvasList(list)
+        return list.activeCanvasId
+      })
+  }, [applyCanvasList])
+
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
       .then((list) => {
@@ -419,6 +436,15 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to delete canvas'))
   }, [applyCanvasList, pushToast])
 
+  const handleClearCanvas = useCallback((canvasId: string) => {
+    return clearPlannerCanvasContent(canvasId)
+      .then(() => {
+        setPlannerClearRevision((value) => value + 1)
+        pushToast('success', 'Canvas cleared')
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to clear canvas'))
+  }, [pushToast])
+
   const boardSessionSignature = useMemo(() => {
     if (!boardState.state) return ''
     return boardState.state.sessions.map((s) => s.id).sort().join('|')
@@ -433,7 +459,12 @@ export default function App() {
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
     setWorkspaceMode(nextMode)
-  }, [])
+    if (nextMode !== 'planner' || !canvasList) return
+    const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
+    if (canvasKind(currentCanvas) !== 'template') return
+    const firstWorkspaceCanvas = canvasList.canvases.find((canvas) => canvasKind(canvas) === 'board')
+    if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
+  }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
@@ -456,6 +487,11 @@ export default function App() {
   }
 
   const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
+  const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
+  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvases[0]?.id ?? activeCanvasId
+  const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
 
   return (
@@ -474,11 +510,22 @@ export default function App() {
         <div className="board-area">
           {workspaceMode === 'planner' ? (
             <PlannerGraph
-              canvasId={activeCanvasId}
-              canvasName={activeCanvas?.name ?? 'Canvas'}
+              canvasId={activeWorkspaceCanvasId}
+              canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
               userProfile={userProfile}
               boardState={boardState.state}
+              clearRevision={plannerClearRevision}
               onOpenSubCanvas={handleSetActiveCanvas}
+              onNotify={pushToast}
+            />
+          ) : workspaceMode === 'templates' ? (
+            <TemplatesView
+              canvases={canvasList.canvases}
+              activeCanvasId={activeCanvasId}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              onOpenCanvas={handleSetActiveCanvas}
+              onCreateTemplate={handleCreateTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} unreadSids={unreadSids} />
@@ -501,11 +548,12 @@ export default function App() {
           )}
           {workspaceMode === 'planner' && (
             <CanvasToolbar
-              canvases={canvasList.canvases}
-              activeCanvasId={activeCanvasId}
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
               onActiveCanvasChange={handleSetActiveCanvas}
               onCreateCanvas={handleCreateCanvas}
               onRenameCanvas={handleRenameCanvas}
+              onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
             />
           )}

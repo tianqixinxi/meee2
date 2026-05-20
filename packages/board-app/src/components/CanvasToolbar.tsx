@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, Globe2, Info, Layers, LockKeyhole, Plus, Search, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Eraser, Globe2, Info, Layers, LockKeyhole, Plus, Search, Trash2 } from 'lucide-react'
 import type { CanvasInfo, CanvasScope } from '../types'
 
 interface Props {
@@ -8,6 +8,7 @@ interface Props {
   onActiveCanvasChange: (canvasId: string) => void
   onCreateCanvas: (name: string, scope: CanvasScope) => Promise<void> | void
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
+  onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
 }
 
@@ -17,11 +18,13 @@ export function CanvasToolbar({
   onActiveCanvasChange,
   onCreateCanvas,
   onRenameCanvas,
+  onClearCanvas,
   onDeleteCanvas,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [clearConfirming, setClearConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
   const [infoTab, setInfoTab] = useState<'overview' | 'settings' | 'danger'>('overview')
@@ -39,6 +42,7 @@ export function CanvasToolbar({
 
   const closePanels = () => {
     setCreating(false)
+    setClearConfirming(false)
     setDeleteConfirming(false)
   }
 
@@ -80,6 +84,15 @@ export function CanvasToolbar({
       setDeleteConfirming(false)
       setMenuOpen(false)
       setInfoOpen(false)
+    })
+  }
+
+  const submitClear = () => {
+    if (!activeCanvas || !onClearCanvas) return
+    Promise.resolve(onClearCanvas(activeCanvas.id)).then(() => {
+      setClearConfirming(false)
+      setInfoOpen(false)
+      setMenuOpen(false)
     })
   }
 
@@ -211,7 +224,7 @@ export function CanvasToolbar({
                   aria-selected={infoTab === tab}
                   onClick={() => setInfoTab(tab)}
                 >
-                  {tab === 'overview' ? 'Overview' : tab === 'settings' ? 'Settings' : 'Delete'}
+                  {tab === 'overview' ? 'Overview' : tab === 'settings' ? 'Settings' : 'Danger'}
                 </button>
               ))}
             </div>
@@ -256,25 +269,47 @@ export function CanvasToolbar({
                 </div>
               )}
               {infoTab === 'danger' && (
-                <div className="canvas-info-modal__danger">
-                  <Trash2 size={15} aria-hidden />
-                  <div>
-                    <strong>Delete this canvas</strong>
-                    <p>Sessions and local AI history are not deleted.</p>
+                <>
+                  {onClearCanvas && (
+                    <div className="canvas-info-modal__danger">
+                      <Eraser size={15} aria-hidden />
+                      <div>
+                        <strong>Clear this canvas</strong>
+                        <p>Removes meee2 AI nodes, proposals, outputs, and local chat history. The canvas remains.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="danger"
+                        title="Clear canvas content"
+                        onClick={() => {
+                          setInfoOpen(false)
+                          setClearConfirming(true)
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                  <div className="canvas-info-modal__danger">
+                    <Trash2 size={15} aria-hidden />
+                    <div>
+                      <strong>Delete this canvas</strong>
+                      <p>Sessions and local AI history are not deleted.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={activeCanvas.isDefault}
+                      title={activeCanvas.isDefault ? 'This canvas cannot be deleted.' : 'Delete canvas'}
+                      onClick={() => {
+                        setInfoOpen(false)
+                        setDeleteConfirming(true)
+                      }}
+                    >
+                      Delete
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={activeCanvas.isDefault}
-                    title={activeCanvas.isDefault ? 'This canvas cannot be deleted.' : 'Delete canvas'}
-                    onClick={() => {
-                      setInfoOpen(false)
-                      setDeleteConfirming(true)
-                    }}
-                  >
-                    Delete
-                  </button>
-                </div>
+                </>
               )}
             </div>
             <div className="modal-footer">
@@ -331,6 +366,31 @@ export function CanvasToolbar({
               >
                 Create
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {clearConfirming && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setClearConfirming(false)
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Clear canvas">
+            <div className="modal-header">
+              <div className="modal-title">Clear canvas</div>
+              <div className="modal-subtitle">This keeps the canvas but removes its meee2 AI graph.</div>
+            </div>
+            <div className="modal-body col" style={{ gap: 8 }}>
+              <strong>{activeCanvas.name}</strong>
+              <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
+                Nodes, pending proposals, outputs, runs, and local meee2 AI chat history for this canvas will be removed. Sessions are not deleted.
+              </span>
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={() => setClearConfirming(false)}>Cancel</button>
+              <button className="danger" type="button" onClick={submitClear}>Clear</button>
             </div>
           </div>
         </div>

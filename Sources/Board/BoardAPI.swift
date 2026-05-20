@@ -337,6 +337,39 @@ enum BoardAPI {
         }
     }
 
+    /// POST /api/planner/canvases/:id/clear
+    ///
+    /// Owner-only. Clears the planner graph content for the canvas but keeps
+    /// the canvas container and unrelated sessions intact.
+    static func clearPlannerCanvasContent(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.clearCanvasContent(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     /// PATCH /api/planner/canvases/:id/visibility
     ///
     /// Owner-only. Body: `{"visibility": "public" | "private"}`.
@@ -844,9 +877,84 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            recordPlannerDispatchIntent(canvasId: canvasId, node: result.dispatchedNode)
+            let spawnRequest = try recordPlannerDispatchIntent(canvasId: canvasId, node: result.dispatchedNode)
+            if let spawnRequest {
+                switch startTerminalSession(
+                    cwd: spawnRequest.cwd,
+                    command: spawnRequest.command,
+                    createIfMissing: true,
+                    termProgram: nil
+                ) {
+                case .success:
+                    break
+                case .failed(let reason):
+                    return errorResponse("spawn_failed", reason, status: 500)
+                }
+            }
             BoardServer.shared.broadcastStateChanged()
             let state = result.graph
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.abandonNodeSession(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func detachPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.detachNodeSession(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerGraphStateEnvelope(
                 canvas: state.canvas,
                 nodes: state.nodes,
@@ -871,6 +979,7 @@ enum BoardAPI {
             let title: String?
             let reference: String
             let status: String?
+            let payload: BoardJSONValue?
         }
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -887,6 +996,128 @@ enum BoardAPI {
                 title: body.title ?? body.reference,
                 reference: body.reference,
                 status: body.status ?? "attached",
+                payload: body.payload,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func bindPlannerNodeInput(_ req: HttpRequest) -> HttpResponse {
+        struct BindInputRequest: Decodable {
+            let input: String
+            let reference: String
+            let kind: ContextSource.Kind?
+            let title: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: BindInputRequest.self),
+              !body.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !body.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("invalid_json", "body must be {\"input\": String, \"reference\": String}", status: 400)
+        }
+        let input = body.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reference = body.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sourceTitle = body.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = ContextSource(
+            kind: body.kind ?? inferContextSourceKind(reference: reference, title: input),
+            title: sourceTitle?.isEmpty == false ? sourceTitle! : input,
+            reference: reference
+        )
+        do {
+            let state = try PlannerBoardBridge.bindNodeInput(
+                nodeId: nodeId,
+                input: input,
+                source: source,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func updatePlannerNodeStatus(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateStatusRequest: Decodable {
+            let status: PlanningNodeStatus
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateStatusRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"status\": PlanningNodeStatus}", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.updateNodeStatus(
+                nodeId: nodeId,
+                status: body.status,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func deletePlannerNode(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        do {
+            let state = try PlannerBoardBridge.deleteNode(
+                nodeId: nodeId,
                 for: canvasId,
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
@@ -983,6 +1214,59 @@ enum BoardAPI {
             )
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func openKanbanItemSubCanvas(_ req: HttpRequest) -> HttpResponse {
+        struct OpenKanbanItemRequest: Decodable {
+            let title: String?
+            let scope: String?
+        }
+        struct OpenKanbanItemResponse: Encodable {
+            let subCanvasId: String
+            let graph: PlannerGraphStateEnvelope
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let artifactId = req.params[":artifactId"], !artifactId.isEmpty,
+              let itemId = req.params[":itemId"], !itemId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id, artifact id, or item id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: OpenKanbanItemRequest.self)
+        let scope: BoardLayoutStore.CanvasScope = body?.scope == "team" ? .team : .personal
+        do {
+            let title = (body?.title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                ?? "Kanban item"
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: title, scope: scope)
+            guard let subCanvas = snapshot.canvases.first(where: { $0.id == snapshot.activeCanvasId }) else {
+                return errorResponse("planner_error", "failed to create sub-canvas", status: 400)
+            }
+            let state = try PlannerBoardBridge.bindKanbanItemSubCanvas(
+                artifactId: artifactId,
+                itemId: itemId,
+                subCanvasId: subCanvas.id,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(OpenKanbanItemResponse(
+                subCanvasId: subCanvas.id,
+                graph: PlannerGraphStateEnvelope(
+                    canvas: state.canvas,
+                    nodes: state.nodes,
+                    states: state.states,
+                    proposals: state.proposals,
+                    access: state.access,
+                    activities: state.activities,
+                    events: state.events,
+                    artifacts: state.artifacts,
+                    edges: state.edges
+                )
+            ), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1121,18 +1405,23 @@ enum BoardAPI {
             change.nodeId ?? change.node?.id
         })
         for node in nodes where changedNodeIds.contains(node.id) && node.workflowRunState == .dispatched {
-            recordPlannerDispatchIntent(canvasId: canvasId, node: node)
+            _ = try? recordPlannerDispatchIntent(canvasId: canvasId, node: node)
         }
+    }
+
+    private struct PlannerDispatchSpawnRequest {
+        let cwd: String
+        let command: String
     }
 
     /// Record the CLI spawn intent for a single dispatched node. Shared by the
     /// proposal-apply path (`recordPlannerDispatchIntents`) and the direct
     /// dispatch endpoint. `ci-agent` / `human` produce no intent
     /// (`spawnsSession` is false for both).
-    private static func recordPlannerDispatchIntent(canvasId: String, node: PlanningNode) {
-        guard node.workflowRunState == .dispatched else { return }
-        guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return }
-        guard let cwd = try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId) else { return }
+    private static func recordPlannerDispatchIntent(canvasId: String, node: PlanningNode) throws -> PlannerDispatchSpawnRequest? {
+        guard node.workflowRunState == .dispatched else { return nil }
+        guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return nil }
+        let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
         let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedCommand = command?.isEmpty == false
             ? command!
@@ -1141,7 +1430,7 @@ enum BoardAPI {
         // Purpose is tagged with the *step* node id; the session PlanningNode
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
-        _ = try? BoardLayoutStore.shared.recordSpawnIntent(
+        try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
             command: resolvedCommand,
@@ -1150,6 +1439,7 @@ enum BoardAPI {
             initialPrompt: plannerDispatchPrompt(for: node),
             layoutHint: nil
         )
+        return PlannerDispatchSpawnRequest(cwd: cwd, command: resolvedCommand)
     }
 
     private static func plannerDispatchPrompt(for node: PlanningNode) -> String {
@@ -1157,13 +1447,27 @@ enum BoardAPI {
             "You are executing a meee2 AI planner node.",
             "Node: \(node.title)",
             "Doer: \(node.doerId)",
-            "Completion signal: \(node.ioSchema.completionSignal)"
+            "Completion signal: \(node.schema.goal)"
         ]
-        if !node.ioSchema.consumes.isEmpty {
-            lines.append("Consumes: \(node.ioSchema.consumes.joined(separator: ", "))")
+        if !node.schema.inputs.isEmpty {
+            lines.append("Consumes: \(node.schema.inputs.joined(separator: ", "))")
         }
-        if !node.ioSchema.produces.isEmpty {
-            lines.append("Produces: \(node.ioSchema.produces.joined(separator: ", "))")
+        if !node.schema.outputs.isEmpty {
+            lines.append("Produces: \(node.schema.outputs.joined(separator: ", "))")
+        }
+        let inputBindings = node.contextSources.filter { source in
+            node.schema.inputs.contains { $0.caseInsensitiveCompare(source.title) == .orderedSame }
+        }
+        if !inputBindings.isEmpty {
+            lines.append("Input bindings:")
+            for source in inputBindings {
+                lines.append("- \(source.title): \(source.reference)")
+            }
+        } else if !node.contextSources.isEmpty {
+            lines.append("Context sources:")
+            for source in node.contextSources {
+                lines.append("- \(source.title): \(source.reference)")
+            }
         }
         if let gate = node.gate {
             lines.append("Gate: \(gate.label)")
@@ -1263,6 +1567,9 @@ enum BoardAPI {
         let userAvatarUrl = connected
             ? defaultString(defaults, key: "meee2UserAvatarUrl", fallback: settings["userAvatarUrl"])
             : ""
+        let userId = connected
+            ? defaultString(defaults, key: "meee2UserId", fallback: settings["userId"])
+            : "local-user"
         let displayName: String
         if !userName.isEmpty {
             displayName = userName
@@ -1274,6 +1581,7 @@ enum BoardAPI {
 
         return jsonResponse(UserProfileDTO(
             connected: connected,
+            userId: userId,
             displayName: displayName,
             userName: userName,
             userEmail: userEmail,
@@ -2327,63 +2635,7 @@ enum BoardAPI {
         termProgram: String?
     ) -> HttpResponse {
         let cwd = rawCwd
-        // Ensure dir exists / create if requested
-        var isDir: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
-            if createIfMissing {
-                do {
-                    try FileManager.default.createDirectory(
-                        atPath: cwd,
-                        withIntermediateDirectories: true
-                    )
-                } catch {
-                    return errorResponse("mkdir_failed", "mkdir -p failed: \(error.localizedDescription)", status: 500)
-                }
-            } else {
-                return errorResponse("not_found", "cwd does not exist: \(cwd) (pass createIfMissing=true to mkdir)", status: 404)
-            }
-        }
-
-        let spawner = SpawnerRouter.forTerminal(termProgram)
-
-        // Fire-and-forget async spawn; don't block the HTTP response waiting
-        // for AppleScript. Client can poll `/api/state` to see the new session
-        // appear once the hook bridge fires its SessionStart.
-        //
-        // Swift 5.10 的 concurrency diagnostics 禁止 Task 闭包里"写入"或"读取"
-        // 外层 `var`。这里：
-        //   - `cwd` 是外层 var（~ 展开 / path normalize 会改它），先 snapshot 成
-        //     let 常量再捕获
-        //   - `outcome` 需要双向（Task 写 / 外层读）→ 放进引用型 box，closure
-        //     只改 box 的属性而不是重绑变量，就符合 Sendable 约束
-        final class OutcomeBox: @unchecked Sendable {
-            var value: SpawnResult?  // nil = pending; non-nil = spawner returned
-        }
-        let cwdSnapshot = cwd
-        let commandSnapshot = command
-        let outcomeBox = OutcomeBox()
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            let r = await spawner.spawn(cwd: cwdSnapshot, command: commandSnapshot)
-            outcomeBox.value = r
-            semaphore.signal()
-        }
-        // Ghostty 开窗 + sleep 400ms + input text 通常 1-2s；长 cmd 经过
-        // AppleScript 转义会再慢一点。老的 2s 阈值容易超时返回 "no outcome"
-        // 假报错（实际窗口已经开成功）。给 5s。timeout 不算失败：spawner 真
-        // 出错会立刻 .failed 并 signal；timeout 时通常 AppleScript 还在跑，
-        // SessionStart hook 后续会照常触发，client 通过 /api/state 能看到。
-        let waitResult = semaphore.wait(timeout: .now() + 5.0)
-        let outcome: SpawnResult
-        switch waitResult {
-        case .success:
-            outcome = outcomeBox.value ?? .success
-        case .timedOut:
-            NSLog("[BoardAPI] spawnSession: 5s elapsed, outcome unknown — assuming async success")
-            outcome = .success
-        }
-
-        switch outcome {
+        switch startTerminalSession(cwd: cwd, command: command, createIfMissing: createIfMissing, termProgram: termProgram) {
         case .success:
             BoardServer.shared.broadcastStateChanged()
             struct SpawnResp: Encodable {
@@ -2394,6 +2646,48 @@ enum BoardAPI {
             return jsonResponse(SpawnResp(ok: true, cwd: cwd, command: command), status: 201, reason: "Created")
         case .failed(let reason):
             return errorResponse("spawn_failed", reason, status: 500)
+        }
+    }
+
+    private static func startTerminalSession(
+        cwd: String,
+        command: String,
+        createIfMissing: Bool,
+        termProgram: String?
+    ) -> SpawnResult {
+        var isDir: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
+            if createIfMissing {
+                do {
+                    try FileManager.default.createDirectory(
+                        atPath: cwd,
+                        withIntermediateDirectories: true
+                    )
+                } catch {
+                    return .failed(reason: "mkdir -p failed: \(error.localizedDescription)")
+                }
+            } else {
+                return .failed(reason: "cwd does not exist: \(cwd) (pass createIfMissing=true to mkdir)")
+            }
+        }
+
+        let spawner = SpawnerRouter.forTerminal(termProgram)
+        final class OutcomeBox: @unchecked Sendable {
+            var value: SpawnResult?
+        }
+        let outcomeBox = OutcomeBox()
+        let semaphore = DispatchSemaphore(value: 0)
+        Task {
+            let result = await spawner.spawn(cwd: cwd, command: command)
+            outcomeBox.value = result
+            semaphore.signal()
+        }
+        switch semaphore.wait(timeout: .now() + 5.0) {
+        case .success:
+            return outcomeBox.value ?? .success
+        case .timedOut:
+            NSLog("[BoardAPI] startTerminalSession: 5s elapsed, outcome unknown — assuming async success")
+            return .success
         }
     }
 
@@ -2755,8 +3049,12 @@ enum BoardAPI {
               let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
+        let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
+        guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
+            return errorResponse("bad_request", "kind must be board or template", status: 400)
+        }
         do {
-            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope)
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
@@ -2851,10 +3149,11 @@ enum BoardAPI {
                 id: $0.id,
                 name: $0.name,
                 scope: $0.scope.rawValue,
+                kind: ($0.kind ?? .board).rawValue,
                 isDefault: $0.isDefault,
                 workspacePath: workspacePath,
                 teamId: $0.teamId,
-                ownerUserId: $0.ownerUserId,
+                ownerUserId: $0.ownerUserId ?? $0.createdBy,
                 remoteId: $0.remoteId,
                 remoteVersion: $0.remoteVersion,
                 syncStatus: $0.syncStatus,
@@ -3047,6 +3346,23 @@ enum BoardAPI {
     private static func parseJSONValueArray(_ raw: Any?) -> [BoardJSONValue] {
         guard let arr = raw as? [Any] else { return [] }
         return arr.compactMap(BoardJSONValue.fromAny)
+    }
+
+    private static func inferContextSourceKind(reference: String, title: String) -> ContextSource.Kind {
+        let normalized = "\(title) \(reference)".lowercased()
+        if normalized.hasPrefix("artifact:") || normalized.contains("artifact://") {
+            return .artifact
+        }
+        if normalized.hasPrefix("repo:") || normalized.hasPrefix("git:") || normalized.contains("github.com") {
+            return .repository
+        }
+        if normalized.contains("lark") || normalized.contains("feishu") || normalized.contains("doc") {
+            return .document
+        }
+        if normalized.hasPrefix("http://") || normalized.hasPrefix("https://") {
+            return .web
+        }
+        return .document
     }
 
     private static func parseStringArray(_ raw: Any?) -> [String] {

@@ -459,7 +459,7 @@ enum IntegrationDetector {
 
 /// Text fragments that, found in a node's context / artifacts / dispatch,
 /// indicate the node's IO touches that integration. Coarse on purpose — the
-/// plan deliberately avoids precise `ioSchema` token matching (decision D).
+/// plan deliberately avoids precise `schema` token matching (decision D).
 enum IntegrationSignals {
     static let keywords: [String: [String]] = [
         "github": ["github.com", "github", "/pull/", "/pulls/", "pull request", "impl-pr", "main-merge"],
@@ -502,7 +502,7 @@ struct CanvasSideEffectsEnvelope: Encodable {
 }
 
 /// Infers which integrations a planner node's input/output touch — purely from
-/// the node's existing fields (contextSources / artifactRefs / ioSchema /
+/// the node's existing fields (contextSources / artifactRefs / schema /
 /// dispatch). No precise IO vocabulary required.
 enum NodeSideEffectInferrer {
     static func infer(node: PlanningNode) -> [NodeSideEffect] {
@@ -524,10 +524,10 @@ enum NodeSideEffectInferrer {
             if source.kind == .repository { tag("github", "reads") }
             scan(source.reference + " " + source.title, "reads")
         }
-        scan(node.ioSchema.consumes.joined(separator: " "), "reads")
+        scan(node.schema.inputs.joined(separator: " "), "reads")
 
         // Output side — artifacts / produces the node writes.
-        scan(((node.artifactRefs ?? []) + node.ioSchema.produces).joined(separator: " "), "writes")
+        scan(((node.artifactRefs ?? []) + node.schema.outputs).joined(separator: " "), "writes")
 
         // Dispatch skill/command — loosely an input touch.
         if let dispatch = node.dispatch {

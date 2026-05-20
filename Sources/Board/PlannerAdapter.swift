@@ -122,7 +122,7 @@ struct PlannerGraphContext: Codable, Equatable {
         /// Current IO contract of the node. Exposed so the model can *refine*
         /// an existing node's schema via `updateNode` — without it the model
         /// cannot see what it would be changing.
-        var ioSchema: IOSchema
+        var schema: NodeSchema
     }
 
     struct Edge: Codable, Equatable {
@@ -152,11 +152,15 @@ struct PlannerGraphContext: Codable, Equatable {
     var edges: [Edge]
     var artifacts: [Artifact]
     var access: Access
+    /// Pending / approved proposals are part of the working canvas in the UI.
+    /// The model must see them so follow-up messages evolve the current
+    /// proposed graph instead of replacing it with an unrelated proposal.
+    var openProposals: [PlanProposal]
     /// Known node `kind` values the model is allowed to emit.
     var allowedNodeKinds: [String]
     /// Known change `kind` values the model is allowed to emit.
     var allowedChangeKinds: [String]
-    /// Allowed `executionMode` raw values.
+    /// Allowed completion mode raw values.
     var allowedExecutionModes: [String]
     /// Allowed `executorType` raw values.
     var allowedExecutorTypes: [String]
@@ -179,7 +183,7 @@ struct PlannerGraphContext: Codable, Equatable {
                 status: node.status.rawValue,
                 doerId: node.doerId,
                 dependsOnNodeIds: node.dependsOnNodeIds ?? [],
-                ioSchema: node.ioSchema
+                schema: node.schema
             )
         }
         self.edges = state.edges.map { edge in
@@ -204,6 +208,9 @@ struct PlannerGraphContext: Codable, Equatable {
             role: state.access.role.rawValue,
             canCreateProposal: state.access.canCreateProposal
         )
+        self.openProposals = Array(state.proposals.filter { proposal in
+            proposal.status == .pending || proposal.status == .approved
+        }.suffix(5))
         self.allowedNodeKinds = PlannerProposalValidator.knownNodeKinds.sorted()
         self.allowedChangeKinds = PlannerProposalValidator.knownChangeKinds.sorted()
         self.allowedExecutionModes = ExecutionMode.allCases.map { $0.rawValue }.sorted()
@@ -243,18 +250,23 @@ enum PlannerAdapterPromptFactory {
     A PlanChange is either:
     - addNode:    {"kind": "addNode", "node": <PlanningNode>}
     - updateNode: {"kind": "updateNode", "nodeId": "<existing node id>", <changed design fields>}
+    - attachArtifact:
+      {"kind": "attachArtifact", "nodeId": "<existing or added node id>",
+       "artifact": {"kind": "kanban"|"generic"|..., "title": string,
+                    "reference": string, "status": "attached",
+                    "payload": <JSON object>}}
       updateNode may change ONLY these design fields — include only the ones
-      you actually change: title, status, ioSchema, contextSources,
+      you actually change: title, status, schema, contextSources,
       dependsOnNodeIds.
-      To refine a node's IO contract, set its ioSchema. Every node's CURRENT
-      ioSchema is given in context.nodes[].ioSchema, so you can adjust it in
+      To refine a node's IO contract, set its schema. Every node's CURRENT
+      schema is given in context.nodes[].schema, so you can adjust it in
       place rather than guessing.
       Do NOT set execution-layer fields (sessionId / workflowRunState) via
       updateNode — those belong to a workflow run, not the graph design.
 
     A PlanningNode requires at least:
       id, canvasId, title,
-      ioSchema { "consumes": [string], "produces": [string], "completionSignal": string },
+      schema { "inputs": [string], "outputs": [string], "goal": string },
       contextSources, executionMode, executorType, doerId, status, nodeKind.
 
     contextSources is an array of OBJECTS — never bare strings:
@@ -272,12 +284,45 @@ enum PlannerAdapterPromptFactory {
     Hard rules:
     - canvasId on the proposal AND on every added node MUST equal context.canvas.id.
     - Never reference a node id that belongs to another canvas.
+    - This is graph evolution, not graph replacement. Treat context.nodes plus
+      context.openProposals as the current working canvas.
+    - Preserve existing working content unless the owner explicitly asks to
+      remove or replace it.
+    - If the owner goal contains "@node:<id> #revise", treat it as an edit of
+      that node, not a request for a new step. If <id> exists in context.nodes,
+      return updateNode for that id unless the owner explicitly asks to add a
+      downstream step.
+    - For committed nodes in context.nodes, refine them with updateNode instead
+      of adding duplicate nodes.
+    - Inputs and outputs are NOT workflow steps. Do not add an "artifact" node
+      just to represent an input or output. Put resources in schema.inputs,
+      schema.outputs, contextSources, or artifactRefs; the UI can render those
+      resources as artifact cards when the owner turns them on.
+    - If the owner describes a node like "idea fetch(input=lark_doc,
+      output=idea_list_kanban)", create or update ONE step node with
+      schema.inputs=["lark_doc"] and schema.outputs=["idea_list_kanban"].
+    - If the owner asks for a kanban/list board output, prefer a schema output
+      named like "idea_list_kanban". Also add an attachArtifact change for
+      the same step node with kind="kanban" and payload:
+      {"version":1,"columns":[{"id":"...", "title":"..."}],"items":[]}.
+      Choose column titles from the user's semantics. For an idea list, start
+      with an empty "Idea list" column; for review/workflow boards choose the
+      natural stages implied by the user. Do not create a separate
+      stamp/artifact workflow step for the kanban itself.
+    - For "idea fetch(input=lark_doc, output=html kanban)", still create ONE
+      step node. The output is a kanban artifact payload that can later render
+      HTML/list items; it is not a second step.
+    - Nodes introduced only by context.openProposals are not committed yet, so
+      updateNode cannot target them. If they should remain, re-emit the desired
+      addNode definition in the new proposal, with any refinements folded into
+      that addNode.
     - updateNode.nodeId MUST be an existing node id from context.nodes.
     - Only use node kinds from context.allowedNodeKinds.
     - Only use change kinds from context.allowedChangeKinds.
     - executionMode / executorType / status must be exact values from the
-      matching context.allowed* list (e.g. executionMode is one of auto /
-      sign-off / human — there is no "manual").
+      matching context.allowed* list. executionMode is the completion mode:
+      "auto" means produced outputs can complete the node automatically;
+      "human" means a human confirms completion after output is produced.
     - Keep changes small, executable, and at least one change.
     - dependsOnNodeIds may only reference nodes in this canvas (existing or added).
     """

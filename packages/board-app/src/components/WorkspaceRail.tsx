@@ -1,5 +1,6 @@
 import {
   Cable,
+  LayoutTemplate,
   List,
   Network,
   Radar,
@@ -12,7 +13,7 @@ import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 
-export type WorkspaceMode = 'planner' | 'sessions' | 'monitor' | 'team' | 'integrations'
+export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'monitor' | 'team' | 'integrations'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -87,6 +88,13 @@ export function WorkspaceRail({
           onClick={() => onModeChange('planner')}
         >
           <Network size={20} />
+        </RailButton>
+        <RailButton
+          label="Templates"
+          active={mode === 'templates'}
+          onClick={() => onModeChange('templates')}
+        >
+          <LayoutTemplate size={20} />
         </RailButton>
         <RailButton
           label="Sessions"

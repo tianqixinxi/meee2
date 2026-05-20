@@ -265,7 +265,7 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
               ))}
             </div>
             <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
-              Global sessions start in the active canvas workspace with the selected local CLI.
+              Global sessions and planner nodes without an explicit Codex/Claude runtime start in the active canvas workspace with this local CLI.
             </div>
             <button
               className="ghost"

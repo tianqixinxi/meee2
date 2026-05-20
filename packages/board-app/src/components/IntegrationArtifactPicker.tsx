@@ -46,6 +46,7 @@ type GithubLevel =
 
 const ARTIFACT_KIND_LABEL: Record<PlannerArtifactKind, string> = {
   'idea-draft': 'idea draft',
+  kanban: 'Kanban',
   prd: 'PRD',
   'impl-pr': 'implementation PR',
   'prerelease-verdict': 'prerelease verdict',
@@ -60,6 +61,7 @@ const ARTIFACT_KIND_ORDER: PlannerArtifactKind[] = [
   'main-merge',
   'check-result',
   'idea-draft',
+  'kanban',
   'prd',
   'lark-doc',
   'prerelease-verdict',

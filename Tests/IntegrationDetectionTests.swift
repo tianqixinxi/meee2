@@ -7,14 +7,14 @@ final class IntegrationDetectionTests: XCTestCase {
     private func node(
         contextSources: [ContextSource] = [],
         artifactRefs: [String]? = nil,
-        produces: [String] = [],
-        consumes: [String] = []
+        outputs: [String] = [],
+        inputs: [String] = []
     ) -> PlanningNode {
         var node = PlanningNode(
             id: "n1", canvasId: "c", title: "step",
-            ioSchema: IOSchema(consumes: consumes, produces: produces, completionSignal: "done"),
+            schema: NodeSchema(inputs: inputs, outputs: outputs, goal: "done"),
             contextSources: contextSources,
-            executionMode: .signOff, executorType: .mock, doerId: "owner", status: .waiting
+            executionMode: .human, executorType: .mock, doerId: "owner", status: .ready
         )
         node.artifactRefs = artifactRefs
         return node

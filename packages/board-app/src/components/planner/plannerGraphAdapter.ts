@@ -1,32 +1,59 @@
-import type { Edge, Node } from '@xyflow/react'
+import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
   NodeStateSnapshot,
   PlanChange,
   PlanProposal,
+  PlannerArtifact,
+  PlannerDispatchRunner,
   PlannerGraphEdge as PlannerGraphStateEdge,
   PlanningNode,
+  PlanningNodeStatus,
   RunNodeState,
 } from '../../types'
-import type { PlannerMode } from './RunSelector'
 
 export type PlannerPreviewKind = 'none' | 'added' | 'updated'
-export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active'
+export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active' | 'neutral'
 export type PlannerEdgePerception = PlannerNodePerception | 'preview' | 'flow'
+export type IOArtifactDirection = 'input' | 'output'
+export type IOArtifactKind = 'text' | 'integration' | 'html' | 'kanban'
+export interface IOArtifactVisibility {
+  inputs: string[]
+  outputs: string[]
+}
+type PlannerGraphMode = 'design' | 'run'
 
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
+  artifacts: PlannerArtifact[]
   previewKind: PlannerPreviewKind
   perception: PlannerNodePerception
   /** Design vs Run mode — the card collapses execution fields in Design. */
-  mode: PlannerMode
+  mode: PlannerGraphMode
   /** This node's state in the selected run, when one is being viewed. */
   runNodeState: RunNodeState | null
   hasSelectedDelivery: boolean
   responsibleLabel?: string
   responsibleAvatarUrl?: string
+  virtual?: boolean
+  artifactDirection?: IOArtifactDirection
+  artifactKind?: IOArtifactKind
+  sourceNodeId?: string
+  ioItem?: string
+  inputReference?: string | null
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
+  onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
+  onBindInput?: (nodeId: string, input: string, reference: string) => void
+  onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
+  canChangeStatus?: boolean
+  onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onOpenSession?: (sessionId: string, nodeId: string) => void
+  onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onCancelSessionCreation?: (nodeId: string) => void
+  onDeleteNode?: (nodeId: string) => void
+  onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  creatingSession?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -36,15 +63,28 @@ interface PlannerGraphInput {
   nodes: PlanningNode[]
   states: NodeStateSnapshot[]
   edges?: PlannerGraphStateEdge[]
+  artifacts?: PlannerArtifact[]
   proposal?: PlanProposal | null
   ownerId?: string
-  mode: PlannerMode
+  mode: PlannerGraphMode
   /** nodeId → run state, from the run being viewed (Run mode only). */
   runNodeStates?: Record<string, RunNodeState>
+  ioArtifactVisibility?: Record<string, IOArtifactVisibility>
   displayNameByUserId?: Record<string, string>
   avatarUrlByUserId?: Record<string, string>
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
+  onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
+  onBindInput?: (nodeId: string, input: string, reference: string) => void
+  onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
+  canChangeStatus?: boolean
+  onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onOpenSession?: (sessionId: string, nodeId: string) => void
+  onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onCancelSessionCreation?: (nodeId: string) => void
+  onDeleteNode?: (nodeId: string) => void
+  onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  creatingSessionNodeIds?: Set<string>
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -52,6 +92,14 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
   edges: PlannerGraphEdge[]
 } {
   const stateByNodeId = new Map(input.states.map((state) => [state.nodeId, state]))
+  const previewArtifacts = proposalArtifactsForPreview(input.proposal)
+  const allArtifacts = [...(input.artifacts ?? []), ...previewArtifacts]
+  const artifactsByNodeId = new Map<string, PlannerArtifact[]>()
+  for (const artifact of allArtifacts) {
+    const artifacts = artifactsByNodeId.get(artifact.nodeId) ?? []
+    artifacts.push(artifact)
+    artifactsByNodeId.set(artifact.nodeId, artifacts)
+  }
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
   const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
@@ -65,11 +113,12 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       id: node.id,
       type: 'plannerNode' as const,
       position,
-      initialWidth: node.layout?.width ?? 286,
-      initialHeight: node.layout?.height ?? (node.status === 'blocked' ? 170 : 142),
+      initialWidth: node.layout?.width ?? 320,
+      initialHeight: node.layout?.height ?? 238,
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,
+        artifacts: artifactsByNodeId.get(node.id) ?? [],
         previewKind,
         perception: perceptionForNode(
           node,
@@ -92,15 +141,209 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
             : node.doerId,
           input.avatarUrlByUserId,
         ),
+        virtual: false,
         onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
+        onOpenKanbanItem: input.onOpenKanbanItem,
+        onChangeStatus: input.onChangeStatus,
+        canChangeStatus: input.canChangeStatus ?? false,
+        onCreateSession: input.onCreateSession,
+        onOpenSession: input.onOpenSession,
+        onReplaceSession: input.onReplaceSession,
+        onCancelSessionCreation: input.onCancelSessionCreation,
+        onDeleteNode: input.onDeleteNode,
+        creatingSession: input.creatingSessionNodeIds?.has(node.id) ?? false,
       },
     }
   })
+  const virtualArtifactNodes = buildVisibleIOArtifactNodes({
+    previewNodes,
+    graphNodes,
+    visibility: input.ioArtifactVisibility ?? {},
+    onOpenDetails: input.onOpenDetails,
+    onOpenKanbanItem: input.onOpenKanbanItem,
+    onBindInput: input.onBindInput,
+    onHideIOArtifact: input.onHideIOArtifact,
+  })
 
   const perceptionByNodeId = new Map(graphNodes.map((node) => [node.id, node.data.perception]))
-  const edges = buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges)
-  return { nodes: graphNodes, edges }
+  const edges = [
+    ...buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges),
+    ...buildIOArtifactEdges(virtualArtifactNodes),
+  ]
+  return { nodes: [...graphNodes, ...virtualArtifactNodes.map((item) => item.node)], edges }
+}
+
+function buildVisibleIOArtifactNodes(input: {
+  previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>
+  graphNodes: PlannerGraphNode[]
+  visibility: Record<string, IOArtifactVisibility>
+  onOpenDetails?: (nodeId: string) => void
+  onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
+  onBindInput?: (nodeId: string, input: string, reference: string) => void
+  onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+}): Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }> {
+  const graphNodeById = new Map(input.graphNodes.map((node) => [node.id, node]))
+  const result: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }> = []
+  for (const { node: sourceNode } of input.previewNodes) {
+    if ((sourceNode.nodeKind ?? 'step') !== 'step') continue
+    const visible = input.visibility[sourceNode.id]
+    if (!visible) continue
+    const sourceGraphNode = graphNodeById.get(sourceNode.id)
+    if (!sourceGraphNode) continue
+    const inputs = visible.inputs
+      .filter((item) => (sourceNode.schema?.inputs ?? []).includes(item))
+      .map((item, index) => {
+        const binding = sourceNode.contextSources.find((source) => normalizeIOKey(source.title) === normalizeIOKey(item))
+        return { item, index, direction: 'input' as const, artifact: null, reference: binding?.reference ?? item, inputReference: binding?.reference ?? null }
+      })
+    const outputCandidates = dedupeIOArtifactItems([
+      ...(sourceNode.schema?.outputs ?? []),
+      ...(sourceNode.artifactRefs ?? []),
+      ...(sourceGraphNode.data.state?.artifactRefs ?? []),
+      ...sourceGraphNode.data.artifacts.map((artifact) => artifact.reference),
+    ])
+    const outputs = visible.outputs
+      .filter((item) => outputCandidates.includes(item))
+      .map((item, index) => ({
+        item,
+        index,
+        direction: 'output' as const,
+        artifact: sourceGraphNode.data.artifacts.find((artifact) =>
+          artifact.reference === item || normalizeIOKey(artifact.reference) === normalizeIOKey(item) || normalizeIOKey(artifact.title) === normalizeIOKey(item),
+        ) ?? null,
+        reference: item,
+      }))
+    for (const entry of [...inputs, ...outputs]) {
+      const id = ioArtifactNodeId(sourceNode.id, entry.direction, entry.item)
+      const artifactKind = entry.artifact?.kind === 'kanban' ? 'kanban' : artifactKindFor(entry.reference)
+      const xOffset = entry.direction === 'input' ? -300 : 360
+      const height = artifactKind === 'kanban' ? 280 : 120
+      const yOffset = entry.index * (artifactKind === 'kanban' ? 292 : 112)
+      const artifactNode: PlanningNode = {
+        id,
+        canvasId: sourceNode.canvasId,
+        title: entry.artifact?.title ?? displayIOArtifactTitle(entry.item),
+        schema: {
+          inputs: [],
+          outputs: [],
+          goal: entry.reference,
+        },
+        contextSources: [],
+        executionMode: 'auto',
+        executorType: 'mock',
+        doerId: '',
+        status: 'ready',
+        dependsOnNodeIds: [],
+        nodeKind: 'artifact',
+        artifactRefs: [entry.item],
+      }
+      result.push({
+        sourceNodeId: sourceNode.id,
+        direction: entry.direction,
+        node: {
+          id,
+          type: 'plannerNode' as const,
+          position: {
+            x: sourceGraphNode.position.x + xOffset,
+            y: sourceGraphNode.position.y + yOffset,
+          },
+          initialWidth: artifactKind === 'kanban' ? 420 : 240,
+          initialHeight: height,
+          data: {
+            node: artifactNode,
+            state: null,
+            artifacts: entry.artifact ? [entry.artifact] : [],
+            previewKind: 'none',
+            perception: 'neutral',
+            mode: sourceGraphNode.data.mode,
+            runNodeState: null,
+            hasSelectedDelivery: false,
+            virtual: true,
+            artifactDirection: entry.direction,
+            artifactKind,
+            sourceNodeId: sourceNode.id,
+            ioItem: entry.item,
+            inputReference: entry.direction === 'input' && 'inputReference' in entry ? entry.inputReference : null,
+            onOpenDetails: input.onOpenDetails,
+            onOpenKanbanItem: input.onOpenKanbanItem,
+            onBindInput: input.onBindInput,
+            canChangeStatus: false,
+            onHideIOArtifact: input.onHideIOArtifact,
+          },
+        },
+      })
+    }
+  }
+  return result
+}
+
+function buildIOArtifactEdges(
+  artifactNodes: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }>,
+): PlannerGraphEdge[] {
+  return artifactNodes.map((item) => edgeFor({
+    id: item.direction === 'input'
+      ? `planner-edge-${item.node.id}-${item.sourceNodeId}`
+      : `planner-edge-${item.sourceNodeId}-${item.node.id}`,
+    source: item.direction === 'input' ? item.node.id : item.sourceNodeId,
+    target: item.direction === 'input' ? item.sourceNodeId : item.node.id,
+    perception: 'neutral',
+    preview: false,
+  }))
+}
+
+function ioArtifactNodeId(nodeId: string, direction: IOArtifactDirection, item: string): string {
+  return `io-artifact-${nodeId}-${direction}-${stableId(item)}`
+}
+
+function stableId(value: string): string {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || 'item'
+}
+
+function displayIOArtifactTitle(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return 'Untitled artifact'
+  const withoutQuery = trimmed.split('?')[0]
+  const parts = withoutQuery.split(/[/:#]/).filter(Boolean)
+  return parts[parts.length - 1]?.replace(/[-_]+/g, ' ') || trimmed
+}
+
+function dedupeIOArtifactItems(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const normalized = value?.trim()
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    result.push(normalized)
+  }
+  return result
+}
+
+function artifactKindFor(value: string): IOArtifactKind {
+  const normalized = value.toLowerCase()
+  if (normalized.includes('kanban') || normalized.includes('看板')) {
+    return 'kanban'
+  }
+  if (normalized.includes('html') || normalized.includes('webpage') || normalized.includes('web-page')) {
+    return 'html'
+  }
+  if (
+    normalized.includes('://')
+    || normalized.startsWith('github:')
+    || normalized.startsWith('git:')
+    || normalized.startsWith('lark')
+    || normalized.startsWith('http:')
+    || normalized.startsWith('https:')
+  ) {
+    return 'integration'
+  }
+  return 'text'
+}
+
+function normalizeIOKey(value: string): string {
+  return value.trim().toLowerCase()
 }
 
 function resolveUserAvatar(
@@ -129,16 +372,16 @@ export function groupStatesByRisk(
 ): Array<{ key: string; label: string; nodes: PlanningNode[] }> {
   const stateByNodeId = new Map(states.map((state) => [state.nodeId, state]))
   const groups = [
-    { key: 'blocked', label: 'Blocked / review', nodes: [] as PlanningNode[] },
-    { key: 'running', label: 'Running', nodes: [] as PlanningNode[] },
-    { key: 'planning', label: 'Planning', nodes: [] as PlanningNode[] },
-    { key: 'waiting', label: 'Waiting', nodes: [] as PlanningNode[] },
+    { key: 'blocked', label: 'Blocked', nodes: [] as PlanningNode[] },
+    { key: 'working', label: 'Working', nodes: [] as PlanningNode[] },
+    { key: 'draft', label: 'Draft', nodes: [] as PlanningNode[] },
+    { key: 'ready', label: 'Ready', nodes: [] as PlanningNode[] },
     { key: 'done', label: 'Done', nodes: [] as PlanningNode[] },
   ]
   const groupByKey = new Map(groups.map((group) => [group.key, group]))
   for (const node of nodes) {
     const state = stateByNodeId.get(node.id)
-    if (state?.runState === 'blocked' || state?.needsOwnerReview) {
+    if (state?.runState === 'blocked') {
       groupByKey.get('blocked')?.nodes.push(node)
       continue
     }
@@ -167,6 +410,26 @@ function applyPendingProposalOverlay(
   return overlay
 }
 
+function proposalArtifactsForPreview(proposal?: PlanProposal | null): PlannerArtifact[] {
+  if (!proposal) return []
+  return proposal.changes.flatMap((change, index): PlannerArtifact[] => {
+    if (change.kind !== 'attachArtifact' || !change.artifact) return []
+    const nodeId = change.artifact.nodeId ?? change.nodeId
+    if (!nodeId) return []
+    return [{
+      id: `preview-artifact-${proposal.id}-${index}`,
+      canvasId: proposal.canvasId,
+      nodeId,
+      kind: change.artifact.kind,
+      title: change.artifact.title,
+      reference: change.artifact.reference,
+      status: change.artifact.status ?? 'attached',
+      createdAt: new Date(0).toISOString(),
+      payload: change.artifact.payload,
+    }]
+  })
+}
+
 function applyUpdateOverlay(
   overlay: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
   change: PlanChange,
@@ -179,7 +442,7 @@ function applyUpdateOverlay(
       ...overlay[index].node,
       title: change.title ?? overlay[index].node.title,
       status: change.status ?? overlay[index].node.status,
-      ioSchema: change.ioSchema ?? overlay[index].node.ioSchema,
+      schema: change.schema ?? overlay[index].node.schema,
       contextSources: change.contextSources ?? overlay[index].node.contextSources,
       dependsOnNodeIds: change.dependsOnNodeIds ?? overlay[index].node.dependsOnNodeIds,
       subCanvasId: change.subCanvasId ?? overlay[index].node.subCanvasId,
@@ -260,7 +523,13 @@ function edgeFor(input: {
     source: input.source,
     target: input.target,
     type: 'smoothstep',
-    animated: input.forceAnimated || input.perception === 'flow' || input.perception === 'attention' || input.perception === 'preview',
+    animated: false,
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: 'rgba(178, 174, 163, 0.62)',
+      width: 18,
+      height: 18,
+    },
     data: {
       preview: input.preview,
       perception: input.perception,
@@ -292,7 +561,7 @@ function edgePerception(
 function perceptionForNode(
   node: PlanningNode,
   state: NodeStateSnapshot | null,
-  mode: PlannerMode,
+  mode: PlannerGraphMode,
   runNodeState: RunNodeState | null,
 ): PlannerNodePerception {
   if (mode === 'run') {
@@ -313,11 +582,11 @@ function perceptionForNode(
     }
   }
 
-  if (state?.needsOwnerReview || state?.runState === 'blocked' || state?.runState === 'planning' || node.status === 'blocked' || node.status === 'planning') {
+  if (state?.runState === 'blocked' || state?.runState === 'draft' || node.status === 'blocked' || node.status === 'draft') {
     return 'attention'
   }
   if (state?.runState === 'done' || node.status === 'done') return 'done'
-  if (state?.runState === 'running' || node.status === 'running') return 'active'
+  if (state?.runState === 'working' || node.status === 'working') return 'active'
   return 'not-reached'
 }
 
@@ -350,8 +619,8 @@ function buildNodePositions(nodes: PlanningNode[]): Map<string, { x: number; y: 
     const row = rowByDepth.get(depth) ?? 0
     rowByDepth.set(depth, row + 1)
     positionByNodeId.set(node.id, {
-      x: depth * 340,
-      y: row * 190,
+      x: depth * 390,
+      y: row * 270,
     })
   }
   return positionByNodeId
