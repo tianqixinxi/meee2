@@ -1325,6 +1325,58 @@ enum BoardAPI {
         }
     }
 
+    static func updatePlannerNodeSchedule(_ req: HttpRequest) -> HttpResponse {
+        struct UpdateScheduleRequest: Decodable {
+            let enabled: Bool
+            let intervalSeconds: Int?
+            let prompt: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: UpdateScheduleRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"enabled\": Bool, \"intervalSeconds\"?: Int, \"prompt\"?: String}", status: 400)
+        }
+        let schedule: PlannerNodeSchedule?
+        if body.enabled {
+            schedule = PlannerNodeSchedule(
+                enabled: true,
+                intervalSeconds: max(60, body.intervalSeconds ?? 900),
+                prompt: body.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                lastSentAt: nil,
+                nextRunAt: Date().addingTimeInterval(TimeInterval(max(60, body.intervalSeconds ?? 900)))
+            )
+        } else {
+            schedule = nil
+        }
+        do {
+            let state = try PlannerBoardBridge.updateNodeSchedule(
+                nodeId: nodeId,
+                schedule: schedule,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerGraphStateEnvelope(
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                proposals: state.proposals,
+                access: state.access,
+                activities: state.activities,
+                events: state.events,
+                artifacts: state.artifacts,
+                edges: state.edges
+            ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func deletePlannerNode(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {

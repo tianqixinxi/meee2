@@ -1,5 +1,5 @@
 import { Background, ReactFlow, ReactFlowProvider } from '@xyflow/react'
-import { Check, ChevronDown, Eye, Info, Send, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, Info, LayoutTemplate, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -13,6 +13,8 @@ import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
 
 interface Props {
   canvasId: string
+  canvasName: string
+  canvasTask?: string
   proposal: PlanProposal | null
   variant?: 'board' | 'template'
   previewGraph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
@@ -22,6 +24,7 @@ interface Props {
   nodeCount: number
   hasActionableDrift: boolean
   onSubmit: (message: string) => void
+  onUseRecommendedTemplate?: () => void
   onApproveAndApply: () => void
   onReject: () => void
   draftMessage?: { id: number; text: string } | null
@@ -44,6 +47,8 @@ interface PlannerChatMessage {
 
 export function PlannerProposalPanel({
   canvasId,
+  canvasName,
+  canvasTask = '',
   proposal,
   variant = 'board',
   previewGraph,
@@ -53,6 +58,7 @@ export function PlannerProposalPanel({
   nodeCount,
   hasActionableDrift,
   onSubmit,
+  onUseRecommendedTemplate,
   onApproveAndApply,
   onReject,
   draftMessage = null,
@@ -154,6 +160,7 @@ export function PlannerProposalPanel({
 
   const canCreateProposal = access?.canCreateProposal ?? true
   const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
+  const templateRecommendation = recommendTemplate(canvasName, canvasTask, nodeCount, variant)
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
   const submitMessage = () => {
     if (!canSend) return
@@ -181,6 +188,14 @@ export function PlannerProposalPanel({
             nodeCount={nodeCount}
             hasActionableDrift={hasActionableDrift}
           />
+          {templateRecommendation && !proposal && (
+            <RecommendedTemplate
+              recommendation={templateRecommendation}
+              busy={busy}
+              canCreateProposal={canCreateProposal}
+              onUse={onUseRecommendedTemplate}
+            />
+          )}
           {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
           {history.length > 0 && (
             <div className={`planner-dialog__history${historyOpen ? ' is-open' : ''}`}>
@@ -377,6 +392,75 @@ export function PlannerProposalPanel({
       )}
     </aside>
   )
+}
+
+interface TemplateRecommendation {
+  id: 'delivery-pipeline'
+  title: string
+  body: string
+  label: string
+}
+
+function RecommendedTemplate({
+  recommendation,
+  busy,
+  canCreateProposal,
+  onUse,
+}: {
+  recommendation: TemplateRecommendation
+  busy: boolean
+  canCreateProposal: boolean
+  onUse?: () => void
+}) {
+  return (
+    <div className="planner-template-recommendation" aria-label="Recommended template">
+      <div className="planner-template-recommendation__icon">
+        <LayoutTemplate size={15} aria-hidden />
+      </div>
+      <div className="planner-template-recommendation__copy">
+        <span>Recommended template</span>
+        <strong>{recommendation.title}</strong>
+        <p>{recommendation.body}</p>
+      </div>
+      <button
+        type="button"
+        disabled={busy || !canCreateProposal || !onUse}
+        onClick={onUse}
+        title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
+      >
+        <LayoutTemplate size={14} aria-hidden />
+        {recommendation.label}
+      </button>
+    </div>
+  )
+}
+
+function recommendTemplate(
+  canvasName: string,
+  canvasTask: string,
+  nodeCount: number,
+  variant: 'board' | 'template',
+): TemplateRecommendation | null {
+  if (variant === 'template' || nodeCount > 0) return null
+  const task = readableCanvasTask(canvasName, canvasTask)
+  return {
+    id: 'delivery-pipeline',
+    title: 'Delivery pipeline',
+    body: `Best fit for turning ${task} into scoped steps, handoffs, review gates, and output artifacts.`,
+    label: 'Use template',
+  }
+}
+
+function readableCanvasTask(canvasName: string, canvasTask: string): string {
+  const title = canvasName.trim()
+  const context = canvasTask.trim()
+  if (title && !isGenericCanvasTitle(title)) return `"${title}"`
+  if (context && !context.startsWith('canvas:')) return `"${context}"`
+  return 'this canvas task'
+}
+
+function isGenericCanvasTitle(title: string): boolean {
+  return /^(untitled|new canvas|default canvas|personal canvas)$/i.test(title)
 }
 
 function WorkflowGuide({

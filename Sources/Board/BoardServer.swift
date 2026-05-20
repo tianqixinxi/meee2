@@ -99,6 +99,7 @@ public final class BoardServer {
                 }
                 writeRuntimeInfo()
                 subscribeToEventBus()
+                PlannerScheduleRunner.shared.start()
                 return
             } catch {
                 lastError = error
@@ -116,6 +117,7 @@ public final class BoardServer {
 
         busSubscription?.cancel()
         busSubscription = nil
+        PlannerScheduleRunner.shared.stop()
 
         wsLock.lock()
         for ws in wsSessions {
@@ -427,6 +429,7 @@ public final class BoardServer {
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/inputs"] = BoardServer.cors(BoardAPI.bindPlannerNodeInput)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/status"] = BoardServer.cors(BoardAPI.updatePlannerNodeStatus)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/gate"] = BoardServer.cors(BoardAPI.updatePlannerNodeGate)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/schedule"] = BoardServer.cors(BoardAPI.updatePlannerNodeSchedule)
         server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
         server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)

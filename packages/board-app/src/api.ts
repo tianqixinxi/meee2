@@ -1053,6 +1053,20 @@ export function updatePlannerNodeStatus(
   )
 }
 
+export function updatePlannerNodeSchedule(
+  canvasId: string,
+  nodeId: string,
+  input: { enabled: boolean; intervalSeconds?: number; prompt?: string },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/schedule`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
 export function deletePlannerNode(
   canvasId: string,
   nodeId: string,

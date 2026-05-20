@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  CalendarClock,
   ExternalLink,
   FileText,
   Layers,
@@ -13,6 +14,7 @@ import { useState } from 'react'
 import {
   bindPlannerNodeInput,
   proposePlannerGraphChange,
+  updatePlannerNodeSchedule,
 } from '../../api'
 import type { TeamMember } from '../../api'
 import type {
@@ -68,6 +70,9 @@ export function NodeInspectorModal({
   const [assignOpen, setAssignOpen] = useState(false)
   const [editingInput, setEditingInput] = useState<string | null>(null)
   const [inputDraftValue, setInputDraftValue] = useState('')
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [scheduleInterval, setScheduleInterval] = useState(() => String(Math.max(1, Math.round((node.schedule?.intervalSeconds ?? 900) / 60))))
+  const [schedulePrompt, setSchedulePrompt] = useState(() => node.schedule?.prompt ?? defaultSchedulePrompt(node))
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const isTemplate = variant === 'template'
@@ -95,6 +100,8 @@ export function NodeInspectorModal({
   const canShowIOArtifactSwitches = nodeKind === 'step'
   const canUseStepActions = nodeKind === 'step'
   const permissionTooltip = canAssignOwner ? undefined : 'Only the canvas owner can assign this node.'
+  const scheduleEnabled = node.schedule?.enabled === true
+  const scheduleNextRun = formatScheduleDate(node.schedule?.nextRunAt)
 
   const runProposalAction = (work: () => Promise<PlanProposal | null>) => {
     setActionBusy(true)
@@ -151,6 +158,26 @@ export function NodeInspectorModal({
       })
   }
 
+  const saveSchedule = (enabled: boolean) => {
+    const minutes = Math.max(1, Number.parseInt(scheduleInterval, 10) || 15)
+    setActionBusy(true)
+    setActionError(null)
+    updatePlannerNodeSchedule(canvasId, node.id, {
+      enabled,
+      intervalSeconds: minutes * 60,
+      prompt: schedulePrompt.trim(),
+    })
+      .then((state) => {
+        setActionBusy(false)
+        onGraphStateChanged?.(state)
+        if (!enabled) setScheduleOpen(false)
+      })
+      .catch((err) => {
+        setActionBusy(false)
+        setActionError((err as Error).message || 'Schedule was not saved')
+      })
+  }
+
   return (
     <div
       className="planner-node-modal-backdrop"
@@ -185,6 +212,7 @@ export function NodeInspectorModal({
           )}
           {showOwnerInfo && <InfoTile label="Owner" value={responsibleLabel} />}
           <InfoTile label="Gate" value={gateModeLabel(node)} />
+          <InfoTile label="Schedule" value={scheduleEnabled ? `Every ${Math.round((node.schedule?.intervalSeconds ?? 60) / 60)}m` : 'Off'} />
           <InfoTile label="Type" value={nodeKind} />
         </div>
 
@@ -261,7 +289,58 @@ export function NodeInspectorModal({
                   <UserRound size={12} aria-hidden /> Assign owner
                 </button>
               )}
+              <button
+                type="button"
+                disabled={actionBusy || !node.sessionId}
+                title={node.sessionId ? undefined : 'Create or bind a session before scheduling this node.'}
+                onClick={() => {
+                  setActionError(null)
+                  setScheduleOpen((value) => !value)
+                }}
+              >
+                <CalendarClock size={12} aria-hidden /> Schedule session
+              </button>
             </div>
+            {scheduleOpen && (
+              <div className="planner-node-actions__panel planner-node-actions__panel--schedule">
+                <label>
+                  <span>Every</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={scheduleInterval}
+                    disabled={actionBusy}
+                    onChange={(event) => setScheduleInterval(event.target.value)}
+                  />
+                  <em>minutes</em>
+                </label>
+                <textarea
+                  value={schedulePrompt}
+                  disabled={actionBusy}
+                  rows={5}
+                  onChange={(event) => setSchedulePrompt(event.target.value)}
+                />
+                {scheduleEnabled && scheduleNextRun && (
+                  <p className="planner-node-actions__schedule-note">Next tick: {scheduleNextRun}</p>
+                )}
+                <div className="planner-node-modal__input-editor-actions">
+                  {scheduleEnabled && (
+                    <button type="button" disabled={actionBusy} onClick={() => saveSchedule(false)}>
+                      Turn off
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={actionBusy || schedulePrompt.trim().length === 0}
+                    onClick={() => saveSchedule(true)}
+                  >
+                    {scheduleEnabled ? 'Save schedule' : 'Turn on schedule'}
+                  </button>
+                </div>
+              </div>
+            )}
             {showOwnerInfo && assignOpen && (
               <div className="planner-node-actions__panel">
                 {teamMembers.length === 0 ? (
@@ -497,6 +576,23 @@ function buildNodeActionPrompt(node: PlanningNode, operation: 'revise' | 'expand
       ? 'Revise this node with me.'
       : 'Expand this node into a sub-canvas with me.',
   ].join('\n')
+}
+
+function defaultSchedulePrompt(node: PlanningNode): string {
+  return [
+    'Scheduled meee2 planner tick.',
+    `Node ID: ${node.id}`,
+    `Node: ${node.title}`,
+    `Goal: ${node.schema?.goal || node.title}`,
+    'Call read_node_contract first. If this tick produces new output, call submit_node_output; if there is nothing to update, reply with a brief status summary.',
+  ].join('\n')
+}
+
+function formatScheduleDate(value: string | number | null | undefined): string | null {
+  if (value == null) return null
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function compactLabel(value: string): string {

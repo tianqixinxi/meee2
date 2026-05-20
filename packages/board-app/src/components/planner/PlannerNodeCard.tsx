@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useEffect, useState } from 'react'
 import {
   AlertTriangle,
+  CalendarClock,
   ChevronDown,
   CheckCircle2,
   Clock3,
@@ -230,11 +231,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const primaryActionDisabled = primaryAction === 'Creating session...'
   const showResponsibleInfo = data.showResponsibleInfo ?? true
   const gateLabel = gateModeLabel(node)
+  const scheduleEnabled = node.schedule?.enabled === true
+  const scheduleLabel = scheduleEnabled ? scheduleIntervalLabel(node.schedule?.intervalSeconds ?? 0) : null
 
   return (
     <div
       className={[
         'planner-node',
+        scheduleEnabled ? 'planner-node--scheduled' : '',
         `planner-node--${borderClass}`,
         `planner-node--kind-${nodeKind}`,
         `planner-node--mode-${data.mode}`,
@@ -278,6 +282,15 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           </span>
         )}
         <div className="planner-node__header-actions">
+          {scheduleLabel && (
+            <span
+              className="planner-node__badge planner-node__badge--schedule"
+              title={`Scheduled session tick: ${scheduleLabel}`}
+            >
+              <CalendarClock size={12} aria-hidden />
+              {scheduleLabel}
+            </span>
+          )}
           {showResponsibleInfo && (
             <span className="planner-node__owner-pill" title={`Owner: ${data.responsibleLabel || 'Unassigned'}`}>
               <span className={`planner-node__mini-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
@@ -297,6 +310,12 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <Code2 size={10} aria-hidden />
             Runtime: {runtimeLabelForNode(node.executorType)}
           </span>
+          {scheduleLabel && (
+            <span className="planner-node__chip planner-node__chip--schedule" title="This node periodically sends a message to its bound session.">
+              <CalendarClock size={10} aria-hidden />
+              Scheduled: {scheduleLabel}
+            </span>
+          )}
           {!isRunMode && data.canChangeStatus && data.onChangeGateMode ? (
             <label
               className="planner-node__chip planner-node__gate-select nodrag nopan"
@@ -1018,6 +1037,13 @@ function runtimeLabelForNode(executorType: PlannerGraphNode['data']['node']['exe
   if (executorType === 'human') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
   if (executorType === 'mock') return `Default: ${spawnProviderLabel(loadSpawnProvider())}`
   return `${executorType} / fallback ${spawnProviderLabel(loadSpawnProvider())}`
+}
+
+function scheduleIntervalLabel(intervalSeconds: number): string {
+  const seconds = Math.max(60, Math.round(intervalSeconds || 60))
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`
+  if (seconds % 60 === 0) return `${seconds / 60}m`
+  return `${seconds}s`
 }
 
 function gateModeLabel(node: PlannerGraphNode['data']['node']): 'Human' | 'Auto' {

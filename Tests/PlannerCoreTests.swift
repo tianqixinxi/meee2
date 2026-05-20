@@ -2554,6 +2554,111 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(dispatchedStep.status, .working)
     }
 
+    func testSessionFailureDoesNotOverrideCompletedNode() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "session-done",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Output submitted", routeTo: []),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "session-done",
+            runState: .failed
+        )
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.workflowRunState, .done)
+        XCTAssertEqual(node.status, .done)
+        XCTAssertNil(node.blockedReason)
+    }
+
+    func testSessionFailureBeforeOutputStoresBlockedReason() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "failed01",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "failed01",
+            runState: .failed
+        )
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.workflowRunState, .failed)
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.blockedReason, "Session failed01 ended before this node submitted a completion output.")
+    }
+
+    func testScheduledNodeBecomesDueAndMarksNextTick() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "session-loop",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.updateNodeSchedule(
+            canvasId: "canvas-a",
+            nodeId: stepId,
+            schedule: PlannerNodeSchedule(
+                enabled: true,
+                intervalSeconds: 60,
+                prompt: "Run another loop.",
+                lastSentAt: nil,
+                nextRunAt: now.addingTimeInterval(-1)
+            )
+        )
+
+        let due = PlannerBoardBridge.store.dueScheduledNodes(now: now)
+        XCTAssertEqual(due.map(\.nodeId), [stepId])
+        XCTAssertEqual(due.first?.sessionId, "session-loop")
+
+        _ = try PlannerBoardBridge.store.markScheduledTickSent(
+            canvasId: "canvas-a",
+            nodeId: stepId,
+            sentAt: now
+        )
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.workflowRunState, .dispatched)
+        XCTAssertEqual(node.status, .working)
+        XCTAssertEqual(node.schedule?.lastSentAt, now)
+        XCTAssertEqual(node.schedule?.nextRunAt, now.addingTimeInterval(60))
+    }
+
     // MARK: - Run layer (P1)
 
     func testStartRunCreatesActiveRunOverCurrentNodes() throws {

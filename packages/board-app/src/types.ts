@@ -358,6 +358,14 @@ export interface PlannerNodeTrigger {
   eventSource?: string | null
 }
 
+export interface PlannerNodeSchedule {
+  enabled: boolean
+  intervalSeconds: number
+  prompt: string
+  lastSentAt?: string | number | null
+  nextRunAt?: string | number | null
+}
+
 export interface PlannerNodeGate {
   type: string
   label: string
@@ -536,6 +544,7 @@ export interface PlanningNode {
   nodeKind?: PlanningNodeKind | null
   layout?: PlannerNodeLayout | null
   trigger?: PlannerNodeTrigger | null
+  schedule?: PlannerNodeSchedule | null
   gate?: PlannerNodeGate | null
   dispatch?: PlannerNodeDispatch | null
   approvers?: string[] | null
@@ -577,6 +586,7 @@ export interface PlanChange {
   nodeKind?: PlanningNodeKind | null
   layout?: PlannerNodeLayout | null
   trigger?: PlannerNodeTrigger | null
+  schedule?: PlannerNodeSchedule | null
   executionMode?: ExecutionMode | null
   clearGate?: boolean | null
   gate?: PlannerNodeGate | null

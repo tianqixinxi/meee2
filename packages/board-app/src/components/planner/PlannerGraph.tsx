@@ -17,6 +17,7 @@ import {
   abandonPlannerNodeSession,
   bindPlannerSessionToNode,
   bindPlannerNodeInput,
+  createPlannerDeliveryPipeline,
   deletePlannerNode,
   detachPlannerNodeSession,
   dispatchPlannerNodeSession,
@@ -715,6 +716,21 @@ function PlannerGraphInner({
     handleGenerate(trimmed)
   }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal])
 
+  const handleUseRecommendedTemplate = useCallback(() => {
+    setBusy(true)
+    setError(null)
+    createPlannerDeliveryPipeline(canvasId)
+      .then((next) => {
+        setProposal(next)
+        setPlannerState((current) => current && next
+          ? { ...current, proposals: upsertProposal(current.proposals, next) }
+          : current)
+        if (next) setReviewRequestTick((tick) => tick + 1)
+      })
+      .catch((err) => setError((err as Error).message || 'Failed to create recommended template proposal'))
+      .finally(() => setBusy(false))
+  }, [canvasId])
+
   const handleApproveAndApply = useCallback(() => {
     if (!proposal) return
     setBusy(true)
@@ -872,6 +888,8 @@ function PlannerGraphInner({
             />
             <PlannerProposalPanel
               canvasId={canvasId}
+              canvasName={plannerState?.canvas.title ?? canvasName}
+              canvasTask={plannerState?.canvas.plannerContext ?? ''}
               proposal={proposal}
               variant={variant}
               previewGraph={reviewGraph}
@@ -881,6 +899,7 @@ function PlannerGraphInner({
               nodeCount={plannerState?.nodes.length ?? 0}
               hasActionableDrift={hasActionableDrift}
               onSubmit={handlePlannerSubmit}
+              onUseRecommendedTemplate={handleUseRecommendedTemplate}
               onApproveAndApply={handleApproveAndApply}
               onReject={handleReject}
               draftMessage={plannerDraftMessage}

@@ -117,6 +117,14 @@ struct PlannerNodeTrigger: Codable, Equatable {
     var eventSource: String?
 }
 
+struct PlannerNodeSchedule: Codable, Equatable {
+    var enabled: Bool
+    var intervalSeconds: Int
+    var prompt: String
+    var lastSentAt: Date?
+    var nextRunAt: Date?
+}
+
 struct PlannerNodeGate: Codable, Equatable {
     var type: String
     var label: String
@@ -371,6 +379,7 @@ struct PlanningNode: Codable, Equatable {
     var nodeKind: PlanningNodeKind?
     var layout: PlannerNodeLayout?
     var trigger: PlannerNodeTrigger?
+    var schedule: PlannerNodeSchedule?
     var gate: PlannerNodeGate?
     var dispatch: PlannerNodeDispatch?
     var approvers: [String]?
@@ -397,6 +406,7 @@ struct PlanningNode: Codable, Equatable {
         nodeKind: PlanningNodeKind? = .step,
         layout: PlannerNodeLayout? = nil,
         trigger: PlannerNodeTrigger? = nil,
+        schedule: PlannerNodeSchedule? = nil,
         gate: PlannerNodeGate? = nil,
         dispatch: PlannerNodeDispatch? = nil,
         approvers: [String]? = nil,
@@ -422,6 +432,7 @@ struct PlanningNode: Codable, Equatable {
         self.nodeKind = nodeKind
         self.layout = layout
         self.trigger = trigger
+        self.schedule = schedule
         self.gate = gate
         self.dispatch = dispatch
         self.approvers = approvers
@@ -441,7 +452,7 @@ struct PlanningNode: Codable, Equatable {
         case id, canvasId, title, schema, contextSources, executionMode
         case executorType, doerId, status, sessionId, chatThreadId, source
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
-        case dispatch, approvers, artifactRefs, eventRefs, workflowRunState
+        case schedule, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case blockedReason
     }
 
@@ -469,6 +480,7 @@ struct PlanningNode: Codable, Equatable {
         nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
         layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
         trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
+        schedule = try container.decodeIfPresent(PlannerNodeSchedule.self, forKey: .schedule)
         gate = try container.decodeIfPresent(PlannerNodeGate.self, forKey: .gate)
         dispatch = try container.decodeIfPresent(PlannerNodeDispatch.self, forKey: .dispatch)
         approvers = try container.decodeIfPresent([String].self, forKey: .approvers)
@@ -497,6 +509,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(nodeKind, forKey: .nodeKind)
         try container.encodeIfPresent(layout, forKey: .layout)
         try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(schedule, forKey: .schedule)
         try container.encodeIfPresent(gate, forKey: .gate)
         try container.encodeIfPresent(dispatch, forKey: .dispatch)
         try container.encodeIfPresent(approvers, forKey: .approvers)
@@ -607,6 +620,7 @@ struct PlanChange: Codable, Equatable {
     var nodeKind: PlanningNodeKind?
     var layout: PlannerNodeLayout?
     var trigger: PlannerNodeTrigger?
+    var schedule: PlannerNodeSchedule?
     var executionMode: ExecutionMode?
     var clearGate: Bool?
     var gate: PlannerNodeGate?
@@ -623,7 +637,7 @@ struct PlanChange: Codable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case kind, node, nodeId, title, status, schema, contextSources
-        case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
+        case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, schedule, gate
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
     }
@@ -641,6 +655,7 @@ struct PlanChange: Codable, Equatable {
         nodeKind: PlanningNodeKind? = nil,
         layout: PlannerNodeLayout? = nil,
         trigger: PlannerNodeTrigger? = nil,
+        schedule: PlannerNodeSchedule? = nil,
         executionMode: ExecutionMode? = nil,
         clearGate: Bool? = nil,
         gate: PlannerNodeGate? = nil,
@@ -667,6 +682,7 @@ struct PlanChange: Codable, Equatable {
         self.nodeKind = nodeKind
         self.layout = layout
         self.trigger = trigger
+        self.schedule = schedule
         self.executionMode = executionMode
         self.clearGate = clearGate
         self.gate = gate
@@ -696,6 +712,7 @@ struct PlanChange: Codable, Equatable {
         nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
         layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
         trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
+        schedule = try container.decodeIfPresent(PlannerNodeSchedule.self, forKey: .schedule)
         executionMode = try container.decodeIfPresent(ExecutionMode.self, forKey: .executionMode)
         clearGate = try container.decodeIfPresent(Bool.self, forKey: .clearGate)
         gate = try container.decodeIfPresent(PlannerNodeGate.self, forKey: .gate)
@@ -725,6 +742,7 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(nodeKind, forKey: .nodeKind)
         try container.encodeIfPresent(layout, forKey: .layout)
         try container.encodeIfPresent(trigger, forKey: .trigger)
+        try container.encodeIfPresent(schedule, forKey: .schedule)
         try container.encodeIfPresent(executionMode, forKey: .executionMode)
         try container.encodeIfPresent(clearGate, forKey: .clearGate)
         try container.encodeIfPresent(gate, forKey: .gate)
@@ -1501,6 +1519,9 @@ final class PlannerCoreService {
                 if let trigger = change.trigger {
                     updatedNodes[index].trigger = trigger
                 }
+                if let schedule = change.schedule {
+                    updatedNodes[index].schedule = schedule
+                }
                 if let executionMode = change.executionMode {
                     updatedNodes[index].executionMode = executionMode
                 }
@@ -1820,6 +1841,15 @@ enum SessionToPlanningNodeMapper {
 }
 
 final class PlannerStore {
+    struct DueScheduledNode {
+        let canvasId: String
+        let nodeId: String
+        let title: String
+        let sessionId: String
+        let prompt: String
+        let intervalSeconds: Int
+    }
+
     struct CanvasRecord: Codable, Equatable {
         var canvas: PlanningCanvas
         var nodes: [PlanningNode]
@@ -2173,15 +2203,30 @@ final class PlannerStore {
                 for: runState,
                 hasGate: record.nodes[stepIndex].gate != nil
             )
+            let currentStepRunState = record.nodes[stepIndex].workflowRunState
             if record.nodes[stepIndex].sessionId != sessionId {
                 record.nodes[stepIndex].sessionId = sessionId
                 record.nodes[stepIndex].chatThreadId = sessionId
                 record.nodes[stepIndex].source = .session
                 changed = true
             }
-            if record.nodes[stepIndex].workflowRunState != stepRunState {
+            let shouldProtectCompletedStep = currentStepRunState == .done && stepRunState != .done
+            if shouldProtectCompletedStep {
+                if record.nodes[stepIndex].blockedReason != nil {
+                    record.nodes[stepIndex].blockedReason = nil
+                    changed = true
+                }
+            } else if record.nodes[stepIndex].workflowRunState != stepRunState {
                 record.nodes[stepIndex].workflowRunState = stepRunState
                 record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
+                if stepRunState == .failed || stepRunState == .gateWait {
+                    record.nodes[stepIndex].blockedReason = Self.sessionFailureReason(
+                        for: runState,
+                        sessionId: sessionId
+                    )
+                } else {
+                    record.nodes[stepIndex].blockedReason = nil
+                }
                 changed = true
                 record.events.append(event(
                     canvasId: canvasId,
@@ -2204,12 +2249,14 @@ final class PlannerStore {
             }
 
             guard changed else { return record }
-            mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
-                state.sessionId = sessionId
-                state.chatThreadId = sessionId
-                state.runState = stepRunState
-                if stepRunState == .done || stepRunState == .failed {
-                    state.finishedAt = state.finishedAt ?? Date()
+            if !shouldProtectCompletedStep {
+                mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
+                    state.sessionId = sessionId
+                    state.chatThreadId = sessionId
+                    state.runState = stepRunState
+                    if stepRunState == .done || stepRunState == .failed {
+                        state.finishedAt = state.finishedAt ?? Date()
+                    }
                 }
             }
             recomputeActiveRun(&record)
@@ -2274,6 +2321,20 @@ final class PlannerStore {
             return .done
         case .failed:
             return .blocked
+        }
+    }
+
+    private static func sessionFailureReason(
+        for sessionRunState: PlannerWorkflowRunState,
+        sessionId: String
+    ) -> String {
+        switch sessionRunState {
+        case .failed:
+            return "Session \(String(sessionId.prefix(8))) ended before this node submitted a completion output."
+        case .gateWait:
+            return "Session \(String(sessionId.prefix(8))) needs human attention before this node can continue."
+        case .pending, .readyToStart, .dispatched, .running, .done:
+            return "Session \(String(sessionId.prefix(8))) could not continue this node."
         }
     }
 
@@ -2644,6 +2705,118 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "\(node.title) gate -> \(executionMode.rawValue)"
             ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    func updateNodeSchedule(
+        canvasId: String,
+        nodeId: String,
+        schedule: PlannerNodeSchedule?
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            let nodeKind = record.nodes[nodeIndex].nodeKind ?? .step
+            guard nodeKind == .step else {
+                throw PlannerCoreError.invalidNodeOutput("Only step nodes can be scheduled.")
+            }
+
+            var normalized = schedule
+            if var value = normalized {
+                value.intervalSeconds = max(60, value.intervalSeconds)
+                value.prompt = value.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                if value.enabled && value.prompt.isEmpty {
+                    value.prompt = Self.defaultSchedulePrompt(for: record.nodes[nodeIndex])
+                }
+                if value.enabled {
+                    value.nextRunAt = value.nextRunAt ?? Date().addingTimeInterval(TimeInterval(value.intervalSeconds))
+                } else {
+                    value.nextRunAt = nil
+                }
+                normalized = value
+            }
+
+            record.nodes[nodeIndex].schedule = normalized
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: normalized?.enabled == true
+                    ? "Scheduled \(record.nodes[nodeIndex].title) every \(normalized?.intervalSeconds ?? 0)s"
+                    : "Disabled schedule for \(record.nodes[nodeIndex].title)"
+            ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    func dueScheduledNodes(now: Date = Date()) -> [DueScheduledNode] {
+        withLock {
+            var due: [DueScheduledNode] = []
+            for (canvasId, record) in document.canvases {
+                for node in record.nodes {
+                    guard let schedule = node.schedule,
+                          schedule.enabled,
+                          schedule.intervalSeconds >= 60,
+                          (node.nodeKind ?? .step) == .step,
+                          let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                          !sessionId.isEmpty else { continue }
+                    let nextRunAt = schedule.nextRunAt ?? schedule.lastSentAt?.addingTimeInterval(TimeInterval(schedule.intervalSeconds)) ?? now
+                    guard nextRunAt <= now else { continue }
+                    due.append(DueScheduledNode(
+                        canvasId: canvasId,
+                        nodeId: node.id,
+                        title: node.title,
+                        sessionId: sessionId,
+                        prompt: schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? Self.defaultSchedulePrompt(for: node)
+                            : schedule.prompt,
+                        intervalSeconds: schedule.intervalSeconds
+                    ))
+                }
+            }
+            return due
+        }
+    }
+
+    func markScheduledTickSent(
+        canvasId: String,
+        nodeId: String,
+        sentAt: Date = Date()
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            guard var schedule = record.nodes[nodeIndex].schedule, schedule.enabled else {
+                return record
+            }
+            schedule.intervalSeconds = max(60, schedule.intervalSeconds)
+            schedule.lastSentAt = sentAt
+            schedule.nextRunAt = sentAt.addingTimeInterval(TimeInterval(schedule.intervalSeconds))
+            record.nodes[nodeIndex].schedule = schedule
+            record.nodes[nodeIndex].workflowRunState = .dispatched
+            record.nodes[nodeIndex].status = .working
+            record.nodes[nodeIndex].blockedReason = nil
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Scheduled tick sent to \(record.nodes[nodeIndex].title)"
+            ))
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = .dispatched
+                state.startedAt = sentAt
+                state.finishedAt = nil
+            }
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -3359,6 +3532,16 @@ final class PlannerStore {
         }
     }
 
+    private static func defaultSchedulePrompt(for node: PlanningNode) -> String {
+        [
+            "Scheduled meee2 planner tick.",
+            "Node ID: \(node.id)",
+            "Node: \(node.title)",
+            "Goal: \(node.schema.goal)",
+            "Call read_node_contract first. If this tick produces new output, call submit_node_output; if there is nothing to update, reply with a brief status summary."
+        ].joined(separator: "\n")
+    }
+
     private func appendContextSource(to node: inout PlanningNode, title: String, reference: String) {
         guard !node.contextSources.contains(where: { $0.reference == reference }) else { return }
         node.contextSources.append(ContextSource(kind: .artifact, title: title, reference: reference))
@@ -3988,6 +4171,25 @@ enum PlannerBoardBridge {
         }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         _ = try store.updateNodeGate(canvasId: canvasId, nodeId: nodeId, executionMode: executionMode)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
+    static func updateNodeSchedule(
+        nodeId: String,
+        schedule: PlannerNodeSchedule?,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        guard (node.nodeKind ?? .step) == .step else {
+            throw PlannerCoreError.invalidNodeOutput("Only step nodes can be scheduled.")
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.updateNodeSchedule(canvasId: canvasId, nodeId: nodeId, schedule: schedule)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
