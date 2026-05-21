@@ -7,12 +7,19 @@ Deeper references: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (+ §6 for hoo
 ## Build
 
 ```bash
-swift build                 # Debug (fastest iteration)
-swift build -c release      # Release
-swift test                  # Full test suite (currently 100 tests)
-./scripts/validate.sh       # Pre-commit gate: build + test + swiftlint + hardcoded-path/print scans
-./build.sh                  # Release + codesign + dylib install to ~/.meee2/lib
+pnpm run build:dev          # ⭐ Default local build — vite build → Sources/Board/WebDist/ then swift build
+swift build                 # Swift-only incremental — ONLY if you haven't touched packages/board-app/
+swift build -c release      # Release (Swift only — see ./build.sh for web+sign+install)
+swift test                  # Full test suite (currently ~306 tests)
+./scripts/validate.sh       # Pre-commit gate: build + test + swiftlint + hardcoded-path/print scans (Swift layer)
+./build.sh                  # Release + web build + codesign + dylib install to ~/.meee2/lib
 ```
+
+> ⚠️ **`Sources/Board/WebDist/` is gitignored** (it's the vite output bundle, regenerated on every web build).
+> If you change anything under `packages/board-app/` you **must** run `pnpm run build:dev` —
+> bare `swift build` will re-embed the previous (stale) WebDist into the binary and the
+> `localhost:9876` UI will silently lag behind your React source. There is no SwiftPM hook
+> that catches this for you.
 
 ## Architecture
 
@@ -98,13 +105,32 @@ curl -s http://localhost:9876/api/state | \
 
 ### Restart meee2 after a rebuild
 
-Swift changes need a restart; Vite web changes hot-reload themselves.
+Two workflows — pick one consciously, they behave differently:
+
+**A. Dev-server mode** (`localhost:5002`) — for iterating on React. Run once:
 
 ```bash
-kill $(pgrep -f '\.build/.*meee2$') 2>/dev/null; sleep 1
-nohup /Users/<you>/projects/meee1_code/meee2/.build/arm64-apple-macosx/debug/meee2 \
-  >/tmp/meee2.log 2>&1 &
+pnpm run dev:web            # Vite dev server with HMR; React edits hot-reload, no rebuild needed
 ```
+
+Swift changes still need a Swift rebuild + restart, but web changes don't touch the binary.
+
+**B. Bundle mode** (`localhost:9876`, what end-users see) — the binary serves `Sources/Board/WebDist/`
+embedded via `Bundle.module`. **Both Swift and React changes require a full rebuild + restart**;
+there is no HMR here:
+
+```bash
+pnpm run build:dev          # web → WebDist, then swift build (one shot)
+pnpm run restart:dev        # then restart the dev binary in background
+
+# manual equivalent if you need custom env:
+kill $(pgrep -f '\.build/.*meee2$') 2>/dev/null; sleep 1
+nohup .build/arm64-apple-macosx/debug/meee2 >/tmp/meee2.log 2>&1 &
+```
+
+Common trap: editing React, running bare `swift build`, then wondering why the UI didn't
+change — bundle mode is still serving the previously-built WebDist. Always go through
+`pnpm run build:dev` (or `restart:dev`) after touching `packages/board-app/`.
 
 ### Web UI (browser console)
 

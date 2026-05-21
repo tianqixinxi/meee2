@@ -36,12 +36,6 @@ struct NodeSchema: Codable, Equatable {
     var inputs: [String]
     var outputs: [String]
     var goal: String
-
-    init(inputs: [String], outputs: [String], goal: String) {
-        self.inputs = inputs
-        self.outputs = outputs
-        self.goal = goal
-    }
 }
 
 struct ContextSource: Codable, Equatable {
@@ -387,6 +381,14 @@ struct PlanningNode: Codable, Equatable {
     var eventRefs: [String]?
     var workflowRunState: PlannerWorkflowRunState?
     var blockedReason: String?
+    /// Set by `PlannerStore.submitNodeOutput` whenever an agent explicitly
+    /// submits a terminal-ish status (done / blocked / needsReview). While
+    /// non-nil, `applySessionRunStateLocked` treats the node as latched and
+    /// refuses to overwrite its `status` / `workflowRunState` /
+    /// `blockedReason` from transient session-status mirrors (e.g. Claude
+    /// returning to idle right after `submit_node_output blocked`). Cleared
+    /// on re-dispatch / abandon so a fresh session can take over.
+    var outputSubmittedAt: Date?
 
     init(
         id: String,
@@ -413,7 +415,8 @@ struct PlanningNode: Codable, Equatable {
         artifactRefs: [String]? = nil,
         eventRefs: [String]? = nil,
         workflowRunState: PlannerWorkflowRunState? = nil,
-        blockedReason: String? = nil
+        blockedReason: String? = nil,
+        outputSubmittedAt: Date? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -440,6 +443,7 @@ struct PlanningNode: Codable, Equatable {
         self.eventRefs = eventRefs
         self.workflowRunState = workflowRunState
         self.blockedReason = blockedReason
+        self.outputSubmittedAt = outputSubmittedAt
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -453,7 +457,7 @@ struct PlanningNode: Codable, Equatable {
         case executorType, doerId, status, sessionId, chatThreadId, source
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
         case schedule, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
-        case blockedReason
+        case blockedReason, outputSubmittedAt
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -488,6 +492,7 @@ struct PlanningNode: Codable, Equatable {
         eventRefs = try container.decodeIfPresent([String].self, forKey: .eventRefs)
         workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
+        outputSubmittedAt = try container.decodeIfPresent(Date.self, forKey: .outputSubmittedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -517,6 +522,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(eventRefs, forKey: .eventRefs)
         try container.encodeIfPresent(workflowRunState, forKey: .workflowRunState)
         try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
+        try container.encodeIfPresent(outputSubmittedAt, forKey: .outputSubmittedAt)
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
@@ -2224,11 +2230,23 @@ final class PlannerStore {
                 changed = true
             }
             let shouldProtectCompletedStep = currentStepRunState == .done && stepRunState != .done
+            // Once an agent has explicitly submitted output (done / blocked /
+            // needsReview), latch that state — don't let transient
+            // session-status observations overwrite it. Without this, a
+            // Claude session returning to idle right after
+            // `submit_node_output blocked` flips the node back to dispatched
+            // and wipes `blockedReason`. Released by `dispatchNode` /
+            // `abandonNodeSession` so a re-dispatch can resume normal mirror.
+            let agentSubmitted = record.nodes[stepIndex].outputSubmittedAt != nil
             if shouldProtectCompletedStep {
                 if record.nodes[stepIndex].blockedReason != nil {
                     record.nodes[stepIndex].blockedReason = nil
                     changed = true
                 }
+            } else if agentSubmitted {
+                // Skip mirror — the node has a latched terminal state from
+                // an explicit submit. sessionId/chatThreadId binding above
+                // still applies so the session stays linked to the node.
             } else if record.nodes[stepIndex].workflowRunState != stepRunState {
                 record.nodes[stepIndex].workflowRunState = stepRunState
                 record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
@@ -2262,7 +2280,7 @@ final class PlannerStore {
             }
 
             guard changed else { return record }
-            if !shouldProtectCompletedStep {
+            if !shouldProtectCompletedStep && !agentSubmitted {
                 mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
                     state.sessionId = sessionId
                     state.chatThreadId = sessionId
@@ -2947,6 +2965,12 @@ final class PlannerStore {
                 current.workflowRunState = .gateWait
                 current.blockedReason = summary.isEmpty ? nil : summary
             }
+            // Latch the explicit-submit marker. `applySessionRunStateLocked`
+            // checks this to refuse overwriting the just-submitted state from
+            // a transient session-status mirror (e.g. Claude returning to idle
+            // right after `submit_node_output blocked`). Cleared on
+            // re-dispatch / abandon.
+            current.outputSubmittedAt = Date()
 
             var artifactRefs = current.artifactRefs ?? []
             var newArtifacts: [PlannerArtifact] = []
@@ -3388,6 +3412,11 @@ final class PlannerStore {
             record.nodes[index].dispatch = dispatch
             record.nodes[index].workflowRunState = runState
             record.nodes[index].status = .working
+            // Release the explicit-submit latch — a fresh dispatch means the
+            // node is taking new work and any subsequent session-state mirror
+            // is once again the authoritative signal.
+            record.nodes[index].outputSubmittedAt = nil
+            record.nodes[index].blockedReason = nil
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -3419,6 +3448,7 @@ final class PlannerStore {
             record.nodes[index].workflowRunState = nil
             record.nodes[index].sessionId = nil
             record.nodes[index].chatThreadId = nil
+            record.nodes[index].outputSubmittedAt = nil
             if record.nodes[index].status == .working {
                 record.nodes[index].status = .ready
             }
@@ -3453,6 +3483,7 @@ final class PlannerStore {
             record.nodes[index].workflowRunState = nil
             record.nodes[index].sessionId = nil
             record.nodes[index].chatThreadId = nil
+            record.nodes[index].outputSubmittedAt = nil
             if record.nodes[index].status == .working {
                 record.nodes[index].status = .ready
             }

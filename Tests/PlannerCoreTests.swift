@@ -188,7 +188,7 @@ final class PlannerCoreTests: XCTestCase {
 
         let blocked = states.first { $0.runState == .blocked }
         XCTAssertNotNil(blocked)
-        XCTAssertEqual(blocked?.blockers, ["Node is blocked and needs meee2 AI attention"])
+        XCTAssertEqual(blocked?.blockers, ["Blocked: no reason was provided by the session."])
         XCTAssertEqual(blocked?.needsOwnerReview, false)
     }
 
@@ -2593,6 +2593,122 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNil(node.blockedReason)
     }
 
+    /// Regression: when an agent calls `submit_node_output` with status=blocked,
+    /// the Claude session returning to idle right after must NOT flip the node
+    /// back to dispatched / wipe the blockedReason. Reproduces the
+    /// "已 submit blocked 但 UI 仍显示 working" 现场 — root cause was
+    /// `applySessionRunStateLocked` only protecting `.done`, not explicit
+    /// agent-submitted terminal states.
+    func testAgentSubmittedBlockedSurvivesSessionIdleObservation() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-01",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        // Simulate Claude session running (thinking / tooling).
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-01",
+            runState: .running
+        )
+        // Agent submits blocked output.
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .blocked,
+                message: PlannerNodeOutputMessage(summary: "Need owner intent", routeTo: ["owner"]),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        // Session goes back to idle / running cycles as Claude awaits the next user turn.
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-01",
+            runState: .dispatched
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-01",
+            runState: .running
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-01",
+            runState: .dispatched
+        )
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.workflowRunState, .failed, "blocked latch must survive idle observations")
+        XCTAssertEqual(node.status, .blocked)
+        XCTAssertEqual(node.blockedReason, "Need owner intent")
+        XCTAssertNotNil(node.outputSubmittedAt, "submit latch should remain set until re-dispatch")
+    }
+
+    /// Counterpart: re-dispatching a blocked node must release the latch and
+    /// let session-status mirror resume — otherwise the node would be stuck
+    /// blocked forever even after the owner asked the agent to try again.
+    func testReDispatchClearsAgentSubmittedLatch() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-01",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .blocked,
+                message: PlannerNodeOutputMessage(summary: "Need owner intent", routeTo: []),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // Re-dispatch — this is the owner saying "try again", latch must lift.
+        _ = try PlannerBoardBridge.dispatchNode(
+            nodeId: stepId,
+            runner: .byoaLocal,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let afterDispatch = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let dispatchedNode = try XCTUnwrap(afterDispatch.nodes.first { $0.id == stepId })
+        XCTAssertEqual(dispatchedNode.workflowRunState, .dispatched)
+        XCTAssertEqual(dispatchedNode.status, .working)
+        XCTAssertNil(dispatchedNode.outputSubmittedAt, "dispatch must clear the submit latch")
+        XCTAssertNil(dispatchedNode.blockedReason, "dispatch must clear stale blocker text")
+
+        // After re-dispatch a fresh idle observation should now flow through.
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-01",
+            runState: .running
+        )
+        let afterRun = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let runningNode = try XCTUnwrap(afterRun.nodes.first { $0.id == stepId })
+        XCTAssertEqual(runningNode.workflowRunState, .running, "session mirror must work again after re-dispatch")
+    }
+
     func testSessionFailureBeforeOutputStoresBlockedReason() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
@@ -2653,8 +2769,10 @@ final class PlannerCoreTests: XCTestCase {
         )
         let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
-        XCTAssertEqual(node.workflowRunState, .dispatched)
-        XCTAssertEqual(node.status, .working)
+        // markScheduledTickSent queues a tick but does not dispatch — the
+        // separate dispatch path is what flips to .dispatched/.working.
+        XCTAssertEqual(node.workflowRunState, .readyToStart)
+        XCTAssertEqual(node.status, .ready)
         XCTAssertEqual(node.schedule?.lastSentAt, now)
         XCTAssertEqual(node.schedule?.nextRunAt, now.addingTimeInterval(60))
     }
