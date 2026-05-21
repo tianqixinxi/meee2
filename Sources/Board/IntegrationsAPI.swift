@@ -222,6 +222,52 @@ enum IntegrationsAPI {
         }
     }
 
+    /// POST /api/integrations/:id/complete-auth
+    /// 一键 OAuth —— 对已经装好但还没完成授权的 integration,直接通过
+    /// `mcp-remote` shim 拉起浏览器走 OAuth,token 落到 `~/.mcp-auth/`。
+    /// 完成后下次 agent-scan 会自动看到 connected 状态。
+    static func completeAuth(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return BoardAPI.errorResponse("bad_request", "missing integration id", status: 400)
+        }
+        guard let url = IntegrationInstaller.resolveOAuthURL(integrationId: id) else {
+            return BoardAPI.errorResponse(
+                "integration_not_oauth",
+                "integration `\(id)` is not an OAuth-shaped MCP — no URL to authorize",
+                status: 400
+            )
+        }
+        let result = IntegrationInstaller.triggerOAuthHandshake(integrationId: id)
+        let message: String
+        if result.spawned, result.authUrl != nil {
+            message = "Browser opening for OAuth. Click Allow there; token caches to ~/.mcp-auth/."
+        } else if result.spawned {
+            message = "mcp-remote launched but no auth URL surfaced in 5s — see \(result.logPath)."
+        } else {
+            message = result.detail ?? "Could not start OAuth shim."
+        }
+        return BoardAPI.jsonResponse(CompleteAuthEnvelope(
+            integrationId: id,
+            spawned: result.spawned,
+            url: url,
+            authUrl: result.authUrl,
+            logPath: result.logPath,
+            message: message
+        ))
+    }
+
+    private struct CompleteAuthEnvelope: Encodable {
+        let integrationId: String
+        let spawned: Bool
+        /// The MCP server URL we're authorizing against.
+        let url: String
+        /// Extracted OAuth URL — frontend renders this as a "Click here if
+        /// browser didn't open" fallback link.
+        let authUrl: String?
+        let logPath: String
+        let message: String
+    }
+
     /// POST /api/integrations/:id/runbook
     /// P3 —— 为某个 integration 生成 agent 无关的 Markdown runbook(落
     /// `~/.meee2/runbooks/connect-<id>.md`),返回内容 + 派发命令。

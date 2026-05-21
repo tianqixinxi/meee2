@@ -75,6 +75,34 @@ enum IntegrationRunbookGenerator {
         lines.append("")
 
         var stepNumber = 1
+
+        // OAuth-pending path takes priority — the MCP server is in config,
+        // user already clicked Install, the only thing left is the in-product
+        // OAuth handshake. Render this as the primary (and usually only) step.
+        let oauthPending = (claude?.state == .needsAuth) || (codex?.state == .needsAuth)
+        if oauthPending {
+            lines.append("### \(stepNumber). 完成 OAuth 授权")
+            stepNumber += 1
+            lines.append("MCP server 已装好,但还没完成 OAuth —— 当前只看得到 `authenticate` / `complete_authentication` 这类引导工具,真正的查询/操作工具会在授权完成后出现。")
+            lines.append("")
+            lines.append("- **在 Claude Code 里** —— 启动一个 session 后输入:")
+            lines.append("  ```")
+            lines.append("  /mcp")
+            lines.append("  ```")
+            lines.append("  在弹出的列表里选 `\(descriptor.id)`,按提示在浏览器完成授权,关掉浏览器回到 Claude。")
+            lines.append("- **或** 让 agent 直接调用 `\(descriptor.id)` 的 authenticate tool:")
+            lines.append("  > Please call the \(descriptor.name) `authenticate` tool, complete the OAuth flow, and confirm it succeeded.")
+            lines.append("- **Codex** —— Codex 走 `mcp-remote` shim,首次使用任一 \(descriptor.name) tool 时会自动弹 OAuth(终端里给出回调 URL)。先跑一个无副作用的工具触发它。")
+            lines.append("")
+            lines.append("完成后回 meee2 的 Integrations 页点「Re-scan」,状态应从 `needs_auth` 变成 `connected`。")
+            lines.append("")
+            lines.append("### \(stepNumber). 验证")
+            lines.append("- 让 agent 调一个真正的 \(descriptor.name) tool 试试(不是 `authenticate`)。")
+            lines.append("- 或在 Claude 里 `/mcp` 查看 `\(descriptor.id)` 的 tool 列表,确认已经不止 auth 工具。")
+            lines.append("")
+            return lines.joined(separator: "\n")
+        }
+
         let claudeMCPMissing = (claude?.mcpConfigured == false)
         let codexMCPMissing = (codex?.mcpConfigured == false)
         if claudeMCPMissing || codexMCPMissing {

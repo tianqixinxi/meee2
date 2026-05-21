@@ -7958,6 +7958,12 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   color: #d4a373;
 }
 
+/* Installed-but-OAuth-pending. Warm amber, distinct from partial (which means
+ * "missing pieces") — this row is *one click* from connected. */
+.agent-matrix__cell.is-needs_auth {
+  color: #e6a23c;
+}
+
 .agent-matrix__cell.is-missing {
   color: #c26a6a;
 }
@@ -7971,6 +7977,53 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
   font-size: 11px;
   cursor: pointer;
 }
+
+/* "Complete auth" — same chassis as Setup, amber chrome to match the cell. */
+.agent-matrix__setup.is-needs-auth {
+  border-color: rgba(230, 162, 60, 0.55);
+  background: rgba(230, 162, 60, 0.10);
+  color: #e6a23c;
+  font-weight: 500;
+}
+
+/* One-click Complete-auth toast — appears after spawn, auto-dismisses
+ * once a re-scan confirms `connected`. */
+.agent-matrix__auth-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(230, 162, 60, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(230, 162, 60, 0.08);
+  color: #d4a373;
+  font-size: 12px;
+}
+
+.agent-matrix__auth-link {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid rgba(230, 162, 60, 0.55);
+  border-radius: var(--radius-sm);
+  background: rgba(230, 162, 60, 0.12);
+  color: #e6a23c;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 500;
+}
+.agent-matrix__auth-link:hover { background: rgba(230, 162, 60, 0.2); }
+
+.agent-matrix__auth-dismiss {
+  margin-left: 4px;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.65;
+}
+.agent-matrix__auth-dismiss:hover { opacity: 1; }
 
 .agent-matrix__install {
   padding: 4px 10px;

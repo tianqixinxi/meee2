@@ -1,6 +1,7 @@
 import { RefreshCw, Sparkles, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  completeIntegrationAuth,
   fetchAgentScan,
   fetchCanvases,
   generateIntegrationRunbook,
@@ -25,11 +26,13 @@ const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
 const STATE_GLYPH: Record<IntegrationConnState, string> = {
   connected: '✓',
   partial: '◐',
+  needs_auth: '◔',
   missing: '✗',
 }
 const STATE_LABEL: Record<IntegrationConnState, string> = {
   connected: 'Connected',
   partial: 'Partial',
+  needs_auth: 'Needs auth',
   missing: 'Missing',
 }
 const AGENT_LABEL: Record<string, string> = {
@@ -70,6 +73,12 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [recommendBusy, setRecommendBusy] = useState(false)
   const [recommended, setRecommended] = useState<PlanProposal | null>(null)
   const [recommendError, setRecommendError] = useState<string | null>(null)
+  /** Transient toast for the one-click "Complete auth" flow — shows
+   *  "Browser opening…" + fallback link, auto-clears once a re-scan flips
+   *  the row to `connected`. */
+  const [authToast, setAuthToast] = useState<
+    { id: string; message: string; authUrl?: string | null } | null
+  >(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -181,6 +190,44 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       .finally(() => setBusyId(null))
   }
 
+  /** One-click "Complete auth" — server spawns mcp-remote, browser pops,
+   *  user clicks Allow, token caches to ~/.mcp-auth/. We poll with re-scans
+   *  for ~30s so the matrix flips to `connected` without the user needing
+   *  to hit Re-scan themselves. */
+  const handleCompleteAuth = (id: string) => {
+    setBusyId(id)
+    setError(null)
+    setAuthToast(null)
+    completeIntegrationAuth(id)
+      .then((result) => {
+        setAuthToast({ id, message: result.message, authUrl: result.authUrl })
+        if (!result.spawned) return // bail polling — nothing to wait for
+        // Poll re-scan a few times — OAuth usually completes within ~15s of
+        // browser auth-click; we don't want the user staring at a stale row.
+        let attempts = 0
+        const poll = () => {
+          attempts += 1
+          fetchAgentScan()
+            .then((freshScan) => {
+              setScan(freshScan)
+              const stillNeedsAuth = freshScan.statuses.some(
+                (s) => s.integrationId === id && s.state === 'needs_auth',
+              )
+              if (stillNeedsAuth && attempts < 10) {
+                setTimeout(poll, 3000)
+              } else if (!stillNeedsAuth) {
+                setAuthToast({ id, message: `${id} is now connected.` })
+                setTimeout(() => setAuthToast(null), 4000)
+              }
+            })
+            .catch(() => { /* best-effort — manual Re-scan still works */ })
+        }
+        setTimeout(poll, 3000)
+      })
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'complete-auth failed'))
+      .finally(() => setBusyId(null))
+  }
+
   /** Pattern A — true one-click install for `.remoteHttp` integrations. */
   const handleInstall = (id: string) => {
     setBusyId(id)
@@ -196,6 +243,12 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
 
   const rowFullyConnected = (row: IntegrationRow) =>
     agents.length > 0 && agents.every((agent) => row.byAgent[agent]?.state === 'connected')
+
+  /** Any cell on this row is OAuth-pending — server installed but token not
+   *  exchanged. Distinct from "missing": skip the Install button, go straight
+   *  to the Complete-auth runbook. */
+  const rowNeedsAuth = (row: IntegrationRow) =>
+    agents.some((agent) => row.byAgent[agent]?.state === 'needs_auth')
 
   /** Browse uses the credential (gh / lark-cli) — MCP need not be configured. */
   const rowHasBrowse = (row: IntegrationRow) =>
@@ -285,7 +338,17 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                   )
                 })}
                 <td className="agent-matrix__action">
-                  {!rowFullyConnected(row) && (() => {
+                  {rowNeedsAuth(row) ? (
+                    <button
+                      type="button"
+                      className="agent-matrix__setup is-needs-auth"
+                      disabled={busyId === row.id}
+                      onClick={() => handleCompleteAuth(row.id)}
+                      title="Open browser to finish OAuth — token caches automatically for both agents."
+                    >
+                      {busyId === row.id ? 'Opening browser…' : 'Complete auth'}
+                    </button>
+                  ) : !rowFullyConnected(row) && (() => {
                     const install = installFor(row)
                     if (install?.kind === 'claudePlugin') {
                       return (
@@ -347,6 +410,31 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
             ))}
           </tbody>
         </table>
+      )}
+
+      {authToast && (
+        <div className="agent-matrix__auth-toast" role="status">
+          <Sparkles size={13} aria-hidden />
+          <span>{authToast.message}</span>
+          {authToast.authUrl && (
+            <a
+              href={authToast.authUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="agent-matrix__auth-link"
+            >
+              Open auth page →
+            </a>
+          )}
+          <button
+            type="button"
+            className="agent-matrix__auth-dismiss"
+            onClick={() => setAuthToast(null)}
+            aria-label="Dismiss"
+          >
+            <X size={11} aria-hidden />
+          </button>
+        </div>
       )}
 
       {browsingId && (

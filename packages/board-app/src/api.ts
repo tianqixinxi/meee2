@@ -1304,6 +1304,29 @@ export function generateIntegrationRunbook(integrationId: string): Promise<Integ
   )
 }
 
+/** POST /api/integrations/:id/complete-auth — one-click OAuth: kick off the
+ *  `mcp-remote` shim against the integration's URL, which opens the browser
+ *  for the user to authorize and caches the token to `~/.mcp-auth/`. After
+ *  that, both Claude Code and Codex pick up the token transparently. */
+export interface CompleteAuthResult {
+  integrationId: string
+  spawned: boolean
+  /** The MCP server URL (e.g. https://mcp.clickhouse.cloud/mcp). */
+  url: string
+  /** OAuth URL extracted from the spawned shim's log. Open this if the
+   *  browser didn't pop automatically. Null when extraction timed out. */
+  authUrl: string | null
+  logPath: string
+  message: string
+}
+
+export function completeIntegrationAuth(integrationId: string): Promise<CompleteAuthResult> {
+  return jsonRequest<CompleteAuthResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/complete-auth`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
 export async function createPlannerSubCanvasFromNode(
   canvasId: string,
   nodeId: string,

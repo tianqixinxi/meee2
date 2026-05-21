@@ -71,4 +71,122 @@ final class IntegrationDetectionTests: XCTestCase {
         _ = IntegrationDetector.claudeMCPServerNames()
         _ = IntegrationDetector.codexMCPServerNames()
     }
+
+    // MARK: needs-auth state machine + tools/list probe
+
+    private var oauthShapedDescriptor: IntegrationDescriptor {
+        IntegrationDescriptor(
+            id: "test-oauth", name: "Test OAuth", category: "test",
+            mcpServerNames: ["test-oauth"], credentialProbes: [],
+            install: .remoteHttp(url: "https://example.invalid/mcp"),
+            setupHint: "n/a"
+        )
+    }
+
+    func testResolveStateNeedsAuthWhenProbeSeesOnlyBootstrapTools() {
+        let state = IntegrationDetector.resolveState(
+            descriptor: oauthShapedDescriptor,
+            mcpConfigured: true, credentialPresent: false,
+            probeResult: .onlyAuthBootstrap(tools: ["authenticate", "complete_authentication"])
+        )
+        XCTAssertEqual(state, .needsAuth)
+    }
+
+    func testResolveStateConnectedWhenProbeSeesRealTools() {
+        let state = IntegrationDetector.resolveState(
+            descriptor: oauthShapedDescriptor,
+            mcpConfigured: true, credentialPresent: false,
+            probeResult: .hasRealTools(tools: ["run_query", "list_tables"])
+        )
+        XCTAssertEqual(state, .connected)
+    }
+
+    /// Probe failure (offline / 5xx / timeout) MUST NOT downgrade the row —
+    /// matrix should keep the pre-probe state (`.connected` for MCP-only).
+    func testResolveStateProbeUnreachableDoesNotRegress() {
+        let state = IntegrationDetector.resolveState(
+            descriptor: oauthShapedDescriptor,
+            mcpConfigured: true, credentialPresent: false,
+            probeResult: .unreachable(reason: "timeout")
+        )
+        XCTAssertEqual(state, .connected)
+    }
+
+    /// And without any probe at all (the call site decided not to probe) the
+    /// state machine must match its pre-existing behavior.
+    func testResolveStateWithoutProbeUnchanged() {
+        let state = IntegrationDetector.resolveState(
+            descriptor: oauthShapedDescriptor,
+            mcpConfigured: true, credentialPresent: false,
+            probeResult: nil
+        )
+        XCTAssertEqual(state, .connected)
+    }
+
+    func testResolveStateMissingTrumpsProbe() {
+        let state = IntegrationDetector.resolveState(
+            descriptor: oauthShapedDescriptor,
+            mcpConfigured: false, credentialPresent: false,
+            probeResult: .onlyAuthBootstrap(tools: ["authenticate"])
+        )
+        XCTAssertEqual(state, .missing)
+    }
+
+    func testClassifyTreatsAllBootstrapAsNeedsAuth() {
+        let result = MCPToolListProbe.classify(["authenticate", "complete_authentication"])
+        if case .onlyAuthBootstrap = result {
+            return
+        }
+        XCTFail("expected .onlyAuthBootstrap, got \(result)")
+    }
+
+    func testClassifyTreatsBootstrapNamesCaseInsensitively() {
+        let result = MCPToolListProbe.classify(["Authenticate", "completeAuthentication"])
+        if case .onlyAuthBootstrap = result {
+            return
+        }
+        XCTFail("expected .onlyAuthBootstrap from case-mismatched names")
+    }
+
+    func testClassifyTreatsAnyRealToolAsConnected() {
+        let result = MCPToolListProbe.classify(["authenticate", "run_query"])
+        if case .hasRealTools = result {
+            return
+        }
+        XCTFail("expected .hasRealTools when a non-bootstrap tool is present")
+    }
+
+    func testClassifyEmptyListIsUnreachable() {
+        let result = MCPToolListProbe.classify([])
+        if case .unreachable = result {
+            return
+        }
+        XCTFail("expected .unreachable for empty tool list")
+    }
+
+    func testParseToolNamesPlainJSON() {
+        let body = """
+        {"jsonrpc":"2.0","id":1,"result":{"tools":[
+          {"name":"authenticate","description":"x"},
+          {"name":"complete_authentication","description":"y"}
+        ]}}
+        """.data(using: .utf8)!
+        let names = MCPToolListProbe.parseToolNames(data: body, contentType: "application/json")
+        XCTAssertEqual(names, ["authenticate", "complete_authentication"])
+    }
+
+    func testParseToolNamesSSEStream() {
+        let body = """
+        event: message
+        data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"run_query"},{"name":"list_tables"}]}}
+
+        """.data(using: .utf8)!
+        let names = MCPToolListProbe.parseToolNames(data: body, contentType: "text/event-stream")
+        XCTAssertEqual(names, ["run_query", "list_tables"])
+    }
+
+    func testParseToolNamesGarbageReturnsNil() {
+        let body = "not json".data(using: .utf8)!
+        XCTAssertNil(MCPToolListProbe.parseToolNames(data: body, contentType: "application/json"))
+    }
 }

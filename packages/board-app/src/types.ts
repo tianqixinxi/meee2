@@ -782,7 +782,7 @@ export interface ExternalItemsResult {
 
 // -- agent-integration-detection (检测 + runbook + 节点副作用) --------------
 
-export type IntegrationConnState = 'connected' | 'partial' | 'missing'
+export type IntegrationConnState = 'connected' | 'partial' | 'missing' | 'needs_auth'
 
 /** Structured install spec per integration. Frontend picks the primary
  *  action(Install / Set up / disabled)from `kind`. */

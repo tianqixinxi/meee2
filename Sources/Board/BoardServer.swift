@@ -462,6 +462,7 @@ public final class BoardServer {
         server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
         server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
         server.POST["/api/integrations/:id/install"] = BoardServer.cors(IntegrationsAPI.installIntegration)
+        server.POST["/api/integrations/:id/complete-auth"] = BoardServer.cors(IntegrationsAPI.completeAuth)
         server.POST["/api/integrations/:id/recommend-workflow"] = BoardServer.cors(IntegrationsAPI.recommendWorkflow)
         server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)
         server.GET["/api/integrations/github/repos"] = BoardServer.cors(IntegrationsAPI.getGithubRepos)

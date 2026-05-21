@@ -13,11 +13,17 @@ import Foundation
 /// Connection state of one integration for one agent.
 enum IntegrationConnState: String, Codable, Equatable {
     /// Every applicable channel satisfied (MCP server + credential, or — for an
-    /// MCP-only integration — just the MCP server).
+    /// MCP-only integration — just the MCP server) **and**, for OAuth-shaped
+    /// remote servers, the OAuth handshake has been completed (the server
+    /// exposes real tools, not only `authenticate` / `complete_authentication`).
     case connected
     /// Some but not all channels satisfied (e.g. MCP server configured but the
     /// credential is missing).
     case partial
+    /// MCP server is configured but OAuth hasn't been completed yet — the
+    /// server only exposes its auth-bootstrap tools. User needs to run the
+    /// integration's `/mcp` OAuth flow or call its `authenticate` tool.
+    case needsAuth = "needs_auth"
     /// No channel satisfied.
     case missing
 }
@@ -270,6 +276,10 @@ enum IntegrationDetector {
         var out: [AgentIntegrationStatus] = []
         for descriptor in IntegrationCatalog.all {
             let credViaShared = credentialMatches(descriptor)
+            // Probe tools/list once per integration (transport is the same
+            // across agents) — only when MCP-only and at least one agent has
+            // it configured. Lazy: skipped for missing/credential-gated rows.
+            var probeResult: MCPProbeResult?
             for agent in agents {
                 let servers = agent == "claude-code" ? claudeServers : codexServers
                 let mcpVia: [String] = descriptor.mcpServerNames.compactMap { fragment in
@@ -279,10 +289,16 @@ enum IntegrationDetector {
                 }
                 let mcpConfigured = !mcpVia.isEmpty
                 let credentialPresent = !credViaShared.isEmpty
+                if mcpConfigured && descriptor.credentialProbes.isEmpty && probeResult == nil {
+                    probeResult = MCPToolListProbe.probe(
+                        integrationId: descriptor.id, install: descriptor.install
+                    )
+                }
                 let state = resolveState(
                     descriptor: descriptor,
                     mcpConfigured: mcpConfigured,
-                    credentialPresent: credentialPresent
+                    credentialPresent: credentialPresent,
+                    probeResult: probeResult
                 )
                 out.append(AgentIntegrationStatus(
                     agent: agent,
@@ -295,7 +311,8 @@ enum IntegrationDetector {
                     via: mcpVia + credViaShared,
                     evidence: evidence(
                         descriptor: descriptor, agent: agent,
-                        mcpConfigured: mcpConfigured, credentialPresent: credentialPresent
+                        mcpConfigured: mcpConfigured, credentialPresent: credentialPresent,
+                        probeResult: probeResult
                     ),
                     install: descriptor.install
                 ))
@@ -305,14 +322,19 @@ enum IntegrationDetector {
     }
 
     /// `connected` needs every applicable channel; an MCP-only integration
-    /// (no credential probes) is `connected` on the MCP server alone.
-    private static func resolveState(
+    /// (no credential probes) is `connected` on the MCP server alone — unless
+    /// the optional tools/list probe reports an OAuth-pending state, in which
+    /// case the row is `.needsAuth`.
+    static func resolveState(
         descriptor: IntegrationDescriptor,
         mcpConfigured: Bool,
-        credentialPresent: Bool
+        credentialPresent: Bool,
+        probeResult: MCPProbeResult? = nil
     ) -> IntegrationConnState {
         if descriptor.credentialProbes.isEmpty {
-            return mcpConfigured ? .connected : .missing
+            guard mcpConfigured else { return .missing }
+            if case .onlyAuthBootstrap = probeResult { return .needsAuth }
+            return .connected
         }
         switch (mcpConfigured, credentialPresent) {
         case (true, true): return .connected
@@ -323,11 +345,23 @@ enum IntegrationDetector {
 
     private static func evidence(
         descriptor: IntegrationDescriptor, agent: String,
-        mcpConfigured: Bool, credentialPresent: Bool
+        mcpConfigured: Bool, credentialPresent: Bool,
+        probeResult: MCPProbeResult? = nil
     ) -> String {
         let mcp = mcpConfigured ? "MCP server configured" : "no MCP server"
         if descriptor.credentialProbes.isEmpty {
-            return mcp + " (\(agent))"
+            var detail = mcp + " (\(agent))"
+            // Probe annotations only matter when this agent actually has the
+            // MCP server — otherwise the row is just plain `missing` and the
+            // "OAuth pending" note from a sibling agent's view would mislead.
+            if mcpConfigured {
+                if case .onlyAuthBootstrap(let tools) = probeResult {
+                    detail += "; OAuth pending — server only exposes \(tools.joined(separator: ", "))"
+                } else if case .hasRealTools(let tools) = probeResult {
+                    detail += "; \(tools.count) tools live"
+                }
+            }
+            return detail
         }
         let cred = credentialPresent ? "credential present" : "credential missing"
         return "\(mcp); \(cred)"
