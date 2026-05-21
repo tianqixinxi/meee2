@@ -134,16 +134,23 @@
   min-height: 0;
 }
 
-.planner-mcp-banner {
+.planner-banner-stack {
   position: absolute;
   top: 14px;
   right: 14px;
   z-index: 24;
+  display: flex;
+  width: min(520px, calc(100% - 28px));
+  flex-direction: column;
+  gap: 8px;
+}
+
+.planner-mcp-banner {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
-  width: min(520px, calc(100% - 28px));
+  width: 100%;
   padding: 10px 12px;
   border: 1px solid rgba(214, 155, 92, 0.34);
   border-radius: var(--radius-sm);
@@ -191,9 +198,47 @@
   color: var(--text);
 }
 
+.planner-session-health-banner {
+  border-color: rgba(226, 95, 79, 0.34);
+  background: rgba(49, 31, 29, 0.94);
+}
+
+.planner-ready-session-banner {
+  border-color: rgba(127, 169, 130, 0.34);
+  background: rgba(30, 42, 32, 0.94);
+}
+
+.planner-session-health-banner button,
+.planner-ready-session-banner button {
+  width: auto;
+  min-width: 104px;
+  grid-auto-flow: column;
+  gap: 6px;
+  padding: 0 10px;
+  color: var(--text);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.planner-session-health-banner button {
+  border-color: rgba(226, 95, 79, 0.34);
+}
+
+.planner-ready-session-banner button {
+  border-color: rgba(127, 169, 130, 0.36);
+}
+
 .planner-mcp-banner button:hover {
   border-color: rgba(214, 155, 92, 0.5);
   background: rgba(255, 255, 255, 0.09);
+}
+
+.planner-session-health-banner button:hover {
+  border-color: rgba(226, 95, 79, 0.58);
+}
+
+.planner-ready-session-banner button:hover {
+  border-color: rgba(127, 169, 130, 0.58);
 }
 
 .planner-flow__state-badge {
@@ -1639,8 +1684,9 @@
 
 .planner-dialog-toggle {
   position: absolute;
-  top: 12px;
+  top: 50%;
   right: var(--planner-panel-width, 420px);
+  transform: translateY(-50%);
   z-index: 30;
   width: 30px;
   height: 30px;
@@ -2895,6 +2941,12 @@
 
   .planner-flow {
     min-height: 360px;
+  }
+
+  .planner-banner-stack {
+    top: 52px;
+    right: 12px;
+    width: min(520px, calc(100% - 32px));
   }
 
   .planner-flow__controls {

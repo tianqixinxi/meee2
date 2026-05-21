@@ -1971,6 +1971,19 @@ final class PlannerStore {
         }
     }
 
+    func setCanvasContext(
+        _ context: String,
+        canvasId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            record.canvas.plannerContext = context
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
     func replaceNodesIfUnmodified(
         canvasId: String,
         matching expectedNodes: [PlanningNode],
@@ -2802,17 +2815,17 @@ final class PlannerStore {
             schedule.lastSentAt = sentAt
             schedule.nextRunAt = sentAt.addingTimeInterval(TimeInterval(schedule.intervalSeconds))
             record.nodes[nodeIndex].schedule = schedule
-            record.nodes[nodeIndex].workflowRunState = .dispatched
-            record.nodes[nodeIndex].status = .working
+            record.nodes[nodeIndex].workflowRunState = .readyToStart
+            record.nodes[nodeIndex].status = .ready
             record.nodes[nodeIndex].blockedReason = nil
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
                 nodeId: nodeId,
-                summary: "Scheduled tick sent to \(record.nodes[nodeIndex].title)"
+                summary: "Scheduled tick queued for \(record.nodes[nodeIndex].title)"
             ))
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
-                state.runState = .dispatched
+                state.runState = .readyToStart
                 state.startedAt = sentAt
                 state.finishedAt = nil
             }
@@ -4150,6 +4163,9 @@ enum PlannerBoardBridge {
         guard (node.nodeKind ?? .step) == .step else {
             throw PlannerCoreError.invalidNodeOutput("Only step nodes can change status.")
         }
+        guard status != .working else {
+            throw PlannerCoreError.invalidNodeOutput("In progress is derived from the bound session; start or resume the session instead.")
+        }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
         _ = try store.updateNodeStatus(canvasId: canvasId, nodeId: nodeId, status: status)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
@@ -4650,6 +4666,24 @@ enum PlannerBoardBridge {
             throw PlannerCoreError.permissionDenied(action: "set canvas visibility", role: access.role)
         }
         record = try store.setCanvasVisibility(visibility, canvasId: canvasId)
+        return record.canvas
+    }
+
+    static func setCanvasDescription(
+        _ description: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlanningCanvas {
+        let boardCanvas = try requireCanvas(canvasId, in: snapshot)
+        let canvas = planningCanvas(from: boardCanvas, actorUserId: actorUserId)
+        var record = try store.record(for: canvas, seedNodes: [])
+        let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
+        guard access.role == .owner else {
+            throw PlannerCoreError.permissionDenied(action: "set canvas description", role: access.role)
+        }
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        record = try store.setCanvasContext(trimmed.isEmpty ? "canvas:\(canvasId)" : trimmed, canvasId: canvasId)
         return record.canvas
     }
 

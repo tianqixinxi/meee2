@@ -38,6 +38,10 @@ final class AssistantLocalSessionStore {
         sessionId(forKey: Self.key(canvasId: canvasId))
     }
 
+    func resetSessionId(forCanvasId canvasId: String) -> String {
+        resetSessionId(forKey: Self.key(canvasId: canvasId))
+    }
+
     func messages(forCanvasId canvasId: String, limit: Int = 80) -> AssistantLocalSessionMessagesEnvelope {
         let sid = sessionId(forCanvasId: canvasId)
         guard let path = transcriptPath(forSessionId: sid) else {
@@ -92,6 +96,22 @@ final class AssistantLocalSessionStore {
             return record.sessionId
         }
 
+        let record = AssistantLocalSessionRecord(
+            sessionId: UUID().uuidString.lowercased(),
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        current[key] = record
+        records = current
+        saveRecords(current)
+        return record.sessionId
+    }
+
+    private func resetSessionId(forKey key: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var current = loadRecords()
         let record = AssistantLocalSessionRecord(
             sessionId: UUID().uuidString.lowercased(),
             createdAt: Date(),

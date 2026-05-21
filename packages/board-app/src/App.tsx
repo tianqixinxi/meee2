@@ -459,6 +459,61 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
+  const workspaceCanvasIds = useMemo(() => (
+    (canvasList?.canvases ?? [])
+      .filter((canvas) => canvasKind(canvas) === 'board')
+      .map((canvas) => canvas.id)
+  ), [canvasList])
+  const activeHistoryCanvasId = workspaceCanvasIds.includes(activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvasIds[0] ?? activeCanvasId
+  const [canvasHistory, setCanvasHistory] = useState<string[]>([])
+  const [canvasHistoryIndex, setCanvasHistoryIndex] = useState(-1)
+  const canvasHistoryNavigationTargetRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!canvasList || workspaceCanvasIds.length === 0) return
+    const navigationTarget = canvasHistoryNavigationTargetRef.current
+    if (navigationTarget) {
+      if (activeHistoryCanvasId === navigationTarget) {
+        canvasHistoryNavigationTargetRef.current = null
+      }
+      return
+    }
+    setCanvasHistory((current) => {
+      const currentAtIndex = canvasHistoryIndex >= 0 ? current[canvasHistoryIndex] : null
+      if (currentAtIndex === activeHistoryCanvasId) return current
+      const next = current.slice(0, Math.max(0, canvasHistoryIndex + 1)).filter((id) => workspaceCanvasIds.includes(id))
+      if (next[next.length - 1] !== activeHistoryCanvasId) next.push(activeHistoryCanvasId)
+      setCanvasHistoryIndex(next.length - 1)
+      return next
+    })
+  }, [activeHistoryCanvasId, canvasHistoryIndex, canvasList, workspaceCanvasIds])
+
+  const handleCanvasHistoryBack = useCallback(() => {
+    const nextIndex = canvasHistoryIndex - 1
+    const targetCanvasId = canvasHistory[nextIndex]
+    if (nextIndex < 0 || !targetCanvasId || !workspaceCanvasIds.includes(targetCanvasId)) return
+    canvasHistoryNavigationTargetRef.current = targetCanvasId
+    setCanvasHistoryIndex(nextIndex)
+    handleSetActiveCanvas(targetCanvasId)
+    window.setTimeout(() => {
+      if (canvasHistoryNavigationTargetRef.current === targetCanvasId) canvasHistoryNavigationTargetRef.current = null
+    }, 2000)
+  }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
+
+  const handleCanvasHistoryForward = useCallback(() => {
+    const nextIndex = canvasHistoryIndex + 1
+    const targetCanvasId = canvasHistory[nextIndex]
+    if (nextIndex >= canvasHistory.length || !targetCanvasId || !workspaceCanvasIds.includes(targetCanvasId)) return
+    canvasHistoryNavigationTargetRef.current = targetCanvasId
+    setCanvasHistoryIndex(nextIndex)
+    handleSetActiveCanvas(targetCanvasId)
+    window.setTimeout(() => {
+      if (canvasHistoryNavigationTargetRef.current === targetCanvasId) canvasHistoryNavigationTargetRef.current = null
+    }, 2000)
+  }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
+
   const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
     return createCanvas({ name, scope })
       .then((list) => {
@@ -609,7 +664,11 @@ export default function App() {
             <CanvasToolbar
               canvases={workspaceCanvases}
               activeCanvasId={activeWorkspaceCanvasId}
+              canGoBack={canvasHistoryIndex > 0}
+              canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
               onActiveCanvasChange={handleSetActiveCanvas}
+              onGoBack={handleCanvasHistoryBack}
+              onGoForward={handleCanvasHistoryForward}
               onCreateCanvas={handleCreateCanvas}
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}

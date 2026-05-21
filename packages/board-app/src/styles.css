@@ -295,6 +295,7 @@ textarea {
 
 .workspace-rail__label {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   letter-spacing: 0;
   line-height: 1;
@@ -337,11 +338,13 @@ textarea {
 }
 
 .workspace-rail__badge {
-  position: absolute;
-  top: 2px;
-  right: 1px;
+  display: inline-flex;
   min-width: 16px;
   height: 16px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
   padding: 0 4px;
   border: 1px solid rgba(37, 31, 29, 0.9);
   border-radius: 999px;
@@ -349,7 +352,7 @@ textarea {
   color: #fff;
   font-size: 9px;
   font-weight: 800;
-  line-height: 14px;
+  line-height: 1;
 }
 
 .workspace-rail__status {
@@ -1816,6 +1819,13 @@ textarea {
     display: none;
   }
 
+  .workspace-rail__badge {
+    position: absolute;
+    top: 2px;
+    right: 1px;
+    margin-left: 0;
+  }
+
   .workspace-rail__button.is-active::before {
     left: -7px;
   }
@@ -1829,17 +1839,19 @@ textarea {
   }
 
   .canvas-toolbar {
-    inset: 0;
-    width: auto;
+    top: 12px;
+    left: 12px;
+    width: min(420px, calc(100vw - 24px));
   }
 
   .canvas-toolbar__switcher {
-    left: 62px;
-    bottom: 12px;
+    position: relative;
+    left: auto;
+    top: auto;
   }
 
   .canvas-toolbar__trigger {
-    max-width: min(230px, calc(100vw - 132px));
+    max-width: none;
     grid-template-columns: 16px minmax(0, 1fr) auto 14px;
     gap: 7px;
   }
@@ -1853,8 +1865,18 @@ textarea {
   }
 
   .canvas-toolbar__panel {
-    bottom: calc(100% + 8px);
-    width: min(300px, calc(100vw - 76px));
+    top: calc(100% + 8px);
+    width: min(300px, calc(100vw - 24px));
+  }
+
+  .canvas-toolbar__context {
+    max-width: calc(100vw - 24px);
+  }
+
+  .canvas-toolbar__status-strip {
+    left: 50%;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
   }
 }
 
@@ -1950,9 +1972,12 @@ textarea {
 
 .canvas-toolbar {
   position: absolute;
-  inset: 0;
+  top: 16px;
+  left: 16px;
   z-index: 240;
-  width: auto;
+  width: min(520px, calc(100% - 32px));
+  display: grid;
+  gap: 8px;
   pointer-events: none;
   color: var(--text);
 }
@@ -1962,22 +1987,25 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .canvas-toolbar__switcher {
-  position: absolute;
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  width: 100%;
   pointer-events: auto;
 }
 
 .canvas-toolbar__switcher {
-  left: 74px;
-  bottom: 18px;
+  left: auto;
+  bottom: auto;
 }
 
 .canvas-toolbar__trigger,
 .canvas-toolbar__info,
+.canvas-toolbar__nav,
 .canvas-toolbar__actions button,
-.canvas-toolbar__submit {
+.canvas-toolbar__submit,
+.canvas-toolbar__recap-refresh {
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -1988,7 +2016,8 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .canvas-toolbar__trigger {
   min-width: 0;
-  max-width: 240px;
+  max-width: none;
+  flex: 1 1 auto;
   height: 34px;
   display: grid;
   grid-template-columns: 16px auto minmax(0, 1fr) 14px;
@@ -2012,12 +2041,34 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   backdrop-filter: blur(14px);
 }
 
+.canvas-toolbar__nav,
+.canvas-toolbar__recap-refresh {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
+}
+
 .canvas-toolbar__trigger:hover,
 .canvas-toolbar__info:hover,
+.canvas-toolbar__nav:hover:not(:disabled),
 .canvas-toolbar__actions button:hover,
-.canvas-toolbar__submit:hover:not(:disabled) {
+.canvas-toolbar__submit:hover:not(:disabled),
+.canvas-toolbar__recap-refresh:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
+}
+
+.canvas-toolbar__nav:disabled,
+.canvas-toolbar__recap-refresh:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .canvas-toolbar__switcher-label {
@@ -2062,7 +2113,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .canvas-toolbar__panel {
   position: absolute;
-  bottom: calc(100% + 8px);
+  top: calc(100% + 8px);
   left: 0;
   z-index: 250;
   width: min(360px, calc(100vw - var(--sidebar-width, 360px) - 40px));
@@ -2075,6 +2126,163 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   background: color-mix(in srgb, var(--bg-paper) 92%, #0f0e0d);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.36);
   backdrop-filter: blur(14px);
+}
+
+.canvas-toolbar__context {
+  pointer-events: auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(14px);
+}
+
+.canvas-toolbar__recap {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 8px;
+}
+
+.canvas-toolbar__recap > svg {
+  color: color-mix(in srgb, var(--accent-hover) 82%, var(--text));
+}
+
+.canvas-toolbar__recap-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.canvas-toolbar__recap-copy strong,
+.canvas-toolbar__recap-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-toolbar__recap-copy strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 820;
+  line-height: 1.25;
+}
+
+.canvas-toolbar__recap-copy small {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.canvas-toolbar__recap-age {
+  color: var(--text-faint) !important;
+  font-size: 11px !important;
+  font-weight: 520 !important;
+}
+
+.canvas-toolbar__status-strip {
+  position: fixed;
+  left: calc(var(--sidebar-width, 208px) + (100vw - var(--sidebar-width, 208px)) / 2);
+  bottom: 18px;
+  z-index: 245;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  max-width: min(560px, calc(100vw - var(--sidebar-width, 208px) - 48px));
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-paper) 80%, rgba(0, 0, 0, 0.42));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
+.canvas-toolbar__status-pill {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 8px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  color: var(--text-dim);
+}
+
+.canvas-toolbar__status-pill:last-child {
+  border-right: 0;
+}
+
+.canvas-toolbar__status-pill strong {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.canvas-toolbar__status-pill small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.canvas-toolbar__status-pill.is-ready strong {
+  color: #9FC39F;
+}
+
+.canvas-toolbar__status-pill.is-running strong {
+  color: #9CB8D4;
+}
+
+.canvas-toolbar__status-pill.is-attention strong {
+  color: #E08C80;
+}
+
+.canvas-toolbar__status-pill.is-done strong {
+  color: #C8C3B8;
+}
+
+.canvas-toolbar__recap-details {
+  display: grid;
+  gap: 4px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.canvas-toolbar__recap-details p {
+  position: relative;
+  margin: 0;
+  padding-left: 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.38;
+}
+
+.canvas-toolbar__recap-details p::before {
+  content: '';
+  position: absolute;
+  top: 0.62em;
+  left: 1px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent-hover) 68%, var(--text-faint));
+}
+
+.canvas-toolbar__recap-refresh {
+  width: 28px;
+  height: 28px;
+  box-shadow: none;
 }
 
 .canvas-toolbar__search {
@@ -2305,6 +2513,38 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   background: #B9D4EA;
 }
 
+@media (max-width: 720px) {
+  .canvas-toolbar {
+    top: 12px;
+    left: 12px;
+    width: min(420px, calc(100vw - 24px));
+  }
+
+  .canvas-toolbar__trigger {
+    grid-template-columns: 16px minmax(0, 1fr) auto 14px;
+    gap: 7px;
+  }
+
+  .canvas-toolbar__switcher-label {
+    display: none;
+  }
+
+  .canvas-toolbar__panel {
+    top: calc(100% + 8px);
+    width: min(300px, calc(100vw - 24px));
+  }
+
+  .canvas-toolbar__context {
+    max-width: calc(100vw - 24px);
+  }
+
+  .canvas-toolbar__status-strip {
+    left: 50%;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+  }
+}
+
 .canvas-confirm-modal {
   width: min(440px, calc(100vw - 32px));
 }
@@ -2397,7 +2637,8 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   gap: 6px;
 }
 
-.canvas-info-modal__settings input {
+.canvas-info-modal__settings input,
+.canvas-info-modal__settings textarea {
   height: 34px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -2409,7 +2650,15 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   outline: none;
 }
 
-.canvas-info-modal__settings input:focus {
+.canvas-info-modal__settings textarea {
+  min-height: 96px;
+  padding: 9px 10px;
+  line-height: 1.42;
+  resize: vertical;
+}
+
+.canvas-info-modal__settings input:focus,
+.canvas-info-modal__settings textarea:focus {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
 }
 
@@ -3412,12 +3661,12 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   justify-content: center;
   align-items: center;
   padding: 24px;
-  z-index: 120;
+  z-index: 1000;
 }
 
 .canvas-toolbar > .modal-backdrop {
   pointer-events: auto;
-  z-index: 260;
+  z-index: 1001;
 }
 
 .modal {
@@ -3750,6 +3999,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 
 .settings-meta-row,
 .settings-toggle-row,
+.settings-field-row,
 .settings-session-sync-row {
   display: flex;
   align-items: center;
@@ -3769,18 +4019,21 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .settings-toggle-row,
+.settings-field-row,
 .settings-session-sync-row {
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .settings-toggle-row:hover,
+.settings-field-row:hover,
 .settings-session-sync-row:hover {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
   background: rgba(204, 120, 92, 0.055);
 }
 
 .settings-toggle-row > span,
+.settings-field-row > span,
 .settings-session-sync-row > span {
   min-width: 0;
   display: flex;
@@ -3789,6 +4042,7 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 }
 
 .settings-toggle-row small,
+.settings-field-row small,
 .settings-session-sync-row small {
   color: var(--text-dim);
   font-size: 11px;
@@ -3802,6 +4056,25 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   width: auto;
   flex: 0 0 auto;
   accent-color: var(--accent);
+}
+
+.settings-number-field {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+}
+
+.settings-number-field input {
+  width: 72px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: 7px;
+  background: rgba(18, 17, 15, 0.7);
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 8px;
 }
 
 .settings-session-sync-list {
@@ -3852,14 +4125,15 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
 .toasts {
   position: fixed;
   top: 18px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  z-index: 80;
-  width: min(420px, calc(100vw - 32px));
+  z-index: 420;
+  width: 100vw;
+  padding: 0 16px;
   pointer-events: none;
 }
 .toast {

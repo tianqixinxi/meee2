@@ -29,7 +29,7 @@ import { getPlannerArtifactContent } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
-const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'working', 'blocked', 'done']
+const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
 
 interface CanvasIOItem {
   key: string

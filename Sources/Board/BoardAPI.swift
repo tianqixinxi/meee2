@@ -591,6 +591,39 @@ enum BoardAPI {
         }
     }
 
+    /// PATCH /api/planner/canvases/:id/description
+    ///
+    /// Owner-only. Body: `{"description": "..."}`
+    static func setPlannerCanvasDescription(_ req: HttpRequest) -> HttpResponse {
+        struct DescriptionRequest: Decodable {
+            let description: String
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: DescriptionRequest.self) else {
+            return errorResponse(
+                "invalid_json",
+                "body must be {\"description\": string}",
+                status: 400
+            )
+        }
+        do {
+            let canvas = try PlannerBoardBridge.setCanvasDescription(
+                body.description,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(PlannerCanvasVisibilityEnvelope(canvas: canvas))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func getPlannerWorkspaceMonitor(_ req: HttpRequest) -> HttpResponse {
         do {
             let monitor = try PlannerBoardBridge.workspaceMonitor(
@@ -1162,6 +1195,85 @@ enum BoardAPI {
                 artifacts: state.artifacts,
                 edges: state.edges
             ))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func resumeClosedPlannerSessions(_ req: HttpRequest) -> HttpResponse {
+        struct ResumeClosedSessionsRequest: Decodable {
+            let sessionIds: [String]?
+        }
+        struct ResumedSession: Encodable {
+            let sessionId: String
+            let nodeIds: [String]
+            let cwd: String
+            let command: String
+        }
+        struct SkippedSession: Encodable {
+            let sessionId: String
+            let reason: String
+        }
+        struct ResumeClosedSessionsEnvelope: Encodable {
+            let resumed: [ResumedSession]
+            let skipped: [SkippedSession]
+        }
+
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: ResumeClosedSessionsRequest.self)
+        let requestedSessionIds = Set((body?.sessionIds ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })
+
+        do {
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            let liveSessions = currentBoardSessions()
+            let grouped = Dictionary(grouping: state.nodes.compactMap { node -> (String, PlanningNode)? in
+                guard let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !sessionId.isEmpty else { return nil }
+                guard requestedSessionIds.isEmpty || requestedSessionIds.contains(sessionId) else { return nil }
+                guard plannerNodeNeedsLiveSession(node) else { return nil }
+                guard !isPlannerSessionLive(sessionId, in: liveSessions) else { return nil }
+                return (sessionId, node)
+            }, by: { $0.0 })
+
+            var resumed: [ResumedSession] = []
+            var skipped: [SkippedSession] = []
+            let cwd = try BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+            for (sessionId, entries) in grouped.sorted(by: { $0.key < $1.key }) {
+                let nodes = entries.map(\.1)
+                do {
+                    for node in nodes {
+                        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+                    }
+                    let command = plannerResumeCommand(for: nodes.first, sessionId: sessionId)
+                    switch startTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: nil) {
+                    case .success:
+                        resumed.append(ResumedSession(
+                            sessionId: sessionId,
+                            nodeIds: nodes.map(\.id),
+                            cwd: cwd,
+                            command: command
+                        ))
+                    case .failed(let reason):
+                        skipped.append(SkippedSession(sessionId: sessionId, reason: reason))
+                    }
+                } catch {
+                    skipped.append(SkippedSession(sessionId: sessionId, reason: error.localizedDescription))
+                }
+            }
+            if !resumed.isEmpty {
+                BoardServer.shared.broadcastStateChanged()
+            }
+            return jsonResponse(ResumeClosedSessionsEnvelope(resumed: resumed, skipped: skipped))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -1906,6 +2018,47 @@ enum BoardAPI {
             "",
             "Use read_node_contract before continuing, then submit_node_output when this node is complete or blocked."
         ].joined(separator: "\n")
+    }
+
+    private static func plannerNodeNeedsLiveSession(_ node: PlanningNode) -> Bool {
+        if node.schedule?.enabled == true { return true }
+        if node.status == .done || node.workflowRunState == .done { return false }
+        return true
+    }
+
+    private static func isPlannerSessionLive(_ sessionId: String, in sessions: [SessionDTO]) -> Bool {
+        sessions.contains { session in
+            boardSession(session, matches: sessionId)
+        }
+    }
+
+    private static func boardSession(_ session: SessionDTO, matches sessionId: String) -> Bool {
+        let needle = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return false }
+        var candidates = [session.id]
+        let prefix = "\(session.pluginId)-"
+        if session.id.hasPrefix(prefix) {
+            candidates.append(String(session.id.dropFirst(prefix.count)))
+        }
+        return candidates.contains { candidate in
+            candidate == needle
+                || candidate.hasSuffix("-\(needle)")
+                || needle.hasSuffix("-\(candidate)")
+        }
+    }
+
+    private static func plannerResumeCommand(for node: PlanningNode?, sessionId: String) -> String {
+        let command = node?.dispatch?.command ?? node?.dispatch?.runner.spawnCommand ?? ""
+        let provider = AgentLaunchCommand.provider(forCommand: command.isEmpty ? node?.dispatch?.runner.rawValue ?? "claude" : command)
+        let quotedSessionId = shellQuote(sessionId)
+        if provider == "codex" {
+            return "codex --dangerously-bypass-approvals-and-sandbox resume \(quotedSessionId)"
+        }
+        return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+    }
+
+    private static func shellQuote(_ raw: String) -> String {
+        "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func currentBoardSessions() -> [SessionDTO] {

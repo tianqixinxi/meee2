@@ -941,6 +941,31 @@ export function detachPlannerNodeSession(
   )
 }
 
+export interface ResumeClosedPlannerSessionResult {
+  sessionId: string
+  nodeIds: string[]
+  cwd: string
+  command: string
+}
+
+export interface ResumeClosedPlannerSessionsResponse {
+  resumed: ResumeClosedPlannerSessionResult[]
+  skipped: Array<{ sessionId: string; reason: string }>
+}
+
+export function resumeClosedPlannerSessions(
+  canvasId: string,
+  sessionIds: string[],
+): Promise<ResumeClosedPlannerSessionsResponse> {
+  return jsonRequest<ResumeClosedPlannerSessionsResponse>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/sessions/resume-closed`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionIds }),
+    },
+  )
+}
+
 // -- P1/P3: Workflow Run layer --------------------------------------------
 
 export interface StartPlannerDeliveryInput {
@@ -1317,6 +1342,29 @@ export async function setPlannerCanvasVisibility(
     {
       method: 'PATCH',
       body: JSON.stringify({ visibility }),
+    },
+  )
+  return response.canvas
+}
+
+export async function setPlannerCanvasDescription(
+  canvasId: string,
+  description: string,
+): Promise<PlanningCanvas> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      id: canvasId,
+      ownerId: DEMO_OWNER_ID,
+      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      plannerContext: description.trim() || `canvas:${canvasId}`,
+      visibility: demoCanvasRecords[canvasId]?.scope === 'team' ? 'public' : 'private',
+    })
+  }
+  const response = await jsonRequest<{ canvas: PlanningCanvas }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/description`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ description }),
     },
   )
   return response.canvas

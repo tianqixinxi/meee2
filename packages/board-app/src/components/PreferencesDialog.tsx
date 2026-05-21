@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
 import {
   DEFAULT_SPAWN_PROVIDER,
+  loadCanvasRecapIntervalMinutes,
   loadBoardGridEnabled,
   loadSpawnProvider,
+  saveCanvasRecapIntervalMinutes,
   saveBoardGridEnabled,
   saveSpawnProvider,
   spawnProviderLabel,
@@ -52,6 +54,7 @@ export function PreferencesDialog({
 }: Props) {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
+  const [canvasRecapIntervalMinutes, setCanvasRecapIntervalMinutes] = useState(loadCanvasRecapIntervalMinutes)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
@@ -73,6 +76,7 @@ export function PreferencesDialog({
   const save = () => {
     saveSpawnProvider(spawnProvider)
     saveBoardGridEnabled(boardGridEnabled)
+    saveCanvasRecapIntervalMinutes(canvasRecapIntervalMinutes)
     writeLlmSettings(llm)
     onSaved?.(spawnProvider)
     onClose()
@@ -246,6 +250,26 @@ export function PreferencesDialog({
                 checked={boardGridEnabled}
                 onChange={(event) => setBoardGridEnabled(event.target.checked)}
               />
+            </label>
+            <label className="settings-field-row settings-panel">
+              <span>
+                <strong>meee2 AI recap interval</strong>
+                <small>Refreshes the canvas summary in the top-left canvas menu. Set 0 to turn off automatic refresh.</small>
+              </span>
+              <span className="settings-number-field">
+                <input
+                  type="number"
+                  min={0}
+                  max={120}
+                  step={1}
+                  value={canvasRecapIntervalMinutes}
+                  onChange={(event) => {
+                    const next = Number.parseInt(event.target.value, 10)
+                    setCanvasRecapIntervalMinutes(Number.isFinite(next) ? Math.max(0, Math.min(120, next)) : 0)
+                  }}
+                />
+                <small>min</small>
+              </span>
             </label>
           </section>
 

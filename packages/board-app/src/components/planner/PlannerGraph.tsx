@@ -7,7 +7,7 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, PanelRightClose, PanelRightOpen, RefreshCw } from 'lucide-react'
+import { AlertTriangle, PanelRightClose, PanelRightOpen, PlayCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -29,6 +29,7 @@ import {
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
   rejectPlannerProposal,
+  resumeClosedPlannerSessions,
   sendPlannerActivity,
   updatePlannerNodeGate,
   updatePlannerNodeLayout,
@@ -46,6 +47,7 @@ import type {
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
+import { loadSpawnProvider } from '../../preferences'
 import {
   buildTeamDirectory,
   teamAvatarUrlByUserId,
@@ -119,6 +121,9 @@ function PlannerGraphInner({
   const [error, setError] = useState<string | null>(null)
   const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string } | null>(null)
   const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
+  const [sessionHealthBoardState, setSessionHealthBoardState] = useState<BoardState | null>(boardState)
+  const [resumingClosedSessions, setResumingClosedSessions] = useState(false)
+  const [startingReadySessions, setStartingReadySessions] = useState(false)
   const [mcpStatus, setMCPStatus] = useState<Meee2MCPStatus | null>(null)
   const [mcpStatusError, setMCPStatusError] = useState<string | null>(null)
   // Bumped whenever a new proposal is created from chat, drift inspection, or
@@ -356,18 +361,25 @@ function PlannerGraphInner({
     activateSession(trimmed)
       .then((ok) => {
         if (ok) return
-        const sessionStillVisible = (boardState?.sessions ?? []).some((session) => session.id === trimmed)
+        const sessionStillVisible = (boardState?.sessions ?? []).some((session) => sessionMatchesBoundId(session.id, trimmed))
         if (!sessionStillVisible && nodeId) {
-          detachPlannerNodeSession(canvasId, nodeId)
-            .then(handleGraphStateChanged)
-            .catch(() => undefined)
-          notifyError('Session was stale and has been unbound. Replace the session to continue.')
-          return
+          return resumeClosedPlannerSessions(canvasId, [trimmed])
+            .then((result) => {
+              if (result.resumed.length > 0) {
+                onNotify?.('success', 'Session is closed; resuming it in the canvas workspace.')
+                void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+                loadState()
+                return
+              }
+              const reason = result.skipped[0]?.reason || 'Session is unavailable and could not be resumed.'
+              notifyError(reason)
+            })
         }
         notifyError('Failed to open session')
+        return undefined
       })
       .finally(() => setBusy(false))
-  }, [boardState?.sessions, canvasId, handleGraphStateChanged, notifyError])
+  }, [boardState?.sessions, canvasId, loadState, notifyError, onNotify])
 
   const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
     setBusy(true)
@@ -552,6 +564,18 @@ function PlannerGraphInner({
   }, [plannerPanelCollapsed])
 
   useEffect(() => {
+    if (!plannerState || graph.nodes.length === 0) return undefined
+    const timer = window.setTimeout(() => {
+      if (window.matchMedia('(max-width: 720px)').matches) {
+        reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
+        return
+      }
+      reactFlow.fitView({ padding: 0.14, duration: 220 })
+    }, 180)
+    return () => window.clearTimeout(timer)
+  }, [graph.nodes.length, plannerPanelCollapsed, plannerState, reactFlow])
+
+  useEffect(() => {
     window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
   }, [plannerPanelWidth])
 
@@ -626,6 +650,121 @@ function PlannerGraphInner({
       ?? graph.nodes.find((node) => node.id === selectedNodeId)?.data.node
       ?? null
   }, [graph.nodes, plannerState, selectedNodeId])
+
+  useEffect(() => {
+    setSessionHealthBoardState(boardState)
+  }, [boardState])
+
+  const closedBoundSessions = useMemo(() => {
+    return collectClosedBoundSessions(plannerState?.nodes ?? [], sessionHealthBoardState?.sessions ?? [])
+  }, [plannerState?.nodes, sessionHealthBoardState?.sessions])
+
+  const readySessionPlan = useMemo(() => {
+    return collectReadySessionPlan(plannerState?.nodes ?? [], sessionHealthBoardState?.sessions ?? [])
+  }, [plannerState?.nodes, sessionHealthBoardState?.sessions])
+
+  useEffect(() => {
+    if (!plannerState || plannerState.nodes.every((node) => !node.sessionId?.trim())) return
+    let cancelled = false
+    const probe = () => {
+      fetchState()
+        .then((state) => {
+          if (!cancelled) setSessionHealthBoardState(state)
+        })
+        .catch(() => {
+          // Health probe is advisory; keep the last known state.
+        })
+    }
+    probe()
+    const timer = window.setInterval(probe, 20_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [canvasId, plannerState])
+
+  const handleResumeClosedSessions = useCallback(() => {
+    const sessionIds = closedBoundSessions.map((item) => item.sessionId)
+    if (sessionIds.length === 0) return
+    setResumingClosedSessions(true)
+    setError(null)
+    resumeClosedPlannerSessions(canvasId, sessionIds)
+      .then((result) => {
+        if (result.resumed.length > 0) {
+          onNotify?.('success', `Resuming ${result.resumed.length} closed session${result.resumed.length === 1 ? '' : 's'}.`)
+          loadState()
+          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+        }
+        if (result.skipped.length > 0) {
+          notifyError(result.skipped.map((item) => item.reason).join('; '))
+        }
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to resume closed sessions'))
+      .finally(() => setResumingClosedSessions(false))
+  }, [canvasId, closedBoundSessions, loadState, notifyError, onNotify])
+
+  const handleStartReadySessions = useCallback(() => {
+    if (!workspacePath.trim()) {
+      notifyError('Current canvas workspace is not ready yet.')
+      return
+    }
+    if (readySessionPlan.total === 0) return
+    warnMCPWritebackIfNeeded()
+    setStartingReadySessions(true)
+    setError(null)
+    const createNodeIds = readySessionPlan.create.map((node) => node.id)
+    const resumeSessionIds = readySessionPlan.resume.map((item) => item.sessionId)
+    fetchState()
+      .catch(() => null)
+      .then((beforeState) => {
+        const work: Promise<unknown>[] = []
+        if (resumeSessionIds.length > 0) {
+          work.push(resumeClosedPlannerSessions(canvasId, resumeSessionIds).then((result) => {
+            if (result.skipped.length > 0) {
+              notifyError(result.skipped.map((item) => item.reason).join('; '))
+            }
+          }))
+        }
+        for (const node of readySessionPlan.create) {
+          work.push(dispatchPlannerNodeSession(canvasId, node.id, dispatchRunnerForExecutor(node.executorType), workspacePath.trim())
+            .then((state) => {
+              handleGraphStateChanged(state)
+              setCreatingSessionNodeIds((current) => new Set(current).add(node.id))
+            }))
+        }
+        return Promise.all(work).then(() => beforeState)
+      })
+      .then((beforeState) => {
+        if (readySessionPlan.total > 0) {
+          onNotify?.('success', `Starting ${readySessionPlan.total} ready node${readySessionPlan.total === 1 ? '' : 's'}.`)
+        }
+        if (createNodeIds.length === 0) {
+          loadState()
+          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+          return
+        }
+        void beforeState
+        void pollForReadyNodeSessions(canvasId, createNodeIds, handleGraphStateChanged, () => {
+          setCreatingSessionNodeIds((current) => {
+            const next = new Set(current)
+            createNodeIds.forEach((nodeId) => next.delete(nodeId))
+            return next
+          })
+          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+        })
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to start ready sessions'))
+      .finally(() => setStartingReadySessions(false))
+  }, [
+    canvasId,
+    handleGraphStateChanged,
+    loadState,
+    notifyError,
+    onNotify,
+    readySessionPlan,
+    warnMCPWritebackIfNeeded,
+    workspacePath,
+  ])
 
   const hasActionableDrift = useMemo(() => {
     return (plannerState?.states ?? []).some((state) =>
@@ -826,20 +965,66 @@ function PlannerGraphInner({
           {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
         </button>
         <div className="planner-flow">
-          {mcpWarning && (
-            <div className="planner-mcp-banner" role="status">
-              <AlertTriangle size={16} aria-hidden />
-              <div className="planner-mcp-banner__copy">
-                <strong>Meee2 MCP is not connected</strong>
-                <span>
-                  Native sessions can run, but node artifacts cannot be submitted back to this canvas.
-                  Reconnect or restart the session after fixing MCP.
-                </span>
-                <em>{mcpWarning}</em>
-              </div>
-              <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
-                <RefreshCw size={14} aria-hidden />
-              </button>
+          {(readySessionPlan.total > 0 || mcpWarning || closedBoundSessions.length > 0) && (
+            <div className="planner-banner-stack">
+              {readySessionPlan.total > 0 && (
+                <div className="planner-mcp-banner planner-ready-session-banner" role="status">
+                  <PlayCircle size={16} aria-hidden />
+                  <div className="planner-mcp-banner__copy">
+                    <strong>{readySessionPlan.total} ready node{readySessionPlan.total === 1 ? '' : 's'} can start</strong>
+                    <span>
+                      {readySessionPlan.create.length} create
+                      {readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}
+                    </span>
+                    <em>Creates missing sessions and resumes closed bound sessions for ready steps.</em>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleStartReadySessions}
+                    disabled={startingReadySessions}
+                  >
+                    <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
+                    Start ready
+                  </button>
+                </div>
+              )}
+              {mcpWarning && (
+                <div className="planner-mcp-banner" role="status">
+                  <AlertTriangle size={16} aria-hidden />
+                  <div className="planner-mcp-banner__copy">
+                    <strong>Meee2 MCP is not connected</strong>
+                    <span>
+                      Native sessions can run, but node artifacts cannot be submitted back to this canvas.
+                      Reconnect or restart the session after fixing MCP.
+                    </span>
+                    <em>{mcpWarning}</em>
+                  </div>
+                  <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
+                    <RefreshCw size={14} aria-hidden />
+                  </button>
+                </div>
+              )}
+              {closedBoundSessions.length > 0 && (
+                <div className="planner-mcp-banner planner-session-health-banner" role="status">
+                  <AlertTriangle size={16} aria-hidden />
+                  <div className="planner-mcp-banner__copy">
+                    <strong>{closedBoundSessions.length} bound session{closedBoundSessions.length === 1 ? '' : 's'} closed</strong>
+                    <span>
+                      {closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}
+                      {closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}
+                    </span>
+                    <em>Bindings are preserved. Resume the existing session instead of replacing the node binding.</em>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResumeClosedSessions}
+                    disabled={resumingClosedSessions}
+                  >
+                    <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
+                    Resume all
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {plannerState ? (
@@ -1118,6 +1303,76 @@ function missingRequiredInputs(node: PlanningNode): string[] {
   return inputs.filter((input) => !bound.has(normalizeInputName(input)))
 }
 
+interface ClosedBoundSession {
+  sessionId: string
+  nodeIds: string[]
+  nodeTitles: string[]
+}
+
+interface ReadySessionPlan {
+  create: PlanningNode[]
+  resume: ClosedBoundSession[]
+  total: number
+}
+
+function collectReadySessionPlan(
+  nodes: PlanningNode[],
+  sessions: BoardState['sessions'],
+): ReadySessionPlan {
+  const create: PlanningNode[] = []
+  const resumeBySessionId = new Map<string, ClosedBoundSession>()
+  for (const node of nodes) {
+    if ((node.nodeKind ?? 'step') !== 'step' || node.status !== 'ready') continue
+    const sessionId = node.sessionId?.trim()
+    if (!sessionId) {
+      create.push(node)
+      continue
+    }
+    if (sessions.some((session) => sessionMatchesBoundId(session.id, sessionId))) continue
+    const existing = resumeBySessionId.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [] }
+    existing.nodeIds.push(node.id)
+    existing.nodeTitles.push(node.title)
+    resumeBySessionId.set(sessionId, existing)
+  }
+  const resume = [...resumeBySessionId.values()]
+  return { create, resume, total: create.length + resume.length }
+}
+
+function collectClosedBoundSessions(
+  nodes: PlanningNode[],
+  sessions: BoardState['sessions'],
+): ClosedBoundSession[] {
+  if (nodes.length === 0) return []
+  const result = new Map<string, ClosedBoundSession>()
+  for (const node of nodes) {
+    const sessionId = node.sessionId?.trim()
+    if (!sessionId || plannerNodeDoesNotNeedLiveSession(node)) continue
+    if (sessions.some((session) => sessionMatchesBoundId(session.id, sessionId))) continue
+    const existing = result.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [] }
+    existing.nodeIds.push(node.id)
+    existing.nodeTitles.push(node.title)
+    result.set(sessionId, existing)
+  }
+  return [...result.values()]
+}
+
+function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {
+  if (node.schedule?.enabled) return false
+  return node.status === 'done' || node.workflowRunState === 'done'
+}
+
+function sessionMatchesBoundId(liveId: string, boundId: string): boolean {
+  return liveId === boundId
+    || liveId.endsWith(`-${boundId}`)
+    || boundId.endsWith(`-${liveId}`)
+}
+
+function dispatchRunnerForExecutor(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
+  if (executorType === 'codex') return 'codex'
+  if (executorType === 'claude') return 'claude'
+  return loadSpawnProvider()
+}
+
 function normalizeInputName(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, ' ')
 }
@@ -1182,6 +1437,47 @@ async function pollForBoundNodeSession(
     if (sawNewSession) return
     const state = await fetchPlannerGraphState(canvasId)
     onState(state)
+  } finally {
+    onDone()
+  }
+}
+
+async function pollForReadyNodeSessions(
+  canvasId: string,
+  nodeIds: string[],
+  onState: (state: PlannerGraphState) => void,
+  onDone: () => void,
+) {
+  const pending = new Set(nodeIds)
+  try {
+    for (let attempt = 0; attempt < 36 && pending.size > 0; attempt += 1) {
+      await delay(attempt < 4 ? 900 : 1800)
+      try {
+        await fetchState()
+        const state = await fetchPlannerGraphState(canvasId)
+        onState(state)
+        for (const nodeId of [...pending]) {
+          const node = state.nodes.find((item) => item.id === nodeId)
+          if (!node) {
+            pending.delete(nodeId)
+            continue
+          }
+          if (node.sessionId?.trim()) {
+            pending.delete(nodeId)
+            continue
+          }
+          if (node.workflowRunState !== 'dispatched' && node.workflowRunState !== 'running') {
+            pending.delete(nodeId)
+          }
+        }
+      } catch {
+        // Session discovery is eventually consistent; keep polling.
+      }
+    }
+    if (pending.size > 0) {
+      const state = await fetchPlannerGraphState(canvasId)
+      onState(state)
+    }
   } finally {
     onDone()
   }
