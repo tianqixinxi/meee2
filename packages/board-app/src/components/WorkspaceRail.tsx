@@ -26,7 +26,7 @@ interface WorkspaceRailProps {
   onPreferences: () => void
 }
 
-const RAIL_WIDTH = 64
+const RAIL_WIDTH = 208
 
 export function WorkspaceRail({
   state,
@@ -130,7 +130,7 @@ export function WorkspaceRail({
 
       <div className="workspace-rail__spacer" />
 
-      <RailButton label="Preferences" onClick={onPreferences}>
+      <RailButton label="Settings" onClick={onPreferences}>
         <Settings size={20} />
       </RailButton>
     </nav>
@@ -179,6 +179,7 @@ function RailButton({
       onClick={onClick}
     >
       {children}
+      <span className="workspace-rail__label">{label}</span>
       {badge !== undefined && badge > 0 && (
         <span className="workspace-rail__badge">{badge > 99 ? '99+' : badge}</span>
       )}

@@ -44,6 +44,37 @@ export interface Meee2MCPStatus {
   checkedAt: string
 }
 
+export interface AgentRuntimeComponentStatus {
+  available: boolean
+  cliAvailable: boolean
+  appAvailable: boolean
+  cliPath: string | null
+  appPath: string | null
+  installed: boolean
+  configured: boolean
+  detail: string | null
+  command: string | null
+}
+
+export interface Meee2AgentRuntimeStatus {
+  marketplacePath: string
+  pluginPath: string
+  mcpServerPath: string
+  stagedMCPServerPath: string | null
+  claude: AgentRuntimeComponentStatus
+  codex: AgentRuntimeComponentStatus
+  needsAttention: boolean
+  checkedAt: string
+}
+
+export interface Meee2AgentRuntimeInstallResult {
+  ok: boolean
+  target: 'claude' | 'codex' | 'all' | string
+  messages: string[]
+  logs: string[]
+  status: Meee2AgentRuntimeStatus
+}
+
 export interface Session {
   id: string
   title: string

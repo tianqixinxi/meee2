@@ -212,6 +212,38 @@ public final class MCPConfigManager {
         ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
     }
 
+    public func currentServerScriptPath() -> String {
+        resolveServerScriptPath()
+    }
+
+    public func stageServerForPluginRuntime() throws -> String {
+        let source = URL(fileURLWithPath: resolveServerScriptPath())
+        guard FileManager.default.fileExists(atPath: source.path) else {
+            throw NSError(
+                domain: "Meee2MCP",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Meee2 MCP server.js was not found at \(source.path)."]
+            )
+        }
+        let sourceDir = source.deletingLastPathComponent()
+        let targetDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent(subdir, isDirectory: true)
+        try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
+
+        for name in [serverJsName, "package.json", "package-lock.json"] {
+            let from = sourceDir.appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: from.path) else { continue }
+            let to = targetDir.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: to.path) {
+                try FileManager.default.removeItem(at: to)
+            }
+            try FileManager.default.copyItem(at: from, to: to)
+        }
+
+        return targetDir.appendingPathComponent(serverJsName).path
+    }
+
     /// 确保 meee2 的 MCP tool 全部在 `~/.claude/settings.json` 的
     /// `permissions.allow` 里。读 → merge → 原子写。文件缺失时创建一个
     /// 只包含我们这些 tool 的最小文档（不破坏 SettingsConfigManager 的 hooks

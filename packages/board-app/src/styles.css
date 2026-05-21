@@ -161,7 +161,7 @@ textarea {
 .app {
   display: grid;
   grid-template-rows: 1fr auto;
-  grid-template-columns: var(--sidebar-width, 64px) 1fr;
+  grid-template-columns: var(--sidebar-width, 208px) 1fr;
   height: 100%;
 }
 
@@ -169,13 +169,13 @@ textarea {
   grid-row: 1 / span 2;
   grid-column: 1;
   display: flex;
-  width: 64px;
-  min-width: 64px;
+  width: 208px;
+  min-width: 208px;
   height: 100%;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 48px 10px 12px;
+  align-items: stretch;
+  gap: 14px;
+  padding: 50px 12px 12px;
   background:
     linear-gradient(180deg, rgba(32, 32, 29, 0.98), rgba(26, 26, 24, 0.98)),
     var(--bg-elevated);
@@ -190,11 +190,9 @@ textarea {
   position: relative;
   display: inline-flex;
   box-sizing: border-box;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
+  height: 38px;
+  flex: 0 0 38px;
   align-items: center;
-  justify-content: center;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -203,8 +201,13 @@ textarea {
 }
 
 .workspace-rail__avatar {
+  width: 36px;
+  height: 36px;
+  flex-basis: 36px;
+  align-self: flex-start;
+  justify-content: center;
   overflow: hidden;
-  margin-bottom: 6px;
+  margin: 0 0 6px 8px;
   padding: 0;
   border-radius: 999px;
   border-color: rgba(204, 120, 92, 0.18);
@@ -268,8 +271,35 @@ textarea {
 
 .workspace-rail__group {
   display: flex;
+  width: 100%;
   flex-direction: column;
   gap: 6px;
+}
+
+.workspace-rail__button {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 12px;
+  color: rgba(245, 244, 239, 0.66);
+  font-size: 13px;
+  font-weight: 620;
+  text-align: left;
+}
+
+.workspace-rail__button svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.workspace-rail__label {
+  min-width: 0;
+  overflow: hidden;
+  letter-spacing: 0;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-rail__button:hover {
@@ -290,7 +320,7 @@ textarea {
 
 .workspace-rail__button.is-active::before {
   position: absolute;
-  left: -10px;
+  left: -12px;
   width: 3px;
   height: 22px;
   border-radius: 0 999px 999px 0;
@@ -1777,8 +1807,17 @@ textarea {
     flex-basis: 38px;
   }
 
+  .workspace-rail__button {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .workspace-rail__label {
+    display: none;
+  }
+
   .workspace-rail__button.is-active::before {
-    left: -6px;
+    left: -7px;
   }
 
   .workspace-rail__status {
@@ -3444,10 +3483,216 @@ html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
   max-height: min(88vh, 820px);
 }
 
+.agent-runtime-modal {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.agent-runtime-modal__header {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+}
+
+.agent-runtime-modal__icon {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(204, 120, 92, 0.42);
+  border-radius: 8px;
+  color: #F5C7B8;
+  background: rgba(204, 120, 92, 0.13);
+}
+
+.agent-runtime-modal__body {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-runtime-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 8px;
+  background: rgba(31, 31, 29, 0.72);
+}
+
+.agent-runtime-row[data-ready="true"] {
+  border-color: rgba(127, 169, 130, 0.34);
+  background: rgba(127, 169, 130, 0.08);
+}
+
+.agent-runtime-row__status {
+  color: #C26A6A;
+  display: inline-flex;
+}
+
+.agent-runtime-row[data-ready="true"] .agent-runtime-row__status {
+  color: #7FA982;
+}
+
+.agent-runtime-row__copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.agent-runtime-row__copy strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.agent-runtime-row__copy span {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.agent-runtime-row__copy small {
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.agent-runtime-row button {
+  min-width: 112px;
+}
+
+.agent-runtime-modal__error {
+  padding: 9px 11px;
+  border: 1px solid rgba(194, 106, 106, 0.34);
+  border-radius: 8px;
+  color: #F2B7B7;
+  background: rgba(194, 106, 106, 0.1);
+  font-size: 12px;
+}
+
+.agent-runtime-modal__logs {
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: 8px;
+  background: rgba(20, 20, 18, 0.72);
+  overflow: hidden;
+}
+
+.agent-runtime-modal__logs summary {
+  cursor: pointer;
+  padding: 8px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.agent-runtime-modal__logs pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 0 10px 10px;
+  overflow: auto;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-runtime-modal__path {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(20, 20, 18, 0.72);
+}
+
+.agent-runtime-modal__path summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.agent-runtime-modal__path code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .settings-body {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.settings-runtime-panel {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 8px;
+  background: rgba(31, 31, 29, 0.72);
+}
+
+.settings-runtime-panel[data-ready="true"] {
+  border-color: rgba(127, 169, 130, 0.34);
+  background: rgba(127, 169, 130, 0.08);
+}
+
+.settings-runtime-panel__status {
+  display: inline-flex;
+  color: #D4A373;
+}
+
+.settings-runtime-panel[data-ready="true"] .settings-runtime-panel__status {
+  color: #7FA982;
+}
+
+.settings-runtime-panel__copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settings-runtime-panel__copy strong {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.settings-runtime-panel__copy span {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.settings-runtime-panel__copy small {
+  color: var(--text-faint);
+  font-size: 10.5px;
+}
+
+.settings-runtime-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-runtime-panel__actions button {
+  min-width: 68px;
 }
 
 .settings-section {

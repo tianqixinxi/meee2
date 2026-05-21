@@ -5,6 +5,8 @@ import type {
   MessageStatus,
   Mode,
   Meee2MCPStatus,
+  Meee2AgentRuntimeInstallResult,
+  Meee2AgentRuntimeStatus,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -422,6 +424,17 @@ export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {
     })
   }
   return jsonRequest<Meee2MCPStatus>('/api/system/meee2-mcp-status')
+}
+
+export function fetchMeee2AgentRuntimeStatus(): Promise<Meee2AgentRuntimeStatus> {
+  return jsonRequest<Meee2AgentRuntimeStatus>('/api/system/meee2-agent-runtime-status')
+}
+
+export function installMeee2AgentRuntime(target: 'claude' | 'codex' | 'all'): Promise<Meee2AgentRuntimeInstallResult> {
+  return jsonRequest<Meee2AgentRuntimeInstallResult>('/api/system/meee2-agent-runtime-install', {
+    method: 'POST',
+    body: JSON.stringify({ target }),
+  })
 }
 
 // -- coordination groups ---------------------------------------------------

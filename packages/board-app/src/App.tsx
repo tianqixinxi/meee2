@@ -16,10 +16,13 @@ import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
 import { PreferencesDialog } from './components/PreferencesDialog'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
+import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
   CanvasScope,
+  Meee2AgentRuntimeStatus,
+  SpawnProvider,
 } from './types'
 import { spawnProviderLabel } from './preferences'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
@@ -34,7 +37,9 @@ import {
   clearPlannerCanvasContent,
   deleteCanvas,
   fetchCanvases,
+  fetchMeee2AgentRuntimeStatus,
   fetchUserProfile,
+  installMeee2AgentRuntime,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -321,6 +326,11 @@ export default function App() {
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
+  const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
+  const [agentRuntimeInstallTarget, setAgentRuntimeInstallTarget] = useState<'claude' | 'codex' | 'all' | null>(null)
+  const [agentRuntimeInstallError, setAgentRuntimeInstallError] = useState<string | null>(null)
+  const [agentRuntimeInstallLogs, setAgentRuntimeInstallLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
@@ -392,6 +402,54 @@ export default function App() {
   }, [])
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
+
+  const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
+    fetchMeee2AgentRuntimeStatus()
+      .then((status) => {
+        setAgentRuntimeStatus(status)
+        if (showModal && status.needsAttention) setAgentRuntimeModalOpen(true)
+      })
+      .catch((err) => {
+        console.warn('[App] fetchMeee2AgentRuntimeStatus failed:', (err as Error).message)
+      })
+  }, [])
+
+  useEffect(() => {
+    refreshAgentRuntimeStatus(true)
+  }, [refreshAgentRuntimeStatus])
+
+  const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
+    setAgentRuntimeInstallTarget(target)
+    setAgentRuntimeInstallError(null)
+    setAgentRuntimeInstallLogs([`Starting install for ${target}...`])
+    installMeee2AgentRuntime(target)
+      .then((result) => {
+        setAgentRuntimeStatus(result.status)
+        setAgentRuntimeInstallLogs(result.logs?.length ? result.logs : result.messages)
+        if (result.ok) {
+          pushToast('success', 'Meee2 Agent Runtime is ready')
+          if (!result.status.needsAttention) setAgentRuntimeModalOpen(false)
+        } else {
+          const message = result.messages.find((item) => /failed|skipped/i.test(item))
+            ?? result.messages[result.messages.length - 1]
+            ?? 'Agent runtime setup is incomplete'
+          setAgentRuntimeInstallError(message)
+        }
+      })
+      .catch((err) => {
+        setAgentRuntimeInstallError((err as Error).message || 'Failed to install Meee2 Agent Runtime')
+        setAgentRuntimeInstallLogs((current) => [...current, (err as Error).message || 'Failed to install Meee2 Agent Runtime'])
+      })
+      .finally(() => setAgentRuntimeInstallTarget(null))
+  }, [pushToast])
+
+  const handleOpenAgentRuntimeSetup = useCallback((_target?: SpawnProvider) => {
+    refreshAgentRuntimeStatus(false)
+    setAgentRuntimeInstallError(null)
+    setAgentRuntimeInstallLogs([])
+    setAgentRuntimeModalOpen(true)
+    setAgentRuntimeInstallTarget(null)
+  }, [refreshAgentRuntimeStatus])
 
   const handleSetActiveCanvas = useCallback((canvasId: string) => {
     updateCanvas(canvasId, { active: true })
@@ -576,8 +634,22 @@ export default function App() {
             onSaved={(provider) => {
               pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)
               refreshUserProfile()
+              refreshAgentRuntimeStatus(false)
             }}
             onToast={pushToast}
+            agentRuntimeStatus={agentRuntimeStatus}
+            onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
+            onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+          />
+        )}
+        {agentRuntimeModalOpen && agentRuntimeStatus && (
+          <AgentRuntimeSetupModal
+            status={agentRuntimeStatus}
+            installingTarget={agentRuntimeInstallTarget}
+            installError={agentRuntimeInstallError}
+            installLogs={agentRuntimeInstallLogs}
+            onInstall={handleInstallAgentRuntime}
+            onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
         <div className="toasts">

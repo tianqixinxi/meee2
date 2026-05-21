@@ -606,22 +606,19 @@ function PlannerGraphInner({
     window.addEventListener('pointerup', onPointerUp)
   }, [plannerPanelWidth])
 
+  const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
-    if (plannerState && graph.nodes.length === 0) {
-      fitViewCanvasRef.current = canvasId
-      return
-    }
-    if (!plannerState || graph.nodes.length === 0 || fitViewCanvasRef.current === canvasId) return
+    if (!plannerState || loadedPlannerCanvasId !== canvasId || fitViewCanvasRef.current === canvasId) return
     fitViewCanvasRef.current = canvasId
     const timer = window.setTimeout(() => {
-      if (window.matchMedia('(max-width: 720px)').matches) {
+      if (graph.nodes.length === 0 || window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
         return
       }
       reactFlow.fitView({ padding: 0.12, duration: 220 })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [plannerState, graph.nodes.length, canvasId, reactFlow])
+  }, [plannerState, loadedPlannerCanvasId, graph.nodes.length, canvasId, reactFlow])
 
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null

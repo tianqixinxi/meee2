@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { CheckCircle2, CircleAlert } from 'lucide-react'
 import {
   DEFAULT_SPAWN_PROVIDER,
   loadBoardGridEnabled,
@@ -7,17 +8,15 @@ import {
   saveSpawnProvider,
   spawnProviderLabel,
 } from '../preferences'
-import type { SpawnProvider } from '../types'
+import type { Meee2AgentRuntimeStatus, SpawnProvider } from '../types'
 import {
   readLlmSettings,
   writeLlmSettings,
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
-  ALL_TOOLS,
   providerLabel,
   type LlmSettings,
   type LlmProvider,
-  type ToolName,
 } from '../lib/llmSettings'
 import {
   disconnectMeee2Online,
@@ -32,6 +31,9 @@ interface Props {
   onClose: () => void
   onSaved?: (provider: SpawnProvider) => void
   onToast?: (kind: 'info' | 'error' | 'success', text: string) => void
+  agentRuntimeStatus?: Meee2AgentRuntimeStatus | null
+  onOpenAgentRuntime?: (target: SpawnProvider) => void
+  onRefreshAgentRuntime?: () => void
 }
 
 /**
@@ -40,7 +42,14 @@ interface Props {
  *   2. Global assistant 的 LLM 设置：provider / apiKey / baseUrl / model /
  *      enabled tools。默认 provider='local' 走本地 Claude 稳定 session（不需要 key）。
  */
-export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
+export function PreferencesDialog({
+  onClose,
+  onSaved,
+  onToast,
+  agentRuntimeStatus = null,
+  onOpenAgentRuntime,
+  onRefreshAgentRuntime,
+}: Props) {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
@@ -74,10 +83,6 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
   const setProvider = (p: LlmProvider) => {
     setLlm((s) => ({ ...s, provider: p }))
   }
-  const setTool = (t: ToolName, on: boolean) => {
-    setLlm((s) => ({ ...s, enabledTools: { ...s.enabledTools, [t]: on } }))
-  }
-
   const setDefaultSync = async (enabled: boolean) => {
     try {
       setProfile(await updateUserProfile({ defaultSyncEnabled: enabled }))
@@ -244,12 +249,12 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
             </label>
           </section>
 
-          {/* ── Spawn command ─────────────────────────────────────── */}
+          {/* ── Agent runtime ─────────────────────────────────────── */}
           <section className="settings-section">
             <div className="settings-section-header">
               <div>
-                <div className="settings-section-title">Default Spawn Provider</div>
-                <div className="settings-section-caption">Used by assistant-created local sessions.</div>
+                <div className="settings-section-title">Agent Runtime</div>
+                <div className="settings-section-caption">Default local agent for planner sessions and global spawns.</div>
               </div>
             </div>
             <div className="segment">
@@ -264,9 +269,12 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
                 </button>
               ))}
             </div>
-            <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
-              Global sessions and planner nodes start in the active canvas workspace with full local permissions for the selected CLI.
-            </div>
+            <RuntimeStatusPanel
+              provider={spawnProvider}
+              status={agentRuntimeStatus}
+              onSetUp={() => onOpenAgentRuntime?.(spawnProvider)}
+              onRefresh={onRefreshAgentRuntime}
+            />
             <button
               className="ghost"
               style={{ alignSelf: 'flex-start', fontSize: 11, padding: '2px 8px' }}
@@ -281,7 +289,7 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
             <div className="settings-section-header">
               <div>
                 <div className="settings-section-title">Assistant LLM</div>
-                <div className="settings-section-caption">Controls the board assistant and enabled tools.</div>
+                <div className="settings-section-caption">Controls the meee2 AI chat model.</div>
               </div>
             </div>
 
@@ -353,27 +361,6 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
                 the same tool-use loop as hosted providers.
               </div>
             )}
-
-            {/* Tools */}
-            <div className="col" style={{ gap: 4, marginTop: 4 }}>
-              <label className="muted" style={{ fontSize: 11 }}>Enabled tools</label>
-              <div className="col" style={{ gap: 2 }}>
-                {ALL_TOOLS.map((t) => (
-                  <label key={t} className="row" style={{ gap: 8, fontSize: 12, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={llm.enabledTools[t]}
-                      onChange={(e) => setTool(t, e.target.checked)}
-                      style={{ width: 'auto' }}
-                    />
-                    <span className="mono">{t}</span>
-                    <span className="muted" style={{ fontSize: 11 }}>
-                      {toolDesc(t)}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
           </section>
         </div>
         <div className="modal-footer">
@@ -386,23 +373,41 @@ export function PreferencesDialog({ onClose, onSaved, onToast }: Props) {
   )
 }
 
-function toolDesc(t: ToolName): string {
-  switch (t) {
-    case 'get_canvas_context': return 'read the current canvas layout'
-    case 'get_session_list': return 'list sessions on the board'
-    case 'get_session_info': return 'fetch a session’s state + transcript'
-    case 'get_session_transcript': return 'read recent session transcript'
-    case 'list_channels': return 'list A2A channels'
-    case 'get_channel_messages': return 'read channel messages'
-    case 'propose_canvas_patch': return 'prepare Apply-only canvas changes'
-    case 'create_session': return 'spawn a new claude session'
-    case 'create_coordinator_session': return 'spawn a coordinator for selected sessions'
-    case 'get_coordination_state': return 'read coordinator groups and digests'
-    case 'send_to_session': return 'route a message to one session'
-    case 'broadcast_to_members': return 'route messages to group members'
-    case 'update_group_digest': return 'maintain compact coordinator state'
-    case 'pause_coordination': return 'pause automatic coordinator wakes'
-    case 'resume_coordination': return 'resume automatic coordinator wakes'
-    case 'ask_coordinator': return 'wake coordinator with compact context'
-  }
+function RuntimeStatusPanel({
+  provider,
+  status,
+  onSetUp,
+  onRefresh,
+}: {
+  provider: SpawnProvider
+  status: Meee2AgentRuntimeStatus | null
+  onSetUp?: () => void
+  onRefresh?: () => void
+}) {
+  const runtime = provider === 'codex' ? status?.codex : status?.claude
+  const ready = runtime?.configured === true
+  const available = runtime?.available !== false
+  return (
+    <div className="settings-runtime-panel" data-ready={ready}>
+      <div className="settings-runtime-panel__status" aria-hidden>
+        {ready ? <CheckCircle2 size={16} /> : <CircleAlert size={16} />}
+      </div>
+      <div className="settings-runtime-panel__copy">
+        <strong>{spawnProviderLabel(provider)} runtime</strong>
+        <span>
+          {runtime?.detail
+            ?? (status ? 'Runtime status is unavailable.' : 'Checking runtime status...')}
+        </span>
+        {runtime && (
+          <small>CLI {runtime.cliAvailable ? 'found' : 'missing'} · App {runtime.appAvailable ? 'found' : 'missing'}</small>
+        )}
+      </div>
+      <div className="settings-runtime-panel__actions">
+        <button type="button" className="ghost" onClick={onRefresh}>Check</button>
+        <button type="button" className="primary" disabled={!available} onClick={onSetUp}>
+          {ready ? 'Manage' : 'Set up'}
+        </button>
+      </div>
+    </div>
+  )
 }
