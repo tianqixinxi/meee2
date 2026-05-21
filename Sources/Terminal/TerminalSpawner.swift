@@ -28,8 +28,8 @@ public enum SpawnResult {
 ///   end tell
 ///
 /// 窗口开出来后，shell 已经落在 cwd；再 `input text "claude\n"` 就跑起来。
-/// 注意：Ghostty 的 CLI **不支持** `-e` / 新建 tab（1.3 版本仍缺），
-/// 所以全靠 AppleScript；Cmd+T 方案需要 Accessibility 权限又 fragile。
+/// 优先在已有 Ghostty window 里新建 tab；没有 window 时再创建新 window。
+/// 全部走 Ghostty 原生 AppleScript，不依赖 Cmd+T / Accessibility keystroke。
 public struct GhosttySpawner: TerminalSpawner {
     public init() {}
 
@@ -44,16 +44,23 @@ public struct GhosttySpawner: TerminalSpawner {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        // Step 1: open window at cwd
+        // Step 1: reuse the front window as a new tab when possible; otherwise
+        // create the first window. This keeps "resume closed session" from
+        // scattering windows when the user already has Ghostty open.
         let openScript = """
         tell application "Ghostty"
             activate
             try
                 set cfg to new surface configuration
                 set initial working directory of cfg to "\(escapedCwd)"
-                set win to new window with configuration cfg
-                -- 返回窗口里那个 terminal 的 id，方便后面 input
-                return id of focused terminal of selected tab of win
+                if (count of windows) > 0 then
+                    set tabRef to new tab in front window with configuration cfg
+                    select tab tabRef
+                    return id of focused terminal of tabRef
+                else
+                    set win to new window with configuration cfg
+                    return id of focused terminal of selected tab of win
+                end if
             on error errMsg
                 return "err:" & errMsg
             end try

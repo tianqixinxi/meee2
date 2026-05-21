@@ -4,11 +4,38 @@ import type {
   Message,
   MessageStatus,
   Mode,
+  Meee2MCPStatus,
+  Meee2AgentRuntimeInstallResult,
+  Meee2AgentRuntimeStatus,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
   SpawnProvider,
   CoordinationGroup,
+  PlanProposal,
+  PlannerActivity,
+  PlannerCanvasState,
+  PlannerGraphState,
+  WorkflowRun,
+  PlannerMonitorState,
+  PlannerNodeContract,
+  PlannerArtifactContent,
+  PlannerNodeOutput,
+  PlannerNodeOutputResult,
+  PlanningNode,
+  PlanningNodeStatus,
+  PlannerNodeLayout,
+  PlanChange,
+  PlannerArtifactKind,
+  PlannerDispatchRunner,
+  PlannerCanvasVisibility,
+  PlanningCanvas,
+  ExternalItemsResult,
+  AgentScanResult,
+  CanvasSideEffectsResult,
+  IntegrationInstallResult,
+  IntegrationRunbookResult,
+  ContextSourceKind,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -20,6 +47,328 @@ export class ApiRequestError extends Error {
     this.code = code
     this.status = status
   }
+}
+
+const PLANNER_DEMO_MODE = import.meta.env.VITE_PLANNER_DEMO === '1'
+const DEMO_CANVAS_ID = 'demo-planner'
+const DEMO_SUB_CANVAS_ID = 'demo-release-readiness'
+const DEMO_OWNER_ID = 'demo-owner'
+
+let demoActiveCanvasId = DEMO_CANVAS_ID
+let demoProposal: PlanProposal | null = null
+let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
+  [DEMO_CANVAS_ID]: {
+    id: DEMO_CANVAS_ID,
+    name: 'meee2 AI Demo',
+    scope: 'personal',
+    kind: 'board',
+    isDefault: true,
+    workspacePath: '/demo/planner',
+    ownerUserId: DEMO_OWNER_ID,
+  },
+  [DEMO_SUB_CANVAS_ID]: {
+    id: DEMO_SUB_CANVAS_ID,
+    name: 'Release Readiness',
+    scope: 'personal',
+    kind: 'board',
+    isDefault: false,
+    workspacePath: '/demo/release-readiness',
+    ownerUserId: DEMO_OWNER_ID,
+  },
+}
+let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
+  [DEMO_CANVAS_ID]: [
+    demoNode({
+      id: 'contract',
+      title: 'meee2 AI Core Contract',
+      status: 'done',
+      executorType: 'human',
+      executionMode: 'human',
+      outputs: ['contract.md', 'meee2-ai-dto'],
+    }),
+    demoNode({
+      id: 'state-api',
+      title: 'Store-backed meee2 AI State API',
+      status: 'working',
+      executorType: 'codex',
+      executionMode: 'auto',
+      inputs: ['contract.md'],
+      outputs: ['GET /api/planner/canvases/:id/state'],
+      dependsOnNodeIds: ['contract'],
+    }),
+    demoNode({
+      id: 'proposal-shell',
+      title: 'Owner Proposal Shell',
+      status: 'blocked',
+      executorType: 'claude',
+      executionMode: 'human',
+      inputs: ['meee2-ai-dto'],
+      outputs: ['proposal-preview'],
+      dependsOnNodeIds: ['contract', 'state-api'],
+    }),
+    demoNode({
+      id: 'react-flow-graph',
+      title: 'React Flow meee2 AI Graph',
+      status: 'working',
+      executorType: 'codex',
+      executionMode: 'auto',
+      inputs: ['meee2-ai-state'],
+      outputs: ['graph-ui'],
+      dependsOnNodeIds: ['state-api'],
+    }),
+    demoNode({
+      id: 'release-readiness',
+      title: 'Release Readiness Sub-canvas',
+      status: 'draft',
+      executorType: 'openClaw',
+      executionMode: 'human',
+      inputs: ['graph-ui', 'proposal-preview'],
+      outputs: ['review-checklist'],
+      dependsOnNodeIds: ['proposal-shell', 'react-flow-graph'],
+      subCanvasId: DEMO_SUB_CANVAS_ID,
+    }),
+  ],
+  [DEMO_SUB_CANVAS_ID]: [
+    demoNode({
+      id: 'qa-pass',
+      canvasId: DEMO_SUB_CANVAS_ID,
+      title: 'Rendered QA Pass',
+      status: 'working',
+      executorType: 'codex',
+      executionMode: 'auto',
+      outputs: ['screenshot', 'dom-check'],
+    }),
+    demoNode({
+      id: 'handoff',
+      canvasId: DEMO_SUB_CANVAS_ID,
+      title: 'Owner Handoff Notes',
+      status: 'ready',
+      executorType: 'human',
+      executionMode: 'human',
+      inputs: ['screenshot', 'dom-check'],
+      outputs: ['handoff.md'],
+      dependsOnNodeIds: ['qa-pass'],
+    }),
+  ],
+}
+
+function demoNode(input: {
+  id: string
+  canvasId?: string
+  title: string
+  status: PlanningNode['status']
+  executorType: PlanningNode['executorType']
+  executionMode: PlanningNode['executionMode']
+  inputs?: string[]
+  outputs?: string[]
+  dependsOnNodeIds?: string[]
+  sessionId?: string
+  source?: PlanningNode['source']
+  subCanvasId?: string
+}): PlanningNode {
+  const canvasId = input.canvasId ?? DEMO_CANVAS_ID
+  return {
+    id: input.id,
+    canvasId,
+    title: input.title,
+    schema: {
+      inputs: input.inputs ?? [],
+      outputs: input.outputs ?? [],
+      goal: `${input.id}.done`,
+    },
+    contextSources: [
+      {
+        kind: 'repository',
+        title: 'meee2 AI branch',
+        reference: 'codex/react-flow-planner-graph',
+      },
+    ],
+    executionMode: input.executionMode,
+    executorType: input.executorType,
+    doerId: input.executorType === 'human' ? DEMO_OWNER_ID : `agent-${input.executorType}`,
+    status: input.status,
+    sessionId: input.sessionId ?? null,
+    chatThreadId: input.sessionId ? `${input.sessionId}-thread` : null,
+    source: input.source ?? 'planner',
+    dependsOnNodeIds: input.dependsOnNodeIds ?? [],
+    subCanvasId: input.subCanvasId ?? null,
+  }
+}
+
+function demoCanvases(): CanvasList {
+  return {
+    activeCanvasId: demoActiveCanvasId,
+    defaultCanvasIds: [DEMO_CANVAS_ID],
+    memberships: [],
+    canvases: Object.values(demoCanvasRecords),
+  }
+}
+
+function demoBoardState(): BoardState {
+  return {
+    sessions: Object.values(demoNodesByCanvasId).flat().filter((node) => node.sessionId).map((node) => ({
+      id: node.sessionId ?? node.id,
+      title: node.title,
+      project: '/demo/planner',
+      pluginId: `demo.${node.executorType}`,
+      pluginDisplayName: node.executorType,
+      pluginColor: node.status === 'blocked' ? '#C26A6A' : '#8BA9C2',
+      status: node.status === 'blocked' ? 'permissionRequired' : node.status,
+      inboxPending: node.status === 'blocked' ? 1 : 0,
+      recentMessages: [{ role: 'assistant', text: `${node.title} is ${node.status}` }],
+      currentTool: null,
+      usageStats: null,
+      backgroundAgents: [],
+      latestRecap: null,
+      syncEnabled: false,
+      syncTeamId: null,
+      syncTeamName: null,
+    })),
+    channels: [],
+    coordinationGroups: [],
+  }
+}
+
+function demoPlannerState(canvasId: string): PlannerCanvasState {
+  const safeCanvasId = demoCanvasRecords[canvasId] ? canvasId : DEMO_CANVAS_ID
+  const canvas = demoCanvasRecords[safeCanvasId]
+  const nodes = demoNodesByCanvasId[safeCanvasId] ?? []
+  const now = new Date().toISOString()
+  return {
+    canvas: {
+      id: safeCanvasId,
+      ownerId: DEMO_OWNER_ID,
+      title: canvas.name,
+      plannerContext: 'Static public demo of the React Flow meee2 AI Graph.',
+    },
+    nodes,
+    states: nodes.map(demoNodeState),
+    proposals: demoProposal && demoProposal.canvasId === safeCanvasId ? [demoProposal] : [],
+    access: {
+      actorId: DEMO_OWNER_ID,
+      role: 'owner',
+      canCreateProposal: true,
+      canApproveProposal: true,
+      canApplyProposal: true,
+      canRejectProposal: true,
+      canUpdateAssignedNode: true,
+    },
+    activities: [
+      {
+        userId: DEMO_OWNER_ID,
+        displayName: 'Owner',
+        currentCanvasId: safeCanvasId,
+        selectedNodeId: nodes.find((node) => node.status === 'blocked')?.id ?? nodes[0]?.id ?? null,
+        selectedSessionId: null,
+        lastActiveAt: now,
+      },
+      {
+        userId: 'viewer-demo',
+        displayName: 'Teammate viewer',
+        currentCanvasId: safeCanvasId,
+        selectedNodeId: nodes.find((node) => node.status === 'working')?.id ?? null,
+        selectedSessionId: null,
+        lastActiveAt: now,
+      },
+    ],
+    events: [
+      {
+        id: 'event-contract',
+        canvasId: safeCanvasId,
+        type: 'node.created',
+        nodeId: nodes[0]?.id ?? null,
+        proposalId: null,
+        summary: 'meee2 AI graph loaded from public demo fixtures.',
+        artifactRefs: ['demo://planner'],
+        createdAt: now,
+      },
+      ...(demoProposal && demoProposal.canvasId === safeCanvasId ? [{
+        id: `event-${demoProposal.id}`,
+        canvasId: safeCanvasId,
+        type: 'proposal.created' as const,
+        nodeId: null,
+        proposalId: demoProposal.id,
+        summary: demoProposal.summary,
+        artifactRefs: [],
+        createdAt: now,
+      }] : []),
+    ],
+    artifacts: nodes.flatMap((node) => (node.artifactRefs ?? []).map((ref) => ({
+      id: `artifact-${node.id}-${ref}`,
+      canvasId: safeCanvasId,
+      nodeId: node.id,
+      kind: 'generic' as const,
+      title: ref,
+      reference: ref,
+      status: node.status,
+      createdAt: now,
+    }))),
+    edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+      id: `edge-${dependencyId}-${node.id}`,
+      sourceNodeId: dependencyId,
+      targetNodeId: node.id,
+      kind: 'dependency',
+    }))),
+  }
+}
+
+function demoNodeState(node: PlanningNode) {
+  const blocked = node.status === 'blocked'
+  return {
+    nodeId: node.id,
+    runState: node.status,
+    blockers: blocked ? ['Blocked before topology changes can apply.'] : [],
+    artifactRefs: node.schema.outputs.map((item) => `demo://${item}`),
+    needsOwnerReview: false,
+  }
+}
+
+function nextDemoProposal(canvasId: string, summary: string, title: string): PlanProposal {
+  const safeCanvasId = demoCanvasRecords[canvasId] ? canvasId : DEMO_CANVAS_ID
+  return {
+    id: `proposal-${Date.now()}`,
+    canvasId: safeCanvasId,
+    summary,
+    status: 'pending',
+    changes: [{
+      kind: 'addNode',
+      node: demoNode({
+        id: `owner-review-${Date.now()}`,
+        canvasId: safeCanvasId,
+        title,
+        status: 'ready',
+        executorType: 'human',
+        executionMode: 'human',
+        inputs: ['proposal-preview'],
+        outputs: ['owner-decision'],
+        dependsOnNodeIds: demoNodesByCanvasId[safeCanvasId]?.slice(-1).map((node) => node.id) ?? [],
+      }),
+    }],
+  }
+}
+
+function applyDemoChanges(nodes: PlanningNode[], proposal: PlanProposal): PlanningNode[] {
+  let next = [...nodes]
+  for (const change of proposal.changes) {
+    if (change.kind === 'addNode' && change.node) {
+      if (!next.some((node) => node.id === change.node?.id)) next.push(change.node)
+    }
+    if (change.kind === 'updateNode' && change.nodeId) {
+      next = next.map((node) => node.id === change.nodeId ? {
+        ...node,
+        title: change.title ?? node.title,
+        status: change.status ?? node.status,
+        schema: change.schema ?? node.schema,
+        contextSources: change.contextSources ?? node.contextSources,
+        dependsOnNodeIds: change.dependsOnNodeIds ?? node.dependsOnNodeIds,
+        subCanvasId: change.subCanvasId ?? node.subCanvasId,
+        executionMode: change.executionMode ?? node.executionMode,
+        gate: change.clearGate ? null : (change.gate ?? node.gate),
+        approvers: change.clearGate ? null : (change.approvers ?? node.approvers),
+      } : node)
+    }
+  }
+  return next
 }
 
 async function jsonRequest<T>(
@@ -53,7 +402,39 @@ async function jsonRequest<T>(
 // -- state -----------------------------------------------------------------
 
 export function fetchState(): Promise<BoardState> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoBoardState())
   return jsonRequest<BoardState>('/api/state')
+}
+
+export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      configured: true,
+      configCommand: 'node',
+      configArgs: ['/demo/Bridge/mcp-meee2/server.js'],
+      expectedServerPath: '/demo/Bridge/mcp-meee2/server.js',
+      serverPath: '/demo/Bridge/mcp-meee2/server.js',
+      serverExists: true,
+      nodeAvailable: true,
+      launches: true,
+      tools: ['read_node_contract', 'submit_node_output', 'attach_artifact_to_node'],
+      missingRequiredTools: [],
+      error: null,
+      checkedAt: new Date().toISOString(),
+    })
+  }
+  return jsonRequest<Meee2MCPStatus>('/api/system/meee2-mcp-status')
+}
+
+export function fetchMeee2AgentRuntimeStatus(): Promise<Meee2AgentRuntimeStatus> {
+  return jsonRequest<Meee2AgentRuntimeStatus>('/api/system/meee2-agent-runtime-status')
+}
+
+export function installMeee2AgentRuntime(target: 'claude' | 'codex' | 'all'): Promise<Meee2AgentRuntimeInstallResult> {
+  return jsonRequest<Meee2AgentRuntimeInstallResult>('/api/system/meee2-agent-runtime-install', {
+    method: 'POST',
+    body: JSON.stringify({ target }),
+  })
 }
 
 // -- coordination groups ---------------------------------------------------
@@ -100,10 +481,32 @@ export function removeCoordinationMember(groupId: string, sessionId: string): Pr
 // -- canvases --------------------------------------------------------------
 
 export function fetchCanvases(): Promise<CanvasList> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoCanvases())
   return jsonRequest<CanvasList>('/api/canvases')
 }
 
-export function createCanvas(input: { name: string; scope: CanvasScope }): Promise<CanvasList> {
+export function createCanvas(input: { name: string; scope: CanvasScope; kind?: CanvasList['canvases'][number]['kind'] }): Promise<CanvasList> {
+  if (PLANNER_DEMO_MODE) {
+    const id = `demo-canvas-${Date.now()}`
+    demoCanvasRecords = {
+      ...demoCanvasRecords,
+      [id]: {
+        id,
+        name: input.name,
+        scope: input.scope,
+        kind: input.kind ?? 'board',
+        isDefault: false,
+        workspacePath: `/demo/${id}`,
+        ownerUserId: DEMO_OWNER_ID,
+      },
+    }
+    demoNodesByCanvasId = {
+      ...demoNodesByCanvasId,
+      [id]: [],
+    }
+    demoActiveCanvasId = id
+    return Promise.resolve(demoCanvases())
+  }
   return jsonRequest<CanvasList>('/api/canvases', {
     method: 'POST',
     body: JSON.stringify(input),
@@ -114,6 +517,16 @@ export function updateCanvas(
   id: string,
   input: { name?: string; active?: boolean },
 ): Promise<CanvasList> {
+  if (PLANNER_DEMO_MODE) {
+    if (input.active && demoCanvasRecords[id]) demoActiveCanvasId = id
+    if (input.name && demoCanvasRecords[id]) {
+      demoCanvasRecords = {
+        ...demoCanvasRecords,
+        [id]: { ...demoCanvasRecords[id], name: input.name },
+      }
+    }
+    return Promise.resolve(demoCanvases())
+  }
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(input),
@@ -121,6 +534,18 @@ export function updateCanvas(
 }
 
 export function deleteCanvas(id: string): Promise<CanvasList> {
+  if (PLANNER_DEMO_MODE) {
+    if (id !== DEMO_CANVAS_ID) {
+      const nextCanvases = { ...demoCanvasRecords }
+      const nextNodes = { ...demoNodesByCanvasId }
+      delete nextCanvases[id]
+      delete nextNodes[id]
+      demoCanvasRecords = nextCanvases
+      demoNodesByCanvasId = nextNodes
+      if (demoActiveCanvasId === id) demoActiveCanvasId = DEMO_CANVAS_ID
+    }
+    return Promise.resolve(demoCanvases())
+  }
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
@@ -156,18 +581,835 @@ export function resolveCanvasConflict(
 export function spawnGlobalSession(
   canvasId: string,
   provider: SpawnProvider,
+  cwd?: string,
 ): Promise<{ ok: boolean; cwd: string; command: string }> {
   return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
     `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
     {
       method: 'POST',
-      body: JSON.stringify({ provider }),
+      body: JSON.stringify({ provider, cwd }),
+    },
+  )
+}
+
+// -- planner ---------------------------------------------------------------
+
+export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvasState> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoPlannerState(canvasId))
+  return jsonRequest<PlannerCanvasState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/state`)
+}
+
+export function fetchPlannerGraphState(canvasId: string): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    const state = demoPlannerState(canvasId)
+    return Promise.resolve({
+      ...state,
+      artifacts: state.artifacts ?? [],
+      edges: state.edges ?? [],
+    })
+  }
+  return jsonRequest<PlannerGraphState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`)
+}
+
+export function clearPlannerCanvasContent(canvasId: string): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    demoNodesByCanvasId[canvasId] = []
+    if (demoProposal?.canvasId === canvasId) demoProposal = null
+    const state = demoPlannerState(canvasId)
+    return Promise.resolve({
+      ...state,
+      artifacts: state.artifacts ?? [],
+      edges: state.edges ?? [],
+    })
+  }
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/clear`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export function fetchPlannerWorkspaceMonitor(): Promise<PlannerMonitorState> {
+  if (PLANNER_DEMO_MODE) {
+    const generatedAt = new Date().toISOString()
+    const items = Object.values(demoNodesByCanvasId).flat().map((node, index) => {
+      const state = demoNodeState(node)
+      return {
+        id: `monitor-${node.id}`,
+        kind: 'node' as const,
+        canvasId: node.canvasId,
+        canvasTitle: node.canvasId === DEMO_SUB_CANVAS_ID ? 'Release Readiness' : 'meee2 AI Demo',
+        nodeId: node.id,
+        nodeTitle: node.title,
+        proposalId: null,
+        proposalStatus: null,
+        summary: node.title,
+        runState: state.runState,
+        blockers: state.blockers,
+        needsOwnerReview: state.needsOwnerReview,
+        doerId: node.doerId,
+        riskRank: node.status === 'blocked' ? 0 : index + 2,
+      }
+    })
+    return Promise.resolve({ generatedAt, items })
+  }
+  return jsonRequest<PlannerMonitorState>('/api/planner/monitor')
+}
+
+export function sendPlannerActivity(input: {
+  canvasId: string
+  selectedNodeId?: string | null
+  selectedSessionId?: string | null
+}): Promise<{ activity: PlannerActivity }> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      activity: {
+        userId: DEMO_OWNER_ID,
+        displayName: 'Owner',
+        currentCanvasId: input.canvasId,
+        selectedNodeId: input.selectedNodeId ?? null,
+        selectedSessionId: input.selectedSessionId ?? null,
+        lastActiveAt: new Date().toISOString(),
+      },
+    })
+  }
+  return jsonRequest('/api/planner/activity', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function generatePlannerProposal(
+  canvasId: string,
+  goal: string,
+  context?: string,
+): Promise<PlanProposal | null> {
+  if (PLANNER_DEMO_MODE) {
+    demoProposal = nextDemoProposal(
+      canvasId,
+      `Generate meee2 AI graph for: ${goal || 'owner goal'}`,
+      goal ? `Owner review: ${goal}` : 'Owner review checkpoint',
+    )
+    return demoProposal
+  }
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/generate`,
+    {
+      method: 'POST',
+      body: JSON.stringify(context?.trim() ? { goal, context } : { goal }),
+    },
+  )
+  return response.proposal
+}
+
+export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposal | null> {
+  if (PLANNER_DEMO_MODE) {
+    const blocked = demoNodesByCanvasId[canvasId]?.find((node) => node.status === 'blocked')
+      ?? demoNodesByCanvasId[DEMO_CANVAS_ID].find((node) => node.status === 'blocked')
+    if (!blocked) return null
+    demoProposal = {
+      id: `drift-${Date.now()}`,
+      canvasId: blocked.canvasId,
+      summary: `Resolve drift around ${blocked.title}`,
+      status: 'pending',
+      changes: [{
+        kind: 'updateNode',
+        nodeId: blocked.id,
+        title: `${blocked.title} - needs attention`,
+        status: 'draft',
+      }],
+    }
+    return demoProposal
+  }
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/inspect-drift`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export async function refinePlannerNode(
+  canvasId: string,
+  nodeId: string,
+  reason: string,
+): Promise<PlanProposal | null> {
+  if (PLANNER_DEMO_MODE) {
+    const node = demoNodesByCanvasId[canvasId]?.find((item) => item.id === nodeId)
+    if (!node) return null
+    demoProposal = nextDemoProposal(canvasId, `Refine ${node.title}: ${reason}`, `Refined follow-up for ${node.title}`)
+    return demoProposal
+  }
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/refine`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ nodeId, reason }),
+    },
+  )
+  return response.proposal
+}
+
+export function applyPlannerProposalPreview(
+  canvasId: string,
+  proposal: PlanProposal,
+): Promise<{
+  proposal: PlanProposal
+  nodes: PlannerCanvasState['nodes']
+  states: PlannerCanvasState['states']
+}> {
+  if (PLANNER_DEMO_MODE) {
+    const nodes = applyDemoChanges(demoNodesByCanvasId[canvasId] ?? demoNodesByCanvasId[DEMO_CANVAS_ID], proposal)
+    return Promise.resolve({
+      proposal: { ...proposal, status: proposal.status === 'pending' ? 'approved' : proposal.status },
+      nodes,
+      states: nodes.map(demoNodeState),
+    })
+  }
+  return jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/apply-preview`, {
+    method: 'POST',
+    body: JSON.stringify({ proposal }),
+  })
+}
+
+export async function approvePlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<PlanProposal | null> {
+  if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
+    demoProposal = { ...demoProposal, status: 'approved' }
+    return demoProposal
+  }
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/approve`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export function applyPlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<{
+  proposal: PlanProposal
+  nodes: PlannerCanvasState['nodes']
+  states: PlannerCanvasState['states']
+}> {
+  if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
+    const canvasIdToApply = demoProposal.canvasId
+    const nodes = applyDemoChanges(demoNodesByCanvasId[canvasIdToApply] ?? [], demoProposal)
+    demoNodesByCanvasId = {
+      ...demoNodesByCanvasId,
+      [canvasIdToApply]: nodes,
+    }
+    demoProposal = { ...demoProposal, status: 'applied' }
+    return Promise.resolve({
+      proposal: demoProposal,
+      nodes,
+      states: nodes.map(demoNodeState),
+    })
+  }
+  return jsonRequest(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export async function rejectPlannerProposal(
+  canvasId: string,
+  proposalId: string,
+): Promise<PlanProposal | null> {
+  if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
+    demoProposal = { ...demoProposal, status: 'rejected' }
+    return demoProposal
+  }
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/${encodeURIComponent(proposalId)}/reject`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+export async function proposePlannerGraphChange(
+  canvasId: string,
+  input: { summary?: string; changes: PlanChange[] },
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/graph-change`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+  return response.proposal
+}
+
+export async function createPlannerDeliveryPipeline(canvasId: string): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/templates/delivery-pipeline`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+  return response.proposal
+}
+
+// bind-session and dispatch are EXECUTION-LAYER actions: they apply DIRECTLY
+// (no proposal / owner-approval gate, gated only by canUpdateAssignedNode) and
+// return the updated graph state — same shape as attach-artifact / layout.
+
+export function bindPlannerSessionToNode(
+  canvasId: string,
+  nodeId: string,
+  sessionId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/bind-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    },
+  )
+}
+
+export function dispatchPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+  runner: PlannerDispatchRunner = 'claude',
+  cwd?: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/dispatch`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ runner, cwd }),
+    },
+  )
+}
+
+export function updatePlannerNodeGate(
+  canvasId: string,
+  nodeId: string,
+  executionMode: 'human' | 'auto',
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/gate`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ executionMode }),
+    },
+  )
+}
+
+export function abandonPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/abandon-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export function detachPlannerNodeSession(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/detach-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    },
+  )
+}
+
+export interface ResumeClosedPlannerSessionResult {
+  sessionId: string
+  nodeIds: string[]
+  cwd: string
+  command: string
+}
+
+export interface ResumeClosedPlannerSessionsResponse {
+  resumed: ResumeClosedPlannerSessionResult[]
+  skipped: Array<{ sessionId: string; reason: string }>
+}
+
+export function resumeClosedPlannerSessions(
+  canvasId: string,
+  sessionIds: string[],
+): Promise<ResumeClosedPlannerSessionsResponse> {
+  return jsonRequest<ResumeClosedPlannerSessionsResponse>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/sessions/resume-closed`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionIds }),
+    },
+  )
+}
+
+// -- P1/P3: Workflow Run layer --------------------------------------------
+
+export interface StartPlannerDeliveryInput {
+  title: string
+  summary?: string
+  responsibleUserId?: string | null
+  linkedArtifactRefs?: string[]
+}
+
+/** Start a new Delivery over the canvas's current Plan. */
+export async function startPlannerRun(
+  canvasId: string,
+  input?: StartPlannerDeliveryInput,
+): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries`,
+    { method: 'POST', body: JSON.stringify(input ?? {}) },
+  )
+  return res.run
+}
+
+/** Delivery history for a canvas (creation order). */
+export async function fetchPlannerRuns(canvasId: string): Promise<WorkflowRun[]> {
+  const res = await jsonRequest<{ runs: WorkflowRun[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries`,
+  )
+  return res.runs
+}
+
+/** A single run's full execution state. */
+export async function fetchPlannerRun(runId: string): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/runs/${encodeURIComponent(runId)}`,
+  )
+  return res.run
+}
+
+/** Human-terminate a run. */
+export async function abortPlannerRun(runId: string): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/runs/${encodeURIComponent(runId)}/abort`,
+    { method: 'POST', body: '{}' },
+  )
+  return res.run
+}
+
+export async function updatePlannerDeliveryNodeAssignee(
+  canvasId: string,
+  deliveryId: string,
+  nodeId: string,
+  assigneeId: string | null,
+): Promise<WorkflowRun> {
+  const res = await jsonRequest<{ run: WorkflowRun }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/deliveries/${encodeURIComponent(deliveryId)}/nodes/${encodeURIComponent(nodeId)}/assignee`,
+    { method: 'PATCH', body: JSON.stringify({ assigneeId }) },
+  )
+  return res.run
+}
+
+export function fetchPlannerNodeContract(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerNodeContract> {
+  return jsonRequest<PlannerNodeContract>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/contract`,
+  )
+}
+
+export function submitPlannerNodeOutput(
+  canvasId: string,
+  nodeId: string,
+  output: PlannerNodeOutput,
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/output`,
+    {
+      method: 'POST',
+      body: JSON.stringify(output),
+    },
+  )
+}
+
+export function getPlannerArtifactContent(
+  canvasId: string,
+  artifactId: string,
+): Promise<PlannerArtifactContent> {
+  return jsonRequest<PlannerArtifactContent>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/content`,
+  )
+}
+
+export function attachPlannerArtifactToNode(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    kind?: PlannerArtifactKind
+    title?: string
+    reference: string
+    status?: string
+    payload?: unknown
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifacts`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function updatePlannerNodeStatus(
+  canvasId: string,
+  nodeId: string,
+  status: PlanningNodeStatus,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/status`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    },
+  )
+}
+
+export function updatePlannerNodeSchedule(
+  canvasId: string,
+  nodeId: string,
+  input: { enabled: boolean; intervalSeconds?: number; prompt?: string },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/schedule`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function deletePlannerNode(
+  canvasId: string,
+  nodeId: string,
+): Promise<PlannerGraphState> {
+  if (PLANNER_DEMO_MODE) {
+    const nodes = demoNodesByCanvasId[canvasId] ?? []
+    demoNodesByCanvasId = {
+      ...demoNodesByCanvasId,
+      [canvasId]: nodes
+        .filter((node) => node.id !== nodeId)
+        .map((node) => ({
+          ...node,
+          dependsOnNodeIds: node.dependsOnNodeIds?.filter((dependencyId) => dependencyId !== nodeId),
+        })),
+    }
+    return fetchPlannerGraphState(canvasId)
+  }
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function bindPlannerNodeInput(
+  canvasId: string,
+  nodeId: string,
+  input: {
+    input: string
+    reference: string
+    kind?: ContextSourceKind
+    title?: string
+  },
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/inputs`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+export function openKanbanItemSubCanvas(
+  canvasId: string,
+  artifactId: string,
+  itemId: string,
+  input: { title?: string; scope?: CanvasScope; existingSubCanvasId?: string | null },
+): Promise<{ subCanvasId: string; action: 'opened' | 'created' | 'replaced_missing'; message: string; graph: PlannerGraphState }> {
+  return jsonRequest<{ subCanvasId: string; action: 'opened' | 'created' | 'replaced_missing'; message: string; graph: PlannerGraphState }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/kanban-items/${encodeURIComponent(itemId)}/sub-canvas`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    },
+  )
+}
+
+// -- integrations (Phase 5: 真接入) ----------------------------------------
+//
+// Read-only browsing endpoints. The actual attach still goes through
+// attachPlannerArtifactToNode above — these only let the user pick an item.
+
+/** Demo fixtures, consistent with the PLANNER_DEMO_MODE pattern elsewhere. */
+function demoGithubRepos(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2',
+        title: 'tianqixinxi/meee2',
+        subtitle: 'private',
+        reference: 'https://github.com/tianqixinxi/meee2',
+        suggestedArtifactKind: 'generic',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoGithubPulls(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2#42',
+        title: '#42 Add planner graph workflow shell',
+        subtitle: 'merged → main',
+        reference: 'https://github.com/tianqixinxi/meee2/pull/42',
+        suggestedArtifactKind: 'main-merge',
+      },
+      {
+        id: 'tianqixinxi/meee2#48',
+        title: '#48 Phase 5 integrations',
+        subtitle: 'open → main',
+        reference: 'https://github.com/tianqixinxi/meee2/pull/48',
+        suggestedArtifactKind: 'impl-pr',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoGithubIssues(): ExternalItemsResult {
+  return {
+    provider: 'github',
+    items: [
+      {
+        id: 'tianqixinxi/meee2#7',
+        title: '#7 Planner artifact picker',
+        subtitle: 'open',
+        reference: 'https://github.com/tianqixinxi/meee2/issues/7',
+        suggestedArtifactKind: 'idea-draft',
+      },
+    ],
+    notice: null,
+  }
+}
+
+function demoLarkDocs(): ExternalItemsResult {
+  return {
+    provider: 'lark',
+    items: [],
+    notice: 'TODO(lark): doc search not wired yet. Contract is final; list is empty.',
+  }
+}
+
+/** GET /api/integrations/status — per-integration connection status. */
+/** GET /api/integrations/github/repos — repos the GitHub token can see. */
+export function fetchGithubRepos(): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubRepos())
+  return jsonRequest<ExternalItemsResult>('/api/integrations/github/repos')
+}
+
+/** GET /api/integrations/github/repos/:owner/:repo/pulls */
+export function fetchGithubPulls(owner: string, repo: string): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubPulls())
+  return jsonRequest<ExternalItemsResult>(
+    `/api/integrations/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`,
+  )
+}
+
+/** GET /api/integrations/github/repos/:owner/:repo/issues */
+export function fetchGithubIssues(owner: string, repo: string): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoGithubIssues())
+  return jsonRequest<ExternalItemsResult>(
+    `/api/integrations/github/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+  )
+}
+
+/** GET /api/integrations/lark/docs — see TODO(lark) on the backend. */
+export function fetchLarkDocs(): Promise<ExternalItemsResult> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(demoLarkDocs())
+  return jsonRequest<ExternalItemsResult>('/api/integrations/lark/docs')
+}
+
+// -- agent-integration-detection -------------------------------------------
+
+/** GET /api/integrations/agent-scan — agent × integration detection matrix. */
+export function fetchAgentScan(): Promise<AgentScanResult> {
+  return jsonRequest<AgentScanResult>('/api/integrations/agent-scan')
+}
+
+/** GET /api/integrations/side-effects?canvasId= — per-node side effects. */
+export function fetchCanvasSideEffects(canvasId: string): Promise<CanvasSideEffectsResult> {
+  return jsonRequest<CanvasSideEffectsResult>(
+    `/api/integrations/side-effects?canvasId=${encodeURIComponent(canvasId)}`,
+  )
+}
+
+/** POST /api/integrations/:id/install — Pattern A one-click install. */
+export function installIntegration(integrationId: string): Promise<IntegrationInstallResult> {
+  return jsonRequest<IntegrationInstallResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/install`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
+/** POST /api/integrations/:id/recommend-workflow —— planner agent 提议
+ *  一份使用刚装好这个 integration 的小流程到 `canvasId`,产物是一条
+ *  pending PlanProposal,会在 planner UI 的审批闸门里出现。 */
+export async function recommendIntegrationWorkflow(
+  integrationId: string,
+  canvasId: string,
+): Promise<PlanProposal | null> {
+  const result = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/recommend-workflow`,
+    { method: 'POST', body: JSON.stringify({ canvasId }) },
+  )
+  return result?.proposal ?? null
+}
+
+/** POST /api/integrations/:id/runbook — generate the connect runbook. */
+export function generateIntegrationRunbook(integrationId: string): Promise<IntegrationRunbookResult> {
+  return jsonRequest<IntegrationRunbookResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/runbook`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
+/** POST /api/integrations/:id/complete-auth — one-click OAuth: kick off the
+ *  `mcp-remote` shim against the integration's URL, which opens the browser
+ *  for the user to authorize and caches the token to `~/.mcp-auth/`. After
+ *  that, both Claude Code and Codex pick up the token transparently. */
+export interface CompleteAuthResult {
+  integrationId: string
+  spawned: boolean
+  /** The MCP server URL (e.g. https://mcp.clickhouse.cloud/mcp). */
+  url: string
+  /** OAuth URL extracted from the spawned shim's log. Open this if the
+   *  browser didn't pop automatically. Null when extraction timed out. */
+  authUrl: string | null
+  logPath: string
+  message: string
+}
+
+export function completeIntegrationAuth(integrationId: string): Promise<CompleteAuthResult> {
+  return jsonRequest<CompleteAuthResult>(
+    `/api/integrations/${encodeURIComponent(integrationId)}/complete-auth`,
+    { method: 'POST', body: '{}' },
+  )
+}
+
+export async function createPlannerSubCanvasFromNode(
+  canvasId: string,
+  nodeId: string,
+  title?: string,
+): Promise<PlanProposal | null> {
+  const response = await jsonRequest<{ proposal: PlanProposal | null }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/sub-canvas`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    },
+  )
+  return response.proposal
+}
+
+/**
+ * PATCH …/canvases/:id/visibility — owner-only public/private toggle. This is
+ * canvas metadata, not a graph proposal, so it applies immediately and returns
+ * the updated canvas record.
+ */
+export async function setPlannerCanvasVisibility(
+  canvasId: string,
+  visibility: PlannerCanvasVisibility,
+): Promise<PlanningCanvas> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      id: canvasId,
+      ownerId: DEMO_OWNER_ID,
+      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      plannerContext: `canvas:${canvasId}`,
+      visibility,
+    })
+  }
+  const response = await jsonRequest<{ canvas: PlanningCanvas }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/visibility`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ visibility }),
+    },
+  )
+  return response.canvas
+}
+
+export async function setPlannerCanvasDescription(
+  canvasId: string,
+  description: string,
+): Promise<PlanningCanvas> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      id: canvasId,
+      ownerId: DEMO_OWNER_ID,
+      title: demoCanvasRecords[canvasId]?.name ?? 'meee2 AI Demo',
+      plannerContext: description.trim() || `canvas:${canvasId}`,
+      visibility: demoCanvasRecords[canvasId]?.scope === 'team' ? 'public' : 'private',
+    })
+  }
+  const response = await jsonRequest<{ canvas: PlanningCanvas }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/description`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ description }),
+    },
+  )
+  return response.canvas
+}
+
+export function updatePlannerNodeLayout(
+  canvasId: string,
+  nodeId: string,
+  layout: PlannerNodeLayout,
+): Promise<PlannerGraphState> {
+  return jsonRequest<PlannerGraphState>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/layout`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(layout),
     },
   )
 }
 
 export interface UserProfile {
   connected: boolean
+  userId: string
   displayName: string
   userName: string
   userEmail: string
@@ -194,7 +1436,66 @@ export interface UserProfile {
 }
 
 export function fetchUserProfile(): Promise<UserProfile> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      connected: false,
+      userId: DEMO_OWNER_ID,
+      displayName: 'Demo User',
+      userName: 'demo',
+      userEmail: '',
+      userAvatarUrl: '',
+      initials: 'DU',
+      dashboardUrl: '',
+      connectUrl: '',
+      defaultSyncEnabled: false,
+      defaultSyncTeamId: '',
+      defaultSyncTeamName: '',
+      teams: [],
+      sessionSync: [],
+    })
+  }
   return jsonRequest<UserProfile>('/api/user-profile')
+}
+
+/** One identity in the team member directory, keyed by `userId`. */
+export interface TeamMember {
+  userId: string
+  displayName: string
+  avatarUrl?: string | null
+  /** Team-level membership role, or null when known only from local signals. */
+  role?: string | null
+}
+
+/**
+ * Authoritative team member directory for the planner graph. The graph keys
+ * avatar / displayName lookups by `userId` from this source.
+ */
+export function fetchTeamMembers(): Promise<{ members: TeamMember[] }> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      members: [
+        {
+          userId: DEMO_OWNER_ID,
+          displayName: 'Demo Owner',
+          avatarUrl: null,
+          role: 'owner',
+        },
+        {
+          userId: 'demo-doer-anna',
+          displayName: 'Anna Doer',
+          avatarUrl: null,
+          role: 'member',
+        },
+        {
+          userId: 'demo-doer-ben',
+          displayName: 'Ben Builder',
+          avatarUrl: null,
+          role: 'member',
+        },
+      ],
+    })
+  }
+  return jsonRequest<{ members: TeamMember[] }>('/api/team/members')
 }
 
 export function openMeee2OnlineConnect(): Promise<{ ok: boolean }> {
@@ -630,6 +1931,23 @@ export async function assistantChat(
     if (ev.type === 'error') throw new ApiRequestError('assistant', ev.message, 500)
   }
   return { content }
+}
+
+export interface LocalAssistantSessionMessage {
+  id: string
+  role: 'user' | 'assistant' | 'injected'
+  content: string
+  timestamp?: string | null
+}
+
+export async function fetchLocalAssistantSessionMessages(
+  canvasId: string,
+  limit = 80,
+): Promise<{ sessionId: string; messages: LocalAssistantSessionMessage[] }> {
+  const params = new URLSearchParams()
+  if (canvasId) params.set('canvasId', canvasId)
+  params.set('limit', String(limit))
+  return jsonRequest(`/api/assistant/local-session/messages?${params.toString()}`)
 }
 
 // -- transcript ------------------------------------------------------------

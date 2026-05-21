@@ -137,6 +137,23 @@ final class AssistantProviderTests: XCTestCase {
         }
     }
 
+    // MARK: - claude CLI args
+
+    func testLocalClaudeArgsUseStableSessionPersistence() {
+        let provider = LocalClaudeProvider()
+        let args = provider.claudeArguments(
+            systemPrompt: "BASE",
+            sessionId: "11111111-1111-1111-1111-111111111111",
+            sessionName: "meee2ai:Canvas"
+        )
+        XCTAssertTrue(args.contains("-p"))
+        XCTAssertTrue(args.contains("--session-id"))
+        XCTAssertTrue(args.contains("11111111-1111-1111-1111-111111111111"))
+        XCTAssertTrue(args.contains("--name"))
+        XCTAssertTrue(args.contains("meee2ai:Canvas"))
+        XCTAssertFalse(args.contains("--no-session-persistence"))
+    }
+
     // MARK: - Provider factory
 
     func testFactoryReturnsCorrectProviderForEachKind() {

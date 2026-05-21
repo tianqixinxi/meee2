@@ -32,6 +32,11 @@ private let _ghosttySnapshotLock = NSLock()
 private var _ghosttySnapshot: GhosttyReachabilitySnapshot?
 private var _ghosttySnapshotRefreshInFlight = false
 
+private func stateTraceLog(_ message: @autoclosure () -> String) {
+    guard UserDefaults.standard.bool(forKey: "stateTraceLoggingEnabled") else { return }
+    NSLog(message())
+}
+
 private func ghosttyReachabilitySnapshot() -> GhosttyReachabilitySnapshot {
     let now = Date()
     var shouldRefresh = false
@@ -199,7 +204,7 @@ public enum TranscriptStatusResolver {
         _resolvedCacheLock.lock()
         _resolvedCache.removeValue(forKey: sessionId)
         _resolvedCacheLock.unlock()
-        NSLog("[StateTrace][resolver] sid=\(sessionId.prefix(8)) cache INVALIDATED")
+        stateTraceLog("[StateTrace][resolver] sid=\(sessionId.prefix(8)) cache INVALIDATED")
     }
 
     /// 对 SessionData 做一次解析 —— Island / TUI / Board 三端的唯一入口。
@@ -219,7 +224,7 @@ public enum TranscriptStatusResolver {
            info.termProgram == "ghostty",
            let tty = info.tty, !tty.isEmpty {
             if !ghosttyHasTty(tty) {
-                NSLog("[StateTrace][resolver] sid=\(sid.prefix(8)) hook=\(data.status.rawValue) → DEAD (Ghostty orphan: tty=\(tty) has no live terminal)")
+                stateTraceLog("[StateTrace][resolver] sid=\(sid.prefix(8)) hook=\(data.status.rawValue) → DEAD (Ghostty orphan: tty=\(tty) has no live terminal)")
                 _resolvedCacheLock.lock()
                 _resolvedCache[sid] = ResolvedCacheEntry(at: Date(), status: .dead)
                 _resolvedCacheLock.unlock()
@@ -245,21 +250,21 @@ public enum TranscriptStatusResolver {
 
         // Step 0: process liveness
         if let pid = pid, !SessionStore.processAlive(pid) {
-            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (pid \(pid) gone)")
+            stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (pid \(pid) gone)")
             return .dead
         }
 
         // Step 0.5: Ghostty reachability (cached)
         if let gtid = ghosttyTerminalId, !gtid.isEmpty {
             if !terminalAlive(gtid) {
-                NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (ghostty \(gtid.prefix(8)) gone)")
+                stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → DEAD (ghostty \(gtid.prefix(8)) gone)")
                 return .dead
             }
         }
 
         // Step 1: read tail & find last user/assistant/system entry.
         guard let tail = readTail(path: transcriptPath, bytes: 4096) else {
-            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no transcript)")
+            stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no transcript)")
             return hookStatus
         }
 
@@ -282,10 +287,10 @@ public enum TranscriptStatusResolver {
                _workingHooks.contains(hookStatus),
                let mtime = transcriptFileMtime(path: path),
                Date().timeIntervalSince(mtime) > _staleTranscriptFileThreshold {
-                NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → idle (no-relevant-entry+transcript-mtime-stale(>\(Int(_staleTranscriptFileThreshold))s))")
+                stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → idle (no-relevant-entry+transcript-mtime-stale(>\(Int(_staleTranscriptFileThreshold))s))")
                 return .idle
             }
-            NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no relevant entry)")
+            stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) → \(hookStatus.rawValue) (no relevant entry)")
             return hookStatus
         }
 
@@ -296,7 +301,7 @@ public enum TranscriptStatusResolver {
         // can hit the decision logic without transcript files or osascript.
         let (out, reason) = decideFromTail(last: last, hookStatus: hookStatus, now: Date())
 
-        NSLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) last={type=\(last.type) age=\(age) ts=\(tsStr)} → \(out.rawValue) (\(reason))")
+        stateTraceLog("[StateTrace][resolver] sid=\(sidTag) hook=\(hookStatus.rawValue) last={type=\(last.type) age=\(age) ts=\(tsStr)} → \(out.rawValue) (\(reason))")
         return out
     }
 

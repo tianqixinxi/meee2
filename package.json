@@ -5,7 +5,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "pnpm -r --filter './packages/*' build",
-    "build:web": "pnpm -F @meee1/board-app build",
+    "build:web": "pnpm -r --filter @meee1/board-app... build",
     "build:dev": "pnpm run build && swift build",
     "dev:web": "pnpm -F @meee1/board-app dev",
     "dev:shell": "./scripts/dev-board-shell.sh",
@@ -15,5 +15,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@meee1/board-core": "^0.1.1",
+    "@meee1/board-persistence-http": "^0.1.1"
   }
 }

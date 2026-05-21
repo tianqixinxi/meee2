@@ -28,6 +28,9 @@ public struct IslandView: View {
     /// 收起状态是否展示 session 信息
     @AppStorage("showSessionInCompact") private var showSessionInCompact: Bool = true
 
+    /// 是否展示灵动岛窗口。关闭时也禁止 urgent 自动展开。
+    @AppStorage("showIsland") private var showIsland: Bool = true
+
     /// 是否显示 buddy
     @AppStorage("showBuddy") private var showBuddy: Bool = true
 
@@ -285,7 +288,7 @@ public struct IslandView: View {
             if needsAttention && !isExpanded {
                 // urgent 自动展开必须尊重用户设置（"Auto expand when needs attention"）。
                 // 关闭时仅在 compact 上做被动指示（颜色 / dot），不主动弹窗。
-                guard autoExpandEnabled else {
+                guard showIsland, autoExpandEnabled else {
                     // NSLog("[IslandView] Auto expand suppressed by user setting")
                     return
                 }
@@ -300,11 +303,16 @@ public struct IslandView: View {
         .onChange(of: statusManager.systemStatus) { newStatus in
             // NSLog("[IslandView] systemStatus changed to: \(newStatus), autoExpand=\(autoExpandEnabled)")
             if newStatus == .needsAttention && !isExpanded {
-                guard autoExpandEnabled else {
+                guard showIsland, autoExpandEnabled else {
                     // NSLog("[IslandView] Auto expand suppressed by user setting (systemStatus path)")
                     return
                 }
                 openExpanded()
+            }
+        }
+        .onChange(of: showIsland) { visible in
+            if !visible, isExpanded {
+                closeExpanded()
             }
         }
         .sheet(item: $connectRequest) { req in
@@ -1352,6 +1360,7 @@ public struct IslandView: View {
     // MARK: - Timer Management
 
     private func toggleExpanded() {
+        guard showIsland else { return }
         // 清除所有悬停相关计时器
         cancelHoverTimers()
 
@@ -1363,6 +1372,7 @@ public struct IslandView: View {
     }
 
     private func openExpanded() {
+        guard showIsland else { return }
         cancelHoverTimers()
         withAnimation(animation) {
             isExpanded = true
@@ -1372,6 +1382,7 @@ public struct IslandView: View {
     }
 
     private func openByHover() {
+        guard showIsland else { return }
         cancelHoverTimers()
         withAnimation(animation) {
             isExpanded = true
@@ -1409,6 +1420,10 @@ public struct IslandView: View {
     // MARK: - Hover Handling
 
     private func handleHover(_ hovering: Bool) {
+        guard showIsland else {
+            cancelHoverTimers()
+            return
+        }
         isHovered = hovering
 
         if hovering {

@@ -199,6 +199,7 @@ struct SyncTeamDTO: Encodable {
 
 struct UserProfileDTO: Encodable {
     let connected: Bool
+    let userId: String
     let displayName: String
     let userName: String
     let userEmail: String
@@ -219,6 +220,23 @@ struct UserProfileSessionSyncDTO: Encodable {
     let pluginDisplayName: String
     let project: String
     let enabled: Bool
+}
+
+/// One identity in the team member directory — the authoritative source the
+/// planner graph keys avatar / displayName lookups by `userId`.
+struct TeamMemberDTO: Encodable {
+    let userId: String
+    let displayName: String
+    let avatarUrl: String?
+    /// Team-level role from meee2 Online membership (`owner` / `admin` /
+    /// `member`). `nil` when the member was discovered only locally (e.g. a
+    /// planner-node doer) and no membership role is known.
+    let role: String?
+}
+
+/// `GET /api/team/members` body.
+struct TeamMembersEnvelope: Encodable {
+    let members: [TeamMemberDTO]
 }
 
 /// 错误 DTO —— 所有 4xx/5xx 响应的 body
@@ -250,6 +268,55 @@ struct MessagesEnvelope: Encodable { let messages: [MessageDTO] }
 struct OkEnvelope: Encodable { let ok: Bool }
 struct CoordinationGroupEnvelope: Encodable { let group: CoordinationGroupDTO }
 struct CoordinationGroupsEnvelope: Encodable { let groups: [CoordinationGroupDTO] }
+struct PlannerCanvasStateEnvelope: Encodable {
+    let canvas: PlanningCanvas
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+    let proposals: [PlanProposal]
+    let access: PlannerAccess
+    let activities: [PlannerActivity]
+    let events: [PlannerEvent]
+    let artifacts: [PlannerArtifact]
+    let edges: [PlannerGraphEdge]
+}
+struct PlannerGraphStateEnvelope: Encodable {
+    let canvas: PlanningCanvas
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+    let proposals: [PlanProposal]
+    let access: PlannerAccess
+    let activities: [PlannerActivity]
+    let events: [PlannerEvent]
+    let artifacts: [PlannerArtifact]
+    let edges: [PlannerGraphEdge]
+}
+struct PlannerProposalEnvelope: Encodable {
+    let proposal: PlanProposal?
+}
+struct PlannerApplyPreviewEnvelope: Encodable {
+    let proposal: PlanProposal
+    let nodes: [PlanningNode]
+    let states: [NodeStateSnapshot]
+}
+struct PlannerMonitorEnvelope: Encodable {
+    let generatedAt: Date
+    let items: [PlannerMonitorItem]
+}
+struct PlannerActivityEnvelope: Encodable {
+    let activity: PlannerActivity
+}
+/// 响应 `PATCH /api/planner/canvases/:id/visibility`。
+struct PlannerCanvasVisibilityEnvelope: Encodable {
+    let canvas: PlanningCanvas
+}
+/// 响应单个 run 的端点(start / get / abort)。
+struct WorkflowRunEnvelope: Encodable {
+    let run: WorkflowRun
+}
+/// 响应 `GET /api/planner/canvases/:id/runs` —— run 历史。
+struct WorkflowRunsEnvelope: Encodable {
+    let runs: [WorkflowRun]
+}
 
 struct CardTemplateEnvelope: Encodable { let template: CardTemplateStore.Entry? }
 struct CardTemplatesEnvelope: Encodable { let templates: [CardTemplateStore.Entry] }
@@ -261,6 +328,7 @@ struct CanvasInfoDTO: Encodable {
     let id: String
     let name: String
     let scope: String
+    let kind: String
     let isDefault: Bool
     let workspacePath: String
     let teamId: String?

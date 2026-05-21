@@ -1,0 +1,8 @@
+.build
+.vercel
+node_modules
+Sources/Board/WebDist
+dist
+*.tsbuildinfo
+*.dmg
+*.zip

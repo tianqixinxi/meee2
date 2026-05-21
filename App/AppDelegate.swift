@@ -65,6 +65,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 用户选择的屏幕 ID
     @AppStorage("selectedScreenId") private var selectedScreenId: String = "builtin"
 
+    /// 是否展示灵动岛窗口
+    @AppStorage("showIsland") private var showIsland: Bool = true
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
         let launchStartedAt = Date()
         // 初始化日志管理器
@@ -102,7 +105,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
 
         // 创建灵动岛窗口
-        setupIslandWindow()
+        if showIsland {
+            setupIslandWindow()
+        }
 
         registerAppObservers()
 
@@ -259,6 +264,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        // 监听灵动岛显示开关
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(islandVisibilityDidChange),
+            name: .islandVisibilityChanged,
+            object: nil
+        )
+
         // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
         // "Check for Updates" 通知 → 在这里桥到 SPUStandardUpdaterController。
         // 这条通道把 Settings 那个按钮和 menubar "Check for Updates…" 完全
@@ -335,6 +348,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(NSMenuItem.separator())
         // 诊断入口 —— 客户报问题时第一指引：菜单点 Reveal Log →
         // 拖 meee2.log 发我；或 Copy Diagnostic Info 把版本/BoardServer
@@ -370,7 +386,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem?.menu = menu
 
-        // 点击图标时打开 Island（菜单通过右键或长按触发）
+        // 点击图标时打开 Island；Island 关闭时改为打开 Settings，避免入口丢失。
         if let button = statusItem?.button {
             button.target = self
             button.action = #selector(statusBarClicked)
@@ -418,6 +434,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openIsland() {
+        guard showIsland else { return }
         if islandWindow == nil {
             setupIslandWindow()
         }
@@ -426,8 +443,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 点击状态栏图标
     @objc private func statusBarClicked() {
-        // 左键点击：打开 Island
-        openIsland()
+        if showIsland {
+            openIsland()
+        } else {
+            openSettings()
+        }
     }
 
     @objc private func openSettings() {
@@ -679,14 +699,28 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screenSelectionDidChange() {
+        guard showIsland else { return }
         // 用户更改屏幕选择，重新定位窗口
         setupIslandWindow()
         positionIslandWindow()
     }
 
+    @objc private func islandVisibilityDidChange() {
+        if showIsland {
+            setupIslandWindow()
+        } else {
+            islandWindow?.orderOut(nil)
+        }
+    }
+
     // MARK: - Island Window
 
     private func setupIslandWindow() {
+        guard showIsland else {
+            islandWindow?.orderOut(nil)
+            return
+        }
+
         // 获取用户选择的屏幕
         guard let screen = getSelectedScreen() else { return }
 
@@ -761,6 +795,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func screenParametersDidChange() {
+        guard showIsland else { return }
+
         // 屏幕参数变化（接外接 / 拔外接 / 刘海机回来）时全量重算：
         //   1. 同步 deviceNotchSize  → 决定窗口宽高
         //   2. 同步 statusManager.notchSize → IslandView 内部 shape 几何
@@ -783,6 +819,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 重新读取当前屏 notch、同步 StatusManager、重排窗口。幂等。
     private func refreshIslandForCurrentScreen() {
+        guard showIsland else { return }
         guard let screen = getSelectedScreen() else { return }
 
         let detected = screen.notchSize

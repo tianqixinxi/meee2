@@ -99,6 +99,7 @@ public final class BoardServer {
                 }
                 writeRuntimeInfo()
                 subscribeToEventBus()
+                PlannerScheduleRunner.shared.start()
                 return
             } catch {
                 lastError = error
@@ -116,6 +117,7 @@ public final class BoardServer {
 
         busSubscription?.cancel()
         busSubscription = nil
+        PlannerScheduleRunner.shared.stop()
 
         wsLock.lock()
         for ws in wsSessions {
@@ -368,12 +370,16 @@ public final class BoardServer {
             ]))
         }
         server.GET["/api/state"]   = BoardServer.cors(BoardAPI.getState)
+        server.GET["/api/system/meee2-mcp-status"] = BoardServer.cors(BoardAPI.getMeee2MCPStatus)
+        server.GET["/api/system/meee2-agent-runtime-status"] = BoardServer.cors(BoardAPI.getMeee2AgentRuntimeStatus)
+        server.POST["/api/system/meee2-agent-runtime-install"] = BoardServer.cors(BoardAPI.installMeee2AgentRuntime)
         server.GET["/api/user-profile"] = BoardServer.cors(BoardAPI.getUserProfile)
         server.POST["/api/user-profile/connect"] = BoardServer.cors(BoardAPI.openMeee2OnlineConnect)
         server.POST["/api/user-profile/dashboard"] = BoardServer.cors(BoardAPI.openMeee2OnlineDashboard)
         server.POST["/api/user-profile/settings"] = BoardServer.cors(BoardAPI.openMeee2Settings)
         server.PATCH["/api/user-profile"] = BoardServer.cors(BoardAPI.updateUserProfile)
         server.DELETE["/api/user-profile"] = BoardServer.cors(BoardAPI.disconnectMeee2Online)
+        server.GET["/api/team/members"] = BoardServer.cors(BoardAPI.getTeamMembers)
         server.GET["/api/automations"] = BoardServer.cors(BoardAPI.listAutomations)
         server.POST["/api/automations"] = BoardServer.cors(BoardAPI.createAutomation)
         server.POST["/api/automations/:id/run"] = BoardServer.cors(BoardAPI.runAutomation)
@@ -402,12 +408,67 @@ public final class BoardServer {
         server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
         server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
         server.POST["/api/canvases/:id/conflict"] = BoardServer.cors(BoardAPI.resolveCanvasConflict)
+        server.GET["/api/planner/monitor"] = BoardServer.cors(BoardAPI.getPlannerWorkspaceMonitor)
+        server.POST["/api/planner/activity"] = BoardServer.cors(BoardAPI.updatePlannerActivity)
+        server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)
+        server.GET["/api/planner/canvases/:id/graph"] = BoardServer.cors(BoardAPI.getPlannerGraphState)
+        server.POST["/api/planner/canvases/:id/clear"] = BoardServer.cors(BoardAPI.clearPlannerCanvasContent)
+        server.PATCH["/api/planner/canvases/:id/visibility"] = BoardServer.cors(BoardAPI.setPlannerCanvasVisibility)
+        server.PATCH["/api/planner/canvases/:id/description"] = BoardServer.cors(BoardAPI.setPlannerCanvasDescription)
+        server.POST["/api/planner/canvases/:id/proposals/generate"] = BoardServer.cors(BoardAPI.generatePlannerProposal)
+        server.POST["/api/planner/canvases/:id/proposals/refine"] = BoardServer.cors(BoardAPI.refinePlannerProposal)
+        server.POST["/api/planner/canvases/:id/proposals/inspect-drift"] = BoardServer.cors(BoardAPI.inspectPlannerDrift)
+        server.POST["/api/planner/canvases/:id/proposals/apply-preview"] = BoardServer.cors(BoardAPI.applyPlannerProposalPreview)
+        server.POST["/api/planner/canvases/:id/proposals/graph-change"] = BoardServer.cors(BoardAPI.proposePlannerGraphChange)
+        server.POST["/api/planner/canvases/:id/templates/delivery-pipeline"] = BoardServer.cors(BoardAPI.createPlannerDeliveryPipeline)
+        server.POST["/api/planner/canvases/:id/proposals/:proposalId/approve"] = BoardServer.cors(BoardAPI.approvePlannerProposal)
+        server.POST["/api/planner/canvases/:id/proposals/:proposalId/apply"] = BoardServer.cors(BoardAPI.applyPlannerProposal)
+        server.POST["/api/planner/canvases/:id/proposals/:proposalId/reject"] = BoardServer.cors(BoardAPI.rejectPlannerProposal)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/bind-session"] = BoardServer.cors(BoardAPI.bindPlannerSessionToNode)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/dispatch"] = BoardServer.cors(BoardAPI.dispatchPlannerNodeSession)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/abandon-session"] = BoardServer.cors(BoardAPI.abandonPlannerNodeSession)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/detach-session"] = BoardServer.cors(BoardAPI.detachPlannerNodeSession)
+        server.POST["/api/planner/canvases/:id/sessions/resume-closed"] = BoardServer.cors(BoardAPI.resumeClosedPlannerSessions)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/artifacts"] = BoardServer.cors(BoardAPI.attachPlannerArtifactToNode)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/inputs"] = BoardServer.cors(BoardAPI.bindPlannerNodeInput)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/status"] = BoardServer.cors(BoardAPI.updatePlannerNodeStatus)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/gate"] = BoardServer.cors(BoardAPI.updatePlannerNodeGate)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/schedule"] = BoardServer.cors(BoardAPI.updatePlannerNodeSchedule)
+        server.DELETE["/api/planner/canvases/:id/nodes/:nodeId"] = BoardServer.cors(BoardAPI.deletePlannerNode)
+        server.GET["/api/planner/canvases/:id/nodes/:nodeId/contract"] = BoardServer.cors(BoardAPI.getPlannerNodeContract)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/output"] = BoardServer.cors(BoardAPI.submitPlannerNodeOutput)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/sub-canvas"] = BoardServer.cors(BoardAPI.createPlannerSubCanvasFromNode)
+        server.GET["/api/planner/canvases/:id/artifacts/:artifactId/content"] = BoardServer.cors(BoardAPI.getPlannerArtifactContent)
+        server.POST["/api/planner/canvases/:id/artifacts/:artifactId/kanban-items/:itemId/sub-canvas"] = BoardServer.cors(BoardAPI.openKanbanItemSubCanvas)
+        server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/layout"] = BoardServer.cors(BoardAPI.updatePlannerNodeLayout)
+        // P1 Run layer — start / list / inspect / abort workflow runs.
+        server.POST["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.startPlannerRun)
+        server.GET["/api/planner/canvases/:id/runs"] = BoardServer.cors(BoardAPI.listPlannerRuns)
+        server.POST["/api/planner/canvases/:id/deliveries"] = BoardServer.cors(BoardAPI.startPlannerRun)
+        server.GET["/api/planner/canvases/:id/deliveries"] = BoardServer.cors(BoardAPI.listPlannerRuns)
+        server.PATCH["/api/planner/canvases/:id/deliveries/:deliveryId/nodes/:nodeId/assignee"] = BoardServer.cors(BoardAPI.updatePlannerDeliveryNodeAssignee)
+        server.GET["/api/planner/runs/:runId"] = BoardServer.cors(BoardAPI.getPlannerRun)
+        server.POST["/api/planner/runs/:runId/abort"] = BoardServer.cors(BoardAPI.abortPlannerRun)
         server.GET["/api/coordination-groups"] = BoardServer.cors(BoardAPI.listCoordinationGroups)
         server.POST["/api/coordination-groups/:id/sync"] = BoardServer.cors(BoardAPI.syncCoordinationGroup)
         server.POST["/api/coordination-groups/:id/ask"] = BoardServer.cors(BoardAPI.askCoordinationGroup)
         server.POST["/api/coordination-groups/:id/pause"] = BoardServer.cors(BoardAPI.pauseCoordinationGroup)
         server.POST["/api/coordination-groups/:id/resume"] = BoardServer.cors(BoardAPI.resumeCoordinationGroup)
         server.DELETE["/api/coordination-groups/:id/members/:sessionId"] = BoardServer.cors(BoardAPI.removeCoordinationMember)
+
+        // Phase 5 — Integrations (真接入). Read-only browsing of external
+        // items. The actual artifact attach still goes through the existing
+        // /api/planner/canvases/:id/nodes/:nodeId/artifacts endpoint.
+        server.GET["/api/integrations/agent-scan"] = BoardServer.cors(IntegrationsAPI.getAgentScan)
+        server.GET["/api/integrations/side-effects"] = BoardServer.cors(IntegrationsAPI.getCanvasSideEffects)
+        server.POST["/api/integrations/:id/install"] = BoardServer.cors(IntegrationsAPI.installIntegration)
+        server.POST["/api/integrations/:id/complete-auth"] = BoardServer.cors(IntegrationsAPI.completeAuth)
+        server.POST["/api/integrations/:id/recommend-workflow"] = BoardServer.cors(IntegrationsAPI.recommendWorkflow)
+        server.POST["/api/integrations/:id/runbook"] = BoardServer.cors(IntegrationsAPI.generateRunbook)
+        server.GET["/api/integrations/github/repos"] = BoardServer.cors(IntegrationsAPI.getGithubRepos)
+        server.GET["/api/integrations/github/repos/:owner/:repo/pulls"] = BoardServer.cors(IntegrationsAPI.getGithubPulls)
+        server.GET["/api/integrations/github/repos/:owner/:repo/issues"] = BoardServer.cors(IntegrationsAPI.getGithubIssues)
+        server.GET["/api/integrations/lark/docs"] = BoardServer.cors(IntegrationsAPI.getLarkDocs)
 
         // External chat session push (browser extension content scripts at
         // chatgpt.com / claude.ai). All CORS-wrapped — they hit localhost
@@ -429,6 +490,7 @@ public final class BoardServer {
 
         // --- Global assistant (claude -p driven "ask & spawn") ---
         server.POST["/api/assistant/chat"] = AssistantAPI.chat
+        server.GET["/api/assistant/local-session/messages"] = BoardServer.cors(AssistantAPI.localSessionMessages)
 
         // --- Card Templates ---
         server.GET["/api/card-templates"]         = BoardAPI.listCardTemplates

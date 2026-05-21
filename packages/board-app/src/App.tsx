@@ -1,6 +1,5 @@
 import {
   createContext,
-  type SetStateAction,
   useCallback,
   useContext,
   useEffect,
@@ -8,27 +7,24 @@ import {
   useRef,
   useState,
 } from 'react'
-import Board from './components/Board'
-import Sidebar from './components/Sidebar'
 import { CanvasToolbar } from './components/CanvasToolbar'
-import { Dock, type DockHandle, type DockMode, type DisplayMessage } from './components/Dock'
-import NewChannelDialog from './components/NewChannelDialog'
+import { PlannerGraph } from './components/planner/PlannerGraph'
+import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
+import { SessionsView } from './components/SessionsView'
+import { IntegrationsView } from './components/IntegrationsView'
+import { TemplatesView } from './components/TemplatesView'
+import { TeamView } from './components/TeamView'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
+import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
-  CanvasPatchProposal,
-  CanvasPatchRequest,
   CanvasScope,
-  SelectedCanvasElementContext,
-  Selection,
+  Meee2AgentRuntimeStatus,
+  SpawnProvider,
 } from './types'
-import {
-  BOARD_PREFERENCES_CHANGED,
-  loadBoardGridEnabled,
-  spawnProviderLabel,
-} from './preferences'
-import { DEFAULT_TEMPLATE, getTemplate, templateIdForSession } from '@meee1/board-cards'
+import { spawnProviderLabel } from './preferences'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
   CanvasPersistence,
@@ -37,12 +33,15 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-  addSessionToCanvas,
   createCanvas,
+  clearPlannerCanvasContent,
   deleteCanvas,
   fetchCanvases,
-  removeSessionFromCanvas,
+  fetchMeee2AgentRuntimeStatus,
+  fetchUserProfile,
+  installMeee2AgentRuntime,
   updateCanvas,
+  type UserProfile,
 } from './api'
 
 interface HydratedState {
@@ -56,7 +55,11 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
-const MIN_CANVAS_LOADING_MS = 3000
+// Minimum loading-overlay duration when an uncached canvas is hydrated.
+// Previously 3000ms — that made every fresh canvas switch feel sluggish even
+// when the real fetch returned in <100ms. 250ms is enough to smooth flicker
+// for sub-perceptual loads without an artificial wait.
+const MIN_CANVAS_LOADING_MS = import.meta.env.VITE_PLANNER_DEMO === '1' ? 0 : 250
 
 async function loadCanvasHydratedState(
   canvasId: string,
@@ -107,14 +110,19 @@ function fallbackCanvasList(): CanvasList {
     memberships: [],
     canvases: [{
       id: FALLBACK_CANVAS_ID,
-      name: 'Default canvas',
+      name: 'My',
       scope: 'personal',
+      kind: 'board',
       isDefault: true,
       workspacePath: '',
       ownerUserId: 'local-user',
       teamId: null,
     }],
   }
+}
+
+function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): 'board' | 'template' {
+  return canvas?.kind === 'template' ? 'template' : 'board'
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -127,6 +135,7 @@ function canvasListSignature(list: CanvasList): string {
         id: canvas.id,
         name: canvas.name,
         scope: canvas.scope,
+        kind: canvas.kind === 'template' ? 'template' : 'board',
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
         ownerUserId: canvas.ownerUserId ?? null,
@@ -314,102 +323,23 @@ export default function App() {
     }
   }, [activeCanvasId, canvasList])
 
-  const handleSceneSnapshotChange = useCallback((snapshot: HydratedState) => {
-    const updated = {
-      ...canvasSceneCacheRef.current,
-      [snapshot.canvasId]: snapshot,
-    }
-    canvasSceneCacheRef.current = updated
-  }, [])
-
   const boardState = useBoardState(scheduleCanvasListRefresh)
-  const [selection, setSelection] = useState<Selection>({ kind: 'none' })
-  const [selectedCanvasElements, setSelectedCanvasElements] = useState<SelectedCanvasElementContext[]>([])
-  const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [newChannelOpen, setNewChannelOpen] = useState(false)
-  // 用户显式请求 dock 进入 assistant 模式（Ask AI 按钮
-  // 按钮 / group + 按钮）。selection.kind === 'session' 时若 dockOpen 但
-  // assistantRequested=false → mode='session'；assistantRequested=true → mode='assistant'。
-  // 键盘 hijack 在画板空白时也会 setAssistantRequested(true)。
-  // 替换了原来独立的 `assistantOpen` state，让所有触发路径汇到同一个 dock 入口。
-  const [assistantRequested, setAssistantRequested] = useState(false)
-  // Assistant 模式 chat 历史 lift 到 App level，跨 dock 开关持久化。只有
-  // 用户在 dock 里打 `/new-session`（或 /clear / /reset）才会清空。
-  const [assistantMessagesByCanvas, setAssistantMessagesByCanvas] = useState<Record<string, DisplayMessage[]>>({})
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [preferencesOpen, setPreferencesOpen] = useState(false)
-  const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
-  useEffect(() => {
-    const handler = () => setBoardGridEnabled(loadBoardGridEnabled())
-    window.addEventListener(BOARD_PREFERENCES_CHANGED, handler)
-    window.addEventListener('storage', handler)
-    return () => {
-      window.removeEventListener(BOARD_PREFERENCES_CHANGED, handler)
-      window.removeEventListener('storage', handler)
-    }
-  }, [])
-  // 每个 session 的"未读通知"集合：status 从工作态 → 休息态转换时加入；
-  // 用户点击 session card 时移除。持久化通过 persistence.saveUnreadSids。
-  // 初值在 hydrate 完成前是空集合 —— 但 hydrate 不完成就不渲染（return null 保护），
-  // 所以 transition 检测用到的旧值不会丢。
+  const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
+  const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
+  const [agentRuntimeInstallTarget, setAgentRuntimeInstallTarget] = useState<'claude' | 'codex' | 'all' | null>(null)
+  const [agentRuntimeInstallError, setAgentRuntimeInstallError] = useState<string | null>(null)
+  const [agentRuntimeInstallLogs, setAgentRuntimeInstallLogs] = useState<string[]>([])
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     if (hydrated) setUnreadSids(hydrated.unreadSids)
   }, [hydrated])
-  // 上一次看到的每个 session 的 status，用来检测转换
   const prevStatusRef = useRef<Record<string, string>>({})
-  const [fitSignal, setFitSignal] = useState(0)
-  const [arrangeSignal, setArrangeSignal] = useState(0)
   const [toasts, setToasts] = useState<Toast[]>([])
-  const [addToCanvasRequest, setAddToCanvasRequest] = useState<
-    { sessionId: string; bump: number } | null
-  >(null)
-  const [hideFromCanvasRequest, setHideFromCanvasRequest] = useState<
-    { sessionId: string; bump: number } | null
-  >(null)
-  // Sidebar 的 "Show all / Hide all" 按钮 —— 一次性处理所有 session，避免
-  // 逐个 setAddToCanvasRequest 被 React setState 批处理吞掉只生效最后一次
-  //
-  // sids: 可选过滤集合 —— 缺省 / undefined 时影响全部 session（保留旧行为，
-  // 顶部 "Hide all" 按钮的语义不变）；带 sids 时只动这一批（per-category
-  // toggle 用）。
-  const [bulkVisibilityRequest, setBulkVisibilityRequest] = useState<
-    { mode: 'show' | 'hide'; bump: number; sids?: string[] } | null
-  >(null)
-  // Channel creation → Board places the hub at viewport center. App doesn't
-  // own the Excalidraw imperative API, so we can't compute viewport coords
-  // here — we fire this request and Board consumes it in an effect.
-  const [placeChannelRequest, setPlaceChannelRequest] = useState<
-    { channelName: string; bump: number } | null
-  >(null)
-  const [focusSessionRequest, setFocusSessionRequest] = useState<
-    { sessionId: string; bump: number } | null
-  >(null)
-  const [canvasPatchRequest, setCanvasPatchRequest] = useState<CanvasPatchRequest | null>(null)
-  const [onCanvasCounts, setOnCanvasCounts] = useState<Record<string, number>>(
-    {},
-  )
-  // Dock：统一的画板浮窗。两种触发方式：
-  //   - dockOpen + selection.kind === 'session' + !assistantRequested → mode='session'
-  //   - dockOpen + (assistantRequested || no session)                  → mode='assistant'
-  // 用户在画板上按可打印键 / 粘贴会触发 dock 挂载（mode 由当前 selection
-  // 决定）。Click Ask AI → assistantRequested=true。
-  // dock × 按钮关 dock：session 模式保留 selection；assistant 模式 reset
-  // assistantRequested。
-  const [dockOpen, setDockOpen] = useState(false)
-  // session-mode dock 绑定的 sessionId —— 跟 `selection` 解耦：用户点画板
-  // 空白处取消选中（selection → none）时 dock 不该收起，所以记一份 dock 自
-  // 己锚定的 id。explicit close（× / Esc / 切到不同 session）时才更新。
-  const [dockSessionId, setDockSessionId] = useState<string | null>(null)
-  const dockSeedRef = useRef<string>('')
-  const dockRef = useRef<DockHandle | null>(null)
-  // Template cache: templateId → raw TSX source. Missing keys fall back to
-  // DEFAULT_TEMPLATE. Populated lazily as pluginIds show up on screen, and
-  // refetched on WS state.changed ticks (Wave 17a backend signals template
-  // changes via the same channel).
-  const [templateCache, setTemplateCache] = useState<Record<string, string>>({})
-  // Track in-flight fetches so we don't hammer the backend when many CardHosts
-  // ask for the same pluginId at once.
-  const pendingTemplatesRef = useRef<Set<string>>(new Set())
+  const [plannerClearRevision, setPlannerClearRevision] = useState(0)
 
   // 检测 status 转换，同步红点：
   //   工作态 → 休息态 = "Claude 刚回复完"       → 标未读
@@ -463,19 +393,6 @@ export default function App() {
     })
   }, [boardState.state])
 
-  // 用户选中 session card → 清未读
-  useEffect(() => {
-    if (selection.kind !== 'session') return
-    const sid = selection.sessionId
-    setUnreadSids((oldSet) => {
-      if (!oldSet.has(sid)) return oldSet
-      const next = new Set(oldSet)
-      next.delete(sid)
-      void persistence.saveUnreadSids(next)
-      return next
-    })
-  }, [selection])
-
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, kind, text }])
@@ -486,101 +403,129 @@ export default function App() {
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
 
-  const sessionById = useMemo(() => {
-    const map = new Map<string, NonNullable<typeof boardState.state>['sessions'][number]>()
-    for (const session of boardState.state?.sessions ?? []) {
-      map.set(session.id, session)
-    }
-    return map
-  }, [boardState.state])
+  const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
+    fetchMeee2AgentRuntimeStatus()
+      .then((status) => {
+        setAgentRuntimeStatus(status)
+        if (showModal && status.needsAttention) setAgentRuntimeModalOpen(true)
+      })
+      .catch((err) => {
+        console.warn('[App] fetchMeee2AgentRuntimeStatus failed:', (err as Error).message)
+      })
+  }, [])
 
-  const canAddSessionToCanvas = useCallback((canvasId: string, sessionId: string) => {
-    const canvas = canvasList?.canvases.find((item) => item.id === canvasId)
-    if (!canvas || canvas.scope !== 'team') return true
-    const session = sessionById.get(sessionId)
-    return Boolean(session?.syncEnabled && session.syncTeamId === canvas.teamId)
-  }, [canvasList, sessionById])
+  useEffect(() => {
+    refreshAgentRuntimeStatus(true)
+  }, [refreshAgentRuntimeStatus])
 
-  const teamCanvasSyncMessage = 'Sync this session to the team before adding it to a team canvas.'
+  const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
+    setAgentRuntimeInstallTarget(target)
+    setAgentRuntimeInstallError(null)
+    setAgentRuntimeInstallLogs([`Starting install for ${target}...`])
+    installMeee2AgentRuntime(target)
+      .then((result) => {
+        setAgentRuntimeStatus(result.status)
+        setAgentRuntimeInstallLogs(result.logs?.length ? result.logs : result.messages)
+        if (result.ok) {
+          pushToast('success', 'Meee2 Agent Runtime is ready')
+          if (!result.status.needsAttention) setAgentRuntimeModalOpen(false)
+        } else {
+          const message = result.messages.find((item) => /failed|skipped/i.test(item))
+            ?? result.messages[result.messages.length - 1]
+            ?? 'Agent runtime setup is incomplete'
+          setAgentRuntimeInstallError(message)
+        }
+      })
+      .catch((err) => {
+        setAgentRuntimeInstallError((err as Error).message || 'Failed to install Meee2 Agent Runtime')
+        setAgentRuntimeInstallLogs((current) => [...current, (err as Error).message || 'Failed to install Meee2 Agent Runtime'])
+      })
+      .finally(() => setAgentRuntimeInstallTarget(null))
+  }, [pushToast])
 
-  const handleAddToCanvas = useCallback((sessionId: string) => {
-    if (!canAddSessionToCanvas(activeCanvasId, sessionId)) {
-      pushToast('error', teamCanvasSyncMessage)
-      return
-    }
-    addSessionToCanvas(activeCanvasId, sessionId)
-      .then(applyCanvasList)
-      .catch((err) => pushToast('error', (err as Error).message || 'Failed to add session to canvas'))
-    setAddToCanvasRequest({ sessionId, bump: Date.now() })
-  }, [activeCanvasId, applyCanvasList, canAddSessionToCanvas, pushToast])
-
-  const handleHideFromCanvas = useCallback((sessionId: string) => {
-    removeSessionFromCanvas(activeCanvasId, sessionId)
-      .then(applyCanvasList)
-      .catch((err) => pushToast('error', (err as Error).message || 'Failed to hide session from canvas'))
-    setHideFromCanvasRequest({ sessionId, bump: Date.now() })
-  }, [activeCanvasId, applyCanvasList, pushToast])
-
-  const handleBulkVisibility = useCallback((mode: 'show' | 'hide', sids?: string[]) => {
-    const targetSids = sids ?? boardState.state?.sessions.map((s) => s.id) ?? []
-    const allowedSids = mode === 'show'
-      ? targetSids.filter((sid) => canAddSessionToCanvas(activeCanvasId, sid))
-      : targetSids
-    if (mode === 'show' && allowedSids.length < targetSids.length) {
-      pushToast('error', teamCanvasSyncMessage)
-    }
-    if (allowedSids.length > 0) {
-      Promise.all(
-        allowedSids.map((sid) =>
-          mode === 'show'
-            ? addSessionToCanvas(activeCanvasId, sid)
-            : removeSessionFromCanvas(activeCanvasId, sid),
-        ),
-      )
-        .then((results) => applyCanvasList(results[results.length - 1]))
-        .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas sessions'))
-    }
-    setBulkVisibilityRequest({ mode, bump: Date.now(), sids: allowedSids })
-  }, [activeCanvasId, applyCanvasList, boardState.state, canAddSessionToCanvas, pushToast])
-
-  const handleSetSessionCanvasMembership = useCallback((
-    sessionId: string,
-    canvasId: string,
-    present: boolean,
-  ) => {
-    if (present && !canAddSessionToCanvas(canvasId, sessionId)) {
-      pushToast('error', teamCanvasSyncMessage)
-      return
-    }
-    const request = present
-      ? addSessionToCanvas(canvasId, sessionId)
-      : removeSessionFromCanvas(canvasId, sessionId)
-    request
-      .then(applyCanvasList)
-      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update canvas membership'))
-
-    if (canvasId === activeCanvasId) {
-      if (present) setAddToCanvasRequest({ sessionId, bump: Date.now() })
-      else setHideFromCanvasRequest({ sessionId, bump: Date.now() })
-    }
-  }, [activeCanvasId, applyCanvasList, canAddSessionToCanvas, pushToast])
+  const handleOpenAgentRuntimeSetup = useCallback((_target?: SpawnProvider) => {
+    refreshAgentRuntimeStatus(false)
+    setAgentRuntimeInstallError(null)
+    setAgentRuntimeInstallLogs([])
+    setAgentRuntimeModalOpen(true)
+    setAgentRuntimeInstallTarget(null)
+  }, [refreshAgentRuntimeStatus])
 
   const handleSetActiveCanvas = useCallback((canvasId: string) => {
     updateCanvas(canvasId, { active: true })
       .then((list) => {
-        setSelection({ kind: 'none' })
-        setOnCanvasCounts({})
         applyCanvasList(list)
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
+  const workspaceCanvasIds = useMemo(() => (
+    (canvasList?.canvases ?? [])
+      .filter((canvas) => canvasKind(canvas) === 'board')
+      .map((canvas) => canvas.id)
+  ), [canvasList])
+  const activeHistoryCanvasId = workspaceCanvasIds.includes(activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvasIds[0] ?? activeCanvasId
+  const [canvasHistory, setCanvasHistory] = useState<string[]>([])
+  const [canvasHistoryIndex, setCanvasHistoryIndex] = useState(-1)
+  const canvasHistoryNavigationTargetRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!canvasList || workspaceCanvasIds.length === 0) return
+    const navigationTarget = canvasHistoryNavigationTargetRef.current
+    if (navigationTarget) {
+      if (activeHistoryCanvasId === navigationTarget) {
+        canvasHistoryNavigationTargetRef.current = null
+      }
+      return
+    }
+    setCanvasHistory((current) => {
+      const currentAtIndex = canvasHistoryIndex >= 0 ? current[canvasHistoryIndex] : null
+      if (currentAtIndex === activeHistoryCanvasId) return current
+      const next = current.slice(0, Math.max(0, canvasHistoryIndex + 1)).filter((id) => workspaceCanvasIds.includes(id))
+      if (next[next.length - 1] !== activeHistoryCanvasId) next.push(activeHistoryCanvasId)
+      setCanvasHistoryIndex(next.length - 1)
+      return next
+    })
+  }, [activeHistoryCanvasId, canvasHistoryIndex, canvasList, workspaceCanvasIds])
+
+  const handleCanvasHistoryBack = useCallback(() => {
+    const nextIndex = canvasHistoryIndex - 1
+    const targetCanvasId = canvasHistory[nextIndex]
+    if (nextIndex < 0 || !targetCanvasId || !workspaceCanvasIds.includes(targetCanvasId)) return
+    canvasHistoryNavigationTargetRef.current = targetCanvasId
+    setCanvasHistoryIndex(nextIndex)
+    handleSetActiveCanvas(targetCanvasId)
+    window.setTimeout(() => {
+      if (canvasHistoryNavigationTargetRef.current === targetCanvasId) canvasHistoryNavigationTargetRef.current = null
+    }, 2000)
+  }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
+
+  const handleCanvasHistoryForward = useCallback(() => {
+    const nextIndex = canvasHistoryIndex + 1
+    const targetCanvasId = canvasHistory[nextIndex]
+    if (nextIndex >= canvasHistory.length || !targetCanvasId || !workspaceCanvasIds.includes(targetCanvasId)) return
+    canvasHistoryNavigationTargetRef.current = targetCanvasId
+    setCanvasHistoryIndex(nextIndex)
+    handleSetActiveCanvas(targetCanvasId)
+    window.setTimeout(() => {
+      if (canvasHistoryNavigationTargetRef.current === targetCanvasId) canvasHistoryNavigationTargetRef.current = null
+    }, 2000)
+  }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
+
   const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
     return createCanvas({ name, scope })
       .then((list) => {
-        setSelection({ kind: 'none' })
-        setOnCanvasCounts({})
         applyCanvasList(list)
+      })
+  }, [applyCanvasList])
+
+  const handleCreateTemplate = useCallback((name: string, scope: CanvasScope) => {
+    return createCanvas({ name, scope, kind: 'template' })
+      .then((list) => {
+        applyCanvasList(list)
+        return list.activeCanvasId
       })
   }, [applyCanvasList])
 
@@ -595,8 +540,6 @@ export default function App() {
   const handleDeleteCanvas = useCallback((canvasId: string) => {
     return deleteCanvas(canvasId)
       .then((list) => {
-        setSelection({ kind: 'none' })
-        setOnCanvasCounts({})
         const nextCache = { ...canvasSceneCacheRef.current }
         delete nextCache[canvasId]
         canvasSceneCacheRef.current = nextCache
@@ -606,268 +549,14 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to delete canvas'))
   }, [applyCanvasList, pushToast])
 
-  const handleCountsChange = useCallback(
-    (counts: Record<string, number>) => {
-      setOnCanvasCounts((prev) => {
-        // Avoid causing re-renders when counts haven't actually changed.
-        const keys = new Set([...Object.keys(prev), ...Object.keys(counts)])
-        for (const k of keys) {
-          if ((prev[k] ?? 0) !== (counts[k] ?? 0)) return counts
-        }
-        return prev
+  const handleClearCanvas = useCallback((canvasId: string) => {
+    return clearPlannerCanvasContent(canvasId)
+      .then(() => {
+        setPlannerClearRevision((value) => value + 1)
+        pushToast('success', 'Canvas cleared')
       })
-    },
-    [],
-  )
-
-  const handleApplyCanvasPatch = useCallback((proposal: CanvasPatchProposal) => {
-    if (proposal.canvasId !== activeCanvasId) {
-      pushToast('error', 'Switch back to that canvas before applying changes')
-      return
-    }
-    setCanvasPatchRequest({ proposal, bump: Date.now() })
-  }, [activeCanvasId, pushToast])
-
-  const handleCanvasPatchApplied = useCallback((result: { ok: boolean; message: string }) => {
-    pushToast(result.ok ? 'success' : 'error', result.message)
-    if (result.ok) {
-      boardState.refresh()
-      void refreshCanvases()
-    }
-  }, [boardState, pushToast, refreshCanvases])
-
-  const handleSidebarSelectionChange = useCallback((next: Selection) => {
-    setSelection(next)
-    if (next.kind === 'session') {
-      setFocusSessionRequest({ sessionId: next.sessionId, bump: performance.now() })
-    }
-  }, [])
-
-  // Lazily fetch a template for a given sessionId. Per-card storage via
-  // templateIdForSession. Falls back to DEFAULT_TEMPLATE when backend has
-  // no entry for this session.
-  const ensureTemplate = useCallback((sessionId: string) => {
-    const id = templateIdForSession(sessionId)
-    if (templateCache[id] !== undefined) return
-    if (pendingTemplatesRef.current.has(id)) return
-    pendingTemplatesRef.current.add(id)
-    getTemplate(id)
-      .then((entry) => {
-        const src = entry?.source ?? DEFAULT_TEMPLATE
-        setTemplateCache((prev) => ({ ...prev, [id]: src }))
-      })
-      .catch((e) => {
-        console.warn('[App] getTemplate failed, using default:', (e as Error).message)
-        setTemplateCache((prev) => ({ ...prev, [id]: DEFAULT_TEMPLATE }))
-      })
-      .finally(() => {
-        pendingTemplatesRef.current.delete(id)
-      })
-  }, [templateCache])
-
-  // Locally applied template source (from the editor) — write-through cache.
-  const applyTemplateLocally = useCallback(
-    (templateId: string, source: string) => {
-      setTemplateCache((prev) => {
-        if (prev[templateId] === source) {
-          // console.log('[App] applyTemplate noop (same) templateId=%s', templateId)
-          return prev
-        }
-        // console.log(
-        //   '[App] applyTemplate templateId=%s prevLen=%d nextLen=%d',
-        //   templateId,
-        //   prev[templateId]?.length ?? 0,
-        //   source.length,
-        // )
-        return { ...prev, [templateId]: source }
-      })
-    },
-    [],
-  )
-
-  // Global keyboard hijack: 选中 session 时画板上的可打印键决定 dock 的可见性：
-  //   - dock 没开 → 把这次键值当 seed，setDockOpen(true)；mount 后 dock
-  //     会消费 dockSeedRef 里的初始值。
-  //   - dock 已开 → 直接调 appendAndFocus 注入到现有 textarea。
-  //
-  // 关键：用 capture 阶段 + stopImmediatePropagation —— Excalidraw 自己在
-  // document 层装了 keydown handler（按字母就造文本元素），冒泡会被它抢先。
-  // capture 先到再吃掉事件即可。
-  //
-  // ⚠️ 不再 hijack `paste` 事件 —— 之前为了"canvas 上 cmd+V 直接 seed dock"
-  // 装了 window-level paste listener，但代价是 cmd+V 永远落不到 excalidraw
-  // 自己的剪贴板 handler 上，"复制 session card / 粘贴图片到画板"全断。
-  // 字母键 seed dock 的 affordance 已经够直观，cmd+V 让回 excalidraw 原生路径。
-  const selectedSessionId =
-    selection.kind === 'session' ? selection.sessionId : null
-
-  // 切到另一个 session 时把 dock 重新指向新 session（issue #21：点画板空白
-  // selection → none 不算切换，dock 保持打开 + 锚在原 session）。
-  useEffect(() => {
-    if (!selectedSessionId) return
-    setDockSessionId(selectedSessionId)
-    setAssistantRequested(false)
-    dockSeedRef.current = ''
-  }, [selectedSessionId])
-
-  // Two distinct keystroke flows depending on selection:
-  //   - A session is selected → the keystroke seeds the SessionDock for that
-  //     session (existing behaviour).
-  //   - Nothing selected (just the canvas) → the keystroke opens the
-  //     "Ask & Spawn" assistant as a temporary global chatbox seeded with
-  //     the keystroke. Same gesture, different target.
-  // Don't fire when the user already has an open Excalidraw shape selected
-  // (so they can still type into Excalidraw text shapes etc.). The
-  // `selection.kind === 'session'` vs `'none'` split handles that.
-  useEffect(() => {
-    const isInputTarget = (t: EventTarget | null) => {
-      if (!(t instanceof HTMLElement)) return false
-      const tag = t.tagName
-      return (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        t.isContentEditable
-      )
-    }
-
-    const dispatch = (text: string) => {
-      if (dockOpen) {
-        dockRef.current?.appendAndFocus(text)
-        return
-      }
-      // Mount a fresh dock with this seed. selection 是 session → 自动走
-      // session 模式；selection none → 强制 assistant 模式（hijack 只在
-      // session-or-none 时触发，channel 选中时已经被前面的 guard 挡掉）。
-      dockSeedRef.current = text
-      if (!selectedSessionId) setAssistantRequested(true)
-      setDockOpen(true)
-    }
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isInputTarget(e.target)) return
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      // Plain Enter on empty canvas → open assistant with no seed (gesture
-      // is "I want to chat", not "I typed Enter as content").
-      if (
-        e.key === 'Enter' &&
-        !selectedSessionId &&
-        selection.kind === 'none' &&
-        !dockOpen
-      ) {
-        e.preventDefault()
-        e.stopImmediatePropagation()
-        setAssistantRequested(true)
-        dockSeedRef.current = ''
-        setDockOpen(true)
-        return
-      }
-      // Plain Enter on a selected session → open Dock (transcript view) for
-      // that session. Mirrors the double-click gesture; gives keyboard users
-      // the same "show transcript" affordance.
-      if (e.key === 'Enter' && selectedSessionId && !dockOpen) {
-        e.preventDefault()
-        e.stopImmediatePropagation()
-        dockSeedRef.current = ''
-        setDockOpen(true)
-        return
-      }
-      if (e.key.length !== 1) return
-      if (!selectedSessionId && selection.kind !== 'none') return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      dispatch(e.key)
-    }
-
-    // Double-click anywhere on the canvas while a session is selected → open
-    // its Dock. Excalidraw's own dblclick on a rect does selection but no
-    // navigation; we layer the Dock-open gesture on top. We only fire when
-    // the target is *outside* an input/composer (keep textarea dblclick =
-    // word-select behaviour), and when a session is currently selected.
-    const onDblClick = (e: MouseEvent) => {
-      if (isInputTarget(e.target)) return
-      if (!selectedSessionId) return
-      if (dockOpen) return
-      // Don't fight the Dock or any modal that explicitly absorbs dblclicks
-      // (`.session-dock` is the Dock root; nothing else uses it).
-      if (e.target instanceof Element && e.target.closest('.session-dock')) return
-      dockSeedRef.current = ''
-      setDockOpen(true)
-    }
-
-    // Canvas-level cmd+V hijack —— 选中 session card 后粘贴 → 自动开
-    // dock + 把内容当 seed 灌进 textarea，不用先点输入框。三档分流：
-    //   - target 是输入框（INPUT/TEXTAREA/contentEditable）：完全 pass-
-    //       through（不 preventDefault / 不 stopPropagation），让原生
-    //       paste flow 把内容插进 textarea。这条以前每次有人 stopPropagation
-    //       都会把客户端里 textarea 粘贴一起搞挂。
-    //   - 选中 session card + 非输入框：preventDefault + stopImmediate
-    //       夺过事件 → dispatch 把文本灌进 dock（dock 没开就开 + seed，
-    //       已开就 appendAndFocus）。
-    //   - 没选 session（或 channel 选中等）+ 非输入框：完全放手，让
-    //       Excalidraw 自己处理 canvas 上的粘贴。
-    const onPaste = (e: ClipboardEvent) => {
-      if (isInputTarget(e.target)) return
-      if (!selectedSessionId) return
-      // Excalidraw 自己的 clipboard payload（{"type":"excalidraw/clipboard"...}）
-      // 不能塞进 dock，让它原生接。
-      const types = e.clipboardData?.types ?? []
-      if (
-        types.includes('application/vnd.excalidraw+json') ||
-        types.includes('application/vnd.excalidrawlib+json')
-      ) {
-        return
-      }
-      const text = e.clipboardData?.getData('text') ?? ''
-      if (text.startsWith('{"type":"excalidraw/clipboard"')) return
-      if (!text) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      dispatch(text)
-    }
-
-    window.addEventListener('keydown', onKeyDown, true)
-    window.addEventListener('paste', onPaste, true)
-    window.addEventListener('dblclick', onDblClick, true)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown, true)
-      window.removeEventListener('paste', onPaste, true)
-      window.removeEventListener('dblclick', onDblClick, true)
-    }
-  }, [selectedSessionId, selection.kind, dockOpen])
-
-  // Refetch currently-cached templates when fetched board state actually
-  // changes. Unchanged websocket frames are filtered in useBoardState.
-  const stateChangedTick = boardState.state
-  useEffect(() => {
-    // 只 refetch 已经从 backend 拉到真实 template 的条目。对 404 回退到
-    // DEFAULT_TEMPLATE 的 id 跳过——否则每秒 WS tick 都会打一发 404，
-    // 日志和网络都会被刷爆。用户在 editor 里存过之后 cache 变非默认值，
-    // 自动进入 refetch 路径，热重载依旧工作。
-    const ids = Object.keys(templateCache).filter(
-      (id) => templateCache[id] !== DEFAULT_TEMPLATE,
-    )
-    if (ids.length === 0) return
-    let cancelled = false
-    ;(async () => {
-      for (const id of ids) {
-        try {
-          const entry = await getTemplate(id)
-          if (cancelled) return
-          const next = entry?.source ?? DEFAULT_TEMPLATE
-          setTemplateCache((prev) =>
-            prev[id] === next ? prev : { ...prev, [id]: next },
-          )
-        } catch {
-          // network blip — keep old cache; next tick will retry
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stateChangedTick])
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to clear canvas'))
+  }, [pushToast])
 
   const boardSessionSignature = useMemo(() => {
     if (!boardState.state) return ''
@@ -881,42 +570,26 @@ export default function App() {
     })
   }, [boardSessionSignature, refreshCanvases])
 
-  // 等到所有 storage slot hydrate 完才渲染 Board —— Board 内部用 useRef 一次性
-  // 接住 initial 值，hydrate 之前给它就只能拿空状态 / 闪屏。
-  const canvasSessionIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const membership of canvasList?.memberships ?? []) {
-      if (membership.canvasId === activeCanvasId && membership.visible) ids.add(membership.sessionId)
-    }
-    return ids
-  }, [activeCanvasId, canvasList])
+  const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
+    setWorkspaceMode(nextMode)
+    if (nextMode !== 'planner' || !canvasList) return
+    const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
+    if (canvasKind(currentCanvas) !== 'template') return
+    const firstWorkspaceCanvas = canvasList.canvases.find((canvas) => canvasKind(canvas) === 'board')
+    if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
+  }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
-  const sessionCanvasIds = useMemo(() => {
-    const out: Record<string, string[]> = {}
-    for (const membership of canvasList?.memberships ?? []) {
-      if (!membership.visible) continue
-      const arr = out[membership.sessionId] ?? []
-      arr.push(membership.canvasId)
-      out[membership.sessionId] = arr
-    }
-    return out
-  }, [canvasList])
+  const refreshUserProfile = useCallback(() => {
+    fetchUserProfile()
+      .then(setUserProfile)
+      .catch(() => setUserProfile(null))
+  }, [])
 
-  const canvasBoardState = useMemo(() => {
-    if (!boardState.state) return null
-    return boardState.state
-  }, [boardState.state])
-
-  const assistantMessages = assistantMessagesByCanvas[activeCanvasId] ?? []
-  const setAssistantMessages = useCallback((next: SetStateAction<DisplayMessage[]>) => {
-    setAssistantMessagesByCanvas((prev) => {
-      const current = prev[activeCanvasId] ?? []
-      const value = typeof next === 'function'
-        ? (next as (prev: DisplayMessage[]) => DisplayMessage[])(current)
-        : next
-      return { ...prev, [activeCanvasId]: value }
-    })
-  }, [activeCanvasId])
+  useEffect(() => {
+    refreshUserProfile()
+    window.addEventListener('focus', refreshUserProfile)
+    return () => window.removeEventListener('focus', refreshUserProfile)
+  }, [refreshUserProfile])
 
   if (!hydrated || !canvasList) {
     return (
@@ -927,60 +600,81 @@ export default function App() {
   }
 
   const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
+  const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
+  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvases[0]?.id ?? activeCanvasId
+  const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
 
   return (
     <ToastContext.Provider value={toastCtx}>
       <div className="app">
+        <WorkspaceRail
+          state={boardState.state}
+          canvases={canvasList.canvases}
+          activeCanvasId={activeCanvasId}
+          mode={workspaceMode}
+          unreadSids={unreadSids}
+          userProfile={userProfile}
+          onModeChange={handleWorkspaceModeChange}
+          onPreferences={() => setPreferencesOpen(true)}
+        />
         <div className="board-area">
-          <Board
-            canvasId={activeCanvasId}
-            canvasLoading={activeCanvasLoading}
-            gridModeEnabled={boardGridEnabled}
-            currentCanvasSessionIds={canvasSessionIds}
-            persistence={persistence}
-            initial={hydrated}
-            state={canvasBoardState}
-            selection={selection}
-            onSelectionChange={setSelection}
-            onSelectedElementsContextChange={setSelectedCanvasElements}
-            fitSignal={fitSignal}
-            addToCanvasRequest={addToCanvasRequest}
-            hideFromCanvasRequest={hideFromCanvasRequest}
-            bulkVisibilityRequest={bulkVisibilityRequest}
-            focusSessionRequest={focusSessionRequest}
-            canvasPatchRequest={canvasPatchRequest}
-            canAddSessionToCanvas={canAddSessionToCanvas}
-            onCanvasPatchApplied={handleCanvasPatchApplied}
-            onCountsChange={handleCountsChange}
-            onSceneSnapshotChange={handleSceneSnapshotChange}
-            templateCache={templateCache}
-            onNeedTemplate={ensureTemplate}
-            unreadSids={unreadSids}
-            onRefresh={() => {
-              boardState.refresh()
-              void refreshCanvases()
-            }}
-            onNewChannel={() => setNewChannelOpen(true)}
-            placeChannelRequest={placeChannelRequest}
-            onAskAndSpawn={() => {
-              setAssistantRequested(true)
-              dockSeedRef.current = ''
-              setDockOpen(true)
-            }}
-            onPreferences={() => setPreferencesOpen(true)}
-            onFit={() => setFitSignal((x) => x + 1)}
-            arrangeSignal={arrangeSignal}
-          />
-          <CanvasToolbar
-            canvases={canvasList.canvases}
-            activeCanvasId={activeCanvasId}
-            onActiveCanvasChange={handleSetActiveCanvas}
-            onCreateCanvas={handleCreateCanvas}
-            onRenameCanvas={handleRenameCanvas}
-            onDeleteCanvas={handleDeleteCanvas}
-            onArrangeSessions={() => setArrangeSignal((x) => x + 1)}
-          />
+          {workspaceMode === 'planner' ? (
+            <PlannerGraph
+              canvasId={activeWorkspaceCanvasId}
+              canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+              workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              clearRevision={plannerClearRevision}
+              onOpenSubCanvas={handleSetActiveCanvas}
+              onNotify={pushToast}
+            />
+          ) : workspaceMode === 'templates' ? (
+            <TemplatesView
+              canvases={canvasList.canvases}
+              activeCanvasId={activeCanvasId}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              onOpenCanvas={handleSetActiveCanvas}
+              onCreateTemplate={handleCreateTemplate}
+            />
+          ) : workspaceMode === 'sessions' ? (
+            <SessionsView state={boardState.state} unreadSids={unreadSids} />
+          ) : workspaceMode === 'integrations' ? (
+            <IntegrationsView
+              state={boardState.state}
+              onJumpToCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
+          ) : workspaceMode === 'team' ? (
+            <TeamView
+              state={boardState.state}
+              activeCanvas={activeCanvas ?? null}
+              userProfile={userProfile}
+            />
+          ) : (
+            <WorkspaceMonitor />
+          )}
+          {workspaceMode === 'planner' && (
+            <CanvasToolbar
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              canGoBack={canvasHistoryIndex > 0}
+              canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
+              onActiveCanvasChange={handleSetActiveCanvas}
+              onGoBack={handleCanvasHistoryBack}
+              onGoForward={handleCanvasHistoryForward}
+              onCreateCanvas={handleCreateCanvas}
+              onRenameCanvas={handleRenameCanvas}
+              onClearCanvas={handleClearCanvas}
+              onDeleteCanvas={handleDeleteCanvas}
+            />
+          )}
           {activeCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
@@ -992,91 +686,29 @@ export default function App() {
               {boardState.error}
             </div>
           )}
-          {/* 统一 Dock 入口：mode 由 selection + assistantRequested 决定。
-              session-mode：现有 session 的 transcript + injectToSession。
-              assistant-mode：AI 对话 + spawnSession。
-              Esc / × 关闭：session 模式保留 selection，assistant 模式清
-              assistantRequested。下次再按键又能重开。 */}
-          {dockOpen && boardState.state && (() => {
-            // dockSessionId 是 dock 自己锚定的 session（不跟随 selection 清空），
-            // 这样画板空白点击不会让 transcript 收起。
-            const sessionForDock = dockSessionId
-              ? boardState.state.sessions.find((x) => x.id === dockSessionId)
-              : undefined
-            const useAssistant = assistantRequested || !sessionForDock
-            const mode: DockMode = useAssistant
-              ? {
-                  kind: 'assistant',
-                  messages: assistantMessages,
-                  setMessages: setAssistantMessages,
-                  canvasId: activeCanvasId,
-                  canvasName: activeCanvas?.name ?? 'Canvas',
-                  workspacePath: activeCanvas?.workspacePath ?? '',
-                  selectedElements: selectedCanvasElements,
-                  onApplyCanvasPatch: handleApplyCanvasPatch,
-                  onSpawned: (cwd) => {
-                    setDockOpen(false)
-                    setDockSessionId(null)
-                    setAssistantRequested(false)
-                    pushToast('success', `Spawning Claude in ${cwd}`)
-                  },
-                  onError: (msg) => pushToast('error', msg),
-                }
-              : {
-                  kind: 'session',
-                  state: boardState.state,
-                  session: sessionForDock!,
-                }
-            return (
-              <Dock
-                ref={dockRef}
-                mode={mode}
-                initialSeed={dockSeedRef.current}
-                onClose={() => {
-                  setDockOpen(false)
-                  setDockSessionId(null)
-                  if (useAssistant) setAssistantRequested(false)
-                }}
-              />
-            )
-          })()}
         </div>
-        <Sidebar
-          state={boardState.state}
-          canvases={canvasList.canvases}
-          activeCanvasId={activeCanvasId}
-          sessionCanvasIds={sessionCanvasIds}
-          onSetSessionCanvasMembership={handleSetSessionCanvasMembership}
-          selection={selection}
-          open={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-          onOpen={() => setSidebarOpen(true)}
-          onSelectionChange={handleSidebarSelectionChange}
-          onCanvasCounts={onCanvasCounts}
-          unreadSids={unreadSids}
-          onAddToCanvas={handleAddToCanvas}
-          onHideFromCanvas={handleHideFromCanvas}
-          onBulkVisibility={handleBulkVisibility}
-          onPreferences={() => setPreferencesOpen(true)}
-        />
-        {newChannelOpen && boardState.state && (
-          <NewChannelDialog
-            state={boardState.state}
-            onClose={() => setNewChannelOpen(false)}
-            onCreated={(name) => {
-              setNewChannelOpen(false)
-              setSelection({ kind: 'channel', channelName: name })
-              setPlaceChannelRequest({ channelName: name, bump: Date.now() })
-              pushToast('success', `Channel "${name}" created`)
-            }}
-          />
-        )}
-        {/* 旧的独立 AssistantChat 模态已合并进上面的 <Dock mode='assistant'>。 */}
         {preferencesOpen && (
           <PreferencesDialog
             onClose={() => setPreferencesOpen(false)}
-            onSaved={(provider) => pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)}
+            onSaved={(provider) => {
+              pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)
+              refreshUserProfile()
+              refreshAgentRuntimeStatus(false)
+            }}
             onToast={pushToast}
+            agentRuntimeStatus={agentRuntimeStatus}
+            onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
+            onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+          />
+        )}
+        {agentRuntimeModalOpen && agentRuntimeStatus && (
+          <AgentRuntimeSetupModal
+            status={agentRuntimeStatus}
+            installingTarget={agentRuntimeInstallTarget}
+            installError={agentRuntimeInstallError}
+            installLogs={agentRuntimeInstallLogs}
+            onInstall={handleInstallAgentRuntime}
+            onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
         <div className="toasts">

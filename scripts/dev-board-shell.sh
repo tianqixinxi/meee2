@@ -28,4 +28,8 @@ pnpm run build:web
 
 echo "Starting desktop Board shell at http://127.0.0.1:${BOARD_PORT}."
 echo "Vite dev server is not started; http://127.0.0.1:5002 should remain inaccessible."
-swift run meee2 board
+if [[ "${MEEE2_FILTER_TASK_POLICY_WARNING:-1}" == "1" ]]; then
+  swift run meee2 board 2> >(grep -v 'Task policy set failed: 4 ((os/kern) invalid argument)' >&2)
+else
+  swift run meee2 board
+fi

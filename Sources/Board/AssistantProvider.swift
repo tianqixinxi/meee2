@@ -65,6 +65,25 @@ struct AssistantSettings {
     let selectedElements: [AssistantSelectedElement]
 }
 
+extension AssistantSettings {
+    func withCanvasDefaults(canvasId nextCanvasId: String, canvasName nextCanvasName: String? = nil) -> AssistantSettings {
+        let trimmedCanvasId = nextCanvasId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCanvasName = (nextCanvasName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return AssistantSettings(
+            provider: provider,
+            apiKey: apiKey,
+            baseUrl: baseUrl,
+            model: model,
+            enabledTools: enabledTools,
+            scope: scope,
+            canvasId: canvasId.isEmpty ? trimmedCanvasId : canvasId,
+            workspacePath: workspacePath,
+            canvasName: canvasName == "Canvas" && !trimmedCanvasName.isEmpty ? trimmedCanvasName : canvasName,
+            selectedElements: selectedElements
+        )
+    }
+}
+
 struct AssistantSelectedElement {
     let id: String
     let type: String
@@ -493,12 +512,38 @@ struct LocalClaudeProvider: AssistantProvider {
         AsyncThrowingStream { continuation in
             Task.detached {
                 do {
+                    let store = AssistantLocalSessionStore.shared
+                    let sessionId = store.sessionId(forCanvasId: settings.canvasId)
                     try runProcess(
                         systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
                         messages: messages,
                         workspacePath: settings.workspacePath,
+                        sessionId: sessionId,
+                        sessionName: AssistantLocalSessionStore.sessionName(
+                            canvasId: settings.canvasId,
+                            canvasName: settings.canvasName
+                        ),
                         continuation: continuation
                     )
+                } catch let error as LocalClaudeExitError where error.isSessionIdError {
+                    do {
+                        let store = AssistantLocalSessionStore.shared
+                        let sessionId = store.resetSessionId(forCanvasId: settings.canvasId)
+                        try runProcess(
+                            systemPrompt: augmentedSystemPrompt(systemPrompt, tools: tools),
+                            messages: messages,
+                            workspacePath: settings.workspacePath,
+                            sessionId: sessionId,
+                            sessionName: AssistantLocalSessionStore.sessionName(
+                                canvasId: settings.canvasId,
+                                canvasName: settings.canvasName
+                            ),
+                            continuation: continuation
+                        )
+                    } catch {
+                        continuation.yield(.error(error.localizedDescription))
+                        continuation.finish()
+                    }
                 } catch {
                     continuation.yield(.error(error.localizedDescription))
                     continuation.finish()
@@ -529,6 +574,8 @@ struct LocalClaudeProvider: AssistantProvider {
         systemPrompt: String,
         messages: [ChatMessage],
         workspacePath rawWorkspacePath: String,
+        sessionId: String,
+        sessionName: String,
         continuation: AsyncThrowingStream<ProviderEvent, Error>.Continuation
     ) throws {
         let claudePath = resolveClaudeBinary()
@@ -537,14 +584,13 @@ struct LocalClaudeProvider: AssistantProvider {
         let stdout = Pipe()
         let stderr = Pipe()
 
-        let args = [
-            "-p",
-            "--append-system-prompt", systemPrompt,
-            "--no-session-persistence",
-            "--output-format", "stream-json",
-            "--include-partial-messages",
-            "--verbose"
-        ]
+        let shouldResume = AssistantLocalSessionStore.shared.transcriptPath(forSessionId: sessionId) != nil
+        let args = claudeArguments(
+            systemPrompt: systemPrompt,
+            sessionId: sessionId,
+            sessionName: sessionName,
+            resumeExistingSession: shouldResume
+        )
         if let p = claudePath {
             process.executableURL = URL(fileURLWithPath: p)
             process.arguments = args
@@ -647,9 +693,7 @@ struct LocalClaudeProvider: AssistantProvider {
         if process.terminationStatus != 0 {
             let errData = stderr.fileHandleForReading.readDataToEndOfFile()
             let err = String(data: errData, encoding: .utf8) ?? ""
-            continuation.yield(.error("claude exited \(process.terminationStatus): \(err.prefix(400))"))
-            continuation.finish()
-            return
+            throw LocalClaudeExitError(status: process.terminationStatus, stderr: String(err.prefix(400)))
         }
 
         // Look for tool-call fence in the final text and emit as a tool call.
@@ -658,6 +702,42 @@ struct LocalClaudeProvider: AssistantProvider {
         }
         continuation.yield(.turnDone(stopReason: nil))
         continuation.finish()
+    }
+
+    func claudeArguments(
+        systemPrompt: String,
+        sessionId: String,
+        sessionName: String,
+        resumeExistingSession: Bool = false
+    ) -> [String] {
+        var args = [
+            "-p",
+            "--append-system-prompt", systemPrompt,
+            "--name", sessionName,
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose"
+        ]
+        if resumeExistingSession {
+            args.insert(contentsOf: ["--resume", sessionId], at: 3)
+        } else {
+            args.insert(contentsOf: ["--session-id", sessionId], at: 3)
+        }
+        return args
+    }
+
+    struct LocalClaudeExitError: LocalizedError, Equatable {
+        let status: Int32
+        let stderr: String
+
+        var errorDescription: String? {
+            "claude exited \(status): \(stderr)"
+        }
+
+        var isSessionIdError: Bool {
+            let lower = stderr.lowercased()
+            return lower.contains("session id") || lower.contains("session-id")
+        }
     }
 
     struct ParsedToolFence: Equatable { let id: String; let name: String; let args: String }

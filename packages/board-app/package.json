@@ -20,20 +20,13 @@
     "registry": "https://registry.npmjs.org/"
   },
   "dependencies": {
-    "@babel/standalone": "^7.25.6",
-    "@excalidraw/excalidraw": "^0.18.1",
-    "@meee1/board-cards": "workspace:*",
     "@meee1/board-core": "workspace:*",
     "@meee1/board-persistence-http": "workspace:*",
-    "@meee1/board-ui": "workspace:*",
-    "@tanstack/react-virtual": "^3.13.24",
-    "highlight.js": "^11.11.1",
+    "@xyflow/react": "^12.10.2",
     "lucide-react": "^1.14.0",
     "react": "19.2.4",
-    "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",
-    "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {

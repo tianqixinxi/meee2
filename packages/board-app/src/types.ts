@@ -29,6 +29,52 @@ export interface UsageStats {
   model: string
 }
 
+export interface Meee2MCPStatus {
+  configured: boolean
+  configCommand: string | null
+  configArgs: string[]
+  expectedServerPath: string
+  serverPath: string | null
+  serverExists: boolean
+  nodeAvailable: boolean
+  launches: boolean
+  tools: string[]
+  missingRequiredTools: string[]
+  error: string | null
+  checkedAt: string
+}
+
+export interface AgentRuntimeComponentStatus {
+  available: boolean
+  cliAvailable: boolean
+  appAvailable: boolean
+  cliPath: string | null
+  appPath: string | null
+  installed: boolean
+  configured: boolean
+  detail: string | null
+  command: string | null
+}
+
+export interface Meee2AgentRuntimeStatus {
+  marketplacePath: string
+  pluginPath: string
+  mcpServerPath: string
+  stagedMCPServerPath: string | null
+  claude: AgentRuntimeComponentStatus
+  codex: AgentRuntimeComponentStatus
+  needsAttention: boolean
+  checkedAt: string
+}
+
+export interface Meee2AgentRuntimeInstallResult {
+  ok: boolean
+  target: 'claude' | 'codex' | 'all' | string
+  messages: string[]
+  logs: string[]
+  status: Meee2AgentRuntimeStatus
+}
+
 export interface Session {
   id: string
   title: string
@@ -163,6 +209,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
+export type CanvasKind = 'board' | 'template'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
@@ -171,6 +218,7 @@ export interface CanvasInfo {
   id: string
   name: string
   scope: CanvasScope
+  kind?: CanvasKind
   isDefault: boolean
   workspacePath: string
   teamId?: string | null
@@ -269,6 +317,532 @@ export interface CanvasList {
   activeCanvasId: string
   defaultCanvasIds: string[]
   memberships: CanvasSessionMembership[]
+}
+
+/** Who can see a planning canvas. Mirrors Swift `PlannerCanvasVisibility`. */
+export type PlannerCanvasVisibility = 'public' | 'private'
+
+export interface PlanningCanvas {
+  id: string
+  ownerId: string
+  title: string
+  plannerContext: string
+  /** Visibility tier for the canvas. */
+  visibility?: PlannerCanvasVisibility
+}
+
+export interface NodeSchema {
+  inputs: string[]
+  outputs: string[]
+  goal: string
+}
+
+export type ContextSourceKind =
+  | 'chatHistory'
+  | 'repository'
+  | 'web'
+  | 'document'
+  | 'artifact'
+
+export interface ContextSource {
+  kind: ContextSourceKind
+  title: string
+  reference: string
+}
+
+export type ExecutionMode = 'auto' | 'human'
+export type ExecutorType =
+  | 'claude'
+  | 'codex'
+  | 'cursor'
+  | 'openClaw'
+  | 'devin'
+  | 'human'
+  | 'mock'
+export type PlanningNodeStatus = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
+export type PlanningNodeSource = 'planner' | 'session'
+export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
+export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
+export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
+export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
+export type PlannerArtifactKind =
+  | 'idea-draft'
+  | 'kanban'
+  | 'prd'
+  | 'impl-pr'
+  | 'prerelease-verdict'
+  | 'main-merge'
+  | 'lark-doc'
+  | 'check-result'
+  | 'generic'
+
+export interface PlannerNodeLayout {
+  x: number
+  y: number
+  width?: number | null
+  height?: number | null
+}
+
+export interface PlannerNodeTrigger {
+  type: string
+  label: string
+  eventSource?: string | null
+}
+
+export interface PlannerNodeSchedule {
+  enabled: boolean
+  intervalSeconds: number
+  prompt: string
+  lastSentAt?: string | number | null
+  nextRunAt?: string | number | null
+}
+
+export interface PlannerNodeGate {
+  type: string
+  label: string
+  requiredArtifactRefs: string[]
+  approvers: string[]
+  onFailGotoNodeId?: string | null
+}
+
+export interface PlannerNodeDispatch {
+  runner: PlannerDispatchRunner
+  skill?: string | null
+  actor: string
+  command?: string | null
+  fallbackRunner?: PlannerDispatchRunner | null
+}
+
+export interface PlannerArtifact {
+  id: string
+  canvasId: string
+  nodeId: string
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  status: string
+  createdAt: string
+  payload?: unknown
+}
+
+export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'
+
+export interface PlannerArtifactContent {
+  artifactId: string
+  type: PlannerArtifactPayloadType | string
+  mimeType: string
+  filename?: string | null
+  size?: number | null
+  sha256?: string | null
+  blobRef?: string | null
+  content?: string | null
+  payload?: unknown
+}
+
+export interface KanbanArtifactPayload {
+  version: 1
+  columns: Array<{ id: string; title: string }>
+  items: Array<{
+    id: string
+    columnId: string
+    title: string
+    description?: string
+    subCanvasId?: string | null
+  }>
+}
+
+export interface PlannerGraphEdge {
+  id: string
+  sourceNodeId: string
+  targetNodeId: string
+  kind: string
+}
+
+export interface PlannerAccess {
+  actorId: string
+  role: PlannerCanvasRole
+  canCreateProposal: boolean
+  canApproveProposal: boolean
+  canApplyProposal: boolean
+  canRejectProposal: boolean
+  canUpdateAssignedNode: boolean
+}
+
+export interface PlannerActivity {
+  userId: string
+  displayName: string
+  currentCanvasId: string
+  selectedNodeId?: string | null
+  selectedSessionId?: string | null
+  lastActiveAt: string
+}
+
+export type PlannerEventType =
+  | 'node.created'
+  | 'node.updated'
+  | 'node.state_changed'
+  | 'node.output_submitted'
+  | 'proposal.created'
+  | 'proposal.approved'
+  | 'proposal.applied'
+  | 'proposal.rejected'
+  | 'artifact.attached'
+
+export interface PlannerEvent {
+  id: string
+  canvasId: string
+  type: PlannerEventType
+  nodeId?: string | null
+  proposalId?: string | null
+  summary: string
+  artifactRefs: string[]
+  createdAt: string
+}
+
+export type PlannerNodeOutputStatus = 'done' | 'blocked' | 'needs_review'
+export type PlannerNodeOutputNext = 'complete' | 'blocked' | 'needs_owner_review'
+
+export interface PlannerNodeOutputMessage {
+  summary: string
+  routeTo: string[]
+}
+
+export interface PlannerNodeOutputArtifact {
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  payload?: unknown
+  routeTo: string[]
+}
+
+export interface PlannerNodeOutput {
+  nodeId: string
+  status: PlannerNodeOutputStatus
+  message?: PlannerNodeOutputMessage | null
+  artifacts: PlannerNodeOutputArtifact[]
+  next: PlannerNodeOutputNext
+}
+
+export interface PlannerRouteTarget {
+  id: string
+  label: string
+  kind: string
+  hasDoer: boolean
+  hasSession: boolean
+}
+
+export interface PlannerNodeContract {
+  canvas: PlanningCanvas
+  node: PlanningNode
+  upstreamNodes: PlanningNode[]
+  downstreamNodes: PlanningNode[]
+  allowedRouteTargets: PlannerRouteTarget[]
+  expectedArtifactKinds: PlannerArtifactKind[]
+  inlinePayloadLimitBytes?: number
+  artifactPayloadTypes?: PlannerArtifactPayloadType[]
+  completionCriteria: string[]
+}
+
+export interface PlannerOutputRoute {
+  target: string
+  targetNodeId?: string | null
+  targetSessionId?: string | null
+  routedMessage?: string | null
+  artifactRefs: string[]
+}
+
+export interface PlannerNodeOutputResult {
+  graph: PlannerGraphState
+  routes: PlannerOutputRoute[]
+  hint?: string | null
+}
+
+export interface PlanningNode {
+  id: string
+  canvasId: string
+  title: string
+  schema: NodeSchema
+  contextSources: ContextSource[]
+  executionMode: ExecutionMode
+  executorType: ExecutorType
+  doerId: string
+  status: PlanningNodeStatus
+  sessionId?: string | null
+  chatThreadId?: string | null
+  source?: PlanningNodeSource | null
+  dependsOnNodeIds?: string[] | null
+  subCanvasId?: string | null
+  nodeKind?: PlanningNodeKind | null
+  layout?: PlannerNodeLayout | null
+  trigger?: PlannerNodeTrigger | null
+  schedule?: PlannerNodeSchedule | null
+  gate?: PlannerNodeGate | null
+  dispatch?: PlannerNodeDispatch | null
+  approvers?: string[] | null
+  artifactRefs?: string[] | null
+  eventRefs?: string[] | null
+  workflowRunState?: PlannerWorkflowRunState | null
+  blockedReason?: string | null
+  /**
+   * Derived workflow-guidance line ("what to do next"), computed server-side
+   * from `workflowRunState` + node context. Encode-only / read-only — never
+   * persisted, never set by the LLM or the adapter. May be absent for nodes
+   * with no actionable workflow state.
+   */
+  nextAction?: string | null
+}
+
+export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
+export type PlanChangeKind = 'addNode' | 'updateNode' | 'attachArtifact'
+
+export interface PlanArtifactDraft {
+  nodeId?: string | null
+  kind: PlannerArtifactKind
+  title: string
+  reference: string
+  status?: string | null
+  payload?: unknown
+}
+
+export interface PlanChange {
+  kind: PlanChangeKind
+  node?: PlanningNode | null
+  nodeId?: string | null
+  title?: string | null
+  status?: PlanningNodeStatus | null
+  schema?: NodeSchema | null
+  contextSources?: ContextSource[] | null
+  dependsOnNodeIds?: string[] | null
+  subCanvasId?: string | null
+  nodeKind?: PlanningNodeKind | null
+  layout?: PlannerNodeLayout | null
+  trigger?: PlannerNodeTrigger | null
+  schedule?: PlannerNodeSchedule | null
+  executionMode?: ExecutionMode | null
+  clearGate?: boolean | null
+  gate?: PlannerNodeGate | null
+  dispatch?: PlannerNodeDispatch | null
+  approvers?: string[] | null
+  artifactRefs?: string[] | null
+  eventRefs?: string[] | null
+  workflowRunState?: PlannerWorkflowRunState | null
+  sessionId?: string | null
+  chatThreadId?: string | null
+  source?: PlanningNodeSource | null
+  /**
+   * Reassigns a node's doer. Used by the assign-doer UI (Gap 6) to produce a
+   * lightweight `updateNode` proposal that touches only `doerId`.
+   */
+  doerId?: string | null
+  artifact?: PlanArtifactDraft | null
+}
+
+export interface PlanProposal {
+  id: string
+  canvasId: string
+  summary: string
+  changes: PlanChange[]
+  status: PlanProposalStatus
+}
+
+export type NodeRunState = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
+
+export interface NodeStateSnapshot {
+  nodeId: string
+  runState: NodeRunState
+  blockers: string[]
+  artifactRefs: string[]
+  needsOwnerReview: boolean
+}
+
+export type PlannerMonitorItemKind = 'node' | 'proposal' | 'delivery'
+
+export interface PlannerMonitorItem {
+  id: string
+  kind: PlannerMonitorItemKind
+  canvasId: string
+  canvasTitle: string
+  nodeId?: string | null
+  nodeTitle?: string | null
+  deliveryId?: string | null
+  proposalId?: string | null
+  proposalStatus?: PlanProposalStatus | null
+  summary: string
+  runState?: NodeRunState | null
+  blockers: string[]
+  needsOwnerReview: boolean
+  doerId?: string | null
+  riskRank: number
+  /**
+   * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
+   * for proposal items or nodes with no actionable workflow state.
+   */
+  nextAction?: string | null
+}
+
+export interface PlannerMonitorState {
+  generatedAt: string
+  items: PlannerMonitorItem[]
+}
+
+export interface PlannerCanvasState {
+  canvas: PlanningCanvas
+  nodes: PlanningNode[]
+  states: NodeStateSnapshot[]
+  proposals: PlanProposal[]
+  access: PlannerAccess
+  activities?: PlannerActivity[]
+  events?: PlannerEvent[]
+  artifacts?: PlannerArtifact[]
+  edges?: PlannerGraphEdge[]
+}
+
+export type PlannerGraphState = PlannerCanvasState & {
+  artifacts: PlannerArtifact[]
+  edges: PlannerGraphEdge[]
+}
+
+// -- P1/P3: Workflow Run layer --------------------------------------------
+
+export type WorkflowRunStatus = 'active' | 'completed' | 'failed' | 'aborted'
+
+/** What the user should do next for a node within a run (WorkflowRunEngine). */
+export type RunNextAction =
+  | 'waiting-on-upstream'
+  | 'ready-to-dispatch'
+  | 'in-progress'
+  | 'gate-review'
+  | 'confirm-artifacts'
+  | 'needs-attention'
+
+export interface NodeAttempt {
+  index: number
+  sessionId?: string | null
+  runState: PlannerWorkflowRunState
+  startedAt: string
+  finishedAt?: string | null
+  outcome?: string | null
+}
+
+export interface RunNodeState {
+  nodeId: string
+  runState: PlannerWorkflowRunState
+  attempts: NodeAttempt[]
+  sessionId?: string | null
+  chatThreadId?: string | null
+  assigneeId?: string | null
+  artifactIds: string[]
+  outputRefs: string[]
+  startedAt?: string | null
+  finishedAt?: string | null
+  nextAction?: RunNextAction | null
+}
+
+export interface WorkflowRun {
+  id: string
+  canvasId: string
+  runIndex: number
+  title: string
+  summary?: string | null
+  responsibleUserId?: string | null
+  linkedArtifactRefs: string[]
+  updatedAt: string
+  status: WorkflowRunStatus
+  trigger: string
+  startedAt: string
+  finishedAt?: string | null
+  nodeStates: Record<string, RunNodeState>
+  events: PlannerEvent[]
+}
+
+// -- Phase 5: Integrations (真接入) ----------------------------------------
+
+/** Provider id for an integration browse endpoint (GitHub PRs / Lark docs). */
+export type IntegrationId = 'github' | 'lark'
+
+/** A selectable external item (GitHub repo/PR/issue, Lark doc, ...). */
+export interface ExternalItem {
+  /** Stable identifier, e.g. "owner/repo#42". */
+  id: string
+  title: string
+  subtitle?: string | null
+  /** The value written into the artifact's reference field (usually a URL). */
+  reference: string
+  /** Backend-suggested PlannerArtifactKind; the user may override it. */
+  suggestedArtifactKind: PlannerArtifactKind
+}
+
+/** Envelope returned by the integration browsing endpoints. */
+export interface ExternalItemsResult {
+  provider: string
+  items: ExternalItem[]
+  /** Set when data degraded (upstream unreachable / not wired); else null. */
+  notice?: string | null
+}
+
+// -- agent-integration-detection (检测 + runbook + 节点副作用) --------------
+
+export type IntegrationConnState = 'connected' | 'partial' | 'missing' | 'needs_auth'
+
+/** Structured install spec per integration. Frontend picks the primary
+ *  action(Install / Set up / disabled)from `kind`. */
+export type IntegrationInstall =
+  | { kind: 'claudePlugin'; marketplace: string; name: string }
+  | { kind: 'remoteHttp'; url: string }
+  | { kind: 'localStdio'; command: string; args: string[]; envKeys: string[] }
+  | { kind: 'unsupported'; reason: string }
+
+/** One (agent, integration) cell of the detection matrix. */
+export interface AgentIntegrationStatus {
+  agent: string
+  integrationId: string
+  integrationName: string
+  category: string
+  state: IntegrationConnState
+  mcpConfigured: boolean
+  credentialPresent: boolean
+  via: string[]
+  evidence: string
+  install: IntegrationInstall
+}
+
+/** Result of `POST /api/integrations/:id/install` (Pattern A one-click). */
+export interface IntegrationInstallResult {
+  integrationId: string
+  claudeOK: boolean
+  codexOK: boolean
+  messages: string[]
+}
+
+export interface AgentScanResult {
+  agents: string[]
+  statuses: AgentIntegrationStatus[]
+}
+
+/** A node side-effect crossed with the detection matrix. */
+export interface NodeSideEffectCoverage {
+  integrationId: string
+  direction: string // 'reads' | 'writes'
+  connected: boolean
+}
+
+export interface NodeSideEffectInfo {
+  nodeId: string
+  title: string
+  sideEffects: NodeSideEffectCoverage[]
+}
+
+export interface CanvasSideEffectsResult {
+  canvasId: string
+  nodes: NodeSideEffectInfo[]
+}
+
+export interface IntegrationRunbookResult {
+  integrationId: string
+  path: string
+  content: string
+  /** agent id → shell command that drives that agent through the runbook. */
+  dispatch: Record<string, string>
 }
 
 export interface SelectedCanvasElementContext {

@@ -99,6 +99,18 @@ enum AssistantAPI {
         }
     }
 
+    /// GET /api/assistant/local-session/messages?canvasId=...
+    /// Returns the user-facing projection of the stable local Claude session.
+    static func localSessionMessages(_ req: HttpRequest) -> HttpResponse {
+        let canvasId = req.queryParams.first(where: { $0.0 == "canvasId" })?.1
+            .removingPercentEncoding ?? ""
+        let limitRaw = req.queryParams.first(where: { $0.0 == "limit" })?.1
+            .removingPercentEncoding ?? ""
+        let limit = Int(limitRaw).map { min(max($0, 1), 200) } ?? 80
+        let envelope = AssistantLocalSessionStore.shared.messages(forCanvasId: canvasId, limit: limit)
+        return BoardAPI.jsonResponse(envelope)
+    }
+
     // MARK: - Orchestration loop
 
     /// Drives the conversation: call provider → relay events → if tool

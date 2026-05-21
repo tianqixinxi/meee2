@@ -27,6 +27,15 @@ enum AssistantTools {
         getSessionTranscriptDef(),
         listChannelsDef(),
         getChannelMessagesDef(),
+        readGraphStateDef(),
+        readNodeContractDef(),
+        proposeGraphChangeDef(),
+        bindSessionToNodeDef(),
+        dispatchNodeSessionDef(),
+        submitNodeOutputDef(),
+        attachArtifactToNodeDef(),
+        createSubCanvasFromNodeDef(),
+        updateNodeLayoutDef(),
         proposeCanvasPatchDef(),
         createSessionDef(),
         createCoordinatorSessionDef(),
@@ -78,6 +87,24 @@ enum AssistantTools {
             return runListChannels(args: args)
         case "get_channel_messages":
             return runGetChannelMessages(args: args)
+        case "read_graph_state":
+            return runReadGraphState(args: args, settings: settings)
+        case "read_node_contract":
+            return runReadNodeContract(args: args, settings: settings)
+        case "propose_graph_change":
+            return runProposeGraphChange(args: args, settings: settings)
+        case "bind_session_to_node":
+            return runBindSessionToNode(args: args, settings: settings)
+        case "dispatch_node_session":
+            return runDispatchNodeSession(args: args, settings: settings)
+        case "submit_node_output":
+            return runSubmitNodeOutput(args: args, settings: settings)
+        case "attach_artifact_to_node":
+            return runAttachArtifactToNode(args: args, settings: settings)
+        case "create_sub_canvas_from_node":
+            return runCreateSubCanvasFromNode(args: args, settings: settings)
+        case "update_node_layout":
+            return runUpdateNodeLayout(args: args, settings: settings)
         case "propose_canvas_patch":
             return runProposeCanvasPatch(args: args, settings: settings)
         case "create_session":
@@ -601,6 +628,424 @@ enum AssistantTools {
         ])
     }
 
+    // MARK: - Planner graph tools
+
+    private static func readGraphStateDef() -> ToolDef {
+        ToolDef(
+            name: "read_graph_state",
+            description: "Read the current meee2 AI graph: nodes, edges, layout, proposals, artifacts, and events.",
+            inputSchema: ["type": "object", "properties": ["canvasId": ["type": "string"]]]
+        )
+    }
+
+    private static func runReadGraphState(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(state))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func proposeGraphChangeDef() -> ToolDef {
+        ToolDef(
+            name: "propose_graph_change",
+            description: "Create a pending meee2 AI graph proposal. This never applies topology changes.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "summary": ["type": "string"],
+                    "changes": ["type": "array", "items": ["type": "object"]]
+                ],
+                "required": ["changes"]
+            ]
+        )
+    }
+
+    private static func runProposeGraphChange(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let changes = try decodePlanChanges(args["changes"])
+            let proposal = try PlannerBoardBridge.graphChangeProposal(
+                summary: stringValue(args["summary"]) ?? "Update meee2 AI graph",
+                changes: changes,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(["proposal": proposal]))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func bindSessionToNodeDef() -> ToolDef {
+        ToolDef(
+            name: "bind_session_to_node",
+            description: "Bind an existing session to a graph node. Execution-layer action — applies directly, no proposal.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "sessionId": ["type": "string"]
+                ],
+                "required": ["nodeId", "sessionId"]
+            ]
+        )
+    }
+
+    private static func runBindSessionToNode(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let sessionId = try requiredPlannerString(args["sessionId"], name: "sessionId")
+            let state = try PlannerBoardBridge.bindSession(
+                nodeId: nodeId,
+                sessionId: sessionId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(state))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func dispatchNodeSessionDef() -> ToolDef {
+        ToolDef(
+            name: "dispatch_node_session",
+            description: "Start work for a graph node with Claude, Codex, or a human task. Execution-layer action — applies directly, no proposal.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "runner": ["type": "string", "enum": ["claude", "codex", "human"]]
+                ],
+                "required": ["nodeId"]
+            ]
+        )
+    }
+
+    private static func runDispatchNodeSession(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let runner = PlannerDispatchRunner(rawValue: stringValue(args["runner"]) ?? "claude") ?? .claude
+            let result = try PlannerBoardBridge.dispatchNode(
+                nodeId: nodeId,
+                runner: runner,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(result.graph))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func readNodeContractDef() -> ToolDef {
+        ToolDef(
+            name: "read_node_contract",
+            description: "Read the execution contract for a planner node: upstream/downstream nodes, expected outputs, allowed route targets, and completion criteria.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"]
+                ],
+                "required": ["nodeId"]
+            ]
+        )
+    }
+
+    private static func runReadNodeContract(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let contract = try PlannerBoardBridge.nodeContract(
+                nodeId: nodeId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(contract))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func submitNodeOutputDef() -> ToolDef {
+        ToolDef(
+            name: "submit_node_output",
+            description: "Submit structured output for a planner node. meee2 validates routeTo and deterministically routes messages/artifacts to downstream nodes or owner.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "status": ["type": "string", "enum": ["done", "blocked", "needs_review"]],
+                    "message": [
+                        "type": "object",
+                        "properties": [
+                            "summary": ["type": "string"],
+                            "routeTo": ["type": "array", "items": ["type": "string"]]
+                        ]
+                    ],
+                    "artifacts": [
+                        "type": "array",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "kind": ["type": "string"],
+                                "title": ["type": "string"],
+                                "reference": ["type": "string"],
+                                "payload": ["type": "object"],
+                                "routeTo": ["type": "array", "items": ["type": "string"]]
+                            ]
+                        ]
+                    ],
+                    "next": ["type": "string", "enum": ["complete", "blocked", "needs_owner_review"]]
+                ],
+                "required": ["nodeId", "status", "next"]
+            ]
+        )
+    }
+
+    private static func runSubmitNodeOutput(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            var payload = args
+            payload["nodeId"] = nodeId
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let decoder = JSONDecoder()
+            let output = try decoder.decode(PlannerNodeOutput.self, from: data)
+            let result = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            routePlannerOutputMessages(result.routes)
+            return try .success(jsonPayload(result))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func routePlannerOutputMessages(_ routes: [PlannerOutputRoute]) {
+        for route in routes {
+            guard let sessionId = route.targetSessionId,
+                  let message = plannerOutputMessage(route: route) else { continue }
+            do {
+                let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: sessionId)
+                _ = try MessageRouter.shared.send(
+                    channel: channelName,
+                    fromAlias: "operator",
+                    toAlias: "session",
+                    content: message,
+                    injectedByHuman: false
+                )
+            } catch {
+                // Tool result still reports accepted output; routing failure is
+                // visible in graph state and can be retried by the operator.
+            }
+        }
+    }
+
+    private static func plannerOutputMessage(route: PlannerOutputRoute) -> String? {
+        var lines: [String] = []
+        if let message = route.routedMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !message.isEmpty {
+            lines.append(message)
+        }
+        if !route.artifactRefs.isEmpty {
+            lines.append("Artifacts:")
+            lines.append(contentsOf: route.artifactRefs.map { "- \($0)" })
+        }
+        guard !lines.isEmpty else { return nil }
+        return [
+            "Planner routed upstream output to this node.",
+            "",
+            lines.joined(separator: "\n"),
+            "",
+            "Use read_node_contract before continuing, then submit_node_output when this node is complete or blocked."
+        ].joined(separator: "\n")
+    }
+
+    private static func attachArtifactToNodeDef() -> ToolDef {
+        ToolDef(
+            name: "attach_artifact_to_node",
+            description: "Attach an artifact reference to a graph node as evidence. This does not change topology.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "kind": ["type": "string"],
+                    "title": ["type": "string"],
+                    "reference": ["type": "string"],
+                    "status": ["type": "string"],
+                    "payload": ["type": "object"]
+                ],
+                "required": ["nodeId", "reference"]
+            ]
+        )
+    }
+
+    private static func runAttachArtifactToNode(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let reference = try requiredPlannerString(args["reference"], name: "reference")
+            let kind = PlannerArtifactKind(rawValue: stringValue(args["kind"]) ?? "") ?? .generic
+            let payload = try boardJSONValue(from: args["payload"])
+            let state = try PlannerBoardBridge.attachArtifact(
+                nodeId: nodeId,
+                kind: kind,
+                title: stringValue(args["title"]) ?? reference,
+                reference: reference,
+                status: stringValue(args["status"]) ?? "attached",
+                payload: payload,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(state))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func createSubCanvasFromNodeDef() -> ToolDef {
+        ToolDef(
+            name: "create_sub_canvas_from_node",
+            description: "Create a sub-canvas container and a pending proposal to link it from a graph node.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "title": ["type": "string"]
+                ],
+                "required": ["nodeId"]
+            ]
+        )
+    }
+
+    private static func runCreateSubCanvasFromNode(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        struct SubCanvasToolResponse: Encodable {
+            let proposal: PlanProposal
+            let subCanvasId: String
+        }
+
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let title = stringValue(args["title"]) ?? "Sub-canvas"
+            let snapshot = try BoardLayoutStore.shared.createCanvas(name: title, scope: .personal)
+            guard let subCanvas = snapshot.canvases.last else {
+                return .failure("failed to create sub-canvas")
+            }
+            let proposal = try PlannerBoardBridge.createSubCanvasProposal(
+                nodeId: nodeId,
+                subCanvasId: subCanvas.id,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(SubCanvasToolResponse(proposal: proposal, subCanvasId: subCanvas.id)))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func updateNodeLayoutDef() -> ToolDef {
+        ToolDef(
+            name: "update_node_layout",
+            description: "Persist a user-driven graph node layout position. Use only after user/drag interaction.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "canvasId": ["type": "string"],
+                    "nodeId": ["type": "string"],
+                    "x": ["type": "number"],
+                    "y": ["type": "number"],
+                    "width": ["type": "number"],
+                    "height": ["type": "number"]
+                ],
+                "required": ["nodeId", "x", "y"]
+            ]
+        )
+    }
+
+    private static func runUpdateNodeLayout(args: [String: Any], settings: AssistantSettings) -> DispatchResult {
+        do {
+            let canvasId = try plannerCanvasId(args: args, settings: settings)
+            let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            let layout = PlannerNodeLayout(
+                x: numberValue(args["x"]) ?? 0,
+                y: numberValue(args["y"]) ?? 0,
+                width: numberValue(args["width"]),
+                height: numberValue(args["height"])
+            )
+            let state = try PlannerBoardBridge.updateNodeLayout(
+                nodeId: nodeId,
+                layout: layout,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return try .success(jsonPayload(state))
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
+    private static func plannerCanvasId(args: [String: Any], settings: AssistantSettings) throws -> String {
+        if let raw = stringValue(args["canvasId"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            return raw
+        }
+        let requested = settings.canvasId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !requested.isEmpty {
+            return requested
+        }
+        return BoardLayoutStore.shared.snapshot().activeCanvasId
+    }
+
+    private static func requiredPlannerString(_ raw: Any?, name: String) throws -> String {
+        guard let value = stringValue(raw)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            throw toolError("\(name) is required")
+        }
+        return value
+    }
+
+    private static func decodePlanChanges(_ raw: Any?) throws -> [PlanChange] {
+        guard let raw else { throw toolError("changes is required") }
+        let data = try JSONSerialization.data(withJSONObject: raw)
+        return try JSONDecoder().decode([PlanChange].self, from: data)
+    }
+
+    private static func jsonPayload<T: Encodable>(_ value: T) throws -> Any {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
     // MARK: - Shared helpers for content tools
 
     private static func clampLimit(_ raw: Any?, default def: Int, hardCap: Int) -> Int {
@@ -796,7 +1241,7 @@ enum AssistantTools {
         var cwd = stringValue(args["cwd"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let mode = createSessionMode(rawMode: rawMode, cwd: cwd)
         let provider = normalizedProvider(stringValue(args["provider"]) ?? stringValue(args["command"]) ?? "claude")
-        let command = provider
+        let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
         if mode == "global" {
             guard let context else {
                 return .failure("global session requires a current canvas")
@@ -1591,6 +2036,14 @@ enum AssistantTools {
     private static func anyValue(from value: BoardJSONValue) -> Any? {
         guard let data = try? JSONEncoder().encode(value) else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func boardJSONValue(from raw: Any?) throws -> BoardJSONValue? {
+        guard let raw else { return nil }
+        guard let value = BoardJSONValue.fromAny(raw) else {
+            throw toolError("payload must be JSON-compatible")
+        }
+        return value
     }
 
     private static func stringValue(_ raw: Any?) -> String? {

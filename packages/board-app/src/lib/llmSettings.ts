@@ -4,7 +4,7 @@
 //
 // Defaults are tuned so the assistant works *out of the box* with no key:
 // `provider: 'local'` shells out to `claude -p` using the user's existing
-// `~/.claude/` OAuth, and all tools are enabled. Setting an `apiKey` and
+// `~/.claude/` OAuth with a stable local session, and all tools are enabled. Setting an `apiKey` and
 // switching `provider` to `openai` / `anthropic` swaps in a hosted LLM.
 
 export type LlmProvider = 'openai' | 'anthropic' | 'local'
@@ -52,7 +52,7 @@ export interface LlmSettings {
   apiKey: string
   /** Override for hosted endpoints. Empty = provider default. */
   baseUrl: string
-  /** Empty = provider default (gpt-4o-mini, claude-haiku-4-5, claude -p's CLI default). */
+  /** Empty = provider default (gpt-4o-mini, claude-haiku-4-5, local Claude CLI default). */
   model: string
   /** Per-tool enable flag. Default: all true. */
   enabledTools: Record<ToolName, boolean>
@@ -143,6 +143,6 @@ export function providerLabel(p: LlmProvider): string {
   switch (p) {
     case 'openai': return 'OpenAI-compatible'
     case 'anthropic': return 'Anthropic'
-    case 'local': return 'Local (claude -p)'
+    case 'local': return 'Local Claude session'
   }
 }
