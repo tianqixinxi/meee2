@@ -21,7 +21,9 @@ import {
   loadCanvasRecapIntervalMinutes,
 } from '../preferences'
 import { readLlmSettings } from '../lib/llmSettings'
-import type { CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
+import type { BoardState, CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
+import type { UserProfile } from '../api'
+import { AIRecapDrawer } from './planner/AIRecapDrawer'
 
 interface Props {
   canvases: CanvasInfo[]
@@ -35,6 +37,11 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
+  // UI-6 · AI Recap Drawer needs richer context. Both optional so callers
+  // that don't yet pipe them through keep working (drawer still renders local
+  // planner-state aggregates and shows ENG-2 stub copy).
+  userProfile?: UserProfile | null
+  boardState?: BoardState | null
 }
 
 interface CanvasRecap {
@@ -59,6 +66,8 @@ export function CanvasToolbar({
   onRenameCanvas,
   onClearCanvas,
   onDeleteCanvas,
+  userProfile = null,
+  boardState = null,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
@@ -79,6 +88,11 @@ export function CanvasToolbar({
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
+  // UI-6 · drawer-open state and a cached PlannerGraphState (the same one
+  // `refreshRecap` already fetches) so the drawer can render local
+  // aggregates without re-fetching.
+  const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
+  const [recapPlannerState, setRecapPlannerState] = useState<PlannerGraphState | null>(null)
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
   const filteredCanvases = useMemo(() => canvases.filter((canvas) => {
@@ -125,6 +139,7 @@ export function CanvasToolbar({
     try {
       const state = await fetchPlannerGraphState(activeCanvas.id)
       if (recapRequestRef.current !== requestId) return
+      setRecapPlannerState(state)
       const baseRecap = buildCanvasStatusRecap(state)
       setRecap(baseRecap)
       const aiRecap = await generateAIRecap(state, activeCanvas)
@@ -344,15 +359,24 @@ export function CanvasToolbar({
       </div>
       <div className="canvas-toolbar__context" aria-live="polite">
         <div className="canvas-toolbar__recap">
-          <Sparkles size={13} aria-hidden />
-          <span className="canvas-toolbar__recap-copy">
-            <strong>{recapLoading ? 'Refreshing recap...' : (recap?.headline ?? 'Reading canvas state...')}</strong>
-            {recapError ? (
-              <small>{recapError}</small>
-            ) : recap?.updatedAt ? (
-              <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
-            ) : null}
-          </span>
+          <button
+            type="button"
+            className="canvas-toolbar__recap-trigger"
+            aria-label="Open AI recap drawer"
+            aria-expanded={recapDrawerOpen}
+            title="Open AI recap"
+            onClick={() => setRecapDrawerOpen((v) => !v)}
+          >
+            <Sparkles size={13} aria-hidden />
+            <span className="canvas-toolbar__recap-copy">
+              <strong>{recapLoading ? 'Refreshing recap...' : (recap?.headline ?? 'Reading canvas state...')}</strong>
+              {recapError ? (
+                <small>{recapError}</small>
+              ) : recap?.updatedAt ? (
+                <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
+              ) : null}
+            </span>
+          </button>
           <button
             type="button"
             className="canvas-toolbar__recap-refresh"
@@ -382,6 +406,16 @@ export function CanvasToolbar({
           ))}
         </div>
       )}
+
+      <AIRecapDrawer
+        open={recapDrawerOpen}
+        onClose={() => setRecapDrawerOpen(false)}
+        canvasId={activeCanvas.id}
+        canvasName={displayCanvasName(activeCanvas)}
+        plannerState={recapPlannerState}
+        boardState={boardState}
+        userProfile={userProfile}
+      />
 
       {infoOpen && (
         <div
