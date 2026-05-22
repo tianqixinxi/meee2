@@ -365,43 +365,69 @@ export interface ResolvedNodeOutput {
   fromSlot: string | null
 }
 
-/** Reconcile a node's declared output slots with the artifacts it actually
- *  produced. A concrete artifact that matches a templated slot *fills* it
- *  (the template stops showing alongside it); when several artifacts fill the
+/** A concrete output a node produced — either a `PlannerArtifact` record or a
+ *  bare reference persisted on `node.artifactRefs` with no artifact object. */
+interface ConcreteNodeOutput {
+  reference: string
+  artifact: PlannerArtifact | null
+  /** Sort key for supersession ordering (artifact `createdAt`; 0 otherwise). */
+  order: number
+}
+
+/** Reconcile a node's declared output slots with the outputs it actually
+ *  produced. A concrete output that matches a templated slot *fills* it
+ *  (the template stops showing alongside it); when several outputs fill the
  *  same slot the newest is `current` and the rest are `superseded`. The
  *  synthetic `artifact://<nodeId>/output` handle and template-token
- *  placeholder artifacts are never surfaced as real outputs. */
+ *  placeholder references are never surfaced as real outputs.
+ *
+ *  Outputs come from two sources: `PlannerArtifact` records (the primary
+ *  source — they carry `createdAt` for supersession ordering) and bare
+ *  `node.artifactRefs` set directly via `updateNode`. A node can legitimately
+ *  hold an `artifactRefs` entry with no matching artifact object, so those
+ *  are kept as artifact-less outputs — otherwise persisted output references
+ *  would silently vanish from the inspector. */
 export function resolveNodeOutputs(
   node: PlanningNode,
   artifacts: PlannerArtifact[],
 ): ResolvedNodeOutput[] {
   const slots = (node.schema?.outputs ?? []).map((s) => s.trim()).filter(Boolean)
   const syntheticOutput = `artifact://${node.id}/output`
-  const concrete = artifacts
-    .filter((a) => a.nodeId === node.id)
-    .filter((a) => !hasTemplateToken(a.reference) && a.reference.trim() !== syntheticOutput)
-    .slice()
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+  const isRealOutput = (reference: string): boolean => {
+    const ref = reference.trim()
+    return ref !== '' && ref !== syntheticOutput && !hasTemplateToken(ref)
+  }
 
-  const claimed = new Set<PlannerArtifact>()
+  const fromArtifacts: ConcreteNodeOutput[] = artifacts
+    .filter((a) => a.nodeId === node.id && isRealOutput(a.reference))
+    .map((a) => ({ reference: a.reference.trim(), artifact: a, order: Date.parse(a.createdAt) || 0 }))
+  const seen = new Set(fromArtifacts.map((o) => o.reference.toLowerCase()))
+  const fromRefs: ConcreteNodeOutput[] = dedupeIOArtifactItems(node.artifactRefs ?? [])
+    .filter((ref) => isRealOutput(ref) && !seen.has(ref.trim().toLowerCase()))
+    .map((ref) => ({ reference: ref.trim(), artifact: null, order: 0 }))
+  // Artifact-less refs sort first — treated as the oldest known outputs, so a
+  // later real artifact filling the same slot supersedes them, not vice versa.
+  const concrete = [...fromRefs, ...fromArtifacts].sort((a, b) => a.order - b.order)
+
+  const claimed = new Set<ConcreteNodeOutput>()
   const result: ResolvedNodeOutput[] = []
 
   for (const slot of slots) {
-    const matches = concrete.filter((a) => !claimed.has(a) && referenceFulfillsSlot(a.reference, slot))
-    matches.forEach((a) => claimed.add(a))
+    const matches = concrete.filter((o) => !claimed.has(o) && referenceFulfillsSlot(o.reference, slot))
+    matches.forEach((o) => claimed.add(o))
     if (matches.length === 0) {
       result.push({ reference: slot, status: 'pending', artifact: null, fromSlot: slot })
       continue
     }
     const current = matches[matches.length - 1]
-    result.push({ reference: current.reference, status: 'current', artifact: current, fromSlot: slot })
+    result.push({ reference: current.reference, status: 'current', artifact: current.artifact, fromSlot: slot })
     for (const old of matches.slice(0, -1)) {
-      result.push({ reference: old.reference, status: 'superseded', artifact: old, fromSlot: slot })
+      result.push({ reference: old.reference, status: 'superseded', artifact: old.artifact, fromSlot: slot })
     }
   }
-  for (const a of concrete) {
-    if (claimed.has(a)) continue
-    result.push({ reference: a.reference, status: 'current', artifact: a, fromSlot: null })
+  for (const o of concrete) {
+    if (claimed.has(o)) continue
+    result.push({ reference: o.reference, status: 'current', artifact: o.artifact, fromSlot: null })
   }
   return result
 }
