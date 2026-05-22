@@ -387,27 +387,20 @@ public final class MCPConfigManager {
     private func resolveNodeBinary() -> String {
         let fm = FileManager.default
 
-        // 1) Ask the user's login+interactive shell — this loads nvm/asdf/volta
-        //    from the rc files and picks whatever `node` the user actually uses.
+        // 1) Ask the user's login+interactive shell — loads nvm/asdf/volta from
+        //    the rc files and picks whatever `node` the user actually uses.
+        //    Bounded: a launchd GUI app inherits a minimal env, and a slow or
+        //    prompting `.zshrc`/`.bashrc` under `-lic` must not hang startup.
         if let shell = ProcessInfo.processInfo.environment["SHELL"],
            shell.hasPrefix("/"),
-           fm.isExecutableFile(atPath: shell) {
-            let probe = Process()
-            probe.executableURL = URL(fileURLWithPath: shell)
-            probe.arguments = ["-lic", "command -v node"]
-            let out = Pipe()
-            probe.standardOutput = out
-            probe.standardError = Pipe()
-            if (try? probe.run()) != nil {
-                probe.waitUntilExit()
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                let resolved = (String(bytes: data, encoding: .utf8) ?? "")
-                    .split(separator: "\n")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .last { $0.hasPrefix("/") }
-                if let resolved, fm.isExecutableFile(atPath: resolved) {
-                    return resolved
-                }
+           fm.isExecutableFile(atPath: shell),
+           let output = runWithTimeout(shell, ["-lic", "command -v node"], seconds: 3) {
+            let resolved = output
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .last { $0.hasPrefix("/") }
+            if let resolved, fm.isExecutableFile(atPath: resolved) {
+                return resolved
             }
         }
 
@@ -426,6 +419,36 @@ public final class MCPConfigManager {
 
         // 3) Last resort — bare command, relies on the spawner's PATH.
         return "node"
+    }
+
+    /// Run `command` with `arguments`, returning its stdout on a clean
+    /// (status 0) exit within `seconds`, or `nil` on launch failure, a
+    /// non-zero exit, or a timeout. stdin is `/dev/null` so an rc script that
+    /// prompts gets an immediate EOF instead of blocking the caller; on
+    /// timeout the process is sent SIGTERM and `nil` is returned without
+    /// waiting further, so a stalled shell can never hang `ensureRegistered()`.
+    private func runWithTimeout(_ command: String, _ arguments: [String], seconds: TimeInterval) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = arguments
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        if exited.wait(timeout: .now() + seconds) == .timedOut {
+            process.terminate()
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(bytes: data, encoding: .utf8)
     }
 
     private func commandAvailable(_ command: String) -> Bool {
