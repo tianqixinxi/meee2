@@ -4578,7 +4578,12 @@ enum PlannerBoardBridge {
             for run in runs {
                 let runStates = Array(run.nodeStates.values)
                 let attentionCount = runStates.filter { nodeState in
-                    nodeState.runState == .failed || nodeState.runState == .gateWait
+                    // `awaitingInput` needs a human reply just like `gateWait`
+                    // / `failed` — keep such deliveries in the attention bucket
+                    // so operators don't miss a run blocked on their input.
+                    nodeState.runState == .failed
+                        || nodeState.runState == .gateWait
+                        || nodeState.runState == .awaitingInput
                 }.count
                 let doneCount = runStates.filter { $0.runState == .done }.count
                 let totalCount = max(runStates.count, 1)
