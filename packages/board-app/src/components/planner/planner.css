@@ -5389,3 +5389,61 @@
   text-decoration-color: rgba(168, 165, 155, 0.4);
   text-underline-offset: 3px;
 }
+
+/* UI-5.3 — canvas-switch loading skeleton.
+   Painted immediately on canvas-switch (no async deps) so the user sees the
+   shape of the upcoming canvas instead of dead time. The shimmer animation
+   is GPU-cheap (background-position only). */
+.planner-canvas-skeleton {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(168, 165, 155, 0.04), transparent 60%),
+    var(--bg, #1c1c1a);
+  pointer-events: none;
+}
+.planner-canvas-skeleton__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(168, 165, 155, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 165, 155, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.7;
+}
+.planner-canvas-skeleton__card {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 14px;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.10) 40%,
+    rgba(255, 255, 255, 0.03) 80%
+  );
+  background-size: 200% 100%;
+  border: 1px solid rgba(168, 165, 155, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  animation: planner-canvas-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.planner-canvas-skeleton__label {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, rgba(232, 228, 217, 0.45));
+}
+@keyframes planner-canvas-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .planner-canvas-skeleton__card {
+    animation: none;
+  }
+}
+
