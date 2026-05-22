@@ -36,6 +36,8 @@ import type {
   IntegrationInstallResult,
   IntegrationRunbookResult,
   ContextSourceKind,
+  AssignPlannerNodeResult,
+  OwnedCanvasSummary,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -1145,6 +1147,50 @@ export function bindPlannerNodeInput(
       body: JSON.stringify(input),
     },
   )
+}
+
+/**
+ * UI-2: Assign a node to a teammate. Server proxies to the SECURITY DEFINER
+ * `meee2_assign_node` RPC (ENG-4). The call is atomic — on failure no
+ * sub-canvas, no session re-bind, no event row is committed.
+ *
+ * If the source canvas was `private`, the server is expected to upgrade it
+ * to `public` as part of the same transaction so the assignee can see it;
+ * the returned `visibilityUpgraded` flag tells the UI whether the
+ * private→public modal's promise was kept.
+ */
+export interface AssignPlannerNodeInput {
+  /** Optional override for the new sub-canvas's display name. */
+  subCanvasName?: string | null
+  /**
+   * Acknowledgement that the source canvas was private and the user accepted
+   * the upgrade. Server refuses the call without it when the canvas is
+   * private — protects against accidentally publishing a private board.
+   */
+  acceptPrivateUpgrade?: boolean
+}
+export function assignPlannerNode(
+  canvasId: string,
+  nodeId: string,
+  assigneeUserId: string,
+  input: AssignPlannerNodeInput = {},
+): Promise<AssignPlannerNodeResult> {
+  return jsonRequest<AssignPlannerNodeResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/assign`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        assigneeUserId,
+        subCanvasName: input.subCanvasName ?? null,
+        acceptPrivateUpgrade: input.acceptPrivateUpgrade === true,
+      }),
+    },
+  )
+}
+
+/** UI-2: List sub-canvases the current user owns (proxy for `meee2_list_owned_canvases`). */
+export function fetchOwnedCanvases(): Promise<{ canvases: OwnedCanvasSummary[] }> {
+  return jsonRequest<{ canvases: OwnedCanvasSummary[] }>('/api/planner/owned-canvases')
 }
 
 export function openKanbanItemSubCanvas(

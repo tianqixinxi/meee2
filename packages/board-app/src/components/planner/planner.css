@@ -4215,3 +4215,357 @@
   border-color: rgba(194, 106, 106, 0.5);
   background: rgba(194, 106, 106, 0.12);
 }
+
+/* ====== UI-2 · Owner chip + Assign dialog + Sub-canvas ref card ====== */
+
+.planner-node__owner-pill--button {
+  background: rgba(245, 244, 239, 0.04);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 999px;
+  padding: 2px 8px 2px 4px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.planner-node__owner-pill--button:hover {
+  background: rgba(245, 244, 239, 0.1);
+  border-color: rgba(168, 165, 155, 0.45);
+}
+
+.planner-node__owner-pill--button:focus-visible {
+  outline: 2px solid rgba(120, 180, 255, 0.6);
+  outline-offset: 1px;
+}
+
+.planner-node__owner-pill-cta {
+  margin-left: 4px;
+  opacity: 0.6;
+}
+
+.planner-node__owner-pill--button:hover .planner-node__owner-pill-cta {
+  opacity: 1;
+}
+
+.planner-node__owner-pill--assigned {
+  background: rgba(120, 180, 255, 0.08);
+  border: 1px solid rgba(120, 180, 255, 0.3);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node--subcanvas-ref {
+  border-style: dashed;
+  background: rgba(245, 244, 239, 0.03);
+}
+
+.planner-node__subcanvas-ref-body {
+  padding: 6px 12px 4px;
+}
+
+.planner-node__subcanvas-ref-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.planner-assign-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 10, 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 9000;
+  padding: 24px;
+}
+
+.planner-assign-dialog {
+  background: var(--surface, #1a1a1c);
+  color: var(--text, #e8e6df);
+  width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  border-radius: 14px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.planner-assign-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.18);
+}
+
+.planner-assign-dialog__header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.planner-assign-dialog__subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim, rgba(232, 230, 223, 0.6));
+}
+
+.planner-assign-dialog__close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.planner-assign-dialog__close:hover {
+  background: rgba(245, 244, 239, 0.05);
+  border-color: rgba(168, 165, 155, 0.22);
+}
+
+.planner-assign-dialog__body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.planner-assign-dialog__body--upgrade {
+  align-items: stretch;
+  gap: 10px;
+}
+
+.planner-assign-dialog__body--upgrade h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.planner-assign-dialog__warning-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(232, 178, 90, 0.16);
+  color: rgb(232, 178, 90);
+}
+
+.planner-assign-dialog__warning-lead {
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.planner-assign-dialog__warning-list {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__warning-list strong {
+  color: var(--text);
+}
+
+.planner-assign-dialog__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(245, 244, 239, 0.04);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 8px;
+}
+
+.planner-assign-dialog__search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.planner-assign-dialog__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.planner-assign-dialog__empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 12px 4px;
+}
+
+.planner-assign-dialog__member {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.planner-assign-dialog__member:hover {
+  background: rgba(245, 244, 239, 0.05);
+}
+
+.planner-assign-dialog__member.is-selected {
+  background: rgba(120, 180, 255, 0.1);
+  border-color: rgba(120, 180, 255, 0.45);
+}
+
+.planner-assign-dialog__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.08);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  flex: none;
+}
+
+.planner-assign-dialog__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.planner-assign-dialog__member-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.planner-assign-dialog__member-role {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__summary {
+  background: rgba(245, 244, 239, 0.03);
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.planner-assign-dialog__summary h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.planner-assign-dialog__summary ul {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.planner-assign-dialog__contract {
+  margin-top: 8px;
+}
+
+.planner-assign-dialog__contract summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__contract pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.32);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.planner-assign-dialog__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 0 18px 12px;
+  background: rgba(194, 106, 106, 0.12);
+  border: 1px solid rgba(194, 106, 106, 0.42);
+  border-radius: 6px;
+  font-size: 12px;
+  color: rgb(238, 178, 178);
+}
+
+.planner-assign-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid rgba(168, 165, 155, 0.18);
+}
+
+.planner-assign-dialog__secondary,
+.planner-assign-dialog__primary {
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid rgba(168, 165, 155, 0.32);
+  background: transparent;
+  color: inherit;
+}
+
+.planner-assign-dialog__secondary:hover {
+  background: rgba(245, 244, 239, 0.05);
+}
+
+.planner-assign-dialog__primary {
+  background: rgba(120, 180, 255, 0.16);
+  border-color: rgba(120, 180, 255, 0.42);
+  color: rgb(180, 215, 255);
+}
+
+.planner-assign-dialog__primary:hover {
+  background: rgba(120, 180, 255, 0.28);
+}
+
+.planner-assign-dialog__primary.is-destructive {
+  background: rgba(232, 178, 90, 0.16);
+  border-color: rgba(232, 178, 90, 0.45);
+  color: rgb(245, 210, 150);
+}
+
+.planner-assign-dialog__primary.is-destructive:hover {
+  background: rgba(232, 178, 90, 0.3);
+}
+
+.planner-assign-dialog__primary:disabled,
+.planner-assign-dialog__secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
