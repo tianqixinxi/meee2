@@ -16,19 +16,35 @@ struct PlanningCanvas: Codable, Equatable {
     var plannerContext: String
     /// Visibility tier. Defaults to `.private` for newly created canvases.
     var visibility: PlannerCanvasVisibility
+    /// ENG-4: parent canvas when this canvas was created via
+    /// `assign_node` (i.e. is a sub-canvas). `nil` for top-level canvases.
+    var parentCanvasId: String?
+    /// ENG-4: id of the parent canvas's node that owns this sub-canvas as
+    /// its `sub_canvas_ref`. Must be set iff `parentCanvasId` is set.
+    var parentNodeId: String?
+    /// ENG-4: frozen Node Contract v2 snapshot captured at assign time.
+    /// Parent owner reads this to surface the I/O boundary; child cannot
+    /// change it without re-assigning. JSON shape mirrors `NodeContractV2`.
+    var frozenIOContract: NodeContractV2?
 
     init(
         id: String,
         ownerId: String,
         title: String,
         plannerContext: String,
-        visibility: PlannerCanvasVisibility = .private
+        visibility: PlannerCanvasVisibility = .private,
+        parentCanvasId: String? = nil,
+        parentNodeId: String? = nil,
+        frozenIOContract: NodeContractV2? = nil
     ) {
         self.id = id
         self.ownerId = ownerId
         self.title = title
         self.plannerContext = plannerContext
         self.visibility = visibility
+        self.parentCanvasId = parentCanvasId
+        self.parentNodeId = parentNodeId
+        self.frozenIOContract = frozenIOContract
     }
 }
 

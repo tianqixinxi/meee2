@@ -329,6 +329,12 @@ export interface PlanningCanvas {
   plannerContext: string
   /** Visibility tier for the canvas. */
   visibility?: PlannerCanvasVisibility
+  /** ENG-4: parent canvas if this canvas is a sub-canvas (`null` for top-level). */
+  parentCanvasId?: string | null
+  /** ENG-4: id of the parent canvas's node that owns this sub-canvas. */
+  parentNodeId?: string | null
+  /** ENG-4: frozen Node Contract v2 snapshot, written at assign time. */
+  frozenIOContract?: NodeContractV2 | null
 }
 
 export interface NodeSchema {
