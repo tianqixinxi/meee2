@@ -4,9 +4,11 @@ import {
   DEFAULT_SPAWN_PROVIDER,
   loadCanvasRecapIntervalMinutes,
   loadBoardGridEnabled,
+  loadLockViewportOnSwitch,
   loadSpawnProvider,
   saveCanvasRecapIntervalMinutes,
   saveBoardGridEnabled,
+  saveLockViewportOnSwitch,
   saveSpawnProvider,
   spawnProviderLabel,
 } from '../preferences'
@@ -54,6 +56,7 @@ export function PreferencesDialog({
 }: Props) {
   const [spawnProvider, setSpawnProvider] = useState<SpawnProvider>(loadSpawnProvider)
   const [boardGridEnabled, setBoardGridEnabled] = useState(loadBoardGridEnabled)
+  const [lockViewportOnSwitch, setLockViewportOnSwitch] = useState(loadLockViewportOnSwitch)
   const [canvasRecapIntervalMinutes, setCanvasRecapIntervalMinutes] = useState(loadCanvasRecapIntervalMinutes)
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
   const [profile, setProfile] = useState<UserProfile | null>(null)
@@ -76,6 +79,7 @@ export function PreferencesDialog({
   const save = () => {
     saveSpawnProvider(spawnProvider)
     saveBoardGridEnabled(boardGridEnabled)
+    saveLockViewportOnSwitch(lockViewportOnSwitch)
     saveCanvasRecapIntervalMinutes(canvasRecapIntervalMinutes)
     writeLlmSettings(llm)
     onSaved?.(spawnProvider)
@@ -249,6 +253,17 @@ export function PreferencesDialog({
                 type="checkbox"
                 checked={boardGridEnabled}
                 onChange={(event) => setBoardGridEnabled(event.target.checked)}
+              />
+            </label>
+            <label className="settings-toggle-row settings-panel">
+              <span>
+                <strong>Lock viewport on switch</strong>
+                <small>Keep the canvas pan/zoom when switching between canvases; restore the last saved position on re-entry.</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={lockViewportOnSwitch}
+                onChange={(event) => setLockViewportOnSwitch(event.target.checked)}
               />
             </label>
             <label className="settings-field-row settings-panel">

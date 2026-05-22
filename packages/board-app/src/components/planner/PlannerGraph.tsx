@@ -53,7 +53,13 @@ import type {
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
-import { loadSpawnProvider } from '../../preferences'
+import {
+  LOCK_VIEWPORT_PREFERENCES_CHANGED,
+  loadLockViewportOnSwitch,
+  loadPlannerViewport,
+  loadSpawnProvider,
+  savePlannerViewport,
+} from '../../preferences'
 import {
   buildTeamDirectory,
   teamAvatarUrlByUserId,
@@ -138,6 +144,16 @@ function PlannerGraphInner({
   const ioArtifactVisibilityCanvasRef = useRef(canvasId)
   const handledClearRevisionRef = useRef(0)
   const fitViewCanvasRef = useRef<string | null>(null)
+  // UI-5.2 — viewport opt-out. Track the user preference reactively so flipping
+  // it in PreferencesDialog affects the *next* canvas switch without reload.
+  const [lockViewportOnSwitch, setLockViewportOnSwitch] = useState(() => loadLockViewportOnSwitch())
+  useEffect(() => {
+    const onChange = () => setLockViewportOnSwitch(loadLockViewportOnSwitch())
+    window.addEventListener(LOCK_VIEWPORT_PREFERENCES_CHANGED, onChange)
+    return () => window.removeEventListener(LOCK_VIEWPORT_PREFERENCES_CHANGED, onChange)
+  }, [])
+  // Debounced viewport-save handle; reset on canvas change.
+  const viewportSaveTimerRef = useRef<number | null>(null)
   const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
@@ -817,6 +833,33 @@ function PlannerGraphInner({
     setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
   }, [])
 
+  // UI-5.2 — persist per-canvas viewport pose after every pan/zoom so the user
+  // can opt in to "Lock viewport on switch" later and still get the right
+  // restore. Saving unconditionally keeps the storage payload tiny (~40 bytes
+  // per canvas) and behaves correctly when the preference is flipped on.
+  const handleViewportMoveEnd = useCallback((
+    _event: unknown,
+    viewport: { x: number; y: number; zoom: number },
+  ) => {
+    if (!canvasId) return
+    if (viewportSaveTimerRef.current !== null) {
+      window.clearTimeout(viewportSaveTimerRef.current)
+    }
+    viewportSaveTimerRef.current = window.setTimeout(() => {
+      viewportSaveTimerRef.current = null
+      savePlannerViewport(canvasId, viewport)
+    }, 250)
+  }, [canvasId])
+
+  useEffect(() => {
+    return () => {
+      if (viewportSaveTimerRef.current !== null) {
+        window.clearTimeout(viewportSaveTimerRef.current)
+        viewportSaveTimerRef.current = null
+      }
+    }
+  }, [])
+
   const handleNodeDragStop = useCallback((node: PlannerGraphNode) => {
     if (node.data.virtual) return
     const layout = {
@@ -842,6 +885,10 @@ function PlannerGraphInner({
 
   useEffect(() => {
     if (!plannerState || graph.nodes.length === 0) return undefined
+    // UI-5.2 — when the user enabled "Lock viewport on switch" and we have a
+    // saved pose for this canvas, do not auto-re-center on node-count / panel-
+    // width changes. Pan/zoom stays exactly where the user left it.
+    if (lockViewportOnSwitch && loadPlannerViewport(canvasId)) return undefined
     const timer = window.setTimeout(() => {
       if (window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
@@ -850,7 +897,7 @@ function PlannerGraphInner({
       reactFlow.fitView({ padding: 0.14, duration: 220 })
     }, 180)
     return () => window.clearTimeout(timer)
-  }, [graph.nodes.length, plannerPanelCollapsed, plannerState, reactFlow])
+  }, [graph.nodes.length, plannerPanelCollapsed, plannerState, reactFlow, lockViewportOnSwitch, canvasId])
 
   useEffect(() => {
     window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
@@ -911,6 +958,15 @@ function PlannerGraphInner({
   useEffect(() => {
     if (!plannerState || loadedPlannerCanvasId !== canvasId || fitViewCanvasRef.current === canvasId) return
     fitViewCanvasRef.current = canvasId
+    // UI-5.2 — opt-out for auto-center-on-switch.
+    // When the user enabled "Lock viewport on switch" and we have a previous
+    // viewport pose for this canvas, restore it and skip the fitView. Default
+    // behavior (lock off / no saved pose) is unchanged: auto-fit on switch.
+    const savedPose = lockViewportOnSwitch ? loadPlannerViewport(canvasId) : null
+    if (savedPose) {
+      reactFlow.setViewport(savedPose, { duration: 0 })
+      return undefined
+    }
     const timer = window.setTimeout(() => {
       if (graph.nodes.length === 0 || window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
@@ -919,7 +975,7 @@ function PlannerGraphInner({
       reactFlow.fitView({ padding: 0.12, duration: 220 })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [plannerState, loadedPlannerCanvasId, graph.nodes.length, canvasId, reactFlow])
+  }, [plannerState, loadedPlannerCanvasId, graph.nodes.length, canvasId, reactFlow, lockViewportOnSwitch])
 
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null
@@ -1394,8 +1450,12 @@ function PlannerGraphInner({
                 setSelectedNodeId(null)
                 setNodeModalOpen(false)
               }}
+              onMoveEnd={handleViewportMoveEnd}
               nodesDraggable
-              fitView={!window.matchMedia('(max-width: 720px)').matches}
+              fitView={
+                !window.matchMedia('(max-width: 720px)').matches
+                && !(lockViewportOnSwitch && !!loadPlannerViewport(canvasId))
+              }
               minZoom={0.35}
               maxZoom={1.6}
               proOptions={{ hideAttribution: true }}
