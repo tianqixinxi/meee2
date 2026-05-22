@@ -964,6 +964,77 @@ enum BoardAPI {
         }
     }
 
+    /// ENG-2 bonus: clean engine path for "refine bound session prompt".
+    /// Builds a `refineSessionPrompt` proposal (no schema change), persists
+    /// it, and pipes the directive to the node's bound session via the
+    /// existing operator-channel inject path so behaviour matches the
+    /// ENG-5 workaround but is now first-class / auditable.
+    ///
+    /// Body: `{"nodeId": String, "directive": String}`
+    /// Response: 201 `{"proposal": PlanProposal, "sessionId": String?,
+    ///                  "delivered": Bool}`
+    static func refineSessionPromptProposal(_ req: HttpRequest) -> HttpResponse {
+        struct RefineSessionPromptRequest: Decodable {
+            let nodeId: String
+            let directive: String?
+        }
+        struct RefineSessionPromptResponse: Encodable {
+            let proposal: PlanProposal
+            let sessionId: String?
+            let delivered: Bool
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: RefineSessionPromptRequest.self) else {
+            return errorResponse("invalid_json", "body must be {\"nodeId\": String, \"directive\": String}", status: 400)
+        }
+        let nodeId = body.nodeId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing node id", status: 400)
+        }
+        let directive = body.directive ?? ""
+        do {
+            let (proposal, sessionId) = try PlannerBoardBridge.refineSessionPromptProposal(
+                nodeId: nodeId,
+                directive: directive,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            var delivered = false
+            if let sid = sessionId,
+               let session = resolvePluginSession(sid),
+               !directive.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let targetSessionId = inboxSessionId(for: session)
+                do {
+                    let channelName = try MessageRouter.shared.ensureOperatorChannel(sessionId: targetSessionId)
+                    _ = try MessageRouter.shared.send(
+                        channel: channelName,
+                        fromAlias: "operator",
+                        toAlias: "session",
+                        content: directive,
+                        injectedByHuman: true
+                    )
+                    delivered = true
+                    NSLog("[ENG-2][refine-session-prompt] sid=\(targetSessionId.prefix(8)) directive_len=\(directive.count)")
+                } catch {
+                    NSLog("[ENG-2][refine-session-prompt] inject failed sid=\(sid.prefix(8)) err=\(error.localizedDescription)")
+                }
+            }
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(
+                RefineSessionPromptResponse(proposal: proposal, sessionId: sessionId, delivered: delivered),
+                status: 201,
+                reason: "Created"
+            )
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func applyPlannerProposalPreview(_ req: HttpRequest) -> HttpResponse {
         struct ApplyRequest: Decodable {
             let proposal: PlanProposal
@@ -1587,6 +1658,38 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             routePlannerOutputMessages(result.routes)
+            // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched
+            // downstream nodes in the background so the user's focused app
+            // stays put. The dispatch state is already persisted by the
+            // store (see PlannerBoardBridge.submitNodeOutput), this just
+            // materializes the terminal so the session actually runs.
+            for autoNodeId in result.autoDispatchedNodeIds ?? [] {
+                guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
+                    continue
+                }
+                do {
+                    let spawnRequest = try recordPlannerDispatchIntent(
+                        canvasId: canvasId,
+                        node: node,
+                        cwdOverride: nil
+                    )
+                    guard let spawnReq = spawnRequest else { continue }
+                    switch startTerminalSession(
+                        cwd: spawnReq.cwd,
+                        command: spawnReq.command,
+                        createIfMissing: true,
+                        termProgram: nil,
+                        createInBackground: true
+                    ) {
+                    case .success:
+                        NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) background=true")
+                    case .failed(let reason):
+                        NSLog("[ENG-2][auto-spawn] failed node=\(autoNodeId) reason=\(reason)")
+                    }
+                } catch {
+                    NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
+                }
+            }
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -3224,11 +3327,12 @@ enum BoardAPI {
         }
     }
 
-    private static func startTerminalSession(
+    static func startTerminalSession(
         cwd: String,
         command: String,
         createIfMissing: Bool,
-        termProgram: String?
+        termProgram: String?,
+        createInBackground: Bool = false
     ) -> SpawnResult {
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
@@ -3253,7 +3357,11 @@ enum BoardAPI {
         let outcomeBox = OutcomeBox()
         let semaphore = DispatchSemaphore(value: 0)
         Task {
-            let result = await spawner.spawn(cwd: cwd, command: command)
+            // ENG-2 / E2.4: thread the no-steal-focus flag down to the
+            // spawner. GhosttySpawner skips `activate` when in background.
+            // Default `false` keeps explicit user-clicked "open terminal"
+            // bringing Ghostty to the front, which is what they expect.
+            let result = await spawner.spawn(cwd: cwd, command: command, createInBackground: createInBackground)
             outcomeBox.value = result
             semaphore.signal()
         }

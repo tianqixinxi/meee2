@@ -417,6 +417,10 @@ public final class BoardServer {
         server.PATCH["/api/planner/canvases/:id/description"] = BoardServer.cors(BoardAPI.setPlannerCanvasDescription)
         server.POST["/api/planner/canvases/:id/proposals/generate"] = BoardServer.cors(BoardAPI.generatePlannerProposal)
         server.POST["/api/planner/canvases/:id/proposals/refine"] = BoardServer.cors(BoardAPI.refinePlannerProposal)
+        // ENG-2 bonus: clean engine path for "refine session prompt" — replaces
+        // the ENG-5 injectToSession workaround so the directive is auditable
+        // (shows up as a proposal + canvas event) instead of going dark.
+        server.POST["/api/planner/canvases/:id/proposals/refine-session-prompt"] = BoardServer.cors(BoardAPI.refineSessionPromptProposal)
         server.POST["/api/planner/canvases/:id/proposals/inspect-drift"] = BoardServer.cors(BoardAPI.inspectPlannerDrift)
         server.POST["/api/planner/canvases/:id/proposals/apply-preview"] = BoardServer.cors(BoardAPI.applyPlannerProposalPreview)
         server.POST["/api/planner/canvases/:id/proposals/graph-change"] = BoardServer.cors(BoardAPI.proposePlannerGraphChange)

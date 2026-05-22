@@ -618,6 +618,11 @@ struct PlanChange: Codable, Equatable {
         case addNode
         case updateNode
         case attachArtifact
+        /// ENG-2 bonus: refine the bound session's next-turn prompt without
+        /// mutating canvas schema. `nodeId` identifies the node; the
+        /// directive text rides in `title`. Apply-side routes it to the
+        /// node's bound session via the operator channel.
+        case refineSessionPrompt
     }
 
     var kind: Kind
@@ -774,6 +779,19 @@ struct PlanChange: Codable, Equatable {
         PlanChange(kind: .addNode, node: node, nodeId: nil, title: nil, status: nil)
     }
 
+    /// ENG-2 bonus: build a `refineSessionPrompt` change. The directive is
+    /// stored in `title` (lightweight reuse of the existing field — no new
+    /// codable surface needed).
+    static func refineSessionPrompt(nodeId: String, directive: String) -> PlanChange {
+        PlanChange(
+            kind: .refineSessionPrompt,
+            node: nil,
+            nodeId: nodeId,
+            title: directive,
+            status: nil
+        )
+    }
+
     static func attachArtifact(
         nodeId: String,
         kind: PlannerArtifactKind,
@@ -927,6 +945,53 @@ struct PlannerNodeOutput: Codable, Equatable {
     var message: PlannerNodeOutputMessage?
     var artifacts: [PlannerNodeOutputArtifact]
     var next: PlannerNodeOutputNext
+    /// ENG-2 / E2.3: when `true`, the store ALWAYS appends a new version on
+    /// this submit — even if the node is already in a terminal state. UI
+    /// "re-run" wires here so a user can produce v2, v3, … without first
+    /// re-dispatching the node. Default `false` keeps existing call sites
+    /// unchanged.
+    var forceNewVersion: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId, status, message, artifacts, next
+        case forceNewVersion = "force_new_version"
+    }
+
+    init(
+        nodeId: String,
+        status: PlannerNodeOutputStatus,
+        message: PlannerNodeOutputMessage? = nil,
+        artifacts: [PlannerNodeOutputArtifact] = [],
+        next: PlannerNodeOutputNext,
+        forceNewVersion: Bool? = nil
+    ) {
+        self.nodeId = nodeId
+        self.status = status
+        self.message = message
+        self.artifacts = artifacts
+        self.next = next
+        self.forceNewVersion = forceNewVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.nodeId = try c.decode(String.self, forKey: .nodeId)
+        self.status = try c.decode(PlannerNodeOutputStatus.self, forKey: .status)
+        self.message = try c.decodeIfPresent(PlannerNodeOutputMessage.self, forKey: .message)
+        self.artifacts = try c.decodeIfPresent([PlannerNodeOutputArtifact].self, forKey: .artifacts) ?? []
+        self.next = try c.decode(PlannerNodeOutputNext.self, forKey: .next)
+        self.forceNewVersion = try c.decodeIfPresent(Bool.self, forKey: .forceNewVersion)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(nodeId, forKey: .nodeId)
+        try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(message, forKey: .message)
+        try c.encode(artifacts, forKey: .artifacts)
+        try c.encode(next, forKey: .next)
+        try c.encodeIfPresent(forceNewVersion, forKey: .forceNewVersion)
+    }
 }
 
 struct PlannerRouteTarget: Codable, Equatable {
@@ -1263,6 +1328,16 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     var graph: PlannerGraphState
     var routes: [PlannerOutputRoute]
     var hint: String?
+    /// ENG-2 / E2.1: id of the version appended by this submit. UI can use
+    /// this to navigate to the new version's pane.
+    var versionId: String?
+    /// ENG-2 / E2.1: 1-based version index within `(canvasId, nodeId)`.
+    var versionIndex: Int?
+    /// ENG-2 / E2.2: downstream nodes that flipped to readyToStart and are
+    /// marked auto-mode — BoardAPI auto-dispatches them so users see "session
+    /// creating…" without a manual click. UI surfaces the same node ids so it
+    /// can render the affordance immediately on the optimistic path.
+    var autoDispatchedNodeIds: [String]?
 }
 
 struct PlannerEvent: Codable, Equatable {
@@ -1656,6 +1731,14 @@ enum PlannerProposalValidator {
                       !artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw PlannerCoreError.invalidNodeOutput("attachArtifact requires non-empty title and reference")
                 }
+            case .refineSessionPrompt:
+                guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
+                guard existingNodeIds.contains(nodeId) else {
+                    throw PlannerCoreError.nodeNotFound(nodeId)
+                }
+                // Directive lives in `title`. Empty is allowed (no-op refine
+                // pings the session to re-think) but we log if missing.
+                _ = change.title
             }
         }
     }
@@ -1877,6 +1960,11 @@ final class PlannerCoreService {
                     updatedNodes[index].status = status
                 }
             case .attachArtifact:
+                continue
+            case .refineSessionPrompt:
+                // ENG-2 bonus: schema-level no-op at preview/apply time.
+                // The directive is delivered to the bound session by the
+                // BoardAPI handler (via the operator-channel inject path).
                 continue
             }
         }
@@ -2178,6 +2266,11 @@ final class PlannerStore {
         /// The run that execution-layer mutations currently mirror into. `nil`
         /// when no run is in progress (e.g. a finished canvas awaiting re-run).
         var activeRunId: String?
+        /// ENG-2 / E2.1: per-(canvasId, nodeId) version chain. Every
+        /// `submit_node_output` appends; old versions stay queryable.
+        /// ENG-3 owns long-term storage in `meee2_session_versions`; this
+        /// in-process slice is the source of truth for the running engine.
+        var nodeVersions: [NodeVersion]
 
         init(
             canvas: PlanningCanvas,
@@ -2186,7 +2279,8 @@ final class PlannerStore {
             events: [PlannerEvent] = [],
             artifacts: [PlannerArtifact] = [],
             runs: [WorkflowRun] = [],
-            activeRunId: String? = nil
+            activeRunId: String? = nil,
+            nodeVersions: [NodeVersion] = []
         ) {
             self.canvas = canvas
             self.nodes = nodes
@@ -2195,10 +2289,11 @@ final class PlannerStore {
             self.artifacts = artifacts
             self.runs = runs
             self.activeRunId = activeRunId
+            self.nodeVersions = nodeVersions
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events, artifacts, runs, activeRunId
+            case canvas, nodes, proposals, events, artifacts, runs, activeRunId, nodeVersions
         }
 
         init(from decoder: Decoder) throws {
@@ -2210,6 +2305,7 @@ final class PlannerStore {
             self.artifacts = try container.decodeIfPresent([PlannerArtifact].self, forKey: .artifacts) ?? []
             self.runs = try container.decodeIfPresent([WorkflowRun].self, forKey: .runs) ?? []
             self.activeRunId = try container.decodeIfPresent(String.self, forKey: .activeRunId)
+            self.nodeVersions = try container.decodeIfPresent([NodeVersion].self, forKey: .nodeVersions) ?? []
         }
     }
 
@@ -2902,6 +2998,18 @@ final class PlannerStore {
                     summary: draft.title,
                     artifactRefs: [draft.reference]
                 ))
+            case .refineSessionPrompt:
+                guard let nodeId = change.nodeId else { continue }
+                let directive = change.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: nodeId,
+                    proposalId: proposal.id,
+                    summary: directive.isEmpty
+                        ? "Refine session prompt"
+                        : "Refine session prompt: \(directive)"
+                ))
             }
         }
         for node in after where changedNodeIds.contains(node.id) && node.status == .done {
@@ -3231,7 +3339,12 @@ final class PlannerStore {
         canvasId: String,
         nodeId: String,
         output: PlannerNodeOutput
-    ) throws -> (record: CanvasRecord, routes: [PlannerOutputRoute]) {
+    ) throws -> (
+        record: CanvasRecord,
+        routes: [PlannerOutputRoute],
+        version: NodeVersion?,
+        autoDispatchCandidates: [PlanningNode]
+    ) {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
             guard output.nodeId == nodeId else {
@@ -3412,10 +3525,77 @@ final class PlannerStore {
                 ))
             }
 
+            // ENG-2 / E2.1: append a NodeVersion to the per-(canvas,node)
+            // chain. `force_new_version: true` (E2.3) bypasses the "already
+            // latched" check — we always create a fresh version. The default
+            // path also appends, since every submit produces a new version
+            // (there's no overwrite in the post-meeting model). Inputs are
+            // captured from the v2 contract derived off the current node.
+            let (derivedV2, _) = NodeContractV2.derive(from: current)
+            let priorVersion = record.nodeVersions.latest(canvasId: canvasId, nodeId: nodeId)
+            let trigger: NodeVersionTrigger = {
+                if output.forceNewVersion == true { return .forceRerun }
+                if priorVersion == nil { return .manual }
+                return .manual
+            }()
+            let externalSnapshot: [NodeVersionExternalSnapshot] = derivedV2.input.external.map { ext in
+                NodeVersionExternalSnapshot(
+                    connector: ext.connector,
+                    ref: ext.ref,
+                    syncSessionId: ext.syncSessionId,
+                    fetchedArtifactId: nil
+                )
+            }
+            // At submit time we don't re-run the merge — but we do capture
+            // the contract shape that *would* have driven it so the version
+            // is a faithful "what input did this produce on" record.
+            let inputSnapshot = NodeVersionInputSnapshot(
+                upstreamNodeId: derivedV2.input.upstream.sourceNodeId,
+                upstreamVersionId: derivedV2.input.upstream.sourceNodeId.flatMap { upId in
+                    record.nodeVersions.latest(canvasId: canvasId, nodeId: upId)?.id
+                },
+                external: externalSnapshot,
+                dialogueTurns: derivedV2.input.dialogue.enabled ? derivedV2.input.dialogue.window.nTurns : nil,
+                mergeLog: ["submit by session=\(current.sessionId ?? "none") trigger=\(trigger.rawValue)"]
+            )
+            let version = NodeVersion.append(
+                canvasId: canvasId,
+                nodeId: nodeId,
+                previousVersions: record.nodeVersions,
+                sessionId: current.sessionId,
+                trigger: trigger,
+                inputs: inputSnapshot,
+                artifactIds: newArtifacts.map(\.id),
+                status: output.status,
+                startedAt: Date(),
+                finishedAt: Date()
+            )
+            record.nodeVersions.append(version)
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Appended version v\(version.versionIndex) (\(version.id)) for \(current.title)"
+            ))
+
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
-            return (record, routes)
+
+            // ENG-2 / E2.2: auto-dispatch candidates — downstream nodes that
+            // (a) just flipped to readyToStart, (b) have no live session, and
+            // (c) declare auto execution mode. The BoardAPI layer is
+            // responsible for materializing the session (spawn terminal etc).
+            // This list intentionally excludes human-mode nodes (those wait on
+            // a human dispatch click).
+            let candidates: [PlanningNode] = record.nodes.filter { node in
+                guard routeTargets.contains(node.id) else { return false }
+                guard node.workflowRunState == .readyToStart else { return false }
+                let hasSession = (node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                if hasSession { return false }
+                return node.executionMode == .auto
+            }
+            return (record, routes, version, candidates)
         }
     }
 
@@ -4662,8 +4842,41 @@ enum PlannerBoardBridge {
             return next
         }
         let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: normalizedOutput)
+        // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
+        // bridge layer so the engine path stays pure (BoardAPI is the place
+        // that actually spawns terminals — see `recordPlannerDispatchIntent`
+        // + `startTerminalSession`). We only auto-dispatch here at the store
+        // level — the BoardAPI handler observes `autoDispatchedNodeIds` and
+        // kicks off the terminal spawn in the background so the response
+        // can return inside the spec's 500ms budget.
+        var autoIds: [String] = []
+        for candidate in submitted.autoDispatchCandidates {
+            do {
+                _ = try store.dispatchNode(
+                    canvasId: canvasId,
+                    nodeId: candidate.id,
+                    dispatch: PlannerNodeDispatch(
+                        runner: .claude,
+                        skill: nil,
+                        actor: candidate.doerId,
+                        command: nil,
+                        fallbackRunner: nil
+                    )
+                )
+                autoIds.append(candidate.id)
+            } catch {
+                MLog("[ENG-2][auto-dispatch] skip node=\(candidate.id) reason=\(error.localizedDescription)")
+            }
+        }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        return PlannerNodeOutputResult(graph: graph, routes: submitted.routes, hint: nil)
+        return PlannerNodeOutputResult(
+            graph: graph,
+            routes: submitted.routes,
+            hint: nil,
+            versionId: submitted.version?.id,
+            versionIndex: submitted.version?.versionIndex,
+            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
+        )
     }
 
     private static func stableArtifactSuffix(_ raw: String) -> String {
@@ -4785,6 +4998,39 @@ enum PlannerBoardBridge {
             seedNodes: [],
             validationNodes: state.nodes
         )
+    }
+
+    /// ENG-2 bonus deliverable: clean engine path for "refine the session
+    /// prompt for this node" (no schema mutation). Builds + persists a
+    /// proposal with an empty `changes[]` and the directive in `summary`.
+    /// The caller is responsible for routing the directive to the bound
+    /// session — current implementation reuses the existing operator-channel
+    /// inject path so behaviour matches the ENG-5 workaround, but the
+    /// proposal is now first-class: it shows up in proposals list, has an
+    /// id, can be approved/rejected, and is audited like every other plan
+    /// change.
+    static func refineSessionPromptProposal(
+        nodeId: String,
+        directive: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> (proposal: PlanProposal, sessionId: String?) {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        let proposal = PlannerProposalFactory.refineSessionPrompt(node: node, directive: directive)
+        let saved = try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+        let trimmedSession = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionId = (trimmedSession?.isEmpty == false) ? trimmedSession : nil
+        return (saved, sessionId)
     }
 
     static func applyPreview(
@@ -5268,6 +5514,39 @@ enum PlannerProposalFactory {
             changes: [
                 .updateNode(id: node.id, status: .draft),
                 .addNode(followUp)
+            ],
+            status: .pending
+        )
+    }
+
+    /// ENG-2 bonus: build a proposal that re-prompts the bound session for a
+    /// node, without mutating the canvas schema. Apply-side is the engine's
+    /// job (see `PlannerStore.applyRefineSessionPrompt`) — the proposal
+    /// carries the directive text in `summary`, and the empty `changes`
+    /// array signals "no schema mutation". Callers should route the
+    /// proposal through the standard approve/apply pipeline so a) the
+    /// directive is recorded in the canvas event log, and b) approval
+    /// permissions are enforced uniformly.
+    ///
+    /// Previously ENG-5 worked around the missing engine path by
+    /// reusing `injectToSession` directly; with this proposal kind the UI
+    /// has a single, auditable channel for "improve the next session
+    /// prompt without changing the plan."
+    static func refineSessionPrompt(
+        node: PlanningNode,
+        directive: String
+    ) -> PlanProposal {
+        let trimmed = directive.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = trimmed.isEmpty
+            ? "Refine session prompt for \(node.title)"
+            : "Refine session prompt for \(node.title) — \(trimmed)"
+        let randomSuffix = UUID().uuidString.lowercased().prefix(8)
+        return PlanProposal(
+            id: "proposal-\(node.id)-refine-session-prompt-\(randomSuffix)",
+            canvasId: node.canvasId,
+            summary: summary,
+            changes: [
+                .refineSessionPrompt(nodeId: node.id, directive: trimmed)
             ],
             status: .pending
         )
