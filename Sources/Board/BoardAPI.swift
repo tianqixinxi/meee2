@@ -1619,6 +1619,145 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - UI-1 (ENG-3) · Artifact version chain endpoints
+    //
+    // The web Board reads the append-only version history through these
+    // routes. `reference` is the logical artifact slot (PlannerArtifact
+    // .reference / NodeContractOutput.name). The Swift store keys slots by
+    // canvasId+nodeId+normalized(reference), matching ENG-3 semantics.
+
+    static func listPlannerArtifactVersions(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let referenceRaw = req.queryParams.first(where: { $0.0 == "reference" })?.1
+        let reference = referenceRaw?.removingPercentEncoding ?? referenceRaw ?? ""
+        guard !reference.isEmpty else {
+            return errorResponse("bad_request", "reference query parameter is required", status: 400)
+        }
+        do {
+            let versions = try PlannerBoardBridge.listArtifactVersions(
+                canvasId: canvasId,
+                nodeId: nodeId,
+                reference: reference,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            // Newest-first, mirroring the Supabase view's order.
+            let sorted = versions.sorted(by: { $0.createdAt > $1.createdAt })
+            struct Envelope: Encodable { let versions: [PlannerArtifactVersion] }
+            return jsonResponse(Envelope(versions: sorted))
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func getPlannerArtifactVersion(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let versionId = req.params[":versionId"], !versionId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or version id", status: 400)
+        }
+        do {
+            guard let version = try PlannerBoardBridge.getArtifactVersion(
+                canvasId: canvasId,
+                versionId: versionId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            ) else {
+                return errorResponse("not_found", "version not found", status: 404)
+            }
+            return jsonResponse(version)
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
+    /// UI-1 · Re-run a gate node by appending a new artifact version for the
+    /// same slot. We take the latest version's payload (or, if none exists,
+    /// fall back to the node's most recent artifact) and resubmit through
+    /// `submitNodeOutput` with `forceNewVersion: true`. This keeps the rerun
+    /// path narrow: the server-side append guarantees a new version row and
+    /// fires the standard broadcast so other clients see it within 2s.
+    static func rerunPlannerNode(_ req: HttpRequest) -> HttpResponse {
+        struct RerunRequest: Decodable {
+            let reference: String?
+        }
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: RerunRequest.self)
+        do {
+            let snapshot = BoardLayoutStore.shared.snapshot()
+            let actor = PlannerPermission.currentActorId()
+            let state = try PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actor
+            )
+            guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            // Locate the slot to rerun. Caller may pin a specific reference;
+            // otherwise pick the most recent artifact attached to the node.
+            let candidates = state.artifacts.filter { $0.nodeId == nodeId }
+            let pickedArtifact: PlannerArtifact?
+            if let requested = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines), !requested.isEmpty {
+                pickedArtifact = candidates.first(where: { $0.reference == requested })
+                    ?? candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
+            } else {
+                pickedArtifact = candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
+            }
+            guard let artifact = pickedArtifact else {
+                return errorResponse(
+                    "no_artifact",
+                    "node has no existing artifact to re-run; submit a first output before re-running",
+                    status: 409
+                )
+            }
+            let rerunArtifact = PlannerNodeOutputArtifact(
+                kind: artifact.kind,
+                title: artifact.title,
+                reference: artifact.reference,
+                payload: artifact.payload,
+                routeTo: []
+            )
+            // Mirror the previous run's terminal disposition: if the node is
+            // already done, keep it done; otherwise treat the rerun as needing
+            // owner review (matches the "re-run this" UX where the user wants
+            // to look at the output again).
+            let rerunStatus: PlannerNodeOutputStatus = node.status == .done ? .done : .needsReview
+            let rerunNext: PlannerNodeOutputNext = node.status == .done ? .complete : .needsOwnerReview
+            let output = PlannerNodeOutput(
+                nodeId: nodeId,
+                status: rerunStatus,
+                message: nil,
+                artifacts: [rerunArtifact],
+                next: rerunNext,
+                forceNewVersion: true
+            )
+            let result = try PlannerBoardBridge.submitNodeOutput(
+                nodeId: nodeId,
+                output: output,
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: actor
+            )
+            routePlannerOutputMessages(result.routes)
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(result, status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+    }
+
     static func createPlannerSubCanvasFromNode(_ req: HttpRequest) -> HttpResponse {
         struct CreateSubCanvasRequest: Decodable {
             let title: String?
