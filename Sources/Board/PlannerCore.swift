@@ -947,6 +947,308 @@ struct PlannerNodeContract: Codable, Equatable {
     var inlinePayloadLimitBytes: Int
     var artifactPayloadTypes: [PlannerArtifactPayloadType]
     var completionCriteria: [String]
+    /// v2 contract block — three-source input model + cardinality/payload_kind
+    /// output model. See `NodeContractV2`. Embedded inside the existing
+    /// `PlannerNodeContract` envelope so v1 consumers keep working while v2
+    /// consumers (ENG-2/3/4 and the UI) can opt in by reading `v2`.
+    var v2: NodeContractV2
+}
+
+// MARK: - Node Contract v2 (ENG-1)
+//
+// The v2 contract redefines node input/output to match the post-meeting decisions:
+//   • input is a 3-source合流 (upstream output, external data sources, dialogue补齐)
+//     — not a single upstream stream
+//   • output is always full (no increment vs full encoding)
+//   • `replace_strategy` is removed; replace is a display-time concept (ENG-3)
+//
+// The v1 envelope (`PlannerNodeContract`) still wraps the runtime types so
+// downstream code can migrate incrementally. Auto-migration from v1 fields
+// (`dependsOnNodeIds`, `contextSources`) happens in `NodeContractV2.derive(...)`.
+
+enum NodeContractUpstreamMode: String, Codable, Equatable, CaseIterable {
+    /// Workflow-node downchain: the upstream node's full output flows through.
+    case passthrough
+    /// Sub-canvas inheriting one item from an upstream list output.
+    case itemScoped = "item_scoped"
+}
+
+struct NodeContractUpstreamInput: Codable, Equatable {
+    var mode: NodeContractUpstreamMode
+    /// Source node id. `nil` means the canvas root entry (no upstream node).
+    var sourceNodeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case sourceNodeId = "source_node"
+    }
+}
+
+struct NodeContractExternalInput: Codable, Equatable {
+    /// Connector id (e.g. `"notion"`, `"lark"`, `"gmail"`). Free-form for now;
+    /// ENG-1 open question — the canonical enum location is deferred to INT-2.
+    var connector: String
+    /// Opaque connector-specific reference (e.g. `"db://abc"`, `"doc://xyz"`).
+    var ref: String
+    /// Bound sync session id, if any. ENG-2 may auto-create this on first run.
+    var syncSessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connector
+        case ref
+        case syncSessionId = "sync_session"
+    }
+}
+
+enum NodeContractDialogueWindowKind: String, Codable, Equatable, CaseIterable {
+    case rolling
+}
+
+struct NodeContractDialogueWindow: Codable, Equatable {
+    var kind: NodeContractDialogueWindowKind
+    var nTurns: Int
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case nTurns = "n_turns"
+    }
+}
+
+struct NodeContractDialogueInput: Codable, Equatable {
+    var enabled: Bool
+    var window: NodeContractDialogueWindow
+}
+
+struct NodeContractInput: Codable, Equatable {
+    var upstream: NodeContractUpstreamInput
+    var external: [NodeContractExternalInput]
+    var dialogue: NodeContractDialogueInput
+}
+
+enum NodeContractCardinality: String, Codable, Equatable, CaseIterable {
+    case single
+    case list
+}
+
+enum NodeContractPayloadKind: String, Codable, Equatable, CaseIterable {
+    case artifactRef = "artifact_ref"
+    case inline
+}
+
+struct NodeContractExternalWriteTarget: Codable, Equatable {
+    var connector: String
+    var ref: String
+}
+
+struct NodeContractOutput: Codable, Equatable {
+    var cardinality: NodeContractCardinality
+    var payloadKind: NodeContractPayloadKind
+    var externalWriteTarget: NodeContractExternalWriteTarget?
+
+    enum CodingKeys: String, CodingKey {
+        case cardinality
+        case payloadKind = "payload_kind"
+        case externalWriteTarget = "external_write_target"
+    }
+}
+
+struct NodeContractV2: Codable, Equatable {
+    static let version = 2
+
+    var version: Int
+    var input: NodeContractInput
+    var output: NodeContractOutput
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case input
+        case output
+    }
+
+    init(input: NodeContractInput, output: NodeContractOutput) {
+        self.version = Self.version
+        self.input = input
+        self.output = output
+    }
+
+    init(version: Int, input: NodeContractInput, output: NodeContractOutput) {
+        self.version = version
+        self.input = input
+        self.output = output
+    }
+}
+
+/// Validation errors for v2 contract / output payloads. The validator is
+/// intentionally strict — it rejects v1-style shapes with actionable messages
+/// so adapters fail loudly instead of silently dropping fields.
+enum NodeContractValidationError: Error, Equatable, LocalizedError {
+    case rejectedFieldMapping(String)
+    case rejectedReplaceStrategy
+    case rejectedIncrementOutput
+    case unknownContractVersion(Int)
+    case missingRequiredField(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .rejectedFieldMapping(let detail):
+            return "Node Contract v2 rejects v1 field-level input mapping (\(detail)). Inputs are a 3-source合流 (upstream/external/dialogue) — remove per-field bindings and use input.upstream / input.external instead."
+        case .rejectedReplaceStrategy:
+            return "Node Contract v2 rejects `replace_strategy`. Replace is a display-time concept handled by the version chain (ENG-3); outputs are always full snapshots."
+        case .rejectedIncrementOutput:
+            return "Node Contract v2 rejects `output.kind: increment`. Outputs are always全量 — submit a full snapshot."
+        case .unknownContractVersion(let version):
+            return "Unknown node contract version \(version). Supported: v2 (current). v1 contracts auto-migrate at read time."
+        case .missingRequiredField(let field):
+            return "Node Contract v2 is missing required field `\(field)`."
+        }
+    }
+}
+
+enum NodeContractValidator {
+    /// Reject v1-style raw JSON contracts. Inspects unknown keys at the top
+    /// level (`replace_strategy`, `field_mapping`, `inputs[].source_field`, …)
+    /// and refuses with an actionable error message.
+    static func validateRawContract(_ raw: BoardJSONValue?) throws {
+        guard let raw = raw, let object = raw.objectValue else { return }
+        if object["replace_strategy"] != nil {
+            throw NodeContractValidationError.rejectedReplaceStrategy
+        }
+        if let output = object["output"]?.objectValue,
+           let kind = output["kind"]?.stringValue,
+           kind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+        // v1 used `field_mapping` / `inputs[].source_field` / `inputs[].target_field`
+        // to wire individual fields between nodes. v2 collapses these into the
+        // three-source合流 model — reject explicitly so the failure is loud.
+        if object["field_mapping"] != nil {
+            throw NodeContractValidationError.rejectedFieldMapping("field_mapping at contract root")
+        }
+        if let inputs = object["inputs"]?.arrayValue {
+            for entry in inputs {
+                guard let entryObj = entry.objectValue else { continue }
+                if entryObj["source_field"] != nil || entryObj["target_field"] != nil {
+                    throw NodeContractValidationError.rejectedFieldMapping("inputs[].source_field / inputs[].target_field")
+                }
+            }
+        }
+        if let version = object["version"]?.intValue, version != NodeContractV2.version {
+            // v1 had no `version` field; an explicit `version: 1` here is a
+            // contract that callers must migrate themselves.
+            throw NodeContractValidationError.unknownContractVersion(version)
+        }
+    }
+
+    /// Reject v1-style raw output payloads. The current submit_node_output
+    /// shape never carried `replace_strategy` or `output.kind: increment` —
+    /// this guard exists so external adapters / replay scripts can't sneak
+    /// them through.
+    static func validateRawOutputPayload(_ raw: [String: Any]) throws {
+        if raw["replace_strategy"] != nil {
+            throw NodeContractValidationError.rejectedReplaceStrategy
+        }
+        if let output = raw["output"] as? [String: Any],
+           let kind = output["kind"] as? String,
+           kind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+        if let outputKind = raw["output_kind"] as? String, outputKind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+    }
+}
+
+extension NodeContractV2 {
+    /// Default dialogue-window size for derived contracts. Picked as a
+    /// conservative round number; the real default lives in session config
+    /// once ENG-2 wires runtime input merging through.
+    static let defaultDialogueTurns = 20
+
+    /// Auto-migrate / derive a v2 contract from v1 fields on a `PlanningNode`.
+    ///
+    /// Mapping:
+    ///   • `dependsOnNodeIds.first`  → `input.upstream.source_node`
+    ///     (sub-canvas nodes default to `item_scoped`; everything else is
+    ///     `passthrough`)
+    ///   • `contextSources` of kind `.document` / `.repository` / `.web` /
+    ///     `.artifact` → `input.external[]` (best-effort connector inference
+    ///     from the reference scheme; `lossy` entries are logged via the
+    ///     returned `warnings` list so callers can surface them)
+    ///   • dialogue defaults to enabled + rolling 20 turns
+    ///   • `output.cardinality` defaults to `list` for `nodeKind == .external`
+    ///     (likely a data source) and `single` otherwise
+    ///   • `output.payload_kind` defaults to `artifact_ref` — inline-only
+    ///     legacy nodes will keep working, just labeled `artifact_ref` until
+    ///     they're re-declared explicitly
+    static func derive(from node: PlanningNode) -> (contract: NodeContractV2, warnings: [String]) {
+        var warnings: [String] = []
+
+        let upstreamMode: NodeContractUpstreamMode = (node.nodeKind == .subCanvas) ? .itemScoped : .passthrough
+        let sourceNodeId = node.dependsOnNodeIds?.first
+        if let deps = node.dependsOnNodeIds, deps.count > 1 {
+            warnings.append("Node \(node.id) had \(deps.count) upstream deps; v2 upstream.source_node keeps only \(deps.first ?? "<none>") — declare extras as external inputs.")
+        }
+        let upstream = NodeContractUpstreamInput(mode: upstreamMode, sourceNodeId: sourceNodeId)
+
+        var external: [NodeContractExternalInput] = []
+        for source in node.contextSources where source.kind != .chatHistory {
+            let connector = inferConnector(from: source.reference)
+            if connector == nil {
+                warnings.append("ContextSource '\(source.title)' has reference '\(source.reference)' — could not infer connector; left as opaque.")
+            }
+            external.append(NodeContractExternalInput(
+                connector: connector ?? "unknown",
+                ref: source.reference,
+                syncSessionId: nil
+            ))
+        }
+
+        let dialogue = NodeContractDialogueInput(
+            enabled: true,
+            window: NodeContractDialogueWindow(kind: .rolling, nTurns: defaultDialogueTurns)
+        )
+
+        let cardinality: NodeContractCardinality = (node.nodeKind == .external) ? .list : .single
+        let output = NodeContractOutput(
+            cardinality: cardinality,
+            payloadKind: .artifactRef,
+            externalWriteTarget: nil
+        )
+
+        let v2 = NodeContractV2(
+            input: NodeContractInput(upstream: upstream, external: external, dialogue: dialogue),
+            output: output
+        )
+        return (v2, warnings)
+    }
+
+    /// Best-effort connector inference from a context-source reference. This
+    /// is a temporary heuristic until INT-2 lands a real connector enum.
+    private static func inferConnector(from reference: String) -> String? {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let prefixToConnector: [(String, String)] = [
+            ("notion://", "notion"),
+            ("notion.so", "notion"),
+            ("lark://", "lark"),
+            ("feishu.cn", "lark"),
+            ("larksuite.com", "lark"),
+            ("gmail:", "gmail"),
+            ("mailto:", "gmail"),
+            ("https://github.com", "github"),
+            ("git@github.com", "github"),
+            ("github://", "github"),
+            ("https://docs.google.com", "google-docs"),
+            ("gdoc://", "google-docs"),
+            ("file://", "file"),
+            ("meee2-artifact://", "meee2-artifact"),
+            ("http://", "http"),
+            ("https://", "http")
+        ]
+        for (prefix, connector) in prefixToConnector where trimmed.hasPrefix(prefix) {
+            return connector
+        }
+        return nil
+    }
 }
 
 struct PlannerOutputRoute: Codable, Equatable {
@@ -3558,6 +3860,10 @@ final class PlannerStore {
                 hasSession: false
             )
         ]
+        let (v2, migrationWarnings) = NodeContractV2.derive(from: node)
+        for warning in migrationWarnings {
+            MLog("[NodeContractV2][migrate] canvas=\(record.canvas.id) node=\(node.id) — \(warning)")
+        }
         return PlannerNodeContract(
             canvas: record.canvas,
             node: node,
@@ -3571,8 +3877,10 @@ final class PlannerStore {
                 node.schema.goal,
                 "Submit output with status done, blocked, or needs_review.",
                 "Small artifact payloads may be inline; large text/html/json/file content must be submitted as payload.file.path inside the session cwd or canvas workspace.",
-                "Route messages and artifacts only to downstream nodes or owner."
-            ]
+                "Route messages and artifacts only to downstream nodes or owner.",
+                "Output is always a full snapshot — never submit an increment / diff payload (see Node Contract v2)."
+            ],
+            v2: v2
         )
     }
 

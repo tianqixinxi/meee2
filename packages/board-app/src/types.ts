@@ -541,6 +541,68 @@ export interface PlannerNodeContract {
   inlinePayloadLimitBytes?: number
   artifactPayloadTypes?: PlannerArtifactPayloadType[]
   completionCriteria: string[]
+  /**
+   * Node Contract v2 (ENG-1). Three-source input合流 +
+   * cardinality/payload_kind output. Embedded alongside the v1 envelope so
+   * downstream consumers can migrate incrementally; the runtime always
+   * populates this for new contracts.
+   */
+  v2: NodeContractV2
+}
+
+/* ---------- Node Contract v2 (ENG-1) ---------- */
+
+export type NodeContractUpstreamMode = 'passthrough' | 'item_scoped'
+
+export interface NodeContractUpstreamInput {
+  mode: NodeContractUpstreamMode
+  /** Source node id; `null` means canvas root entry. */
+  source_node: string | null
+}
+
+export interface NodeContractExternalInput {
+  connector: string
+  ref: string
+  sync_session: string | null
+}
+
+export type NodeContractDialogueWindowKind = 'rolling'
+
+export interface NodeContractDialogueWindow {
+  kind: NodeContractDialogueWindowKind
+  n_turns: number
+}
+
+export interface NodeContractDialogueInput {
+  enabled: boolean
+  window: NodeContractDialogueWindow
+}
+
+export interface NodeContractInput {
+  upstream: NodeContractUpstreamInput
+  external: NodeContractExternalInput[]
+  dialogue: NodeContractDialogueInput
+}
+
+export type NodeContractCardinality = 'single' | 'list'
+export type NodeContractPayloadKind = 'artifact_ref' | 'inline'
+
+export interface NodeContractExternalWriteTarget {
+  connector: string
+  ref: string
+}
+
+export interface NodeContractOutput {
+  cardinality: NodeContractCardinality
+  payload_kind: NodeContractPayloadKind
+  external_write_target?: NodeContractExternalWriteTarget | null
+}
+
+export interface NodeContractV2 {
+  /** Contract schema version. Always `2` for the v2 shape. */
+  version: number
+  input: NodeContractInput
+  output: NodeContractOutput
 }
 
 export interface PlannerOutputRoute {

@@ -2397,6 +2397,192 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
     }
 
+    // MARK: - Node Contract v2 (ENG-1)
+
+    func testNodeContractV2RoundTripsThroughJSON() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let contract = try PlannerBoardBridge.nodeContract(
+            nodeId: "canvas-a-node-2",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // v2 block is always populated.
+        XCTAssertEqual(contract.v2.version, NodeContractV2.version)
+        XCTAssertNotNil(contract.v2.input.upstream)
+        XCTAssertTrue(contract.v2.input.dialogue.enabled)
+        XCTAssertEqual(contract.v2.input.dialogue.window.kind, .rolling)
+        XCTAssertEqual(contract.v2.input.dialogue.window.nTurns, NodeContractV2.defaultDialogueTurns)
+
+        // Codable round-trip (snake_case wire format).
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(contract.v2)
+        let decoded = try JSONDecoder().decode(NodeContractV2.self, from: data)
+        XCTAssertEqual(decoded, contract.v2)
+
+        // Wire format uses snake_case keys (source_node, payload_kind, n_turns).
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"source_node\""))
+        XCTAssertTrue(json.contains("\"payload_kind\""))
+        XCTAssertTrue(json.contains("\"n_turns\""))
+        XCTAssertFalse(json.contains("\"replace_strategy\""))
+        XCTAssertFalse(json.contains("\"increment\""))
+    }
+
+    func testNodeContractV2DerivesUpstreamFromDependsOn() {
+        let node = PlanningNode(
+            id: "node-derive",
+            canvasId: "canvas-a",
+            title: "Derive",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [
+                ContextSource(kind: .document, title: "Notion DB", reference: "notion://db/abc"),
+                ContextSource(kind: .repository, title: "Repo", reference: "https://github.com/foo/bar"),
+                ContextSource(kind: .web, title: "Spec", reference: "ftp://internal/spec")
+            ],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: ["upstream-1", "upstream-2"],
+            nodeKind: .step
+        )
+
+        let (v2, warnings) = NodeContractV2.derive(from: node)
+
+        XCTAssertEqual(v2.input.upstream.mode, .passthrough)
+        XCTAssertEqual(v2.input.upstream.sourceNodeId, "upstream-1")
+        XCTAssertEqual(v2.input.external.count, 3)
+        XCTAssertEqual(v2.input.external[0].connector, "notion")
+        XCTAssertEqual(v2.input.external[1].connector, "github")
+        XCTAssertEqual(v2.input.external[2].connector, "unknown") // ftp:// — lossy
+        XCTAssertEqual(v2.output.cardinality, .single)
+        XCTAssertEqual(v2.output.payloadKind, .artifactRef)
+
+        // Lossy items are surfaced as warnings.
+        XCTAssertTrue(warnings.contains { $0.contains("ftp://internal/spec") })
+        XCTAssertTrue(warnings.contains { $0.contains("2 upstream deps") })
+    }
+
+    func testNodeContractV2SubCanvasNodeDefaultsToItemScoped() {
+        let node = PlanningNode(
+            id: "node-sub",
+            canvasId: "canvas-a",
+            title: "Sub",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: ["parent"],
+            nodeKind: .subCanvas
+        )
+
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.input.upstream.mode, .itemScoped)
+        XCTAssertEqual(v2.input.upstream.sourceNodeId, "parent")
+    }
+
+    func testNodeContractV2ExternalNodeDefaultsToListCardinality() {
+        let node = PlanningNode(
+            id: "node-ext",
+            canvasId: "canvas-a",
+            title: "Ext",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .external
+        )
+
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.cardinality, .list)
+    }
+
+    func testNodeContractValidatorRejectsReplaceStrategy() {
+        let raw: BoardJSONValue = .object([
+            "replace_strategy": .string("overwrite")
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            guard let err = error as? NodeContractValidationError else {
+                return XCTFail("expected NodeContractValidationError, got \(error)")
+            }
+            XCTAssertEqual(err, .rejectedReplaceStrategy)
+        }
+    }
+
+    func testNodeContractValidatorRejectsIncrementOutput() {
+        let raw: BoardJSONValue = .object([
+            "output": .object(["kind": .string("increment")])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            XCTAssertEqual(error as? NodeContractValidationError, .rejectedIncrementOutput)
+        }
+    }
+
+    func testNodeContractValidatorRejectsV1FieldMapping() {
+        let raw: BoardJSONValue = .object([
+            "field_mapping": .object([:])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            guard case .rejectedFieldMapping = (error as? NodeContractValidationError) ?? .missingRequiredField("?") else {
+                return XCTFail("expected rejectedFieldMapping, got \(error)")
+            }
+        }
+
+        let nestedRaw: BoardJSONValue = .object([
+            "inputs": .array([
+                .object(["source_field": .string("foo"), "target_field": .string("bar")])
+            ])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(nestedRaw))
+    }
+
+    func testNodeContractValidatorRejectsV1OutputPayload() {
+        let payload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "replace_strategy": "overwrite"
+        ]
+        XCTAssertThrowsError(try NodeContractValidator.validateRawOutputPayload(payload)) { error in
+            XCTAssertEqual(error as? NodeContractValidationError, .rejectedReplaceStrategy)
+        }
+
+        let incrementPayload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "output": ["kind": "increment"]
+        ]
+        XCTAssertThrowsError(try NodeContractValidator.validateRawOutputPayload(incrementPayload))
+    }
+
+    func testNodeContractValidatorAcceptsCleanV2Payload() throws {
+        let payload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "message": ["summary": "ok", "routeTo": ["owner"]],
+            "artifacts": []
+        ]
+        XCTAssertNoThrow(try NodeContractValidator.validateRawOutputPayload(payload))
+
+        let raw: BoardJSONValue = .object([
+            "version": .number(2),
+            "input": .object([:]),
+            "output": .object(["cardinality": .string("single"), "payload_kind": .string("artifact_ref")])
+        ])
+        XCTAssertNoThrow(try NodeContractValidator.validateRawContract(raw))
+    }
+
     func testSubmitNodeOutputRoutesArtifactAndParksHumanCompletionAtGate() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")

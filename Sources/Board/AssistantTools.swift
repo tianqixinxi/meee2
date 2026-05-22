@@ -756,7 +756,7 @@ enum AssistantTools {
     private static func readNodeContractDef() -> ToolDef {
         ToolDef(
             name: "read_node_contract",
-            description: "Read the execution contract for a planner node: upstream/downstream nodes, expected outputs, allowed route targets, and completion criteria.",
+            description: "Read the execution contract for a planner node: upstream/downstream nodes, expected outputs, allowed route targets, completion criteria, and the v2 contract block (input.upstream / input.external / input.dialogue, output.cardinality, output.payload_kind).",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -825,6 +825,9 @@ enum AssistantTools {
         do {
             let canvasId = try plannerCanvasId(args: args, settings: settings)
             let nodeId = try requiredPlannerString(args["nodeId"], name: "nodeId")
+            // ENG-1: reject v1-style payloads (replace_strategy / output.kind:
+            // increment) before they decode into a v2-shaped model.
+            try NodeContractValidator.validateRawOutputPayload(args)
             var payload = args
             payload["nodeId"] = nodeId
             let data = try JSONSerialization.data(withJSONObject: payload)

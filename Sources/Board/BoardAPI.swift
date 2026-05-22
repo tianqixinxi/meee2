@@ -1564,6 +1564,17 @@ enum BoardAPI {
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
             return errorResponse("bad_request", "missing canvas id or node id", status: 400)
         }
+        // ENG-1: reject v1-style payloads (replace_strategy / output.kind:
+        // increment) before they decode into a v2-shaped model, so adapters
+        // fail loudly with an actionable error instead of silently dropping
+        // the offending fields.
+        if let raw = try? JSONSerialization.jsonObject(with: Data(req.body)) as? [String: Any] {
+            do {
+                try NodeContractValidator.validateRawOutputPayload(raw)
+            } catch {
+                return errorResponse("invalid_node_output", error.localizedDescription, status: 400)
+            }
+        }
         guard let output = decodeJSONBody(req, as: PlannerNodeOutput.self) else {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
         }
