@@ -22,16 +22,18 @@ import type {
   NodeStateSnapshot,
   PlanProposal,
   PlannerAccess,
+  PlannerArtifact,
   PlannerGraphState,
   PlanningNode,
 } from '../../types'
-import type { IOArtifactVisibility } from './plannerGraphAdapter'
+import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
 
 interface Props {
   node: PlanningNode
   canvasId: string
   variant?: 'board' | 'template'
   state: NodeStateSnapshot | null
+  artifacts?: PlannerArtifact[]
   doerLabel?: string
   access?: PlannerAccess | null
   teamMembers?: TeamMember[]
@@ -55,6 +57,7 @@ export function NodeInspectorModal({
   canvasId,
   variant = 'board',
   state,
+  artifacts = [],
   doerLabel,
   access = null,
   teamMembers = [],
@@ -86,10 +89,15 @@ export function NodeInspectorModal({
         ? [node.blockedReason.trim()]
         : []
   const inputs = dedupeStrings(node.schema?.inputs ?? [])
-  const outputs = dedupeStrings(node.schema?.outputs ?? [])
   const inputBindings = inputBindingMap(inputs, node.contextSources ?? [])
-  const artifactRefs = dedupeStrings([...(node.artifactRefs ?? []), ...(state?.artifactRefs ?? [])])
-  const outputItems = dedupeStrings([...outputs, ...artifactRefs])
+  // Output slots reconciled with produced artifacts: a concrete artifact
+  // fills its templated slot (the `<slug>` template stops showing alongside
+  // it), superseded artifacts and the synthetic `…/output` handle are dropped.
+  // `state.artifactRefs` carries state-time outputs (e.g. `subcanvas:<id>`)
+  // that are not persisted on the node — pass them as runtime refs.
+  const outputItems = dedupeStrings(
+    visibleOutputReferences(node, artifacts, state?.artifactRefs ?? []),
+  )
   const nextAction = node.nextAction?.trim() || null
   const responsibleId = node.doerId?.trim() ?? ''
   const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)
@@ -615,6 +623,8 @@ function displayRunState(runState: string): string {
       return 'ready to start'
     case 'gate-wait':
       return 'review output'
+    case 'awaiting-input':
+      return 'awaiting your reply'
     default:
       return runState.replace(/_/g, ' ')
   }
