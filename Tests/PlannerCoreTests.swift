@@ -2379,6 +2379,99 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(artifacts.first?.payload, kanbanPayload(subCanvasId: nil))
     }
 
+    // MARK: - ENG-3 · Artifact Version Chain
+
+    func testSubmitNodeOutputAppendsVersionChainAndKeepsLatestForSlot() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-v3", ownerId: "owner-a")
+        let canvas = PlanningCanvas(
+            id: "canvas-v3",
+            ownerId: "owner-a",
+            title: "Version Chain Canvas",
+            plannerContext: "canvas:canvas-v3"
+        )
+        let node = PlanningNode(
+            id: "canvas-v3-node",
+            canvasId: "canvas-v3",
+            title: "ideas",
+            schema: NodeSchema(inputs: [], outputs: ["idea_list_kanban"], goal: "Fetch ideas"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step
+        )
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        // First submit — fresh slot, no parent.
+        let first = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v1", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .kanban,
+                        title: "Ideas",
+                        reference: "idea_list_kanban",
+                        payload: kanbanPayload(subCanvasId: nil),
+                        routeTo: []
+                    )
+                ],
+                next: .complete,
+                forceNewVersion: false
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(first.graph.artifacts.filter { $0.reference == "idea_list_kanban" }.count, 1)
+
+        // Second submit — same slot. Latest-per-slot mirror still shows one,
+        // but the version chain now has two rows with parent wiring.
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v2", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .kanban,
+                        title: "Ideas v2",
+                        reference: "idea_list_kanban",
+                        payload: kanbanPayload(subCanvasId: nil),
+                        routeTo: []
+                    )
+                ],
+                next: .complete,
+                forceNewVersion: true
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let versions = try PlannerBoardBridge.listArtifactVersions(
+            canvasId: canvas.id,
+            nodeId: node.id,
+            reference: "idea_list_kanban",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(versions.count, 2, "Both versions must persist; submit is append-only.")
+        // Newest-first ordering.
+        XCTAssertEqual(versions.first?.parentVersionId, versions.last?.versionId,
+                       "v2.parent_version_id must point at v1.version_id.")
+        XCTAssertTrue(versions.first?.forceNewVersion == true,
+                      "force_new_version flag must be recorded on the version row.")
+        XCTAssertNotNil(versions.first?.inputSnapshot,
+                        "Input snapshot must be captured on every version.")
+        XCTAssertEqual(versions.first?.displayStrategy, .latest,
+                       "Default display_strategy is `latest` per ENG-3 F4.3 fix.")
+    }
+
     func testNodeContractListsOnlyDownstreamAndOwnerRouteTargets() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")

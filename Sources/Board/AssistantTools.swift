@@ -814,7 +814,12 @@ enum AssistantTools {
                             ]
                         ]
                     ],
-                    "next": ["type": "string", "enum": ["complete", "blocked", "needs_owner_review"]]
+                    "next": ["type": "string", "enum": ["complete", "blocked", "needs_owner_review"]],
+                    // ENG-3 · When `true`, the version-chain row records that
+                    // this submit was an explicit re-run (UI "rerun" button
+                    // wires here). The store appends a new version on every
+                    // submit regardless; the flag is informational metadata.
+                    "force_new_version": ["type": "boolean"]
                 ],
                 "required": ["nodeId", "status", "next"]
             ]

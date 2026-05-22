@@ -241,6 +241,112 @@ struct PlannerArtifact: Codable, Equatable {
     }
 }
 
+// MARK: - ENG-3 · Artifact Version Chain
+//
+// Every submit_node_output appends a new PlannerArtifactVersion row (never
+// physically replaces the previous one). `parent_version_id` chains the
+// history; `input_snapshot` records the upstream / external / dialogue
+// inputs that produced this version so it can be re-viewed in context.
+//
+// The Supabase mirror lives in `meee2_artifact_versions` /
+// `meee2_artifact_input_snapshots` (migration 20260522232332).
+
+/// How the UI should pick which version of an artifact slot to show.
+/// Default `latest`; `mergedView` is for fan-in nodes (list cardinality)
+/// where the UI accumulates entries across versions.
+///
+/// Renamed from v1 `replace_strategy`: see `NodeContractValidator
+/// .rejectedReplaceStrategy` — the runtime never physically replaces;
+/// "replace" is now purely a display-time choice.
+enum PlannerArtifactDisplayStrategy: String, Codable, Equatable, CaseIterable {
+    case latest
+    case mergedView = "merged_view"
+}
+
+/// Who submitted a version. Mirrors the `submitted_by_kind` enum on the
+/// `meee2_artifact_versions` row.
+enum PlannerArtifactVersionSubmitterKind: String, Codable, Equatable, CaseIterable {
+    case agent
+    case human
+    case system
+    case integration
+}
+
+/// Snapshot of the three input sources captured at version-submit time.
+/// Without this, re-viewing an old artifact version cannot reconstruct
+/// the context that produced it (Jaxon's版本回看 case).
+struct PlannerArtifactInputSnapshot: Codable, Equatable {
+    /// Upstream artifact ref captured at run time (same scheme as
+    /// `PlannerArtifact.reference`). `nil` for root / external nodes.
+    var upstreamArtifactRef: String?
+    /// Per-external-input connector outputs at run time. Each entry mirrors
+    /// `NodeContractExternalInput` plus the fetched payload pointer.
+    var externalOutputs: [BoardJSONValue]
+    /// Rolling N-turn dialogue window slice used as input. Shape mirrors
+    /// `NodeContractDialogueWindow` plus the materialised turns.
+    var dialogueWindow: BoardJSONValue?
+
+    init(
+        upstreamArtifactRef: String? = nil,
+        externalOutputs: [BoardJSONValue] = [],
+        dialogueWindow: BoardJSONValue? = nil
+    ) {
+        self.upstreamArtifactRef = upstreamArtifactRef
+        self.externalOutputs = externalOutputs
+        self.dialogueWindow = dialogueWindow
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case upstreamArtifactRef = "upstream_artifact_ref"
+        case externalOutputs = "external_outputs"
+        case dialogueWindow = "dialogue_window"
+    }
+}
+
+/// One version row in an artifact's append-only history. The "slot" is
+/// `(canvasId, nodeId, normalized reference)` — multiple versions share a
+/// slot, chained via `parentVersionId`.
+struct PlannerArtifactVersion: Codable, Equatable {
+    var versionId: String
+    var parentVersionId: String?
+    var canvasId: String
+    var nodeId: String
+    var artifactId: String
+    /// Stable key for the logical artifact slot. Matches
+    /// `PlannerStore.sameArtifactSlot` (canvasId|nodeId|normalized-reference).
+    var artifactSlotKey: String
+    var payloadRef: String
+    /// Inline payload mirror for small (<=64KB) artifacts; large payloads
+    /// live at `payloadRef`. Matches the desktop's 64 KB inline cap in
+    /// `PlannerArtifactStorage.inlinePayloadLimitBytes`.
+    var payloadInline: BoardJSONValue?
+    var inputSnapshot: PlannerArtifactInputSnapshot?
+    var displayStrategy: PlannerArtifactDisplayStrategy
+    var forceNewVersion: Bool
+    var submittedBy: String?
+    var submittedByKind: PlannerArtifactVersionSubmitterKind
+    var metadata: BoardJSONValue?
+    var createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case versionId = "version_id"
+        case parentVersionId = "parent_version_id"
+        case canvasId = "canvas_id"
+        case nodeId = "node_id"
+        case artifactId = "artifact_id"
+        case artifactSlotKey = "artifact_slot_key"
+        case payloadRef = "payload_ref"
+        case payloadInline = "payload_inline"
+        case inputSnapshot = "input_snapshot"
+        case displayStrategy = "display_strategy"
+        case forceNewVersion = "force_new_version"
+        case submittedBy = "submitted_by"
+        case submittedByKind = "submitted_by_kind"
+        case metadata
+        case createdAt = "created_at"
+    }
+}
+
 struct PlannerGraphEdge: Codable, Equatable {
     var id: String
     var sourceNodeId: String
@@ -927,6 +1033,54 @@ struct PlannerNodeOutput: Codable, Equatable {
     var message: PlannerNodeOutputMessage?
     var artifacts: [PlannerNodeOutputArtifact]
     var next: PlannerNodeOutputNext
+    /// ENG-3 · When `true`, even if this artifact slot has no observable
+    /// change since the previous version, still append a fresh version row.
+    /// UI re-run / "force re-fetch" wires to this. Defaults to `false`;
+    /// the store appends a new version on every submit regardless, but the
+    /// flag is recorded on the version row so the UI can distinguish a
+    /// user-initiated re-run from an agent-driven follow-up.
+    var forceNewVersion: Bool
+
+    init(
+        nodeId: String,
+        status: PlannerNodeOutputStatus,
+        message: PlannerNodeOutputMessage? = nil,
+        artifacts: [PlannerNodeOutputArtifact] = [],
+        next: PlannerNodeOutputNext,
+        forceNewVersion: Bool = false
+    ) {
+        self.nodeId = nodeId
+        self.status = status
+        self.message = message
+        self.artifacts = artifacts
+        self.next = next
+        self.forceNewVersion = forceNewVersion
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId
+        case status
+        case message
+        case artifacts
+        case next
+        case forceNewVersion = "force_new_version"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.nodeId = try container.decode(String.self, forKey: .nodeId)
+        self.status = try container.decode(PlannerNodeOutputStatus.self, forKey: .status)
+        self.message = try container.decodeIfPresent(PlannerNodeOutputMessage.self, forKey: .message)
+        self.artifacts = try container.decodeIfPresent([PlannerNodeOutputArtifact].self, forKey: .artifacts) ?? []
+        self.next = try container.decode(PlannerNodeOutputNext.self, forKey: .next)
+        // Accept both camelCase and snake_case for legacy callers / hand-rolled
+        // JSON. `force_new_version` is canonical (matches ENG-2 spec wording).
+        if let v = try container.decodeIfPresent(Bool.self, forKey: .forceNewVersion) {
+            self.forceNewVersion = v
+        } else {
+            self.forceNewVersion = false
+        }
+    }
 }
 
 struct PlannerRouteTarget: Codable, Equatable {
@@ -2173,6 +2327,9 @@ final class PlannerStore {
         var proposals: [PlanProposal]
         var events: [PlannerEvent]
         var artifacts: [PlannerArtifact]
+        /// ENG-3 · Append-only version chain. Every `submitNodeOutput` adds
+        /// one row per artifact; latest-per-slot is what `artifacts` mirrors.
+        var artifactVersions: [PlannerArtifactVersion]
         /// Execution-layer history (P1 Run layer).
         var runs: [WorkflowRun]
         /// The run that execution-layer mutations currently mirror into. `nil`
@@ -2185,6 +2342,7 @@ final class PlannerStore {
             proposals: [PlanProposal],
             events: [PlannerEvent] = [],
             artifacts: [PlannerArtifact] = [],
+            artifactVersions: [PlannerArtifactVersion] = [],
             runs: [WorkflowRun] = [],
             activeRunId: String? = nil
         ) {
@@ -2193,12 +2351,13 @@ final class PlannerStore {
             self.proposals = proposals
             self.events = events
             self.artifacts = artifacts
+            self.artifactVersions = artifactVersions
             self.runs = runs
             self.activeRunId = activeRunId
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events, artifacts, runs, activeRunId
+            case canvas, nodes, proposals, events, artifacts, artifactVersions, runs, activeRunId
         }
 
         init(from decoder: Decoder) throws {
@@ -2208,6 +2367,9 @@ final class PlannerStore {
             self.proposals = try container.decode([PlanProposal].self, forKey: .proposals)
             self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
             self.artifacts = try container.decodeIfPresent([PlannerArtifact].self, forKey: .artifacts) ?? []
+            // ENG-3 back-compat: legacy records on disk have no version chain
+            // — start with an empty array; first re-submit seeds it.
+            self.artifactVersions = try container.decodeIfPresent([PlannerArtifactVersion].self, forKey: .artifactVersions) ?? []
             self.runs = try container.decodeIfPresent([WorkflowRun].self, forKey: .runs) ?? []
             self.activeRunId = try container.decodeIfPresent(String.self, forKey: .activeRunId)
         }
@@ -3290,6 +3452,12 @@ final class PlannerStore {
 
             var artifactRefs = current.artifactRefs ?? []
             var newArtifacts: [PlannerArtifact] = []
+            var newVersions: [PlannerArtifactVersion] = []
+            // ENG-3 · Capture the input snapshot once per submit — same bundle
+            // attaches to every artifact in this output (they all came from
+            // the same node tick).
+            let inputSnapshot = buildInputSnapshot(node: current, record: record)
+            let now = Date()
             for item in output.artifacts {
                 let reference = item.reference.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !reference.isEmpty else {
@@ -3309,17 +3477,54 @@ final class PlannerStore {
                     title: item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : item.title,
                     reference: reference,
                     status: output.status.rawValue,
-                    createdAt: Date(),
+                    createdAt: now,
                     payload: item.payload
                 )
                 newArtifacts.append(artifact)
                 if !artifactRefs.contains(reference) {
                     artifactRefs.append(reference)
                 }
+
+                // ENG-3 · Append one version row per artifact in this submit.
+                // The store NEVER physically replaces — `mergeArtifacts`
+                // below still de-dupes the latest-per-slot mirror for the
+                // UI default surface, but the version chain is preserved
+                // here for re-viewing old context.
+                let slotKey = artifactSlotKey(canvasId: canvasId, nodeId: nodeId, reference: reference)
+                let parent = latestVersion(
+                    in: record.artifactVersions,
+                    slotKey: slotKey
+                )?.versionId
+                let payloadRef = (item.payload?.objectValue?["blobRef"]?.stringValue).flatMap {
+                    $0.isEmpty ? nil : $0
+                } ?? reference
+                let version = PlannerArtifactVersion(
+                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(now.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    artifactId: artifactId,
+                    artifactSlotKey: slotKey,
+                    payloadRef: payloadRef,
+                    payloadInline: item.payload,
+                    inputSnapshot: inputSnapshot,
+                    displayStrategy: .latest,
+                    forceNewVersion: output.forceNewVersion,
+                    submittedBy: nil,
+                    submittedByKind: .agent,
+                    metadata: .object([
+                        "title": .string(artifact.title),
+                        "kind": .string(item.kind.rawValue),
+                        "status": .string(output.status.rawValue),
+                    ]),
+                    createdAt: now
+                )
+                newVersions.append(version)
             }
             current.artifactRefs = artifactRefs
             record.nodes[sourceIndex] = current
             record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
+            record.artifactVersions.append(contentsOf: newVersions)
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
                 state.runState = current.workflowRunState ?? state.runState
                 if current.workflowRunState == .done || current.workflowRunState == .failed {
@@ -3911,6 +4116,92 @@ final class PlannerStore {
     private func appendContextSource(to node: inout PlanningNode, title: String, reference: String) {
         guard !node.contextSources.contains(where: { $0.reference == reference }) else { return }
         node.contextSources.append(ContextSource(kind: .artifact, title: title, reference: reference))
+    }
+
+    // MARK: - ENG-3 helpers · artifact version chain
+
+    /// Stable key for the logical artifact "slot" — matches the dedupe rule
+    /// used by `sameArtifactSlot` so versions and the latest-per-slot mirror
+    /// share one identity.
+    private func artifactSlotKey(canvasId: String, nodeId: String, reference: String) -> String {
+        "\(canvasId)|\(nodeId)|\(normalizeArtifactReference(reference))"
+    }
+
+    /// Most recent version for a slot, or `nil` if this is the first submit.
+    private func latestVersion(
+        in versions: [PlannerArtifactVersion],
+        slotKey: String
+    ) -> PlannerArtifactVersion? {
+        versions
+            .filter { $0.artifactSlotKey == slotKey }
+            .max { $0.createdAt < $1.createdAt }
+    }
+
+    /// Capture the three input sources for the snapshot bundle. Best-effort:
+    /// this populates upstream artifact ref + dialogue window descriptor.
+    /// External-output backfill happens via the bound sync sessions (INT-2).
+    private func buildInputSnapshot(
+        node: PlanningNode,
+        record: CanvasRecord
+    ) -> PlannerArtifactInputSnapshot {
+        // Upstream: pick the most recent artifact attached to the first
+        // upstream dependency. Matches `NodeContractUpstreamInput.sourceNodeId`.
+        var upstreamRef: String? = nil
+        if let upstreamId = node.dependsOnNodeIds?.first {
+            upstreamRef = record.artifacts
+                .filter { $0.nodeId == upstreamId }
+                .max(by: { $0.createdAt < $1.createdAt })?.reference
+        }
+        // External: surface the declared external inputs as opaque entries.
+        // The actual fetched payload pointers get filled in by sync sessions
+        // (INT-2); recording the declaration is the lossless minimum.
+        var external: [BoardJSONValue] = []
+        for source in node.contextSources where source.kind != .chatHistory {
+            external.append(.object([
+                "title": .string(source.title),
+                "ref": .string(source.reference),
+                "kind": .string(source.kind.rawValue),
+            ]))
+        }
+        // Dialogue window: record the rolling-N descriptor; the actual turns
+        // get filled in by the runtime (ENG-2) when input合流 lands.
+        let dialogue: BoardJSONValue = .object([
+            "kind": .string("rolling"),
+            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns)),
+        ])
+        return PlannerArtifactInputSnapshot(
+            upstreamArtifactRef: upstreamRef,
+            externalOutputs: external,
+            dialogueWindow: dialogue
+        )
+    }
+
+    /// Public read API · list all versions for an artifact slot, ordered
+    /// newest-first. UI-1 / version dropdown call this.
+    func artifactVersions(
+        canvasId: String,
+        nodeId: String,
+        reference: String
+    ) throws -> [PlannerArtifactVersion] {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            let slotKey = artifactSlotKey(canvasId: canvasId, nodeId: nodeId, reference: reference)
+            return record.artifactVersions
+                .filter { $0.artifactSlotKey == slotKey }
+                .sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
+    /// Public read API · fetch one version by id. Returns the version row
+    /// plus its input snapshot — caller can reconstruct the context.
+    func artifactVersion(
+        canvasId: String,
+        versionId: String
+    ) throws -> PlannerArtifactVersion? {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            return record.artifactVersions.first { $0.versionId == versionId }
+        }
     }
 
     private func mergeArtifacts(
@@ -4664,6 +4955,33 @@ enum PlannerBoardBridge {
         let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: normalizedOutput)
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         return PlannerNodeOutputResult(graph: graph, routes: submitted.routes, hint: nil)
+    }
+
+    /// ENG-3 · List the append-only version chain for one artifact slot,
+    /// newest-first. UI-1 / version dropdown consume this.
+    static func listArtifactVersions(
+        canvasId: String,
+        nodeId: String,
+        reference: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifactVersion] {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard state.nodes.contains(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        return try store.artifactVersions(canvasId: canvasId, nodeId: nodeId, reference: reference)
+    }
+
+    /// ENG-3 · Fetch one version by id, including its input snapshot.
+    static func getArtifactVersion(
+        canvasId: String,
+        versionId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerArtifactVersion? {
+        _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return try store.artifactVersion(canvasId: canvasId, versionId: versionId)
     }
 
     private static func stableArtifactSuffix(_ raw: String) -> String {
