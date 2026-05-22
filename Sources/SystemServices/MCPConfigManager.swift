@@ -401,7 +401,7 @@ public final class MCPConfigManager {
             if (try? probe.run()) != nil {
                 probe.waitUntilExit()
                 let data = out.fileHandleForReading.readDataToEndOfFile()
-                let resolved = String(decoding: data, as: UTF8.self)
+                let resolved = (String(bytes: data, encoding: .utf8) ?? "")
                     .split(separator: "\n")
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .last { $0.hasPrefix("/") }
