@@ -100,6 +100,10 @@ enum PlannerWorkflowRunState: String, Codable, Equatable {
     case readyToStart = "ready_to_start"
     case dispatched
     case running
+    /// Session is alive but idle, waiting for a human to supply context or a
+    /// decision before it can continue. Distinct from `dispatched` (just
+    /// spun up) and `gateWait` (an explicit planner/permission gate).
+    case awaitingInput = "awaiting-input"
     case gateWait = "gate-wait"
     case done
     case failed
@@ -563,6 +567,8 @@ enum PlannerWorkflowGuidance {
         switch runState {
         case .readyToStart:
             return "Ready — start work or attach an existing session."
+        case .awaitingInput:
+            return "Waiting for your input — open the session and reply."
         case .gateWait:
             return "Review the output and confirm or send it back."
         case .failed:
@@ -1715,7 +1721,10 @@ final class PlannerCoreService {
 
     private func artifactRefs(for node: PlanningNode) -> [String] {
         var refs = node.artifactRefs ?? []
-        if node.status == .done {
+        // Synthetic fallback handle — only for a done node that produced no
+        // concrete artifact of its own. Once a real artifact exists it is
+        // pure noise (a duplicate "output" entry alongside the real refs).
+        if node.status == .done && refs.isEmpty {
             refs.append("artifact://\(node.id)/output")
         }
         if let subCanvasId = node.subCanvasId {
@@ -2250,7 +2259,7 @@ final class PlannerStore {
             } else if record.nodes[stepIndex].workflowRunState != stepRunState {
                 record.nodes[stepIndex].workflowRunState = stepRunState
                 record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
-                if stepRunState == .failed || stepRunState == .gateWait {
+                if stepRunState == .failed || stepRunState == .gateWait || stepRunState == .awaitingInput {
                     record.nodes[stepIndex].blockedReason = Self.sessionFailureReason(
                         for: runState,
                         sessionId: sessionId
@@ -2346,7 +2355,7 @@ final class PlannerStore {
             return .ready
         case .dispatched, .running:
             return .working
-        case .gateWait:
+        case .awaitingInput, .gateWait:
             return .blocked
         case .done:
             return .done
@@ -2364,6 +2373,8 @@ final class PlannerStore {
             return "Session \(String(sessionId.prefix(8))) ended before this node submitted a completion output."
         case .gateWait:
             return "Session \(String(sessionId.prefix(8))) needs human attention before this node can continue."
+        case .awaitingInput:
+            return "Session \(String(sessionId.prefix(8))) is waiting for your input — open it and reply."
         case .pending, .readyToStart, .dispatched, .running, .done:
             return "Session \(String(sessionId.prefix(8))) could not continue this node."
         }
@@ -2381,7 +2392,7 @@ final class PlannerStore {
             return hasGate ? .gateWait : .done
         case .failed:
             return .failed
-        case .pending, .readyToStart, .dispatched, .running, .gateWait:
+        case .pending, .readyToStart, .dispatched, .running, .awaitingInput, .gateWait:
             return sessionRunState
         }
     }
@@ -2950,7 +2961,10 @@ final class PlannerStore {
             case .done:
                 current.blockedReason = nil
                 if current.executionMode == .human {
-                    current.status = .working
+                    // Parked at a human gate — plan-layer status mirrors
+                    // `nodeStatus(for: .gateWait)` so design mode shows it
+                    // in the attention bucket, not as "In progress".
+                    current.status = Self.nodeStatus(for: .gateWait)
                     current.workflowRunState = .gateWait
                 } else {
                     current.status = .done
@@ -2961,7 +2975,7 @@ final class PlannerStore {
                 current.workflowRunState = .failed
                 current.blockedReason = summary.isEmpty ? nil : summary
             case .needsReview:
-                current.status = .working
+                current.status = Self.nodeStatus(for: .gateWait)
                 current.workflowRunState = .gateWait
                 current.blockedReason = summary.isEmpty ? nil : summary
             }
@@ -3700,7 +3714,9 @@ final class PlannerStore {
 
     private func serviceArtifactRefs(node: PlanningNode) -> [String] {
         var refs = node.artifactRefs ?? []
-        if node.status == .done {
+        // See `artifactRefs(for:)` — synthetic handle only when the done node
+        // has no concrete artifact, otherwise it is a duplicate "output" entry.
+        if node.status == .done && refs.isEmpty {
             refs.append("artifact://\(node.id)/output")
         }
         if let subCanvasId = node.subCanvasId {
@@ -4842,7 +4858,9 @@ enum PlannerSessionRunStateBridge {
     /// Map a live `SessionStatus` to the node `workflowRunState`.
     ///
     /// - working states (thinking / tooling / active / compacting) → `running`
-    /// - `idle` / `waitingForUser` → `dispatched` (session alive, not finished)
+    /// - `idle` → `dispatched` (session alive, just spun up / between turns)
+    /// - `waitingForUser` → `awaitingInput` (session idle, ball is in the
+    ///   human's court — needs context or a decision to advance)
     /// - `permissionRequired` → `gateWait` (blocked awaiting a human)
     /// - `completed` → `done`
     /// - `dead` → `failed`
@@ -4850,8 +4868,10 @@ enum PlannerSessionRunStateBridge {
         switch status {
         case .thinking, .tooling, .active, .compacting:
             return .running
-        case .idle, .waitingForUser:
+        case .idle:
             return .dispatched
+        case .waitingForUser:
+            return .awaitingInput
         case .permissionRequired:
             return .gateWait
         case .completed:

@@ -137,22 +137,6 @@ public final class MCPConfigManager {
     /// 应用启动时调；无论现在是啥状态都收敛到"已注册，命令指向当前的 server.js
     /// 绝对路径"。
     public func ensureRegistered() {
-        // 检查 Node.js 是否可用
-        let whichNode = Process()
-        whichNode.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        whichNode.arguments = ["which", "node"]
-        whichNode.standardOutput = Pipe()
-        whichNode.standardError = Pipe()
-        do {
-            try whichNode.run()
-            whichNode.waitUntilExit()
-            if whichNode.terminationStatus != 0 {
-                NSLog("[MCPConfigManager] WARNING: Node.js not found in PATH. MCP server will be registered but cannot run until Node.js >= 18 is installed.")
-            }
-        } catch {
-            NSLog("[MCPConfigManager] WARNING: Cannot check for Node.js availability.")
-        }
-
         let expectedServerPath = resolveServerScriptPath()
         NSLog("[MCPConfigManager] expected server.js path: \(expectedServerPath)")
 
@@ -161,10 +145,15 @@ public final class MCPConfigManager {
             return
         }
 
-        // node 路径——Claude 的其他 MCP 条目都是裸 "node" / "npx"，靠 PATH
-        // 解析。这里也用 `node`，不写死绝对路径（brew / nvm / asdf 下各家位置
-        // 都不一样；子进程能从 PATH 里找到）。
-        let nodeBin = "node"
+        // node 路径——meee2 作为 launchd 启动的 GUI app，PATH 是精简版，不含
+        // nvm / Homebrew 目录；裸 `node` 的 MCP 条目在 meee2 自己以及它派发的
+        // session 里都起不来。注册时解析出一个绝对路径写进去。
+        let nodeBin = resolveNodeBinary()
+        if nodeBin == "node" {
+            NSLog("[MCPConfigManager] WARNING: could not resolve an absolute node path; falling back to bare `node` (requires Node.js >= 18 on the spawner PATH).")
+        } else {
+            NSLog("[MCPConfigManager] resolved node binary → \(nodeBin)")
+        }
 
         var rootObject: [String: Any] = readConfig() ?? [:]
         var mcpServers = (rootObject["mcpServers"] as? [String: Any]) ?? [:]
@@ -387,7 +376,64 @@ public final class MCPConfigManager {
         return "\"\(escaped)\""
     }
 
+    /// Resolve an absolute path to a `node` binary.
+    ///
+    /// meee2 runs as a launchd-started GUI app with a minimal PATH that does
+    /// not include nvm / Homebrew / asdf dirs, so a bare `node` command in the
+    /// MCP config fails to launch (both for meee2's own probe and for the
+    /// sessions it dispatches). We resolve a concrete path at registration
+    /// time instead. Order: the user's login shell (respects nvm's default
+    /// alias) → known install locations → bare `node` as a last resort.
+    private func resolveNodeBinary() -> String {
+        let fm = FileManager.default
+
+        // 1) Ask the user's login+interactive shell — this loads nvm/asdf/volta
+        //    from the rc files and picks whatever `node` the user actually uses.
+        if let shell = ProcessInfo.processInfo.environment["SHELL"],
+           shell.hasPrefix("/"),
+           fm.isExecutableFile(atPath: shell) {
+            let probe = Process()
+            probe.executableURL = URL(fileURLWithPath: shell)
+            probe.arguments = ["-lic", "command -v node"]
+            let out = Pipe()
+            probe.standardOutput = out
+            probe.standardError = Pipe()
+            if (try? probe.run()) != nil {
+                probe.waitUntilExit()
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let resolved = String(decoding: data, as: UTF8.self)
+                    .split(separator: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .last { $0.hasPrefix("/") }
+                if let resolved, fm.isExecutableFile(atPath: resolved) {
+                    return resolved
+                }
+            }
+        }
+
+        // 2) Scan known install locations. nvm: newest version wins.
+        let nvmRoot = "\(NSHomeDirectory())/.nvm/versions/node"
+        if let versions = try? fm.contentsOfDirectory(atPath: nvmRoot) {
+            let newestFirst = versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            for version in newestFirst {
+                let candidate = "\(nvmRoot)/\(version)/bin/node"
+                if fm.isExecutableFile(atPath: candidate) { return candidate }
+            }
+        }
+        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+            if fm.isExecutableFile(atPath: candidate) { return candidate }
+        }
+
+        // 3) Last resort — bare command, relies on the spawner's PATH.
+        return "node"
+    }
+
     private func commandAvailable(_ command: String) -> Bool {
+        // An absolute path (what `resolveNodeBinary` writes) — check directly;
+        // `which` is for PATH lookups of bare command names.
+        if command.hasPrefix("/") {
+            return FileManager.default.isExecutableFile(atPath: command)
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["which", command]

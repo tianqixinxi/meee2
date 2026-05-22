@@ -8,6 +8,7 @@ import {
   Clock3,
   Code2,
   FileText,
+  MessageCircle,
   PlayCircle,
   Plug,
   Route,
@@ -44,6 +45,7 @@ const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   ready_to_start: PlayCircle,
   dispatched: PlayCircle,
   running: PlayCircle,
+  'awaiting-input': MessageCircle,
   'gate-wait': Signpost,
   done: CheckCircle2,
   failed: AlertTriangle,
@@ -58,6 +60,7 @@ function runStateClass(runState: PlannerWorkflowRunState): string {
     case 'dispatched':
     case 'running':
       return 'working'
+    case 'awaiting-input':
     case 'gate-wait':
     case 'failed':
       return 'blocked'
@@ -948,6 +951,8 @@ function workStatusLabel(status: PlannerWorkflowRunState, hasSelectedDelivery: b
     case 'dispatched':
     case 'running':
       return 'In progress'
+    case 'awaiting-input':
+      return 'Awaiting your reply'
     case 'gate-wait':
     case 'failed':
       return 'Needs attention'

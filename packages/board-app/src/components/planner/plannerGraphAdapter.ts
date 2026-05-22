@@ -331,6 +331,92 @@ function dedupeIOArtifactItems(values: Array<string | null | undefined>): string
   return result
 }
 
+/** A schema output slot may carry `<token>` placeholders (e.g. `<slug>`,
+ *  `<date>`, `<id>`). True when the reference still has an unfilled token. */
+export function hasTemplateToken(reference: string): boolean {
+  return /<[^<>]+>/.test(reference)
+}
+
+/** Treat each `<token>` in a slot as a wildcard within one path segment, so a
+ *  concrete `…/prd/monitor-session-block-status.md` is recognised as filling
+ *  the declared slot `…/prd/<slug>.md`. Scheme-agnostic — works for
+ *  `repo://`, `lark://`, `git://…/pull/<id>`, `artifact://…` alike. */
+export function referenceFulfillsSlot(reference: string, slot: string): boolean {
+  const ref = reference.trim()
+  const slotTrimmed = slot.trim()
+  if (!ref || !slotTrimmed) return false
+  if (!hasTemplateToken(slotTrimmed)) {
+    return ref.toLowerCase() === slotTrimmed.toLowerCase()
+  }
+  const pattern = slotTrimmed
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/<[^<>]+>/g, '[^/]*')
+  return new RegExp(`^${pattern}$`, 'i').test(ref)
+}
+
+export type ResolvedOutputStatus = 'pending' | 'current' | 'superseded'
+
+export interface ResolvedNodeOutput {
+  /** Reference to display and to key the visibility toggle on. */
+  reference: string
+  status: ResolvedOutputStatus
+  artifact: PlannerArtifact | null
+  /** The schema slot this output fills, when it fills one. */
+  fromSlot: string | null
+}
+
+/** Reconcile a node's declared output slots with the artifacts it actually
+ *  produced. A concrete artifact that matches a templated slot *fills* it
+ *  (the template stops showing alongside it); when several artifacts fill the
+ *  same slot the newest is `current` and the rest are `superseded`. The
+ *  synthetic `artifact://<nodeId>/output` handle and template-token
+ *  placeholder artifacts are never surfaced as real outputs. */
+export function resolveNodeOutputs(
+  node: PlanningNode,
+  artifacts: PlannerArtifact[],
+): ResolvedNodeOutput[] {
+  const slots = (node.schema?.outputs ?? []).map((s) => s.trim()).filter(Boolean)
+  const syntheticOutput = `artifact://${node.id}/output`
+  const concrete = artifacts
+    .filter((a) => a.nodeId === node.id)
+    .filter((a) => !hasTemplateToken(a.reference) && a.reference.trim() !== syntheticOutput)
+    .slice()
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+
+  const claimed = new Set<PlannerArtifact>()
+  const result: ResolvedNodeOutput[] = []
+
+  for (const slot of slots) {
+    const matches = concrete.filter((a) => !claimed.has(a) && referenceFulfillsSlot(a.reference, slot))
+    matches.forEach((a) => claimed.add(a))
+    if (matches.length === 0) {
+      result.push({ reference: slot, status: 'pending', artifact: null, fromSlot: slot })
+      continue
+    }
+    const current = matches[matches.length - 1]
+    result.push({ reference: current.reference, status: 'current', artifact: current, fromSlot: slot })
+    for (const old of matches.slice(0, -1)) {
+      result.push({ reference: old.reference, status: 'superseded', artifact: old, fromSlot: slot })
+    }
+  }
+  for (const a of concrete) {
+    if (claimed.has(a)) continue
+    result.push({ reference: a.reference, status: 'current', artifact: a, fromSlot: null })
+  }
+  return result
+}
+
+/** The output references worth surfacing — `current` artifacts plus
+ *  still-unfilled slot templates. Superseded artifacts are dropped. */
+export function visibleOutputReferences(
+  node: PlanningNode,
+  artifacts: PlannerArtifact[],
+): string[] {
+  return resolveNodeOutputs(node, artifacts)
+    .filter((output) => output.status !== 'superseded')
+    .map((output) => output.reference)
+}
+
 function artifactKindFor(value: string): IOArtifactKind {
   const normalized = value.toLowerCase()
   if (normalized.includes('kanban') || normalized.includes('看板')) {
@@ -619,6 +705,7 @@ function perceptionForNode(
         return 'done'
       case 'failed':
       case 'gate-wait':
+      case 'awaiting-input':
       case 'ready_to_start':
         return 'attention'
       case 'dispatched':

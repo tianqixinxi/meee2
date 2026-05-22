@@ -363,7 +363,7 @@ export type PlanningNodeStatus = 'draft' | 'ready' | 'working' | 'blocked' | 'do
 export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
-export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
+export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'awaiting-input' | 'gate-wait' | 'done' | 'failed'
 export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
 export type PlannerArtifactKind =
   | 'idea-draft'

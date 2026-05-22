@@ -316,6 +316,10 @@ final class PlannerCoreTests: XCTestCase {
             "In progress — open the session to monitor work."
         )
         XCTAssertEqual(
+            PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .awaitingInput), blockers: nil),
+            "Waiting for your input — open the session and reply."
+        )
+        XCTAssertEqual(
             PlannerWorkflowGuidance.nextAction(for: guidanceNode(runState: .done), blockers: nil),
             "Done — confirm the artifact is attached."
         )
@@ -2393,7 +2397,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
     }
 
-    func testSubmitNodeOutputRoutesArtifactAndKeepsHumanCompletionWorking() throws {
+    func testSubmitNodeOutputRoutesArtifactAndParksHumanCompletionAtGate() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
 
@@ -2421,7 +2425,9 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
 
-        XCTAssertEqual(result.graph.nodes.first { $0.id == "canvas-a-node-1" }?.status, .working)
+        let gated = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-1" })
+        XCTAssertEqual(gated.workflowRunState, .gateWait)
+        XCTAssertEqual(gated.status, .blocked, "a node parked at a human gate is not 'In progress'")
         let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-2" })
         XCTAssertEqual(downstream.workflowRunState, .readyToStart)
         XCTAssertTrue(downstream.contextSources.contains { $0.reference == "lark://doc/idea" })
@@ -3012,7 +3018,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .active), .running)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .compacting), .running)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .idle), .dispatched)
-        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .waitingForUser), .dispatched)
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .waitingForUser), .awaitingInput)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .permissionRequired), .gateWait)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .completed), .done)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .dead), .failed)

@@ -132,6 +132,15 @@
   position: relative;
   min-width: 0;
   min-height: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.planner-flow input,
+.planner-flow textarea,
+.planner-flow [contenteditable='true'] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .planner-banner-stack {

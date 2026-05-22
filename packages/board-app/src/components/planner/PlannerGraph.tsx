@@ -414,9 +414,15 @@ function PlannerGraphInner({
               delete next[sourceNodeId]
               continue
             }
+            // Keep visibility for declared slots AND for concrete produced
+            // artifacts (their reference is not in `schema.outputs`).
+            const validOutputs = new Set([
+              ...sourceNode.schema.outputs,
+              ...(sourceNode.artifactRefs ?? []),
+            ])
             next[sourceNodeId] = {
               inputs: visible.inputs.filter((item) => sourceNode.schema.inputs.includes(item)),
-              outputs: visible.outputs.filter((item) => sourceNode.schema.outputs.includes(item)),
+              outputs: visible.outputs.filter((item) => validOutputs.has(item)),
             }
             if (next[sourceNodeId].inputs.length === 0 && next[sourceNodeId].outputs.length === 0) {
               delete next[sourceNodeId]
@@ -1097,6 +1103,7 @@ function PlannerGraphInner({
           canvasId={canvasId}
           variant={variant}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
+          artifacts={plannerState?.artifacts ?? []}
           doerLabel={
             selectedNode.doerId
               ? teamDirectory.displayNameByUserId[selectedNode.doerId] ?? selectedNode.doerId
