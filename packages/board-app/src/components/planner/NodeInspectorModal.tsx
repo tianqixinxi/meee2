@@ -93,7 +93,11 @@ export function NodeInspectorModal({
   // Output slots reconciled with produced artifacts: a concrete artifact
   // fills its templated slot (the `<slug>` template stops showing alongside
   // it), superseded artifacts and the synthetic `…/output` handle are dropped.
-  const outputItems = dedupeStrings(visibleOutputReferences(node, artifacts))
+  // `state.artifactRefs` carries state-time outputs (e.g. `subcanvas:<id>`)
+  // that are not persisted on the node — pass them as runtime refs.
+  const outputItems = dedupeStrings(
+    visibleOutputReferences(node, artifacts, state?.artifactRefs ?? []),
+  )
   const nextAction = node.nextAction?.trim() || null
   const responsibleId = node.doerId?.trim() ?? ''
   const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)

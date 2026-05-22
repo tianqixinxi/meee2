@@ -381,15 +381,19 @@ interface ConcreteNodeOutput {
  *  synthetic `artifact://<nodeId>/output` handle and template-token
  *  placeholder references are never surfaced as real outputs.
  *
- *  Outputs come from two sources: `PlannerArtifact` records (the primary
- *  source — they carry `createdAt` for supersession ordering) and bare
- *  `node.artifactRefs` set directly via `updateNode`. A node can legitimately
- *  hold an `artifactRefs` entry with no matching artifact object, so those
- *  are kept as artifact-less outputs — otherwise persisted output references
- *  would silently vanish from the inspector. */
+ *  Outputs come from three sources: `PlannerArtifact` records (the primary
+ *  source — they carry `createdAt` for supersession ordering), bare
+ *  `node.artifactRefs` persisted via `updateNode`, and `runtimeRefs` —
+ *  state-time output references (e.g. `subcanvas:<id>` injected by
+ *  `serviceArtifactRefs`) that are neither persisted on the node nor backed
+ *  by an artifact object. A node can legitimately hold outputs in any of
+ *  these without a matching artifact, so all are kept as artifact-less
+ *  outputs — otherwise those references would silently vanish from the
+ *  inspector. */
 export function resolveNodeOutputs(
   node: PlanningNode,
   artifacts: PlannerArtifact[],
+  runtimeRefs: string[] = [],
 ): ResolvedNodeOutput[] {
   const slots = (node.schema?.outputs ?? []).map((s) => s.trim()).filter(Boolean)
   const syntheticOutput = `artifact://${node.id}/output`
@@ -402,7 +406,10 @@ export function resolveNodeOutputs(
     .filter((a) => a.nodeId === node.id && isRealOutput(a.reference))
     .map((a) => ({ reference: a.reference.trim(), artifact: a, order: Date.parse(a.createdAt) || 0 }))
   const seen = new Set(fromArtifacts.map((o) => o.reference.toLowerCase()))
-  const fromRefs: ConcreteNodeOutput[] = dedupeIOArtifactItems(node.artifactRefs ?? [])
+  const fromRefs: ConcreteNodeOutput[] = dedupeIOArtifactItems([
+    ...(node.artifactRefs ?? []),
+    ...runtimeRefs,
+  ])
     .filter((ref) => isRealOutput(ref) && !seen.has(ref.trim().toLowerCase()))
     .map((ref) => ({ reference: ref.trim(), artifact: null, order: 0 }))
   // Artifact-less refs sort first — treated as the oldest known outputs, so a
@@ -437,8 +444,9 @@ export function resolveNodeOutputs(
 export function visibleOutputReferences(
   node: PlanningNode,
   artifacts: PlannerArtifact[],
+  runtimeRefs: string[] = [],
 ): string[] {
-  return resolveNodeOutputs(node, artifacts)
+  return resolveNodeOutputs(node, artifacts, runtimeRefs)
     .filter((output) => output.status !== 'superseded')
     .map((output) => output.reference)
 }
