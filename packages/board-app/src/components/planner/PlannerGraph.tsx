@@ -79,6 +79,13 @@ interface Props {
   userProfile?: UserProfile | null
   boardState?: BoardState | null
   clearRevision?: number
+  /**
+   * U5.1 — auto-refresh on notification.
+   * Parent bumps this counter every time a WS `state.changed` event arrives so
+   * the active canvas can re-fetch its planner graph and reflect remote
+   * changes within ~1s, without forcing the user to manually switch canvas.
+   */
+  refreshTick?: number
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
 }
@@ -114,6 +121,7 @@ function PlannerGraphInner({
   userProfile = null,
   boardState = null,
   clearRevision = 0,
+  refreshTick = 0,
   onOpenSubCanvas,
   onNotify,
 }: Props) {
@@ -170,6 +178,42 @@ function PlannerGraphInner({
   useEffect(() => {
     loadState()
   }, [loadState])
+
+  // U5.1 — auto-refresh on notification.
+  // When the parent signals (via `refreshTick`) that a WS `state.changed` event
+  // arrived for this canvas, silently re-fetch the planner graph and apply the
+  // diff. We deliberately don't toggle `busy` here so the canvas doesn't flicker
+  // on every backend tick; the planner state setter is idempotent for unchanged
+  // graphs.
+  const lastHandledRefreshTickRef = useRef(refreshTick)
+  useEffect(() => {
+    if (refreshTick === lastHandledRefreshTickRef.current) return
+    lastHandledRefreshTickRef.current = refreshTick
+    if (!canvasId) return
+    let cancelled = false
+    fetchPlannerGraphState(canvasId)
+      .then((state) => {
+        if (cancelled) return
+        setPlannerState(state)
+        setProposal(
+          state.proposals.find(
+            (item) => item.status === 'pending' || item.status === 'approved',
+          ) ?? null,
+        )
+      })
+      .catch((err) => {
+        if (cancelled) return
+        // Soft-fail: a failed background refresh shouldn't blow away the UI;
+        // log only so the next tick / manual interaction retries cleanly.
+        console.warn(
+          '[PlannerGraph] auto-refresh on notification failed:',
+          (err as Error).message,
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasId, refreshTick])
 
   const refreshMCPStatus = useCallback(() => {
     setMCPStatusError(null)
