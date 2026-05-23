@@ -5,13 +5,18 @@
  * `PlannerGraph`. The collapsed/headline form continues to live in
  * `CanvasToolbar` — clicking it opens this drawer.
  *
- * Layout (per UI-6-ai-recap.md):
+ * Layout:
  *   - Top: pinned event highlights
  *       · Gate-blocked nodes               (today: planner blocked + ENG-2 stub)
- *       · Failed sessions                  (ENG-2 stub)
+ *       · Failed sessions                  (ENG-2 stub) — attention signal only
  *       · New artifact versions <1h        (live from ENG-3 once wired)
  *   - Middle: aggregated activity, groupable by owner / node / time
- *   - Bottom: currently-active sessions (ENG-2 stub) + recently-completed
+ *   - Bottom: CTA → hand off to the global `SessionsView` rail mode
+ *
+ * The full session list lives in `SessionsView` (left-rail mode). This drawer
+ * intentionally does NOT re-list sessions — it only surfaces attention signals
+ * (gate-blocked, failed) and quick-jumps; clicking the bottom CTA routes the
+ * user to the canonical session list.
  *
  * Quick-jump URL contract (proposed for UI-1 coordination):
  *   ?node=<nodeId>&version=<versionId>
@@ -24,12 +29,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
-  CheckCircle2,
+  ArrowUpRight,
   Clock3,
   GitBranch,
   History,
   Layers,
-  PlayCircle,
   ShieldAlert,
   Users,
   X,
@@ -52,6 +56,12 @@ interface Props {
    * `meee2:ai-recap:jump` CustomEvent (UI-1 contract).
    */
   onJumpToNode?: (nodeId: string, versionId?: string) => void
+  /**
+   * Switch the workspace rail to the global `SessionsView`. Provided by
+   * `CanvasToolbar`, which receives it from `App.tsx`. When wired, the bottom
+   * CTA hands the user off there instead of duplicating the session list here.
+   */
+  onOpenAllSessions?: () => void
 }
 
 type GroupBy = 'time' | 'owner' | 'node'
@@ -68,6 +78,7 @@ export function AIRecapDrawer({
   boardState,
   userProfile,
   onJumpToNode,
+  onOpenAllSessions,
 }: Props) {
   const [groupBy, setGroupBy] = useState<GroupBy>('time')
   const [recentVersions, setRecentVersions] = useState<ArtifactVersionSummary[]>([])
@@ -195,23 +206,10 @@ export function AIRecapDrawer({
       .slice(0, 12)
   }, [boardState, plannerState?.nodes])
 
-  const eng2ActiveSessions: ActiveSessionItem[] = useMemo(() => {
-    if (!boardState) return []
-    const sessionToNodeId = new Map<string, string>()
-    for (const n of plannerState?.nodes ?? []) {
-      if (n.sessionId) sessionToNodeId.set(n.sessionId, n.id)
-    }
-    const activeStatuses = new Set(['running', 'thinking', 'tooling', 'working', 'in-progress'])
-    return boardState.sessions
-      .filter((s) => activeStatuses.has((s.status as string).toLowerCase()))
-      .map((s) => ({
-        sessionId: s.id,
-        title: s.title,
-        statusLabel: s.currentTask || s.currentTool || (s.status as string),
-        nodeId: sessionToNodeId.get(s.id) ?? null,
-      }))
-      .slice(0, 16)
-  }, [boardState, plannerState?.nodes])
+  // Active/recently-completed sessions are intentionally NOT listed here.
+  // They live in the global `SessionsView` rail mode; the bottom CTA hands
+  // off to that surface. We still surface failed sessions above as an
+  // attention signal (different intent: "this needs a human").
 
   // ── Local-derived data (works today, no backend changes needed) ───────
   const localBlockedNodes = useMemo(() => {
@@ -225,17 +223,6 @@ export function AIRecapDrawer({
         doerId: n.doerId,
       }))
   }, [plannerState])
-
-  const recentlyCompletedSessions = useMemo(() => {
-    if (!boardState) return []
-    // Show "done"/idle-looking sessions sorted by recency; this is the
-    // baseline until ENG-2 emits explicit completion events.
-    return boardState.sessions
-      .filter((s) => (s.status as string) === 'idle' || (s.status as string) === 'done')
-      .slice()
-      .sort((a, b) => (Date.parse(b.lastActivity ?? '') || 0) - (Date.parse(a.lastActivity ?? '') || 0))
-      .slice(0, 8)
-  }, [boardState])
 
   const aggregatedActivity = useMemo(() => {
     return buildAggregatedActivity(plannerState, recentVersions, boardState, groupBy)
@@ -423,43 +410,25 @@ export function AIRecapDrawer({
         )}
       </section>
 
-      {/* ── Bottom: sessions ─────────────────────────────────────────── */}
-      <section className="ai-recap-drawer__section">
-        <h3>
-          <PlayCircle size={12} aria-hidden /> Currently active sessions
-        </h3>
-        {eng2ActiveSessions.length === 0 ? (
-          <EmptyRow note="Live session activity coming with ENG-2." />
-        ) : (
-          eng2ActiveSessions.map((s) => (
-            <button
-              key={s.sessionId}
-              type="button"
-              className="ai-recap-drawer__row"
-              onClick={() => s.nodeId && handleJump(s.nodeId)}
-            >
-              <span className="ai-recap-drawer__row-title">{s.title}</span>
-              <span className="ai-recap-drawer__row-meta">{s.statusLabel}</span>
-            </button>
-          ))
-        )}
-
-        <h3 style={{ marginTop: 12 }}>
-          <CheckCircle2 size={12} aria-hidden /> Recently completed
-        </h3>
-        {recentlyCompletedSessions.length === 0 ? (
-          <EmptyRow note="Nothing wrapped up recently." />
-        ) : (
-          recentlyCompletedSessions.map((s) => (
-            <div key={s.id} className="ai-recap-drawer__row ai-recap-drawer__row--static">
-              <span className="ai-recap-drawer__row-title">{s.title || s.id.slice(0, 8)}</span>
-              <span className="ai-recap-drawer__row-meta">
-                {relativeTime(s.lastActivity) || (s.status as string)}
-              </span>
-            </div>
-          ))
-        )}
-      </section>
+      {/* ── Bottom: hand off to the global SessionsView ─────────────── */}
+      {onOpenAllSessions && (
+        <section className="ai-recap-drawer__section ai-recap-drawer__footer">
+          <button
+            type="button"
+            className="ai-recap-drawer__cta"
+            onClick={() => {
+              onOpenAllSessions()
+              onClose()
+            }}
+          >
+            <span>View all sessions</span>
+            <ArrowUpRight size={12} aria-hidden />
+          </button>
+          <p className="ai-recap-drawer__cta-hint">
+            Live status, search and filtering live in the Sessions rail.
+          </p>
+        </section>
+      )}
     </div>
   )
 }
@@ -476,13 +445,6 @@ interface FailedSessionItem {
   sessionId: string
   title: string
   reason: string
-  nodeId?: string | null
-}
-
-interface ActiveSessionItem {
-  sessionId: string
-  title: string
-  statusLabel: string
   nodeId?: string | null
 }
 

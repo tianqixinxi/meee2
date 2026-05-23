@@ -690,6 +690,7 @@ export default function App() {
               onDeleteCanvas={handleDeleteCanvas}
               userProfile={userProfile}
               boardState={boardState.state}
+              onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
           {activeCanvasLoading && (
