@@ -165,6 +165,309 @@ textarea {
   height: 100%;
 }
 
+.first-run {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(14px, 3.5vw, 34px);
+  background:
+    linear-gradient(145deg, rgba(43, 43, 39, 0.96), rgba(27, 27, 25, 0.98) 52%, rgba(35, 32, 29, 0.98)),
+    var(--bg);
+  color: var(--text);
+}
+
+.first-run__shell {
+  width: min(720px, 100%);
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: clamp(18px, 4vh, 34px);
+}
+
+.first-run__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.first-run__mark {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, rgba(245, 244, 239, 0.04));
+  color: var(--accent-hover);
+}
+
+.first-run__panel {
+  align-self: start;
+  justify-self: center;
+  width: min(620px, 100%);
+  max-height: calc(100vh - 96px);
+  display: grid;
+  grid-template-rows: auto minmax(0, auto) auto auto auto;
+  gap: 14px;
+  padding: clamp(18px, 3vw, 28px);
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 66%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.2));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+}
+
+.first-run__intro {
+  display: grid;
+  gap: 10px;
+}
+
+.first-run__intro span {
+  color: var(--accent-hover);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.first-run__intro h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(34px, 7vw, 60px);
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+.first-run__intro p {
+  max-width: 540px;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.first-run__status-list {
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  overflow: auto;
+}
+
+.first-run-runtime {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: 8px;
+  background: rgba(245, 244, 239, 0.045);
+}
+
+.first-run-runtime[data-state='ready'] {
+  border-color: color-mix(in srgb, var(--success) 36%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, rgba(245, 244, 239, 0.035));
+}
+
+.first-run-runtime[data-state='missing'] {
+  border-color: color-mix(in srgb, var(--warning) 34%, transparent);
+}
+
+.first-run-runtime[data-state='unavailable'] {
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+.first-run-runtime__icon {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text-faint);
+}
+
+.first-run-runtime[data-state='ready'] .first-run-runtime__icon {
+  color: var(--success);
+}
+
+.first-run-runtime[data-state='missing'] .first-run-runtime__icon {
+  color: var(--warning);
+}
+
+.first-run-runtime[data-state='unavailable'] .first-run-runtime__icon {
+  color: var(--danger);
+}
+
+.first-run-runtime__copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.first-run-runtime__copy div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.first-run-runtime__copy strong,
+.first-run-runtime__copy span,
+.first-run-runtime__copy p,
+.first-run-runtime__copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.first-run-runtime__copy strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.first-run-runtime__copy span,
+.first-run-runtime__copy small {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.first-run-runtime__copy p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.first-run-runtime button {
+  min-width: 82px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.first-run__error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 12%, rgba(0, 0, 0, 0.16));
+  color: #F0B6B6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.first-run__logs {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.first-run__logs summary {
+  padding: 9px 11px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.first-run__logs pre {
+  max-height: 140px;
+  margin: 0;
+  overflow: auto;
+  padding: 0 11px 11px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.first-run__actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg-paper) 88%, rgba(0, 0, 0, 0.2)) 18%);
+}
+
+.first-run__actions button {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.first-run__secondary {
+  color: var(--text-dim);
+}
+
+.first-run__primary {
+  min-width: 148px;
+}
+
+@media (max-width: 720px) {
+  .first-run {
+    place-items: start stretch;
+    padding: 12px;
+  }
+
+  .first-run__shell {
+    gap: 14px;
+  }
+
+  .first-run__panel {
+    max-height: none;
+    padding: 16px;
+  }
+
+  .first-run__intro h1 {
+    font-size: 36px;
+  }
+
+  .first-run-runtime {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .first-run-runtime button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .first-run-runtime__copy div {
+    display: grid;
+    gap: 3px;
+  }
+
+  .first-run-runtime__copy p {
+    white-space: normal;
+  }
+
+  .first-run__actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .first-run__actions button {
+    width: 100%;
+  }
+}
+
 .workspace-rail {
   position: relative;
   grid-row: 1 / span 2;
