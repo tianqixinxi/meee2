@@ -1916,7 +1916,7 @@ enum BoardAPI {
             return errorResponse("upstream_unavailable", underlying.localizedDescription, status: 502)
         case .http(let status, let body):
             // Pass through upstream body if it's already JSON; otherwise wrap.
-            if let _ = try? JSONSerialization.jsonObject(with: body) {
+            if (try? JSONSerialization.jsonObject(with: body)) != nil {
                 return HttpResponse.raw(status, "Upstream", ["Content-Type": "application/json"]) { writer in
                     try? writer.write(body)
                 }

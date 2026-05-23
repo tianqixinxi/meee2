@@ -3619,7 +3619,7 @@ final class PlannerStore {
                     metadata: .object([
                         "title": .string(artifact.title),
                         "kind": .string(item.kind.rawValue),
-                        "status": .string(output.status.rawValue),
+                        "status": .string(output.status.rawValue)
                     ]),
                     createdAt: now
                 )
@@ -4319,7 +4319,7 @@ final class PlannerStore {
     ) -> PlannerArtifactInputSnapshot {
         // Upstream: pick the most recent artifact attached to the first
         // upstream dependency. Matches `NodeContractUpstreamInput.sourceNodeId`.
-        var upstreamRef: String? = nil
+        var upstreamRef: String?
         if let upstreamId = node.dependsOnNodeIds?.first {
             upstreamRef = record.artifacts
                 .filter { $0.nodeId == upstreamId }
@@ -4333,14 +4333,14 @@ final class PlannerStore {
             external.append(.object([
                 "title": .string(source.title),
                 "ref": .string(source.reference),
-                "kind": .string(source.kind.rawValue),
+                "kind": .string(source.kind.rawValue)
             ]))
         }
         // Dialogue window: record the rolling-N descriptor; the actual turns
         // get filled in by the runtime (ENG-2) when input合流 lands.
         let dialogue: BoardJSONValue = .object([
             "kind": .string("rolling"),
-            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns)),
+            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns))
         ])
         return PlannerArtifactInputSnapshot(
             upstreamArtifactRef: upstreamRef,
