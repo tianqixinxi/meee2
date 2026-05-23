@@ -15,6 +15,7 @@ import {
   approvePlannerProposal,
   activateSession,
   abandonPlannerNodeSession,
+  assignPlannerNode,
   bindPlannerSessionToNode,
   bindPlannerNodeInput,
   createPlannerDeliveryPipeline,
@@ -37,7 +38,9 @@ import {
   updatePlannerNodeLayout,
   updatePlannerNodeStatus,
 } from '../../api'
+import { AssignNodeDialog } from './AssignNodeDialog'
 import type {
+  NodeAssignment,
   PlanProposal,
   PlannerCanvasState,
   PlannerArtifact,
@@ -136,6 +139,11 @@ function PlannerGraphInner({
   // ENG-5: when the heuristic decides the user's message is a question, we
   // push an answer-only reply to the panel instead of generating a proposal.
   const [answerOnlyReply, setAnswerOnlyReply] = useState<{ id: number; markdown: string } | null>(null)
+  // UI-2: assign-dialog state. `assignDialogNodeId` keys which node's chip
+  // was clicked; the dialog reads its node + frozen contract from plannerState.
+  const [assignDialogNodeId, setAssignDialogNodeId] = useState<string | null>(null)
+  const [assignBusy, setAssignBusy] = useState(false)
+  const [assignError, setAssignError] = useState<string | null>(null)
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -477,6 +485,60 @@ function PlannerGraphInner({
     })
   }, [])
 
+  // UI-2 · F1.1 — open the assign dialog from a node's owner chip.
+  const handleRequestAssign = useCallback((nodeId: string) => {
+    setAssignError(null)
+    setAssignDialogNodeId(nodeId)
+  }, [])
+
+  const handleCancelAssign = useCallback(() => {
+    if (assignBusy) return
+    setAssignDialogNodeId(null)
+    setAssignError(null)
+  }, [assignBusy])
+
+  // UI-2 · F1.2 + U2.2 — wire the dialog to the assign RPC. On success the
+  // graph state is re-loaded so the just-assigned node renders as a sub-canvas
+  // ref chip (per ENG-4 `node_assigned` payload). On failure we keep the
+  // dialog open with the error so the user can retry or cancel.
+  const handleConfirmAssign = useCallback((input: { assigneeUserId: string; acceptPrivateUpgrade: boolean }) => {
+    if (!assignDialogNodeId) return
+    setAssignBusy(true)
+    setAssignError(null)
+    assignPlannerNode(canvasId, assignDialogNodeId, input.assigneeUserId, {
+      acceptPrivateUpgrade: input.acceptPrivateUpgrade,
+    })
+      .then((result) => {
+        handleGraphStateChanged(result.graph)
+        setAssignDialogNodeId(null)
+        if (result.visibilityUpgraded) {
+          onNotify?.('success', 'Canvas published and node assigned.')
+        } else {
+          onNotify?.('success', 'Node assigned.')
+        }
+      })
+      .catch((err) => {
+        setAssignError((err as Error).message || 'Failed to assign node')
+      })
+      .finally(() => setAssignBusy(false))
+  }, [assignDialogNodeId, canvasId, handleGraphStateChanged, onNotify])
+
+  // UI-2: when a sub-canvas chip's "Open" button fires, hand off to the
+  // existing sub-canvas navigator. Reuses the same callback the kanban-item
+  // path uses so we land in the same canvas viewer.
+  const handleOpenAssignedSubCanvas = useCallback((subCanvasId: string) => {
+    onOpenSubCanvas?.(subCanvasId)
+  }, [onOpenSubCanvas])
+
+  // UI-2: derive an in-memory map for the adapter from plannerState.
+  const nodeAssignmentsByNodeId = useMemo(() => {
+    const result: Record<string, NodeAssignment> = {}
+    for (const assignment of plannerState?.nodeAssignments ?? []) {
+      result[assignment.sourceNodeId] = assignment
+    }
+    return result
+  }, [plannerState?.nodeAssignments])
+
   const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
@@ -497,7 +559,7 @@ function PlannerGraphInner({
       onBindInput: handleBindNodeInput,
       onChangeStatus: handleChangeNodeStatus,
       onChangeGateMode: handleChangeNodeGateMode,
-      canChangeStatus: variant !== 'template',
+      canChangeStatus: variant !== 'template' && (plannerState?.canEditInternals ?? true),
       onCreateSession: handleCreateNodeSession,
       onOpenSession: handleOpenNodeSession,
       onReplaceSession: handleReplaceNodeSession,
@@ -507,6 +569,10 @@ function PlannerGraphInner({
       onRerunNode: handleRerunNode,
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
+      nodeAssignmentsByNodeId,
+      onRequestAssign: handleRequestAssign,
+      onOpenAssignedSubCanvas: handleOpenAssignedSubCanvas,
+      canEditInternals: plannerState?.canEditInternals ?? true,
     })
   }, [
     plannerState?.nodes,
@@ -533,6 +599,10 @@ function PlannerGraphInner({
     handleRerunNode,
     creatingSessionNodeIds,
     variant,
+    nodeAssignmentsByNodeId,
+    handleRequestAssign,
+    handleOpenAssignedSubCanvas,
+    plannerState?.canEditInternals,
   ])
 
   const reviewGraph = useMemo(() => {
@@ -680,6 +750,14 @@ function PlannerGraphInner({
       ?? graph.nodes.find((node) => node.id === selectedNodeId)?.data.node
       ?? null
   }, [graph.nodes, plannerState, selectedNodeId])
+
+  // UI-2: planner node currently targeted by the assign dialog, if any.
+  const assignDialogNode = useMemo(() => {
+    if (!assignDialogNodeId) return null
+    return plannerState?.nodes.find((node) => node.id === assignDialogNodeId)
+      ?? graph.nodes.find((node) => node.id === assignDialogNodeId)?.data.node
+      ?? null
+  }, [assignDialogNodeId, graph.nodes, plannerState])
 
   useEffect(() => {
     setSessionHealthBoardState(boardState)
@@ -1210,6 +1288,27 @@ function PlannerGraphInner({
           onToggleIOArtifact={handleToggleIOArtifact}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
+        />
+      )}
+      {assignDialogNodeId && assignDialogNode && (
+        <AssignNodeDialog
+          node={assignDialogNode}
+          sourceVisibility={plannerState?.canvas.visibility === 'private' ? 'private' : 'public'}
+          frozenIOContract={
+            // Prefer the frozen contract already attached to the parent canvas
+            // (set when a previous assign happened); fall back to deriving a
+            // minimal one from the node's schema so the dialog can still preview.
+            plannerState?.canvas.frozenIOContract ?? null
+          }
+          teamMembers={teamMembers}
+          excludedUserIds={[
+            ...(plannerState?.canvas.ownerId ? [plannerState.canvas.ownerId] : []),
+            ...(userProfile?.userId ? [userProfile.userId] : []),
+          ]}
+          busy={assignBusy}
+          errorMessage={assignError}
+          onCancel={handleCancelAssign}
+          onConfirm={handleConfirmAssign}
         />
       )}
     </section>

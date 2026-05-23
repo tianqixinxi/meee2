@@ -795,6 +795,19 @@ export interface PlannerCanvasState {
   events?: PlannerEvent[]
   artifacts?: PlannerArtifact[]
   edges?: PlannerGraphEdge[]
+  /**
+   * UI-2: Active assignments rooted in this canvas. Each row collapses the
+   * matching node to a sub-canvas ref chip in `PlannerGraph`.
+   */
+  nodeAssignments?: NodeAssignment[]
+  /**
+   * UI-2: Whether the calling user can mutate this canvas's internals
+   * (mirror of `meee2_can_edit_canvas_internals(canvas_id)`). Used to gate
+   * edit affordances on the parent canvas after the owner reassigned a node
+   * (the owner keeps SELECT but loses UPDATE on the sub-canvas; ENG-4 RLS
+   * is authoritative — this flag only suppresses the UI affordance).
+   */
+  canEditInternals?: boolean
 }
 
 export type PlannerGraphState = PlannerCanvasState & {
@@ -960,6 +973,49 @@ export interface SelectedCanvasElementContext {
 
 export interface ApiError {
   error: { code: string; message: string }
+}
+
+/**
+ * UI-2: Active assignment of a node to a person. When present, the node card
+ * collapses to a sub-canvas reference chip; the source node is no longer
+ * editable in-place by the parent canvas owner (ENG-4 RLS enforces this on
+ * the server). One active row per (sourceCanvasId, sourceNodeId).
+ */
+export interface NodeAssignment {
+  sourceCanvasId: string
+  sourceNodeId: string
+  assigneeUserId: string
+  subCanvasId: string
+  subCanvasName: string
+  /** Snapshot of the parent node's I/O contract — what the assignee owes back. */
+  frozenIOContract: NodeContractV2 | null
+  /** Billing team that pays for sub-canvas work (inherits from the parent). */
+  billingTeamId: string
+  /** Server-side count of session links re-bound to the new sub-canvas. */
+  sessionCountRebound?: number | null
+  assignedAt?: string | null
+}
+
+/** UI-2: Result of a successful assign call, mirrored from the ENG-4 event payload. */
+export interface AssignPlannerNodeResult {
+  assignment: NodeAssignment
+  /**
+   * Whether the source canvas was upgraded from `private` to `public` as part
+   * of this assign. UI-2 surfaces a different success toast when this happens.
+   */
+  visibilityUpgraded: boolean
+  graph: PlannerGraphState
+}
+
+/** UI-2: One sub-canvas the calling user owns (from `meee2_list_owned_canvases`). */
+export interface OwnedCanvasSummary {
+  id: string
+  teamId: string
+  name: string
+  parentCanvasId: string | null
+  parentNodeId: string | null
+  frozenIOContract: NodeContractV2 | null
+  updatedAt: string | null
 }
 
 // Selection state — what's picked on the board.

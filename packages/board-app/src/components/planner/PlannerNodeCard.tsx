@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  ArrowUpRight,
   Bot,
   CalendarClock,
   ChevronDown,
@@ -11,6 +12,7 @@ import {
   FileText,
   Flag,
   History,
+  Lock,
   MessageCircle,
   PlayCircle,
   Plug,
@@ -18,15 +20,18 @@ import {
   Route,
   Signpost,
   Trash2,
+  UserPlus,
   UserRound,
 } from 'lucide-react'
 import type {
+  NodeAssignment,
   PlannerArtifactContent,
   PlannerArtifactVersion,
   KanbanArtifactPayload,
   PlannerArtifact,
   PlannerDispatchRunner,
   PlannerWorkflowRunState,
+  PlanningNode,
   PlanningNodeStatus,
   RunNextAction,
 } from '../../types'
@@ -216,6 +221,23 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       </div>
     )
   }
+  // UI-2: when this node has been assigned, collapse it to a sub-canvas
+  // reference chip. The card stops showing the regular interior (status
+  // dropdown, IO grid, primary action) because parent-side editing is no
+  // longer authoritative — ENG-4 RLS blocks it server-side anyway.
+  if (data.assignment && !data.virtual) {
+    return (
+      <SubCanvasRefCard
+        node={node}
+        assignment={data.assignment}
+        assigneeLabel={assigneeLabelFromAssignment(data)}
+        avatarUrl={data.responsibleAvatarUrl}
+        onOpenAssignedSubCanvas={data.onOpenAssignedSubCanvas}
+        selected={selected}
+      />
+    )
+  }
+
   const statusLabel = isRunMode
     ? workStatusLabel(runStatus, data.hasSelectedDelivery)
     : planStatusLabel(designStatus)
@@ -338,12 +360,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             </span>
           )}
           {showResponsibleInfo && (
-            <span className="planner-node__owner-pill" title={`Owner: ${data.responsibleLabel || 'Unassigned'}`}>
-              <span className={`planner-node__mini-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-                {data.responsibleAvatarUrl ? <img src={data.responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
-              </span>
-              <span>{data.responsibleLabel || 'Unassigned'}</span>
-            </span>
+            <OwnerChip
+              nodeId={node.id}
+              nodeTitle={node.title}
+              isAssigned={Boolean(data.assignment)}
+              assigneeLabel={data.assignment ? assigneeLabelFromAssignment(data) : null}
+              responsibleLabel={data.responsibleLabel}
+              responsibleAvatarUrl={data.responsibleAvatarUrl}
+              canAssign={Boolean(data.onRequestAssign) && !data.virtual && nodeKind === 'step'}
+              onRequestAssign={data.onRequestAssign}
+            />
           )}
         </div>
       </div>
@@ -1255,4 +1281,171 @@ function formatVersionLabel(v: PlannerArtifactVersion): string {
     : v.created_at
   const submitter = v.submitted_by || v.submitted_by_kind || 'unknown'
   return `${stamp} · ${submitter}`
+}
+
+
+// ---- UI-2 helpers -----------------------------------------------------------
+
+/** Pick the best label we can show for the assignee — assignment carries the
+ *  user id but not the display name. Falls back to the responsibleLabel
+ *  computed in the adapter via the team directory. */
+function assigneeLabelFromAssignment(data: PlannerGraphNode['data']): string {
+  if (!data.assignment) return 'Unassigned'
+  if (data.responsibleLabel) return data.responsibleLabel
+  return data.assignment.assigneeUserId.slice(0, 8)
+}
+
+interface OwnerChipProps {
+  nodeId: string
+  nodeTitle: string
+  isAssigned: boolean
+  assigneeLabel: string | null
+  responsibleLabel?: string
+  responsibleAvatarUrl?: string
+  canAssign: boolean
+  onRequestAssign?: (nodeId: string) => void
+}
+
+/** UI-2 · F1.1 — clickable owner chip in the node header (top-right).
+ *  Click opens the assign dialog. When an assignment already exists, the chip
+ *  switches to a "Assigned to X" badge and stops being clickable (revoke is
+ *  not in MVP — see spec). The button explicitly carries `nodrag nopan` so
+ *  React Flow doesn't intercept the click as a node drag. */
+function OwnerChip({
+  nodeId,
+  nodeTitle,
+  isAssigned,
+  assigneeLabel,
+  responsibleLabel,
+  responsibleAvatarUrl,
+  canAssign,
+  onRequestAssign,
+}: OwnerChipProps) {
+  const label = isAssigned
+    ? assigneeLabel || 'Assigned'
+    : responsibleLabel || 'Unassigned'
+  const title = isAssigned
+    ? `Assigned to ${label} — owner-revoke is not available in MVP`
+    : canAssign
+      ? `Assign ${nodeTitle} to a teammate`
+      : `Owner: ${label}`
+  if (isAssigned || !canAssign || !onRequestAssign) {
+    return (
+      <span
+        className={`planner-node__owner-pill${isAssigned ? ' planner-node__owner-pill--assigned' : ''}`}
+        title={title}
+      >
+        <span className={`planner-node__mini-avatar${responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+          {responsibleAvatarUrl ? <img src={responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
+        </span>
+        <span>{label}</span>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      className="planner-node__owner-pill planner-node__owner-pill--button nodrag nopan"
+      title={title}
+      aria-label={title}
+      onClick={(event) => {
+        event.stopPropagation()
+        onRequestAssign(nodeId)
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <span className={`planner-node__mini-avatar${responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+        {responsibleAvatarUrl ? <img src={responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
+      </span>
+      <span>{label}</span>
+      <UserPlus size={11} aria-hidden className="planner-node__owner-pill-cta" />
+    </button>
+  )
+}
+
+interface SubCanvasRefCardProps {
+  node: PlanningNode
+  assignment: NodeAssignment
+  assigneeLabel: string
+  avatarUrl?: string
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  selected: boolean
+}
+
+/** UI-2 · F1.1 — the node body collapsed to a sub-canvas reference chip.
+ *  The whole card is read-only (parent owner has lost internal-edit rights
+ *  per ENG-4 RLS). A single primary action takes the user into the assigned
+ *  sub-canvas if a navigator is wired. The `frozen_io_contract` is shown
+ *  in a compact summary so the parent owner can still verify the boundary. */
+function SubCanvasRefCard({
+  node,
+  assignment,
+  assigneeLabel,
+  avatarUrl,
+  onOpenAssignedSubCanvas,
+  selected,
+}: SubCanvasRefCardProps) {
+  const inputCardinality = assignment.frozenIOContract?.input?.upstream?.mode ?? 'unspecified'
+  const outputCardinality = assignment.frozenIOContract?.output?.cardinality ?? 'unspecified'
+  return (
+    <div
+      className={[
+        'planner-node',
+        'planner-node--subcanvas-ref',
+        selected ? 'is-selected' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      <Handle type="target" position={Position.Left} className="planner-node__handle" />
+      <div className="planner-node__header">
+        <span className="planner-node__status planner-node__status--design">
+          <Lock size={12} aria-hidden />
+          Assigned
+        </span>
+        <div className="planner-node__header-actions">
+          <span
+            className="planner-node__owner-pill planner-node__owner-pill--assigned"
+            title={`Owned by ${assigneeLabel} — internal edit is locked for you`}
+          >
+            <span className={`planner-node__mini-avatar${avatarUrl ? ' has-image' : ''}`} aria-hidden>
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : <UserRound size={12} />}
+            </span>
+            <span>{assigneeLabel}</span>
+          </span>
+        </div>
+      </div>
+      <div className="planner-node__title">{node.title}</div>
+      <div className="planner-node__subcanvas-ref-body">
+        <div className="planner-node__subcanvas-ref-meta">
+          <span className="planner-node__chip">
+            <FileText size={10} aria-hidden />
+            Sub-canvas: {assignment.subCanvasName || assignment.subCanvasId.slice(0, 8)}
+          </span>
+          <span className="planner-node__chip" title="Frozen I/O contract — input contract">
+            in: {inputCardinality}
+          </span>
+          <span className="planner-node__chip" title="Frozen I/O contract — output contract">
+            out: {outputCardinality}
+          </span>
+        </div>
+      </div>
+      {onOpenAssignedSubCanvas && (
+        <div className="planner-node__footer">
+          <button
+            type="button"
+            className="planner-node__primary-action nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpenAssignedSubCanvas(assignment.subCanvasId)
+            }}
+            title={`Open sub-canvas owned by ${assigneeLabel}`}
+          >
+            Open sub-canvas
+            <ArrowUpRight size={12} aria-hidden style={{ marginLeft: 4 }} />
+          </button>
+        </div>
+      )}
+      <Handle type="source" position={Position.Right} className="planner-node__handle" />
+    </div>
+  )
 }

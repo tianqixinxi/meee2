@@ -1,5 +1,6 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
+  NodeAssignment,
   NodeStateSnapshot,
   PlanChange,
   PlanProposal,
@@ -61,6 +62,14 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onRerunNode?: (nodeId: string, reference?: string) => void
   creatingSession?: boolean
   showResponsibleInfo?: boolean
+  /** UI-2: active assignment for this node, when present. */
+  assignment?: NodeAssignment | null
+  /** UI-2: opens the assign dialog (top-right owner chip click). */
+  onRequestAssign?: (nodeId: string) => void
+  /** UI-2: opens the assigned sub-canvas from the chip. */
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  /** UI-2: false when ENG-4 RLS would refuse internal edits. */
+  canEditInternals?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -98,6 +107,14 @@ interface PlannerGraphInput {
   onRerunNode?: (nodeId: string, reference?: string) => void
   creatingSessionNodeIds?: Set<string>
   showResponsibleInfo?: boolean
+  /** UI-2: assignments keyed by source node id. */
+  nodeAssignmentsByNodeId?: Record<string, NodeAssignment>
+  /** UI-2: open the assign dialog for a node. */
+  onRequestAssign?: (nodeId: string) => void
+  /** UI-2: navigate into an assigned sub-canvas. */
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  /** UI-2: whether the parent canvas owner can still edit node internals. */
+  canEditInternals?: boolean
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -170,6 +187,10 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onRerunNode: input.onRerunNode,
         creatingSession: input.creatingSessionNodeIds?.has(node.id) ?? false,
         showResponsibleInfo: input.showResponsibleInfo ?? true,
+        assignment: input.nodeAssignmentsByNodeId?.[node.id] ?? null,
+        onRequestAssign: input.onRequestAssign,
+        onOpenAssignedSubCanvas: input.onOpenAssignedSubCanvas,
+        canEditInternals: input.canEditInternals ?? true,
       },
     }
   })
