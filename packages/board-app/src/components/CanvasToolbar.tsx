@@ -37,11 +37,15 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
-  // UI-6 · AI Recap Drawer needs richer context. Both optional so callers
+  // UI-6 · AI Recap Drawer needs richer context. All optional so callers
   // that don't yet pipe them through keep working (drawer still renders local
   // planner-state aggregates and shows ENG-2 stub copy).
   userProfile?: UserProfile | null
   boardState?: BoardState | null
+  /** Switch the workspace rail to `SessionsView`. Forwarded to the drawer's
+   *  "View all sessions" CTA so it can hand off instead of duplicating the
+   *  global session list. */
+  onOpenAllSessions?: () => void
 }
 
 interface CanvasRecap {
@@ -68,6 +72,7 @@ export function CanvasToolbar({
   onDeleteCanvas,
   userProfile = null,
   boardState = null,
+  onOpenAllSessions,
 }: Props) {
   const rootRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
@@ -415,6 +420,7 @@ export function CanvasToolbar({
         plannerState={recapPlannerState}
         boardState={boardState}
         userProfile={userProfile}
+        onOpenAllSessions={onOpenAllSessions}
       />
 
       {infoOpen && (

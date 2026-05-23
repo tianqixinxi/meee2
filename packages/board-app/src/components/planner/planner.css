@@ -5316,6 +5316,37 @@
   border-radius: 4px;
 }
 
+.ai-recap-drawer__footer {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
+.ai-recap-drawer__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-default);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.ai-recap-drawer__cta:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-default);
+}
+
+.ai-recap-drawer__cta-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
 .ai-recap-drawer__activity-head {
   display: flex;
   align-items: center;
