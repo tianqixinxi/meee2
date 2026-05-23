@@ -1650,7 +1650,7 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
         }
         do {
-            let result = try PlannerBoardBridge.submitNodeOutput(
+            var result = try PlannerBoardBridge.submitNodeOutput(
                 nodeId: nodeId,
                 output: output,
                 for: canvasId,
@@ -1663,8 +1663,12 @@ enum BoardAPI {
             // stays put. The dispatch state is already persisted by the
             // store (see PlannerBoardBridge.submitNodeOutput), this just
             // materializes the terminal so the session actually runs.
+            var autoSpawnStarted = 0
+            var autoSpawnSkipped: [String] = []
+            var autoSpawnFailed: [String] = []
             for autoNodeId in result.autoDispatchedNodeIds ?? [] {
                 guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
+                    autoSpawnSkipped.append("\(autoNodeId): missing node")
                     continue
                 }
                 do {
@@ -1673,7 +1677,10 @@ enum BoardAPI {
                         node: node,
                         cwdOverride: nil
                     )
-                    guard let spawnReq = spawnRequest else { continue }
+                    guard let spawnReq = spawnRequest else {
+                        autoSpawnSkipped.append("\(autoNodeId): no spawn request")
+                        continue
+                    }
                     switch startTerminalSession(
                         cwd: spawnReq.cwd,
                         command: spawnReq.command,
@@ -1682,13 +1689,27 @@ enum BoardAPI {
                         createInBackground: true
                     ) {
                     case .success:
+                        autoSpawnStarted += 1
                         NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) background=true")
                     case .failed(let reason):
+                        autoSpawnFailed.append("\(autoNodeId): \(reason)")
                         NSLog("[ENG-2][auto-spawn] failed node=\(autoNodeId) reason=\(reason)")
                     }
                 } catch {
+                    autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
                     NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
                 }
+            }
+            if let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty {
+                var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
+                if !autoSpawnSkipped.isEmpty {
+                    parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
+                }
+                if !autoSpawnFailed.isEmpty {
+                    parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
+                }
+                result.hint = parts.joined(separator: " ")
+                NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
             }
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
@@ -1780,6 +1801,152 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Wave 1-3 integration · OnlineProxy routes
+    //
+    // These three proxy the desktop board-app's UI-2 and UI-6 calls to
+    // meee2-online. They share `OnlineProxy.loadSettings()` for the
+    // supabase URL + anon key + teamId/userId stored in
+    // `~/.meee2/settings.json` (also mirrored to UserDefaults).
+    //
+    // 1) POST /api/planner/canvases/:id/nodes/:nodeId/assign
+    //      → Supabase RPC `meee2_assign_node`
+    // 2) GET  /api/planner/owned-canvases
+    //      → Supabase RPC `meee2_list_owned_canvases`
+    // 3) GET  /api/cloud/artifact-versions/recent
+    //      → meee2-online `/api/v1/artifact-versions?…`
+
+    /// UI-2 · F1.2 — proxy `assignPlannerNode` from the board-app to the
+    /// `meee2_assign_node` RPC. The web client posts a JSON body with
+    /// `assigneeUserId`, optional `subCanvasName`, and `acceptPrivateUpgrade`;
+    /// we forward those as RPC params and stream the JSON response through.
+    /// Response shape matches `AssignPlannerNodeResult` in the board-app
+    /// `types.ts`.
+    static func proxyAssignPlannerNode(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        struct AssignBody: Decodable {
+            let assigneeUserId: String?
+            let subCanvasName: String?
+            let acceptPrivateUpgrade: Bool?
+        }
+        let body: AssignBody = (try? JSONDecoder().decode(AssignBody.self, from: Data(req.body)))
+            ?? AssignBody(assigneeUserId: nil, subCanvasName: nil, acceptPrivateUpgrade: nil)
+        guard let assigneeUserId = body.assigneeUserId, !assigneeUserId.isEmpty else {
+            return errorResponse("bad_request", "assigneeUserId is required", status: 400)
+        }
+        var payload: [String: Any] = [
+            "p_team_id": settings.teamId,
+            "p_canvas_id": canvasId,
+            "p_node_id": nodeId,
+            "p_assignee_user_id": assigneeUserId,
+            "p_accept_private_upgrade": body.acceptPrivateUpgrade ?? false
+        ]
+        if let name = body.subCanvasName, !name.isEmpty {
+            payload["p_sub_canvas_name"] = name
+        }
+        switch OnlineProxy.callRPC(name: "meee2_assign_node", payload: payload, settings: settings) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// UI-2 · proxy `fetchOwnedCanvases` to `meee2_list_owned_canvases`.
+    static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let payload: [String: Any] = [
+            "p_team_id": settings.teamId,
+            "p_user_id": settings.userId
+        ]
+        switch OnlineProxy.callRPC(name: "meee2_list_owned_canvases", payload: payload, settings: settings) {
+        case .success(let data):
+            // RPC returns an array; wrap in `{ canvases: [...] }` to match the
+            // board-app `fetchOwnedCanvases` envelope.
+            if let arr = try? JSONSerialization.jsonObject(with: data) {
+                let envelope: [String: Any] = ["canvases": arr]
+                if let wrapped = try? JSONSerialization.data(withJSONObject: envelope) {
+                    return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                        try? writer.write(wrapped)
+                    }
+                }
+            }
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// UI-6 · proxy `fetchRecentArtifactVersions` to meee2-online's
+    /// `/api/v1/artifact-versions` endpoint. The caller passes
+    /// `teamId`, `canvasId`, `windowMs`; we translate `windowMs` to a
+    /// `since=<iso>` query param per the upstream spec. The board-app
+    /// accepts a `{ versions: [...] }` envelope.
+    static func proxyRecentArtifactVersions(_ req: HttpRequest) -> HttpResponse {
+        let qp = Dictionary(uniqueKeysWithValues: req.queryParams.map { ($0.0, $0.1) })
+        let teamId = (qp["teamId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let canvasId = (qp["canvasId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let windowMs = Int(qp["windowMs"] ?? "") ?? 60_000
+        guard !teamId.isEmpty, !canvasId.isEmpty else {
+            return errorResponse("bad_request", "teamId and canvasId are required", status: 400)
+        }
+        let sinceDate = Date(timeIntervalSinceNow: -Double(windowMs) / 1000.0)
+        let isoFormatter: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "teamId", value: teamId),
+            URLQueryItem(name: "canvasId", value: canvasId),
+            URLQueryItem(name: "since", value: isoFormatter.string(from: sinceDate))
+        ]
+        if let limit = qp["limit"] { items.append(URLQueryItem(name: "limit", value: limit)) }
+        switch OnlineProxy.callOnlineAPI(method: "GET", path: "/api/v1/artifact-versions", query: items) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// Map OnlineProxy errors to JSON error responses with appropriate
+    /// HTTP status codes. Surfaces upstream status when available.
+    private static func mapOnlineProxyError(_ err: OnlineProxy.ProxyError) -> HttpResponse {
+        switch err {
+        case .missingSettings(let key):
+            return errorResponse("not_connected", "meee2-online not configured (missing \(key))", status: 412)
+        case .badURL:
+            return errorResponse("bad_request", "invalid upstream URL", status: 400)
+        case .transport(let underlying):
+            return errorResponse("upstream_unavailable", underlying.localizedDescription, status: 502)
+        case .http(let status, let body):
+            // Pass through upstream body if it's already JSON; otherwise wrap.
+            if (try? JSONSerialization.jsonObject(with: body)) != nil {
+                return HttpResponse.raw(status, "Upstream", ["Content-Type": "application/json"]) { writer in
+                    try? writer.write(body)
+                }
+            }
+            let text = String(data: body, encoding: .utf8) ?? ""
+            return errorResponse("upstream_error", text.isEmpty ? "upstream returned \(status)" : text, status: status)
+        }
+    }
+
     /// UI-1 · Re-run a gate node by appending a new artifact version for the
     /// same slot. We take the latest version's payload (or, if none exists,
     /// fall back to the node's most recent artifact) and resubmit through
@@ -1811,8 +1978,17 @@ enum BoardAPI {
             let candidates = state.artifacts.filter { $0.nodeId == nodeId }
             let pickedArtifact: PlannerArtifact?
             if let requested = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines), !requested.isEmpty {
-                pickedArtifact = candidates.first(where: { $0.reference == requested })
-                    ?? candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
+                // P1 (Codex review): when caller pins a specific reference,
+                // refuse to silently fall back to latest — a typoed reference
+                // would otherwise rerun the wrong slot.
+                guard let match = candidates.first(where: { $0.reference == requested }) else {
+                    return errorResponse(
+                        "artifact_slot_not_found",
+                        "requested reference \"\(requested)\" not found on this node",
+                        status: 404
+                    )
+                }
+                pickedArtifact = match
             } else {
                 pickedArtifact = candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
             }
@@ -2192,7 +2368,8 @@ enum BoardAPI {
             "",
             "External tools:",
             "- If the node requires an external system such as Lark, GitHub, Linear, or a database, use the relevant available MCP/tool for that system.",
-            "- Regardless of external tools used, structured planner results must be written back through Meee2 MCP."
+            "- Regardless of external tools used, structured planner results must be written back through Meee2 MCP.",
+            "- If the node contract needs different inputs, outputs, artifact slots, gates, or task requirements, ask for a planner graph change through Meee2 rather than only editing local notes."
         ]
         if !node.schema.inputs.isEmpty {
             lines.append("")

@@ -73,6 +73,11 @@ public final class BoardServer {
             return
         }
 
+        // Opt-in: route planner agent events through the meee2-online TS
+        // runtime when both env vars are set. Otherwise the in-process
+        // DefaultPlannerAgentRuntime keeps serving requests.
+        HTTPPlannerAgentRuntime.installFromEnvironment()
+
         var lastError: Error?
         for candidate in candidatePorts() {
             let server = HttpServer()
@@ -450,6 +455,13 @@ public final class BoardServer {
         // with force_new_version: true. Body: { reference?: string } (optional;
         // defaults to the node's latest version slot).
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/rerun"] = BoardServer.cors(BoardAPI.rerunPlannerNode)
+        // Wave 1-3 integration — OnlineProxy routes.
+        // UI-2: assign a node to a teammate (forwards to meee2_assign_node RPC).
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/assign"] = BoardServer.cors(BoardAPI.proxyAssignPlannerNode)
+        // UI-2: list sub-canvases the current user owns.
+        server.GET["/api/planner/owned-canvases"] = BoardServer.cors(BoardAPI.proxyListOwnedCanvases)
+        // UI-6: recent artifact versions across the canvas (drives the AI Recap drawer).
+        server.GET["/api/cloud/artifact-versions/recent"] = BoardServer.cors(BoardAPI.proxyRecentArtifactVersions)
         server.POST["/api/planner/canvases/:id/artifacts/:artifactId/kanban-items/:itemId/sub-canvas"] = BoardServer.cors(BoardAPI.openKanbanItemSubCanvas)
         server.PATCH["/api/planner/canvases/:id/nodes/:nodeId/layout"] = BoardServer.cors(BoardAPI.updatePlannerNodeLayout)
         // P1 Run layer — start / list / inspect / abort workflow runs.

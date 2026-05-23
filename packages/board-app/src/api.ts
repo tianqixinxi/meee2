@@ -2343,3 +2343,69 @@ export function connectEvents(
     ws?.close()
   }
 }
+
+// -- UI-6 · AI Recap · ENG-3 artifact version stream -----------------------
+
+/**
+ * One row from `meee2_artifact_versions` (or its `_latest` view), shaped for
+ * the AI Recap drawer. Mirrors the read schema of meee2-online's
+ * `GET /api/v1/artifact-versions` (see ENG-3).
+ */
+export interface ArtifactVersionSummary {
+  versionId: string
+  parentVersionId: string | null
+  nodeId: string
+  nodeTitle: string | null
+  artifactSlotKey: string
+  submittedByLabel: string
+  shortId: string
+  createdAt: string
+}
+
+interface FetchRecentArtifactVersionsArgs {
+  teamId: string
+  canvasId: string
+  /** Lookback window in ms. The endpoint returns newest-first; we filter client-side. */
+  windowMs: number
+}
+
+/**
+ * Fetches recent artifact versions for the AI Recap drawer.
+ *
+ * Routing strategy:
+ *   1. Try the local BoardServer proxy at `/api/cloud/artifact-versions/recent`.
+ *      This proxy is intentionally *not implemented yet* — see TODO below.
+ *      Until it exists this resolves to an empty list (caller renders the
+ *      "no recent versions" empty state, drawer otherwise functions).
+ *   2. (Future) Once supabase-js is bundled into board-app, the drawer will
+ *      open a Realtime channel directly and this polling helper goes away.
+ *
+ * TODO(UI-6 follow-up): expose `GET /api/cloud/artifact-versions/recent`
+ *   on BoardServer that forwards to meee2-online's
+ *   `GET /api/v1/artifact-versions` using the connect token stored in
+ *   `~/.meee2/settings.json`. The handler should aggregate across all nodes
+ *   in the canvas (the upstream endpoint is per-slot).
+ */
+export async function fetchRecentArtifactVersions(
+  args: FetchRecentArtifactVersionsArgs,
+): Promise<ArtifactVersionSummary[]> {
+  if (PLANNER_DEMO_MODE) return []
+  const params = new URLSearchParams({
+    teamId: args.teamId,
+    canvasId: args.canvasId,
+    windowMs: String(args.windowMs),
+  })
+  try {
+    const data = await jsonRequest<{ versions?: ArtifactVersionSummary[] }>(
+      `/api/cloud/artifact-versions/recent?${params.toString()}`,
+    )
+    return data.versions ?? []
+  } catch (err) {
+    // The proxy endpoint is not wired yet. Surface a friendly empty list
+    // unless this is a transient error we should re-throw.
+    if (err instanceof ApiRequestError && (err.status === 404 || err.status === 501)) {
+      return []
+    }
+    throw err
+  }
+}

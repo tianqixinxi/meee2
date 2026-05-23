@@ -1715,21 +1715,33 @@ enum PlannerPermission {
 }
 
 enum PlannerProposalValidator {
-    /// Known `PlanningNode.nodeKind` raw values an LLM is allowed to emit.
-    static let knownNodeKinds: Set<String> = [
-        PlanningNodeKind.step.rawValue,
-        PlanningNodeKind.session.rawValue,
-        PlanningNodeKind.artifact.rawValue,
-        PlanningNodeKind.subCanvas.rawValue,
-        PlanningNodeKind.external.rawValue
-    ]
+    /// Allowed enum sets: derived from `PlannerContract.generated.swift`, whose
+    /// source of truth is meee2-online/src/planner-runtime/contract/{enums,proposal}.ts.
+    /// Re-emit via `pnpm contract:emit` in meee2-online. The static-let initializers
+    /// below assert (at first access via `precondition`) that every Swift-side enum
+    /// case is represented in the contract — surfaces drift loudly if a Swift enum
+    /// gains a case but the Zod side hasn't.
+    static let knownNodeKinds: Set<String> = {
+        let s = PlannerContract.nodeKinds
+        for kind in [PlanningNodeKind.step, .session, .artifact, .subCanvas, .external] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanningNodeKind.\(kind) missing from PlannerContract.nodeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
-    /// Known `PlanChange.Kind` raw values an LLM is allowed to emit.
-    static let knownChangeKinds: Set<String> = [
-        PlanChange.Kind.addNode.rawValue,
-        PlanChange.Kind.updateNode.rawValue,
-        PlanChange.Kind.attachArtifact.rawValue
-    ]
+    static let knownChangeKinds: Set<String> = {
+        let s = PlannerContract.changeKinds
+        for kind in [PlanChange.Kind.addNode, .updateNode, .attachArtifact] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanChange.Kind.\(kind) missing from PlannerContract.changeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
     static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
         let decoder = JSONDecoder()
@@ -3591,7 +3603,7 @@ final class PlannerStore {
                     $0.isEmpty ? nil : $0
                 } ?? reference
                 let version = PlannerArtifactVersion(
-                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(now.timeIntervalSince1970)"))",
+                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(artifactId)-\(now.timeIntervalSince1970)"))",
                     parentVersionId: parent,
                     canvasId: canvasId,
                     nodeId: nodeId,
@@ -3607,7 +3619,7 @@ final class PlannerStore {
                     metadata: .object([
                         "title": .string(artifact.title),
                         "kind": .string(item.kind.rawValue),
-                        "status": .string(output.status.rawValue),
+                        "status": .string(output.status.rawValue)
                     ]),
                     createdAt: now
                 )
@@ -3718,7 +3730,7 @@ final class PlannerStore {
             let (derivedV2, _) = NodeContractV2.derive(from: current)
             let priorVersion = record.nodeVersions.latest(canvasId: canvasId, nodeId: nodeId)
             let trigger: NodeVersionTrigger = {
-                if output.forceNewVersion == true { return .forceRerun }
+                if output.forceNewVersion { return .forceRerun }
                 if priorVersion == nil { return .manual }
                 return .manual
             }()
@@ -3733,7 +3745,9 @@ final class PlannerStore {
             // At submit time we don't re-run the merge — but we do capture
             // the contract shape that *would* have driven it so the version
             // is a faithful "what input did this produce on" record.
-            let inputSnapshot = NodeVersionInputSnapshot(
+            // (Distinct from `inputSnapshot` above which is the ENG-3
+            // PlannerArtifactInputSnapshot bundle for the artifact chain.)
+            let nodeVersionInputSnapshot = NodeVersionInputSnapshot(
                 upstreamNodeId: derivedV2.input.upstream.sourceNodeId,
                 upstreamVersionId: derivedV2.input.upstream.sourceNodeId.flatMap { upId in
                     record.nodeVersions.latest(canvasId: canvasId, nodeId: upId)?.id
@@ -3748,7 +3762,7 @@ final class PlannerStore {
                 previousVersions: record.nodeVersions,
                 sessionId: current.sessionId,
                 trigger: trigger,
-                inputs: inputSnapshot,
+                inputs: nodeVersionInputSnapshot,
                 artifactIds: newArtifacts.map(\.id),
                 status: output.status,
                 startedAt: Date(),
@@ -4305,7 +4319,7 @@ final class PlannerStore {
     ) -> PlannerArtifactInputSnapshot {
         // Upstream: pick the most recent artifact attached to the first
         // upstream dependency. Matches `NodeContractUpstreamInput.sourceNodeId`.
-        var upstreamRef: String? = nil
+        var upstreamRef: String?
         if let upstreamId = node.dependsOnNodeIds?.first {
             upstreamRef = record.artifacts
                 .filter { $0.nodeId == upstreamId }
@@ -4319,14 +4333,14 @@ final class PlannerStore {
             external.append(.object([
                 "title": .string(source.title),
                 "ref": .string(source.reference),
-                "kind": .string(source.kind.rawValue),
+                "kind": .string(source.kind.rawValue)
             ]))
         }
         // Dialogue window: record the rolling-N descriptor; the actual turns
         // get filled in by the runtime (ENG-2) when input合流 lands.
         let dialogue: BoardJSONValue = .object([
             "kind": .string("rolling"),
-            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns)),
+            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns))
         ])
         return PlannerArtifactInputSnapshot(
             upstreamArtifactRef: upstreamRef,

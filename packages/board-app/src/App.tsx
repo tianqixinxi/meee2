@@ -10,6 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
+import { ArtifactsView } from './components/ArtifactsView'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -225,7 +226,16 @@ export default function App() {
       })
   }, [applyCanvasList])
   const refreshCanvasesTimerRef = useRef<number | null>(null)
+  // U5.1 — auto-refresh on notification.
+  // bump this counter whenever a WS state.changed event arrives. Anything that
+  // renders the active canvas (PlannerGraph etc.) takes it as a prop and uses
+  // it as an effect dep to refetch its server state without a manual canvas
+  // switch.
+  const [activeCanvasRefreshTick, setActiveCanvasRefreshTick] = useState(0)
   const scheduleCanvasListRefresh = useCallback(() => {
+    // bump the per-canvas refresh tick immediately so consumers diff against
+    // the server in <1s of the notification (acceptance #1).
+    setActiveCanvasRefreshTick((value) => value + 1)
     if (refreshCanvasesTimerRef.current !== null) {
       window.clearTimeout(refreshCanvasesTimerRef.current)
     }
@@ -599,7 +609,6 @@ export default function App() {
     )
   }
 
-  const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
   const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
   const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
@@ -629,6 +638,7 @@ export default function App() {
               userProfile={userProfile}
               boardState={boardState.state}
               clearRevision={plannerClearRevision}
+              refreshTick={activeCanvasRefreshTick}
               onOpenSubCanvas={handleSetActiveCanvas}
               onNotify={pushToast}
             />
@@ -643,6 +653,15 @@ export default function App() {
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} unreadSids={unreadSids} />
+          ) : workspaceMode === 'artifacts' ? (
+            <ArtifactsView
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              onOpenCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView
               state={boardState.state}
@@ -652,11 +671,7 @@ export default function App() {
               }}
             />
           ) : workspaceMode === 'team' ? (
-            <TeamView
-              state={boardState.state}
-              activeCanvas={activeCanvas ?? null}
-              userProfile={userProfile}
-            />
+            <TeamView userProfile={userProfile} />
           ) : (
             <WorkspaceMonitor />
           )}
@@ -673,6 +688,9 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
           {activeCanvasLoading && (

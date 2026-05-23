@@ -38,6 +38,7 @@ import type {
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
 import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
+import { InputCardSections } from './InputCardSections'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
 const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
@@ -424,9 +425,19 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {io.hasIO && (
-        <div className="planner-node__io" aria-label="Node inputs and outputs">
-          <IOColumn title="Input" items={io.inputs} emptyLabel="No input" />
+      {nodeKind === 'step' && (
+        <InputCardSections
+          node={node}
+          upstreamLabel={data.upstreamSourceLabel}
+          variant="card"
+          onAttachDataSource={data.onAttachDataSource}
+          onRefreshExternal={data.onRefreshExternalInput}
+          onConfigureDialogue={data.onConfigureDialogue}
+        />
+      )}
+
+      {(io.outputs.length > 0 || (node.schema?.outputs?.length ?? 0) > 0) && (
+        <div className="planner-node__io planner-node__io--output-only" aria-label="Node output">
           <IOColumn title="Output" items={io.outputs} emptyLabel="No output" />
         </div>
       )}
@@ -513,20 +524,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               title="Cancel session creation"
             >
               Cancel
-            </button>
-          )}
-          {primaryAction === 'Open session' && data.onReplaceSession && (
-            <button
-              type="button"
-              className="planner-node__secondary-action nodrag"
-              onClick={(event) => {
-                event.stopPropagation()
-                data.onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))
-              }}
-              aria-label={`Replace session for ${node.title}`}
-              title="Replace the current session binding"
-            >
-              Replace session
             </button>
           )}
           {!data.virtual && data.onDeleteNode && (

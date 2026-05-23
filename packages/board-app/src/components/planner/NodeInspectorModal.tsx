@@ -4,6 +4,7 @@ import {
   ExternalLink,
   FileText,
   Layers,
+  RefreshCw,
   Route,
   Signpost,
   Sparkles,
@@ -12,20 +13,22 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import {
-  bindPlannerNodeInput,
   proposePlannerGraphChange,
   updatePlannerNodeSchedule,
 } from '../../api'
+import { loadSpawnProvider } from '../../preferences'
 import type { TeamMember } from '../../api'
 import type {
-  ContextSource,
+  NodeContractExternalInput,
   NodeStateSnapshot,
   PlanProposal,
   PlannerAccess,
   PlannerArtifact,
+  PlannerDispatchRunner,
   PlannerGraphState,
   PlanningNode,
 } from '../../types'
+import { InputCardSections } from './InputCardSections'
 import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
 
 interface Props {
@@ -41,7 +44,8 @@ interface Props {
   onOpenSubCanvas?: (canvasId: string) => void
   onProposalCreated?: (proposal: PlanProposal) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
-  onSendToAI?: (message: string) => void
+  onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
+  onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -50,6 +54,12 @@ interface Props {
     item: string,
     visible: boolean,
   ) => void
+  /** UI-4: open the Attach Data Source popover for this node. */
+  onAttachDataSource?: (nodeId: string) => void
+  /** UI-4: refresh-now per external row. */
+  onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
+  /** UI-4: configure dialogue retention. */
+  onConfigureDialogue?: (nodeId: string) => void
 }
 
 export function NodeInspectorModal({
@@ -66,14 +76,17 @@ export function NodeInspectorModal({
   onProposalCreated,
   onGraphStateChanged,
   onSendToAI,
+  onReplaceSession,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
+  onAttachDataSource,
+  onRefreshExternalInput,
+  onConfigureDialogue,
 }: Props) {
   const [assignOpen, setAssignOpen] = useState(false)
-  const [editingInput, setEditingInput] = useState<string | null>(null)
-  const [inputDraftValue, setInputDraftValue] = useState('')
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
   const [scheduleInterval, setScheduleInterval] = useState(() => String(Math.max(1, Math.round((node.schedule?.intervalSeconds ?? 900) / 60))))
   const [schedulePrompt, setSchedulePrompt] = useState(() => node.schedule?.prompt ?? defaultSchedulePrompt(node))
   const [actionBusy, setActionBusy] = useState(false)
@@ -88,8 +101,9 @@ export function NodeInspectorModal({
       : node.status === 'blocked' && node.blockedReason?.trim()
         ? [node.blockedReason.trim()]
         : []
-  const inputs = dedupeStrings(node.schema?.inputs ?? [])
-  const inputBindings = inputBindingMap(inputs, node.contextSources ?? [])
+  // UI-4: the legacy `schema.inputs` slot list + per-input binding editor
+  // were removed. Inputs are now rendered through the three-section card
+  // (Upstream / External / Dialogue). Outputs continue to use SchemaList.
   // Output slots reconciled with produced artifacts: a concrete artifact
   // fills its templated slot (the `<slug>` template stops showing alongside
   // it), superseded artifacts and the synthetic `…/output` handle are dropped.
@@ -131,39 +145,13 @@ export function NodeInspectorModal({
   }
 
   const sendNodeActionToAI = (operation: 'revise' | 'expand-sub-canvas') => {
-    onSendToAI?.(buildNodeActionPrompt(node, operation))
-    onClose()
-  }
-
-  const startEditingInput = (item: string) => {
-    setActionError(null)
-    setEditingInput(item)
-    setInputDraftValue(inputBindings[item]?.reference ?? '')
-  }
-
-  const saveInputBinding = (item: string) => {
-    const reference = inputDraftValue.trim()
-    if (!reference) {
-      setActionError('Input value cannot be empty.')
-      return
-    }
-    setActionBusy(true)
-    setActionError(null)
-    bindPlannerNodeInput(canvasId, node.id, {
-      input: item,
-      reference,
-      kind: inferContextSourceKind(reference, item),
-      title: item,
+    onSendToAI?.(buildNodeActionPrompt(node, operation), {
+      visibleText: operation === 'revise'
+        ? 'Revise this node with me.'
+        : 'Expand this node into a sub-canvas with me.',
+      contextLabel: `Node: ${node.title}`,
     })
-      .then((state) => {
-        setActionBusy(false)
-        onGraphStateChanged?.(state)
-        setEditingInput(null)
-      })
-      .catch((err) => {
-        setActionBusy(false)
-        setActionError((err as Error).message || 'Input value was not saved')
-      })
+    onClose()
   }
 
   const saveSchedule = (enabled: boolean) => {
@@ -224,25 +212,37 @@ export function NodeInspectorModal({
           <InfoTile label="Type" value={nodeKind} />
         </div>
 
+        {canUseStepActions && (
+          <div className="planner-node-modal__ai-callout">
+            <div>
+              <span><Sparkles size={12} aria-hidden /> meee2 AI</span>
+              <strong>Revise this node with AI</strong>
+            </div>
+            <button
+              type="button"
+              className="primary"
+              disabled={actionBusy}
+              onClick={() => sendNodeActionToAI('revise')}
+            >
+              <Sparkles size={13} aria-hidden /> Revise
+            </button>
+          </div>
+        )}
+
         <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> Schema</h3>
+          <h3><Route size={13} aria-hidden /> Inputs</h3>
+          <InputCardSections
+            node={node}
+            variant="modal"
+            onAttachDataSource={onAttachDataSource}
+            onRefreshExternal={onRefreshExternalInput}
+            onConfigureDialogue={onConfigureDialogue}
+          />
+        </div>
+
+        <div className="planner-node-modal__section">
+          <h3><Route size={13} aria-hidden /> Output</h3>
           <div className="planner-node-modal__schema">
-            <SchemaList
-              title="Inputs"
-              items={inputs}
-              empty="No required input"
-              visibleItems={visibleIOArtifacts.inputs}
-              switchesEnabled={canShowIOArtifactSwitches}
-              onToggle={(item, visible) => onToggleIOArtifact?.(node.id, 'inputs', item, visible)}
-              inputBindings={inputBindings}
-              editingItem={editingInput}
-              draftValue={inputDraftValue}
-              actionBusy={actionBusy}
-              onStartEdit={startEditingInput}
-              onCancelEdit={() => setEditingInput(null)}
-              onDraftChange={setInputDraftValue}
-              onSaveInput={saveInputBinding}
-            />
             <SchemaList
               title="Outputs"
               items={outputItems}
@@ -269,14 +269,6 @@ export function NodeInspectorModal({
           <div className="planner-node-modal__section">
             <h3><Sparkles size={13} aria-hidden /> Actions</h3>
             <div className="planner-node-actions__buttons">
-              <button
-                type="button"
-                className="primary"
-                disabled={actionBusy}
-                onClick={() => sendNodeActionToAI('revise')}
-              >
-                <Sparkles size={12} aria-hidden /> Revise with AI
-              </button>
               <button
                 type="button"
                 disabled={actionBusy}
@@ -308,7 +300,47 @@ export function NodeInspectorModal({
               >
                 <CalendarClock size={12} aria-hidden /> Schedule session
               </button>
+              {node.sessionId && onReplaceSession && (
+                <button
+                  type="button"
+                  className="planner-node-actions__danger"
+                  disabled={actionBusy}
+                  onClick={() => {
+                    setActionError(null)
+                    setReplaceConfirmOpen((value) => !value)
+                  }}
+                >
+                  <RefreshCw size={12} aria-hidden /> Replace session
+                </button>
+              )}
             </div>
+            {replaceConfirmOpen && node.sessionId && (
+              <div className="planner-node-actions__panel planner-node-actions__panel--danger">
+                <div className="planner-node-actions__warning">
+                  <AlertTriangle size={14} aria-hidden />
+                  <div>
+                    <strong>Replace the bound session?</strong>
+                    <p>This detaches the current session and starts a new one for this node. Keep the old session only if you still need its context.</p>
+                  </div>
+                </div>
+                <div className="planner-node-modal__input-editor-actions">
+                  <button type="button" disabled={actionBusy} onClick={() => setReplaceConfirmOpen(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="primary danger"
+                    disabled={actionBusy}
+                    onClick={() => {
+                      onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))
+                      onClose()
+                    }}
+                  >
+                    Replace session
+                  </button>
+                </div>
+              </div>
+            )}
             {scheduleOpen && (
               <div className="planner-node-actions__panel planner-node-actions__panel--schedule">
                 <label>
@@ -414,6 +446,10 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   )
 }
 
+// UI-4: SchemaList is now Output-only. The Input axis is rendered via
+// `InputCardSections` (Upstream / External / Dialogue). All field-level
+// binding props (`inputBindings`, `editingItem`, `onSaveInput`, etc.) were
+// removed; ENG-1's contract validator rejects field-level mapping anyway.
 function SchemaList({
   title,
   items,
@@ -421,14 +457,6 @@ function SchemaList({
   visibleItems = [],
   switchesEnabled = false,
   onToggle,
-  inputBindings,
-  editingItem,
-  draftValue = '',
-  actionBusy = false,
-  onStartEdit,
-  onCancelEdit,
-  onDraftChange,
-  onSaveInput,
 }: {
   title: string
   items: string[]
@@ -436,19 +464,9 @@ function SchemaList({
   visibleItems?: string[]
   switchesEnabled?: boolean
   onToggle?: (item: string, visible: boolean) => void
-  inputBindings?: Record<string, ContextSource>
-  editingItem?: string | null
-  draftValue?: string
-  actionBusy?: boolean
-  onStartEdit?: (item: string) => void
-  onCancelEdit?: () => void
-  onDraftChange?: (value: string) => void
-  onSaveInput?: (item: string) => void
 }) {
   const normalized = dedupeStrings(items)
   const visibleSet = new Set(visibleItems.map((item) => item.trim()).filter(Boolean))
-  const canEditInputs = Boolean(inputBindings && onStartEdit && onDraftChange && onSaveInput)
-  const editingBinding = editingItem ? inputBindings?.[editingItem] : null
   return (
     <div className="planner-node-modal__schema-row">
       <span>{title}</span>
@@ -456,17 +474,10 @@ function SchemaList({
         <div className="planner-node-modal__schema-chips">
           {normalized.map((item) => {
             const checked = visibleSet.has(item)
-            const binding = inputBindings?.[item]
-            const isEditing = editingItem === item
             return (
-              <div key={item} className={`planner-node-modal__schema-item${isEditing ? ' is-editing' : ''}`}>
+              <div key={item} className="planner-node-modal__schema-item">
                 <div className="planner-node-modal__schema-item-main">
                   <strong title={item}><FileText size={11} aria-hidden />{compactLabel(item)}</strong>
-                  {canEditInputs && (
-                    <span className={`planner-node-modal__input-value${binding ? ' is-set' : ''}`}>
-                      {binding ? compactLabel(binding.reference) : 'not set'}
-                    </span>
-                  )}
                 </div>
                 {switchesEnabled && (
                   <button
@@ -479,80 +490,15 @@ function SchemaList({
                     <span />
                   </button>
                 )}
-                {canEditInputs && !isEditing && (
-                  <button
-                    type="button"
-                    className="planner-node-modal__input-edit"
-                    disabled={actionBusy}
-                    onClick={() => onStartEdit?.(item)}
-                  >
-                    {binding ? 'Edit' : 'Set'}
-                  </button>
-                )}
               </div>
             )
           })}
-          {canEditInputs && editingItem && (
-            <div className="planner-node-modal__input-editor">
-              <div className="planner-node-modal__input-editor-head">
-                <span>{compactLabel(editingItem)}</span>
-                {editingBinding && <em>{compactLabel(editingBinding.reference)}</em>}
-              </div>
-              <textarea
-                value={draftValue}
-                onChange={(event) => onDraftChange?.(event.target.value)}
-                placeholder="Paste document URL or artifact reference"
-                autoFocus
-                rows={4}
-              />
-              <div className="planner-node-modal__input-editor-actions">
-                <button
-                  type="button"
-                  disabled={actionBusy}
-                  onClick={onCancelEdit}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={actionBusy || draftValue.trim().length === 0}
-                  onClick={() => onSaveInput?.(editingItem)}
-                >
-                  Save input
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       ) : (
         <strong>{empty}</strong>
       )}
     </div>
   )
-}
-
-function inputBindingMap(inputs: string[], sources: ContextSource[]): Record<string, ContextSource> {
-  const result: Record<string, ContextSource> = {}
-  const inputKeys = new Map(inputs.map((input) => [normalizeKey(input), input]))
-  for (const source of sources) {
-    const input = inputKeys.get(normalizeKey(source.title))
-    if (input) result[input] = source
-  }
-  return result
-}
-
-function normalizeKey(value: string): string {
-  return value.trim().toLowerCase()
-}
-
-function inferContextSourceKind(reference: string, title: string): ContextSource['kind'] {
-  const normalized = `${title} ${reference}`.toLowerCase()
-  if (normalized.startsWith('artifact:') || normalized.includes('artifact://')) return 'artifact'
-  if (normalized.startsWith('repo:') || normalized.startsWith('git:') || normalized.includes('github.com')) return 'repository'
-  if (normalized.includes('lark') || normalized.includes('feishu') || normalized.includes('doc')) return 'document'
-  if (normalized.startsWith('http://') || normalized.startsWith('https://')) return 'web'
-  return 'document'
 }
 
 function dedupeStrings(values: Array<string | null | undefined>): string[] {
@@ -584,6 +530,12 @@ function buildNodeActionPrompt(node: PlanningNode, operation: 'revise' | 'expand
       ? 'Revise this node with me.'
       : 'Expand this node into a sub-canvas with me.',
   ].join('\n')
+}
+
+function dispatchRunnerForNode(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
+  if (executorType === 'codex') return 'codex'
+  if (executorType === 'claude') return 'claude'
+  return loadSpawnProvider()
 }
 
 function defaultSchedulePrompt(node: PlanningNode): string {
