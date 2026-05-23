@@ -32,6 +32,10 @@ interface Props {
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
   reviewRequestTick?: number
+  /** ENG-5: incremented when a planner turn produces an answer-only reply
+   *  (no canvas mutation). Adds the reply to history and force-expands it
+   *  so the user sees the textual answer instead of an empty turn. */
+  answerOnlyReply?: { id: number; markdown: string } | null
 }
 
 const reviewNodeTypes = {
@@ -64,9 +68,16 @@ export function PlannerProposalPanel({
   draftMessage = null,
   clearRevision = 0,
   reviewRequestTick,
+  answerOnlyReply = null,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const handledClearRevisionRef = useRef(0)
+  const handledAnswerOnlyIdRef = useRef(0)
+  // ENG-5: first-Q&A auto-expand. We flip historyOpen=true the first time a
+  // planner reply (proposal OR answer-only) lands following a user message,
+  // so the textual answer doesn't stay buried in a collapsed panel — which
+  // is the exact bug benjamin reported in the 2026-05-22 meeting.
+  const autoExpandedRef = useRef(false)
   const [message, setMessage] = useState('')
   const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -77,6 +88,7 @@ export function PlannerProposalPanel({
   useEffect(() => {
     setHistory(readChatHistory(canvasId))
     setHistoryOpen(false)
+    autoExpandedRef.current = false
   }, [canvasId])
 
   useEffect(() => {
@@ -136,8 +148,42 @@ export function PlannerProposalPanel({
         `${proposal.changes.length} ${proposal.changes.length === 1 ? 'change' : 'changes'}`,
       ].filter(Boolean),
     }
-    setHistory((current) => upsertChatMessage(current, nextMessage))
+    setHistory((current) => {
+      const next = upsertChatMessage(current, nextMessage)
+      // ENG-5: first-Q&A auto-expand. If the user has anything in history
+      // (i.e. they just asked something), open the panel so they see the
+      // answer alongside the canvas mutation summary.
+      if (!autoExpandedRef.current && next.some((item) => item.role === 'user')) {
+        autoExpandedRef.current = true
+        setHistoryOpen(true)
+      }
+      return next
+    })
   }, [proposal])
+
+  // ENG-5: answer-only path. PlannerGraph hands us a markdown string when it
+  // decides the user's message was a question that does not warrant a canvas
+  // mutation. We add it to history and force-expand the panel on first reply.
+  useEffect(() => {
+    if (!answerOnlyReply) return
+    if (handledAnswerOnlyIdRef.current === answerOnlyReply.id) return
+    handledAnswerOnlyIdRef.current = answerOnlyReply.id
+    setThinking(false)
+    const nextMessage: PlannerChatMessage = {
+      id: `answer:${answerOnlyReply.id}`,
+      role: 'planner',
+      markdown: answerOnlyReply.markdown,
+      meta: ['answer'],
+    }
+    setHistory((current) => {
+      const next = upsertChatMessage(current, nextMessage)
+      if (!autoExpandedRef.current && next.some((item) => item.role === 'user')) {
+        autoExpandedRef.current = true
+        setHistoryOpen(true)
+      }
+      return next
+    })
+  }, [answerOnlyReply])
 
   useEffect(() => {
     if (error) setThinking(false)
