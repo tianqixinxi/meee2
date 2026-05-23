@@ -119,13 +119,99 @@ export function AIRecapDrawer({
   //     .subscribe()
   // The polling fallback above keeps the surface live until then.
 
-  // ── ENG-2 lifecycle stubs ─────────────────────────────────────────────
-  // TODO(ENG-2): subscribe to session lifecycle events
-  //   (auto-create, force_new_version, gate-blocked, failed). Until ENG-2
-  //   merges, the matching sections render their placeholder copy below.
-  const eng2GateBlocked: GateBlockedItem[] = []
-  const eng2FailedSessions: FailedSessionItem[] = []
-  const eng2ActiveSessions: ActiveSessionItem[] = []
+  // ── ENG-2 lifecycle data ──────────────────────────────────────────────
+  // Now that ENG-2 (session lifecycle) has landed we can derive these from
+  // the existing `PlannerGraphState` / `BoardState` accessors. The full
+  // session-lifecycle event stream (auto-create, force_new_version) will
+  // arrive through Supabase realtime in a follow-up; for now the polling
+  // adapter that already drives the rest of the drawer keeps these fresh.
+  //
+  // Mapping:
+  //  - eng2GateBlocked  ← planner nodes with a gate (approvers required)
+  //                       AND a blocking workflow/status signal. Differs
+  //                       from `localBlockedNodes` (which catches every
+  //                       blocked-status node) by isolating gate-review
+  //                       stuck-points specifically.
+  //  - eng2FailedSessions ← BoardState.sessions whose last surfaced status
+  //                         indicates an error (free-form status string;
+  //                         we match the well-known set the resolver emits)
+  //                         OR whose linked planner node has
+  //                         workflowRunState === 'failed'.
+  //  - eng2ActiveSessions ← BoardState.sessions in an in-flight status
+  //                         (thinking/tooling/running/etc.).
+  //
+  // TODO(ENG-2 follow-up): switch to the realtime
+  //   `meee2_session_runs` channel once supabase-js is bundled here — the
+  //   polling-derived view below is a baseline that works without a new
+  //   transport but won't catch < poll-interval transitions.
+  const eng2GateBlocked: GateBlockedItem[] = useMemo(() => {
+    if (!plannerState) return []
+    return plannerState.nodes
+      .filter((n) => {
+        const hasGate = ((n.gate?.approvers ?? []).length > 0) || n.executionMode === 'human'
+        const isBlocked =
+          n.status === 'blocked' ||
+          n.workflowRunState === 'gate-wait' ||
+          n.workflowRunState === 'awaiting-input'
+        return hasGate && isBlocked
+      })
+      .map((n) => ({
+        nodeId: n.id,
+        nodeTitle: n.title,
+        reason:
+          n.blockedReason
+          ?? n.nextAction
+          ?? (n.workflowRunState === 'gate-wait' ? 'Waiting for gate approval' : 'Awaiting input'),
+      }))
+  }, [plannerState])
+
+  const eng2FailedSessions: FailedSessionItem[] = useMemo(() => {
+    if (!boardState) return []
+    const failedNodeSessionIds = new Set(
+      (plannerState?.nodes ?? [])
+        .filter((n) => n.workflowRunState === 'failed' && n.sessionId)
+        .map((n) => n.sessionId as string),
+    )
+    const sessionToNodeId = new Map<string, string>()
+    for (const n of plannerState?.nodes ?? []) {
+      if (n.sessionId) sessionToNodeId.set(n.sessionId, n.id)
+    }
+    return boardState.sessions
+      .filter((s) => {
+        const status = (s.status as string).toLowerCase()
+        return (
+          failedNodeSessionIds.has(s.id) ||
+          status === 'error' ||
+          status === 'failed' ||
+          status === 'aborted'
+        )
+      })
+      .map((s) => ({
+        sessionId: s.id,
+        title: s.title,
+        reason: s.pendingPermissionMessage || (s.status as string) || 'failed',
+        nodeId: sessionToNodeId.get(s.id) ?? null,
+      }))
+      .slice(0, 12)
+  }, [boardState, plannerState?.nodes])
+
+  const eng2ActiveSessions: ActiveSessionItem[] = useMemo(() => {
+    if (!boardState) return []
+    const sessionToNodeId = new Map<string, string>()
+    for (const n of plannerState?.nodes ?? []) {
+      if (n.sessionId) sessionToNodeId.set(n.sessionId, n.id)
+    }
+    const activeStatuses = new Set(['running', 'thinking', 'tooling', 'working', 'in-progress'])
+    return boardState.sessions
+      .filter((s) => activeStatuses.has((s.status as string).toLowerCase()))
+      .map((s) => ({
+        sessionId: s.id,
+        title: s.title,
+        statusLabel: s.currentTask || s.currentTool || (s.status as string),
+        nodeId: sessionToNodeId.get(s.id) ?? null,
+      }))
+      .slice(0, 16)
+  }, [boardState, plannerState?.nodes])
 
   // ── Local-derived data (works today, no backend changes needed) ───────
   const localBlockedNodes = useMemo(() => {

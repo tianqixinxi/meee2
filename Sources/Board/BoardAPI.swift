@@ -1780,6 +1780,152 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Wave 1-3 integration · OnlineProxy routes
+    //
+    // These three proxy the desktop board-app's UI-2 and UI-6 calls to
+    // meee2-online. They share `OnlineProxy.loadSettings()` for the
+    // supabase URL + anon key + teamId/userId stored in
+    // `~/.meee2/settings.json` (also mirrored to UserDefaults).
+    //
+    // 1) POST /api/planner/canvases/:id/nodes/:nodeId/assign
+    //      → Supabase RPC `meee2_assign_node`
+    // 2) GET  /api/planner/owned-canvases
+    //      → Supabase RPC `meee2_list_owned_canvases`
+    // 3) GET  /api/cloud/artifact-versions/recent
+    //      → meee2-online `/api/v1/artifact-versions?…`
+
+    /// UI-2 · F1.2 — proxy `assignPlannerNode` from the board-app to the
+    /// `meee2_assign_node` RPC. The web client posts a JSON body with
+    /// `assigneeUserId`, optional `subCanvasName`, and `acceptPrivateUpgrade`;
+    /// we forward those as RPC params and stream the JSON response through.
+    /// Response shape matches `AssignPlannerNodeResult` in the board-app
+    /// `types.ts`.
+    static func proxyAssignPlannerNode(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        struct AssignBody: Decodable {
+            let assigneeUserId: String?
+            let subCanvasName: String?
+            let acceptPrivateUpgrade: Bool?
+        }
+        let body: AssignBody = (try? JSONDecoder().decode(AssignBody.self, from: Data(req.body)))
+            ?? AssignBody(assigneeUserId: nil, subCanvasName: nil, acceptPrivateUpgrade: nil)
+        guard let assigneeUserId = body.assigneeUserId, !assigneeUserId.isEmpty else {
+            return errorResponse("bad_request", "assigneeUserId is required", status: 400)
+        }
+        var payload: [String: Any] = [
+            "p_team_id": settings.teamId,
+            "p_canvas_id": canvasId,
+            "p_node_id": nodeId,
+            "p_assignee_user_id": assigneeUserId,
+            "p_accept_private_upgrade": body.acceptPrivateUpgrade ?? false
+        ]
+        if let name = body.subCanvasName, !name.isEmpty {
+            payload["p_sub_canvas_name"] = name
+        }
+        switch OnlineProxy.callRPC(name: "meee2_assign_node", payload: payload, settings: settings) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// UI-2 · proxy `fetchOwnedCanvases` to `meee2_list_owned_canvases`.
+    static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let payload: [String: Any] = [
+            "p_team_id": settings.teamId,
+            "p_user_id": settings.userId
+        ]
+        switch OnlineProxy.callRPC(name: "meee2_list_owned_canvases", payload: payload, settings: settings) {
+        case .success(let data):
+            // RPC returns an array; wrap in `{ canvases: [...] }` to match the
+            // board-app `fetchOwnedCanvases` envelope.
+            if let arr = try? JSONSerialization.jsonObject(with: data) {
+                let envelope: [String: Any] = ["canvases": arr]
+                if let wrapped = try? JSONSerialization.data(withJSONObject: envelope) {
+                    return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                        try? writer.write(wrapped)
+                    }
+                }
+            }
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// UI-6 · proxy `fetchRecentArtifactVersions` to meee2-online's
+    /// `/api/v1/artifact-versions` endpoint. The caller passes
+    /// `teamId`, `canvasId`, `windowMs`; we translate `windowMs` to a
+    /// `since=<iso>` query param per the upstream spec. The board-app
+    /// accepts a `{ versions: [...] }` envelope.
+    static func proxyRecentArtifactVersions(_ req: HttpRequest) -> HttpResponse {
+        let qp = Dictionary(uniqueKeysWithValues: req.queryParams.map { ($0.0, $0.1) })
+        let teamId = (qp["teamId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let canvasId = (qp["canvasId"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let windowMs = Int(qp["windowMs"] ?? "") ?? 60_000
+        guard !teamId.isEmpty, !canvasId.isEmpty else {
+            return errorResponse("bad_request", "teamId and canvasId are required", status: 400)
+        }
+        let sinceDate = Date(timeIntervalSinceNow: -Double(windowMs) / 1000.0)
+        let isoFormatter: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "teamId", value: teamId),
+            URLQueryItem(name: "canvasId", value: canvasId),
+            URLQueryItem(name: "since", value: isoFormatter.string(from: sinceDate))
+        ]
+        if let limit = qp["limit"] { items.append(URLQueryItem(name: "limit", value: limit)) }
+        switch OnlineProxy.callOnlineAPI(method: "GET", path: "/api/v1/artifact-versions", query: items) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// Map OnlineProxy errors to JSON error responses with appropriate
+    /// HTTP status codes. Surfaces upstream status when available.
+    private static func mapOnlineProxyError(_ err: OnlineProxy.ProxyError) -> HttpResponse {
+        switch err {
+        case .missingSettings(let key):
+            return errorResponse("not_connected", "meee2-online not configured (missing \(key))", status: 412)
+        case .badURL:
+            return errorResponse("bad_request", "invalid upstream URL", status: 400)
+        case .transport(let underlying):
+            return errorResponse("upstream_unavailable", underlying.localizedDescription, status: 502)
+        case .http(let status, let body):
+            // Pass through upstream body if it's already JSON; otherwise wrap.
+            if let _ = try? JSONSerialization.jsonObject(with: body) {
+                return HttpResponse.raw(status, "Upstream", ["Content-Type": "application/json"]) { writer in
+                    try? writer.write(body)
+                }
+            }
+            let text = String(data: body, encoding: .utf8) ?? ""
+            return errorResponse("upstream_error", text.isEmpty ? "upstream returned \(status)" : text, status: status)
+        }
+    }
+
     /// UI-1 · Re-run a gate node by appending a new artifact version for the
     /// same slot. We take the latest version's payload (or, if none exists,
     /// fall back to the node's most recent artifact) and resubmit through
