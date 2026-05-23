@@ -258,9 +258,9 @@ function UpgradeConfirmation({ picked, errorMessage }: { picked: TeamMember; err
       </div>
       <h3>Publish this canvas to assign work?</h3>
       <p className="planner-assign-dialog__warning-lead">
-        This canvas is currently <strong>private</strong>. To assign{' '}
-        <strong>{picked.displayName || picked.userId}</strong> a node, the canvas has to
-        become <strong>public</strong> for them to access.
+        Assign will publish the current canvas so{' '}
+        <strong>{picked.displayName || picked.userId}</strong> can access the assigned
+        work. Confirm to make this canvas <strong>public</strong> and continue.
       </p>
       <ul className="planner-assign-dialog__warning-list">
         <li>

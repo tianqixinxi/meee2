@@ -526,20 +526,6 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               Cancel
             </button>
           )}
-          {primaryAction === 'Open session' && data.onReplaceSession && (
-            <button
-              type="button"
-              className="planner-node__secondary-action nodrag"
-              onClick={(event) => {
-                event.stopPropagation()
-                data.onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))
-              }}
-              aria-label={`Replace session for ${node.title}`}
-              title="Replace the current session binding"
-            >
-              Replace session
-            </button>
-          )}
           {!data.virtual && data.onDeleteNode && (
             <button
               type="button"

@@ -27,7 +27,7 @@ interface Props {
   onUseRecommendedTemplate?: () => void
   onApproveAndApply: () => void
   onReject: () => void
-  draftMessage?: { id: number; text: string } | null
+  draftMessage?: PlannerDraftMessage | null
   clearRevision?: number
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
@@ -48,6 +48,32 @@ interface PlannerChatMessage {
   markdown: string
   meta?: string[]
 }
+
+interface PlannerDraftMessage {
+  id: number
+  text: string
+  visibleText?: string
+  contextLabel?: string
+}
+
+interface PlannerChatChoice {
+  id: string
+  label: string
+  value: string
+  description?: string
+}
+
+interface PlannerChatChoiceGroup {
+  id: string
+  question?: string
+  choices: PlannerChatChoice[]
+}
+
+const PERSISTED_CHAT_LIMIT = 30
+const SESSION_SYNC_LIMIT = 12
+const VISIBLE_HISTORY_LIMIT = 12
+const COLLAPSE_LINE_LIMIT = 8
+const COLLAPSE_CHAR_LIMIT = 900
 
 export function PlannerProposalPanel({
   canvasId,
@@ -83,6 +109,7 @@ export function PlannerProposalPanel({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [draftContext, setDraftContext] = useState<{ text: string; label: string } | null>(null)
   const isTemplate = variant === 'template'
 
   useEffect(() => {
@@ -93,7 +120,7 @@ export function PlannerProposalPanel({
 
   useEffect(() => {
     let cancelled = false
-    fetchLocalAssistantSessionMessages(canvasId)
+    fetchLocalAssistantSessionMessages(canvasId, SESSION_SYNC_LIMIT)
       .then(({ sessionId, messages }) => {
         if (cancelled) return
         setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
@@ -109,7 +136,7 @@ export function PlannerProposalPanel({
   useEffect(() => {
     if (busy) return
     let cancelled = false
-    fetchLocalAssistantSessionMessages(canvasId)
+    fetchLocalAssistantSessionMessages(canvasId, SESSION_SYNC_LIMIT)
       .then(({ sessionId, messages }) => {
         if (cancelled) return
         setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
@@ -200,7 +227,11 @@ export function PlannerProposalPanel({
 
   useEffect(() => {
     if (!draftMessage) return
-    setMessage(draftMessage.text)
+    const visibleText = draftMessage.visibleText ?? draftMessage.text
+    setMessage(visibleText)
+    setDraftContext(draftMessage.visibleText
+      ? { text: draftMessage.text, label: draftMessage.contextLabel ?? 'Selected node' }
+      : null)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }, [draftMessage])
 
@@ -208,32 +239,34 @@ export function PlannerProposalPanel({
   const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
   const templateRecommendation = recommendTemplate(canvasName, canvasTask, nodeCount, variant)
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
+  const visibleHistory = history.slice(-VISIBLE_HISTORY_LIMIT)
+  const hiddenHistoryCount = Math.max(0, history.length - visibleHistory.length)
   const submitMessage = () => {
     if (!canSend) return
     const next = message.trim()
     const displayMessage = next || 'Inspect the current graph drift.'
+    const outboundMessage = draftContext
+      ? `${draftContext.text}\n\nUser request: ${displayMessage}`
+      : next
     setHistory((current) => [
       ...current,
       {
         id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         role: 'user',
         markdown: displayMessage,
+        meta: draftContext ? [draftContext.label] : undefined,
       },
     ])
     setThinking(true)
-    onSubmit(next)
+    onSubmit(outboundMessage)
     setMessage('')
+    setDraftContext(null)
   }
 
   return (
     <aside className="planner-proposal-panel">
       <div className="planner-dialog">
         <div className="planner-dialog__messages">
-          <WorkflowGuide
-            proposal={proposal}
-            nodeCount={nodeCount}
-            hasActionableDrift={hasActionableDrift}
-          />
           {templateRecommendation && !proposal && (
             <RecommendedTemplate
               recommendation={templateRecommendation}
@@ -255,31 +288,23 @@ export function PlannerProposalPanel({
                 <span>History</span>
                 <em>{history.length}</em>
               </button>
-              {historyOpen && history.map((item) => (
-                <div
-                  key={item.id}
-                  className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
-                >
-                  {item.meta && item.meta.length > 0 && (
-                    <div className="planner-dialog__message-meta">
-                      {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
-                    </div>
-                  )}
-                  <MarkdownMessage markdown={item.markdown} />
-                  {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
-                    <div className="planner-dialog__actions planner-dialog__actions--single">
-                      <button
-                        type="button"
-                        className="planner-proposal__preview"
-                        disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
-                        onClick={() => setReviewOpen(true)}
-                      >
-                        <Eye size={14} aria-hidden />
-                        Review changes
-                      </button>
-                    </div>
-                  )}
+              {historyOpen && hiddenHistoryCount > 0 && (
+                <div className="planner-dialog__history-trimmed">
+                  Showing latest {visibleHistory.length} messages. {hiddenHistoryCount} older {hiddenHistoryCount === 1 ? 'message is' : 'messages are'} kept out of this panel.
                 </div>
+              )}
+              {historyOpen && visibleHistory.map((item) => (
+                <PlannerChatMessageRow
+                  key={item.id}
+                  item={item}
+                  proposal={proposal}
+                  busy={busy}
+                  onReview={() => setReviewOpen(true)}
+                  onChoice={(value) => {
+                    setMessage(value)
+                    window.requestAnimationFrame(() => textareaRef.current?.focus())
+                  }}
+                />
               ))}
             </div>
           )}
@@ -299,7 +324,7 @@ export function PlannerProposalPanel({
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
               </div>
-              <MarkdownMessage markdown={proposalChatMarkdown(proposal)} />
+              <MarkdownMessage markdown={proposalChatMarkdown(proposal)} collapsible />
               <div className="planner-dialog__actions planner-dialog__actions--single">
                 <button
                   type="button"
@@ -325,6 +350,18 @@ export function PlannerProposalPanel({
       </div>
 
       <div className="planner-dialog__composer">
+        {draftContext && (
+          <div className="planner-dialog__selection" aria-label="Selected context">
+            <span>{draftContext.label}</span>
+            <button
+              type="button"
+              onClick={() => setDraftContext(null)}
+              aria-label="Clear selected node context"
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={message}
@@ -335,7 +372,7 @@ export function PlannerProposalPanel({
               submitMessage()
             }
           }}
-          placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to change the graph'}
+          placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to adjust node inputs, outputs, artifacts, gates, or tasks'}
           rows={5}
         />
         <div className="planner-proposal-panel__buttons" aria-label="Send message">
@@ -509,60 +546,6 @@ function isGenericCanvasTitle(title: string): boolean {
   return /^(untitled|new canvas|default canvas|personal canvas)$/i.test(title)
 }
 
-function WorkflowGuide({
-  proposal,
-  nodeCount,
-  hasActionableDrift,
-}: {
-  proposal: PlanProposal | null
-  nodeCount: number
-  hasActionableDrift: boolean
-}) {
-  const copy = workflowGuideCopy(proposal, nodeCount, hasActionableDrift)
-  return (
-    <div className="planner-workflow-guide" aria-label="Workflow next step">
-      <span>Next</span>
-      <strong>{copy.title}</strong>
-      <p>{copy.body}</p>
-    </div>
-  )
-}
-
-function workflowGuideCopy(
-  proposal: PlanProposal | null,
-  nodeCount: number,
-  hasActionableDrift: boolean,
-): { title: string; body: string } {
-  if (proposal?.status === 'pending') {
-    return {
-      title: 'Review these changes',
-      body: 'Open the preview modal. The canvas is unchanged until you apply.',
-    }
-  }
-  if (proposal?.status === 'approved') {
-    return {
-      title: 'Apply these changes',
-      body: 'This proposal is already approved. Apply it to update the canvas.',
-    }
-  }
-  if (nodeCount === 0) {
-    return {
-      title: 'Co-create the canvas with meee2 AI',
-      body: 'Describe the outcome you want and meee2 AI will shape the canvas with you.',
-    }
-  }
-  if (hasActionableDrift) {
-    return {
-      title: 'Inspect blocked or review nodes',
-      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open a node for details or outputs.',
-    }
-  }
-  return {
-    title: 'Start the next step',
-    body: 'Keep talking with meee2 AI or open a node to adjust details and attach outputs.',
-  }
-}
-
 function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null): boolean {
   if (proposal.status === 'pending') {
     return Boolean(access?.canApproveProposal && access?.canApplyProposal)
@@ -571,6 +554,69 @@ function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null
     return Boolean(access?.canApplyProposal)
   }
   return false
+}
+
+function PlannerChatMessageRow({
+  item,
+  proposal,
+  busy,
+  onReview,
+  onChoice,
+}: {
+  item: PlannerChatMessage
+  proposal: PlanProposal | null
+  busy: boolean
+  onReview: () => void
+  onChoice: (value: string) => void
+}) {
+  const choiceBlocks = parseChoiceBlocks(item.markdown)
+  return (
+    <div
+      className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
+    >
+      {item.meta && item.meta.length > 0 && (
+        <div className="planner-dialog__message-meta">
+          {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
+        </div>
+      )}
+      <MarkdownMessage markdown={choiceBlocks.markdown} collapsible />
+      {choiceBlocks.groups.length > 0 && (
+        <div className="planner-dialog__choices" aria-label="Message choices">
+          {choiceBlocks.groups.map((group) => (
+            <div key={group.id} className="planner-dialog__choice-group">
+              {group.question && <strong>{group.question}</strong>}
+              <div className="planner-dialog__choice-list">
+                {group.choices.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    onClick={() => onChoice(choice.value)}
+                    title={choice.description}
+                  >
+                    <span>{choice.label}</span>
+                    {choice.description && <small>{choice.description}</small>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
+        <div className="planner-dialog__actions planner-dialog__actions--single">
+          <button
+            type="button"
+            className="planner-proposal__preview"
+            disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
+            onClick={onReview}
+          >
+            <Eye size={14} aria-hidden />
+            Review changes
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function chatHistoryKey(canvasId: string): string {
@@ -600,7 +646,7 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
         }
       })
       .filter((item): item is PlannerChatMessage => Boolean(item))
-    return normalizeChatHistoryOrder(history).slice(-80)
+    return normalizeChatHistoryOrder(history).slice(-PERSISTED_CHAT_LIMIT)
   } catch {
     return []
   }
@@ -609,7 +655,8 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
 function writeChatHistory(canvasId: string, history: PlannerChatMessage[]) {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(normalizeChatHistoryOrder(history).slice(-80)))
+    const localHistory = history.filter((item) => !item.id.startsWith('claude:'))
+    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(normalizeChatHistoryOrder(localHistory).slice(-PERSISTED_CHAT_LIMIT)))
   } catch {
     // History persistence is best-effort; chat actions still work without it.
   }
@@ -626,7 +673,7 @@ function clearChatHistory(canvasId: string) {
 
 function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessage): PlannerChatMessage[] {
   const index = history.findIndex((item) => item.id === next.id)
-  if (index < 0) return normalizeChatHistoryOrder([...history, next]).slice(-80)
+  if (index < 0) return normalizeChatHistoryOrder([...history, next]).slice(-PERSISTED_CHAT_LIMIT)
   return normalizeChatHistoryOrder(history.map((item, itemIndex) => (itemIndex === index ? next : item)))
 }
 
@@ -659,7 +706,7 @@ function mergeClaudeSessionMessages(
   }
 
   if (restored.length === 0) return normalizeChatHistoryOrder(history)
-  return normalizeChatHistoryOrder([...history, ...restored]).slice(-80)
+  return normalizeChatHistoryOrder([...history, ...restored]).slice(-PERSISTED_CHAT_LIMIT)
 }
 
 function normalizeChatHistoryOrder(history: PlannerChatMessage[]): PlannerChatMessage[] {
@@ -676,14 +723,129 @@ function contentKey(item: PlannerChatMessage): string {
   return `${item.role}:${item.markdown.replace(/\s+/g, ' ').trim()}`
 }
 
-function MarkdownMessage({ markdown }: { markdown: string }) {
+function MarkdownMessage({ markdown, collapsible = false }: { markdown: string; collapsible?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const displayMarkdown = normalizeJsonMarkdown(markdown)
+  const shouldCollapse = collapsible && isLongMarkdown(displayMarkdown)
   return (
-    <div className="planner-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {markdown}
-      </ReactMarkdown>
-    </div>
+    <>
+      <div className={`planner-markdown${shouldCollapse ? ' is-collapsible' : ''}${shouldCollapse && !expanded ? ' is-collapsed' : ''}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {displayMarkdown}
+        </ReactMarkdown>
+      </div>
+      {shouldCollapse && (
+        <button
+          type="button"
+          className="planner-markdown__expand"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </>
   )
+}
+
+function isLongMarkdown(markdown: string): boolean {
+  return markdown.length > COLLAPSE_CHAR_LIMIT || markdown.split('\n').length > COLLAPSE_LINE_LIMIT
+}
+
+function normalizeJsonMarkdown(markdown: string): string {
+  const trimmed = markdown.trim()
+  const fullJson = formatJsonIfObject(trimmed)
+  if (fullJson) return `\`\`\`json\n${fullJson}\n\`\`\``
+
+  return markdown.replace(/```([a-zA-Z0-9_-]*)?\s*\n([\s\S]*?)```/g, (raw, lang = '', body: string) => {
+    const normalizedLang = lang.trim().toLowerCase()
+    if (normalizedLang && normalizedLang !== 'json') return raw
+    const formatted = formatJsonIfObject(body.trim())
+    return formatted ? `\`\`\`json\n${formatted}\n\`\`\`` : raw
+  })
+}
+
+function formatJsonIfObject(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (!parsed || (typeof parsed !== 'object' && !Array.isArray(parsed))) return null
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return null
+  }
+}
+
+function parseChoiceBlocks(markdown: string): { markdown: string; groups: PlannerChatChoiceGroup[] } {
+  const groups: PlannerChatChoiceGroup[] = []
+  const nextMarkdown = markdown.replace(/```(?:choices|ask_user)\s*\n([\s\S]*?)\n```/g, (raw, jsonText: string) => {
+    const parsed = parseChoiceGroup(jsonText, groups.length)
+    if (!parsed) return raw
+    groups.push(parsed)
+    return ''
+  }).trim()
+  return { markdown: nextMarkdown || markdown, groups }
+}
+
+function parseChoiceGroup(raw: string, index: number): PlannerChatChoiceGroup | null {
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!data || typeof data !== 'object') return null
+  const item = data as Record<string, unknown>
+  const question = typeof item.question === 'string'
+    ? item.question
+    : typeof item.prompt === 'string'
+      ? item.prompt
+      : undefined
+  const rawChoices = Array.isArray(item.choices)
+    ? item.choices
+    : Array.isArray(item.options)
+      ? item.options
+      : Array.isArray(item.questions)
+        ? choiceOptionsFromAskUserQuestions(item.questions)
+        : []
+  const choices = rawChoices
+    .map((choice, choiceIndex): PlannerChatChoice | null => normalizeChoice(choice, choiceIndex))
+    .filter((choice): choice is PlannerChatChoice => Boolean(choice))
+  if (choices.length === 0) return null
+  return {
+    id: `choices:${index}`,
+    question,
+    choices,
+  }
+}
+
+function choiceOptionsFromAskUserQuestions(rawQuestions: unknown[]): unknown[] {
+  const first = rawQuestions.find((item) => item && typeof item === 'object') as Record<string, unknown> | undefined
+  if (!first) return []
+  if (Array.isArray(first.options)) return first.options
+  if (Array.isArray(first.choices)) return first.choices
+  return []
+}
+
+function normalizeChoice(raw: unknown, index: number): PlannerChatChoice | null {
+  if (typeof raw === 'string') {
+    const label = raw.trim()
+    return label ? { id: `choice:${index}`, label, value: label } : null
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const item = raw as Record<string, unknown>
+  const label = stringValue(item.label) ?? stringValue(item.title) ?? stringValue(item.text) ?? stringValue(item.value)
+  if (!label) return null
+  return {
+    id: stringValue(item.id) ?? `choice:${index}`,
+    label,
+    value: stringValue(item.value) ?? label,
+    description: stringValue(item.description),
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string {
@@ -702,9 +864,11 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     ].join('\n')
   }
   return [
-    'Ask meee2 AI to adjust the graph in the box below.',
+    'Ask meee2 AI to adjust the workflow in the box below.',
     '',
-    'It decides whether to reshape the canvas or inspect the current state.',
+    'Natural language changes to a node schema, inputs, outputs, artifacts, gates, or task requirements become a proposal you can review and approve.',
+    '',
+    'For a node that already has a live session, direct execution notes can still be injected into that session prompt.',
   ].join('\n')
 }
 

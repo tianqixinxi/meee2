@@ -1,5 +1,6 @@
 import {
   Cable,
+  Archive,
   LayoutTemplate,
   List,
   Network,
@@ -13,7 +14,7 @@ import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 
-export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'monitor' | 'team' | 'integrations'
+export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'monitor' | 'team' | 'integrations'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -45,6 +46,14 @@ export function WorkspaceRail({
       document.documentElement.classList.remove('board-sidebar-rail')
     }
   }, [])
+
+  const showTeam = Boolean(userProfile?.connected)
+
+  useEffect(() => {
+    if (mode === 'team' && !showTeam) {
+      onModeChange('planner')
+    }
+  }, [mode, showTeam, onModeChange])
 
   const avatarLabel = userProfile?.connected
     ? userProfile.displayName
@@ -106,19 +115,28 @@ export function WorkspaceRail({
           <List size={20} />
         </RailButton>
         <RailButton
+          label="Artifacts"
+          active={mode === 'artifacts'}
+          onClick={() => onModeChange('artifacts')}
+        >
+          <Archive size={20} />
+        </RailButton>
+        <RailButton
           label="Monitor"
           active={mode === 'monitor'}
           onClick={() => onModeChange('monitor')}
         >
           <Radar size={20} />
         </RailButton>
-        <RailButton
-          label="Team"
-          active={mode === 'team'}
-          onClick={() => onModeChange('team')}
-        >
-          <UsersRound size={20} />
-        </RailButton>
+        {showTeam && (
+          <RailButton
+            label="Team"
+            active={mode === 'team'}
+            onClick={() => onModeChange('team')}
+          >
+            <UsersRound size={20} />
+          </RailButton>
+        )}
         <RailButton
           label="Integrations"
           active={mode === 'integrations'}

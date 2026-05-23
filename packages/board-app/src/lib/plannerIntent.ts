@@ -58,6 +58,11 @@ const PROMOTE_HINTS = [
   /\b(rephrase|reword|rewrite\s+the\s+prompt|promote\s+(this|it|that)\s+into|inject\s+into)/i,
 ]
 
+const GRAPH_CONTRACT_HINTS = [
+  /\b(schema|input|inputs|output|outputs|artifact|artifacts|gate|approval|deliverable|task requirement)\b/i,
+  /输入|输出|产物|artifact|schema|门禁|审批|任务要求|交付物/,
+]
+
 const INSPECT_KEYWORDS = ['blocked', 'drift', 'fix', 'repair', 'review', 'stuck', '卡', '修', '检查', '跑偏', '阻塞']
 
 export function classifyPlannerIntent(
@@ -72,6 +77,13 @@ export function classifyPlannerIntent(
   // hasActionableDrift; we only label here.)
   if (INSPECT_KEYWORDS.some((k) => message.toLowerCase().includes(k))) return 'inspect'
 
+  const hasEditVerb = EDIT_VERBS.some((re) => re.test(message))
+
+  // Contract-shaping language belongs to graph proposal generation even when
+  // the selected node already has a session. The session can execute against
+  // the new contract after the proposal is approved.
+  if (hasEditVerb && GRAPH_CONTRACT_HINTS.some((re) => re.test(message))) return 'edit'
+
   // Promote takes priority only when we actually have a target session to
   // inject into; otherwise the directive has no landing site and we fall
   // back to the edit/answer split.
@@ -79,7 +91,6 @@ export function classifyPlannerIntent(
     return 'promote'
   }
 
-  const hasEditVerb = EDIT_VERBS.some((re) => re.test(message))
   const looksInterrogative = INTERROGATIVE_HINTS.some((re) => re.test(message))
 
   // Pure question, no edit verb → answer-only. This is the bug fix: today
