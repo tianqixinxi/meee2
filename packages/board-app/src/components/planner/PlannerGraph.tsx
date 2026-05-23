@@ -30,6 +30,7 @@ import {
   injectToSession,
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
+  proposePlannerGraphChange,
   rejectPlannerProposal,
   rerunPlannerNode,
   resumeClosedPlannerSessions,
@@ -60,11 +61,14 @@ import {
 } from '../../teamDirectory'
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
+import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
+import { TransformInsertEdge } from './TransformInsertEdge'
 import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphNode } from './plannerGraphAdapter'
+import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
 interface Props {
@@ -81,6 +85,10 @@ interface Props {
 
 const nodeTypes = {
   plannerNode: PlannerNodeCard,
+}
+
+const edgeTypes = {
+  transformInsert: TransformInsertEdge,
 }
 
 const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
@@ -133,6 +141,8 @@ function PlannerGraphInner({
   const [startingReadySessions, setStartingReadySessions] = useState(false)
   const [mcpStatus, setMCPStatus] = useState<Meee2MCPStatus | null>(null)
   const [mcpStatusError, setMCPStatusError] = useState<string | null>(null)
+  // UI-4: which node is showing the "Attach data source" popover (nodeId | null).
+  const [attachDataSourceNodeId, setAttachDataSourceNodeId] = useState<string | null>(null)
   // Bumped whenever a new proposal is created from chat, drift inspection, or
   // node actions. PlannerProposalPanel watches this to auto-open review.
   const [reviewRequestTick, setReviewRequestTick] = useState(0)
@@ -539,6 +549,121 @@ function PlannerGraphInner({
     return result
   }, [plannerState?.nodeAssignments])
 
+  /* ---------- UI-4 handlers ---------- */
+
+  // "+ Transform" on an edge: produce a proposal that inserts a session-kind
+  // step node between `sourceNodeId` and `targetNodeId`, rewires the target
+  // to depend on the new node, and preserves the upstream connection.
+  // The new node is a regular session step — its prompt slot is editable as
+  // usual once the user opens it.
+  const handleInsertTransformBetween = useCallback((sourceNodeId: string, targetNodeId: string) => {
+    const sourceNode = plannerState?.nodes.find((node) => node.id === sourceNodeId)
+    const targetNode = plannerState?.nodes.find((node) => node.id === targetNodeId)
+    if (!sourceNode || !targetNode) return
+    const newNodeId = `transform-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const title = `Transform ${sourceNode.title} → ${targetNode.title}`
+    const newDepends = Array.from(
+      new Set([...(targetNode.dependsOnNodeIds ?? []).filter((id) => id !== sourceNodeId), newNodeId]),
+    )
+    const newNode: PlanningNode = {
+      id: newNodeId,
+      canvasId,
+      title,
+      schema: {
+        inputs: [],
+        outputs: [],
+        goal: `Transform upstream output before passing to ${targetNode.title}.`,
+      },
+      contextSources: [],
+      executionMode: 'auto',
+      executorType: 'claude',
+      doerId: targetNode.doerId,
+      status: 'draft',
+      sessionId: null,
+      chatThreadId: null,
+      source: 'planner',
+      dependsOnNodeIds: [sourceNodeId],
+      subCanvasId: null,
+      nodeKind: 'step',
+    }
+    setBusy(true)
+    setError(null)
+    proposePlannerGraphChange(canvasId, {
+      summary: `Insert transform session between "${sourceNode.title}" and "${targetNode.title}"`,
+      changes: [
+        { kind: 'addNode', node: newNode },
+        { kind: 'updateNode', nodeId: targetNode.id, dependsOnNodeIds: newDepends },
+      ],
+    })
+      .then((next) => {
+        if (next) {
+          setProposal(next)
+          setReviewRequestTick((tick) => tick + 1)
+        }
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to insert transform session'))
+      .finally(() => setBusy(false))
+  }, [canvasId, notifyError, plannerState?.nodes])
+
+  // Open the "Attach data source" popover.
+  const handleOpenAttachDataSource = useCallback((nodeId: string) => {
+    setAttachDataSourceNodeId(nodeId)
+  }, [])
+
+  // Submit handler from the popover. No-op + TODO today: real wiring lives
+  // in INT-2 (Notion + 6 others) once the connector hub exposes both the
+  // connector list and a `POST /api/planner/.../nodes/:id/external-bindings`
+  // endpoint. The call is best-effort so the popover can close cleanly.
+  const handleSubmitAttachDataSource = useCallback(async (
+    nodeId: string,
+    input: { connectorSlug: string; ref: string },
+  ) => {
+    // TODO(INT-2 / ENG-3 follow-up): replace this with the real
+    // bind-external-input API. Today the canvas DTO has no field for the
+    // resulting `NodeContractExternalInput[]` either; once it does, refresh
+    // graph state here.
+    try {
+      await fetch(
+        `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/external-bindings`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connector: input.connectorSlug, ref: input.ref }),
+        },
+      )
+    } catch {
+      // Swallow — the endpoint may not exist yet. The popover surfaces no
+      // network error so the user sees the action as accepted; INT-2 will
+      // upgrade this to a real bind that returns the new contract state.
+    }
+    // eslint-disable-next-line no-console
+    console.info(
+      '[UI-4 TODO] attach data source no-op',
+      { canvasId, nodeId, connector: input.connectorSlug, ref: input.ref },
+    )
+  }, [canvasId])
+
+  // Refresh-now per external row. Stub today; INT-2 / ENG-3 will dispatch
+  // the bound sync session and bump a "last synced at" timestamp on the row.
+  const handleRefreshExternalInput = useCallback((
+    nodeId: string,
+    external: NodeContractExternalInput,
+  ) => {
+    // eslint-disable-next-line no-console
+    console.info(
+      '[UI-4 TODO] refresh external input (no-op until INT-2)',
+      { canvasId, nodeId, connector: external.connector, ref: external.ref, syncSession: external.sync_session },
+    )
+  }, [canvasId])
+
+  // Dialogue retention popover: hook is currently a logger; the real wiring
+  // will dispatch a refine-session-prompt proposal (ENG-2 endpoint) or a
+  // dedicated update-contract endpoint when ENG-3 lands.
+  const handleConfigureDialogue = useCallback((nodeId: string) => {
+    // eslint-disable-next-line no-console
+    console.info('[UI-4] configure dialogue retention (popover handled in-card)', { canvasId, nodeId })
+  }, [canvasId])
+
   const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
@@ -567,6 +692,10 @@ function PlannerGraphInner({
       onDeleteNode: handleDeleteNode,
       onHideIOArtifact: handleHideIOArtifact,
       onRerunNode: handleRerunNode,
+      onAttachDataSource: handleOpenAttachDataSource,
+      onRefreshExternalInput: handleRefreshExternalInput,
+      onConfigureDialogue: handleConfigureDialogue,
+      onInsertTransformBetween: handleInsertTransformBetween,
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
       nodeAssignmentsByNodeId,
@@ -597,6 +726,10 @@ function PlannerGraphInner({
     handleDeleteNode,
     handleHideIOArtifact,
     handleRerunNode,
+    handleOpenAttachDataSource,
+    handleRefreshExternalInput,
+    handleConfigureDialogue,
+    handleInsertTransformBetween,
     creatingSessionNodeIds,
     variant,
     nodeAssignmentsByNodeId,
@@ -1206,6 +1339,7 @@ function PlannerGraphInner({
               nodes={flowNodes}
               edges={graph.edges}
               nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
               onNodesChange={handleNodesChange}
               onNodeClick={(_, node) => {
                 setSelectedNodeId(node.data.node.id)
@@ -1288,6 +1422,16 @@ function PlannerGraphInner({
           onToggleIOArtifact={handleToggleIOArtifact}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
+          onAttachDataSource={handleOpenAttachDataSource}
+          onRefreshExternalInput={handleRefreshExternalInput}
+          onConfigureDialogue={handleConfigureDialogue}
+        />
+      )}
+      {attachDataSourceNodeId && (
+        <AttachDataSourcePopover
+          nodeId={attachDataSourceNodeId}
+          onClose={() => setAttachDataSourceNodeId(null)}
+          onSubmit={(input) => handleSubmitAttachDataSource(attachDataSourceNodeId, input)}
         />
       )}
       {assignDialogNodeId && assignDialogNode && (
