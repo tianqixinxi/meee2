@@ -41,7 +41,7 @@ export function IntegrationsView(props: Props) {
         </div>
         <p>
           Integrations are not new Planner node types. They are readable output
-          sources for planner nodes. To use one in a workflow, open a node and
+          sources for planner nodes. To use one in a canvas, open a node and
           attach the chosen item as evidence — existing sessions are never
           auto-linked.
         </p>

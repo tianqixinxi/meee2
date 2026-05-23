@@ -1276,7 +1276,7 @@ function demoGithubPulls(): ExternalItemsResult {
     items: [
       {
         id: 'tianqixinxi/meee2#42',
-        title: '#42 Add planner graph workflow shell',
+        title: '#42 Add planner graph shell',
         subtitle: 'merged → main',
         reference: 'https://github.com/tianqixinxi/meee2/pull/42',
         suggestedArtifactKind: 'main-merge',

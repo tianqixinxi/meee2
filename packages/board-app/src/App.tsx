@@ -56,6 +56,7 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
+const WORKSPACE_RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
 // Minimum loading-overlay duration when an uncached canvas is hydrated.
 // Previously 3000ms — that made every fresh canvas switch feel sluggish even
 // when the real fetch returned in <100ms. 250ms is enough to smooth flicker
@@ -335,6 +336,7 @@ export default function App() {
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
+  const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -589,6 +591,15 @@ export default function App() {
     if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
   }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
+  const handleWorkspaceRailCollapsedChange = useCallback((collapsed: boolean) => {
+    setWorkspaceRailCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(WORKSPACE_RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      // Persistence is nice-to-have; keep the in-memory state.
+    }
+  }, [])
+
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
       .then(setUserProfile)
@@ -626,6 +637,8 @@ export default function App() {
           mode={workspaceMode}
           unreadSids={unreadSids}
           userProfile={userProfile}
+          collapsed={workspaceRailCollapsed}
+          onCollapsedChange={handleWorkspaceRailCollapsedChange}
           onModeChange={handleWorkspaceModeChange}
           onPreferences={() => setPreferencesOpen(true)}
         />
@@ -739,4 +752,16 @@ export default function App() {
       </div>
     </ToastContext.Provider>
   )
+}
+
+function readWorkspaceRailCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const stored = window.localStorage.getItem(WORKSPACE_RAIL_COLLAPSED_KEY)
+    if (stored === '1') return true
+    if (stored === '0') return false
+    return window.matchMedia('(max-width: 720px)').matches
+  } catch {
+    return false
+  }
 }

@@ -121,11 +121,24 @@
   position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--planner-panel-width, 420px);
+  grid-template-columns: var(--planner-chat-width, 420px) minmax(0, 1fr);
 }
 
 .planner-main--panel-collapsed {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.planner-empty-omni {
+  min-height: 0;
+  display: grid;
+  align-items: start;
+  justify-items: center;
+  overflow: auto;
+  padding: clamp(112px, 14vh, 148px) clamp(24px, 6vw, 96px) clamp(32px, 6vh, 72px);
+  background:
+    radial-gradient(circle at 24% 18%, rgba(204, 120, 92, 0.07), transparent 34%),
+    radial-gradient(circle at 84% 42%, rgba(203, 185, 120, 0.06), transparent 30%),
+    #252522;
 }
 
 .planner-flow {
@@ -294,6 +307,18 @@
 
 .planner-flow .react-flow {
   background: #252522;
+}
+
+.planner-workspace-preview {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  background: #252522;
+}
+
+.planner-workspace-preview .react-flow {
+  min-height: 0;
 }
 
 .planner-flow__edge .react-flow__edge-path {
@@ -1807,29 +1832,29 @@
   overflow: hidden;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  border-left: 1px solid rgba(168, 165, 155, 0.18);
+  border-right: 1px solid rgba(168, 165, 155, 0.18);
   background: rgba(35, 35, 32, 0.88);
 }
 
 .planner-dialog-toggle {
   position: absolute;
   top: 50%;
-  right: var(--planner-panel-width, 420px);
+  left: var(--planner-chat-width, 420px);
   transform: translateY(-50%);
   z-index: 30;
   width: 30px;
   height: 30px;
   padding: 0;
   border: 1px solid rgba(168, 165, 155, 0.2);
-  border-right: 0;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-left: 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: rgba(44, 43, 41, 0.96);
   color: var(--text-dim);
 }
 
 .planner-dialog-toggle.is-collapsed {
-  right: 12px;
-  border-right: 1px solid rgba(168, 165, 155, 0.2);
+  left: 12px;
+  border-left: 1px solid rgba(168, 165, 155, 0.2);
   border-radius: var(--radius-sm);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.26);
 }
@@ -1843,7 +1868,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -5px;
+  right: -5px;
   z-index: 3;
   width: 10px;
   padding: 0;
@@ -1858,7 +1883,7 @@
   position: absolute;
   top: 12px;
   bottom: 12px;
-  left: 4px;
+  right: 4px;
   width: 1px;
   background: rgba(168, 165, 155, 0.16);
   transition: background 120ms ease, box-shadow 120ms ease;
@@ -1930,6 +1955,34 @@
   background: rgba(38, 38, 36, 0.94);
 }
 
+.planner-proposal-panel--left-rail {
+  background: rgba(24, 24, 22, 0.98);
+}
+
+.planner-proposal-panel--omni {
+  width: min(980px, 100%);
+  height: auto;
+  max-height: none;
+  overflow: visible;
+  grid-template-rows: minmax(0, auto) auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.planner-proposal-panel.is-empty-mode .planner-dialog__messages {
+  padding-top: 28px;
+}
+
+.planner-proposal-panel--omni.is-empty-mode .planner-dialog__messages {
+  justify-items: stretch;
+  padding: 0 0 22px;
+}
+
+.planner-proposal-panel--omni .planner-dialog {
+  min-height: 0;
+}
+
 .planner-dialog {
   min-height: 0;
   display: grid;
@@ -1942,6 +1995,158 @@
   align-content: start;
   gap: 10px;
   padding: 18px 14px;
+}
+
+.planner-dialog__onboarding {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 8px;
+  background: rgba(245, 244, 239, 0.045);
+}
+
+.planner-proposal-panel--omni .planner-dialog__onboarding {
+  max-width: 980px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.planner-dialog__onboarding span {
+  color: color-mix(in srgb, var(--accent-hover) 72%, var(--text));
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.planner-dialog__onboarding strong {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 820;
+  line-height: 1.2;
+}
+
+.planner-proposal-panel--omni .planner-dialog__onboarding strong {
+  font-size: clamp(34px, 4.8vw, 58px);
+  letter-spacing: 0;
+}
+
+.planner-dialog__onboarding p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.planner-proposal-panel--omni .planner-dialog__onboarding p {
+  max-width: 760px;
+  font-size: 17px;
+  line-height: 1.48;
+}
+
+.planner-dialog__starter-suggestions {
+  display: grid;
+  gap: 8px;
+}
+
+.planner-proposal-panel--omni .planner-dialog__starter-suggestions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.planner-dialog__starter-heading {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.planner-dialog__starter-heading strong {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 780;
+  line-height: 1.2;
+}
+
+.planner-dialog__starter-heading span {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.planner-dialog__starter-suggestions button {
+  display: grid;
+  gap: 4px;
+  padding: 10px 11px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 8px;
+  background: rgba(245, 244, 239, 0.035);
+  color: var(--text);
+  text-align: left;
+}
+
+.planner-proposal-panel--omni .planner-dialog__starter-suggestions button {
+  min-height: 128px;
+  align-content: start;
+  padding: 18px;
+  border-color: rgba(168, 165, 155, 0.14);
+  background: rgba(245, 244, 239, 0.05);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+}
+
+.planner-template-preview {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(168, 165, 155, 0.13);
+}
+
+.planner-template-preview i {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  padding: 6px 8px 6px 22px;
+  border: 1px solid rgba(168, 165, 155, 0.12);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-template-preview i::before {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-hover) 64%, var(--text-faint));
+  content: "";
+  transform: translateY(-50%);
+}
+
+.planner-dialog__starter-suggestions button:hover {
+  border-color: rgba(204, 120, 92, 0.32);
+  background: rgba(204, 120, 92, 0.08);
+}
+
+.planner-dialog__starter-suggestions span {
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.planner-dialog__starter-suggestions small {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .planner-workflow-guide {
@@ -2444,6 +2649,14 @@
   background: rgba(35, 35, 32, 0.96);
 }
 
+.planner-proposal-panel--omni .planner-dialog__composer {
+  padding: 22px;
+  border: 1px solid rgba(168, 165, 155, 0.2);
+  border-radius: 12px;
+  background: rgba(38, 38, 36, 0.96);
+  box-shadow: 0 24px 58px rgba(0, 0, 0, 0.32);
+}
+
 .planner-dialog__selection {
   min-width: 0;
   display: inline-flex;
@@ -2563,6 +2776,33 @@
   height: 34px;
   padding: 0;
   border-radius: 999px;
+}
+
+.planner-proposal-panel.is-empty-mode .planner-dialog__composer textarea {
+  min-height: 136px;
+}
+
+.planner-proposal-panel--omni.is-empty-mode .planner-dialog__composer textarea {
+  min-height: 156px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 18px;
+  line-height: 1.48;
+}
+
+.planner-proposal-panel.is-empty-mode .planner-proposal-panel__buttons button {
+  width: auto;
+  min-width: 92px;
+  gap: 7px;
+  padding: 0 13px;
+}
+
+.planner-proposal-panel--omni.is-empty-mode .planner-proposal-panel__buttons button {
+  min-width: 116px;
+  height: 40px;
+  padding: 0 18px;
+  font-size: 14px;
 }
 
 .planner-proposal-panel__error,
@@ -3107,15 +3347,32 @@
 
   .planner-main {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) 320px;
+    grid-template-rows: 320px minmax(0, 1fr);
+  }
+
+  .planner-empty-omni {
+    align-items: start;
+    padding: 92px 18px 28px;
+  }
+
+  .planner-proposal-panel--omni {
+    max-height: none;
+  }
+
+  .planner-proposal-panel--omni .planner-dialog__starter-suggestions {
+    grid-template-columns: 1fr;
+  }
+
+  .planner-main--panel-collapsed {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .planner-side {
-    grid-row: 2;
+    grid-row: 1;
     grid-template-columns: 1fr;
     overflow: auto;
-    border-top: 1px solid rgba(168, 165, 155, 0.18);
-    border-left: 0;
+    border-right: 0;
+    border-bottom: 1px solid rgba(168, 165, 155, 0.18);
   }
 
   .planner-side__resize {
@@ -3123,8 +3380,8 @@
   }
 
   .planner-dialog-toggle {
-    right: 12px;
-    border-right: 1px solid rgba(168, 165, 155, 0.2);
+    left: 12px;
+    border-left: 1px solid rgba(168, 165, 155, 0.2);
     border-radius: var(--radius-sm);
   }
 
@@ -3205,7 +3462,23 @@
 
   .planner-main {
     min-height: 0;
-    grid-template-rows: minmax(360px, 58vh) minmax(300px, 42vh);
+    grid-template-rows: minmax(300px, 42vh) minmax(360px, 58vh);
+  }
+
+  .planner-empty-omni {
+    padding: 86px 12px 24px;
+  }
+
+  .planner-proposal-panel--omni .planner-dialog__onboarding strong {
+    font-size: 30px;
+  }
+
+  .planner-proposal-panel--omni .planner-dialog__onboarding p {
+    font-size: 14px;
+  }
+
+  .planner-main--panel-collapsed {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .planner-flow {
@@ -3250,17 +3523,12 @@
   .planner-side {
     grid-template-columns: 1fr;
     gap: 10px;
-    padding: 10px;
   }
 
   .planner-proposal-panel,
   .planner-states-list,
   .planner-states-summary {
     border-radius: 7px;
-  }
-
-  .planner-proposal-panel {
-    padding: 11px;
   }
 
   .planner-dialog__messages,

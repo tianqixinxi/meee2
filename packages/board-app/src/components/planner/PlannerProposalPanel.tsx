@@ -36,6 +36,10 @@ interface Props {
    *  (no canvas mutation). Adds the reply to history and force-expands it
    *  so the user sees the textual answer instead of an empty turn. */
   answerOnlyReply?: { id: number; markdown: string } | null
+  layout?: 'side' | 'left-rail' | 'omni'
+  emptyMode?: boolean
+  starterSuggestions?: PlannerChatChoice[]
+  autoFocus?: boolean
 }
 
 const reviewNodeTypes = {
@@ -61,6 +65,7 @@ interface PlannerChatChoice {
   label: string
   value: string
   description?: string
+  preview?: string[]
 }
 
 interface PlannerChatChoiceGroup {
@@ -95,6 +100,10 @@ export function PlannerProposalPanel({
   clearRevision = 0,
   reviewRequestTick,
   answerOnlyReply = null,
+  layout = 'side',
+  emptyMode = false,
+  starterSuggestions = [],
+  autoFocus = false,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const handledClearRevisionRef = useRef(0)
@@ -222,8 +231,14 @@ export function PlannerProposalPanel({
 
   // A node action just produced a proposal — surface it immediately.
   useEffect(() => {
+    if (layout === 'left-rail' || layout === 'omni') return
     if (reviewRequestTick && reviewRequestTick > 0) setReviewOpen(true)
-  }, [reviewRequestTick])
+  }, [layout, reviewRequestTick])
+
+  useEffect(() => {
+    if (!autoFocus) return
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [autoFocus, canvasId])
 
   useEffect(() => {
     if (!draftMessage) return
@@ -241,6 +256,11 @@ export function PlannerProposalPanel({
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
   const visibleHistory = history.slice(-VISIBLE_HISTORY_LIMIT)
   const hiddenHistoryCount = Math.max(0, history.length - visibleHistory.length)
+  const placeholder = emptyMode
+    ? 'Describe what you want this canvas to build...'
+    : hasActionableDrift
+      ? 'Ask meee2 AI what to fix, or send empty to inspect drift'
+      : 'Ask meee2 AI to adjust node inputs, outputs, artifacts, gates, or tasks'
   const submitMessage = () => {
     if (!canSend) return
     const next = message.trim()
@@ -264,10 +284,17 @@ export function PlannerProposalPanel({
   }
 
   return (
-    <aside className="planner-proposal-panel">
+    <aside className={`planner-proposal-panel planner-proposal-panel--${layout}${emptyMode ? ' is-empty-mode' : ''}`}>
       <div className="planner-dialog">
         <div className="planner-dialog__messages">
-          {templateRecommendation && !proposal && (
+          {emptyMode && !proposal && (
+            <div className="planner-dialog__onboarding" role="note">
+              <span>meee2 AI</span>
+              <strong>Great, let's start building together...</strong>
+              <p>Describe the product, research plan, operating loop, or session graph you want. I will ask follow-up questions when needed, then draft the canvas for review.</p>
+            </div>
+          )}
+          {templateRecommendation && !proposal && !(emptyMode && layout === 'omni') && (
             <RecommendedTemplate
               recommendation={templateRecommendation}
               busy={busy}
@@ -275,8 +302,33 @@ export function PlannerProposalPanel({
               onUse={onUseRecommendedTemplate}
             />
           )}
+          {emptyMode && layout !== 'omni' && starterSuggestions.length > 0 && !proposal && (
+            <div className="planner-dialog__starter-suggestions" aria-label="Starter suggestions">
+              {starterSuggestions.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  onClick={() => {
+                    setMessage(choice.value)
+                    window.requestAnimationFrame(() => textareaRef.current?.focus())
+                  }}
+                  title={choice.description}
+                >
+                  <span>{choice.label}</span>
+                  {choice.description && <small>{choice.description}</small>}
+                  {choice.preview && choice.preview.length > 0 && (
+                    <div className="planner-template-preview" aria-hidden>
+                      {choice.preview.map((item) => (
+                        <i key={item}>{item}</i>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
-          {history.length > 0 && (
+          {history.length > 0 && !(emptyMode && layout === 'omni' && !proposal) && (
             <div className={`planner-dialog__history${historyOpen ? ' is-open' : ''}`}>
               <button
                 type="button"
@@ -372,7 +424,7 @@ export function PlannerProposalPanel({
               submitMessage()
             }
           }}
-          placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to adjust node inputs, outputs, artifacts, gates, or tasks'}
+          placeholder={placeholder}
           rows={5}
         />
         <div className="planner-proposal-panel__buttons" aria-label="Send message">
@@ -385,9 +437,40 @@ export function PlannerProposalPanel({
             aria-label="Send to meee2 AI"
           >
             <Send size={14} aria-hidden />
+            {emptyMode && <span>Build it</span>}
           </button>
         </div>
       </div>
+
+      {emptyMode && layout === 'omni' && starterSuggestions.length > 0 && !proposal && (
+        <div className="planner-dialog__starter-suggestions" aria-label="Starter suggestions">
+          <div className="planner-dialog__starter-heading">
+            <strong>Official templates</strong>
+            <span>Start from a recommended structure, then let me adapt it to this canvas.</span>
+          </div>
+          {starterSuggestions.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              onClick={() => {
+                setMessage(choice.value)
+                window.requestAnimationFrame(() => textareaRef.current?.focus())
+              }}
+              title={choice.description}
+            >
+              <span>{choice.label}</span>
+              {choice.description && <small>{choice.description}</small>}
+              {choice.preview && choice.preview.length > 0 && (
+                <div className="planner-template-preview" aria-hidden>
+                  {choice.preview.map((item) => (
+                    <i key={item}>{item}</i>
+                  ))}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {reviewOpen && proposal && (
         <div
@@ -864,7 +947,7 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     ].join('\n')
   }
   return [
-    'Ask meee2 AI to adjust the workflow in the box below.',
+    'Ask meee2 AI to adjust the canvas plan in the box below.',
     '',
     'Natural language changes to a node schema, inputs, outputs, artifacts, gates, or task requirements become a proposal you can review and approve.',
     '',
