@@ -1576,6 +1576,7 @@ function PlannerGraphInner({
           {showWorkspacePreview && activeProposal ? (
             <PlannerWorkspacePreview
               graph={reviewGraph}
+              proposal={activeProposal}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -2130,11 +2131,18 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 
 function PlannerWorkspacePreview({
   graph,
+  proposal,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
+  proposal: PlanProposal
 }) {
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview">
+      <div className="planner-workspace-preview__notice" role="status">
+        <span>Preview only</span>
+        <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
+        <em>Review and apply from the modal before these nodes become the real canvas.</em>
+      </div>
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}
