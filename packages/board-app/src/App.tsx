@@ -10,6 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
+import { ArtifactsView } from './components/ArtifactsView'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -608,7 +609,6 @@ export default function App() {
     )
   }
 
-  const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
   const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
   const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
@@ -653,6 +653,15 @@ export default function App() {
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} unreadSids={unreadSids} />
+          ) : workspaceMode === 'artifacts' ? (
+            <ArtifactsView
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              onOpenCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView
               state={boardState.state}
@@ -662,11 +671,7 @@ export default function App() {
               }}
             />
           ) : workspaceMode === 'team' ? (
-            <TeamView
-              state={boardState.state}
-              activeCanvas={activeCanvas ?? null}
-              userProfile={userProfile}
-            />
+            <TeamView userProfile={userProfile} />
           ) : (
             <WorkspaceMonitor />
           )}

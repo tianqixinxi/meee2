@@ -288,15 +288,30 @@ export function CanvasToolbar({
 
         {menuOpen && (
           <div className="canvas-toolbar__panel">
-            <label className="canvas-toolbar__search">
-              <Search size={13} aria-hidden />
-              <input
-                value={canvasQuery}
-                onChange={(event) => setCanvasQuery(event.target.value)}
-                placeholder="Find canvas"
-                autoFocus
-              />
-            </label>
+            <div className="canvas-toolbar__menu-tools">
+              <button
+                type="button"
+                className="canvas-toolbar__new-canvas"
+                onClick={() => {
+                  setCanvasNameDraft('')
+                  setCanvasScopeDraft('personal')
+                  setDeleteConfirming(false)
+                  setCreating(true)
+                  setMenuOpen(false)
+                }}
+              >
+                <Plus size={13} aria-hidden /> New
+              </button>
+              <label className="canvas-toolbar__search">
+                <Search size={13} aria-hidden />
+                <input
+                  value={canvasQuery}
+                  onChange={(event) => setCanvasQuery(event.target.value)}
+                  placeholder="Find canvas"
+                  autoFocus
+                />
+              </label>
+            </div>
             <div className="canvas-toolbar__list">
               {filteredCanvases.map((canvas) => {
                 const selected = canvas.id === activeCanvas.id
@@ -327,32 +342,6 @@ export function CanvasToolbar({
               {filteredCanvases.length === 0 && (
                 <div className="canvas-toolbar__empty">No matching canvas</div>
               )}
-            </div>
-            <div className="canvas-toolbar__actions">
-              <button
-                type="button"
-                onClick={() => {
-                  setCanvasNameDraft('')
-                  setCanvasScopeDraft('personal')
-                  setDeleteConfirming(false)
-                  setCreating(true)
-                  setMenuOpen(false)
-                }}
-              >
-                <Plus size={13} aria-hidden /> New private
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setCanvasNameDraft('')
-                  setCanvasScopeDraft('team')
-                  setDeleteConfirming(false)
-                  setCreating(true)
-                  setMenuOpen(false)
-                }}
-              >
-                <Plus size={13} aria-hidden /> New public
-              </button>
             </div>
           </div>
         )}

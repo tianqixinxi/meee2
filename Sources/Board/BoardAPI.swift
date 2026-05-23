@@ -1650,7 +1650,7 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
         }
         do {
-            let result = try PlannerBoardBridge.submitNodeOutput(
+            var result = try PlannerBoardBridge.submitNodeOutput(
                 nodeId: nodeId,
                 output: output,
                 for: canvasId,
@@ -1663,8 +1663,12 @@ enum BoardAPI {
             // stays put. The dispatch state is already persisted by the
             // store (see PlannerBoardBridge.submitNodeOutput), this just
             // materializes the terminal so the session actually runs.
+            var autoSpawnStarted = 0
+            var autoSpawnSkipped: [String] = []
+            var autoSpawnFailed: [String] = []
             for autoNodeId in result.autoDispatchedNodeIds ?? [] {
                 guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
+                    autoSpawnSkipped.append("\(autoNodeId): missing node")
                     continue
                 }
                 do {
@@ -1673,7 +1677,10 @@ enum BoardAPI {
                         node: node,
                         cwdOverride: nil
                     )
-                    guard let spawnReq = spawnRequest else { continue }
+                    guard let spawnReq = spawnRequest else {
+                        autoSpawnSkipped.append("\(autoNodeId): no spawn request")
+                        continue
+                    }
                     switch startTerminalSession(
                         cwd: spawnReq.cwd,
                         command: spawnReq.command,
@@ -1682,13 +1689,27 @@ enum BoardAPI {
                         createInBackground: true
                     ) {
                     case .success:
+                        autoSpawnStarted += 1
                         NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) background=true")
                     case .failed(let reason):
+                        autoSpawnFailed.append("\(autoNodeId): \(reason)")
                         NSLog("[ENG-2][auto-spawn] failed node=\(autoNodeId) reason=\(reason)")
                     }
                 } catch {
+                    autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
                     NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
                 }
+            }
+            if let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty {
+                var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
+                if !autoSpawnSkipped.isEmpty {
+                    parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
+                }
+                if !autoSpawnFailed.isEmpty {
+                    parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
+                }
+                result.hint = parts.joined(separator: " ")
+                NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
             }
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
@@ -2347,7 +2368,8 @@ enum BoardAPI {
             "",
             "External tools:",
             "- If the node requires an external system such as Lark, GitHub, Linear, or a database, use the relevant available MCP/tool for that system.",
-            "- Regardless of external tools used, structured planner results must be written back through Meee2 MCP."
+            "- Regardless of external tools used, structured planner results must be written back through Meee2 MCP.",
+            "- If the node contract needs different inputs, outputs, artifact slots, gates, or task requirements, ask for a planner graph change through Meee2 rather than only editing local notes."
         ]
         if !node.schema.inputs.isEmpty {
             lines.append("")
