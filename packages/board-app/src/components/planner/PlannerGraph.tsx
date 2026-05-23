@@ -26,6 +26,7 @@ import {
   fetchState,
   fetchTeamMembers,
   generatePlannerProposal,
+  injectToSession,
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
   rejectPlannerProposal,
@@ -53,6 +54,8 @@ import {
   teamAvatarUrlByUserId,
   teamDisplayNameByUserId,
 } from '../../teamDirectory'
+import { classifyPlannerIntent } from '../../lib/plannerIntent'
+import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
@@ -129,6 +132,9 @@ function PlannerGraphInner({
   // Bumped whenever a new proposal is created from chat, drift inspection, or
   // node actions. PlannerProposalPanel watches this to auto-open review.
   const [reviewRequestTick, setReviewRequestTick] = useState(0)
+  // ENG-5: when the heuristic decides the user's message is a question, we
+  // push an answer-only reply to the panel instead of generating a proposal.
+  const [answerOnlyReply, setAnswerOnlyReply] = useState<{ id: number; markdown: string } | null>(null)
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -815,7 +821,13 @@ function PlannerGraphInner({
         setPlannerState((current) => current && next
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
-        if (next) setReviewRequestTick((tick) => tick + 1)
+        if (next) {
+          setReviewRequestTick((tick) => tick + 1)
+          // ENG-5: emit canvas_mutated telemetry every time we land a proposal
+          // through the chat composer — this is the signal we want to compare
+          // against revert/30s to validate the heuristic.
+          emitPlannerEvent('planner.canvas_mutated', { canvasId, message: goal, intent: 'edit' })
+        }
       })
       .catch((err) => setError((err as Error).message || 'Failed to generate meee2 AI proposal'))
       .finally(() => setBusy(false))
@@ -836,7 +848,10 @@ function PlannerGraphInner({
                 setPlannerState((current) => current && generated
                   ? { ...current, proposals: upsertProposal(current.proposals, generated) }
                   : current)
-                if (generated) setReviewRequestTick((tick) => tick + 1)
+                if (generated) {
+                  setReviewRequestTick((tick) => tick + 1)
+                  emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed, intent: 'inspect' })
+                }
               })
             }
             setError('No blocked or draft state found.')
@@ -847,6 +862,7 @@ function PlannerGraphInner({
             ? { ...current, proposals: upsertProposal(current.proposals, next) }
             : current)
           setReviewRequestTick((tick) => tick + 1)
+          emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed || '(drift)', intent: 'inspect' })
           return undefined
         })
         .catch((err) => setError((err as Error).message || 'Failed to inspect meee2 AI drift'))
@@ -855,8 +871,58 @@ function PlannerGraphInner({
     }
 
     if (!trimmed) return
+
+    // ENG-5: classify the user's intent before deciding whether to mutate the
+    // canvas. Three new outcomes vs the original "always mutate":
+    //   - 'answer'  → push a text reply to the panel, do not call generate.
+    //   - 'promote' → inject the directive into the selected node's bound
+    //                 session prompt (no schema mutation).
+    //   - 'edit'    → existing generate-proposal path.
+    const intent = classifyPlannerIntent(trimmed, {
+      hasSelectedNodeWithSession: Boolean(selectedNode?.sessionId?.trim()),
+    })
+
+    if (intent === 'answer') {
+      // Don't bulldoze the canvas. Surface a short clarification in the
+      // chat panel so the user can decide whether to re-ask with an edit
+      // verb. The panel auto-expands on first reply (see PlannerProposalPanel).
+      emitPlannerEvent('planner.answer_only', { canvasId, message: trimmed, intent: 'answer' })
+      const markdown = answerOnlyClarification(trimmed)
+      setAnswerOnlyReply({ id: Date.now(), markdown })
+      return
+    }
+
+    if (intent === 'promote' && selectedNode?.sessionId) {
+      // Refine an existing session's prompt instead of reshaping the schema.
+      // This is the "在这个 session NODE 里面去做 promote 的注入" path that
+      // the spec calls out — today there is no dedicated planner-engine API
+      // for this, so we route through the operator-channel inject endpoint
+      // (the same one used to deliver initial spawn prompts).
+      const sessionId = selectedNode.sessionId
+      const nodeId = selectedNode.id
+      setBusy(true)
+      setError(null)
+      injectToSession(sessionId, trimmed)
+        .then(() => {
+          emitPlannerEvent('planner.promote_into_session_prompt', {
+            canvasId,
+            nodeId,
+            sessionId,
+            intent: 'promote',
+            message: trimmed,
+          })
+          setAnswerOnlyReply({
+            id: Date.now(),
+            markdown: `Injected into the session prompt for **${selectedNode.title}** (session \`${sessionId.slice(0, 8)}\`). The schema is unchanged.`,
+          })
+        })
+        .catch((err) => setError((err as Error).message || 'Failed to inject prompt into session'))
+        .finally(() => setBusy(false))
+      return
+    }
+
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal])
+  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal, selectedNode])
 
   const handleUseRecommendedTemplate = useCallback(() => {
     setBusy(true)
@@ -921,6 +987,10 @@ function PlannerGraphInner({
     if (!proposal) return
     setBusy(true)
     setError(null)
+    // ENG-5: track quick reverts. If the user rejects a proposal within 30s
+    // of it landing, we emit `planner.user_revert_within_30s` — this is the
+    // signal the spec asks for to validate the answer-vs-edit heuristic.
+    reportPlannerRevert(canvasId, { reason: 'rejected_proposal' })
     rejectPlannerProposal(canvasId, proposal.id)
       .then((next) => {
         if (!next) return
@@ -937,6 +1007,8 @@ function PlannerGraphInner({
   // PlanProposal. Thread it into the same proposal state the generate / drift /
   // AI-dialog flows feed, so the user lands in the existing approve/apply gate.
   const handleNodeActionProposal = useCallback((next: PlanProposal) => {
+    // ENG-5: node-action proposals also mutate the canvas — count them.
+    emitPlannerEvent('planner.canvas_mutated', { canvasId, intent: 'edit', reason: 'node_action' })
     setProposal(next)
     setPlannerState((current) => current
       ? { ...current, proposals: upsertProposal(current.proposals, next) }
@@ -1093,6 +1165,7 @@ function PlannerGraphInner({
               draftMessage={plannerDraftMessage}
               clearRevision={clearRevision}
               reviewRequestTick={reviewRequestTick}
+              answerOnlyReply={answerOnlyReply}
             />
           </div>
         )}
@@ -1255,6 +1328,22 @@ function compactPlanningNode(node: PlanningNode) {
 
 function clampPanelWidth(width: number): number {
   return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(width)))
+}
+
+// ENG-5: answer-only reply body. We don't have a full LLM round-trip on this
+// path — we deliberately keep the canvas untouched. The reply explains what
+// the heuristic decided and tells the user how to escalate to an actual
+// edit if they really did want one. This is a placeholder until a textual
+// answer-only LLM call is wired in (TODO: route through `/api/llm/chat`
+// without the proposal-generation system prompt).
+function answerOnlyClarification(message: string): string {
+  return [
+    'I read your message as a **question** about the current graph, not a request to change it, so I did not modify the canvas.',
+    '',
+    `> ${message.replace(/\n/g, ' ')}`,
+    '',
+    'If you want me to actually edit the graph, re-send with an explicit verb — e.g. "add a review step", "rename node X to …", "split this node into …", "改成 …", "加一个 …".',
+  ].join('\n')
 }
 
 function shouldInspectDrift(
