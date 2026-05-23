@@ -4,6 +4,7 @@ import {
   ExternalLink,
   FileText,
   Layers,
+  RefreshCw,
   Route,
   Signpost,
   Sparkles,
@@ -15,6 +16,7 @@ import {
   proposePlannerGraphChange,
   updatePlannerNodeSchedule,
 } from '../../api'
+import { loadSpawnProvider } from '../../preferences'
 import type { TeamMember } from '../../api'
 import type {
   NodeContractExternalInput,
@@ -22,6 +24,7 @@ import type {
   PlanProposal,
   PlannerAccess,
   PlannerArtifact,
+  PlannerDispatchRunner,
   PlannerGraphState,
   PlanningNode,
 } from '../../types'
@@ -41,7 +44,8 @@ interface Props {
   onOpenSubCanvas?: (canvasId: string) => void
   onProposalCreated?: (proposal: PlanProposal) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
-  onSendToAI?: (message: string) => void
+  onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
+  onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -72,6 +76,7 @@ export function NodeInspectorModal({
   onProposalCreated,
   onGraphStateChanged,
   onSendToAI,
+  onReplaceSession,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
@@ -81,6 +86,7 @@ export function NodeInspectorModal({
 }: Props) {
   const [assignOpen, setAssignOpen] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
   const [scheduleInterval, setScheduleInterval] = useState(() => String(Math.max(1, Math.round((node.schedule?.intervalSeconds ?? 900) / 60))))
   const [schedulePrompt, setSchedulePrompt] = useState(() => node.schedule?.prompt ?? defaultSchedulePrompt(node))
   const [actionBusy, setActionBusy] = useState(false)
@@ -139,7 +145,12 @@ export function NodeInspectorModal({
   }
 
   const sendNodeActionToAI = (operation: 'revise' | 'expand-sub-canvas') => {
-    onSendToAI?.(buildNodeActionPrompt(node, operation))
+    onSendToAI?.(buildNodeActionPrompt(node, operation), {
+      visibleText: operation === 'revise'
+        ? 'Revise this node with me.'
+        : 'Expand this node into a sub-canvas with me.',
+      contextLabel: `Node: ${node.title}`,
+    })
     onClose()
   }
 
@@ -201,6 +212,23 @@ export function NodeInspectorModal({
           <InfoTile label="Type" value={nodeKind} />
         </div>
 
+        {canUseStepActions && (
+          <div className="planner-node-modal__ai-callout">
+            <div>
+              <span><Sparkles size={12} aria-hidden /> meee2 AI</span>
+              <strong>Revise this node with AI</strong>
+            </div>
+            <button
+              type="button"
+              className="primary"
+              disabled={actionBusy}
+              onClick={() => sendNodeActionToAI('revise')}
+            >
+              <Sparkles size={13} aria-hidden /> Revise
+            </button>
+          </div>
+        )}
+
         <div className="planner-node-modal__section">
           <h3><Route size={13} aria-hidden /> Inputs</h3>
           <InputCardSections
@@ -243,14 +271,6 @@ export function NodeInspectorModal({
             <div className="planner-node-actions__buttons">
               <button
                 type="button"
-                className="primary"
-                disabled={actionBusy}
-                onClick={() => sendNodeActionToAI('revise')}
-              >
-                <Sparkles size={12} aria-hidden /> Revise with AI
-              </button>
-              <button
-                type="button"
                 disabled={actionBusy}
                 onClick={() => sendNodeActionToAI('expand-sub-canvas')}
               >
@@ -280,7 +300,47 @@ export function NodeInspectorModal({
               >
                 <CalendarClock size={12} aria-hidden /> Schedule session
               </button>
+              {node.sessionId && onReplaceSession && (
+                <button
+                  type="button"
+                  className="planner-node-actions__danger"
+                  disabled={actionBusy}
+                  onClick={() => {
+                    setActionError(null)
+                    setReplaceConfirmOpen((value) => !value)
+                  }}
+                >
+                  <RefreshCw size={12} aria-hidden /> Replace session
+                </button>
+              )}
             </div>
+            {replaceConfirmOpen && node.sessionId && (
+              <div className="planner-node-actions__panel planner-node-actions__panel--danger">
+                <div className="planner-node-actions__warning">
+                  <AlertTriangle size={14} aria-hidden />
+                  <div>
+                    <strong>Replace the bound session?</strong>
+                    <p>This detaches the current session and starts a new one for this node. Keep the old session only if you still need its context.</p>
+                  </div>
+                </div>
+                <div className="planner-node-modal__input-editor-actions">
+                  <button type="button" disabled={actionBusy} onClick={() => setReplaceConfirmOpen(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="primary danger"
+                    disabled={actionBusy}
+                    onClick={() => {
+                      onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))
+                      onClose()
+                    }}
+                  >
+                    Replace session
+                  </button>
+                </div>
+              </div>
+            )}
             {scheduleOpen && (
               <div className="planner-node-actions__panel planner-node-actions__panel--schedule">
                 <label>
@@ -470,6 +530,12 @@ function buildNodeActionPrompt(node: PlanningNode, operation: 'revise' | 'expand
       ? 'Revise this node with me.'
       : 'Expand this node into a sub-canvas with me.',
   ].join('\n')
+}
+
+function dispatchRunnerForNode(executorType: PlanningNode['executorType']): PlannerDispatchRunner {
+  if (executorType === 'codex') return 'codex'
+  if (executorType === 'claude') return 'claude'
+  return loadSpawnProvider()
 }
 
 function defaultSchedulePrompt(node: PlanningNode): string {

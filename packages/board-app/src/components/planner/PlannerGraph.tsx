@@ -159,7 +159,7 @@ function PlannerGraphInner({
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string } | null>(null)
+  const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string; visibleText?: string; contextLabel?: string } | null>(null)
   const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
   const [sessionHealthBoardState, setSessionHealthBoardState] = useState<BoardState | null>(boardState)
   const [resumingClosedSessions, setResumingClosedSessions] = useState(false)
@@ -884,11 +884,14 @@ function PlannerGraphInner({
     window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
   }, [plannerPanelCollapsed])
 
+  const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
-    if (!plannerState || graph.nodes.length === 0) return undefined
+    if (!loadedPlannerCanvasId || loadedPlannerCanvasId !== canvasId || graph.nodes.length === 0) return undefined
     // UI-5.2 — when the user enabled "Lock viewport on switch" and we have a
     // saved pose for this canvas, do not auto-re-center on node-count / panel-
-    // width changes. Pan/zoom stays exactly where the user left it.
+    // width changes. Pan/zoom stays exactly where the user left it. Keep this
+    // keyed to stable layout signals instead of the whole plannerState object:
+    // background status refreshes must not steal the user's zoomed-in view.
     if (lockViewportOnSwitch && loadPlannerViewport(canvasId)) return undefined
     const timer = window.setTimeout(() => {
       if (window.matchMedia('(max-width: 720px)').matches) {
@@ -898,7 +901,7 @@ function PlannerGraphInner({
       reactFlow.fitView({ padding: 0.14, duration: 220 })
     }, 180)
     return () => window.clearTimeout(timer)
-  }, [graph.nodes.length, plannerPanelCollapsed, plannerState, reactFlow, lockViewportOnSwitch, canvasId])
+  }, [graph.nodes.length, plannerPanelCollapsed, loadedPlannerCanvasId, reactFlow, lockViewportOnSwitch, canvasId])
 
   useEffect(() => {
     window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
@@ -955,7 +958,6 @@ function PlannerGraphInner({
     window.addEventListener('pointerup', onPointerUp)
   }, [plannerPanelWidth])
 
-  const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
     if (!plannerState || loadedPlannerCanvasId !== canvasId || fitViewCanvasRef.current === canvasId) return
     fitViewCanvasRef.current = canvasId
@@ -1243,7 +1245,13 @@ function PlannerGraphInner({
           })
           setAnswerOnlyReply({
             id: Date.now(),
-            markdown: `Injected into the session prompt for **${selectedNode.title}** (session \`${sessionId.slice(0, 8)}\`). The schema is unchanged.`,
+            markdown: [
+              `Injected into the session prompt for **${selectedNode.title}** (session \`${sessionId.slice(0, 8)}\`).`,
+              '',
+              'The session can use meee2 MCP to read its node contract and write back schema-aware artifacts with `submit_node_output`; file artifacts should use `payload.file.path` so meee2 can copy them into the artifact store.',
+              '',
+              'If you want to change this node\'s inputs, outputs, artifact slots, gate, or task requirements, ask meee2 AI for that change here and it will create a graph proposal instead of only injecting the live session.',
+            ].join('\n'),
           })
         })
         .catch((err) => setError((err as Error).message || 'Failed to inject prompt into session'))
@@ -1347,9 +1355,9 @@ function PlannerGraphInner({
     setReviewRequestTick((tick) => tick + 1)
   }, [])
 
-  const handleSendNodeActionToAI = useCallback((message: string) => {
+  const handleSendNodeActionToAI = useCallback((message: string, display?: { visibleText?: string; contextLabel?: string }) => {
     setPlannerPanelCollapsed(false)
-    setPlannerDraftMessage({ id: Date.now(), text: message })
+    setPlannerDraftMessage({ id: Date.now(), text: message, ...display })
     setNodeModalOpen(false)
   }, [])
 
@@ -1357,6 +1365,21 @@ function PlannerGraphInner({
     '--planner-panel-width': `${plannerPanelWidth}px`,
   } as CSSProperties
   const mcpWarning = mcpStatusError || (mcpStatus && !mcpStatus.launches ? mcpStatus.error || 'Meee2 MCP is not available.' : null)
+  const hasSessionActionBanner = readySessionPlan.total > 0 || closedBoundSessions.length > 0
+  const sessionActionBannerTitle = [
+    readySessionPlan.total > 0
+      ? `${readySessionPlan.total} ready node${readySessionPlan.total === 1 ? '' : 's'} can start`
+      : null,
+    closedBoundSessions.length > 0
+      ? `${closedBoundSessions.length} bound session${closedBoundSessions.length === 1 ? '' : 's'} closed`
+      : null,
+  ].filter(Boolean).join(' · ')
+  const readySessionActionSummary = readySessionPlan.total > 0
+    ? `${readySessionPlan.create.length} create${readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}`
+    : null
+  const closedBoundSessionSummary = closedBoundSessions.length > 0
+    ? `${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
+    : null
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
@@ -1373,27 +1396,44 @@ function PlannerGraphInner({
           {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
         </button>
         <div className="planner-flow">
-          {(readySessionPlan.total > 0 || mcpWarning || closedBoundSessions.length > 0) && (
+          {(hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
-              {readySessionPlan.total > 0 && (
-                <div className="planner-mcp-banner planner-ready-session-banner" role="status">
-                  <PlayCircle size={16} aria-hidden />
+              {hasSessionActionBanner && (
+                <div
+                  className={`planner-mcp-banner planner-session-action-banner${closedBoundSessions.length > 0 ? ' is-warning' : ' is-ready'}`}
+                  role="status"
+                >
+                  {closedBoundSessions.length > 0
+                    ? <AlertTriangle size={16} aria-hidden />
+                    : <PlayCircle size={16} aria-hidden />}
                   <div className="planner-mcp-banner__copy">
-                    <strong>{readySessionPlan.total} ready node{readySessionPlan.total === 1 ? '' : 's'} can start</strong>
-                    <span>
-                      {readySessionPlan.create.length} create
-                      {readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}
-                    </span>
-                    <em>Creates missing sessions and resumes closed bound sessions for ready steps.</em>
+                    <strong>{sessionActionBannerTitle}</strong>
+                    {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
+                    {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
+                    <em>Creates missing sessions and resumes preserved session bindings.</em>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleStartReadySessions}
-                    disabled={startingReadySessions}
-                  >
-                    <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
-                    Start ready
-                  </button>
+                  <div className="planner-session-action-banner__actions">
+                    {readySessionPlan.total > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleStartReadySessions}
+                        disabled={startingReadySessions}
+                      >
+                        <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
+                        Start ready
+                      </button>
+                    )}
+                    {closedBoundSessions.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleResumeClosedSessions}
+                        disabled={resumingClosedSessions}
+                      >
+                        <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
+                        Resume all
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
               {mcpWarning && (
@@ -1409,27 +1449,6 @@ function PlannerGraphInner({
                   </div>
                   <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
                     <RefreshCw size={14} aria-hidden />
-                  </button>
-                </div>
-              )}
-              {closedBoundSessions.length > 0 && (
-                <div className="planner-mcp-banner planner-session-health-banner" role="status">
-                  <AlertTriangle size={16} aria-hidden />
-                  <div className="planner-mcp-banner__copy">
-                    <strong>{closedBoundSessions.length} bound session{closedBoundSessions.length === 1 ? '' : 's'} closed</strong>
-                    <span>
-                      {closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}
-                      {closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}
-                    </span>
-                    <em>Bindings are preserved. Resume the existing session instead of replacing the node binding.</em>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleResumeClosedSessions}
-                    disabled={resumingClosedSessions}
-                  >
-                    <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
-                    Resume all
                   </button>
                 </div>
               )}
@@ -1543,6 +1562,7 @@ function PlannerGraphInner({
           }
           access={plannerState?.access ?? null}
           teamMembers={teamMembers}
+          onReplaceSession={handleReplaceNodeSession}
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
           onSendToAI={handleSendNodeActionToAI}
