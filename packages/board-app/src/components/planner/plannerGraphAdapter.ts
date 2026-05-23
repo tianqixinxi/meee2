@@ -41,6 +41,9 @@ export interface PlannerNodeData extends Record<string, unknown> {
   sourceNodeId?: string
   ioItem?: string
   inputReference?: string | null
+  /** UI-1 · Canvas id surfaced to the card so the version dropdown can call
+   *  the artifact-versions endpoints without bubbling up. */
+  canvasId?: string
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
@@ -54,6 +57,8 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  /** UI-1 · Re-run a node by appending a new artifact version. */
+  onRerunNode?: (nodeId: string, reference?: string) => void
   creatingSession?: boolean
   showResponsibleInfo?: boolean
 }
@@ -69,6 +74,9 @@ interface PlannerGraphInput {
   proposal?: PlanProposal | null
   ownerId?: string
   mode: PlannerGraphMode
+  /** UI-1 · Canvas id passed straight through to every node card so the
+   *  version dropdown / re-run button can address the right canvas. */
+  canvasId?: string
   /** nodeId → run state, from the run being viewed (Run mode only). */
   runNodeStates?: Record<string, RunNodeState>
   ioArtifactVisibility?: Record<string, IOArtifactVisibility>
@@ -87,6 +95,7 @@ interface PlannerGraphInput {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  onRerunNode?: (nodeId: string, reference?: string) => void
   creatingSessionNodeIds?: Set<string>
   showResponsibleInfo?: boolean
 }
@@ -146,6 +155,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
           input.avatarUrlByUserId,
         ),
         virtual: false,
+        canvasId: input.canvasId,
         onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
         onOpenKanbanItem: input.onOpenKanbanItem,
@@ -157,6 +167,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onReplaceSession: input.onReplaceSession,
         onCancelSessionCreation: input.onCancelSessionCreation,
         onDeleteNode: input.onDeleteNode,
+        onRerunNode: input.onRerunNode,
         creatingSession: input.creatingSessionNodeIds?.has(node.id) ?? false,
         showResponsibleInfo: input.showResponsibleInfo ?? true,
       },

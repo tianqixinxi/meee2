@@ -30,6 +30,7 @@ import {
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
   rejectPlannerProposal,
+  rerunPlannerNode,
   resumeClosedPlannerSessions,
   sendPlannerActivity,
   updatePlannerNodeGate,
@@ -271,6 +272,18 @@ function PlannerGraphInner({
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError, plannerState?.nodes])
 
+  // UI-1 · Re-run the node by asking the desktop to append a fresh artifact
+  // version (force_new_version: true). The state refresh shows the new entry
+  // at the top of the version dropdown within one broadcast tick.
+  const handleRerunNode = useCallback((nodeId: string, reference?: string) => {
+    setBusy(true)
+    setError(null)
+    rerunPlannerNode(canvasId, nodeId, reference ? { reference } : undefined)
+      .then((result) => handleGraphStateChanged(result.graph))
+      .catch((err) => notifyError((err as Error).message || 'Failed to re-run node'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
   const handleChangeNodeGateMode = useCallback((nodeId: string, mode: 'human' | 'auto') => {
     const node = plannerState?.nodes.find((item) => item.id === nodeId)
     if (!node || gateModeForPlanningNode(node) === mode) return
@@ -473,6 +486,7 @@ function PlannerGraphInner({
       proposal: null,
       ownerId: plannerState?.canvas.ownerId,
       mode: 'design',
+      canvasId,
       runNodeStates: undefined,
       ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,
@@ -490,6 +504,7 @@ function PlannerGraphInner({
       onCancelSessionCreation: handleCancelNodeSessionCreation,
       onDeleteNode: handleDeleteNode,
       onHideIOArtifact: handleHideIOArtifact,
+      onRerunNode: handleRerunNode,
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
     })
@@ -500,6 +515,7 @@ function PlannerGraphInner({
     plannerState?.artifacts,
     plannerState?.canvas.ownerId,
     plannerState?.canvas.visibility,
+    canvasId,
     ioArtifactVisibility,
     teamDirectory,
     handleOpenNodeDetails,
@@ -514,6 +530,7 @@ function PlannerGraphInner({
     handleCancelNodeSessionCreation,
     handleDeleteNode,
     handleHideIOArtifact,
+    handleRerunNode,
     creatingSessionNodeIds,
     variant,
   ])
@@ -528,6 +545,7 @@ function PlannerGraphInner({
       proposal,
       ownerId: plannerState.canvas.ownerId,
       mode: 'design',
+      canvasId,
       runNodeStates: undefined,
       ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,

@@ -445,6 +445,38 @@ export interface PlannerArtifactContent {
   payload?: unknown
 }
 
+// ENG-3 · Artifact version chain — every submit_node_output appends a new
+// version row keyed by (canvasId, nodeId, normalized reference). The desktop
+// exposes these through `/api/planner/canvases/:id/nodes/:nodeId/artifact-versions`
+// and `/api/planner/canvases/:id/artifact-versions/:versionId`. UI-1 consumes
+// them for the version dropdown.
+export type PlannerArtifactDisplayStrategy = 'latest' | 'merged_view'
+export type PlannerArtifactVersionSubmitterKind = 'agent' | 'human' | 'system' | 'integration'
+
+export interface PlannerArtifactInputSnapshot {
+  upstream_artifact_ref?: string | null
+  external_outputs?: unknown[]
+  dialogue_window?: unknown
+}
+
+export interface PlannerArtifactVersion {
+  version_id: string
+  parent_version_id?: string | null
+  canvas_id: string
+  node_id: string
+  artifact_id: string
+  artifact_slot_key: string
+  payload_ref: string
+  payload_inline?: unknown
+  input_snapshot?: PlannerArtifactInputSnapshot | null
+  display_strategy: PlannerArtifactDisplayStrategy
+  force_new_version: boolean
+  submitted_by?: string | null
+  submitted_by_kind: PlannerArtifactVersionSubmitterKind
+  metadata?: unknown
+  created_at: string
+}
+
 export interface KanbanArtifactPayload {
   version: 1
   columns: Array<{ id: string; title: string }>

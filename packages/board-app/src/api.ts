@@ -20,6 +20,7 @@ import type {
   PlannerMonitorState,
   PlannerNodeContract,
   PlannerArtifactContent,
+  PlannerArtifactVersion,
   PlannerNodeOutput,
   PlannerNodeOutputResult,
   PlanningNode,
@@ -1054,6 +1055,45 @@ export function getPlannerArtifactContent(
 ): Promise<PlannerArtifactContent> {
   return jsonRequest<PlannerArtifactContent>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifacts/${encodeURIComponent(artifactId)}/content`,
+  )
+}
+
+// UI-1 (ENG-3) — version chain read API. The dropdown calls listArtifactVersions
+// once per artifact slot; selecting a non-latest entry calls getArtifactVersion
+// to fetch its full payload + input snapshot.
+export function listArtifactVersions(
+  canvasId: string,
+  nodeId: string,
+  reference: string,
+): Promise<{ versions: PlannerArtifactVersion[] }> {
+  return jsonRequest<{ versions: PlannerArtifactVersion[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifact-versions?reference=${encodeURIComponent(reference)}`,
+  )
+}
+
+export function getArtifactVersion(
+  canvasId: string,
+  versionId: string,
+): Promise<PlannerArtifactVersion> {
+  return jsonRequest<PlannerArtifactVersion>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifact-versions/${encodeURIComponent(versionId)}`,
+  )
+}
+
+// UI-1 — Re-run a node. The desktop takes the latest artifact for the node
+// (or the slot pinned by `reference`) and resubmits with force_new_version=true,
+// producing a fresh version row visible in the dropdown within one broadcast tick.
+export function rerunPlannerNode(
+  canvasId: string,
+  nodeId: string,
+  options?: { reference?: string },
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/rerun`,
+    {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    },
   )
 }
 
