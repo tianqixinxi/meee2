@@ -1957,8 +1957,17 @@ enum BoardAPI {
             let candidates = state.artifacts.filter { $0.nodeId == nodeId }
             let pickedArtifact: PlannerArtifact?
             if let requested = body?.reference?.trimmingCharacters(in: .whitespacesAndNewlines), !requested.isEmpty {
-                pickedArtifact = candidates.first(where: { $0.reference == requested })
-                    ?? candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
+                // P1 (Codex review): when caller pins a specific reference,
+                // refuse to silently fall back to latest — a typoed reference
+                // would otherwise rerun the wrong slot.
+                guard let match = candidates.first(where: { $0.reference == requested }) else {
+                    return errorResponse(
+                        "artifact_slot_not_found",
+                        "requested reference \"\(requested)\" not found on this node",
+                        status: 404
+                    )
+                }
+                pickedArtifact = match
             } else {
                 pickedArtifact = candidates.sorted(by: { $0.createdAt > $1.createdAt }).first
             }

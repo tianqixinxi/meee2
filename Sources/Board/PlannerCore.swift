@@ -3603,7 +3603,7 @@ final class PlannerStore {
                     $0.isEmpty ? nil : $0
                 } ?? reference
                 let version = PlannerArtifactVersion(
-                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(now.timeIntervalSince1970)"))",
+                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(artifactId)-\(now.timeIntervalSince1970)"))",
                     parentVersionId: parent,
                     canvasId: canvasId,
                     nodeId: nodeId,
