@@ -40,10 +40,20 @@ public enum Meee2Identity {
     /// RPC. Returns the user override when present, otherwise the SaaS
     /// default. Trailing slash is stripped to match the JS-side path joining.
     public static var apiUrl: String {
+        apiUrlOverride ?? defaultApiUrl
+    }
+
+    /// User-supplied override (self-hosted deployments) — `nil` when the
+    /// user has not set anything. Callers that should fall through to local
+    /// discovery when no override is set (e.g. MCP env injection) should
+    /// branch on this rather than `apiUrl`, otherwise they pin every install
+    /// to the SaaS host and the MCP server's local-first BoardServer
+    /// discovery is bypassed.
+    public static var apiUrlOverride: String? {
         let raw = UserDefaults.standard.string(forKey: apiUrlKey)
         let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let base = value.isEmpty ? defaultApiUrl : value
-        return base.hasSuffix("/") ? String(base.dropLast()) : base
+        guard !value.isEmpty else { return nil }
+        return value.hasSuffix("/") ? String(value.dropLast()) : value
     }
 
     /// Called from the OAuth callback handler when meee2-online forwards
