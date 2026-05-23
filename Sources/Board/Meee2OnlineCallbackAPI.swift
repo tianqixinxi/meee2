@@ -28,6 +28,10 @@ public struct Meee2OnlineCallbackAPI {
         let supabaseUrl = decode("supabase_url")
         let supabaseKey = decode("supabase_key")
         let teamsJSON = decode("teams")
+        // Optional: meee2-online forwards its own base URL so we can route
+        // MCP-server writes back through /api/v1/* (M1). Blank values are
+        // ignored — Meee2Identity.apiUrl falls back to the SaaS default.
+        Meee2Identity.setApiUrlIfProvided(decode("api_url"))
 
         // 验证必要参数
         if teamId.isEmpty || userId.isEmpty || supabaseUrl.isEmpty || supabaseKey.isEmpty {
@@ -122,7 +126,7 @@ public struct Meee2OnlineCallbackAPI {
                 "supabaseUrl": supabaseUrl,
                 "supabaseKey": supabaseKey,
                 "teams": teams,
-                "machineId": Host.current().name ?? "unknown",
+                "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
         ]
