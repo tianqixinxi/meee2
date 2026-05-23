@@ -63,6 +63,15 @@ class ClaudePlugin: SessionPlugin {
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
 
+    /// 灵动岛 token 速率监控器。1Hz 采样 sessionUsage 的 (input, output) 总量，
+    /// 在监控器内部做"启动后真实新增"差分。持久持有以保证 widget 跟它的
+    /// ObservedObject 绑定不断。
+    private lazy var tokenRateMonitor: TokenRateMonitor = {
+        TokenRateMonitor { [weak self] in
+            self?.tokensSnapshot() ?? (0, 0)
+        }
+    }()
+
     /// 已 start 标记 — start() 必须 idempotent。AppDelegate 会先启动
     /// ClaudePlugin，再延迟加载外部 plugin 并再次 startAll；不守卫的话 sessionMonitor
     /// 的 .sink {}.store(in: &cancellables) 会**追加一份订阅**，导致
@@ -105,6 +114,9 @@ class ClaudePlugin: SessionPlugin {
             }
         )
 
+        // 启动 token 速率采样
+        tokenRateMonitor.start()
+
         NSLog("[ClaudePlugin] Started")
         return true
     }
@@ -115,7 +127,32 @@ class ClaudePlugin: SessionPlugin {
         cancellables.removeAll()
         sessionMonitor.stopMonitoring()
         hookServer.stop()
+        tokenRateMonitor.stop()
         NSLog("[ClaudePlugin] Stopped")
+    }
+
+    // MARK: - Island Widgets
+
+    /// 暴露给 PluginManager / IslandView 的 widget 列表。
+    /// `tokenRateMonitor` 是 lazy 单例，每次调用都返回同一个实例，
+    /// 满足 IslandWidget 协议要求的"稳定 ObservableObject"约束。
+    override var widgets: [IslandWidget] {
+        [TokenRateWidget(monitor: tokenRateMonitor)]
+    }
+
+    /// 返回当前所有 session 的 (input_tokens 总和, output_tokens 总和)。
+    /// cache_read / cache_create 不计——prompt caching 是常数级开销，会把速率压满。
+    /// 供 TokenRateMonitor 1Hz 采样。
+    private func tokensSnapshot() -> TokenRateMonitor.TokensSnapshot {
+        sessionUsageLock.lock()
+        defer { sessionUsageLock.unlock() }
+        var inSum = 0
+        var outSum = 0
+        for stats in sessionUsage.values {
+            inSum += stats.inputTokens
+            outSum += stats.outputTokens
+        }
+        return (inSum, outSum)
     }
 
     override func cleanup() {

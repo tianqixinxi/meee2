@@ -12,6 +12,11 @@ public class PluginManager: ObservableObject {
     /// 所有 plugin sessions
     @Published public var sessions: [PluginSession] = []
 
+    /// 所有 plugin 注册的灵动岛 widget。IslandView 按 placement 渲染。
+    /// 仅在 register / start / setPluginEnabled / stopAll 时聚合一次——widget 内部数据
+    /// 反应式更新走它自己的 ObservableObject，不依赖这个数组被重新赋值。
+    @Published public var widgets: [IslandWidget] = []
+
     /// 已加载的 plugins
     @Published public var loadedPlugins: [String: SessionPlugin] = [:]
 
@@ -80,6 +85,7 @@ public class PluginManager: ObservableObject {
 
         loadedPlugins[plugin.pluginId] = plugin
         MLog("[PluginManager] Registered plugin: \(plugin.pluginId)")
+        refreshWidgets()
     }
 
     /// 启动所有 plugins
@@ -93,6 +99,7 @@ public class PluginManager: ObservableObject {
                 MLog("[PluginManager] Skipped disabled plugin: \(pluginId)")
             }
         }
+        refreshWidgets()
     }
 
     /// 停止所有 plugins
@@ -100,6 +107,27 @@ public class PluginManager: ObservableObject {
         for plugin in loadedPlugins.values {
             plugin.stop()
         }
+        refreshWidgets()
+    }
+
+    /// 聚合所有启用 plugin 的 widget 列表。@Published 改动只在主线程。
+    private func refreshWidgets() {
+        let collected: [IslandWidget] = loadedPlugins.values
+            .filter { $0.config.enabled }
+            .flatMap { $0.widgets }
+
+        if Thread.isMainThread {
+            self.widgets = collected
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.widgets = collected
+            }
+        }
+    }
+
+    /// 按 placement 过滤 widget，供 IslandView 用。
+    public func widgets(for placement: IslandWidgetPlacement) -> [IslandWidget] {
+        widgets.filter { $0.placement == placement }
     }
 
     // MARK: - External Plugin Loading
@@ -144,6 +172,7 @@ public class PluginManager: ObservableObject {
                 MLog("[PluginManager] Failed to initialize external plugin: \(plugin.pluginId)")
             }
         }
+        refreshWidgets()
     }
 
     // MARK: - Session Management
@@ -267,6 +296,7 @@ public class PluginManager: ObservableObject {
             removeSessions(forPluginId: pluginId)
             MLog("[PluginManager] Disabled plugin: \(pluginId)")
         }
+        refreshWidgets()
     }
 
     private func applyPersistedEnabledState(to plugin: SessionPlugin) {
