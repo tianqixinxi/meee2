@@ -166,19 +166,41 @@ public final class MCPConfigManager {
         // Already correctly registered → 跳过 mcpServers 写入但 permissions
         // allowlist 仍要 ensure（旧版本 meee2 注册了 server 但没配 allowlist，
         // 升级到新版后第一次启动需要补上）。
-        if existingCmd == nodeBin, existingArgsFirst == expectedServerPath {
-            NSLog("[MCPConfigManager] already registered with correct path, noop")
+        // 同时检查 env 里有没有 MEEE2_API_URL —— M1 之前注册的 entry 没这个
+        // 字段，MCP server 会一直降级走老的直连 Supabase 路径并喷 deprecation
+        // warning，所以发现缺失也要重写。
+        // 仅当用户显式配置了 self-hosted base URL 时才注入 MEEE2_API_URL。
+        // 默认 SaaS 场景下不写,这样 MCP server 的 discoverAPI() 仍可以走
+        // 本机 127.0.0.1 BoardServer 优先发现路径,避免 session/inbox/planner
+        // 这种本地接口被强制重路由到公网导致功能丢失。
+        let existingEnv = existing?["env"] as? [String: String] ?? [:]
+        let apiUrlOverride = Meee2Identity.apiUrlOverride
+        let envIsCorrect: Bool = {
+            if let override = apiUrlOverride {
+                return existingEnv["MEEE2_API_URL"] == override
+            } else {
+                return existingEnv["MEEE2_API_URL"] == nil
+            }
+        }()
+        if existingCmd == nodeBin,
+           existingArgsFirst == expectedServerPath,
+           envIsCorrect {
+            NSLog("[MCPConfigManager] already registered with correct path + env, noop")
             ensurePermissionsAllowlist()
             ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
 
-        let entry: [String: Any] = [
+        // env: 用户配置了 self-hosted base URL 时才传 MEEE2_API_URL,
+        // 让 SaaS 默认安装保留 MCP server 的本地优先 discovery 行为。
+        var entry: [String: Any] = [
             "type": "stdio",
             "command": nodeBin,
-            "args": [expectedServerPath],
-            "env": [:] as [String: String]
+            "args": [expectedServerPath]
         ]
+        if let override = apiUrlOverride {
+            entry["env"] = ["MEEE2_API_URL": override]
+        }
         mcpServers[serverName] = entry
         rootObject["mcpServers"] = mcpServers
 

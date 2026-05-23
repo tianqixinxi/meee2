@@ -208,7 +208,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
             supabaseKey: defaults.string(forKey: "meee2SupabaseKey") ?? "",
-            machineId: defaults.string(forKey: "meee2MachineId") ?? "unknown"
+            machineId: Meee2Identity.machineId
         )
         cachedSettings = snapshot
         cachedSettingsAt = now
