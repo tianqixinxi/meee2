@@ -2379,6 +2379,99 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(artifacts.first?.payload, kanbanPayload(subCanvasId: nil))
     }
 
+    // MARK: - ENG-3 · Artifact Version Chain
+
+    func testSubmitNodeOutputAppendsVersionChainAndKeepsLatestForSlot() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-v3", ownerId: "owner-a")
+        let canvas = PlanningCanvas(
+            id: "canvas-v3",
+            ownerId: "owner-a",
+            title: "Version Chain Canvas",
+            plannerContext: "canvas:canvas-v3"
+        )
+        let node = PlanningNode(
+            id: "canvas-v3-node",
+            canvasId: "canvas-v3",
+            title: "ideas",
+            schema: NodeSchema(inputs: [], outputs: ["idea_list_kanban"], goal: "Fetch ideas"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step
+        )
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        // First submit — fresh slot, no parent.
+        let first = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v1", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .kanban,
+                        title: "Ideas",
+                        reference: "idea_list_kanban",
+                        payload: kanbanPayload(subCanvasId: nil),
+                        routeTo: []
+                    )
+                ],
+                next: .complete,
+                forceNewVersion: false
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(first.graph.artifacts.filter { $0.reference == "idea_list_kanban" }.count, 1)
+
+        // Second submit — same slot. Latest-per-slot mirror still shows one,
+        // but the version chain now has two rows with parent wiring.
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v2", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .kanban,
+                        title: "Ideas v2",
+                        reference: "idea_list_kanban",
+                        payload: kanbanPayload(subCanvasId: nil),
+                        routeTo: []
+                    )
+                ],
+                next: .complete,
+                forceNewVersion: true
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let versions = try PlannerBoardBridge.listArtifactVersions(
+            canvasId: canvas.id,
+            nodeId: node.id,
+            reference: "idea_list_kanban",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertEqual(versions.count, 2, "Both versions must persist; submit is append-only.")
+        // Newest-first ordering.
+        XCTAssertEqual(versions.first?.parentVersionId, versions.last?.versionId,
+                       "v2.parent_version_id must point at v1.version_id.")
+        XCTAssertTrue(versions.first?.forceNewVersion == true,
+                      "force_new_version flag must be recorded on the version row.")
+        XCTAssertNotNil(versions.first?.inputSnapshot,
+                        "Input snapshot must be captured on every version.")
+        XCTAssertEqual(versions.first?.displayStrategy, .latest,
+                       "Default display_strategy is `latest` per ENG-3 F4.3 fix.")
+    }
+
     func testNodeContractListsOnlyDownstreamAndOwnerRouteTargets() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
@@ -2395,6 +2488,192 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-2" })
         XCTAssertTrue(contract.allowedRouteTargets.contains { $0.id == "owner" })
         XCTAssertFalse(contract.allowedRouteTargets.contains { $0.id == "canvas-a-node-3" })
+    }
+
+    // MARK: - Node Contract v2 (ENG-1)
+
+    func testNodeContractV2RoundTripsThroughJSON() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let contract = try PlannerBoardBridge.nodeContract(
+            nodeId: "canvas-a-node-2",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // v2 block is always populated.
+        XCTAssertEqual(contract.v2.version, NodeContractV2.version)
+        XCTAssertNotNil(contract.v2.input.upstream)
+        XCTAssertTrue(contract.v2.input.dialogue.enabled)
+        XCTAssertEqual(contract.v2.input.dialogue.window.kind, .rolling)
+        XCTAssertEqual(contract.v2.input.dialogue.window.nTurns, NodeContractV2.defaultDialogueTurns)
+
+        // Codable round-trip (snake_case wire format).
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(contract.v2)
+        let decoded = try JSONDecoder().decode(NodeContractV2.self, from: data)
+        XCTAssertEqual(decoded, contract.v2)
+
+        // Wire format uses snake_case keys (source_node, payload_kind, n_turns).
+        let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+        XCTAssertTrue(json.contains("\"source_node\""))
+        XCTAssertTrue(json.contains("\"payload_kind\""))
+        XCTAssertTrue(json.contains("\"n_turns\""))
+        XCTAssertFalse(json.contains("\"replace_strategy\""))
+        XCTAssertFalse(json.contains("\"increment\""))
+    }
+
+    func testNodeContractV2DerivesUpstreamFromDependsOn() {
+        let node = PlanningNode(
+            id: "node-derive",
+            canvasId: "canvas-a",
+            title: "Derive",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [
+                ContextSource(kind: .document, title: "Notion DB", reference: "notion://db/abc"),
+                ContextSource(kind: .repository, title: "Repo", reference: "https://github.com/foo/bar"),
+                ContextSource(kind: .web, title: "Spec", reference: "ftp://internal/spec")
+            ],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: ["upstream-1", "upstream-2"],
+            nodeKind: .step
+        )
+
+        let (v2, warnings) = NodeContractV2.derive(from: node)
+
+        XCTAssertEqual(v2.input.upstream.mode, .passthrough)
+        XCTAssertEqual(v2.input.upstream.sourceNodeId, "upstream-1")
+        XCTAssertEqual(v2.input.external.count, 3)
+        XCTAssertEqual(v2.input.external[0].connector, "notion")
+        XCTAssertEqual(v2.input.external[1].connector, "github")
+        XCTAssertEqual(v2.input.external[2].connector, "unknown") // ftp:// — lossy
+        XCTAssertEqual(v2.output.cardinality, .single)
+        XCTAssertEqual(v2.output.payloadKind, .artifactRef)
+
+        // Lossy items are surfaced as warnings.
+        XCTAssertTrue(warnings.contains { $0.contains("ftp://internal/spec") })
+        XCTAssertTrue(warnings.contains { $0.contains("2 upstream deps") })
+    }
+
+    func testNodeContractV2SubCanvasNodeDefaultsToItemScoped() {
+        let node = PlanningNode(
+            id: "node-sub",
+            canvasId: "canvas-a",
+            title: "Sub",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: ["parent"],
+            nodeKind: .subCanvas
+        )
+
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.input.upstream.mode, .itemScoped)
+        XCTAssertEqual(v2.input.upstream.sourceNodeId, "parent")
+    }
+
+    func testNodeContractV2ExternalNodeDefaultsToListCardinality() {
+        let node = PlanningNode(
+            id: "node-ext",
+            canvasId: "canvas-a",
+            title: "Ext",
+            schema: NodeSchema(inputs: [], outputs: [], goal: "x"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .external
+        )
+
+        let (v2, _) = NodeContractV2.derive(from: node)
+        XCTAssertEqual(v2.output.cardinality, .list)
+    }
+
+    func testNodeContractValidatorRejectsReplaceStrategy() {
+        let raw: BoardJSONValue = .object([
+            "replace_strategy": .string("overwrite")
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            guard let err = error as? NodeContractValidationError else {
+                return XCTFail("expected NodeContractValidationError, got \(error)")
+            }
+            XCTAssertEqual(err, .rejectedReplaceStrategy)
+        }
+    }
+
+    func testNodeContractValidatorRejectsIncrementOutput() {
+        let raw: BoardJSONValue = .object([
+            "output": .object(["kind": .string("increment")])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            XCTAssertEqual(error as? NodeContractValidationError, .rejectedIncrementOutput)
+        }
+    }
+
+    func testNodeContractValidatorRejectsV1FieldMapping() {
+        let raw: BoardJSONValue = .object([
+            "field_mapping": .object([:])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(raw)) { error in
+            guard case .rejectedFieldMapping = (error as? NodeContractValidationError) ?? .missingRequiredField("?") else {
+                return XCTFail("expected rejectedFieldMapping, got \(error)")
+            }
+        }
+
+        let nestedRaw: BoardJSONValue = .object([
+            "inputs": .array([
+                .object(["source_field": .string("foo"), "target_field": .string("bar")])
+            ])
+        ])
+        XCTAssertThrowsError(try NodeContractValidator.validateRawContract(nestedRaw))
+    }
+
+    func testNodeContractValidatorRejectsV1OutputPayload() {
+        let payload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "replace_strategy": "overwrite"
+        ]
+        XCTAssertThrowsError(try NodeContractValidator.validateRawOutputPayload(payload)) { error in
+            XCTAssertEqual(error as? NodeContractValidationError, .rejectedReplaceStrategy)
+        }
+
+        let incrementPayload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "output": ["kind": "increment"]
+        ]
+        XCTAssertThrowsError(try NodeContractValidator.validateRawOutputPayload(incrementPayload))
+    }
+
+    func testNodeContractValidatorAcceptsCleanV2Payload() throws {
+        let payload: [String: Any] = [
+            "nodeId": "n1",
+            "status": "done",
+            "next": "complete",
+            "message": ["summary": "ok", "routeTo": ["owner"]],
+            "artifacts": []
+        ]
+        XCTAssertNoThrow(try NodeContractValidator.validateRawOutputPayload(payload))
+
+        let raw: BoardJSONValue = .object([
+            "version": .number(2),
+            "input": .object([:]),
+            "output": .object(["cardinality": .string("single"), "payload_kind": .string("artifact_ref")])
+        ])
+        XCTAssertNoThrow(try NodeContractValidator.validateRawContract(raw))
     }
 
     func testSubmitNodeOutputRoutesArtifactAndParksHumanCompletionAtGate() throws {
@@ -3290,6 +3569,245 @@ final class PlannerCoreTests: XCTestCase {
             for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a"
         )
         XCTAssertEqual(reloaded.canvas.visibility, .public)
+    }
+
+    // MARK: - ENG-2: Session Lifecycle Rebuild
+
+    /// E2.1: every submit_node_output appends a version. Two submits → two
+    /// distinct version_ids with v1 → v2 parent linkage.
+    func testSubmitNodeOutputAppendsNodeVersionAndChainsParent() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "session-v",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        let first = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v1 output", routeTo: []),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let v1Id = try XCTUnwrap(first.versionId)
+        XCTAssertEqual(first.versionIndex, 1)
+
+        // E2.3: force_new_version produces a fresh version on the same node.
+        let second = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "v2 output", routeTo: []),
+                artifacts: [],
+                next: .complete,
+                forceNewVersion: true
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let v2Id = try XCTUnwrap(second.versionId)
+        XCTAssertEqual(second.versionIndex, 2)
+        XCTAssertNotEqual(v1Id, v2Id)
+
+        // Both versions queryable + chained. `record(for:)` is the public
+        // accessor; pass a matching canvas + empty seedNodes so the existing
+        // record is returned unchanged.
+        let canvas = PlanningCanvas(
+            id: "canvas-a",
+            ownerId: "owner-a",
+            title: "Planning Canvas",
+            plannerContext: "canvas:canvas-a"
+        )
+        let record = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [])
+        let chain = record.nodeVersions.chain(canvasId: "canvas-a", nodeId: stepId)
+        XCTAssertEqual(chain.count, 2)
+        XCTAssertEqual(chain.first?.versionIndex, 1)
+        XCTAssertEqual(chain.last?.versionIndex, 2)
+        XCTAssertNil(chain.first?.parentVersionId)
+        XCTAssertEqual(chain.last?.parentVersionId, v1Id)
+        XCTAssertEqual(chain.last?.trigger, .forceRerun)
+    }
+
+    /// E2.5: SessionInputMerge sorts sources in the declared order
+    /// (upstream → external (declared order) → dialogue).
+    func testSessionInputMergeRespectsDeclaredOrder() {
+        let contract = NodeContractV2(input: NodeContractInput(
+            upstream: NodeContractUpstreamInput(mode: .passthrough, sourceNodeId: "up-1"),
+            external: [
+                NodeContractExternalInput(connector: "notion", ref: "notion://a", syncSessionId: nil),
+                NodeContractExternalInput(connector: "lark", ref: "lark://b", syncSessionId: "sync-lark-1")
+            ],
+            dialogue: NodeContractDialogueInput(enabled: true, window: NodeContractDialogueWindow(kind: .rolling, nTurns: 3))
+        ), output: NodeContractOutput(cardinality: .single, payloadKind: .artifactRef, externalWriteTarget: nil))
+
+        let upstream = NodeVersion(
+            id: "nodever-canvas-up1-2-abcd",
+            canvasId: "canvas-a",
+            nodeId: "up-1",
+            versionIndex: 2,
+            parentVersionId: "nodever-canvas-up1-1-aaaa",
+            sessionId: nil,
+            trigger: .manual,
+            inputs: NodeVersionInputSnapshot(upstreamNodeId: nil, upstreamVersionId: nil, external: [], dialogueTurns: nil, mergeLog: []),
+            artifactIds: [],
+            status: .done,
+            startedAt: Date(),
+            finishedAt: Date()
+        )
+        let fetched = [
+            SessionInputMerge.ExternalFetchResult(connector: "notion", ref: "notion://a", fetchedArtifactId: "art-notion-1", previewLines: ["notion line"]),
+            SessionInputMerge.ExternalFetchResult(connector: "lark", ref: "lark://b", fetchedArtifactId: nil, previewLines: ["lark line a", "lark line b"])
+        ]
+        let result = SessionInputMerge.merge(
+            contract: contract,
+            upstreamLatest: upstream,
+            upstreamPayload: "upstream payload body",
+            externalFetched: fetched,
+            dialogueTurns: ["t1", "t2", "t3", "t4"]
+        )
+
+        // Snapshot fields.
+        XCTAssertEqual(result.snapshot.upstreamNodeId, "up-1")
+        XCTAssertEqual(result.snapshot.upstreamVersionId, upstream.id)
+        XCTAssertEqual(result.snapshot.external.count, 2)
+        XCTAssertEqual(result.snapshot.external[0].connector, "notion")
+        XCTAssertEqual(result.snapshot.external[0].fetchedArtifactId, "art-notion-1")
+        XCTAssertEqual(result.snapshot.external[1].connector, "lark")
+        XCTAssertEqual(result.snapshot.external[1].syncSessionId, "sync-lark-1")
+        XCTAssertEqual(result.snapshot.dialogueTurns, 3)
+
+        // Order in preamble: upstream block first, then external blocks
+        // in declared order, then dialogue tail last.
+        let preamble = result.promptPreamble
+        let upIdx = preamble.range(of: "## Upstream")?.lowerBound
+        let notionIdx = preamble.range(of: "## External: notion")?.lowerBound
+        let larkIdx = preamble.range(of: "## External: lark")?.lowerBound
+        let dialogueIdx = preamble.range(of: "## Recent dialogue")?.lowerBound
+        XCTAssertNotNil(upIdx)
+        XCTAssertNotNil(notionIdx)
+        XCTAssertNotNil(larkIdx)
+        XCTAssertNotNil(dialogueIdx)
+        XCTAssertLessThan(upIdx!, notionIdx!)
+        XCTAssertLessThan(notionIdx!, larkIdx!)
+        XCTAssertLessThan(larkIdx!, dialogueIdx!)
+
+        // Dialogue window slices the last 3 turns (newest at the end).
+        XCTAssertTrue(preamble.contains("t4"))
+        XCTAssertTrue(preamble.contains("t2"))
+        XCTAssertFalse(preamble.contains("\nt1\n")) // t1 was outside the 3-turn window
+
+        // Merge log mentions every source so ENG-5 can render it in history.
+        XCTAssertTrue(result.snapshot.mergeLog.contains { $0.contains("upstream node=up-1") })
+        XCTAssertTrue(result.snapshot.mergeLog.contains { $0.contains("external[0] connector=notion") })
+        XCTAssertTrue(result.snapshot.mergeLog.contains { $0.contains("dialogue") })
+    }
+
+    /// E2.5: dialogue-disabled contracts produce a snapshot with
+    /// `dialogueTurns == nil` and no dialogue block in the preamble.
+    func testSessionInputMergeHonoursDialogueDisabled() {
+        let contract = NodeContractV2(input: NodeContractInput(
+            upstream: NodeContractUpstreamInput(mode: .passthrough, sourceNodeId: nil),
+            external: [],
+            dialogue: NodeContractDialogueInput(enabled: false, window: NodeContractDialogueWindow(kind: .rolling, nTurns: 5))
+        ), output: NodeContractOutput(cardinality: .single, payloadKind: .artifactRef, externalWriteTarget: nil))
+
+        let result = SessionInputMerge.merge(
+            contract: contract,
+            upstreamLatest: nil,
+            upstreamPayload: nil,
+            externalFetched: [],
+            dialogueTurns: ["should not show"]
+        )
+
+        XCTAssertNil(result.snapshot.dialogueTurns)
+        XCTAssertFalse(result.promptPreamble.contains("Recent dialogue"))
+        XCTAssertFalse(result.promptPreamble.contains("should not show"))
+    }
+
+    /// E2.2: submitting output to an upstream node auto-dispatches downstream
+    /// auto-mode nodes that flip to readyToStart.
+    func testSubmitNodeOutputAutoDispatchesDownstreamAutoNode() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        // Force the downstream node into auto execution mode + clear gate so
+        // submitNodeOutput's targetIndex flip path takes it to readyToStart.
+        let stepId = "canvas-a-node-1"
+        let downstreamId = "canvas-a-node-2"
+        _ = try PlannerBoardBridge.store.updateNodeGate(
+            canvasId: "canvas-a", nodeId: downstreamId, executionMode: .auto
+        )
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "kick downstream", routeTo: [downstreamId]),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(result.autoDispatchedNodeIds, [downstreamId])
+        let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == downstreamId })
+        XCTAssertEqual(downstream.workflowRunState, .dispatched)
+    }
+
+    /// Bonus deliverable: refineSessionPrompt builds a no-schema-mutation
+    /// proposal and persists it cleanly via the standard pipeline. Empty
+    /// directive is allowed (just a "re-think" ping); non-empty is reflected
+    /// in proposal summary.
+    func testRefineSessionPromptProposalIsFirstClass() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        let (proposal, sessionId) = try PlannerBoardBridge.refineSessionPromptProposal(
+            nodeId: stepId,
+            directive: "tighten the M2 PRD prompt",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertEqual(proposal.canvasId, "canvas-a")
+        XCTAssertEqual(proposal.changes.count, 1)
+        XCTAssertEqual(proposal.changes.first?.kind, .refineSessionPrompt)
+        XCTAssertEqual(proposal.changes.first?.nodeId, stepId)
+        XCTAssertEqual(proposal.changes.first?.title, "tighten the M2 PRD prompt")
+        XCTAssertTrue(proposal.summary.contains("tighten the M2 PRD prompt"))
+        // No bound session on a fresh node — sessionId is nil and the caller
+        // (BoardAPI) knows to skip the inject step.
+        XCTAssertNil(sessionId)
+
+        // Validator accepts the proposal even though `changes` only contains
+        // a refine-session-prompt entry (no addNode/updateNode/attachArtifact).
+        let canvas = PlanningCanvas(id: "canvas-a", ownerId: "owner-a", title: "Planning Canvas", plannerContext: "canvas:canvas-a")
+        XCTAssertNoThrow(try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: [
+            PlanningNode(
+                id: stepId, canvasId: "canvas-a", title: "Step",
+                schema: NodeSchema(inputs: [], outputs: [], goal: ""),
+                contextSources: [], executionMode: .auto, executorType: .claude,
+                doerId: "owner-a", status: .ready
+            )
+        ]))
     }
 
     private func boardSnapshot(

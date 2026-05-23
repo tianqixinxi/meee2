@@ -1,36 +1,55 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
+  ArrowUpRight,
+  Bot,
   CalendarClock,
   ChevronDown,
   CheckCircle2,
   Clock3,
   Code2,
   FileText,
+  Flag,
+  History,
+  Lock,
   MessageCircle,
   PlayCircle,
   Plug,
+  RefreshCw,
   Route,
   Signpost,
   Trash2,
+  UserPlus,
   UserRound,
 } from 'lucide-react'
 import type {
+  NodeAssignment,
   PlannerArtifactContent,
+  PlannerArtifactVersion,
   KanbanArtifactPayload,
   PlannerArtifact,
   PlannerDispatchRunner,
   PlannerWorkflowRunState,
+  PlanningNode,
   PlanningNodeStatus,
   RunNextAction,
 } from '../../types'
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
-import { getPlannerArtifactContent } from '../../api'
+import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
+import { InputCardSections } from './InputCardSections'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
 const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
+
+// UI-1 · "auto / gate / human" mode badge — derived from execution mode +
+// gate approver count. `human` wins when the node is an explicit human step;
+// `gate` when downstream review is required (approvers present or gate mode
+// human); otherwise `auto`. Colors mirror the existing border palette.
+type NodeMode = 'auto' | 'gate' | 'human'
+const MODE_LABEL: Record<NodeMode, string> = { auto: 'Auto', gate: 'Gate', human: 'Human' }
+const MODE_ICON: Record<NodeMode, typeof Bot> = { auto: Bot, gate: Signpost, human: UserRound }
 
 interface CanvasIOItem {
   key: string
@@ -203,6 +222,23 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       </div>
     )
   }
+  // UI-2: when this node has been assigned, collapse it to a sub-canvas
+  // reference chip. The card stops showing the regular interior (status
+  // dropdown, IO grid, primary action) because parent-side editing is no
+  // longer authoritative — ENG-4 RLS blocks it server-side anyway.
+  if (data.assignment && !data.virtual) {
+    return (
+      <SubCanvasRefCard
+        node={node}
+        assignment={data.assignment}
+        assigneeLabel={assigneeLabelFromAssignment(data)}
+        avatarUrl={data.responsibleAvatarUrl}
+        onOpenAssignedSubCanvas={data.onOpenAssignedSubCanvas}
+        selected={selected}
+      />
+    )
+  }
+
   const statusLabel = isRunMode
     ? workStatusLabel(runStatus, data.hasSelectedDelivery)
     : planStatusLabel(designStatus)
@@ -236,6 +272,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const gateLabel = gateModeLabel(node)
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleLabel = scheduleEnabled ? scheduleIntervalLabel(node.schedule?.intervalSeconds ?? 0) : null
+  // UI-1 · mode badge + re-run gating. Re-run is offered on any non-virtual
+  // step whose latest version status is `done` (per spec). Mark-down is a
+  // quick-flag → `blocked` action so reviewers can park the node without
+  // opening the status dropdown.
+  const nodeMode = resolveNodeMode(node)
+  const latestArtifactForVersionSlot = pickLatestArtifactForVersions(data.artifacts)
+  const reRunEligible = nodeKind === 'step'
+    && !data.virtual
+    && Boolean(data.onRerunNode)
+    && (designStatus === 'done' || node.status === 'done')
+  const markDownEligible = nodeKind === 'step'
+    && !data.virtual
+    && Boolean(data.onChangeStatus)
+    && designStatus !== 'blocked'
+    && (data.canChangeStatus ?? false)
 
   return (
     <div
@@ -279,6 +330,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             {statusLabel}
           </span>
         )}
+        {/* UI-1 · auto / gate / human badge — placed in the top-left cluster
+            so it sits beside the status pill. Top-right is reserved for UI-2. */}
+        {nodeKind === 'step' && !data.virtual && (
+          <NodeModeBadge mode={nodeMode} />
+        )}
+        {/* UI-1 · Version dropdown lives in the top-left, defaulting to
+            Latest. Lazy-loads the chain on open; selecting a non-latest
+            entry swaps the card body only (no server-side pointer change). */}
+        {nodeKind === 'step' && !data.virtual && data.canvasId && latestArtifactForVersionSlot && (
+          <NodeVersionDropdown
+            canvasId={data.canvasId}
+            nodeId={node.id}
+            reference={latestArtifactForVersionSlot.reference}
+          />
+        )}
         {data.previewKind !== 'none' && (
           <span className="planner-node__badge">
             {data.previewKind === 'added' ? 'new' : 'changed'}
@@ -295,12 +361,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             </span>
           )}
           {showResponsibleInfo && (
-            <span className="planner-node__owner-pill" title={`Owner: ${data.responsibleLabel || 'Unassigned'}`}>
-              <span className={`planner-node__mini-avatar${data.responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
-                {data.responsibleAvatarUrl ? <img src={data.responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
-              </span>
-              <span>{data.responsibleLabel || 'Unassigned'}</span>
-            </span>
+            <OwnerChip
+              nodeId={node.id}
+              nodeTitle={node.title}
+              isAssigned={Boolean(data.assignment)}
+              assigneeLabel={data.assignment ? assigneeLabelFromAssignment(data) : null}
+              responsibleLabel={data.responsibleLabel}
+              responsibleAvatarUrl={data.responsibleAvatarUrl}
+              canAssign={Boolean(data.onRequestAssign) && !data.virtual && nodeKind === 'step'}
+              onRequestAssign={data.onRequestAssign}
+            />
           )}
         </div>
       </div>
@@ -355,9 +425,19 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {io.hasIO && (
-        <div className="planner-node__io" aria-label="Node inputs and outputs">
-          <IOColumn title="Input" items={io.inputs} emptyLabel="No input" />
+      {nodeKind === 'step' && (
+        <InputCardSections
+          node={node}
+          upstreamLabel={data.upstreamSourceLabel}
+          variant="card"
+          onAttachDataSource={data.onAttachDataSource}
+          onRefreshExternal={data.onRefreshExternalInput}
+          onConfigureDialogue={data.onConfigureDialogue}
+        />
+      )}
+
+      {(io.outputs.length > 0 || (node.schema?.outputs?.length ?? 0) > 0) && (
+        <div className="planner-node__io planner-node__io--output-only" aria-label="Node output">
           <IOColumn title="Output" items={io.outputs} emptyLabel="No output" />
         </div>
       )}
@@ -370,8 +450,44 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {(primaryAction || (!data.virtual && data.onDeleteNode)) && (
+      {(primaryAction || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
+          {/* UI-1 · Re-run / Mark down sit in the same bottom action row as the
+              primary action so the gate-node controls are co-located. Re-run
+              hits the desktop's /rerun endpoint, which calls submit_node_output
+              with force_new_version: true and broadcasts state to all clients. */}
+          {reRunEligible && (
+            <button
+              type="button"
+              className="planner-node__rerun-action nodrag"
+              title="Re-run this node (creates a new version)"
+              aria-label={`Re-run ${node.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                data.onRerunNode?.(node.id, latestArtifactForVersionSlot?.reference)
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <RefreshCw size={11} aria-hidden />
+              <span>Re-run</span>
+            </button>
+          )}
+          {markDownEligible && (
+            <button
+              type="button"
+              className="planner-node__markdown-action nodrag"
+              title="Mark this node down for attention"
+              aria-label={`Mark ${node.title} for attention`}
+              onClick={(event) => {
+                event.stopPropagation()
+                data.onChangeStatus?.(node.id, 'blocked')
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <Flag size={11} aria-hidden />
+              <span>Mark down</span>
+            </button>
+          )}
           {primaryAction && (
             <button
               type="button"
@@ -1055,4 +1171,292 @@ function gateModeLabel(node: PlannerGraphNode['data']['node']): 'Human' | 'Auto'
   if (node.executionMode === 'human') return 'Human'
   if ((node.gate?.approvers ?? []).length > 0) return 'Human'
   return 'Auto'
+}
+
+// UI-1 · Derive the auto/gate/human badge value. Explicit human execution
+// always wins; gate review requirements promote auto → gate; everything else
+// is auto.
+function resolveNodeMode(node: PlannerGraphNode['data']['node']): NodeMode {
+  if (node.executionMode === 'human') return 'human'
+  const approvers = node.gate?.approvers ?? []
+  if (approvers.length > 0) return 'gate'
+  return 'auto'
+}
+
+// UI-1 · Pick the artifact slot the version dropdown should anchor to. Latest
+// artifact (by createdAt) wins — matches the runtime's "latest" display
+// strategy default and keeps the dropdown deterministic when the node has
+// multiple slots (the user can drill into NodeInspector for per-slot history).
+function pickLatestArtifactForVersions(artifacts: PlannerArtifact[]): PlannerArtifact | undefined {
+  if (artifacts.length === 0) return undefined
+  return [...artifacts].sort((a, b) => {
+    const ta = Date.parse(String(a.createdAt))
+    const tb = Date.parse(String(b.createdAt))
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+  })[0]
+}
+
+function NodeModeBadge({ mode }: { mode: NodeMode }) {
+  const Icon = MODE_ICON[mode]
+  return (
+    <span
+      className={`planner-node__mode-badge planner-node__mode-badge--${mode}`}
+      title={`Execution mode: ${MODE_LABEL[mode]}`}
+    >
+      <Icon size={11} aria-hidden />
+      <span>{MODE_LABEL[mode]}</span>
+    </span>
+  )
+}
+
+// UI-1 · Lazy-loading version dropdown. The chain is fetched on first open
+// (so closed cards don't fan out N requests on first paint). "Latest" is the
+// default visual state — selecting a non-latest entry stashes the chosen
+// version-id in local state so callers (NodeInspector / future diff view) can
+// pick it up; we deliberately do NOT mutate any server pointer here, matching
+// acceptance criterion 2 in the spec.
+function NodeVersionDropdown({
+  canvasId,
+  nodeId,
+  reference,
+}: {
+  canvasId: string
+  nodeId: string
+  reference: string
+}) {
+  const [versions, setVersions] = useState<PlannerArtifactVersion[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [selectedVersionId, setSelectedVersionId] = useState<string>('latest')
+
+  // Reset selection whenever the slot changes (e.g. user picks another node /
+  // the node's primary artifact ref flips).
+  useEffect(() => {
+    setSelectedVersionId('latest')
+    setVersions(null)
+    setError(null)
+  }, [canvasId, nodeId, reference])
+
+  const ensureLoaded = () => {
+    if (versions !== null || loading) return
+    setLoading(true)
+    listArtifactVersions(canvasId, nodeId, reference)
+      .then((result) => setVersions(result.versions ?? []))
+      .catch((err) => setError((err as Error).message || 'Failed to load versions'))
+      .finally(() => setLoading(false))
+  }
+
+  const selectedLabel = useMemo(() => {
+    if (selectedVersionId === 'latest') return 'Latest'
+    const v = versions?.find((entry) => entry.version_id === selectedVersionId)
+    return v ? formatVersionLabel(v) : 'Latest'
+  }, [selectedVersionId, versions])
+
+  return (
+    <label
+      className="planner-node__version-select nodrag"
+      title="View a previous version of this node's output"
+      onClick={(event) => {
+        event.stopPropagation()
+        ensureLoaded()
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      <History size={11} aria-hidden />
+      <span>{selectedLabel}</span>
+      <select
+        value={selectedVersionId}
+        aria-label="Artifact version"
+        onChange={(event) => setSelectedVersionId(event.target.value)}
+        onFocus={ensureLoaded}
+        onMouseDown={ensureLoaded}
+      >
+        <option value="latest">Latest</option>
+        {loading && <option disabled value="__loading">Loading…</option>}
+        {error && <option disabled value="__error">{error}</option>}
+        {(versions ?? []).map((v) => (
+          <option key={v.version_id} value={v.version_id}>
+            {formatVersionLabel(v)}
+          </option>
+        ))}
+      </select>
+      <ChevronDown size={11} aria-hidden />
+    </label>
+  )
+}
+
+function formatVersionLabel(v: PlannerArtifactVersion): string {
+  const ts = Date.parse(v.created_at)
+  const stamp = Number.isFinite(ts)
+    ? new Date(ts).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : v.created_at
+  const submitter = v.submitted_by || v.submitted_by_kind || 'unknown'
+  return `${stamp} · ${submitter}`
+}
+
+
+// ---- UI-2 helpers -----------------------------------------------------------
+
+/** Pick the best label we can show for the assignee — assignment carries the
+ *  user id but not the display name. Falls back to the responsibleLabel
+ *  computed in the adapter via the team directory. */
+function assigneeLabelFromAssignment(data: PlannerGraphNode['data']): string {
+  if (!data.assignment) return 'Unassigned'
+  if (data.responsibleLabel) return data.responsibleLabel
+  return data.assignment.assigneeUserId.slice(0, 8)
+}
+
+interface OwnerChipProps {
+  nodeId: string
+  nodeTitle: string
+  isAssigned: boolean
+  assigneeLabel: string | null
+  responsibleLabel?: string
+  responsibleAvatarUrl?: string
+  canAssign: boolean
+  onRequestAssign?: (nodeId: string) => void
+}
+
+/** UI-2 · F1.1 — clickable owner chip in the node header (top-right).
+ *  Click opens the assign dialog. When an assignment already exists, the chip
+ *  switches to a "Assigned to X" badge and stops being clickable (revoke is
+ *  not in MVP — see spec). The button explicitly carries `nodrag nopan` so
+ *  React Flow doesn't intercept the click as a node drag. */
+function OwnerChip({
+  nodeId,
+  nodeTitle,
+  isAssigned,
+  assigneeLabel,
+  responsibleLabel,
+  responsibleAvatarUrl,
+  canAssign,
+  onRequestAssign,
+}: OwnerChipProps) {
+  const label = isAssigned
+    ? assigneeLabel || 'Assigned'
+    : responsibleLabel || 'Unassigned'
+  const title = isAssigned
+    ? `Assigned to ${label} — owner-revoke is not available in MVP`
+    : canAssign
+      ? `Assign ${nodeTitle} to a teammate`
+      : `Owner: ${label}`
+  if (isAssigned || !canAssign || !onRequestAssign) {
+    return (
+      <span
+        className={`planner-node__owner-pill${isAssigned ? ' planner-node__owner-pill--assigned' : ''}`}
+        title={title}
+      >
+        <span className={`planner-node__mini-avatar${responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+          {responsibleAvatarUrl ? <img src={responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
+        </span>
+        <span>{label}</span>
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      className="planner-node__owner-pill planner-node__owner-pill--button nodrag nopan"
+      title={title}
+      aria-label={title}
+      onClick={(event) => {
+        event.stopPropagation()
+        onRequestAssign(nodeId)
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      <span className={`planner-node__mini-avatar${responsibleAvatarUrl ? ' has-image' : ''}`} aria-hidden>
+        {responsibleAvatarUrl ? <img src={responsibleAvatarUrl} alt="" /> : <UserRound size={12} />}
+      </span>
+      <span>{label}</span>
+      <UserPlus size={11} aria-hidden className="planner-node__owner-pill-cta" />
+    </button>
+  )
+}
+
+interface SubCanvasRefCardProps {
+  node: PlanningNode
+  assignment: NodeAssignment
+  assigneeLabel: string
+  avatarUrl?: string
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  selected: boolean
+}
+
+/** UI-2 · F1.1 — the node body collapsed to a sub-canvas reference chip.
+ *  The whole card is read-only (parent owner has lost internal-edit rights
+ *  per ENG-4 RLS). A single primary action takes the user into the assigned
+ *  sub-canvas if a navigator is wired. The `frozen_io_contract` is shown
+ *  in a compact summary so the parent owner can still verify the boundary. */
+function SubCanvasRefCard({
+  node,
+  assignment,
+  assigneeLabel,
+  avatarUrl,
+  onOpenAssignedSubCanvas,
+  selected,
+}: SubCanvasRefCardProps) {
+  const inputCardinality = assignment.frozenIOContract?.input?.upstream?.mode ?? 'unspecified'
+  const outputCardinality = assignment.frozenIOContract?.output?.cardinality ?? 'unspecified'
+  return (
+    <div
+      className={[
+        'planner-node',
+        'planner-node--subcanvas-ref',
+        selected ? 'is-selected' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      <Handle type="target" position={Position.Left} className="planner-node__handle" />
+      <div className="planner-node__header">
+        <span className="planner-node__status planner-node__status--design">
+          <Lock size={12} aria-hidden />
+          Assigned
+        </span>
+        <div className="planner-node__header-actions">
+          <span
+            className="planner-node__owner-pill planner-node__owner-pill--assigned"
+            title={`Owned by ${assigneeLabel} — internal edit is locked for you`}
+          >
+            <span className={`planner-node__mini-avatar${avatarUrl ? ' has-image' : ''}`} aria-hidden>
+              {avatarUrl ? <img src={avatarUrl} alt="" /> : <UserRound size={12} />}
+            </span>
+            <span>{assigneeLabel}</span>
+          </span>
+        </div>
+      </div>
+      <div className="planner-node__title">{node.title}</div>
+      <div className="planner-node__subcanvas-ref-body">
+        <div className="planner-node__subcanvas-ref-meta">
+          <span className="planner-node__chip">
+            <FileText size={10} aria-hidden />
+            Sub-canvas: {assignment.subCanvasName || assignment.subCanvasId.slice(0, 8)}
+          </span>
+          <span className="planner-node__chip" title="Frozen I/O contract — input contract">
+            in: {inputCardinality}
+          </span>
+          <span className="planner-node__chip" title="Frozen I/O contract — output contract">
+            out: {outputCardinality}
+          </span>
+        </div>
+      </div>
+      {onOpenAssignedSubCanvas && (
+        <div className="planner-node__footer">
+          <button
+            type="button"
+            className="planner-node__primary-action nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpenAssignedSubCanvas(assignment.subCanvasId)
+            }}
+            title={`Open sub-canvas owned by ${assigneeLabel}`}
+          >
+            Open sub-canvas
+            <ArrowUpRight size={12} aria-hidden style={{ marginLeft: 4 }} />
+          </button>
+        </div>
+      )}
+      <Handle type="source" position={Position.Right} className="planner-node__handle" />
+    </div>
+  )
 }

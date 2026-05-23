@@ -293,6 +293,11 @@ extension BoardJSONValue {
         if case .number(let value) = self { return Int(value) }
         return nil
     }
+
+    var arrayValue: [BoardJSONValue]? {
+        if case .array(let value) = self { return value }
+        return nil
+    }
 }
 
 private extension String {

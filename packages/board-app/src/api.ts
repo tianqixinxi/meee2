@@ -20,6 +20,7 @@ import type {
   PlannerMonitorState,
   PlannerNodeContract,
   PlannerArtifactContent,
+  PlannerArtifactVersion,
   PlannerNodeOutput,
   PlannerNodeOutputResult,
   PlanningNode,
@@ -36,6 +37,8 @@ import type {
   IntegrationInstallResult,
   IntegrationRunbookResult,
   ContextSourceKind,
+  AssignPlannerNodeResult,
+  OwnedCanvasSummary,
 } from './types'
 
 /** Uniform error thrown by the API helpers. */
@@ -1057,6 +1060,45 @@ export function getPlannerArtifactContent(
   )
 }
 
+// UI-1 (ENG-3) — version chain read API. The dropdown calls listArtifactVersions
+// once per artifact slot; selecting a non-latest entry calls getArtifactVersion
+// to fetch its full payload + input snapshot.
+export function listArtifactVersions(
+  canvasId: string,
+  nodeId: string,
+  reference: string,
+): Promise<{ versions: PlannerArtifactVersion[] }> {
+  return jsonRequest<{ versions: PlannerArtifactVersion[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/artifact-versions?reference=${encodeURIComponent(reference)}`,
+  )
+}
+
+export function getArtifactVersion(
+  canvasId: string,
+  versionId: string,
+): Promise<PlannerArtifactVersion> {
+  return jsonRequest<PlannerArtifactVersion>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/artifact-versions/${encodeURIComponent(versionId)}`,
+  )
+}
+
+// UI-1 — Re-run a node. The desktop takes the latest artifact for the node
+// (or the slot pinned by `reference`) and resubmits with force_new_version=true,
+// producing a fresh version row visible in the dropdown within one broadcast tick.
+export function rerunPlannerNode(
+  canvasId: string,
+  nodeId: string,
+  options?: { reference?: string },
+): Promise<PlannerNodeOutputResult> {
+  return jsonRequest<PlannerNodeOutputResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/rerun`,
+    {
+      method: 'POST',
+      body: JSON.stringify(options ?? {}),
+    },
+  )
+}
+
 export function attachPlannerArtifactToNode(
   canvasId: string,
   nodeId: string,
@@ -1145,6 +1187,50 @@ export function bindPlannerNodeInput(
       body: JSON.stringify(input),
     },
   )
+}
+
+/**
+ * UI-2: Assign a node to a teammate. Server proxies to the SECURITY DEFINER
+ * `meee2_assign_node` RPC (ENG-4). The call is atomic — on failure no
+ * sub-canvas, no session re-bind, no event row is committed.
+ *
+ * If the source canvas was `private`, the server is expected to upgrade it
+ * to `public` as part of the same transaction so the assignee can see it;
+ * the returned `visibilityUpgraded` flag tells the UI whether the
+ * private→public modal's promise was kept.
+ */
+export interface AssignPlannerNodeInput {
+  /** Optional override for the new sub-canvas's display name. */
+  subCanvasName?: string | null
+  /**
+   * Acknowledgement that the source canvas was private and the user accepted
+   * the upgrade. Server refuses the call without it when the canvas is
+   * private — protects against accidentally publishing a private board.
+   */
+  acceptPrivateUpgrade?: boolean
+}
+export function assignPlannerNode(
+  canvasId: string,
+  nodeId: string,
+  assigneeUserId: string,
+  input: AssignPlannerNodeInput = {},
+): Promise<AssignPlannerNodeResult> {
+  return jsonRequest<AssignPlannerNodeResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/assign`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        assigneeUserId,
+        subCanvasName: input.subCanvasName ?? null,
+        acceptPrivateUpgrade: input.acceptPrivateUpgrade === true,
+      }),
+    },
+  )
+}
+
+/** UI-2: List sub-canvases the current user owns (proxy for `meee2_list_owned_canvases`). */
+export function fetchOwnedCanvases(): Promise<{ canvases: OwnedCanvasSummary[] }> {
+  return jsonRequest<{ canvases: OwnedCanvasSummary[] }>('/api/planner/owned-canvases')
 }
 
 export function openKanbanItemSubCanvas(
@@ -2255,5 +2341,71 @@ export function connectEvents(
       reconnectTimer = null
     }
     ws?.close()
+  }
+}
+
+// -- UI-6 · AI Recap · ENG-3 artifact version stream -----------------------
+
+/**
+ * One row from `meee2_artifact_versions` (or its `_latest` view), shaped for
+ * the AI Recap drawer. Mirrors the read schema of meee2-online's
+ * `GET /api/v1/artifact-versions` (see ENG-3).
+ */
+export interface ArtifactVersionSummary {
+  versionId: string
+  parentVersionId: string | null
+  nodeId: string
+  nodeTitle: string | null
+  artifactSlotKey: string
+  submittedByLabel: string
+  shortId: string
+  createdAt: string
+}
+
+interface FetchRecentArtifactVersionsArgs {
+  teamId: string
+  canvasId: string
+  /** Lookback window in ms. The endpoint returns newest-first; we filter client-side. */
+  windowMs: number
+}
+
+/**
+ * Fetches recent artifact versions for the AI Recap drawer.
+ *
+ * Routing strategy:
+ *   1. Try the local BoardServer proxy at `/api/cloud/artifact-versions/recent`.
+ *      This proxy is intentionally *not implemented yet* — see TODO below.
+ *      Until it exists this resolves to an empty list (caller renders the
+ *      "no recent versions" empty state, drawer otherwise functions).
+ *   2. (Future) Once supabase-js is bundled into board-app, the drawer will
+ *      open a Realtime channel directly and this polling helper goes away.
+ *
+ * TODO(UI-6 follow-up): expose `GET /api/cloud/artifact-versions/recent`
+ *   on BoardServer that forwards to meee2-online's
+ *   `GET /api/v1/artifact-versions` using the connect token stored in
+ *   `~/.meee2/settings.json`. The handler should aggregate across all nodes
+ *   in the canvas (the upstream endpoint is per-slot).
+ */
+export async function fetchRecentArtifactVersions(
+  args: FetchRecentArtifactVersionsArgs,
+): Promise<ArtifactVersionSummary[]> {
+  if (PLANNER_DEMO_MODE) return []
+  const params = new URLSearchParams({
+    teamId: args.teamId,
+    canvasId: args.canvasId,
+    windowMs: String(args.windowMs),
+  })
+  try {
+    const data = await jsonRequest<{ versions?: ArtifactVersionSummary[] }>(
+      `/api/cloud/artifact-versions/recent?${params.toString()}`,
+    )
+    return data.versions ?? []
+  } catch (err) {
+    // The proxy endpoint is not wired yet. Surface a friendly empty list
+    // unless this is a transient error we should re-throw.
+    if (err instanceof ApiRequestError && (err.status === 404 || err.status === 501)) {
+      return []
+    }
+    throw err
   }
 }

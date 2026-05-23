@@ -1681,6 +1681,113 @@
   color: var(--text);
 }
 
+/* UI-1 · Node header chrome: version dropdown + auto/gate/human mode badge.
+   Lives in the left cluster of `.planner-node__header`. Top-right slot is
+   intentionally untouched so UI-2's owner chip can land without conflict. */
+.planner-node__version-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 18px 2px 7px;
+  border: 1px solid rgba(245, 244, 239, 0.12);
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.04);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-transform: none;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+.planner-node__version-select:hover {
+  border-color: rgba(245, 244, 239, 0.22);
+  background: rgba(245, 244, 239, 0.10);
+  color: var(--text);
+}
+
+.planner-node__version-select select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.planner-node__version-select svg:last-child {
+  position: absolute;
+  right: 5px;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.planner-node__version-select > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.planner-node__mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.planner-node__mode-badge--auto {
+  background: rgba(139, 169, 194, 0.16);
+  color: #b9d4ea;
+  border-color: rgba(139, 169, 194, 0.28);
+}
+
+.planner-node__mode-badge--gate {
+  background: rgba(204, 120, 92, 0.16);
+  color: var(--accent-hover);
+  border-color: rgba(204, 120, 92, 0.32);
+}
+
+.planner-node__mode-badge--human {
+  background: rgba(201, 164, 93, 0.18);
+  color: #e6ca8f;
+  border-color: rgba(201, 164, 93, 0.32);
+}
+
+/* UI-1 · Re-run / Mark-down action buttons. They sit beside the primary
+   action in the footer and use compact pill styling so they never crowd it. */
+.planner-node__rerun-action,
+.planner-node__markdown-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  background: rgba(245, 244, 239, 0.045);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.planner-node__rerun-action:hover {
+  border-color: rgba(139, 169, 194, 0.45);
+  color: #d6e5f1;
+}
+
+.planner-node__markdown-action:hover {
+  border-color: rgba(204, 120, 92, 0.45);
+  color: var(--accent-hover);
+}
+
 .planner-side {
   position: relative;
   min-height: 0;
@@ -4215,3 +4322,1128 @@
   border-color: rgba(194, 106, 106, 0.5);
   background: rgba(194, 106, 106, 0.12);
 }
+
+/* ====== UI-2 · Owner chip + Assign dialog + Sub-canvas ref card ====== */
+
+.planner-node__owner-pill--button {
+  background: rgba(245, 244, 239, 0.04);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 999px;
+  padding: 2px 8px 2px 4px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: 10px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.planner-node__owner-pill--button:hover {
+  background: rgba(245, 244, 239, 0.1);
+  border-color: rgba(168, 165, 155, 0.45);
+}
+
+.planner-node__owner-pill--button:focus-visible {
+  outline: 2px solid rgba(120, 180, 255, 0.6);
+  outline-offset: 1px;
+}
+
+.planner-node__owner-pill-cta {
+  margin-left: 4px;
+  opacity: 0.6;
+}
+
+.planner-node__owner-pill--button:hover .planner-node__owner-pill-cta {
+  opacity: 1;
+}
+
+.planner-node__owner-pill--assigned {
+  background: rgba(120, 180, 255, 0.08);
+  border: 1px solid rgba(120, 180, 255, 0.3);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node--subcanvas-ref {
+  border-style: dashed;
+  background: rgba(245, 244, 239, 0.03);
+}
+
+.planner-node__subcanvas-ref-body {
+  padding: 6px 12px 4px;
+}
+
+.planner-node__subcanvas-ref-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.planner-assign-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 10, 0.62);
+  display: grid;
+  place-items: center;
+  z-index: 9000;
+  padding: 24px;
+}
+
+.planner-assign-dialog {
+  background: var(--surface, #1a1a1c);
+  color: var(--text, #e8e6df);
+  width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  border-radius: 14px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.planner-assign-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.18);
+}
+
+.planner-assign-dialog__header h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.planner-assign-dialog__subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim, rgba(232, 230, 223, 0.6));
+}
+
+.planner-assign-dialog__close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.planner-assign-dialog__close:hover {
+  background: rgba(245, 244, 239, 0.05);
+  border-color: rgba(168, 165, 155, 0.22);
+}
+
+.planner-assign-dialog__body {
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.planner-assign-dialog__body--upgrade {
+  align-items: stretch;
+  gap: 10px;
+}
+
+.planner-assign-dialog__body--upgrade h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.planner-assign-dialog__warning-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: rgba(232, 178, 90, 0.16);
+  color: rgb(232, 178, 90);
+}
+
+.planner-assign-dialog__warning-lead {
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.planner-assign-dialog__warning-list {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__warning-list strong {
+  color: var(--text);
+}
+
+.planner-assign-dialog__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(245, 244, 239, 0.04);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 8px;
+}
+
+.planner-assign-dialog__search input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.planner-assign-dialog__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.planner-assign-dialog__empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 12px 4px;
+}
+
+.planner-assign-dialog__member {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.planner-assign-dialog__member:hover {
+  background: rgba(245, 244, 239, 0.05);
+}
+
+.planner-assign-dialog__member.is-selected {
+  background: rgba(120, 180, 255, 0.1);
+  border-color: rgba(120, 180, 255, 0.45);
+}
+
+.planner-assign-dialog__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.08);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  flex: none;
+}
+
+.planner-assign-dialog__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.planner-assign-dialog__member-name {
+  flex: 1;
+  font-size: 13px;
+}
+
+.planner-assign-dialog__member-role {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ============================================================ */
+/* UI-4 · Input Card sections (Upstream / External / Dialogue). */
+/* ============================================================ */
+
+.planner-input-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 9px;
+  padding: 8px 9px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 7px;
+  background: rgba(245, 244, 239, 0.04);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.planner-input-card--modal {
+  padding: 10px 12px;
+  font-size: 11px;
+}
+
+.planner-input-card__title {
+  margin-bottom: 4px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.planner-input-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(168, 165, 155, 0.12);
+}
+
+.planner-input-card__section:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.planner-input-card__section-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.planner-input-card__section-count {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.planner-input-card__badge {
+  padding: 1px 6px;
+  border: 1px solid rgba(168, 165, 155, 0.28);
+  border-radius: 4px;
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.planner-input-card__badge--upstream {
+  border-color: rgba(168, 165, 155, 0.34);
+  background: rgba(168, 165, 155, 0.14);
+  color: var(--text-dim);
+}
+
+.planner-input-card__badge--external {
+  border-color: rgba(139, 169, 194, 0.32);
+  background: rgba(139, 169, 194, 0.12);
+  color: rgba(139, 169, 194, 0.92);
+}
+
+.planner-input-card__badge--dialogue {
+  border-color: rgba(201, 164, 93, 0.32);
+  background: rgba(201, 164, 93, 0.12);
+  color: rgba(201, 164, 93, 0.94);
+}
+
+.planner-input-card__upstream-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.planner-input-card__upstream-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text);
+  font-size: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-input-card__upstream-pill svg {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.planner-input-card__upstream-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-input-card__upstream-mode {
+  margin-left: auto;
+  color: rgba(168, 165, 155, 0.62);
+  font-size: 9px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.planner-input-card__muted {
+  color: rgba(168, 165, 155, 0.62);
+}
+
+.planner-input-card__external-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planner-input-card__external-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid rgba(139, 169, 194, 0.20);
+  border-radius: 5px;
+  background: rgba(139, 169, 194, 0.07);
+  min-width: 0;
+}
+
+.planner-input-card__external-row svg {
+  flex: none;
+  color: rgba(139, 169, 194, 0.9);
+}
+
+.planner-input-card__external-ref {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.planner-input-card__external-ref strong {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.planner-input-card__external-ref em {
+  color: var(--text-dim);
+  font-size: 9px;
+  font-style: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-input-card__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(168, 165, 155, 0.28);
+  border-radius: 4px;
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.planner-input-card__refresh:hover:not(:disabled) {
+  background: rgba(139, 169, 194, 0.18);
+  color: var(--text);
+}
+
+.planner-input-card__refresh:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.planner-input-card__last-sync {
+  margin-left: auto;
+  color: rgba(168, 165, 155, 0.62);
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-input-card__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 3px 7px;
+  border: 1px dashed rgba(168, 165, 155, 0.34);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.planner-input-card__cta:hover:not(:disabled) {
+  border-color: rgba(139, 169, 194, 0.5);
+  background: rgba(139, 169, 194, 0.08);
+  color: var(--text);
+}
+
+.planner-input-card__cta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.planner-input-card__dialogue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.planner-input-card__dialogue-row svg {
+  flex: none;
+  color: rgba(201, 164, 93, 0.92);
+}
+
+.planner-input-card__dialogue-summary strong {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.planner-input-card__dialogue-config {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 4px;
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text-faint);
+  font-size: 9px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.planner-input-card__dialogue-config:hover:not(:disabled) {
+  background: rgba(201, 164, 93, 0.12);
+  color: var(--text);
+}
+
+.planner-input-card__dialogue-popover {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 5px;
+  background: rgba(245, 244, 239, 0.05);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.planner-input-card__dialogue-popover em {
+  color: var(--text);
+  font-weight: 650;
+  font-style: normal;
+}
+
+/* ============================================================ */
+/* UI-4 · "+ Transform" floating edge button. */
+/* ============================================================ */
+
+.planner-edge-insert {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+/* React Flow puts the hovered edge into [data-state="hovered"] but doesn't
+   always — fall back to making the parent group hover-sensitive. */
+.react-flow__edge:hover .planner-edge-insert,
+.planner-edge-insert:hover,
+.planner-edge-insert:focus-within {
+  opacity: 1;
+}
+
+.planner-edge-insert__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(139, 169, 194, 0.5);
+  border-radius: 999px;
+  background: rgba(13, 17, 23, 0.94);
+  color: rgba(139, 169, 194, 0.95);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32);
+  transition: transform 0.12s, background 0.12s, color 0.12s;
+}
+
+.planner-edge-insert__button:hover {
+  transform: scale(1.08);
+  background: rgba(139, 169, 194, 0.18);
+  color: #fff;
+}
+
+/* ============================================================ */
+/* UI-4 · Attach data source popover. */
+/* ============================================================ */
+
+.planner-attach-popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.36);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.planner-attach-popover {
+  width: min(420px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 16px 18px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 10px;
+  background: var(--panel, #15171c);
+  color: var(--text);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.planner-attach-popover__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.planner-attach-popover__header strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.planner-attach-popover__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.planner-attach-popover__close:hover {
+  background: rgba(245, 244, 239, 0.08);
+  color: var(--text);
+}
+
+.planner-attach-popover__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__summary {
+  background: rgba(245, 244, 239, 0.03);
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.planner-assign-dialog__summary h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.planner-assign-dialog__summary ul {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.planner-assign-dialog__contract {
+  margin-top: 8px;
+}
+
+.planner-assign-dialog__contract summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.planner-assign-dialog__contract pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  background: rgba(0, 0, 0, 0.32);
+  border-radius: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.planner-assign-dialog__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 0 18px 12px;
+  background: rgba(194, 106, 106, 0.12);
+  border: 1px solid rgba(194, 106, 106, 0.42);
+  border-radius: 6px;
+  font-size: 12px;
+  color: rgb(238, 178, 178);
+}
+
+.planner-assign-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 14px;
+  border-top: 1px solid rgba(168, 165, 155, 0.18);
+}
+
+.planner-assign-dialog__secondary,
+.planner-assign-dialog__primary {
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid rgba(168, 165, 155, 0.32);
+  background: transparent;
+  color: inherit;
+}
+
+.planner-assign-dialog__secondary:hover {
+  background: rgba(245, 244, 239, 0.05);
+}
+
+.planner-assign-dialog__primary {
+  background: rgba(120, 180, 255, 0.16);
+  border-color: rgba(120, 180, 255, 0.42);
+  color: rgb(180, 215, 255);
+}
+
+.planner-assign-dialog__primary:hover {
+  background: rgba(120, 180, 255, 0.28);
+}
+
+.planner-assign-dialog__primary.is-destructive {
+  background: rgba(232, 178, 90, 0.16);
+  border-color: rgba(232, 178, 90, 0.45);
+  color: rgb(245, 210, 150);
+}
+
+.planner-assign-dialog__primary.is-destructive:hover {
+  background: rgba(232, 178, 90, 0.3);
+}
+
+.planner-assign-dialog__primary:disabled,
+.planner-assign-dialog__secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.planner-attach-popover__field select,
+.planner-attach-popover__field input {
+  padding: 6px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.28);
+  border-radius: 5px;
+  background: rgba(245, 244, 239, 0.04);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.planner-attach-popover__muted {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.planner-attach-popover__warn {
+  margin: 0;
+  padding: 6px 8px;
+  border-left: 2px solid rgba(201, 164, 93, 0.6);
+  background: rgba(201, 164, 93, 0.08);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.planner-attach-popover__error {
+  margin: 0;
+  color: rgba(204, 120, 92, 0.95);
+  font-size: 11px;
+}
+
+.planner-attach-popover__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.planner-attach-popover__actions button {
+  padding: 6px 12px;
+  border: 1px solid rgba(168, 165, 155, 0.28);
+  border-radius: 5px;
+  background: rgba(245, 244, 239, 0.04);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.planner-attach-popover__actions button.primary {
+  border-color: rgba(139, 169, 194, 0.6);
+  background: rgba(139, 169, 194, 0.18);
+}
+
+.planner-attach-popover__actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.planner-node__io--output-only {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ── UI-6 · AI Recap Drawer ───────────────────────────────────────────── */
+.ai-recap-drawer {
+  position: absolute;
+  top: 64px;
+  left: 16px;
+  z-index: 260;
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: rgba(28, 28, 26, 0.97);
+  border: 1px solid rgba(168, 165, 155, 0.24);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+  color: var(--text);
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.ai-recap-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.16);
+}
+
+.ai-recap-drawer__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-recap-drawer__title strong {
+  font-size: 13px;
+}
+
+.ai-recap-drawer__title span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ai-recap-drawer__close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.ai-recap-drawer__close:hover {
+  background: rgba(168, 165, 155, 0.12);
+  color: var(--text);
+}
+
+.ai-recap-drawer__section {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.1);
+  overflow-y: auto;
+}
+
+.ai-recap-drawer__section:last-child {
+  border-bottom: none;
+}
+
+.ai-recap-drawer__section h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ai-recap-drawer__highlights {
+  background: rgba(168, 113, 50, 0.06);
+}
+
+.ai-recap-drawer__subsection {
+  margin-bottom: 10px;
+}
+
+.ai-recap-drawer__subsection:last-child {
+  margin-bottom: 0;
+}
+
+.ai-recap-drawer__subsection-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.ai-recap-drawer__subsection-head strong {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ai-recap-drawer__subsection-head small {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-recap-drawer__subsection-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ai-recap-drawer__row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background 80ms, border-color 80ms;
+}
+
+.ai-recap-drawer__row:hover:not(:disabled) {
+  background: rgba(168, 165, 155, 0.08);
+  border-color: rgba(168, 165, 155, 0.18);
+}
+
+.ai-recap-drawer__row:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.ai-recap-drawer__row--static {
+  cursor: default;
+}
+
+.ai-recap-drawer__row-title {
+  font-size: 12px;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.ai-recap-drawer__row-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ai-recap-drawer__empty {
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  font-style: italic;
+}
+
+.ai-recap-drawer__warn {
+  font-size: 11px;
+  color: rgba(216, 144, 88, 0.95);
+  padding: 4px 8px;
+  margin-bottom: 4px;
+  background: rgba(216, 144, 88, 0.08);
+  border-radius: 4px;
+}
+
+.ai-recap-drawer__activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.ai-recap-drawer__activity-head h3 {
+  margin: 0;
+}
+
+.ai-recap-drawer__group-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: rgba(168, 165, 155, 0.08);
+  padding: 2px;
+  border-radius: 6px;
+}
+
+.ai-recap-drawer__group-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.ai-recap-drawer__group-tabs button.is-active {
+  background: rgba(168, 165, 155, 0.18);
+  color: var(--text);
+}
+
+.ai-recap-drawer__group {
+  margin-bottom: 10px;
+}
+
+.ai-recap-drawer__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  margin-bottom: 2px;
+}
+
+/* trigger button replacing the inert recap line */
+.canvas-toolbar__recap-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.canvas-toolbar__recap-trigger:hover .canvas-toolbar__recap-copy strong {
+  text-decoration: underline;
+  text-decoration-color: rgba(168, 165, 155, 0.4);
+  text-underline-offset: 3px;
+}
+
+/* UI-5.3 — canvas-switch loading skeleton.
+   Painted immediately on canvas-switch (no async deps) so the user sees the
+   shape of the upcoming canvas instead of dead time. The shimmer animation
+   is GPU-cheap (background-position only). */
+.planner-canvas-skeleton {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(168, 165, 155, 0.04), transparent 60%),
+    var(--bg, #1c1c1a);
+  pointer-events: none;
+}
+.planner-canvas-skeleton__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(168, 165, 155, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(168, 165, 155, 0.06) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.7;
+}
+.planner-canvas-skeleton__card {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 14px;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.03) 0%,
+    rgba(255, 255, 255, 0.10) 40%,
+    rgba(255, 255, 255, 0.03) 80%
+  );
+  background-size: 200% 100%;
+  border: 1px solid rgba(168, 165, 155, 0.08);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+  animation: planner-canvas-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.planner-canvas-skeleton__label {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim, rgba(232, 228, 217, 0.45));
+}
+@keyframes planner-canvas-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .planner-canvas-skeleton__card {
+    animation: none;
+  }
+}
+

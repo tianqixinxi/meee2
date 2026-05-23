@@ -7,6 +7,17 @@ import Foundation
 /// 所以抽成 protocol，按终端类型挑实现。
 public protocol TerminalSpawner {
     func spawn(cwd: String, command: String?) async -> SpawnResult
+    /// ENG-2 / E2.4: spawn without stealing focus from the user's current app.
+    /// Used by planner auto-dispatch + multi-node burst so a series of new
+    /// sessions doesn't strip-mine the user's attention. Default impl falls
+    /// back to `spawn(...)` so older terminals work unchanged.
+    func spawn(cwd: String, command: String?, createInBackground: Bool) async -> SpawnResult
+}
+
+extension TerminalSpawner {
+    public func spawn(cwd: String, command: String?, createInBackground: Bool) async -> SpawnResult {
+        await spawn(cwd: cwd, command: command)
+    }
 }
 
 public enum SpawnResult {
@@ -30,10 +41,36 @@ public enum SpawnResult {
 /// 窗口开出来后，shell 已经落在 cwd；再 `input text "claude\n"` 就跑起来。
 /// 优先在已有 Ghostty window 里新建 tab；没有 window 时再创建新 window。
 /// 全部走 Ghostty 原生 AppleScript，不依赖 Cmd+T / Accessibility keystroke。
+/// ENG-2 / E2.4: serialize Ghostty spawn calls so a multi-node planner burst
+/// (auto-dispatch fanning out to several downstream nodes at once) doesn't
+/// race AppleScript events. macOS Ghostty's AppleScript bridge is single-
+/// threaded — concurrent `new tab` calls drop tabs or mis-route the focused
+/// terminal id. An actor-confined queue + serial AS dispatch is enough.
+actor GhosttySpawnSerializer {
+    static let shared = GhosttySpawnSerializer()
+    func serialize<T>(_ block: () async -> T) async -> T {
+        await block()
+    }
+}
+
 public struct GhosttySpawner: TerminalSpawner {
     public init() {}
 
     public func spawn(cwd: String, command: String?) async -> SpawnResult {
+        await spawn(cwd: cwd, command: command, createInBackground: false)
+    }
+
+    public func spawn(cwd: String, command: String?, createInBackground: Bool) async -> SpawnResult {
+        // ENG-2 / E2.4: serialize all spawn calls. See `GhosttySpawnSerializer`
+        // for the rationale (Ghostty AppleScript races on concurrent
+        // `new tab`). The actor hop is cheap (~µs) compared to the AppleScript
+        // round-trip and prevents focus-steal during a multi-node burst.
+        await GhosttySpawnSerializer.shared.serialize {
+            await self.spawnLocked(cwd: cwd, command: command, createInBackground: createInBackground)
+        }
+    }
+
+    private func spawnLocked(cwd: String, command: String?, createInBackground: Bool) async -> SpawnResult {
         // 基础 sanity：cwd 必须存在
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir), isDir.boolValue else {
@@ -44,13 +81,23 @@ public struct GhosttySpawner: TerminalSpawner {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        // Step 1: reuse the front window as a new tab when possible; otherwise
-        // create the first window. This keeps "resume closed session" from
-        // scattering windows when the user already has Ghostty open.
+        // ENG-2 / E2.4: `activate` raises Ghostty to the front and steals
+        // focus from whatever the user is in. For auto-dispatch / burst
+        // creation we skip it so new tabs open quietly behind the current
+        // app — the user only switches to Ghostty when they want to. The
+        // existing manual-spawn path (user clicks "open terminal") keeps
+        // `activate` so click → focus still works.
+        //
+        // Macos gotcha (documented for future readers): you can't just
+        // `tell process` instead — Ghostty's tab-creation APIs live on the
+        // application object. Tried `open -g -a Ghostty` first; it brings
+        // up a new *window* per call (no tab reuse) and doesn't return the
+        // terminal id we need to track. AppleScript-without-activate is the
+        // sweet spot.
+        let activateClause = createInBackground ? "" : "activate\n            "
         let openScript = """
         tell application "Ghostty"
-            activate
-            try
+            \(activateClause)try
                 set cfg to new surface configuration
                 set initial working directory of cfg to "\(escapedCwd)"
                 if (count of windows) > 0 then
