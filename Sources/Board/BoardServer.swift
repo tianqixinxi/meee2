@@ -73,6 +73,11 @@ public final class BoardServer {
             return
         }
 
+        // Opt-in: route planner agent events through the meee2-online TS
+        // runtime when both env vars are set. Otherwise the in-process
+        // DefaultPlannerAgentRuntime keeps serving requests.
+        HTTPPlannerAgentRuntime.installFromEnvironment()
+
         var lastError: Error?
         for candidate in candidatePorts() {
             let server = HttpServer()

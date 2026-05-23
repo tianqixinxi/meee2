@@ -1715,21 +1715,33 @@ enum PlannerPermission {
 }
 
 enum PlannerProposalValidator {
-    /// Known `PlanningNode.nodeKind` raw values an LLM is allowed to emit.
-    static let knownNodeKinds: Set<String> = [
-        PlanningNodeKind.step.rawValue,
-        PlanningNodeKind.session.rawValue,
-        PlanningNodeKind.artifact.rawValue,
-        PlanningNodeKind.subCanvas.rawValue,
-        PlanningNodeKind.external.rawValue
-    ]
+    /// Allowed enum sets: derived from `PlannerContract.generated.swift`, whose
+    /// source of truth is meee2-online/src/planner-runtime/contract/{enums,proposal}.ts.
+    /// Re-emit via `pnpm contract:emit` in meee2-online. The static-let initializers
+    /// below assert (at first access via `precondition`) that every Swift-side enum
+    /// case is represented in the contract — surfaces drift loudly if a Swift enum
+    /// gains a case but the Zod side hasn't.
+    static let knownNodeKinds: Set<String> = {
+        let s = PlannerContract.nodeKinds
+        for kind in [PlanningNodeKind.step, .session, .artifact, .subCanvas, .external] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanningNodeKind.\(kind) missing from PlannerContract.nodeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
-    /// Known `PlanChange.Kind` raw values an LLM is allowed to emit.
-    static let knownChangeKinds: Set<String> = [
-        PlanChange.Kind.addNode.rawValue,
-        PlanChange.Kind.updateNode.rawValue,
-        PlanChange.Kind.attachArtifact.rawValue
-    ]
+    static let knownChangeKinds: Set<String> = {
+        let s = PlannerContract.changeKinds
+        for kind in [PlanChange.Kind.addNode, .updateNode, .attachArtifact] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanChange.Kind.\(kind) missing from PlannerContract.changeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
     static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
         let decoder = JSONDecoder()

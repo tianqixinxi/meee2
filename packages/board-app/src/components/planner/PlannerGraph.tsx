@@ -71,6 +71,7 @@ import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
+import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
 import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphNode } from './plannerGraphAdapter'
@@ -1511,6 +1512,20 @@ function PlannerGraphInner({
               reviewRequestTick={reviewRequestTick}
               answerOnlyReply={answerOnlyReply}
             />
+            {import.meta.env.VITE_PLANNER_RUNTIME_URL && (
+              <PlannerAgentChatPanel
+                runtimeBaseUrl={import.meta.env.VITE_PLANNER_RUNTIME_URL as string}
+                boardBaseUrl={
+                  (import.meta.env.VITE_BOARD_BASE_URL as string | undefined) ??
+                  window.location.origin
+                }
+                canvasId={canvasId}
+                harness={
+                  (import.meta.env.VITE_PLANNER_HARNESS as 'stub' | 'anthropic' | undefined) ??
+                  'stub'
+                }
+              />
+            )}
           </div>
         )}
       </div>
