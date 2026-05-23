@@ -3718,7 +3718,7 @@ final class PlannerStore {
             let (derivedV2, _) = NodeContractV2.derive(from: current)
             let priorVersion = record.nodeVersions.latest(canvasId: canvasId, nodeId: nodeId)
             let trigger: NodeVersionTrigger = {
-                if output.forceNewVersion == true { return .forceRerun }
+                if output.forceNewVersion { return .forceRerun }
                 if priorVersion == nil { return .manual }
                 return .manual
             }()
@@ -3733,7 +3733,9 @@ final class PlannerStore {
             // At submit time we don't re-run the merge — but we do capture
             // the contract shape that *would* have driven it so the version
             // is a faithful "what input did this produce on" record.
-            let inputSnapshot = NodeVersionInputSnapshot(
+            // (Distinct from `inputSnapshot` above which is the ENG-3
+            // PlannerArtifactInputSnapshot bundle for the artifact chain.)
+            let nodeVersionInputSnapshot = NodeVersionInputSnapshot(
                 upstreamNodeId: derivedV2.input.upstream.sourceNodeId,
                 upstreamVersionId: derivedV2.input.upstream.sourceNodeId.flatMap { upId in
                     record.nodeVersions.latest(canvasId: canvasId, nodeId: upId)?.id
@@ -3748,7 +3750,7 @@ final class PlannerStore {
                 previousVersions: record.nodeVersions,
                 sessionId: current.sessionId,
                 trigger: trigger,
-                inputs: inputSnapshot,
+                inputs: nodeVersionInputSnapshot,
                 artifactIds: newArtifacts.map(\.id),
                 status: output.status,
                 startedAt: Date(),
