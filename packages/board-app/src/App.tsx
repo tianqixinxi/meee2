@@ -673,6 +673,8 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              userProfile={userProfile}
+              boardState={boardState.state}
             />
           )}
           {activeCanvasLoading && (
