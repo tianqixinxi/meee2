@@ -16,6 +16,7 @@ import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
 import { PreferencesDialog } from './components/PreferencesDialog'
+import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { useBoardState } from './useBoardState'
@@ -56,6 +57,8 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
+const WORKSPACE_RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
+const FIRST_RUN_ONBOARDING_COMPLETED_KEY = 'meee2.onboarding.completed.v1'
 // Minimum loading-overlay duration when an uncached canvas is hydrated.
 // Previously 3000ms — that made every fresh canvas switch feel sluggish even
 // when the real fetch returned in <100ms. 250ms is enough to smooth flicker
@@ -335,6 +338,9 @@ export default function App() {
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
+  const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
+  const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [preferencesOpen, setPreferencesOpen] = useState(false)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -416,17 +422,29 @@ export default function App() {
   const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
     fetchMeee2AgentRuntimeStatus()
       .then((status) => {
+        setAgentRuntimeInstallError(null)
         setAgentRuntimeStatus(status)
         if (showModal && status.needsAttention) setAgentRuntimeModalOpen(true)
       })
       .catch((err) => {
         console.warn('[App] fetchMeee2AgentRuntimeStatus failed:', (err as Error).message)
+        setAgentRuntimeStatus(null)
+        setAgentRuntimeInstallError((err as Error).message || 'Failed to check Meee2 Agent Runtime')
       })
   }, [])
 
   useEffect(() => {
-    refreshAgentRuntimeStatus(true)
+    refreshAgentRuntimeStatus(firstRunOnboardingCompletedAtMountRef.current)
   }, [refreshAgentRuntimeStatus])
+
+  const completeFirstRunOnboarding = useCallback(() => {
+    setFirstRunOnboardingCompleted(true)
+    try {
+      window.localStorage.setItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY, '1')
+    } catch {
+      // Persistence is best-effort; entering the app should still work.
+    }
+  }, [])
 
   const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
     setAgentRuntimeInstallTarget(target)
@@ -589,6 +607,15 @@ export default function App() {
     if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
   }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
+  const handleWorkspaceRailCollapsedChange = useCallback((collapsed: boolean) => {
+    setWorkspaceRailCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(WORKSPACE_RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      // Persistence is nice-to-have; keep the in-memory state.
+    }
+  }, [])
+
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
       .then(setUserProfile)
@@ -600,6 +627,30 @@ export default function App() {
     window.addEventListener('focus', refreshUserProfile)
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
+
+  if (!firstRunOnboardingCompleted) {
+    return (
+      <ToastContext.Provider value={toastCtx}>
+        <FirstRunOnboarding
+          status={agentRuntimeStatus}
+          installingTarget={agentRuntimeInstallTarget}
+          installError={agentRuntimeInstallError}
+          installLogs={agentRuntimeInstallLogs}
+          onInstall={handleInstallAgentRuntime}
+          onRefresh={() => refreshAgentRuntimeStatus(false)}
+          onComplete={completeFirstRunOnboarding}
+          onSkip={completeFirstRunOnboarding}
+        />
+        <div className="toasts">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast ${t.kind}`}>
+              {t.text}
+            </div>
+          ))}
+        </div>
+      </ToastContext.Provider>
+    )
+  }
 
   if (!hydrated || !canvasList) {
     return (
@@ -626,6 +677,8 @@ export default function App() {
           mode={workspaceMode}
           unreadSids={unreadSids}
           userProfile={userProfile}
+          collapsed={workspaceRailCollapsed}
+          onCollapsedChange={handleWorkspaceRailCollapsedChange}
           onModeChange={handleWorkspaceModeChange}
           onPreferences={() => setPreferencesOpen(true)}
         />
@@ -739,4 +792,25 @@ export default function App() {
       </div>
     </ToastContext.Provider>
   )
+}
+
+function readWorkspaceRailCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const stored = window.localStorage.getItem(WORKSPACE_RAIL_COLLAPSED_KEY)
+    if (stored === '1') return true
+    if (stored === '0') return false
+    return window.matchMedia('(max-width: 720px)').matches
+  } catch {
+    return false
+  }
+}
+
+function readFirstRunOnboardingCompleted(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    return window.localStorage.getItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY) === '1'
+  } catch {
+    return true
+  }
 }

@@ -7,7 +7,7 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, PanelRightClose, PanelRightOpen, PlayCircle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -74,7 +74,7 @@ import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
-import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphNode } from './plannerGraphAdapter'
+import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
 import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
@@ -825,6 +825,18 @@ function PlannerGraphInner({
     ioArtifactVisibility,
     teamDirectory,
   ])
+  const activeProposal = proposal && (proposal.status === 'pending' || proposal.status === 'approved') ? proposal : null
+  const emptyCanvasMode = Boolean(
+    plannerState
+    && plannerState.canvas.id === canvasId
+    && isPlannerCanvasEmptyForOnboarding(plannerState)
+    && !activeProposal,
+  )
+  const showWorkspacePreview = Boolean(activeProposal && reviewGraph.nodes.length > 0)
+  const starterSuggestions = useMemo(() => buildStarterSuggestions(canvasName, plannerState?.canvas.plannerContext), [
+    canvasName,
+    plannerState?.canvas.plannerContext,
+  ])
 
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
@@ -883,6 +895,22 @@ function PlannerGraphInner({
   useEffect(() => {
     window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
   }, [plannerPanelCollapsed])
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--planner-chat-width', plannerPanelCollapsed ? '0px' : `${plannerPanelWidth}px`)
+    document.documentElement.classList.toggle('board-planner-chat-collapsed', plannerPanelCollapsed)
+    return () => {
+      document.documentElement.style.removeProperty('--planner-chat-width')
+      document.documentElement.classList.remove('board-planner-chat-collapsed')
+    }
+  }, [plannerPanelCollapsed, plannerPanelWidth])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('board-empty-omni', emptyCanvasMode)
+    return () => {
+      document.documentElement.classList.remove('board-empty-omni')
+    }
+  }, [emptyCanvasMode])
 
   const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
@@ -946,7 +974,7 @@ function PlannerGraphInner({
     const startX = event.clientX
     const startWidth = plannerPanelWidth
     const onPointerMove = (moveEvent: PointerEvent) => {
-      setPlannerPanelWidth(clampPanelWidth(startWidth + startX - moveEvent.clientX))
+      setPlannerPanelWidth(clampPanelWidth(startWidth + moveEvent.clientX - startX))
     }
     const onPointerUp = () => {
       window.removeEventListener('pointermove', onPointerMove)
@@ -1332,7 +1360,7 @@ function PlannerGraphInner({
     rejectPlannerProposal(canvasId, proposal.id)
       .then((next) => {
         if (!next) return
-        setProposal(next)
+        setProposal(next.status === 'pending' || next.status === 'approved' ? next : null)
         setPlannerState((current) => current
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
@@ -1362,7 +1390,7 @@ function PlannerGraphInner({
   }, [])
 
   const plannerMainStyle = {
-    '--planner-panel-width': `${plannerPanelWidth}px`,
+    '--planner-chat-width': `${plannerPanelWidth}px`,
   } as CSSProperties
   const mcpWarning = mcpStatusError || (mcpStatus && !mcpStatus.launches ? mcpStatus.error || 'Meee2 MCP is not available.' : null)
   const hasSessionActionBanner = readySessionPlan.total > 0 || closedBoundSessions.length > 0
@@ -1383,18 +1411,96 @@ function PlannerGraphInner({
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
-      <div
-        className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
-        style={plannerMainStyle}
-      >
+      {emptyCanvasMode ? (
+        <div className="planner-empty-omni">
+          <PlannerProposalPanel
+            canvasId={canvasId}
+            canvasName={plannerState?.canvas.title ?? canvasName}
+            canvasTask={plannerState?.canvas.plannerContext ?? ''}
+            proposal={proposal}
+            variant={variant}
+            previewGraph={reviewGraph}
+            busy={busy}
+            error={error}
+            access={plannerState?.access ?? null}
+            nodeCount={plannerState?.nodes.length ?? 0}
+            hasActionableDrift={hasActionableDrift}
+            onSubmit={handlePlannerSubmit}
+            onUseRecommendedTemplate={handleUseRecommendedTemplate}
+            onApproveAndApply={handleApproveAndApply}
+            onReject={handleReject}
+            draftMessage={plannerDraftMessage}
+            clearRevision={clearRevision}
+            reviewRequestTick={reviewRequestTick}
+            answerOnlyReply={answerOnlyReply}
+            layout="omni"
+            emptyMode
+            starterSuggestions={starterSuggestions}
+            autoFocus
+          />
+        </div>
+      ) : (
+        <div
+          className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
+          style={plannerMainStyle}
+        >
         <button
           type="button"
           className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
           onClick={() => setPlannerPanelCollapsed((value) => !value)}
           aria-label={plannerPanelCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
         >
-          {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
+          {plannerPanelCollapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
         </button>
+        {!plannerPanelCollapsed && (
+          <div className="planner-side">
+            <button
+              type="button"
+              className="planner-side__resize"
+              aria-label="Resize meee2 AI panel"
+              onPointerDown={handlePanelResizeStart}
+            />
+            <PlannerProposalPanel
+              canvasId={canvasId}
+              canvasName={plannerState?.canvas.title ?? canvasName}
+              canvasTask={plannerState?.canvas.plannerContext ?? ''}
+              proposal={proposal}
+              variant={variant}
+              previewGraph={reviewGraph}
+              busy={busy}
+              error={error}
+              access={plannerState?.access ?? null}
+              nodeCount={plannerState?.nodes.length ?? 0}
+              hasActionableDrift={hasActionableDrift}
+              onSubmit={handlePlannerSubmit}
+              onUseRecommendedTemplate={handleUseRecommendedTemplate}
+              onApproveAndApply={handleApproveAndApply}
+              onReject={handleReject}
+              draftMessage={plannerDraftMessage}
+              clearRevision={clearRevision}
+              reviewRequestTick={reviewRequestTick}
+              answerOnlyReply={answerOnlyReply}
+              layout="left-rail"
+              emptyMode={emptyCanvasMode}
+              starterSuggestions={starterSuggestions}
+              autoFocus={emptyCanvasMode}
+            />
+            {import.meta.env.VITE_PLANNER_RUNTIME_URL && (
+              <PlannerAgentChatPanel
+                runtimeBaseUrl={import.meta.env.VITE_PLANNER_RUNTIME_URL as string}
+                boardBaseUrl={
+                  (import.meta.env.VITE_BOARD_BASE_URL as string | undefined) ??
+                  window.location.origin
+                }
+                canvasId={canvasId}
+                harness={
+                  (import.meta.env.VITE_PLANNER_HARNESS as 'stub' | 'anthropic' | undefined) ??
+                  'stub'
+                }
+              />
+            )}
+          </div>
+        )}
         <div className="planner-flow">
           {(hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
@@ -1467,7 +1573,12 @@ function PlannerGraphInner({
             about to fill in. Default fixture content first-paint is unchanged
             (~<400ms median against the local board server).
           */}
-          {plannerState && plannerState.canvas.id === canvasId ? (
+          {showWorkspacePreview && activeProposal ? (
+            <PlannerWorkspacePreview
+              graph={reviewGraph}
+              proposal={activeProposal}
+            />
+          ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
               nodes={flowNodes}
               edges={graph.edges}
@@ -1501,53 +1612,8 @@ function PlannerGraphInner({
             <PlannerCanvasSkeleton canvasName={canvasName} />
           )}
         </div>
-
-        {!plannerPanelCollapsed && (
-          <div className="planner-side">
-            <button
-              type="button"
-              className="planner-side__resize"
-              aria-label="Resize meee2 AI panel"
-              onPointerDown={handlePanelResizeStart}
-            />
-            <PlannerProposalPanel
-              canvasId={canvasId}
-              canvasName={plannerState?.canvas.title ?? canvasName}
-              canvasTask={plannerState?.canvas.plannerContext ?? ''}
-              proposal={proposal}
-              variant={variant}
-              previewGraph={reviewGraph}
-              busy={busy}
-              error={error}
-              access={plannerState?.access ?? null}
-              nodeCount={plannerState?.nodes.length ?? 0}
-              hasActionableDrift={hasActionableDrift}
-              onSubmit={handlePlannerSubmit}
-              onUseRecommendedTemplate={handleUseRecommendedTemplate}
-              onApproveAndApply={handleApproveAndApply}
-              onReject={handleReject}
-              draftMessage={plannerDraftMessage}
-              clearRevision={clearRevision}
-              reviewRequestTick={reviewRequestTick}
-              answerOnlyReply={answerOnlyReply}
-            />
-            {import.meta.env.VITE_PLANNER_RUNTIME_URL && (
-              <PlannerAgentChatPanel
-                runtimeBaseUrl={import.meta.env.VITE_PLANNER_RUNTIME_URL as string}
-                boardBaseUrl={
-                  (import.meta.env.VITE_BOARD_BASE_URL as string | undefined) ??
-                  window.location.origin
-                }
-                canvasId={canvasId}
-                harness={
-                  (import.meta.env.VITE_PLANNER_HARNESS as 'stub' | 'anthropic' | undefined) ??
-                  'stub'
-                }
-              />
-            )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
       {nodeModalOpen && selectedNode && (
         <NodeInspectorModal
           node={selectedNode}
@@ -2061,4 +2127,85 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
       </span>
     </div>
   )
+}
+
+function PlannerWorkspacePreview({
+  graph,
+  proposal,
+}: {
+  graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
+  proposal: PlanProposal
+}) {
+  return (
+    <div className="planner-workspace-preview" aria-label="Proposal preview">
+      <div className="planner-workspace-preview__notice" role="status">
+        <span>Preview only</span>
+        <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
+        <em>Review and apply from the modal before these nodes become the real canvas.</em>
+      </div>
+      <ReactFlow
+        nodes={graph.nodes}
+        edges={graph.edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        panOnDrag
+        zoomOnScroll
+        fitView
+        minZoom={0.25}
+        maxZoom={1.4}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
+      </ReactFlow>
+    </div>
+  )
+}
+
+function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
+  const activeProposals = (state.proposals ?? []).filter((proposal) =>
+    proposal.status === 'pending' || proposal.status === 'approved',
+  )
+  return (
+    (state.nodes ?? []).length === 0
+    && (state.artifacts ?? []).length === 0
+    && activeProposals.length === 0
+  )
+}
+
+function buildStarterSuggestions(canvasName: string, canvasTask?: string | null) {
+  const target = readableCanvasStarterTarget(canvasName, canvasTask)
+  return [
+    {
+      id: 'starter-delivery',
+      label: 'Delivery plan',
+      value: `Build a delivery plan for ${target}. Include scoped milestones, owners, review gates, and expected artifacts.`,
+      description: 'Turn a product, launch, or implementation goal into milestones, owners, gates, and deliverables.',
+      preview: ['Goal intake', 'Milestones', 'Owner review', 'Artifacts'],
+    },
+    {
+      id: 'starter-research',
+      label: 'Research brief',
+      value: `Create a research plan for ${target}. Include discovery, evidence collection, synthesis, decisions, and final outputs.`,
+      description: 'Structure discovery work with sources, synthesis checkpoints, decisions, and final recommendations.',
+      preview: ['Questions', 'Evidence', 'Synthesis', 'Decision'],
+    },
+    {
+      id: 'starter-ops',
+      label: 'Operating loop',
+      value: `Set up an operating loop for ${target}. Include recurring checks, blockers, escalation, artifacts, and a completion review.`,
+      description: 'Run a recurring process with check-ins, blockers, escalation paths, and completion review.',
+      preview: ['Check-in', 'Blockers', 'Escalation', 'Review'],
+    },
+  ]
+}
+
+function readableCanvasStarterTarget(canvasName: string, canvasTask?: string | null): string {
+  const title = canvasName.trim()
+  const context = canvasTask?.trim() ?? ''
+  if (context && !context.startsWith('canvas:')) return context
+  if (title && !/^(untitled|new canvas|default canvas|my|personal canvas)$/i.test(title)) return title
+  return 'this canvas'
 }

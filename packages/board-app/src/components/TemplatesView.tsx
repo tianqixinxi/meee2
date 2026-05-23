@@ -133,7 +133,7 @@ export function TemplatesView({
         <header className="templates-workspace__header">
           <div>
             <span>Templates</span>
-            <h1>Workflow templates</h1>
+            <h1>Canvas templates</h1>
           </div>
           <div className="templates-workspace__tools">
             <label className="templates-search">

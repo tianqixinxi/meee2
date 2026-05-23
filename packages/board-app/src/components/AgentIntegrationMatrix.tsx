@@ -488,7 +488,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               <div className="agent-matrix__recommend">
                 <div className="agent-matrix__recommend-header">
                   <Sparkles size={13} aria-hidden />
-                  <strong>Use it in a workflow</strong>
+                  <strong>Use it in a canvas</strong>
                 </div>
                 {recommended ? (
                   <div className="agent-matrix__recommend-success">
@@ -509,7 +509,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                 ) : (
                   <>
                     <p>
-                      Let the planner agent propose a small workflow that exercises{' '}
+                      Let the planner agent propose a small canvas plan that exercises{' '}
                       <strong>{installResult.integrationId}</strong>.
                     </p>
                     <div className="agent-matrix__recommend-controls">
@@ -533,7 +533,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                         disabled={recommendBusy || !recommendCanvasId}
                         onClick={() => handleRecommendWorkflow(installResult.integrationId)}
                       >
-                        {recommendBusy ? 'Thinking…' : 'Recommend workflow'}
+                        {recommendBusy ? 'Thinking…' : 'Recommend plan'}
                       </button>
                     </div>
                     {recommendError && (

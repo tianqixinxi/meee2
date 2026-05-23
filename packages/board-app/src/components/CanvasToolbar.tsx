@@ -49,6 +49,7 @@ interface Props {
 }
 
 interface CanvasRecap {
+  mode: 'ai' | 'empty'
   description: string
   headline: string
   statuses: Array<{ label: string; value: number; tone: CanvasStatusTone }>
@@ -147,6 +148,12 @@ export function CanvasToolbar({
       setRecapPlannerState(state)
       const baseRecap = buildCanvasStatusRecap(state)
       setRecap(baseRecap)
+      if (isBlankPlannerCanvas(state)) {
+        const nextRecap = buildBlankCanvasRecap(state)
+        recapCacheRef.current[activeCanvas.id] = nextRecap
+        setRecap(nextRecap)
+        return
+      }
       const aiRecap = await generateAIRecap(state, activeCanvas)
       if (recapRequestRef.current !== requestId) return
       const nextRecap = { ...baseRecap, ...aiRecap, updatedAt: new Date().toISOString() }
@@ -390,7 +397,7 @@ export function CanvasToolbar({
           </div>
         )}
       </div>
-      {recap?.statuses && (
+      {recap?.mode !== 'empty' && recap?.statuses && (
         <div className="canvas-toolbar__status-strip" aria-label="Canvas status overview">
           {recap.statuses.map((item) => (
             <span key={item.label} className={`canvas-toolbar__status-pill is-${item.tone}`}>
@@ -669,6 +676,7 @@ function buildCanvasStatusRecap(state: PlannerGraphState): CanvasRecap {
   const description = editableCanvasDescription(state.canvas?.plannerContext)
 
   return {
+    mode: 'ai',
     description,
     headline: 'Generating AI recap...',
     statuses: [
@@ -686,6 +694,7 @@ function buildCanvasStatusRecap(state: PlannerGraphState): CanvasRecap {
 
 function buildEmptyCanvasRecap(headline = 'Generating AI recap...'): CanvasRecap {
   return {
+    mode: 'ai',
     description: '',
     headline,
     statuses: [
@@ -699,6 +708,25 @@ function buildEmptyCanvasRecap(headline = 'Generating AI recap...'): CanvasRecap
     details: [],
     updatedAt: new Date().toISOString(),
   }
+}
+
+function buildBlankCanvasRecap(state: PlannerGraphState): CanvasRecap {
+  return {
+    ...buildCanvasStatusRecap(state),
+    mode: 'empty',
+    headline: 'Ready to build this canvas',
+    details: [
+      'Describe the outcome you want in AIChat.',
+      'meee2 AI will draft nodes for review before applying.',
+    ],
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function isBlankPlannerCanvas(state: PlannerGraphState): boolean {
+  const nodes = state.nodes ?? []
+  const artifacts = state.artifacts ?? []
+  return nodes.length === 0 && artifacts.length === 0
 }
 
 function editableCanvasDescription(value: string | null | undefined): string {
