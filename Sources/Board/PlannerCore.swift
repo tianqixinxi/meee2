@@ -68,11 +68,25 @@ struct ContextSource: Codable, Equatable {
     var reference: String
 }
 
+// MARK: - Cross-language enums (Swift ↔ Zod twin)
+//
+// The next three enums are also declared on the meee2-online side as Zod
+// schemas in `meee2-online/src/planner-runtime/contract/enums.ts` (ExecutionMode
+// / ExecutorType / NodeStatus). They MUST stay in sync — desktop and online
+// both round-trip these as raw strings through Supabase, and a divergence
+// will surface as silent Codable/Zod parse failures.
+//
+// If you add or remove a case here, mirror it in `enums.ts` (in the same PR
+// or the immediately following workspace-bump PR). A future codegen step can
+// collapse this back to one source; until then the rule is "edit both."
+
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (ExecutionMode)
 enum ExecutionMode: String, Codable, Equatable, CaseIterable {
     case auto
     case human
 }
 
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (ExecutorType)
 enum ExecutorType: String, Codable, Equatable, CaseIterable {
     case claude
     case codex
@@ -83,6 +97,7 @@ enum ExecutorType: String, Codable, Equatable, CaseIterable {
     case mock
 }
 
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (NodeStatus)
 enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     case draft
     case ready
