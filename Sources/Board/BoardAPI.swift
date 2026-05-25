@@ -2689,6 +2689,63 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    // MARK: - GET/PATCH /api/app-settings
+
+    static func getAppSettings(_ req: HttpRequest) -> HttpResponse {
+        return jsonResponse(appSettingsDTO())
+    }
+
+    static func updateAppSettings(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+
+        let defaults = UserDefaults.standard
+        var didChangeIslandVisibility = false
+        var didChangeScreenSelection = false
+
+        if let theme = json["theme"] as? String, ["system", "light", "dark"].contains(theme) {
+            defaults.set(theme, forKey: "meee2.theme")
+        }
+        if let locale = json["locale"] as? String, ["en", "zh-CN"].contains(locale) {
+            defaults.set(locale, forKey: "meee2.locale")
+        }
+        if let showIsland = json["showIsland"] as? Bool {
+            let previous = defaults.object(forKey: "showIsland") as? Bool ?? true
+            defaults.set(showIsland, forKey: "showIsland")
+            didChangeIslandVisibility = previous != showIsland
+        }
+        if let selectedScreenId = json["selectedScreenId"] as? String,
+           !selectedScreenId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let previous = defaults.string(forKey: "selectedScreenId") ?? "builtin"
+            defaults.set(selectedScreenId, forKey: "selectedScreenId")
+            didChangeScreenSelection = previous != selectedScreenId
+        }
+        if let autoExpandEnabled = json["autoExpandEnabled"] as? Bool {
+            defaults.set(autoExpandEnabled, forKey: "autoExpandEnabled")
+        }
+        if let autoCloseInterval = numeric(json["autoCloseInterval"]) {
+            defaults.set(clamp(autoCloseInterval, min: 3, max: 30), forKey: "autoCloseInterval")
+        }
+        if let showSessionInCompact = json["showSessionInCompact"] as? Bool {
+            defaults.set(showSessionInCompact, forKey: "showSessionInCompact")
+        }
+        if let carouselInterval = numeric(json["carouselInterval"]) {
+            defaults.set(clamp(carouselInterval, min: 3, max: 30), forKey: "carouselInterval")
+        }
+
+        DispatchQueue.main.async {
+            if didChangeIslandVisibility {
+                NotificationCenter.default.post(name: Notification.Name("islandVisibilityChanged"), object: nil)
+            }
+            if didChangeScreenSelection {
+                NotificationCenter.default.post(name: Notification.Name("screenSelectionChanged"), object: nil)
+            }
+        }
+
+        return jsonResponse(appSettingsDTO())
+    }
+
     static func openMeee2Settings(_ req: HttpRequest) -> HttpResponse {
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: Notification.Name("openSettings"), object: nil)
@@ -2721,6 +2778,72 @@ enum BoardAPI {
         clearMeee2OnlineSettings()
         Meee2OnlinePusher.shared.refreshActivation()
         return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func appSettingsDTO() -> AppSettingsDTO {
+        let defaults = UserDefaults.standard
+        return AppSettingsDTO(
+            theme: validTheme(defaults.string(forKey: "meee2.theme")),
+            locale: validLocale(defaults.string(forKey: "meee2.locale")),
+            devMode: appDevMode(),
+            showIsland: defaults.object(forKey: "showIsland") as? Bool ?? true,
+            selectedScreenId: defaults.string(forKey: "selectedScreenId") ?? "builtin",
+            availableScreens: availableScreenDTOs(),
+            autoExpandEnabled: defaults.object(forKey: "autoExpandEnabled") as? Bool ?? true,
+            autoCloseInterval: storedDouble(defaults, key: "autoCloseInterval", fallback: 8),
+            showSessionInCompact: defaults.object(forKey: "showSessionInCompact") as? Bool ?? true,
+            carouselInterval: storedDouble(defaults, key: "carouselInterval", fallback: 10)
+        )
+    }
+
+    private static func appDevMode() -> Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private static func availableScreenDTOs() -> [AppSettingsScreenDTO] {
+        NSScreen.screens.map { screen in
+            AppSettingsScreenDTO(
+                id: screen.isBuiltinDisplay ? "builtin" : screen.screenId,
+                name: screen.displayName,
+                hasNotch: screen.notchSize != .zero
+            )
+        }
+    }
+
+    private static func validTheme(_ value: String?) -> String {
+        guard let value, ["system", "light", "dark"].contains(value) else { return "system" }
+        return value
+    }
+
+    private static func validLocale(_ value: String?) -> String {
+        guard let value, ["en", "zh-CN"].contains(value) else { return "en" }
+        return value
+    }
+
+    private static func numeric(_ value: Any?) -> Double? {
+        switch value {
+        case let number as NSNumber:
+            return number.doubleValue
+        case let double as Double:
+            return double
+        case let int as Int:
+            return Double(int)
+        default:
+            return nil
+        }
+    }
+
+    private static func clamp(_ value: Double, min: Double, max: Double) -> Double {
+        Swift.max(min, Swift.min(max, value))
+    }
+
+    private static func storedDouble(_ defaults: UserDefaults, key: String, fallback: Double) -> Double {
+        guard defaults.object(forKey: key) != nil else { return fallback }
+        return defaults.double(forKey: key)
     }
 
     private static func readMeee2OnlineSettings() -> [String: Any] {

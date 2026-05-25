@@ -167,6 +167,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var retryWorkItem: DispatchWorkItem?
     private var isShowingLoadError = false
     private let jsConsoleBridge = JSConsoleBridge()
+    private var pendingOpenSettings = false
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -282,6 +283,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func openSettings() {
+        pendingOpenSettings = true
+        show()
+        dispatchOpenSettingsIfPossible()
+    }
+
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
@@ -336,6 +343,20 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // sidebar-collapsed-toggle 能精确对齐。窗口 resize / titlebar 模式
         // 切换时也要更新（NSWindow.didResize 通知触发）。
         injectTitlebarMetrics()
+        dispatchOpenSettingsIfPossible()
+    }
+
+    private func dispatchOpenSettingsIfPossible() {
+        guard pendingOpenSettings, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        pendingOpenSettings = false
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:open-settings'));
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open settings event failed: \(error.localizedDescription)")
+                self?.pendingOpenSettings = true
+            }
+        }
     }
 
     /// 把 macOS 系统级 traffic light 按钮的中心点（webview CSS 坐标）注入

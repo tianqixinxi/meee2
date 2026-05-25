@@ -15,6 +15,7 @@ import {
   type TeamMember,
   type UserProfile,
 } from '../api'
+import { useI18n } from '../lib/i18n'
 
 interface Props {
   userProfile: UserProfile | null
@@ -23,6 +24,7 @@ interface Props {
 type TeamInfo = UserProfile['teams'][number]
 
 export function TeamView({ userProfile }: Props) {
+  const { t } = useI18n()
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [error, setError] = useState<string | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -47,13 +49,13 @@ export function TeamView({ userProfile }: Props) {
       .catch((err) => {
         if (!cancelled) {
           setTeamMembers([])
-          setError((err as Error).message || 'Failed to load team members')
+          setError((err as Error).message || t('team.loadFailed'))
         }
       })
     return () => {
       cancelled = true
     }
-  }, [connected])
+  }, [connected, t])
 
   const members = useMemo(() => {
     if (!connected) return []
@@ -75,13 +77,13 @@ export function TeamView({ userProfile }: Props) {
 
   if (!connected) {
     return (
-      <section className="team-view" aria-label="Team">
+      <section className="team-view" aria-label={t('team.title')}>
         <div className="team-view__inner">
           <div className="team-view__gate">
             <LockKeyhole size={18} aria-hidden />
             <div>
-              <strong>Sign in to manage a team</strong>
-              <p>Team management is available after connecting meee2 Online.</p>
+              <strong>{t('team.signInTitle')}</strong>
+              <p>{t('team.signInSubtitle')}</p>
             </div>
           </div>
         </div>
@@ -90,36 +92,35 @@ export function TeamView({ userProfile }: Props) {
   }
 
   return (
-    <section className="team-view" aria-label="Team">
+    <section className="team-view" aria-label={t('team.title')}>
       <div className="team-view__inner">
         <div className="team-view__header">
           <div>
-            <span>Team</span>
-            <h1>{currentTeam?.name || userProfile?.defaultSyncTeamName || 'Current team'}</h1>
-            <p>Manage people, invites, and team-wide configuration for the signed-in workspace.</p>
+            <span>{t('team.title')}</span>
+            <h1>{currentTeam?.name || userProfile?.defaultSyncTeamName || t('team.currentTeam')}</h1>
+            <p>{t('team.subtitle')}</p>
           </div>
           <div className="team-view__summary">
             <UsersRound size={15} aria-hidden />
-            {members.length} human member{members.length === 1 ? '' : 's'}
-            {currentRole ? ` · ${currentRole}` : ''}
+            {t('team.summary', { count: members.length, role: currentRole ? ` · ${currentRole}` : '' })}
           </div>
         </div>
 
         {error && <div className="team-view__error">{error}</div>}
 
         <div className="team-view__sections">
-          <section className="team-panel-section" aria-label="Members">
+          <section className="team-panel-section" aria-label={t('team.members')}>
             <div className="team-panel-section__header">
               <div>
-                <span>Members</span>
-                <h2>People in this team</h2>
+                <span>{t('team.members')}</span>
+                <h2>{t('team.people')}</h2>
               </div>
               <strong>{members.length}</strong>
             </div>
             {members.length === 0 ? (
               <div className="team-view__empty">
                 <User size={16} aria-hidden />
-                <span>No online team members are available from the desktop bridge yet.</span>
+                <span>{t('team.noMembers')}</span>
               </div>
             ) : (
               <div className="team-view__grid">
@@ -128,86 +129,87 @@ export function TeamView({ userProfile }: Props) {
                     key={member.userId}
                     member={member}
                     current={member.userId === userProfile?.userId}
+                    currentLabel={t('team.you')}
                   />
                 ))}
               </div>
             )}
           </section>
 
-          <section className="team-panel-section" aria-label="Invite link">
+          <section className="team-panel-section" aria-label={t('team.inviteLink')}>
             <div className="team-panel-section__header">
               <div>
-                <span>Invite</span>
-                <h2>Invite link</h2>
+                <span>{t('team.invite')}</span>
+                <h2>{t('team.inviteLink')}</h2>
               </div>
             </div>
             <div className="team-invite">
-              <code>{inviteText || 'Invite link is not available from desktop yet'}</code>
+              <code>{inviteText || t('team.inviteUnavailable')}</code>
               <button
                 type="button"
                 className="team-view__icon-button"
                 onClick={copyInvite}
                 disabled={!inviteText}
-                title="Copy invite link"
-                aria-label="Copy invite link"
+                title={t('team.copyInvite')}
+                aria-label={t('team.copyInvite')}
               >
                 <Copy size={15} aria-hidden />
               </button>
             </div>
             <p className="team-panel-section__note">
-              The online team already owns invite codes; the desktop bridge should expose that authoritative code/link here.
+              {t('team.inviteNote')}
             </p>
             <div className="team-view__actions">
               <button type="button" className="team-view__action" onClick={() => void openMeee2OnlineDashboard()}>
                 <ExternalLink size={14} aria-hidden />
-                Open dashboard
+                {t('team.openDashboard')}
               </button>
             </div>
             {copyState !== 'idle' && (
               <p className={`team-view__copy-state is-${copyState}`}>
-                {copyState === 'copied' ? 'Copied' : 'Copy failed'}
+                {copyState === 'copied' ? t('common.copied') : t('common.copyFailed')}
               </p>
             )}
           </section>
 
           {isOwner && (
-            <section className="team-panel-section" aria-label="Team settings">
+            <section className="team-panel-section" aria-label={t('settings.team')}>
               <div className="team-panel-section__header">
                 <div>
-                  <span>Settings</span>
-                  <h2>Owner controls</h2>
+                  <span>{t('rail.settings')}</span>
+                  <h2>{t('team.ownerControls')}</h2>
                 </div>
                 <ShieldCheck size={16} aria-hidden />
               </div>
               <div className="team-settings-list">
-                <TeamSettingRow label="Team id" value={currentTeam?.id || userProfile?.defaultSyncTeamId || 'Not set'} />
-                <TeamSettingRow label="Default sync" value={userProfile?.defaultSyncEnabled ? 'Enabled' : 'Disabled'} />
-                <TeamSettingRow label="Role" value={currentRole ?? 'Unknown'} />
+                <TeamSettingRow label={t('team.teamId')} value={currentTeam?.id || userProfile?.defaultSyncTeamId || t('team.notSet')} />
+                <TeamSettingRow label={t('team.defaultSync')} value={userProfile?.defaultSyncEnabled ? t('team.enabled') : t('team.disabled')} />
+                <TeamSettingRow label={t('team.role')} value={currentRole ?? t('team.unknown')} />
               </div>
               <div className="team-view__actions">
                 <button type="button" className="team-view__action" onClick={() => void openMeee2Settings()}>
                   <Settings size={14} aria-hidden />
-                  Open settings
+                  {t('team.openSettings')}
                 </button>
                 <button type="button" className="team-view__action" onClick={() => void openMeee2OnlineDashboard()}>
                   <ExternalLink size={14} aria-hidden />
-                  Open dashboard
+                  {t('team.openDashboard')}
                 </button>
               </div>
             </section>
           )}
 
           {!isOwner && (
-            <section className="team-panel-section" aria-label="Team settings unavailable">
+            <section className="team-panel-section" aria-label={t('settings.team')}>
               <div className="team-panel-section__header">
                 <div>
-                  <span>Settings</span>
-                  <h2>Owner controls</h2>
+                  <span>{t('rail.settings')}</span>
+                  <h2>{t('team.ownerControls')}</h2>
                 </div>
                 <LockKeyhole size={16} aria-hidden />
               </div>
               <p className="team-panel-section__note">
-                Team configuration is visible only to the team owner.
+                {t('team.ownerOnly')}
               </p>
             </section>
           )}
@@ -220,9 +222,11 @@ export function TeamView({ userProfile }: Props) {
 function TeamMemberCard({
   member,
   current,
+  currentLabel,
 }: {
   member: TeamMember
   current: boolean
+  currentLabel: string
 }) {
   return (
     <article className="team-member-card">
@@ -236,7 +240,7 @@ function TeamMemberCard({
         </div>
       </div>
       <div className="team-member-card__meta">
-        {current && <span>You</span>}
+        {current && <span>{currentLabel}</span>}
         <strong>{member.role ?? 'member'}</strong>
       </div>
     </article>

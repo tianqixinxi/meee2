@@ -66,6 +66,7 @@ import {
   teamDisplayNameByUserId,
 } from '../../teamDirectory'
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
+import { useI18n } from '../../lib/i18n'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { NodeInspectorModal } from './NodeInspectorModal'
@@ -132,6 +133,7 @@ function PlannerGraphInner({
   onOpenSubCanvas,
   onNotify,
 }: Props) {
+  const { t } = useI18n()
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
@@ -833,9 +835,10 @@ function PlannerGraphInner({
     && !activeProposal,
   )
   const showWorkspacePreview = Boolean(activeProposal && reviewGraph.nodes.length > 0)
-  const starterSuggestions = useMemo(() => buildStarterSuggestions(canvasName, plannerState?.canvas.plannerContext), [
+  const starterSuggestions = useMemo(() => buildStarterSuggestions(canvasName, plannerState?.canvas.plannerContext, t), [
     canvasName,
     plannerState?.canvas.plannerContext,
+    t,
   ])
 
   useEffect(() => {
@@ -2175,37 +2178,60 @@ function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
   )
 }
 
-function buildStarterSuggestions(canvasName: string, canvasTask?: string | null) {
-  const target = readableCanvasStarterTarget(canvasName, canvasTask)
+function buildStarterSuggestions(
+  canvasName: string,
+  canvasTask: string | null | undefined,
+  t: ReturnType<typeof useI18n>['t'],
+) {
+  const target = readableCanvasStarterTarget(canvasName, canvasTask, t)
   return [
     {
       id: 'starter-delivery',
-      label: 'Delivery plan',
-      value: `Build a delivery plan for ${target}. Include scoped milestones, owners, review gates, and expected artifacts.`,
-      description: 'Turn a product, launch, or implementation goal into milestones, owners, gates, and deliverables.',
-      preview: ['Goal intake', 'Milestones', 'Owner review', 'Artifacts'],
+      label: t('planner.starterDelivery'),
+      value: t('planner.starterDeliveryValue', { target }),
+      description: t('planner.starterDeliveryDesc'),
+      preview: [
+        t('planner.previewGoal'),
+        t('planner.previewMilestones'),
+        t('planner.previewOwnerReview'),
+        t('planner.previewArtifacts'),
+      ],
     },
     {
       id: 'starter-research',
-      label: 'Research brief',
-      value: `Create a research plan for ${target}. Include discovery, evidence collection, synthesis, decisions, and final outputs.`,
-      description: 'Structure discovery work with sources, synthesis checkpoints, decisions, and final recommendations.',
-      preview: ['Questions', 'Evidence', 'Synthesis', 'Decision'],
+      label: t('planner.starterResearch'),
+      value: t('planner.starterResearchValue', { target }),
+      description: t('planner.starterResearchDesc'),
+      preview: [
+        t('planner.previewQuestions'),
+        t('planner.previewEvidence'),
+        t('planner.previewSynthesis'),
+        t('planner.previewDecision'),
+      ],
     },
     {
       id: 'starter-ops',
-      label: 'Operating loop',
-      value: `Set up an operating loop for ${target}. Include recurring checks, blockers, escalation, artifacts, and a completion review.`,
-      description: 'Run a recurring process with check-ins, blockers, escalation paths, and completion review.',
-      preview: ['Check-in', 'Blockers', 'Escalation', 'Review'],
+      label: t('planner.starterOps'),
+      value: t('planner.starterOpsValue', { target }),
+      description: t('planner.starterOpsDesc'),
+      preview: [
+        t('planner.previewCheckIn'),
+        t('planner.previewBlockers'),
+        t('planner.previewEscalation'),
+        t('planner.previewReview'),
+      ],
     },
   ]
 }
 
-function readableCanvasStarterTarget(canvasName: string, canvasTask?: string | null): string {
+function readableCanvasStarterTarget(
+  canvasName: string,
+  canvasTask: string | null | undefined,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
   const title = canvasName.trim()
   const context = canvasTask?.trim() ?? ''
   if (context && !context.startsWith('canvas:')) return context
   if (title && !/^(untitled|new canvas|default canvas|my|personal canvas)$/i.test(title)) return title
-  return 'this canvas'
+  return t('planner.thisCanvas')
 }

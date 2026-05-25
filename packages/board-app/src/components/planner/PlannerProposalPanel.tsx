@@ -9,6 +9,7 @@ import {
   type AssistantMessage,
   type LocalAssistantSessionMessage,
 } from '../../api'
+import { useI18n } from '../../lib/i18n'
 import { readLlmSettings } from '../../lib/llmSettings'
 import type { PlanProposal, PlannerAccess } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
@@ -121,6 +122,7 @@ export function PlannerProposalPanel({
   starterSuggestions = [],
   autoFocus = false,
 }: Props) {
+  const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const emptyIntakeAbortRef = useRef<AbortController | null>(null)
   const handledClearRevisionRef = useRef(0)
@@ -301,14 +303,14 @@ export function PlannerProposalPanel({
   const visibleHistory = history.slice(-VISIBLE_HISTORY_LIMIT)
   const hiddenHistoryCount = Math.max(0, history.length - visibleHistory.length)
   const placeholder = emptyMode
-    ? 'Describe what you want this canvas to build...'
+    ? t('planner.emptyPlaceholder')
     : hasActionableDrift
-      ? 'Ask meee2 AI what to fix, or send empty to inspect drift'
-      : 'Ask meee2 AI to adjust node inputs, outputs, artifacts, gates, or tasks'
+      ? t('planner.driftPlaceholder')
+      : t('planner.adjustPlaceholder')
   const submitMessage = () => {
     if (!canSend) return
     const next = message.trim()
-    const displayMessage = next || 'Inspect the current graph drift.'
+    const displayMessage = next || t('planner.inspectDrift')
     const outboundMessage = draftContext
       ? `${draftContext.text}\n\nUser request: ${displayMessage}`
       : next
@@ -361,7 +363,7 @@ export function PlannerProposalPanel({
       })
       .catch((err) => {
         if (controller.signal.aborted) return
-        setEmptyIntakeError((err as Error).message || 'meee2 AI could not continue the setup conversation.')
+        setEmptyIntakeError((err as Error).message || t('planner.continueError'))
       })
       .finally(() => {
         if (emptyIntakeAbortRef.current === controller) {
@@ -384,8 +386,8 @@ export function PlannerProposalPanel({
           {emptyMode && !proposal && !showOmniConversation && (
             <div className="planner-dialog__onboarding" role="note">
               <span>meee2 AI</span>
-              <strong>Great, let's start building together...</strong>
-              <p>Describe the product, research plan, operating loop, or session graph you want. I will ask follow-up questions when needed, then draft the canvas for review.</p>
+              <strong>{t('planner.emptyTitle')}</strong>
+              <p>{t('planner.emptySubtitle')}</p>
             </div>
           )}
           {templateRecommendation && !proposal && !(emptyMode && layout === 'omni') && (
@@ -397,7 +399,7 @@ export function PlannerProposalPanel({
             />
           )}
           {emptyMode && layout !== 'omni' && starterSuggestions.length > 0 && !proposal && (
-            <div className="planner-dialog__starter-suggestions" aria-label="Starter suggestions">
+            <div className="planner-dialog__starter-suggestions" aria-label={t('planner.starterSuggestions')}>
               {starterSuggestions.map((choice) => (
                 <button
                   key={choice.id}
@@ -427,7 +429,7 @@ export function PlannerProposalPanel({
             </div>
           )}
           {showOmniConversation && (
-            <div className="planner-dialog__history planner-dialog__history--omni-chat" aria-label="meee2 AI conversation">
+            <div className="planner-dialog__history planner-dialog__history--omni-chat" aria-label={t('planner.conversation')}>
               {hiddenHistoryCount > 0 && (
                 <div className="planner-dialog__history-trimmed">
                   Showing latest {visibleHistory.length} messages. {hiddenHistoryCount} older {hiddenHistoryCount === 1 ? 'message is' : 'messages are'} kept out of this view.
@@ -484,7 +486,7 @@ export function PlannerProposalPanel({
           )}
           {thinking && (
             <div className="planner-dialog__message planner-dialog__message--planner planner-dialog__message--thinking">
-              <span>meee2 AI is thinking</span>
+              <span>{t('planner.thinking')}</span>
               <span className="planner-thinking-dots" aria-hidden>
                 <i />
                 <i />
@@ -549,26 +551,26 @@ export function PlannerProposalPanel({
           placeholder={placeholder}
           rows={5}
         />
-        <div className="planner-proposal-panel__buttons" aria-label="Send message">
+        <div className="planner-proposal-panel__buttons" aria-label={t('planner.sendMessage')}>
           <button
             type="button"
             className="primary"
             disabled={!canSend}
             onClick={submitMessage}
-            title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
-            aria-label="Send to meee2 AI"
+            title={!canCreateProposal ? t('planner.ownerOnly') : undefined}
+            aria-label={t('planner.sendToAi')}
           >
             <Send size={14} aria-hidden />
-            {emptyMode && <span>Build it</span>}
+            {emptyMode && <span>{t('planner.buildIt')}</span>}
           </button>
         </div>
       </div>
 
       {emptyMode && layout === 'omni' && starterSuggestions.length > 0 && !proposal && !showOmniConversation && (
-        <div className="planner-dialog__starter-suggestions" aria-label="Starter suggestions">
+        <div className="planner-dialog__starter-suggestions" aria-label={t('planner.starterSuggestions')}>
           <div className="planner-dialog__starter-heading">
-            <strong>Official templates</strong>
-            <span>Start from a recommended structure, then let me adapt it to this canvas.</span>
+            <strong>{t('planner.officialTemplates')}</strong>
+            <span>{t('planner.templatesHelp')}</span>
           </div>
           {starterSuggestions.map((choice) => (
             <button

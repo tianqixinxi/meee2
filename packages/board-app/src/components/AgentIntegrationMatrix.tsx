@@ -8,6 +8,7 @@ import {
   installIntegration,
   recommendIntegrationWorkflow,
 } from '../api'
+import { useI18n } from '../lib/i18n'
 import type {
   AgentIntegrationStatus,
   AgentScanResult,
@@ -28,12 +29,6 @@ const STATE_GLYPH: Record<IntegrationConnState, string> = {
   partial: '◐',
   needs_auth: '◔',
   missing: '✗',
-}
-const STATE_LABEL: Record<IntegrationConnState, string> = {
-  connected: 'Connected',
-  partial: 'Partial',
-  needs_auth: 'Needs auth',
-  missing: 'Missing',
 }
 const AGENT_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -59,6 +54,7 @@ interface Props {
  * missing. A not-fully-connected row offers "Set up" → generates a runbook.
  */
 export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
+  const { t } = useI18n()
   const [scan, setScan] = useState<AgentScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -85,9 +81,9 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     setError(null)
     fetchAgentScan()
       .then(setScan)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'scan failed'))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : t('integrations.scanFailed')))
       .finally(() => setLoading(false))
-  }, [])
+  }, [t])
   useEffect(() => {
     load()
   }, [load])
@@ -122,7 +118,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
    *  flips over to the planner to review the new pending proposal. */
   const handleRecommendWorkflow = (integrationId: string) => {
     if (!recommendCanvasId) {
-      setRecommendError('Pick a canvas first.')
+      setRecommendError(t('integrations.pickCanvasFirst'))
       return
     }
     setRecommendBusy(true)
@@ -130,13 +126,13 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     recommendIntegrationWorkflow(integrationId, recommendCanvasId)
       .then((proposal) => {
         if (!proposal) {
-          setRecommendError('Planner agent returned no proposal (timeout or no-action).')
+          setRecommendError(t('integrations.noProposal'))
           return
         }
         setRecommended(proposal)
       })
       .catch((err: unknown) => {
-        setRecommendError(err instanceof Error ? err.message : 'Recommend failed')
+        setRecommendError(err instanceof Error ? err.message : t('integrations.recommendFailed'))
       })
       .finally(() => setRecommendBusy(false))
   }
@@ -186,7 +182,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     setError(null)
     generateIntegrationRunbook(id)
       .then(setRunbook)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'runbook failed'))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : t('integrations.runbookFailed')))
       .finally(() => setBusyId(null))
   }
 
@@ -216,7 +212,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               if (stillNeedsAuth && attempts < 10) {
                 setTimeout(poll, 3000)
               } else if (!stillNeedsAuth) {
-                setAuthToast({ id, message: `${id} is now connected.` })
+                setAuthToast({ id, message: `${id} ${t('integrations.connected').toLowerCase()}.` })
                 setTimeout(() => setAuthToast(null), 4000)
               }
             })
@@ -224,7 +220,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
         }
         setTimeout(poll, 3000)
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'complete-auth failed'))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : t('integrations.completeAuthFailed')))
       .finally(() => setBusyId(null))
   }
 
@@ -237,7 +233,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
         setInstallResult(result)
         load() // re-scan so the matrix reflects the new state
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'install failed'))
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : t('integrations.installFailed')))
       .finally(() => setBusyId(null))
   }
 
@@ -259,14 +255,14 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     agents.map((agent) => row.byAgent[agent]?.install).find((spec) => spec !== undefined)
 
   return (
-    <section className="agent-matrix" aria-label="Agent integration matrix">
+    <section className="agent-matrix" aria-label={t('integrations.agentMatrix')}>
       <header className="agent-matrix__header">
         <div>
-          <span>Agent integrations</span>
-          <h2>本地 agent 接入体检</h2>
+          <span>{t('integrations.agentKicker')}</span>
+          <h2>{t('integrations.localHealth')}</h2>
         </div>
         <button type="button" className="agent-matrix__rescan" disabled={loading} onClick={load}>
-          <RefreshCw size={13} aria-hidden /> {loading ? 'Scanning…' : 'Re-scan'}
+          <RefreshCw size={13} aria-hidden /> {loading ? t('integrations.scanning') : t('integrations.rescan')}
         </button>
       </header>
 
@@ -277,17 +273,17 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
           <input
             type="search"
             className="agent-matrix__search"
-            placeholder={`Search ${rows.length} integrations…`}
+            placeholder={t('integrations.searchPlaceholder', { count: rows.length })}
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
           />
-          <div className="agent-matrix__categories" role="group" aria-label="Category filter">
+          <div className="agent-matrix__categories" role="group" aria-label={t('integrations.categoryFilter')}>
             <button
               type="button"
               className={categoryFilter === null ? 'is-active' : ''}
               onClick={() => setCategoryFilter(null)}
             >
-              All ({rows.length})
+              {t('artifacts.filterAll')} ({rows.length})
             </button>
             {categoryCounts.map(([cat, count]) => (
               <button
@@ -301,7 +297,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
             ))}
           </div>
           <span className="agent-matrix__visible-count">
-            Showing {visibleRows.length} of {rows.length}
+            {t('integrations.showing', { visible: visibleRows.length, total: rows.length })}
           </span>
         </div>
       )}
@@ -310,11 +306,11 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
         <table className="agent-matrix__table">
           <thead>
             <tr>
-              <th>Integration</th>
+              <th>{t('integrations.integration')}</th>
               {agents.map((agent) => (
                 <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
               ))}
-              <th aria-label="actions" />
+              <th aria-label={t('integrations.actions')} />
             </tr>
           </thead>
           <tbody>
@@ -333,7 +329,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                       className={`agent-matrix__cell is-${state}`}
                       title={cell?.evidence}
                     >
-                      <span aria-hidden>{STATE_GLYPH[state]}</span> {STATE_LABEL[state]}
+                      <span aria-hidden>{STATE_GLYPH[state]}</span> {stateLabel(state, t)}
                     </td>
                   )
                 })}
@@ -344,9 +340,9 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                       className="agent-matrix__setup is-needs-auth"
                       disabled={busyId === row.id}
                       onClick={() => handleCompleteAuth(row.id)}
-                      title="Open browser to finish OAuth — token caches automatically for both agents."
+                      title={t('integrations.finishOauth')}
                     >
-                      {busyId === row.id ? 'Opening browser…' : 'Complete auth'}
+                      {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
                     </button>
                   ) : !rowFullyConnected(row) && (() => {
                     const install = installFor(row)
@@ -359,7 +355,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                           onClick={() => handleInstall(row.id)}
                           title={`One-click install: claude plugin install ${install.name}@${install.marketplace}`}
                         >
-                          {busyId === row.id ? '…' : 'Install'}
+                          {busyId === row.id ? '...' : t('integrations.install')}
                         </button>
                       )
                     }
@@ -372,14 +368,14 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                           onClick={() => handleInstall(row.id)}
                           title={`One-click install via ${install.url} (OAuth on first use)`}
                         >
-                          {busyId === row.id ? '…' : 'Install'}
+                          {busyId === row.id ? '...' : t('integrations.install')}
                         </button>
                       )
                     }
                     if (install?.kind === 'unsupported') {
                       return (
                         <button type="button" className="agent-matrix__setup" disabled title={install.reason}>
-                          Unsupported
+                          {t('integrations.unsupported')}
                         </button>
                       )
                     }
@@ -391,7 +387,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                         disabled={busyId === row.id}
                         onClick={() => handleSetup(row.id)}
                       >
-                        {busyId === row.id ? '…' : 'Set up'}
+                        {busyId === row.id ? '...' : t('common.setUp')}
                       </button>
                     )
                   })()}
@@ -400,9 +396,9 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                       type="button"
                       className="agent-matrix__browse"
                       onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
-                      title={`Browse ${row.name} items`}
+                      title={t('integrations.browseItems', { name: row.name })}
                     >
-                      Browse
+                      {t('integrations.browse')}
                     </button>
                   )}
                 </td>
@@ -423,14 +419,14 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               rel="noreferrer noopener"
               className="agent-matrix__auth-link"
             >
-              Open auth page →
+              {t('integrations.openAuthPage')}
             </a>
           )}
           <button
             type="button"
             className="agent-matrix__auth-dismiss"
             onClick={() => setAuthToast(null)}
-            aria-label="Dismiss"
+            aria-label={t('integrations.dismiss')}
           >
             <X size={11} aria-hidden />
           </button>
@@ -440,11 +436,11 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       {browsingId && (
         <div className="agent-matrix__browse-panel">
           <div className="agent-matrix__browse-header">
-            <strong>Browse {browsingId}</strong>
+            <strong>{t('integrations.browse')} {browsingId}</strong>
             <button
               type="button"
               onClick={() => setBrowsingId(null)}
-              aria-label="Close browse"
+              aria-label={t('integrations.closeBrowse')}
               className="agent-matrix__browse-close"
             >
               <X size={14} aria-hidden />
@@ -464,17 +460,17 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
             if (event.target === event.currentTarget) setInstallResult(null)
           }}
         >
-          <div className="agent-matrix__runbook" role="dialog" aria-modal="true" aria-label="Install result">
+          <div className="agent-matrix__runbook" role="dialog" aria-modal="true" aria-label={t('integrations.installResult')}>
             <button
               type="button"
               className="agent-matrix__runbook-close"
               onClick={() => setInstallResult(null)}
-              aria-label="Close install result"
+              aria-label={t('integrations.closeInstallResult')}
             >
               <X size={15} aria-hidden />
             </button>
             <h3>
-              Installed {installResult.integrationId}
+              {t('integrations.installed', { id: installResult.integrationId })}
               {' '}
               <em style={{ fontStyle: 'normal', fontSize: 12, color: 'var(--text-faint)' }}>
                 Claude {installResult.claudeOK ? '✓' : '✗'} · Codex {installResult.codexOK ? '✓' : '✗'}
@@ -488,7 +484,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
               <div className="agent-matrix__recommend">
                 <div className="agent-matrix__recommend-header">
                   <Sparkles size={13} aria-hidden />
-                  <strong>Use it in a canvas</strong>
+                  <strong>{t('integrations.useInCanvas')}</strong>
                 </div>
                 {recommended ? (
                   <div className="agent-matrix__recommend-success">
@@ -500,21 +496,20 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                         setInstallResult(null)
                       }}
                     >
-                      Open canvas →
+                      {t('integrations.openCanvasArrow')}
                     </button>
                     <span>
-                      Proposal “{recommended.summary}” is waiting in that canvas's review queue.
+                      {t('integrations.proposalWaiting', { summary: recommended.summary })}
                     </span>
                   </div>
                 ) : (
                   <>
                     <p>
-                      Let the planner agent propose a small canvas plan that exercises{' '}
-                      <strong>{installResult.integrationId}</strong>.
+                      {t('integrations.proposePlan', { id: installResult.integrationId })}
                     </p>
                     <div className="agent-matrix__recommend-controls">
                       <label>
-                        Canvas:
+                        {t('integrations.canvas')}:
                         <select
                           value={recommendCanvasId ?? ''}
                           onChange={(event) => setRecommendCanvasId(event.target.value)}
@@ -533,7 +528,7 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                         disabled={recommendBusy || !recommendCanvasId}
                         onClick={() => handleRecommendWorkflow(installResult.integrationId)}
                       >
-                        {recommendBusy ? 'Thinking…' : 'Recommend plan'}
+                        {recommendBusy ? t('integrations.thinking') : t('integrations.recommendPlan')}
                       </button>
                     </div>
                     {recommendError && (
@@ -554,22 +549,22 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
             if (event.target === event.currentTarget) setRunbook(null)
           }}
         >
-          <div className="agent-matrix__runbook" role="dialog" aria-modal="true" aria-label="Connect runbook">
+          <div className="agent-matrix__runbook" role="dialog" aria-modal="true" aria-label={t('integrations.connectRunbook')}>
             <button
               type="button"
               className="agent-matrix__runbook-close"
               onClick={() => setRunbook(null)}
-              aria-label="Close runbook"
+              aria-label={t('integrations.closeRunbook')}
             >
               <X size={15} aria-hidden />
             </button>
-            <h3>Runbook — connect {runbook.integrationId}</h3>
+            <h3>{t('integrations.runbookTitle', { id: runbook.integrationId })}</h3>
             <p className="agent-matrix__runbook-path">
-              已生成:<code>{runbook.path}</code>
+              {t('integrations.generated')}<code>{runbook.path}</code>
             </p>
             <pre className="agent-matrix__runbook-content">{runbook.content}</pre>
             <div className="agent-matrix__dispatch">
-              <span>派给 agent 执行(在终端运行):</span>
+              <span>{t('integrations.dispatch')}</span>
               {Object.entries(runbook.dispatch).map(([agent, command]) => (
                 <div key={agent}>
                   <strong>{AGENT_LABEL[agent] ?? agent}</strong>
@@ -582,4 +577,17 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       )}
     </section>
   )
+}
+
+function stateLabel(state: IntegrationConnState, t: ReturnType<typeof useI18n>['t']): string {
+  switch (state) {
+    case 'connected':
+      return t('integrations.connected')
+    case 'partial':
+      return t('integrations.partial')
+    case 'needs_auth':
+      return t('integrations.needsAuth')
+    case 'missing':
+      return t('integrations.missing')
+  }
 }

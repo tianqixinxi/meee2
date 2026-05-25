@@ -15,8 +15,9 @@ import { type ReactNode, useEffect, useMemo } from 'react'
 import { WORKING_STATUSES } from '../notifications'
 import type { BoardState, CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
+import { useI18n } from '../lib/i18n'
 
-export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'monitor' | 'team' | 'integrations'
+export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'monitor' | 'team' | 'integrations' | 'settings'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -28,7 +29,6 @@ interface WorkspaceRailProps {
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
   onModeChange: (mode: WorkspaceMode) => void
-  onPreferences: () => void
 }
 
 const RAIL_WIDTH = 208
@@ -42,8 +42,8 @@ export function WorkspaceRail({
   collapsed,
   onCollapsedChange,
   onModeChange,
-  onPreferences,
 }: WorkspaceRailProps) {
+  const { t } = useI18n()
   useEffect(() => {
     document.documentElement.style.setProperty('--sidebar-width', `${collapsed ? RAIL_COLLAPSED_WIDTH : RAIL_WIDTH}px`)
     document.documentElement.classList.add('board-sidebar-rail')
@@ -65,7 +65,7 @@ export function WorkspaceRail({
 
   const avatarLabel = userProfile?.connected
     ? userProfile.displayName
-    : 'User'
+    : t('rail.user')
   const avatarInitials = userProfile?.connected
     ? userProfile.initials || initialsFor(userProfile.displayName)
     : ''
@@ -88,7 +88,7 @@ export function WorkspaceRail({
   }, [state?.sessions, unreadSids])
 
   return (
-    <nav className={`workspace-rail${collapsed ? ' is-collapsed' : ''}`} aria-label="Workspace">
+    <nav className={`workspace-rail${collapsed ? ' is-collapsed' : ''}`} aria-label={t('rail.workspace')}>
       <div className="workspace-rail__top">
         <button
           type="button"
@@ -101,8 +101,8 @@ export function WorkspaceRail({
         <button
           type="button"
           className="workspace-rail__collapse"
-          aria-label={collapsed ? 'Expand workspace rail' : 'Collapse workspace rail'}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-label={collapsed ? t('rail.expand') : t('rail.collapse')}
+          title={collapsed ? t('rail.expand') : t('rail.collapse')}
           onClick={() => onCollapsedChange(!collapsed)}
         >
           {collapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
@@ -111,21 +111,21 @@ export function WorkspaceRail({
 
       <div className="workspace-rail__group">
         <RailButton
-          label="meee2 AI"
+          label={t('rail.planner')}
           active={mode === 'planner'}
           onClick={() => onModeChange('planner')}
         >
           <Network size={20} />
         </RailButton>
         <RailButton
-          label="Templates"
+          label={t('rail.templates')}
           active={mode === 'templates'}
           onClick={() => onModeChange('templates')}
         >
           <LayoutTemplate size={20} />
         </RailButton>
         <RailButton
-          label="Sessions"
+          label={t('rail.sessions')}
           active={mode === 'sessions'}
           onClick={() => onModeChange('sessions')}
           badge={counts.sessions > 0 ? counts.sessions : undefined}
@@ -134,14 +134,14 @@ export function WorkspaceRail({
           <List size={20} />
         </RailButton>
         <RailButton
-          label="Artifacts"
+          label={t('rail.artifacts')}
           active={mode === 'artifacts'}
           onClick={() => onModeChange('artifacts')}
         >
           <Archive size={20} />
         </RailButton>
         <RailButton
-          label="Monitor"
+          label={t('rail.monitor')}
           active={mode === 'monitor'}
           onClick={() => onModeChange('monitor')}
         >
@@ -149,7 +149,7 @@ export function WorkspaceRail({
         </RailButton>
         {showTeam && (
           <RailButton
-            label="Team"
+            label={t('rail.team')}
             active={mode === 'team'}
             onClick={() => onModeChange('team')}
           >
@@ -157,7 +157,7 @@ export function WorkspaceRail({
           </RailButton>
         )}
         <RailButton
-          label="Integrations"
+          label={t('rail.integrations')}
           active={mode === 'integrations'}
           onClick={() => onModeChange('integrations')}
         >
@@ -167,7 +167,7 @@ export function WorkspaceRail({
 
       <div className="workspace-rail__spacer" />
 
-      <RailButton label="Settings" onClick={onPreferences}>
+      <RailButton label={t('rail.settings')} active={mode === 'settings'} onClick={() => onModeChange('settings')}>
         <Settings size={20} />
       </RailButton>
     </nav>
