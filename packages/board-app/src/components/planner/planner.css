@@ -6182,3 +6182,83 @@
     animation: none;
   }
 }
+
+:root[data-theme="light"] .planner-workspace,
+:root[data-theme="light"] .planner-flow,
+:root[data-theme="light"] .planner-monitor {
+  background: var(--bg);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .planner-topbar,
+:root[data-theme="light"] .planner-activity-strip,
+:root[data-theme="light"] .planner-empty-omni,
+:root[data-theme="light"] .planner-monitor__body,
+:root[data-theme="light"] .planner-monitor-item,
+:root[data-theme="light"] .planner-monitor__empty,
+:root[data-theme="light"] .planner-proposal-panel,
+:root[data-theme="light"] .planner-proposal,
+:root[data-theme="light"] .planner-node__details,
+:root[data-theme="light"] .planner-mcp-banner,
+:root[data-theme="light"] .planner-session-action-banner,
+:root[data-theme="light"] .planner-session-health-banner,
+:root[data-theme="light"] .planner-ready-session-banner,
+:root[data-theme="light"] .ai-recap-drawer,
+:root[data-theme="light"] .canvas-toolbar__menu,
+:root[data-theme="light"] .canvas-info-modal {
+  background: var(--panel-bg);
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: 0 18px 42px rgba(62, 52, 40, 0.08);
+}
+
+:root[data-theme="light"] .planner-monitor__search input,
+:root[data-theme="light"] .planner-role-badge,
+:root[data-theme="light"] .planner-activity-pill,
+:root[data-theme="light"] .planner-monitor-item__icon,
+:root[data-theme="light"] .planner-topbar button,
+:root[data-theme="light"] .planner-proposal-panel__buttons button,
+:root[data-theme="light"] .planner-proposal-modal__actions button,
+:root[data-theme="light"] .ai-recap-drawer__group-tabs,
+:root[data-theme="light"] .canvas-toolbar__button,
+:root[data-theme="light"] .canvas-toolbar__menu button,
+:root[data-theme="light"] .canvas-toolbar__scope-toggle button {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .planner-topbar p,
+:root[data-theme="light"] .planner-activity-pill,
+:root[data-theme="light"] .planner-activity-pill em,
+:root[data-theme="light"] .planner-monitor-item__meta,
+:root[data-theme="light"] .planner-monitor-item p,
+:root[data-theme="light"] .planner-monitor__empty,
+:root[data-theme="light"] .canvas-toolbar__recap-copy span,
+:root[data-theme="light"] .ai-recap-drawer__group-header {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .planner-role-badge--owner,
+:root[data-theme="light"] .planner-session-action-banner.is-ready,
+:root[data-theme="light"] .planner-ready-session-banner {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border));
+}
+
+:root[data-theme="light"] .planner-role-badge--doer {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 36%, var(--border));
+}
+
+:root[data-theme="light"] .planner-role-badge--suggestion,
+:root[data-theme="light"] .planner-mcp-banner {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 36%, var(--border));
+}
+
+:root[data-theme="light"] .planner-session-action-banner.is-warning,
+:root[data-theme="light"] .planner-session-health-banner {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+}

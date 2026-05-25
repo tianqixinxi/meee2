@@ -21,6 +21,7 @@ import {
   loadCanvasRecapIntervalMinutes,
 } from '../preferences'
 import { readLlmSettings } from '../lib/llmSettings'
+import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
 import type { UserProfile } from '../api'
 import { AIRecapDrawer } from './planner/AIRecapDrawer'
@@ -75,6 +76,7 @@ export function CanvasToolbar({
   boardState = null,
   onOpenAllSessions,
 }: Props) {
+  const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
   const recapCacheRef = useRef<Record<string, CanvasRecap>>({})
@@ -104,9 +106,9 @@ export function CanvasToolbar({
   const filteredCanvases = useMemo(() => canvases.filter((canvas) => {
     const query = canvasQuery.trim().toLowerCase()
     if (!query) return true
-    return [canvas.name, canvas.id, visibilityLabel(canvas)]
+    return [canvas.name, canvas.id, visibilityLabel(canvas, t)]
       .some((value) => value.toLowerCase().includes(query))
-  }), [canvasQuery, canvases])
+  }), [canvasQuery, canvases, t])
 
   const closePanels = () => {
     setCreating(false)
@@ -146,10 +148,10 @@ export function CanvasToolbar({
       const state = await fetchPlannerGraphState(activeCanvas.id)
       if (recapRequestRef.current !== requestId) return
       setRecapPlannerState(state)
-      const baseRecap = buildCanvasStatusRecap(state)
+      const baseRecap = buildCanvasStatusRecap(state, t)
       setRecap(baseRecap)
       if (isBlankPlannerCanvas(state)) {
-        const nextRecap = buildBlankCanvasRecap(state)
+        const nextRecap = buildBlankCanvasRecap(state, t)
         recapCacheRef.current[activeCanvas.id] = nextRecap
         setRecap(nextRecap)
         return
@@ -162,11 +164,11 @@ export function CanvasToolbar({
     } catch (err) {
       if (recapRequestRef.current !== requestId) return
       setRecapError((err as Error).message || 'Recap unavailable')
-      setRecap(buildEmptyCanvasRecap('AI recap unavailable.'))
+      setRecap(buildEmptyCanvasRecap(t, t('canvas.recapUnavailable')))
     } finally {
       if (recapRequestRef.current === requestId) setRecapLoading(false)
     }
-  }, [activeCanvas?.id, activeCanvas?.name])
+  }, [activeCanvas?.id, activeCanvas?.name, t])
 
   useEffect(() => {
     if (!activeCanvas) return
@@ -177,9 +179,9 @@ export function CanvasToolbar({
       setRecap(cached)
       return
     }
-    setRecap(buildEmptyCanvasRecap())
+    setRecap(buildEmptyCanvasRecap(t))
     void refreshRecap()
-  }, [activeCanvas?.id, refreshRecap])
+  }, [activeCanvas?.id, refreshRecap, t])
 
   useEffect(() => {
     const timer = window.setInterval(() => setRecapAgeNow(Date.now()), 60 * 1000)
@@ -252,7 +254,7 @@ export function CanvasToolbar({
         <button
           type="button"
           className="canvas-toolbar__nav"
-          aria-label="Back to previous canvas"
+          aria-label={t('canvas.back')}
           disabled={!canGoBack}
           onClick={() => onGoBack?.()}
         >
@@ -261,7 +263,7 @@ export function CanvasToolbar({
         <button
           type="button"
           className="canvas-toolbar__nav"
-          aria-label="Forward to next canvas"
+          aria-label={t('canvas.forward')}
           disabled={!canGoForward}
           onClick={() => onGoForward?.()}
         >
@@ -278,14 +280,14 @@ export function CanvasToolbar({
           }}
         >
           <Layers size={15} aria-hidden />
-          <span className="canvas-toolbar__switcher-label">Canvas</span>
+          <span className="canvas-toolbar__switcher-label">{t('canvas.canvas')}</span>
           <span className="canvas-toolbar__switcher-current">{displayCanvasName(activeCanvas)}</span>
           <ChevronDown size={14} aria-hidden />
         </button>
         <button
           type="button"
           className="canvas-toolbar__info"
-          aria-label="Canvas info"
+          aria-label={t('canvas.info')}
           onClick={() => {
             closePanels()
             setMenuOpen(false)
@@ -312,14 +314,14 @@ export function CanvasToolbar({
                   setMenuOpen(false)
                 }}
               >
-                <Plus size={13} aria-hidden /> New
+                <Plus size={13} aria-hidden /> {t('canvas.new')}
               </button>
               <label className="canvas-toolbar__search">
                 <Search size={13} aria-hidden />
                 <input
                   value={canvasQuery}
                   onChange={(event) => setCanvasQuery(event.target.value)}
-                  placeholder="Find canvas"
+                  placeholder={t('canvas.find')}
                   autoFocus
                 />
               </label>
@@ -343,16 +345,16 @@ export function CanvasToolbar({
                     </span>
                     <span className="canvas-toolbar__item-text">
                       <span>{displayCanvasName(canvas)}</span>
-                      <span className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityLabel(canvas).toLowerCase()}`}>
-                        {visibilityLabel(canvas) === 'Public' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
-                        {visibilityLabel(canvas)}
+                      <span className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}>
+                        {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
+                        {visibilityLabel(canvas, t)}
                       </span>
                     </span>
                   </button>
                 )
               })}
               {filteredCanvases.length === 0 && (
-                <div className="canvas-toolbar__empty">No matching canvas</div>
+                <div className="canvas-toolbar__empty">{t('canvas.noMatch')}</div>
               )}
             </div>
           </div>
@@ -363,14 +365,14 @@ export function CanvasToolbar({
           <button
             type="button"
             className="canvas-toolbar__recap-trigger"
-            aria-label="Open AI recap drawer"
+            aria-label={t('canvas.openRecap')}
             aria-expanded={recapDrawerOpen}
-            title="Open AI recap"
+            title={t('canvas.openRecap')}
             onClick={() => setRecapDrawerOpen((v) => !v)}
           >
             <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
-              <strong>{recapLoading ? 'Refreshing recap...' : (recap?.headline ?? 'Reading canvas state...')}</strong>
+              <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
               {recapError ? (
                 <small>{recapError}</small>
               ) : recap?.updatedAt ? (
@@ -381,8 +383,8 @@ export function CanvasToolbar({
           <button
             type="button"
             className="canvas-toolbar__recap-refresh"
-            aria-label="Refresh canvas recap"
-            title="Refresh canvas recap"
+            aria-label={t('canvas.refreshRecap')}
+            title={t('canvas.refreshRecap')}
             onClick={() => void refreshRecap()}
             disabled={recapLoading}
           >
@@ -398,7 +400,7 @@ export function CanvasToolbar({
         )}
       </div>
       {recap?.mode !== 'empty' && recap?.statuses && (
-        <div className="canvas-toolbar__status-strip" aria-label="Canvas status overview">
+        <div className="canvas-toolbar__status-strip" aria-label={t('canvas.statusOverview')}>
           {recap.statuses.map((item) => (
             <span key={item.label} className={`canvas-toolbar__status-pill is-${item.tone}`}>
               <strong>{item.value}</strong>
@@ -426,12 +428,12 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setInfoOpen(false)
           }}
         >
-          <div className="modal canvas-info-modal" role="dialog" aria-modal="true" aria-label="Canvas info">
+          <div className="modal canvas-info-modal" role="dialog" aria-modal="true" aria-label={t('canvas.info')}>
             <div className="modal-header">
               <div className="modal-title">{displayCanvasName(activeCanvas)}</div>
-              <div className="modal-subtitle">{visibilityLabel(activeCanvas)} planning canvas</div>
+              <div className="modal-subtitle">{t('canvas.planningCanvas', { visibility: visibilityLabel(activeCanvas, t) })}</div>
             </div>
-            <div className="canvas-info-modal__tabs" role="tablist" aria-label="Canvas sections">
+            <div className="canvas-info-modal__tabs" role="tablist" aria-label={t('canvas.sections')}>
               {(['overview', 'settings', 'danger'] as const).map((tab) => (
                 <button
                   key={tab}
@@ -440,7 +442,7 @@ export function CanvasToolbar({
                   aria-selected={infoTab === tab}
                   onClick={() => setInfoTab(tab)}
                 >
-                  {tab === 'overview' ? 'Overview' : tab === 'settings' ? 'Settings' : 'Danger'}
+                  {tab === 'overview' ? t('canvas.overview') : tab === 'settings' ? t('canvas.settings') : t('canvas.danger')}
                 </button>
               ))}
             </div>
@@ -448,22 +450,22 @@ export function CanvasToolbar({
               {infoTab === 'overview' && (
                 <>
                   <div className="canvas-info-modal__row">
-                    <span>Visibility</span>
-                    <strong>{visibilityLabel(activeCanvas)}</strong>
+                    <span>{t('canvas.visibility')}</span>
+                    <strong>{visibilityLabel(activeCanvas, t)}</strong>
                   </div>
                   <div className="canvas-info-modal__row">
-                    <span>Canvas ID</span>
+                    <span>{t('canvas.id')}</span>
                     <strong className="is-mono">{activeCanvas.id}</strong>
                   </div>
                   <p>
-                    meee2 AI changes are scoped to this canvas. Sessions only appear after explicit binding.
+                    {t('canvas.scopedHelp')}
                   </p>
                 </>
               )}
               {infoTab === 'settings' && (
                 <div className="canvas-info-modal__settings">
                   <label>
-                    <span>Name</span>
+                    <span>{t('canvas.name')}</span>
                     <input
                       value={canvasNameDraft}
                       onChange={(event) => setCanvasNameDraft(event.target.value)}
@@ -471,7 +473,7 @@ export function CanvasToolbar({
                         if (event.key === 'Enter') submitRename()
                         if (event.key === 'Escape') setCanvasNameDraft(activeCanvas.name)
                       }}
-                      placeholder="Canvas name"
+                      placeholder={t('canvas.namePlaceholder')}
                     />
                   </label>
                   <button
@@ -480,14 +482,14 @@ export function CanvasToolbar({
                     onClick={submitRename}
                     disabled={!canvasNameDraft.trim() || canvasNameDraft.trim() === activeCanvas.name}
                   >
-                    Save name
+                    {t('canvas.saveName')}
                   </button>
                   <label>
-                    <span>Description</span>
+                    <span>{t('canvas.description')}</span>
                     <textarea
                       value={canvasDescriptionDraft}
                       onChange={(event) => setCanvasDescriptionDraft(event.target.value)}
-                      placeholder="What is this canvas trying to accomplish?"
+                      placeholder={t('canvas.descriptionPlaceholder')}
                       rows={4}
                     />
                   </label>
@@ -497,7 +499,7 @@ export function CanvasToolbar({
                     onClick={submitDescription}
                     disabled={canvasDescriptionSaving || canvasDescriptionDraft.trim() === (recap?.description ?? '').trim()}
                   >
-                    {canvasDescriptionSaving ? 'Saving...' : 'Save description'}
+                    {canvasDescriptionSaving ? t('canvas.saving') : t('canvas.saveDescription')}
                   </button>
                 </div>
               )}
@@ -507,46 +509,46 @@ export function CanvasToolbar({
                     <div className="canvas-info-modal__danger">
                       <Eraser size={15} aria-hidden />
                       <div>
-                        <strong>Clear this canvas</strong>
-                        <p>Removes meee2 AI nodes, proposals, outputs, and local chat history. The canvas remains.</p>
+                        <strong>{t('canvas.clearTitle')}</strong>
+                        <p>{t('canvas.clearHelp')}</p>
                       </div>
                       <button
                         type="button"
                         className="danger"
-                        title="Clear canvas content"
+                        title={t('canvas.clearContent')}
                         onClick={() => {
                           setInfoOpen(false)
                           setClearConfirming(true)
                         }}
                       >
-                        Clear
+                        {t('common.clear')}
                       </button>
                     </div>
                   )}
                   <div className="canvas-info-modal__danger">
                     <Trash2 size={15} aria-hidden />
                     <div>
-                      <strong>Delete this canvas</strong>
-                      <p>Sessions and local AI history are not deleted.</p>
+                      <strong>{t('canvas.deleteTitle')}</strong>
+                      <p>{t('canvas.deleteHelp')}</p>
                     </div>
                     <button
                       type="button"
                       className="danger"
                       disabled={activeCanvas.isDefault}
-                      title={activeCanvas.isDefault ? 'This canvas cannot be deleted.' : 'Delete canvas'}
+                      title={activeCanvas.isDefault ? t('canvas.cannotDelete') : t('canvas.deleteTitle')}
                       onClick={() => {
                         setInfoOpen(false)
                         setDeleteConfirming(true)
                       }}
                     >
-                      Delete
+                      {t('common.delete')}
                     </button>
                   </div>
                 </>
               )}
             </div>
             <div className="modal-footer">
-              <button className="primary" type="button" onClick={() => setInfoOpen(false)}>Done</button>
+              <button className="primary" type="button" onClick={() => setInfoOpen(false)}>{t('common.done')}</button>
             </div>
           </div>
         </div>
@@ -559,10 +561,10 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setCreating(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Create canvas">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('canvas.createTitle')}>
             <div className="modal-header">
-              <div className="modal-title">New canvas</div>
-              <div className="modal-subtitle">Choose who can view this planning space.</div>
+              <div className="modal-title">{t('canvas.createTitle')}</div>
+              <div className="modal-subtitle">{t('canvas.createSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
               <input
@@ -572,10 +574,10 @@ export function CanvasToolbar({
                   if (event.key === 'Enter') submitCreate()
                   if (event.key === 'Escape') setCreating(false)
                 }}
-                placeholder="Canvas name"
+                placeholder={t('canvas.namePlaceholder')}
                 autoFocus
               />
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Canvas visibility">
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('canvas.visibilityLabel')}>
                 {(['personal', 'team'] as CanvasScope[]).map((scope) => (
                   <button
                     key={scope}
@@ -584,20 +586,20 @@ export function CanvasToolbar({
                     aria-pressed={canvasScopeDraft === scope}
                     onClick={() => setCanvasScopeDraft(scope)}
                   >
-                    {scope === 'team' ? 'Public' : 'Private'}
+                    {scope === 'team' ? t('templates.public') : t('templates.private')}
                   </button>
                 ))}
               </div>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setCreating(false)}>Cancel</button>
+              <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
               <button
                 className="primary"
                 type="button"
                 onClick={submitCreate}
                 disabled={!canvasNameDraft.trim()}
               >
-                Create
+                {t('common.create')}
               </button>
             </div>
           </div>
@@ -610,20 +612,20 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setClearConfirming(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Clear canvas">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('canvas.clearTitle')}>
             <div className="modal-header">
-              <div className="modal-title">Clear canvas</div>
-              <div className="modal-subtitle">This keeps the canvas but removes its meee2 AI graph.</div>
+              <div className="modal-title">{t('canvas.clearTitle')}</div>
+              <div className="modal-subtitle">{t('canvas.clearConfirmSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 8 }}>
               <strong>{activeCanvas.name}</strong>
               <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
-                Nodes, pending proposals, outputs, runs, and local meee2 AI chat history for this canvas will be removed. Sessions are not deleted.
+                {t('canvas.clearConfirmBody')}
               </span>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setClearConfirming(false)}>Cancel</button>
-              <button className="danger" type="button" onClick={submitClear}>Clear</button>
+              <button className="ghost" type="button" onClick={() => setClearConfirming(false)}>{t('common.cancel')}</button>
+              <button className="danger" type="button" onClick={submitClear}>{t('common.clear')}</button>
             </div>
           </div>
         </div>
@@ -635,20 +637,20 @@ export function CanvasToolbar({
             if (event.target === event.currentTarget) setDeleteConfirming(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Delete canvas">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('canvas.deleteTitle')}>
             <div className="modal-header">
-              <div className="modal-title">Delete canvas</div>
-              <div className="modal-subtitle">This only removes the canvas container.</div>
+              <div className="modal-title">{t('canvas.deleteTitle')}</div>
+              <div className="modal-subtitle">{t('canvas.deleteConfirmSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 8 }}>
               <strong>{activeCanvas.name}</strong>
               <span className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
-                This removes the canvas layout and memberships. Sessions are not deleted.
+                {t('canvas.deleteConfirmBody')}
               </span>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setDeleteConfirming(false)}>Cancel</button>
-              <button className="danger" type="button" onClick={submitDelete}>Delete</button>
+              <button className="ghost" type="button" onClick={() => setDeleteConfirming(false)}>{t('common.cancel')}</button>
+              <button className="danger" type="button" onClick={submitDelete}>{t('common.delete')}</button>
             </div>
           </div>
         </div>
@@ -657,15 +659,19 @@ export function CanvasToolbar({
   )
 }
 
-function visibilityLabel(canvas: CanvasInfo): 'Private' | 'Public' {
-  return canvas.scope === 'team' ? 'Public' : 'Private'
+function visibilityTone(canvas: CanvasInfo): 'private' | 'public' {
+  return canvas.scope === 'team' ? 'public' : 'private'
+}
+
+function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
+  return canvas.scope === 'team' ? t('templates.public') : t('templates.private')
 }
 
 function displayCanvasName(canvas: CanvasInfo): string {
   return canvas.name === 'Default canvas' ? 'My' : canvas.name
 }
 
-function buildCanvasStatusRecap(state: PlannerGraphState): CanvasRecap {
+function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {
   const nodes = state.nodes ?? []
   const artifacts = state.artifacts ?? []
   const ready = nodes.filter((node) => node.status === 'ready')
@@ -678,46 +684,46 @@ function buildCanvasStatusRecap(state: PlannerGraphState): CanvasRecap {
   return {
     mode: 'ai',
     description,
-    headline: 'Generating AI recap...',
+    headline: t('canvas.generatingRecap'),
     statuses: [
-      { label: 'Ready', value: ready.length, tone: 'ready' },
-      { label: 'Running', value: working.length, tone: 'running' },
-      { label: 'Attention', value: blocked.length, tone: 'attention' },
-      { label: 'Done', value: done.length, tone: 'done' },
-      { label: 'Artifacts', value: artifacts.length, tone: 'neutral' },
-      { label: 'Scheduled', value: scheduled.length, tone: 'neutral' },
+      { label: t('canvas.statusReady'), value: ready.length, tone: 'ready' },
+      { label: t('canvas.statusRunning'), value: working.length, tone: 'running' },
+      { label: t('canvas.statusAttention'), value: blocked.length, tone: 'attention' },
+      { label: t('canvas.statusDone'), value: done.length, tone: 'done' },
+      { label: t('canvas.statusArtifacts'), value: artifacts.length, tone: 'neutral' },
+      { label: t('canvas.statusScheduled'), value: scheduled.length, tone: 'neutral' },
     ],
     details: [],
     updatedAt: new Date().toISOString(),
   }
 }
 
-function buildEmptyCanvasRecap(headline = 'Generating AI recap...'): CanvasRecap {
+function buildEmptyCanvasRecap(t: ReturnType<typeof useI18n>['t'], headline = t('canvas.generatingRecap')): CanvasRecap {
   return {
     mode: 'ai',
     description: '',
     headline,
     statuses: [
-      { label: 'Ready', value: 0, tone: 'ready' },
-      { label: 'Running', value: 0, tone: 'running' },
-      { label: 'Attention', value: 0, tone: 'attention' },
-      { label: 'Done', value: 0, tone: 'done' },
-      { label: 'Artifacts', value: 0, tone: 'neutral' },
-      { label: 'Scheduled', value: 0, tone: 'neutral' },
+      { label: t('canvas.statusReady'), value: 0, tone: 'ready' },
+      { label: t('canvas.statusRunning'), value: 0, tone: 'running' },
+      { label: t('canvas.statusAttention'), value: 0, tone: 'attention' },
+      { label: t('canvas.statusDone'), value: 0, tone: 'done' },
+      { label: t('canvas.statusArtifacts'), value: 0, tone: 'neutral' },
+      { label: t('canvas.statusScheduled'), value: 0, tone: 'neutral' },
     ],
     details: [],
     updatedAt: new Date().toISOString(),
   }
 }
 
-function buildBlankCanvasRecap(state: PlannerGraphState): CanvasRecap {
+function buildBlankCanvasRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {
   return {
-    ...buildCanvasStatusRecap(state),
+    ...buildCanvasStatusRecap(state, t),
     mode: 'empty',
-    headline: 'Ready to build this canvas',
+    headline: t('canvas.readyToBuild'),
     details: [
-      'Describe the outcome you want in AIChat.',
-      'meee2 AI will draft nodes for review before applying.',
+      t('canvas.emptyDetailOutcome'),
+      t('canvas.emptyDetailReview'),
     ],
     updatedAt: new Date().toISOString(),
   }

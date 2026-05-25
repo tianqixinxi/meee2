@@ -222,6 +222,25 @@ struct UserProfileSessionSyncDTO: Encodable {
     let enabled: Bool
 }
 
+struct AppSettingsScreenDTO: Encodable {
+    let id: String
+    let name: String
+    let hasNotch: Bool
+}
+
+struct AppSettingsDTO: Encodable {
+    let theme: String
+    let locale: String
+    let devMode: Bool
+    let showIsland: Bool
+    let selectedScreenId: String
+    let availableScreens: [AppSettingsScreenDTO]
+    let autoExpandEnabled: Bool
+    let autoCloseInterval: Double
+    let showSessionInCompact: Bool
+    let carouselInterval: Double
+}
+
 /// One identity in the team member directory — the authoritative source the
 /// planner graph keys avatar / displayName lookups by `userId`.
 struct TeamMemberDTO: Encodable {

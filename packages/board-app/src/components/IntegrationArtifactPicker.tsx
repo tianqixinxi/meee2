@@ -7,6 +7,7 @@ import {
   fetchGithubRepos,
   fetchLarkDocs,
 } from '../api'
+import { useI18n } from '../lib/i18n'
 import type { ExternalItem, ExternalItemsResult, PlannerArtifactKind } from '../types'
 
 /**
@@ -69,6 +70,7 @@ const ARTIFACT_KIND_ORDER: PlannerArtifactKind[] = [
 ]
 
 export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, onClose }: Props) {
+  const { t } = useI18n()
   const [level, setLevel] = useState<GithubLevel>({ kind: 'repos' })
   const [result, setResult] = useState<ExternalItemsResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -92,10 +94,10 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
       .then((res) => setResult(res))
       .catch((err: unknown) => {
         setResult(null)
-        setError(err instanceof Error ? err.message : 'Failed to load items')
+        setError(err instanceof Error ? err.message : t('picker.loadFailed'))
       })
       .finally(() => setLoading(false))
-  }, [provider, level])
+  }, [provider, level, t])
 
   useEffect(() => {
     load()
@@ -114,11 +116,11 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
       })
         .then(() => onAttached?.(item.reference, kind))
         .catch((err: unknown) => {
-          setError(err instanceof Error ? err.message : 'Add output failed')
+          setError(err instanceof Error ? err.message : t('picker.addOutputFailed'))
         })
         .finally(() => setAttachingId(null))
     },
-    [attachTarget, onAttached],
+    [attachTarget, onAttached, t],
   )
 
   const Icon = provider === 'github' ? GitPullRequest : MessageSquareText
@@ -132,7 +134,7 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
             className="integration-picker__back"
             onClick={() => setLevel({ kind: 'repos' })}
           >
-            <ArrowLeft size={13} aria-hidden /> Repos
+            <ArrowLeft size={13} aria-hidden /> {t('picker.repos')}
           </button>
         ) : (
           <span className="integration-picker__title">
@@ -148,20 +150,20 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
                 className={level.tab === 'pulls' ? 'is-active' : ''}
                 onClick={() => setLevel({ ...level, tab: 'pulls' })}
               >
-                Pull requests
+                {t('picker.pullRequests')}
               </button>
               <button
                 type="button"
                 className={level.tab === 'issues' ? 'is-active' : ''}
                 onClick={() => setLevel({ ...level, tab: 'issues' })}
               >
-                Issues
+                {t('picker.issues')}
               </button>
             </div>
           )}
           {onClose && (
             <button type="button" className="integration-picker__close" onClick={onClose}>
-              Done
+              {t('picker.done')}
             </button>
           )}
         </div>
@@ -178,11 +180,11 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
 
       {loading ? (
         <p className="integration-picker__empty">
-          <Loader2 size={13} className="spin" aria-hidden /> Loading…
+          <Loader2 size={13} className="spin" aria-hidden /> {t('picker.loading')}
         </p>
       ) : !result || result.items.length === 0 ? (
         <p className="integration-picker__empty">
-          {error ? 'Could not load items.' : 'No items to show.'}
+          {error ? t('picker.couldNotLoad') : t('picker.noItems')}
         </p>
       ) : (
         <ul className="integration-picker__list">
@@ -204,7 +206,7 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
                       }
                     }}
                   >
-                    Browse
+                    {t('integrations.browse')}
                   </button>
                 ) : attachTarget ? (
                   <AttachControl
@@ -212,10 +214,11 @@ export function IntegrationArtifactPicker({ provider, attachTarget, onAttached, 
                     busy={attachingId === item.id}
                     nodeTitle={attachTarget.nodeTitle}
                     onAttach={handleAttach}
+                    t={t}
                   />
                 ) : (
                   <a href={item.reference} target="_blank" rel="noreferrer">
-                    Open
+                    {t('common.open')}
                   </a>
                 )}
               </div>
@@ -236,11 +239,13 @@ function AttachControl({
   busy,
   nodeTitle,
   onAttach,
+  t,
 }: {
   item: ExternalItem
   busy: boolean
   nodeTitle: string
   onAttach: (item: ExternalItem, kind: PlannerArtifactKind) => void
+  t: ReturnType<typeof useI18n>['t']
 }) {
   const [kind, setKind] = useState<PlannerArtifactKind>(item.suggestedArtifactKind)
   return (
@@ -248,7 +253,7 @@ function AttachControl({
       <select
         value={kind}
         onChange={(event) => setKind(event.target.value as PlannerArtifactKind)}
-        aria-label="Artifact kind"
+        aria-label={t('picker.artifactKind')}
         disabled={busy}
       >
         {ARTIFACT_KIND_ORDER.map((value) => (
@@ -261,9 +266,9 @@ function AttachControl({
         type="button"
         onClick={() => onAttach(item, kind)}
         disabled={busy}
-        title={`Add output to ${nodeTitle}`}
+        title={t('picker.addOutputTo', { node: nodeTitle })}
       >
-        {busy ? 'Adding…' : 'Add output'}
+        {busy ? t('picker.adding') : t('picker.addOutput')}
       </button>
     </div>
   )

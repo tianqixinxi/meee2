@@ -14,6 +14,7 @@ import {
   getPlannerArtifactContent,
   listArtifactVersions,
 } from '../api'
+import { useI18n } from '../lib/i18n'
 import type {
   CanvasInfo,
   PlannerArtifact,
@@ -62,6 +63,7 @@ export function ArtifactsView({
   activeCanvasId,
   onOpenCanvas,
 }: ArtifactsViewProps) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<ArtifactFilter>('all')
   const [canvasArtifacts, setCanvasArtifacts] = useState<CanvasArtifacts[]>([])
@@ -98,7 +100,7 @@ export function ArtifactsView({
           canvas,
           nodes: [],
           artifacts: [],
-          error: (err as Error).message || 'Failed to load artifacts',
+          error: (err as Error).message || t('artifacts.loadFailed'),
         } satisfies CanvasArtifacts
       }
     }))
@@ -106,10 +108,10 @@ export function ArtifactsView({
         if (cancelled) return
         setCanvasArtifacts(items)
         const failures = items.filter((item) => item.error)
-        setError(failures.length ? `${failures.length} canvas artifact group(s) failed to load.` : null)
+        setError(failures.length ? t('artifacts.groupLoadFailed', { count: failures.length }) : null)
       })
       .catch((err) => {
-        if (!cancelled) setError((err as Error).message || 'Failed to load artifacts')
+        if (!cancelled) setError((err as Error).message || t('artifacts.loadFailed'))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -117,7 +119,7 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature])
+  }, [canvasSignature, t])
 
   const canvasGroups = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -232,13 +234,13 @@ export function ArtifactsView({
   }
 
   return (
-    <section className="artifacts-workspace" aria-label="Artifacts">
+    <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
       <div className="artifacts-workspace__inner">
         <header className="artifacts-workspace__header">
           <div>
-            <span>All canvases</span>
-            <h1>Artifacts</h1>
-            <p>{loading ? 'Loading artifact slots' : `${totalSlots} artifact slot${totalSlots === 1 ? '' : 's'} across ${canvasArtifacts.length} canvas${canvasArtifacts.length === 1 ? '' : 'es'}`}</p>
+            <span>{t('artifacts.scope')}</span>
+            <h1>{t('artifacts.title')}</h1>
+            <p>{loading ? t('artifacts.loadingSlots') : t('artifacts.summary', { slots: totalSlots, canvases: canvasArtifacts.length })}</p>
           </div>
           <div className="artifacts-workspace__tools">
             <label className="artifacts-search">
@@ -246,10 +248,10 @@ export function ArtifactsView({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search title, reference, kind, canvas, or node"
+                placeholder={t('artifacts.searchPlaceholder')}
               />
             </label>
-            <div className="artifacts-filters" aria-label="Artifact kind filter">
+            <div className="artifacts-filters" aria-label={t('artifacts.filterLabel')}>
               {KIND_FILTERS.map((filter) => (
                 <button
                   type="button"
@@ -257,7 +259,7 @@ export function ArtifactsView({
                   className={`artifacts-filter${kindFilter === filter ? ' is-active' : ''}`}
                   onClick={() => setKindFilter(filter)}
                 >
-                  {filter === 'all' ? 'All' : filter}
+                  {filter === 'all' ? t('artifacts.filterAll') : filter}
                 </button>
               ))}
             </div>
@@ -268,13 +270,13 @@ export function ArtifactsView({
         {loading && (
           <div className="artifacts-empty" role="status">
             <Loader2 size={15} className="spin" aria-hidden />
-            <span>Gathering artifacts from visible canvases</span>
+            <span>{t('artifacts.loading')}</span>
           </div>
         )}
         {!loading && canvasGroups.length === 0 && (
           <div className="artifacts-empty">
             <Archive size={15} aria-hidden />
-            <span>No artifacts match this view.</span>
+            <span>{t('artifacts.empty')}</span>
           </div>
         )}
 
@@ -290,10 +292,10 @@ export function ArtifactsView({
                   type="button"
                   className="artifacts-open-button"
                   onClick={() => onOpenCanvas(group.canvas.id)}
-                  aria-label={`Open ${group.canvas.name}`}
+                  aria-label={t('artifacts.openCanvas', { name: group.canvas.name })}
                 >
                   <ExternalLink size={14} aria-hidden />
-                  <span>{group.canvas.id === activeCanvasId ? 'Current canvas' : 'Open canvas'}</span>
+                  <span>{group.canvas.id === activeCanvasId ? t('artifacts.currentCanvas') : t('artifacts.openCanvasButton')}</span>
                 </button>
               </div>
               {group.error && <div className="artifacts-banner">{group.error}</div>}
@@ -320,22 +322,22 @@ export function ArtifactsView({
                       </div>
                       <dl className="artifacts-meta">
                         <div>
-                          <dt>Node</dt>
+                          <dt>{t('artifacts.node')}</dt>
                           <dd>{slot.node?.title ?? slot.latest.nodeId}</dd>
                         </div>
                         <div>
-                          <dt>Latest</dt>
+                          <dt>{t('artifacts.latest')}</dt>
                           <dd>{formatDate(slot.latest.createdAt)}</dd>
                         </div>
                       </dl>
-                      <div className="artifacts-card__actions" aria-label="Artifact display controls">
+                      <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
                         <button
                           type="button"
                           className={mode === 'latest' ? 'is-active' : ''}
                           onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
                         >
                           <FileText size={13} aria-hidden />
-                          <span>Show latest</span>
+                          <span>{t('artifacts.showLatest')}</span>
                         </button>
                         <button
                           type="button"
@@ -346,7 +348,7 @@ export function ArtifactsView({
                           }}
                         >
                           <Layers size={13} aria-hidden />
-                          <span>Show merged view</span>
+                          <span>{t('artifacts.showMerged')}</span>
                         </button>
                         <button
                           type="button"
@@ -357,7 +359,7 @@ export function ArtifactsView({
                           }}
                         >
                           <GitCompare size={13} aria-hidden />
-                          <span>Compare versions</span>
+                          <span>{t('artifacts.compareVersions')}</span>
                         </button>
                       </div>
                       <div className="artifacts-card__footer">
@@ -369,14 +371,14 @@ export function ArtifactsView({
                             loadContent(slot.latest)
                           }}
                         >
-                          {isExpanded ? 'Hide details' : 'View details'}
+                          {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
                         </button>
                         <button
                           type="button"
                           className="artifacts-link-button"
                           onClick={() => loadVersions(slot)}
                         >
-                          {versionsLoading.has(slot.key) ? 'Loading versions' : 'Load versions'}
+                          {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
                         </button>
                       </div>
                       {isExpanded && (
@@ -384,17 +386,17 @@ export function ArtifactsView({
                           {contentLoading.has(slot.latest.id) ? (
                             <div className="artifacts-preview artifacts-preview--loading">
                               <Loader2 size={14} className="spin" aria-hidden />
-                              <span>Loading latest artifact</span>
+                              <span>{t('artifacts.loadingLatest')}</span>
                             </div>
                           ) : (
-                            <ArtifactContentPreview content={content} />
+                            <ArtifactContentPreview content={content} t={t} />
                           )}
                         </div>
                       )}
                       {versions && (
                         <div className="artifacts-versions">
                           <label>
-                            <span>Version</span>
+                            <span>{t('artifacts.version')}</span>
                             <select
                               value={selectedVersionId ?? ''}
                               onChange={(event) => selectVersion(slot, event.target.value)}
@@ -406,9 +408,9 @@ export function ArtifactsView({
                               ))}
                             </select>
                           </label>
-                          {mode === 'latest' && <VersionSummary version={selectedVersion} />}
+                          {mode === 'latest' && <VersionSummary version={selectedVersion} t={t} />}
                           {mode === 'merged' && <MergedVersionView versions={versions} />}
-                          {mode === 'compare' && <CompareVersionView versions={versions} />}
+                          {mode === 'compare' && <CompareVersionView versions={versions} t={t} />}
                         </div>
                       )}
                     </article>
@@ -423,11 +425,11 @@ export function ArtifactsView({
   )
 }
 
-function ArtifactContentPreview({ content }: { content?: PlannerArtifactContent }) {
+function ArtifactContentPreview({ content, t }: { content?: PlannerArtifactContent; t: ReturnType<typeof useI18n>['t'] }) {
   if (!content) {
     return (
       <div className="artifacts-preview">
-        <span>Open details to load latest content.</span>
+        <span>{t('artifacts.openDetailsPrompt')}</span>
       </div>
     )
   }
@@ -435,20 +437,20 @@ function ArtifactContentPreview({ content }: { content?: PlannerArtifactContent 
     return (
       <dl className="artifacts-file-meta">
         <div>
-          <dt>Filename</dt>
-          <dd>{content.filename ?? 'file artifact'}</dd>
+          <dt>{t('artifacts.filename')}</dt>
+          <dd>{content.filename ?? t('artifacts.fileArtifact')}</dd>
         </div>
         <div>
-          <dt>Mime type</dt>
+          <dt>{t('artifacts.mimeType')}</dt>
           <dd>{content.mimeType || 'application/octet-stream'}</dd>
         </div>
         <div>
-          <dt>Size</dt>
-          <dd>{formatBytes(content.size)}</dd>
+          <dt>{t('artifacts.size')}</dt>
+          <dd>{formatBytes(content.size, t)}</dd>
         </div>
         <div>
           <dt>SHA-256</dt>
-          <dd>{content.sha256 ?? 'not recorded'}</dd>
+          <dd>{content.sha256 ?? t('artifacts.notRecorded')}</dd>
         </div>
       </dl>
     )
@@ -456,25 +458,25 @@ function ArtifactContentPreview({ content }: { content?: PlannerArtifactContent 
   const preview = content.content ?? stringifyPreview(content.payload)
   return (
     <pre className="artifacts-preview">
-      {preview || 'No inline preview available.'}
+      {preview || t('artifacts.noPreview')}
     </pre>
   )
 }
 
-function VersionSummary({ version }: { version?: PlannerArtifactVersion }) {
+function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: ReturnType<typeof useI18n>['t'] }) {
   if (!version) return null
   return (
     <dl className="artifacts-version-summary">
       <div>
-        <dt>Payload</dt>
+        <dt>{t('artifacts.payload')}</dt>
         <dd>{version.payload_ref}</dd>
       </div>
       <div>
-        <dt>Strategy</dt>
+        <dt>{t('artifacts.strategy')}</dt>
         <dd>{version.display_strategy}</dd>
       </div>
       <div>
-        <dt>Submitted by</dt>
+        <dt>{t('artifacts.submittedBy')}</dt>
         <dd>{version.submitted_by ?? version.submitted_by_kind}</dd>
       </div>
     </dl>
@@ -494,16 +496,16 @@ function MergedVersionView({ versions }: { versions: PlannerArtifactVersion[] })
   )
 }
 
-function CompareVersionView({ versions }: { versions: PlannerArtifactVersion[] }) {
+function CompareVersionView({ versions, t }: { versions: PlannerArtifactVersion[]; t: ReturnType<typeof useI18n>['t'] }) {
   const [latest, previous] = versions
   if (!latest || !previous) {
-    return <div className="artifacts-preview">Need at least two versions to compare.</div>
+    return <div className="artifacts-preview">{t('artifacts.needTwoVersions')}</div>
   }
   return (
     <div className="artifacts-compare">
       {[latest, previous].map((version, index) => (
         <div key={version.version_id}>
-          <strong>{index === 0 ? 'Latest' : 'Previous'}</strong>
+          <strong>{index === 0 ? t('artifacts.latest') : t('artifacts.previous')}</strong>
           <span>{formatDate(version.created_at)}</span>
           <code>{version.payload_ref}</code>
         </div>
@@ -531,8 +533,8 @@ function formatDate(value: string): string {
   })
 }
 
-function formatBytes(value?: number | null): string {
-  if (value == null) return 'not recorded'
+function formatBytes(value: number | null | undefined, t: ReturnType<typeof useI18n>['t']): string {
+  if (value == null) return t('artifacts.notRecorded')
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`

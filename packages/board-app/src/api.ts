@@ -1610,6 +1610,50 @@ export function disconnectMeee2Online(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile', { method: 'DELETE' })
 }
 
+export interface AppSettings {
+  theme: 'system' | 'light' | 'dark'
+  locale: 'en' | 'zh-CN'
+  devMode?: boolean
+  showIsland: boolean
+  selectedScreenId: string
+  availableScreens: Array<{
+    id: string
+    name: string
+    hasNotch: boolean
+  }>
+  autoExpandEnabled: boolean
+  autoCloseInterval: number
+  showSessionInCompact: boolean
+  carouselInterval: number
+}
+
+export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
+
+export function fetchAppSettings(): Promise<AppSettings> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      theme: 'system',
+      locale: 'en',
+      devMode: true,
+      showIsland: true,
+      selectedScreenId: 'builtin',
+      availableScreens: [{ id: 'builtin', name: 'Built-in Display', hasNotch: true }],
+      autoExpandEnabled: true,
+      autoCloseInterval: 8,
+      showSessionInCompact: true,
+      carouselInterval: 10,
+    })
+  }
+  return jsonRequest<AppSettings>('/api/app-settings')
+}
+
+export function updateAppSettings(input: AppSettingsPatch): Promise<AppSettings> {
+  return jsonRequest<AppSettings>('/api/app-settings', {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 // -- whoami (system user running meee2) ------------------------------------
 
 export interface WhoamiInfo {

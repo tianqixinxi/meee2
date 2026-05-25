@@ -44,9 +44,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 灵动岛窗口
     private var islandWindow: DynamicIslandWindow?
 
-    /// 设置窗口
-    private var settingsWindow: NSWindow?
-
     /// Board WebUI shell window controller (strong ref, otherwise NSWindowController is released).
     private var boardWindowController: BoardWebWindowController?
 
@@ -451,11 +448,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        if settingsWindow == nil {
-            createSettingsWindow()
-        }
-        settingsWindow?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        openBoardMenu()
+        boardWindowController?.openSettings()
     }
 
     @objc private func openBoardMenu() {
@@ -491,26 +485,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         AppIconProvider.installDockTileIcon()
         boardWindowController?.show()
-    }
-
-    private func createSettingsWindow() {
-        let contentView = NSHostingView(rootView: SettingsView())
-        contentView.frame = NSRect(x: 0, y: 0, width: 520, height: 450)
-        contentView.wantsLayer = true
-        contentView.layer?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1).cgColor
-
-        settingsWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 450),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        settingsWindow?.title = "meee2 Settings"
-        settingsWindow?.appearance = NSAppearance(named: .darkAqua)
-        settingsWindow?.backgroundColor = NSColor(red: 0.055, green: 0.058, blue: 0.070, alpha: 1)
-        settingsWindow?.contentView = contentView
-        settingsWindow?.center()
-        settingsWindow?.isReleasedWhenClosed = false
     }
 
     @objc private func quitApp() {
