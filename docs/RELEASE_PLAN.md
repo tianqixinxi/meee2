@@ -31,8 +31,8 @@ Release 承诺：
 
 ## Release 时间点
 
-- 内部可用 release：2026-06-14。目标是团队可以开始 dogfood，真实会话接入、monitor canvas、session control、状态聚合、artifact/evidence 和基础 recap 跑通。
-- 正式 release：2026-06-30。目标是对外可安装、可更新、可解释、可排障，并具备官方模板、打包签名、隐私说明和基础团队语义。
+- 内部可用 release：2026-05-31。目标是团队可以开始 dogfood，真实会话接入、monitor canvas、session control、状态聚合、artifact/evidence 和基础 recap 跑通。
+- 正式 release：2026-06-04。目标是对外可安装、可更新、可解释、可排障，并具备官方模板、打包签名、隐私说明和基础团队语义。
 
 ## 核心抽象
 
@@ -104,36 +104,37 @@ Template 不应该只是“预设一组节点”。它应该定义：
 
 - Kai 已申领：Onboarding 和健康检查、可靠的会话接入、Monitor 和 canvas 融合、节点状态和聚合模型、核心会话控制动作、Session 内部管控、记忆和经验沉淀、Artifacts 和证据。
 - QC 先负责其余 P0/P1 项，后续可按实现细节继续拆分或调整。
+- P0 DDL 按内部可用 release 和正式 release 倒排；P1 是正式 release 前的 stretch/补强项，不阻塞 release gate，但仍需要明确截止时间。
 
 ### P0 Todo
 
 | 负责人 | 模块 | Todo | DDL | 验收信号 |
 |---|---|---|---|---|
-| Kai | Onboarding 和健康检查 | 新用户能一键接入 Claude Code，并看到 hook socket、BoardServer、planner sidecar、权限、存储路径是否正常 | 2026-06-03 | 首次启动 3 分钟内完成接入；异常时有明确修复动作 |
-| Kai | 可靠的会话接入 | 真实 Claude/Codex 会话稳定出现、去重、持久化、可恢复 | 2026-06-05 | app/CLI 重启后会话不丢、不重复；失效 session id 可自动恢复 |
-| QC | 会话工作区和 canvas 基础能力 | 支持创建/切换 canvas，绑定 live session 和 subcanvas，编辑节点基础字段 | 2026-06-07 | 用户能把多个 session 组织进一个 canvas，并在重启后恢复 layout |
-| Kai | Monitor 和 canvas 融合 | 顶层 monitor 就是一个特殊 canvas，聚合 live sessions、subcanvas、recap、blocked 和 approval 信号 | 2026-06-10 | 首页能下钻到 session、节点、artifact、subcanvas；没有独立 monitor/canvas 双心智 |
-| QC | 简化 canvas 使用心智 | 默认入口和 official templates 让用户不从空白画布开始 | 2026-06-12 | 用户能把 canvas 理解为工作空间/看板/监控台/流程图，而不必先学 graph editor |
-| Kai | 节点状态和聚合模型 | 定义基础状态、workflow done/gate、live session 状态、subcanvas 聚合策略 | 2026-06-10 | 节点状态可解释；workflow 可 gate 流转；monitor/live template 不被 done 绑死 |
-| Kai | 核心会话控制动作 | 支持 jump、send message、权限处理、停止、归档、隐藏、恢复和高危确认 | 2026-06-12 | 用户能从 meee2 控制 session，而不是只观察 |
-| Kai | Session 内部管控 | 单个 session 内部可查看 prompt、工具调用、权限请求、输出、错误、artifact、时间线 | 2026-06-14 | 体验接近 cmux 式 session control；可注入消息、暂停/恢复/停止/迁移绑定 |
-| QC | Recap 和状态智能 | 会话级 summary、canvas 级 recap、阻塞/审批/证据摘要、缓存和手动刷新 | 2026-06-14 | 用户能快速知道一组 session 发生了什么，recap 不在切换时重复生成 |
-| Kai | Artifacts 和证据 | 展示 diff、文件改动、命令、tool calls、文档、截图、PR、节点输出附件 | 2026-06-14 | done/blocked/approval 等状态都有可追溯 evidence |
-| Kai | 记忆和经验沉淀 | 沉淀 canvas/session/node 级记忆和经验，并可见、可编辑、可删除 | 2026-06-18 | 记忆有来源和证据，不是黑盒长期记忆 |
-| QC | Official templates / Demo canvases | 提供官方模板和 demo canvas，并定义视图、节点、状态聚合、gate、recap、evidence | 2026-06-18 | 用户无真实 session 也能理解 meee2 的典型用法 |
-| QC | Team-ready 语义模型 | 支持 member、AI member、owner、doer、reviewer、approver、assignment、handoff、approval、snapshot | 2026-06-21 | v0.1 不做实时多人同步，但能表达团队工作责任和审批 |
-| QC | 本地 planner runtime 稳定性 | Sidecar 自动启动/重启，连接状态可见，contract drift 检查，AI 不可用时 fallback | 2026-06-24 | AI 层故障不影响手动 canvas 使用 |
-| QC | 打包、签名和更新 | 完成 DMG、Developer ID 签名、公证、Sparkle 更新、权限引导、debug export | 2026-06-28 | 用户可安装、更新、导出 debug 信息 |
+| Kai | Onboarding 和健康检查 | 新用户能一键接入 Claude Code，并看到 hook socket、BoardServer、planner sidecar、权限、存储路径是否正常 | 2026-05-27 | 首次启动 3 分钟内完成接入；异常时有明确修复动作 |
+| Kai | 可靠的会话接入 | 真实 Claude/Codex 会话稳定出现、去重、持久化、可恢复 | 2026-05-28 | app/CLI 重启后会话不丢、不重复；失效 session id 可自动恢复 |
+| QC | 会话工作区和 canvas 基础能力 | 支持创建/切换 canvas，绑定 live session 和 subcanvas，编辑节点基础字段 | 2026-05-29 | 用户能把多个 session 组织进一个 canvas，并在重启后恢复 layout |
+| Kai | Monitor 和 canvas 融合 | 顶层 monitor 就是一个特殊 canvas，聚合 live sessions、subcanvas、recap、blocked 和 approval 信号 | 2026-05-30 | 首页能下钻到 session、节点、artifact、subcanvas；没有独立 monitor/canvas 双心智 |
+| QC | 简化 canvas 使用心智 | 默认入口和 official templates 让用户不从空白画布开始 | 2026-05-31 | 用户能把 canvas 理解为工作空间/看板/监控台/流程图，而不必先学 graph editor |
+| Kai | 节点状态和聚合模型 | 定义基础状态、workflow done/gate、live session 状态、subcanvas 聚合策略 | 2026-05-30 | 节点状态可解释；workflow 可 gate 流转；monitor/live template 不被 done 绑死 |
+| Kai | 核心会话控制动作 | 支持 jump、send message、权限处理、停止、归档、隐藏、恢复和高危确认 | 2026-05-31 | 用户能从 meee2 控制 session，而不是只观察 |
+| Kai | Session 内部管控 | 单个 session 内部可查看 prompt、工具调用、权限请求、输出、错误、artifact、时间线 | 2026-05-31 | 体验接近 cmux 式 session control；可注入消息、暂停/恢复/停止/迁移绑定 |
+| QC | Recap 和状态智能 | 会话级 summary、canvas 级 recap、阻塞/审批/证据摘要、缓存和手动刷新 | 2026-05-31 | 用户能快速知道一组 session 发生了什么，recap 不在切换时重复生成 |
+| Kai | Artifacts 和证据 | 展示 diff、文件改动、命令、tool calls、文档、截图、PR、节点输出附件 | 2026-05-31 | done/blocked/approval 等状态都有可追溯 evidence |
+| Kai | 记忆和经验沉淀 | 沉淀 canvas/session/node 级记忆和经验，并可见、可编辑、可删除 | 2026-06-02 | 记忆有来源和证据，不是黑盒长期记忆 |
+| QC | Official templates / Demo canvases | 提供官方模板和 demo canvas，并定义视图、节点、状态聚合、gate、recap、evidence | 2026-06-02 | 用户无真实 session 也能理解 meee2 的典型用法 |
+| QC | Team-ready 语义模型 | 支持 member、AI member、owner、doer、reviewer、approver、assignment、handoff、approval、snapshot | 2026-06-03 | v0.1 不做实时多人同步，但能表达团队工作责任和审批 |
+| QC | 本地 planner runtime 稳定性 | Sidecar 自动启动/重启，连接状态可见，contract drift 检查，AI 不可用时 fallback | 2026-06-03 | AI 层故障不影响手动 canvas 使用 |
+| QC | 打包、签名和更新 | 完成 DMG、Developer ID 签名、公证、Sparkle 更新、权限引导、debug export | 2026-06-04 | 用户可安装、更新、导出 debug 信息 |
 
 ### P1 Todo
 
 | 负责人 | 模块 | Todo | DDL | 验收信号 |
 |---|---|---|---|---|
-| QC | 搜索、筛选和 command palette | 搜索会话、canvas、artifact、transcript，并按项目/状态/provider/owner/时间/标签筛选 | 2026-07-03 | 大量 session 下仍能快速找到目标并执行常用动作 |
-| QC | Custom templates | 从当前 canvas 保存为 template，编辑默认节点、视图、聚合方式和 gate 规则 | 2026-07-03 | 用户能复用自己的工作流/监控台形态 |
-| QC | Planner proposal flow | AI 提议 canvas/graph 修改，人类 review 后 apply，支持解释和回滚 | 2026-07-07 | 结构变更有 proposal history，并和真实 canvas 状态绑定 |
-| QC | 通知系统 | 权限请求、会话受阻、会话完成、需要审批、recap 更新等通知 | 2026-07-07 | 用户能订阅重要事件，不需要一直盯着 Board |
-| QC | 隐私和数据控制 | 展示本地存储路径，支持导出/删除数据，说明哪些内容会发给 summarizer，允许关闭 cloud/model 调用 | 2026-06-28 | 用户知道数据在哪里、发到哪里，并能控制 |
+| QC | 搜索、筛选和 command palette | 搜索会话、canvas、artifact、transcript，并按项目/状态/provider/owner/时间/标签筛选 | 2026-06-03 | 大量 session 下仍能快速找到目标并执行常用动作 |
+| QC | Custom templates | 从当前 canvas 保存为 template，编辑默认节点、视图、聚合方式和 gate 规则 | 2026-06-04 | 用户能复用自己的工作流/监控台形态 |
+| QC | Planner proposal flow | AI 提议 canvas/graph 修改，人类 review 后 apply，支持解释和回滚 | 2026-06-04 | 结构变更有 proposal history，并和真实 canvas 状态绑定 |
+| QC | 通知系统 | 权限请求、会话受阻、会话完成、需要审批、recap 更新等通知 | 2026-06-04 | 用户能订阅重要事件，不需要一直盯着 Board |
+| QC | 隐私和数据控制 | 展示本地存储路径，支持导出/删除数据，说明哪些内容会发给 summarizer，允许关闭 cloud/model 调用 | 2026-06-03 | 用户知道数据在哪里、发到哪里，并能控制 |
 
 ## P0：Release 必须完成
 
