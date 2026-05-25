@@ -102,7 +102,7 @@ Template 不应该只是“预设一组节点”。它应该定义：
 
 当前分工：
 
-- Kai 已申领：Onboarding 和健康检查、可靠的会话接入、Monitor 和 canvas 融合、节点状态和聚合模型、核心会话控制动作、Session 内部管控、记忆和经验沉淀、Artifacts 和证据。
+- Kai 已申领：Onboarding 和健康检查、可靠的会话接入、Monitor 和 canvas 融合、节点状态和聚合模型、核心会话控制动作、Session 内部管控、记忆和经验沉淀、Artifacts 和证据、本地 planner runtime 稳定性、Custom templates、Planner proposal flow。
 - QC 先负责其余 P0/P1 项，后续可按实现细节继续拆分或调整。
 - P0 DDL 按内部可用 release 和正式 release 倒排；P1 是正式 release 前的 stretch/补强项，不阻塞 release gate，但仍需要明确截止时间。
 
@@ -123,7 +123,7 @@ Template 不应该只是“预设一组节点”。它应该定义：
 | Kai | 记忆和经验沉淀 | 沉淀 canvas/session/node 级记忆和经验，并可见、可编辑、可删除 | 2026-06-02 | 记忆有来源和证据，不是黑盒长期记忆 |
 | QC | Official templates / Demo canvases | 提供官方模板和 demo canvas，并定义视图、节点、状态聚合、gate、recap、evidence | 2026-06-02 | 用户无真实 session 也能理解 meee2 的典型用法 |
 | QC | Team-ready 语义模型 | 支持 member、AI member、owner、doer、reviewer、approver、assignment、handoff、approval、snapshot | 2026-06-03 | v0.1 不做实时多人同步，但能表达团队工作责任和审批 |
-| QC | 本地 planner runtime 稳定性 | Sidecar 自动启动/重启，连接状态可见，contract drift 检查，AI 不可用时 fallback | 2026-06-03 | AI 层故障不影响手动 canvas 使用 |
+| Kai | 本地 planner runtime 稳定性 | Sidecar 自动启动/重启，连接状态可见，contract drift 检查，AI 不可用时 fallback | 2026-06-03 | AI 层故障不影响手动 canvas 使用 |
 | QC | 打包、签名和更新 | 完成 DMG、Developer ID 签名、公证、Sparkle 更新、权限引导、debug export | 2026-06-04 | 用户可安装、更新、导出 debug 信息 |
 
 ### P1 Todo
@@ -131,8 +131,8 @@ Template 不应该只是“预设一组节点”。它应该定义：
 | 负责人 | 模块 | Todo | DDL | 验收信号 |
 |---|---|---|---|---|
 | QC | 搜索、筛选和 command palette | 搜索会话、canvas、artifact、transcript，并按项目/状态/provider/owner/时间/标签筛选 | 2026-06-03 | 大量 session 下仍能快速找到目标并执行常用动作 |
-| QC | Custom templates | 从当前 canvas 保存为 template，编辑默认节点、视图、聚合方式和 gate 规则 | 2026-06-04 | 用户能复用自己的工作流/监控台形态 |
-| QC | Planner proposal flow | AI 提议 canvas/graph 修改，人类 review 后 apply，支持解释和回滚 | 2026-06-04 | 结构变更有 proposal history，并和真实 canvas 状态绑定 |
+| Kai | Custom templates | 从当前 canvas 保存为 template，编辑默认节点、视图、聚合方式和 gate 规则 | 2026-06-04 | 用户能复用自己的工作流/监控台形态 |
+| Kai | Planner proposal flow | AI 提议 canvas/graph 修改，人类 review 后 apply，支持解释和回滚 | 2026-06-04 | 结构变更有 proposal history，并和真实 canvas 状态绑定 |
 | QC | 通知系统 | 权限请求、会话受阻、会话完成、需要审批、recap 更新等通知 | 2026-06-04 | 用户能订阅重要事件，不需要一直盯着 Board |
 | QC | 隐私和数据控制 | 展示本地存储路径，支持导出/删除数据，说明哪些内容会发给 summarizer，允许关闭 cloud/model 调用 | 2026-06-03 | 用户知道数据在哪里、发到哪里，并能控制 |
 
