@@ -38,7 +38,6 @@ import type {
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
 import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
-import { InputCardSections } from './InputCardSections'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
 const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
@@ -379,78 +378,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       <div className="planner-node__title">{node.title}</div>
       {node.desc && <div className="planner-node__desc">{node.desc}</div>}
 
-      {nodeKind === 'step' && (
-        <div className="planner-node__meta" aria-label="Runtime">
-          <span className="planner-node__chip">
-            <Code2 size={10} aria-hidden />
-            Runtime: {runtimeLabelForNode(node.executorType)}
-          </span>
-          {scheduleLabel && (
-            <span className="planner-node__chip planner-node__chip--schedule" title="This node periodically sends a message to its bound session.">
-              <CalendarClock size={10} aria-hidden />
-              Scheduled: {scheduleLabel}
-            </span>
-          )}
-          {!isRunMode && data.canChangeStatus && data.onChangeGateMode ? (
-            <label
-              className="planner-node__chip planner-node__gate-select nodrag nopan"
-              title="Change gate mode"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <Signpost size={10} aria-hidden />
-              Gate: {gateLabel}
-              <select
-                value={gateLabel.toLowerCase()}
-                aria-label={`Gate mode for ${node.title}`}
-                onChange={(event) => data.onChangeGateMode?.(node.id, event.target.value as 'human' | 'auto')}
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <option value="human">Human</option>
-                <option value="auto">Auto</option>
-              </select>
-              <ChevronDown size={10} aria-hidden />
-            </label>
-          ) : (
-            <span className="planner-node__chip">
-              <Signpost size={10} aria-hidden />
-              Gate: {gateLabel}
-            </span>
-          )}
-        </div>
-      )}
-
-      {nextAction && (
-        <div className="planner-node__next-action" title={nextAction}>
-          <Signpost size={11} aria-hidden />
-          <span>{nextAction}</span>
-        </div>
-      )}
-
-      {nodeKind === 'step' && (
-        <InputCardSections
-          node={node}
-          upstreamLabel={data.upstreamSourceLabel}
-          variant="card"
-          onAttachDataSource={data.onAttachDataSource}
-          onRefreshExternal={data.onRefreshExternalInput}
-          onConfigureDialogue={data.onConfigureDialogue}
-        />
-      )}
-
-      {(io.outputs.length > 0 || (node.schema?.outputs?.length ?? 0) > 0) && (
-        <div className="planner-node__io planner-node__io--output-only" aria-label="Node output">
-          <IOColumn title="Output" items={io.outputs} emptyLabel="No output" />
-        </div>
-      )}
-
-      {blockers.length > 0 && (
-        <div className="planner-node__blockers">
-          <AlertTriangle size={12} aria-hidden />
-          <span>{blockers[0]}</span>
-          {blockers.length > 1 && <em>+{blockers.length - 1}</em>}
-        </div>
-      )}
+      {/* UI-simplification §2.6 / §3.1 — 卡片只保留 status+mode header / title / desc / footer 四段。
+       *  原 meta chips (Runtime / Schedule / Gate)、nextAction、InputCardSections、IO output、
+       *  blockers 全部下沉到 inspector(进展/成果/足迹三段);schedule/gate 信息已折入 mode badge。
+       *  详情、re-run、mark-down 通过点击节点打开 inspector 操作。 */}
 
       {(primaryAction || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
