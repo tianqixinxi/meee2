@@ -7,7 +7,7 @@ import {
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
@@ -595,7 +595,7 @@ function NativeTerminalPanel({
     })
   }, [syncNative])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!session.surfaceId) return
     lastSentRectRef.current = null
     lastObservedSizeRef.current = null
@@ -637,20 +637,21 @@ function NativeTerminalPanel({
   return (
     <div
       ref={hostRef}
-      className="sessions-native-terminal"
+      className={`sessions-native-terminal${openError ? ' is-unavailable' : ''}`}
       aria-label={t('sessions.terminal')}
+      tabIndex={0}
+      onFocus={() => syncNative('focus')}
       onDoubleClick={() => syncNative('focus')}
     >
-      <TerminalIcon size={28} aria-hidden />
-      <div>
-        <h3>{t('sessions.nativeTerminalTitle')}</h3>
-        <p>{t('sessions.nativeTerminalBody')}</p>
-        {openError && <span>{t('sessions.nativeTerminalUnavailable')}</span>}
-      </div>
-      <button type="button" onClick={() => syncNative('attach')}>
-        <TerminalIcon size={14} aria-hidden />
-        {t('sessions.openNativeTerminal')}
-      </button>
+      {openError && (
+        <div className="sessions-native-terminal__fallback" role="status">
+          <TerminalIcon size={18} aria-hidden />
+          <span>{t('sessions.nativeTerminalUnavailable')}</span>
+          <button type="button" onClick={() => syncNative('attach')}>
+            {t('sessions.openNativeTerminal')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
