@@ -670,6 +670,18 @@ export interface NativeTerminalPrewarmAck {
   reason?: string
 }
 
+export interface NativeTerminalSyncAck {
+  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | string
+  surfaceId?: string
+  sessionId?: string
+  ok?: boolean
+  reason?: string
+  traceId?: string
+  cacheHit?: boolean
+  activeChanged?: boolean
+  nativeAtMs?: number
+}
+
 // -- planner ---------------------------------------------------------------
 
 export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvasState> {

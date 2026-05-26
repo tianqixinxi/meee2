@@ -8,7 +8,7 @@ import {
   Terminal as TerminalIcon,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect } from '../api'
+import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
 
@@ -546,6 +546,32 @@ function NativeTerminalPanel({
   const lastSentRectRef = useRef<NativeTerminalRect | null>(null)
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null)
   const [openError, setOpenError] = useState(false)
+
+  useEffect(() => {
+    const handleSyncAck = (event: Event) => {
+      const detail = (event as CustomEvent<NativeTerminalSyncAck>).detail
+      const surfaceId = detail?.surfaceId?.trim()
+      if (!surfaceId || surfaceId !== session.surfaceId) return
+      if (detail.sessionId && detail.sessionId !== session.id) return
+      if (detail.type === 'attach') {
+        setOpenError(detail.ok === false)
+      }
+      if (detail.traceId) {
+        console.debug('[TerminalSwitchPerf]', {
+          traceId: detail.traceId,
+          phase: `web.${detail.type ?? 'terminal'}.ack`,
+          sessionId: session.id,
+          surfaceId,
+          ok: detail.ok,
+          reason: detail.reason,
+          cacheHit: detail.cacheHit,
+          activeChanged: detail.activeChanged,
+        })
+      }
+    }
+    window.addEventListener('meee2:native-terminal-sync', handleSyncAck)
+    return () => window.removeEventListener('meee2:native-terminal-sync', handleSyncAck)
+  }, [session.id, session.surfaceId])
 
   const syncNative = useCallback((type: NativeTerminalSyncType = 'attach') => {
     if (!session.surfaceId || !hostRef.current) return false
