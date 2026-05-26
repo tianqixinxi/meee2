@@ -577,7 +577,16 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             key == directKey || controller.matches(surfaceId: surfaceId, sessionId: sessionId) ? key : nil
         }
         for key in matchingKeys {
-            embeddedTerminals.removeValue(forKey: key)?.detach()
+            if let removed = embeddedTerminals.removeValue(forKey: key) {
+                dispatchNativeTerminalPrewarmAck(
+                    surfaceId: removed.surfaceId,
+                    sessionId: removed.sessionId,
+                    ready: false,
+                    cacheHit: false,
+                    reason: "removed"
+                )
+                removed.detach()
+            }
             embeddedTerminalLRU.removeAll { $0 == key }
             if activeEmbeddedTerminalKey == key {
                 activeEmbeddedTerminalKey = nil
@@ -598,7 +607,16 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 break
             }
             embeddedTerminalLRU.removeAll { $0 == evictedKey }
-            embeddedTerminals.removeValue(forKey: evictedKey)?.detach()
+            if let evicted = embeddedTerminals.removeValue(forKey: evictedKey) {
+                dispatchNativeTerminalPrewarmAck(
+                    surfaceId: evicted.surfaceId,
+                    sessionId: evicted.sessionId,
+                    ready: false,
+                    cacheHit: false,
+                    reason: "evicted"
+                )
+                evicted.detach()
+            }
         }
     }
 
