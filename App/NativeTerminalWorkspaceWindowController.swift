@@ -117,20 +117,23 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             deactivateOutput()
             return
         }
-        var replaySince = pausedOutputPosition
-        if needsInitialReplay {
-            needsInitialReplay = false
-            replaySince = nil
-        }
-        let replay = InternalTerminalRuntime.shared.resumeClientOutput(
-            self,
-            surfaceOrSessionId: surfaceId,
-            since: replaySince
-        )
-        pausedOutputPosition = nil
-        if let replay {
-            terminalSession.receive(replay)
-            scheduleRefit(includeFollowUp: true)
+        let shouldResumeOutput = needsInitialReplay || pausedOutputPosition != nil || !surfaceVisible
+        if shouldResumeOutput {
+            var replaySince = pausedOutputPosition
+            if needsInitialReplay {
+                needsInitialReplay = false
+                replaySince = nil
+            }
+            let replay = InternalTerminalRuntime.shared.resumeClientOutput(
+                self,
+                surfaceOrSessionId: surfaceId,
+                since: replaySince
+            )
+            pausedOutputPosition = nil
+            if let replay {
+                terminalSession.receive(replay)
+                scheduleRefit(includeFollowUp: true)
+            }
         }
         setTerminalSurfaceVisible(true)
         if frameChanged {
