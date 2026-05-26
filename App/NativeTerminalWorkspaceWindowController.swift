@@ -23,6 +23,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var surfaceVisible = false
     private var refitScheduled = false
     private var followUpRefitScheduled = false
+    private var needsInitialReplay = true
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -71,7 +72,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             context: .window
         )
 
-        _ = InternalTerminalRuntime.shared.addClient(self, surfaceOrSessionId: resolvedSurfaceId)
+        _ = InternalTerminalRuntime.shared.addClient(self, surfaceOrSessionId: resolvedSurfaceId, replay: false)
     }
 
     func detach() {
@@ -115,6 +116,14 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             flushPendingOutput()
             setTerminalSurfaceVisible(false)
             return
+        }
+        if needsInitialReplay {
+            hiddenOutput.removeAll(keepingCapacity: true)
+            needsInitialReplay = false
+            if let replay = InternalTerminalRuntime.shared.replayOutputData(surfaceOrSessionId: surfaceId) {
+                terminalSession.receive(replay)
+                scheduleRefit(includeFollowUp: true)
+            }
         }
         flushHiddenOutput()
         setTerminalSurfaceVisible(true)

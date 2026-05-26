@@ -280,10 +280,19 @@ public final class InternalTerminalRuntime {
         return true
     }
 
-    public func addClient(_ client: InternalTerminalSurfaceClient, surfaceOrSessionId id: String) -> Bool {
+    public func addClient(
+        _ client: InternalTerminalSurfaceClient,
+        surfaceOrSessionId id: String,
+        replay: Bool = true
+    ) -> Bool {
         guard let surface = surface(surfaceOrSessionId: id) else { return false }
-        surface.addClient(client)
+        surface.addClient(client, replay: replay)
         return true
+    }
+
+    public func replayOutputData(surfaceOrSessionId id: String) -> Data? {
+        guard let surface = surface(surfaceOrSessionId: id) else { return nil }
+        return surface.replayOutputData()
     }
 
     public func removeClient(_ client: InternalTerminalSurfaceClient, surfaceOrSessionId id: String) {
@@ -508,11 +517,11 @@ final class InternalTerminalSurface {
         touch()
     }
 
-    func addClient(_ client: InternalTerminalSurfaceClient) {
+    func addClient(_ client: InternalTerminalSurfaceClient, replay shouldReplay: Bool = true) {
         let key = ObjectIdentifier(client)
         lock.lock()
         nativeClients[key] = WeakInternalTerminalSurfaceClient(client)
-        let replay = status == .running ? replayDataLocked() : Data()
+        let replay = shouldReplay && status == .running ? replayDataLocked() : Data()
         let snapshot = snapshotLocked()
         lock.unlock()
 
@@ -522,6 +531,13 @@ final class InternalTerminalSurface {
                 client.internalTerminalSurface(self.surfaceId, didReplayOutput: replay)
             }
         }
+    }
+
+    func replayOutputData() -> Data? {
+        lock.lock()
+        let replay = status == .running ? replayDataLocked() : Data()
+        lock.unlock()
+        return replay.isEmpty ? nil : replay
     }
 
     func removeClient(_ client: InternalTerminalSurfaceClient) {
