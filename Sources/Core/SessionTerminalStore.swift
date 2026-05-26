@@ -11,6 +11,7 @@ struct SessionTerminalInfo: Codable {
     var status: String
     var command: String?
     var provider: String?
+    var providerResumeSessionId: String?
     var canvasId: String?
     var nodeId: String?
 
@@ -57,6 +58,7 @@ class SessionTerminalStore {
         status: String,
         command: String? = nil,
         provider: String? = nil,
+        providerResumeSessionId: String? = nil,
         canvasId: String? = nil,
         nodeId: String? = nil
     ) {
@@ -73,6 +75,7 @@ class SessionTerminalStore {
                 status: status,
                 command: command,
                 provider: provider,
+                providerResumeSessionId: providerResumeSessionId,
                 canvasId: canvasId,
                 nodeId: nodeId,
                 cmuxSocketPath: cmuxSocketPath,
@@ -86,6 +89,7 @@ class SessionTerminalStore {
             info.cmuxSurfaceId = cmuxSurfaceId ?? info.cmuxSurfaceId
             info.command = command ?? info.command
             info.provider = provider ?? info.provider
+            info.providerResumeSessionId = providerResumeSessionId ?? info.providerResumeSessionId
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
             info.cwd = cwd
@@ -121,6 +125,19 @@ class SessionTerminalStore {
         }
     }
 
+    func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
+        let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        queue.async { [weak self] in
+            guard let self, var info = self.store[sessionId] else { return }
+            info.providerResumeSessionId = trimmed
+            info.lastActivityAt = Date()
+            self.store[sessionId] = info
+            self.save()
+            NSLog("[SessionTerminalStore] Linked internal session \(sessionId.prefix(8)) to provider resume id \(trimmed.prefix(8))")
+        }
+    }
+
     /// 清理过期 session (超过 24 小时无活动)
     func cleanupExpired() {
         queue.async { [weak self] in
@@ -128,12 +145,16 @@ class SessionTerminalStore {
 
             let threshold = Date().addingTimeInterval(-24 * 60 * 60)
             let before = self.store.count
+            var changed = false
 
             self.store = self.store.filter { $0.value.lastActivityAt > threshold }
+            changed = self.migrateInvalidInternalResumeCommandsLocked() || changed
 
             let removed = before - self.store.count
             if removed > 0 {
                 NSLog("[SessionTerminalStore] Cleaned up \(removed) expired sessions")
+            }
+            if removed > 0 || changed {
                 self.save()
             }
         }
@@ -149,11 +170,60 @@ class SessionTerminalStore {
         }
 
         store = decoded
+        if migrateInvalidInternalResumeCommandsLocked() {
+            save()
+        }
         NSLog("[SessionTerminalStore] Loaded \(store.count) session-terminal mappings")
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(store) else { return }
         try? data.write(to: storeURL)
+    }
+
+    private func migrateInvalidInternalResumeCommandsLocked() -> Bool {
+        var changed = false
+        for (sessionId, var info) in store {
+            var entryChanged = false
+            let providerResume = info.providerResumeSessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasValidProviderResume = !providerResume.isEmpty && !Self.isMeee2InternalSessionId(providerResume)
+            if !providerResume.isEmpty && !hasValidProviderResume {
+                info.providerResumeSessionId = nil
+                entryChanged = true
+            }
+            if Self.isMeee2InternalSessionId(sessionId),
+               !hasValidProviderResume,
+               let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+               Self.commandUsesInternalResumeId(command, sessionId: sessionId) {
+                info.command = Self.freshCommand(provider: info.provider, command: command)
+                entryChanged = true
+            }
+            if entryChanged {
+                store[sessionId] = info
+                changed = true
+            }
+        }
+        if changed {
+            NSLog("[SessionTerminalStore] Migrated invalid internal resume commands")
+        }
+        return changed
+    }
+
+    private static func isMeee2InternalSessionId(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+    }
+
+    private static func commandUsesInternalResumeId(_ command: String, sessionId: String) -> Bool {
+        let lower = command.lowercased()
+        return lower.contains("resume") && lower.contains(sessionId.lowercased())
+    }
+
+    private static func freshCommand(provider: String?, command: String?) -> String {
+        let haystack = "\(provider ?? "") \(command ?? "")".lowercased()
+        if haystack.contains("codex") {
+            return "codex --dangerously-bypass-approvals-and-sandbox"
+        }
+        return "claude --dangerously-skip-permissions"
     }
 }

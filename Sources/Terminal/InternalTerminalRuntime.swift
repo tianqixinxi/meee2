@@ -293,6 +293,9 @@ public final class InternalTerminalRuntime {
     }
 
     private func restoreCommand(for info: SessionTerminalInfo, storedSession: SessionData?) -> String? {
+        if let resumeId = Self.validProviderResumeSessionId(info.providerResumeSessionId) {
+            return Self.resumeCommand(for: info, resumeSessionId: resumeId)
+        }
         if let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
             if Self.commandUsesInternalResumeId(command, sessionId: info.sessionId) {
                 return Self.freshCommand(for: info, command: command)
@@ -336,6 +339,20 @@ public final class InternalTerminalRuntime {
         guard isInternalSessionId(sessionId) else { return false }
         let lower = command.lowercased()
         return lower.contains("resume") && lower.contains(sessionId.lowercased())
+    }
+
+    private static func validProviderResumeSessionId(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, !isInternalSessionId(trimmed) else { return nil }
+        return trimmed
+    }
+
+    private static func resumeCommand(for info: SessionTerminalInfo, resumeSessionId: String) -> String {
+        let provider = restoreProvider(for: info, command: info.command ?? "")
+        if provider == "codex" {
+            return "codex --dangerously-bypass-approvals-and-sandbox resume \(shellQuote(resumeSessionId))"
+        }
+        return "claude --resume \(shellQuote(resumeSessionId)) --dangerously-skip-permissions"
     }
 
     private static func freshCommand(for info: SessionTerminalInfo, command: String?) -> String {

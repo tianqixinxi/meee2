@@ -1357,10 +1357,13 @@ enum BoardAPI {
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-                    let canResume = isProviderResumeSessionId(sessionId)
-                    let command = canResume
-                        ? plannerResumeCommand(for: existingNode, sessionId: sessionId)
-                        : plannerFreshCommand(for: existingNode)
+                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
+                    let command = resumeSessionId.map {
+                        plannerResumeCommand(for: existingNode, sessionId: $0)
+                    }
+                        ?? plannerFreshCommand(for: existingNode)
+                    let canResume = resumeSessionId != nil
+                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     surface = try createInternalSessionSurface(
                         provider: provider,
@@ -1370,7 +1373,7 @@ enum BoardAPI {
                         canvasId: canvasId,
                         nodeId: nodeId,
                         initialPrompt: canResume ? nil : plannerDispatchPrompt(for: existingNode, canvasId: canvasId, cwd: cwd),
-                        preferredSessionId: canResume ? sessionId : nil
+                        preferredSessionId: preferredSessionId
                     )
                     if canResume {
                         _ = PlannerSessionRunStateBridge.observeBound(
@@ -1569,10 +1572,13 @@ enum BoardAPI {
                     for node in nodes {
                         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
                     }
-                    let canResume = isProviderResumeSessionId(sessionId)
-                    let command = canResume
-                        ? plannerResumeCommand(for: nodes.first, sessionId: sessionId)
-                        : plannerFreshCommand(for: nodes.first)
+                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
+                    let command = resumeSessionId.map {
+                        plannerResumeCommand(for: nodes.first, sessionId: $0)
+                    }
+                        ?? plannerFreshCommand(for: nodes.first)
+                    let canResume = resumeSessionId != nil
+                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     let surface = try createInternalSessionSurface(
                         provider: provider,
@@ -1582,7 +1588,7 @@ enum BoardAPI {
                         canvasId: canvasId,
                         nodeId: nodes.first?.id,
                         initialPrompt: canResume ? nil : nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) },
-                        preferredSessionId: canResume ? sessionId : nil
+                        preferredSessionId: preferredSessionId
                     )
                     if canResume {
                         _ = PlannerSessionRunStateBridge.observeBound(
@@ -2795,6 +2801,16 @@ enum BoardAPI {
         return true
     }
 
+    private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
+        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !mapped.isEmpty,
+           isProviderResumeSessionId(mapped) {
+            return mapped
+        }
+        return isProviderResumeSessionId(sessionId) ? sessionId : nil
+    }
+
     private static func shellQuote(_ raw: String) -> String {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
@@ -2814,6 +2830,10 @@ enum BoardAPI {
         let internalSessions = InternalTerminalRuntime.shared
             .listSnapshots()
             .map(BoardDTOBuilder.internalSessionDTO)
+        let internalProviderResumeIds = Set(internalSessions.compactMap {
+            SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
             .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
             .filter { $0.status != .dead }
@@ -2824,6 +2844,7 @@ enum BoardAPI {
                 return !archivedDesktopSids.contains(realSid)
             }
             .map { BoardDTOBuilder.sessionDTO($0) }
+            .filter { !internalProviderResumeIds.contains($0.id) }
             .filter { external in
                 !internalSessions.contains { internalSession in
                     boardSession(internalSession, matches: external.id)
@@ -2840,6 +2861,7 @@ enum BoardAPI {
                 guard let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: cliSid),
                       !m.isArchived,
                       !realSids.contains(cliSid),
+                      !internalProviderResumeIds.contains(cliSid),
                       !internalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
         }
