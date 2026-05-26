@@ -419,6 +419,9 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
         if embeddedTerminals[key] != nil {
+            if activeEmbeddedTerminalKey != key, let cached = embeddedTerminals[key] {
+                hostEmbeddedTerminalView(cached, hidden: true)
+            }
             rememberEmbeddedTerminal(key)
             logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
             return
@@ -429,6 +432,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
         created.hide()
         embeddedTerminals[key] = created
+        hostEmbeddedTerminalView(created, hidden: true)
         rememberEmbeddedTerminal(key)
         logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false cacheCount=\(embeddedTerminals.count)")
     }
@@ -454,14 +458,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             }
             activeEmbeddedTerminalKey = key
             rememberEmbeddedTerminal(key)
-            if controller.view.superview == nil {
-                controller.view.frame = .zero
-                controller.view.autoresizingMask = []
-                terminalHostView.addSubview(controller.view)
-            } else if controller.view.superview !== terminalHostView {
-                controller.view.removeFromSuperview()
-                terminalHostView.addSubview(controller.view)
-            }
+            hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
             guard let controller = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
@@ -472,9 +469,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             embeddedTerminals[key] = controller
             activeEmbeddedTerminalKey = key
             rememberEmbeddedTerminal(key)
-            controller.view.frame = .zero
-            controller.view.autoresizingMask = []
-            terminalHostView.addSubview(controller.view)
+            hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
         }
         if let rectPayload {
             updateEmbeddedTerminalFrame(rectPayload, tracePayload: tracePayload)
@@ -485,6 +480,20 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             phase: "native.embed.done",
             extra: "cacheHit=\(cacheHit) activeChanged=\(activeChanged) cacheCount=\(embeddedTerminals.count)"
         )
+    }
+
+    private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, hidden: Bool) {
+        if controller.view.superview == nil {
+            controller.view.frame = .zero
+            controller.view.autoresizingMask = []
+            terminalHostView.addSubview(controller.view)
+        } else if controller.view.superview !== terminalHostView {
+            controller.view.removeFromSuperview()
+            terminalHostView.addSubview(controller.view)
+        }
+        if hidden {
+            controller.layout(in: .zero, hidden: true)
+        }
     }
 
     private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) {
