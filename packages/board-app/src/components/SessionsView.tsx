@@ -535,6 +535,8 @@ function NativeTerminalPanel({
   useLayoutEffect(() => {
     if (!session.surfaceId) return
     syncNative('attach')
+    const surfaceId = session.surfaceId
+    const sessionId = session.id
     const resizeObserver = hostRef.current ? new ResizeObserver(scheduleLayout) : null
     if (hostRef.current) resizeObserver?.observe(hostRef.current)
     window.addEventListener('resize', scheduleLayout)
@@ -547,6 +549,7 @@ function NativeTerminalPanel({
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleLayout)
       window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
+      openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId })
     }
   }, [scheduleLayout, session.id, session.surfaceId, syncNative])
 

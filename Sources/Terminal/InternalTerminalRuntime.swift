@@ -365,6 +365,10 @@ public final class InternalTerminalRuntime {
 }
 
 final class InternalTerminalSurface {
+    private static let maxScrollbackBytes = 96_000
+    private static let scrollbackTrimSearchBytes = 8_192
+    private static let replayResetPrefix = Data("\u{001B}[0m\u{001B}[?25h\r\n".utf8)
+
     let surfaceId: String
     let sessionId: String
     let provider: String
@@ -380,6 +384,7 @@ final class InternalTerminalSurface {
     private var masterFD: Int32 = -1
     private var nativeClients: [ObjectIdentifier: WeakInternalTerminalSurfaceClient] = [:]
     private var scrollback = Data()
+    private var scrollbackWasTrimmed = false
     private var status: InternalTerminalLifecycle = .starting
     private var pid: Int?
     private var exitCode: Int?
@@ -491,7 +496,7 @@ final class InternalTerminalSurface {
         let key = ObjectIdentifier(client)
         lock.lock()
         nativeClients[key] = WeakInternalTerminalSurfaceClient(client)
-        let replay = status == .running ? scrollback : Data()
+        let replay = status == .running ? replayDataLocked() : Data()
         let snapshot = snapshotLocked()
         lock.unlock()
 
@@ -632,10 +637,37 @@ final class InternalTerminalSurface {
 
     private func appendScrollbackLocked(_ data: Data) {
         scrollback.append(data)
-        let maxLength = 240_000
-        if scrollback.count > maxLength {
-            scrollback.removeFirst(scrollback.count - maxLength)
+        if scrollback.count > Self.maxScrollbackBytes {
+            let preferredCut = scrollback.count - Self.maxScrollbackBytes
+            let cut = Self.safeScrollbackTrimIndex(in: scrollback, preferredIndex: preferredCut)
+            if cut > 0 {
+                scrollback.removeFirst(cut)
+                scrollbackWasTrimmed = true
+            }
         }
+    }
+
+    private func replayDataLocked() -> Data {
+        guard scrollbackWasTrimmed else { return scrollback }
+        var replay = Data()
+        replay.reserveCapacity(Self.replayResetPrefix.count + scrollback.count)
+        replay.append(Self.replayResetPrefix)
+        replay.append(scrollback)
+        return replay
+    }
+
+    private static func safeScrollbackTrimIndex(in data: Data, preferredIndex: Int) -> Int {
+        guard preferredIndex > 0 else { return 0 }
+        let upper = min(data.count, preferredIndex + scrollbackTrimSearchBytes)
+        var cut = preferredIndex
+        if preferredIndex < upper,
+           let newline = data[preferredIndex..<upper].firstIndex(of: 0x0A) {
+            cut = data.index(after: newline)
+        }
+        while cut < data.count, (data[cut] & 0b1100_0000) == 0b1000_0000 {
+            cut += 1
+        }
+        return min(cut, data.count)
     }
 
     private func compactNativeClientsLocked() -> [InternalTerminalSurfaceClient] {

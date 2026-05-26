@@ -105,7 +105,6 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
-        refitSurface()
         terminalSession.receive(data)
         scheduleRefit()
     }
