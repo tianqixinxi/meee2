@@ -436,6 +436,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
             return
         }
+        let webPhase = tracePayload?["webPhase"] as? String ?? ""
+        if webPhase == "react.idleTabPrewarm" {
+            logTerminalTrace(tracePayload, phase: "native.prewarm.skipped", extra: "reason=backgroundIdle cacheHit=false cacheCount=\(embeddedTerminals.count)")
+            return
+        }
         guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
             logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
             return
