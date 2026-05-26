@@ -77,6 +77,19 @@ export function SessionsView({
     [visibleSessions],
   )
 
+  const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
+    if (!session.surfaceId || !isLiveInternalSession(session)) return false
+    if (prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
+    const ok = openNativeTerminalSurface({
+      type: 'prewarm',
+      surfaceId: session.surfaceId,
+      sessionId: session.id,
+      webPhase: reason,
+    })
+    if (ok) prewarmedInternalSurfaceIdsRef.current.add(session.surfaceId)
+    return ok
+  }, [])
+
   useEffect(() => {
     if (selectedSessionId || selectedSession || internalSessions.length === 0) return
     const next = internalSessions[0]
@@ -89,29 +102,27 @@ export function SessionsView({
 
   useEffect(() => {
     if (activeKindTab !== 'internal') return
-    const targets = internalSessions
+    const targets = uniqueSessionsById([
+      ...(selectedSession ? [selectedSession] : []),
+      ...internalSessions,
+    ])
       .filter((session) => session.surfaceId && isLiveInternalSession(session))
-      .slice(0, 4)
+      .slice(0, 6)
     if (targets.length === 0) return
     const timer = window.setTimeout(() => {
       for (const session of targets) {
-        if (!session.surfaceId || prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) continue
-        const ok = openNativeTerminalSurface({
-          type: 'prewarm',
-          surfaceId: session.surfaceId,
-          sessionId: session.id,
-        })
-        if (ok) prewarmedInternalSurfaceIdsRef.current.add(session.surfaceId)
+        prewarmInternalSession(session, 'react.tabPrewarm')
       }
     }, 160)
     return () => window.clearTimeout(timer)
-  }, [activeKindTab, internalSessions])
+  }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSession])
 
   const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
     const startedAt = Date.now()
     const traceId = `switch-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     switchStartedAtRef.current[session.id] = startedAt
     switchTraceIdRef.current[session.id] = traceId
+    prewarmInternalSession(session, `${phase}.prewarm`)
     console.debug('[TerminalSwitchPerf]', {
       traceId,
       phase,
@@ -119,7 +130,11 @@ export function SessionsView({
       surfaceId: session.surfaceId,
     })
     onSelectedSessionChange?.(session.id)
-  }, [onSelectedSessionChange])
+  }, [onSelectedSessionChange, prewarmInternalSession])
+
+  const prewarmSessionRow = useCallback((session: Session) => {
+    if (isInternalSession(session)) prewarmInternalSession(session, 'react.rowHoverPrewarm')
+  }, [prewarmInternalSession])
 
   const openSession = useCallback(async (session: Session) => {
     if (isInternalSession(session)) {
@@ -205,8 +220,9 @@ export function SessionsView({
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
-                            onSelect={() => selectInternalSession(session)}
-                            onOpen={() => openSession(session)}
+                            onSelect={selectInternalSession}
+                            onOpen={openSession}
+                            onPrewarm={prewarmSessionRow}
                             t={t}
                           />
                         ))}
@@ -229,8 +245,9 @@ export function SessionsView({
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
-                            onSelect={() => undefined}
-                            onOpen={() => openSession(session)}
+                            onSelect={noopSessionAction}
+                            onOpen={openSession}
+                            onPrewarm={noopSessionAction}
                             t={t}
                           />
                         ))}
@@ -328,6 +345,7 @@ const SessionRow = memo(function SessionRow({
   unread,
   onSelect,
   onOpen,
+  onPrewarm,
   t,
 }: {
   session: Session
@@ -335,8 +353,9 @@ const SessionRow = memo(function SessionRow({
   opening: boolean
   openError: boolean
   unread: boolean
-  onSelect: () => void
-  onOpen: () => void
+  onSelect: (session: Session) => void
+  onOpen: (session: Session) => void
+  onPrewarm: (session: Session) => void
   t: ReturnType<typeof useI18n>['t']
 }) {
   const attention = sessionNeedsAttention(session) || unread
@@ -350,8 +369,11 @@ const SessionRow = memo(function SessionRow({
         attention ? 'sessions-row--attention' : '',
         unread ? 'sessions-row--unread' : '',
       ].filter(Boolean).join(' ')}
-      onClick={onSelect}
-      onDoubleClick={onOpen}
+      onClick={() => onSelect(session)}
+      onDoubleClick={() => onOpen(session)}
+      onMouseEnter={() => onPrewarm(session)}
+      onFocus={() => onPrewarm(session)}
+      tabIndex={0}
       aria-label={isInternalSession(session) ? t('sessions.doubleClickSelect') : t('sessions.doubleClickOpen')}
     >
       <div className="sessions-row__identity">
@@ -388,7 +410,7 @@ const SessionRow = memo(function SessionRow({
       <div className="sessions-row__actions">
         {openError && <span>{t('common.openFailed')}</span>}
         {!isInternalSession(session) && (
-          <button type="button" onClick={(event) => { event.stopPropagation(); onOpen() }} disabled={opening}>
+          <button type="button" onClick={(event) => { event.stopPropagation(); onOpen(session) }} disabled={opening}>
             <ExternalLink size={13} aria-hidden />
             {opening ? t('common.opening') : t('sessions.openExternal')}
           </button>
@@ -719,6 +741,19 @@ function compareSessions(a: Session, b: Session, unreadSids: Set<string>): numbe
   if (workingDelta !== 0) return workingDelta
   return timestamp(b.lastActivity) - timestamp(a.lastActivity)
 }
+
+function uniqueSessionsById(sessions: Session[]): Session[] {
+  const seen = new Set<string>()
+  const result: Session[] = []
+  for (const session of sessions) {
+    if (seen.has(session.id)) continue
+    seen.add(session.id)
+    result.push(session)
+  }
+  return result
+}
+
+function noopSessionAction(_session: Session) {}
 
 function isWorkingSession(session: Session): boolean {
   return !['completed', 'done', 'idle'].includes(session.status)
