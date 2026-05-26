@@ -42,6 +42,7 @@ import {
   fetchMeee2AgentRuntimeStatus,
   fetchUserProfile,
   installMeee2AgentRuntime,
+  openNativeTerminalSurface,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -448,7 +449,18 @@ export default function App() {
   useEffect(() => {
     const openSession = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
-      setSelectedSessionId(detail?.sessionId ?? detail?.surfaceId ?? null)
+      const surfaceId = detail?.surfaceId?.trim()
+      const sessionId = detail?.sessionId?.trim()
+      if (surfaceId || sessionId) {
+        openNativeTerminalSurface({
+          type: 'prewarm',
+          surfaceId,
+          sessionId,
+          sentAtMs: Date.now(),
+          webPhase: 'app.openSession.prewarm',
+        })
+      }
+      setSelectedSessionId(sessionId || surfaceId || null)
       setWorkspaceMode('sessions')
       boardState.refresh()
     }
