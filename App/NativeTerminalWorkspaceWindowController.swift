@@ -47,11 +47,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             write: { data in
                 _ = InternalTerminalRuntime.shared.writeInputData(surfaceOrSessionId: resolvedSurfaceId, data: data)
             },
-            resize: { viewport in
-                let cols = Self.clamped(viewport.columns, lower: 20, upper: 500)
-                let rows = Self.clamped(viewport.rows, lower: 8, upper: 200)
-                _ = InternalTerminalRuntime.shared.resize(surfaceOrSessionId: resolvedSurfaceId, cols: cols, rows: rows)
-            }
+            resize: { _ in }
         )
         self.terminalSession = terminalSession
         Self.configureGhosttyResourcesIfNeeded()
@@ -247,6 +243,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     private func syncPtySize(columns: UInt16, rows: UInt16, force: Bool = false) {
+        guard surfaceVisible, !view.isHidden else { return }
         let cols = Self.clamped(columns, lower: 20, upper: 500)
         let rows = Self.clamped(rows, lower: 8, upper: 200)
         if !force, let lastSyncedSize, lastSyncedSize.cols == cols, lastSyncedSize.rows == rows {
