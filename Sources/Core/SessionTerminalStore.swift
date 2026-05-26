@@ -29,11 +29,13 @@ class SessionTerminalStore {
     private let storeURL: URL
     private var store: [String: SessionTerminalInfo] = [:]
     private let queue = DispatchQueue(label: "com.meee2.terminalstore", qos: .utility)
+    private let queueKey = DispatchSpecificKey<Void>()
 
     private init() {
         let home = NSHomeDirectory()
         let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
         storeURL = dir.appendingPathComponent("session-terminals.json")
+        queue.setSpecific(key: queueKey, value: ())
 
         // 确保目录存在
         try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -119,9 +121,9 @@ class SessionTerminalStore {
 
     /// 删除已结束的 session
     func remove(sessionId: String) {
-        queue.async { [weak self] in
-            self?.store.removeValue(forKey: sessionId)
-            self?.save()
+        performSync {
+            store.removeValue(forKey: sessionId)
+            save()
         }
     }
 
@@ -140,22 +142,20 @@ class SessionTerminalStore {
 
     /// 清理过期 session (超过 24 小时无活动)
     func cleanupExpired() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
+        performSync {
             let threshold = Date().addingTimeInterval(-24 * 60 * 60)
-            let before = self.store.count
+            let before = store.count
             var changed = false
 
-            self.store = self.store.filter { $0.value.lastActivityAt > threshold }
-            changed = self.migrateInvalidInternalResumeCommandsLocked() || changed
+            store = store.filter { $0.value.lastActivityAt > threshold }
+            changed = migrateInvalidInternalResumeCommandsLocked() || changed
 
-            let removed = before - self.store.count
+            let removed = before - store.count
             if removed > 0 {
                 NSLog("[SessionTerminalStore] Cleaned up \(removed) expired sessions")
             }
             if removed > 0 || changed {
-                self.save()
+                save()
             }
         }
     }
@@ -179,6 +179,14 @@ class SessionTerminalStore {
     private func save() {
         guard let data = try? JSONEncoder().encode(store) else { return }
         try? data.write(to: storeURL)
+    }
+
+    private func performSync(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            work()
+        } else {
+            queue.sync(execute: work)
+        }
     }
 
     private func migrateInvalidInternalResumeCommandsLocked() -> Bool {
