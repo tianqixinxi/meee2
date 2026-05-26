@@ -5,6 +5,7 @@ import meee2Kit
 @MainActor
 final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceClient {
     private static let maxPendingOutputBytes = 64_000
+    private static let maxHiddenOutputBytes = 256_000
 
     let surfaceId: String
     let sessionId: String?
@@ -125,7 +126,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
         flushPendingOutput()
         guard !view.isHidden, surfaceVisible else {
-            hiddenOutput.append(data)
+            enqueueHiddenOutput(data)
             return
         }
         terminalSession.receive(data)
@@ -183,7 +184,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private func enqueueOutput(_ data: Data) {
         guard !detached, !data.isEmpty else { return }
         if view.isHidden || !surfaceVisible {
-            hiddenOutput.append(data)
+            enqueueHiddenOutput(data)
             return
         }
         pendingOutput.append(data)
@@ -204,6 +205,14 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         let data = pendingOutput
         pendingOutput.removeAll(keepingCapacity: true)
         terminalSession.receive(data)
+    }
+
+    private func enqueueHiddenOutput(_ data: Data) {
+        hiddenOutput.append(data)
+        guard hiddenOutput.count >= Self.maxHiddenOutputBytes else { return }
+        let overflow = hiddenOutput
+        hiddenOutput.removeAll(keepingCapacity: true)
+        terminalSession.receive(overflow)
     }
 
     private func flushHiddenOutput() {
