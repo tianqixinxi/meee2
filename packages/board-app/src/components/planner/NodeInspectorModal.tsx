@@ -194,6 +194,23 @@ export function NodeInspectorModal({
           <h2>{node.title}</h2>
         </div>
 
+        {/* UI-simplification §2.9 — three-section reorg: 进展 / 成果 / 足迹.
+         *  Existing content is grouped under the new headers without dropping
+         *  functionality. Each section's old contents stay; we just give them
+         *  semantic group labels so the inspector reads as one progressive
+         *  story (where am I / what came out / how did I get here).
+         *
+         *  Group 1 · 进展(progress): blockers + info grid + AI callout +
+         *  next-action.  Group 2 · 成果(output/artifact clipboard): inputs +
+         *  output schema + downstream version chain.  Group 3 · 足迹: covered
+         *  further down by activity / version history sections (out of view
+         *  in this hunk). */}
+
+        <div className="planner-node-modal__group-label">
+          <span>进展</span>
+          <small>progress · session 当前态</small>
+        </div>
+
         {blockers.length > 0 && (
           <div className="planner-node-modal__blockers">
             {blockers.map((blocker) => (
@@ -228,6 +245,11 @@ export function NodeInspectorModal({
             </button>
           </div>
         )}
+
+        <div className="planner-node-modal__group-label">
+          <span>成果 · 剪贴板</span>
+          <small>artifacts · inputs / outputs / 版本</small>
+        </div>
 
         <div className="planner-node-modal__section">
           <h3><Route size={13} aria-hidden /> Inputs</h3>
