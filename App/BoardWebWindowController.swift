@@ -203,6 +203,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         guard let activeEmbeddedTerminalKey else { return nil }
         return embeddedTerminals[activeEmbeddedTerminalKey]
     }
+    private struct EmbeddedTerminalLayout {
+        let frame: NSRect
+        let hidden: Bool
+    }
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     var onClose: (() -> Void)?
@@ -456,6 +460,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
         let cacheHit = embeddedTerminals[key] != nil
         let activeChanged = activeEmbeddedTerminalKey != key
+        let initialLayout = rectPayload.flatMap { embeddedTerminalLayout(from: $0) }
+        var hostedDuringAttach = false
         if activeEmbeddedTerminalKey != key {
             embeddedTerminal?.hide()
             let controller: EmbeddedNativeTerminalController
@@ -472,7 +478,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             }
             activeEmbeddedTerminalKey = key
             rememberEmbeddedTerminal(key)
-            hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
+            hostEmbeddedTerminalView(
+                controller,
+                frame: initialLayout?.frame ?? .zero,
+                hidden: initialLayout?.hidden ?? true
+            )
+            hostedDuringAttach = true
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
             guard let controller = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
@@ -483,15 +494,28 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             embeddedTerminals[key] = controller
             activeEmbeddedTerminalKey = key
             rememberEmbeddedTerminal(key)
-            hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
+            hostEmbeddedTerminalView(
+                controller,
+                frame: initialLayout?.frame ?? .zero,
+                hidden: initialLayout?.hidden ?? true
+            )
+            hostedDuringAttach = true
         }
         if let rectPayload {
-            updateEmbeddedTerminalFrame(
-                rectPayload,
-                surfaceId: surfaceId,
-                sessionId: sessionId,
-                tracePayload: tracePayload
-            )
+            if hostedDuringAttach || initialLayout == nil {
+                if let initialLayout {
+                    logTerminalLayoutDone(initialLayout, tracePayload: tracePayload)
+                } else {
+                    logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
+                }
+            } else {
+                updateEmbeddedTerminalFrame(
+                    rectPayload,
+                    surfaceId: surfaceId,
+                    sessionId: sessionId,
+                    tracePayload: tracePayload
+                )
+            }
         }
         embeddedTerminal?.focus()
         logTerminalTrace(
@@ -507,7 +531,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
     }
 
-    private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, hidden: Bool) {
+    private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, frame: NSRect, hidden: Bool) {
         if controller.view.superview == nil {
             controller.view.frame = .zero
             controller.view.autoresizingMask = []
@@ -516,7 +540,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             controller.view.removeFromSuperview()
             terminalHostView.addSubview(controller.view)
         }
-        controller.layout(in: hidden ? .zero : controller.view.frame, hidden: hidden)
+        controller.layout(in: frame, hidden: hidden)
     }
 
     private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) {
@@ -588,14 +612,22 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=staleTarget")
             return
         }
+        guard let layout = embeddedTerminalLayout(from: rectPayload) else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
+            return
+        }
+        embeddedTerminal.layout(in: layout.frame, hidden: layout.hidden)
+        logTerminalLayoutDone(layout, tracePayload: tracePayload)
+    }
+
+    private func embeddedTerminalLayout(from rectPayload: [String: Any]) -> EmbeddedTerminalLayout? {
         guard
             let x = Self.doubleValue(rectPayload["x"]),
             let y = Self.doubleValue(rectPayload["y"]),
             let width = Self.doubleValue(rectPayload["width"]),
             let height = Self.doubleValue(rectPayload["height"])
         else {
-            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
-            return
+            return nil
         }
         let rootHeight = rootView.bounds.height
         let frame = NSRect(
@@ -605,11 +637,14 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             height: max(1, height)
         ).integral
         let hidden = width < 8 || height < 8
-        embeddedTerminal.layout(in: frame, hidden: hidden)
+        return EmbeddedTerminalLayout(frame: frame, hidden: hidden)
+    }
+
+    private func logTerminalLayoutDone(_ layout: EmbeddedTerminalLayout, tracePayload: [String: Any]?) {
         logTerminalTrace(
             tracePayload,
             phase: "native.layout.done",
-            extra: "frame=\(Int(frame.width))x\(Int(frame.height)) hidden=\(hidden)"
+            extra: "frame=\(Int(layout.frame.width))x\(Int(layout.frame.height)) hidden=\(layout.hidden)"
         )
     }
 
