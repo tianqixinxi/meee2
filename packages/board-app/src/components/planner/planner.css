@@ -6177,17 +6177,13 @@
   background: rgba(168, 113, 50, 0.06);
 }
 
-/* UI-simplification §4.3 — canvas summary section + collapsed drawer state */
+/* UI-simplification §4.3 — canvas summary section(shown only when drawer is open).
+ * 之前实验性的 .is-collapsed 常驻状态因为跟 canvas toolbar / preview / refreshing
+ * banner 在同一坐标 + 同 z-index 区间堆叠,UI 重叠成一锅粥(commit 218245b 回退,
+ * 现在恢复 modal-style: 点 toolbar 按钮才显示)。 */
 .ai-recap-drawer__summary {
   background: linear-gradient(180deg, rgba(204, 120, 92, 0.08), rgba(204, 120, 92, 0.02));
 }
-.ai-recap-drawer.is-collapsed {
-  max-height: 44px;
-  overflow: hidden;
-  transition: max-height 200ms ease;
-}
-.ai-recap-drawer.is-collapsed .ai-recap-drawer__section { display: none; }
-.ai-recap-drawer.is-collapsed .ai-recap-drawer__header { border-bottom: none; }
 
 .ai-recap-drawer__subsection {
   margin-bottom: 10px;

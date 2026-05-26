@@ -30,7 +30,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowUpRight,
-  ChevronDown,
   Clock3,
   GitBranch,
   History,
@@ -255,27 +254,18 @@ export function AIRecapDrawer({
     onClose()
   }
 
-  // UI-simplification §4.3: always-mounted, `open` now controls collapsed/expanded.
-  const collapsed = !open
-  const toggleCollapsed = () => {
-    if (collapsed) {
-      onClose()  // back-compat: toolbar still tracks via the same boolean
-    } else {
-      onClose()
-    }
-  }
+  // UI-simplification §4.3 revisit:retain modal-style opt-in mount.
+  // Earlier change(218245b) made the drawer always-mounted but the real
+  // canvas has other absolute-positioned banners(canvas-toolbar /
+  // PreviewOverlay / RecapRefreshing toast)at the same top-left coord with
+  // z-index 260+ — multiple floats overlap and the page becomes unreadable.
+  // Keep open/close behavior; the canvas summary section is still surfaced
+  // here(see below)— users see it the moment they open the drawer.
+  if (!open) return null
 
   return (
-    <div
-      className={`ai-recap-drawer${collapsed ? ' is-collapsed' : ''}`}
-      role="region"
-      aria-label={`AI recap for ${canvasName}`}
-    >
-      <header
-        className="ai-recap-drawer__header"
-        onClick={toggleCollapsed}
-        style={{ cursor: 'pointer' }}
-      >
+    <div className="ai-recap-drawer" role="dialog" aria-label={`AI recap for ${canvasName}`}>
+      <header className="ai-recap-drawer__header">
         <div className="ai-recap-drawer__title">
           <strong>AI Recap</strong>
           <span>{canvasName}</span>
@@ -283,27 +273,25 @@ export function AIRecapDrawer({
         <button
           type="button"
           className="ai-recap-drawer__close"
-          aria-label={collapsed ? 'Expand AI recap drawer' : 'Collapse AI recap drawer'}
-          onClick={(e) => { e.stopPropagation(); toggleCollapsed() }}
+          aria-label="Close AI recap drawer"
+          onClick={onClose}
         >
-          {collapsed ? <ChevronDown size={14} aria-hidden /> : <X size={14} aria-hidden />}
+          <X size={14} aria-hidden />
         </button>
       </header>
 
       {/* Canvas summary — BYOA LLM narrative refresh every 5 min(UI-simplification §4.3).
        *  TODO server-side: /api/v1/canvas/:id/recap-summary endpoint(planner-runtime cron + cache).
        *  Currently shows a derived placeholder; once endpoint lands the body comes from API. */}
-      {!collapsed && (
-        <section className="ai-recap-drawer__section ai-recap-drawer__summary">
-          <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <h3 style={{ margin: 0 }}><Sparkles size={12} aria-hidden /> Canvas summary</h3>
-            <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>refreshed — · 每 5 min · BYOA</span>
-          </header>
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--text)', lineHeight: 1.6 }}>
-            {deriveSummaryPlaceholder(canvasName, plannerState)}
-          </p>
-        </section>
-      )}
+      <section className="ai-recap-drawer__section ai-recap-drawer__summary">
+        <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <h3 style={{ margin: 0 }}><Sparkles size={12} aria-hidden /> Canvas summary</h3>
+          <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>refreshed — · 每 5 min · BYOA</span>
+        </header>
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text)', lineHeight: 1.6 }}>
+          {deriveSummaryPlaceholder(canvasName, plannerState)}
+        </p>
+      </section>
 
       {/* ── Top: pinned event highlights ─────────────────────────────── */}
       <section className="ai-recap-drawer__section ai-recap-drawer__highlights">
