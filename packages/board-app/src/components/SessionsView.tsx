@@ -7,7 +7,7 @@ import {
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { activateSession, closeSessionSurface, openNativeTerminalSurface } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
@@ -485,18 +485,14 @@ function NativeTerminalPanel({ session }: { session: Session }) {
     })
   }, [syncNative])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!session.surfaceId) return
-    const surfaceId = session.surfaceId
-    const frame = window.requestAnimationFrame(() => {
-      syncNative('attach')
-    })
+    syncNative('attach')
     const resizeObserver = hostRef.current ? new ResizeObserver(scheduleLayout) : null
     if (hostRef.current) resizeObserver?.observe(hostRef.current)
     window.addEventListener('resize', scheduleLayout)
     window.addEventListener('meee2:layout-native-terminal', scheduleLayout)
     return () => {
-      window.cancelAnimationFrame(frame)
       if (layoutFrameRef.current !== null) {
         window.cancelAnimationFrame(layoutFrameRef.current)
         layoutFrameRef.current = null
@@ -504,11 +500,6 @@ function NativeTerminalPanel({ session }: { session: Session }) {
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleLayout)
       window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
-      openNativeTerminalSurface({
-        type: 'detach',
-        surfaceId,
-        sessionId: session.id,
-      })
     }
   }, [scheduleLayout, session.id, session.surfaceId, syncNative])
 

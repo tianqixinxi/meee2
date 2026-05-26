@@ -12,6 +12,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private let terminalController: GhosttyTerminal.TerminalController
     private var detached = false
     private var lastSyncedSize: (cols: UInt16, rows: UInt16)?
+    private var lastLayoutFrame: NSRect = .zero
 
     init?(surfaceId: String, sessionId: String?) {
         guard Thread.isMainThread else { return nil }
@@ -89,12 +90,15 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     func layout(in frame: NSRect, hidden: Bool) {
+        let frameChanged = frame != lastLayoutFrame
+        lastLayoutFrame = frame
         view.frame = frame
         view.isHidden = hidden
         guard !hidden else { return }
         view.setSurfaceVisible(true)
-        refitSurface()
-        scheduleRefit()
+        if frameChanged {
+            refitSurface()
+        }
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
