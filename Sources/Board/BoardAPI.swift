@@ -1330,6 +1330,7 @@ enum BoardAPI {
             let cwd: String
             let command: String
             let terminalKind: String
+            let action: String
             let graph: PlannerGraphStateEnvelope
         }
 
@@ -1349,6 +1350,7 @@ enum BoardAPI {
             }
 
             let surface: InternalTerminalSurfaceSnapshot
+            var action = "reuse"
             if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !sessionId.isEmpty {
                 if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
@@ -1363,6 +1365,7 @@ enum BoardAPI {
                     }
                         ?? plannerFreshCommand(for: existingNode)
                     let canResume = resumeSessionId != nil
+                    action = canResume ? "resume" : "recreate"
                     let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     surface = try createInternalSessionSurface(
@@ -1422,6 +1425,7 @@ enum BoardAPI {
                     nodeId: nodeId,
                     initialPrompt: spawnRequest.initialPrompt
                 )
+                action = "create"
                 _ = PlannerSessionRunStateBridge.observe(
                     sessionId: surface.sessionId,
                     purpose: spawnRequest.purpose,
@@ -1442,6 +1446,7 @@ enum BoardAPI {
                 cwd: surface.cwd,
                 command: surface.command,
                 terminalKind: "internal",
+                action: action,
                 graph: graphEnvelope(state)
             ), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -1529,6 +1534,7 @@ enum BoardAPI {
             let cwd: String
             let command: String
             let terminalKind: String
+            let action: String
         }
         struct SkippedSession: Encodable {
             let sessionId: String
@@ -1578,6 +1584,7 @@ enum BoardAPI {
                     }
                         ?? plannerFreshCommand(for: nodes.first)
                     let canResume = resumeSessionId != nil
+                    let action = canResume ? "resume" : "recreate"
                     let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     let surface = try createInternalSessionSurface(
@@ -1610,7 +1617,8 @@ enum BoardAPI {
                         nodeIds: nodes.map(\.id),
                         cwd: surface.cwd,
                         command: surface.command,
-                        terminalKind: "internal"
+                        terminalKind: "internal",
+                        action: action
                     ))
                 } catch {
                     skipped.append(SkippedSession(sessionId: sessionId, reason: error.localizedDescription))

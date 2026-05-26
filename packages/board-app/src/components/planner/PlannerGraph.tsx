@@ -1087,7 +1087,7 @@ function PlannerGraphInner({
     resumeClosedPlannerSessions(canvasId, sessionIds)
       .then((result) => {
         if (result.resumed.length > 0) {
-          onNotify?.('success', `Restoring ${result.resumed.length} closed session${result.resumed.length === 1 ? '' : 's'}.`)
+          onNotify?.('success', formatRecoveredSessionToast(result.resumed))
           const first = result.resumed[0]
           window.dispatchEvent(new CustomEvent('meee2:open-session', {
             detail: {
@@ -1116,13 +1116,16 @@ function PlannerGraphInner({
     setStartingReadySessions(true)
     setError(null)
     const createNodeIds = readySessionPlan.create.map((node) => node.id)
-    const resumeSessionIds = readySessionPlan.resume.map((item) => item.sessionId)
+    const missingBoundSessionIds = [
+      ...readySessionPlan.resume.map((item) => item.sessionId),
+      ...readySessionPlan.recreate.map((item) => item.sessionId),
+    ]
     fetchState()
       .catch(() => null)
       .then((beforeState) => {
         const work: Promise<unknown>[] = []
-        if (resumeSessionIds.length > 0) {
-          work.push(resumeClosedPlannerSessions(canvasId, resumeSessionIds).then((result) => {
+        if (missingBoundSessionIds.length > 0) {
+          work.push(resumeClosedPlannerSessions(canvasId, missingBoundSessionIds).then((result) => {
             if (result.resumed.length > 0 && createNodeIds.length === 0) {
               const first = result.resumed[0]
               window.dispatchEvent(new CustomEvent('meee2:open-session', {
@@ -1443,11 +1446,18 @@ function PlannerGraphInner({
       : null,
   ].filter(Boolean).join(' · ')
   const readySessionActionSummary = readySessionPlan.total > 0
-    ? `${readySessionPlan.create.length} create${readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} restore` : ''}`
+    ? formatSessionActionSummary([
+      [readySessionPlan.create.length, 'create'],
+      [readySessionPlan.recreate.length, 'recreate'],
+      [readySessionPlan.resume.length, 'resume'],
+    ])
     : null
   const closedBoundSessionSummary = closedBoundSessions.length > 0
-    ? `${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
+    ? `${formatClosedBoundSessionActions(closedBoundSessions)} · ${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
     : null
+  const closedBoundSessionButtonLabel = closedBoundSessions.some((item) => item.action === 'resume')
+    ? 'Recover missing'
+    : 'Recreate missing'
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
@@ -1556,7 +1566,7 @@ function PlannerGraphInner({
                     <strong>{sessionActionBannerTitle}</strong>
                     {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
                     {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
-                    <em>Creates missing sessions and restores preserved session bindings.</em>
+                    <em>Recreates missing internal sessions; resumes only when a real provider resume id exists.</em>
                   </div>
                   <div className="planner-session-action-banner__actions">
                     {readySessionPlan.total > 0 && (
@@ -1576,7 +1586,7 @@ function PlannerGraphInner({
                         disabled={resumingClosedSessions}
                       >
                         <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
-                        Restore all
+                        {closedBoundSessionButtonLabel}
                       </button>
                     )}
                   </div>
@@ -1919,11 +1929,13 @@ interface ClosedBoundSession {
   sessionId: string
   nodeIds: string[]
   nodeTitles: string[]
+  action: 'resume' | 'recreate'
 }
 
 interface ReadySessionPlan {
   create: PlanningNode[]
   resume: ClosedBoundSession[]
+  recreate: ClosedBoundSession[]
   total: number
 }
 
@@ -1933,6 +1945,7 @@ function collectReadySessionPlan(
 ): ReadySessionPlan {
   const create: PlanningNode[] = []
   const resumeBySessionId = new Map<string, ClosedBoundSession>()
+  const recreateBySessionId = new Map<string, ClosedBoundSession>()
   for (const node of nodes) {
     if ((node.nodeKind ?? 'step') !== 'step' || node.status !== 'ready') continue
     const sessionId = node.sessionId?.trim()
@@ -1941,13 +1954,16 @@ function collectReadySessionPlan(
       continue
     }
     if (sessions.some((session) => sessionMatchesBoundId(session.id, sessionId))) continue
-    const existing = resumeBySessionId.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [] }
+    const action = missingBoundSessionAction(sessionId)
+    const target = action === 'resume' ? resumeBySessionId : recreateBySessionId
+    const existing = target.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [], action }
     existing.nodeIds.push(node.id)
     existing.nodeTitles.push(node.title)
-    resumeBySessionId.set(sessionId, existing)
+    target.set(sessionId, existing)
   }
   const resume = [...resumeBySessionId.values()]
-  return { create, resume, total: create.length + resume.length }
+  const recreate = [...recreateBySessionId.values()]
+  return { create, resume, recreate, total: create.length + resume.length + recreate.length }
 }
 
 function collectClosedBoundSessions(
@@ -1960,12 +1976,52 @@ function collectClosedBoundSessions(
     const sessionId = node.sessionId?.trim()
     if (!sessionId || plannerNodeDoesNotNeedLiveSession(node)) continue
     if (sessions.some((session) => sessionMatchesBoundId(session.id, sessionId))) continue
-    const existing = result.get(sessionId) ?? { sessionId, nodeIds: [], nodeTitles: [] }
+    const existing = result.get(sessionId) ?? {
+      sessionId,
+      nodeIds: [],
+      nodeTitles: [],
+      action: missingBoundSessionAction(sessionId),
+    }
     existing.nodeIds.push(node.id)
     existing.nodeTitles.push(node.title)
     result.set(sessionId, existing)
   }
   return [...result.values()]
+}
+
+function missingBoundSessionAction(sessionId: string): ClosedBoundSession['action'] {
+  return isMeee2InternalSessionId(sessionId) ? 'recreate' : 'resume'
+}
+
+function isMeee2InternalSessionId(sessionId: string): boolean {
+  const lower = sessionId.trim().toLowerCase()
+  return lower.startsWith('claude-internal-') || lower.startsWith('codex-internal-')
+}
+
+function formatSessionActionSummary(items: Array<[number, string]>): string {
+  const parts = items
+    .filter(([count]) => count > 0)
+    .map(([count, label]) => `${count} ${label}`)
+  return parts.length > 0 ? parts.join(' · ') : '0 create'
+}
+
+function formatClosedBoundSessionActions(items: ClosedBoundSession[]): string {
+  const recreateCount = items.filter((item) => item.action === 'recreate').length
+  const resumeCount = items.length - recreateCount
+  return formatSessionActionSummary([
+    [recreateCount, 'recreate'],
+    [resumeCount, 'resume'],
+  ])
+}
+
+function formatRecoveredSessionToast(items: Array<{ action?: string }>): string {
+  const recreated = items.filter((item) => item.action === 'recreate').length
+  const resumed = items.length - recreated
+  const summary = formatSessionActionSummary([
+    [recreated, 'recreated'],
+    [resumed, 'resumed'],
+  ])
+  return `${summary} missing session${items.length === 1 ? '' : 's'}.`
 }
 
 function plannerNodeDoesNotNeedLiveSession(node: PlanningNode): boolean {

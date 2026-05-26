@@ -978,6 +978,7 @@ export interface PlannerNodeInternalSessionResult {
   cwd: string
   command: string
   terminalKind: 'internal' | string
+  action?: 'reuse' | 'create' | 'resume' | 'recreate' | string
   graph: PlannerGraphState
 }
 
@@ -1045,6 +1046,7 @@ export interface ResumeClosedPlannerSessionResult {
   cwd: string
   command: string
   terminalKind: 'internal' | string
+  action?: 'resume' | 'recreate' | string
 }
 
 export interface ResumeClosedPlannerSessionsResponse {
