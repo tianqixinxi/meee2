@@ -329,7 +329,7 @@ final class InternalTerminalSurface {
     let createdAt: Date
 
     private let lock = NSLock()
-    private var process: Foundation.Process?
+    private var processSource: DispatchSourceProcess?
     private var masterHandle: FileHandle?
     private var masterFD: Int32 = -1
     private var nativeClients: [ObjectIdentifier: WeakInternalTerminalSurfaceClient] = [:]
@@ -355,29 +355,21 @@ final class InternalTerminalSurface {
     func start(cols: UInt16, rows: UInt16) throws {
         var master: Int32 = -1
         var slave: Int32 = -1
+        var slaveName = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        guard openpty(&master, &slave, nil, nil, &size) == 0 else {
+        guard openpty(&master, &slave, &slaveName, nil, &size) == 0 else {
             markFailed("openpty failed: \(String(cString: strerror(errno)))")
             throw NSError(domain: "InternalTerminalRuntime", code: Int(errno), userInfo: [NSLocalizedDescriptionKey: errorMessage ?? "openpty failed"])
         }
+        let slavePath = String(cString: slaveName)
 
         masterFD = master
         let masterHandle = FileHandle(fileDescriptor: master, closeOnDealloc: true)
-        let slaveHandle = FileHandle(fileDescriptor: slave, closeOnDealloc: true)
         self.masterHandle = masterHandle
 
-        let proc = Foundation.Process()
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        proc.executableURL = URL(fileURLWithPath: shell)
-        proc.arguments = ["-l", "-c", "cd \(Self.shellQuote(cwd)) && exec \(command)"]
-        proc.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
-        proc.environment = startupEnvironment()
-        proc.standardInput = slaveHandle
-        proc.standardOutput = slaveHandle
-        proc.standardError = slaveHandle
-        proc.terminationHandler = { [weak self] process in
-            self?.handleExit(code: Int(process.terminationStatus))
-        }
+        let arguments = [shell, "-l", "-c", "cd \(Self.shellQuote(cwd)) && exec \(command)"]
+        let environment = startupEnvironment(cols: cols, rows: rows)
 
         masterHandle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -386,10 +378,16 @@ final class InternalTerminalSurface {
         }
 
         do {
-            try proc.run()
-            slaveHandle.closeFile()
-            process = proc
-            pid = Int(proc.processIdentifier)
+            let launchedPid = try Self.spawnProcess(
+                executable: shell,
+                arguments: arguments,
+                environment: environment,
+                slavePath: slavePath,
+                inheritedMasterFD: master
+            )
+            Darwin.close(slave)
+            pid = Int(launchedPid)
+            processSource = makeProcessExitSource(pid: launchedPid)
             status = .running
             touch()
             notifyNativeClientsStatus(snapshot())
@@ -414,7 +412,10 @@ final class InternalTerminalSurface {
                 nodeId: nodeId
             )
         } catch {
-            slaveHandle.closeFile()
+            Darwin.close(slave)
+            masterHandle.readabilityHandler = nil
+            masterHandle.closeFile()
+            masterFD = -1
             markFailed("process start failed: \(error.localizedDescription)")
             throw error
         }
@@ -466,24 +467,32 @@ final class InternalTerminalSurface {
         guard masterFD >= 0 else { return }
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(masterFD, TIOCSWINSZ, &size)
-        if let pid = process?.processIdentifier, pid > 0 {
-            _ = Darwin.kill(pid, SIGWINCH)
+        if let pid, pid > 0 {
+            let processGroup = -pid_t(pid)
+            if Darwin.kill(processGroup, SIGWINCH) != 0 {
+                _ = Darwin.kill(pid_t(pid), SIGWINCH)
+            }
         }
     }
 
     func terminate() {
         lock.lock()
-        let proc = process
+        let pid = pid
         lock.unlock()
-        if proc?.isRunning == true {
-            proc?.terminate()
+        if let pid, pid > 0 {
+            _ = Darwin.kill(-pid_t(pid), SIGTERM)
+            _ = Darwin.kill(pid_t(pid), SIGTERM)
         } else {
             handleExit(code: exitCode ?? 0)
         }
     }
 
     private func handleExit(code: Int) {
+        processSource?.cancel()
+        processSource = nil
         masterHandle?.readabilityHandler = nil
+        masterHandle?.closeFile()
+        masterFD = -1
         lock.lock()
         status = .exited
         exitCode = code
@@ -513,6 +522,33 @@ final class InternalTerminalSurface {
         notifyNativeClientsStatus(snapshot)
         notifyNativeClientsExit(code)
         BoardServer.shared.broadcastStateChanged()
+    }
+
+    private func makeProcessExitSource(pid: pid_t) -> DispatchSourceProcess {
+        let source = DispatchSource.makeProcessSource(
+            identifier: pid,
+            eventMask: .exit,
+            queue: DispatchQueue.global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            var status: Int32 = 0
+            _ = waitpid(pid, &status, WNOHANG)
+            let code = Self.exitCode(fromWaitStatus: status)
+            self?.handleExit(code: code)
+        }
+        source.resume()
+        return source
+    }
+
+    private static func exitCode(fromWaitStatus status: Int32) -> Int {
+        let waitStatus = status & 0o177
+        if waitStatus == 0 {
+            return Int((status >> 8) & 0xFF)
+        }
+        if waitStatus != 0o177 {
+            return 128 + Int(waitStatus)
+        }
+        return 0
     }
 
     private func markFailed(_ message: String) {
@@ -625,14 +661,81 @@ final class InternalTerminalSurface {
         )
     }
 
-    private func startupEnvironment() -> [String: String] {
+    private func startupEnvironment(cols: UInt16, rows: UInt16) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["TERM_PROGRAM"] = "meee2"
+        env["TERM_PROGRAM_VERSION"] = "internal"
+        env["COLUMNS"] = "\(cols)"
+        env["LINES"] = "\(rows)"
+        env["PWD"] = cwd
         env["MEEE2_SESSION_ID"] = sessionId
         env["MEEE2_SURFACE_ID"] = surfaceId
         env["MEEE2_TERMINAL_KIND"] = "internal"
         if let canvasId { env["MEEE2_CANVAS_ID"] = canvasId }
         if let nodeId { env["MEEE2_NODE_ID"] = nodeId }
         return env
+    }
+
+    private static func spawnProcess(
+        executable: String,
+        arguments: [String],
+        environment: [String: String],
+        slavePath: String,
+        inheritedMasterFD: Int32
+    ) throws -> pid_t {
+        var fileActions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&fileActions)
+        defer { posix_spawn_file_actions_destroy(&fileActions) }
+
+        var spawnAttributes: posix_spawnattr_t?
+        posix_spawnattr_init(&spawnAttributes)
+        defer { posix_spawnattr_destroy(&spawnAttributes) }
+
+        let flags = Int16(POSIX_SPAWN_SETSID)
+        posix_spawnattr_setflags(&spawnAttributes, flags)
+        posix_spawn_file_actions_addclose(&fileActions, inheritedMasterFD)
+
+        var spawnedPid: pid_t = 0
+        let environmentPairs = environment.map { "\($0.key)=\($0.value)" }.sorted()
+        let result = slavePath.withCString { slavePathPtr in
+            posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, slavePathPtr, O_RDWR, 0)
+            posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, slavePathPtr, O_RDWR, 0)
+            posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, slavePathPtr, O_RDWR, 0)
+            return withCStringArray(arguments) { argv in
+                withCStringArray(environmentPairs) { envp in
+                    executable.withCString { executablePtr in
+                        posix_spawn(&spawnedPid, executablePtr, &fileActions, &spawnAttributes, argv, envp)
+                    }
+                }
+            }
+        }
+
+        guard result == 0 else {
+            throw NSError(
+                domain: "InternalTerminalRuntime",
+                code: Int(result),
+                userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(result)))"]
+            )
+        }
+        return spawnedPid
+    }
+
+    private static func withCStringArray<Result>(
+        _ strings: [String],
+        _ body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) throws -> Result
+    ) rethrows -> Result {
+        var cStrings = strings.map { strdup($0) }
+        cStrings.append(nil)
+        defer {
+            for pointer in cStrings {
+                free(pointer)
+            }
+        }
+        return try cStrings.withUnsafeMutableBufferPointer { buffer in
+            try body(buffer.baseAddress)
+        }
     }
 
     private static func shellQuote(_ raw: String) -> String {
