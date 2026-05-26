@@ -450,10 +450,11 @@ export default function App() {
       const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
       setSelectedSessionId(detail?.sessionId ?? detail?.surfaceId ?? null)
       setWorkspaceMode('sessions')
+      boardState.refresh()
     }
     window.addEventListener('meee2:open-session', openSession)
     return () => window.removeEventListener('meee2:open-session', openSession)
-  }, [])
+  }, [boardState.refresh])
 
   const completeFirstRunOnboarding = useCallback(() => {
     setFirstRunOnboardingCompleted(true)

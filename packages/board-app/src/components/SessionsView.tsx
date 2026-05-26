@@ -78,10 +78,10 @@ export function SessionsView({
   )
 
   useEffect(() => {
-    if (selectedSession || internalSessions.length === 0) return
+    if (selectedSessionId || selectedSession || internalSessions.length === 0) return
     const next = internalSessions[0]
     onSelectedSessionChange?.(next?.id ?? null)
-  }, [internalSessions, onSelectedSessionChange, selectedSession])
+  }, [internalSessions, onSelectedSessionChange, selectedSession, selectedSessionId])
 
   useEffect(() => {
     if (selectedSessionId && selectedSession) setActiveKindTab('internal')
