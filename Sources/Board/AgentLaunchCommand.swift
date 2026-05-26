@@ -15,6 +15,26 @@ enum AgentLaunchCommand {
         normalizedProvider(command)
     }
 
+    static func isMeee2InternalSessionId(_ raw: String) -> Bool {
+        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+    }
+
+    static func commandRequestsResume(_ rawCommand: String) -> Bool {
+        let lower = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        return lower.range(
+            of: #"(^|[\s"'=])(--resume|resume)([\s"'=]|$)"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    static func commandUsesInternalResumeId(_ rawCommand: String) -> Bool {
+        let lower = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard commandRequestsResume(lower) else { return false }
+        return lower.contains("claude-internal-") || lower.contains("codex-internal-")
+    }
+
     static func normalize(command rawCommand: String, fallbackProvider: String = "claude") -> (provider: String, command: String) {
         let trimmed = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -23,6 +43,17 @@ enum AgentLaunchCommand {
         }
 
         let lower = trimmed.lowercased()
+        let inferredProvider: String
+        if lower.hasPrefix("codex") {
+            inferredProvider = "codex"
+        } else if lower.hasPrefix("claude") {
+            inferredProvider = "claude"
+        } else {
+            inferredProvider = normalizedProvider(fallbackProvider)
+        }
+        if commandUsesInternalResumeId(trimmed) {
+            return (inferredProvider, fullAccessCommand(forProvider: inferredProvider))
+        }
         if lower.hasPrefix("codex") {
             if lower.contains("--dangerously-bypass-approvals-and-sandbox") {
                 return ("codex", trimmed)

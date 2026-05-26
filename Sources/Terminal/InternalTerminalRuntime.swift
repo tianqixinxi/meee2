@@ -331,7 +331,7 @@ public final class InternalTerminalRuntime {
             return Self.resumeCommand(for: info, resumeSessionId: resumeId)
         }
         if let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
-            if Self.commandUsesInternalResumeId(command, sessionId: info.sessionId) {
+            if AgentLaunchCommand.commandRequestsResume(command) {
                 return Self.freshCommand(for: info, command: command)
             }
             return command
@@ -365,19 +365,12 @@ public final class InternalTerminalRuntime {
     }
 
     private static func isInternalSessionId(_ sessionId: String) -> Bool {
-        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
-    }
-
-    private static func commandUsesInternalResumeId(_ command: String, sessionId: String) -> Bool {
-        guard isInternalSessionId(sessionId) else { return false }
-        let lower = command.lowercased()
-        return lower.contains("resume") && lower.contains(sessionId.lowercased())
+        AgentLaunchCommand.isMeee2InternalSessionId(sessionId)
     }
 
     private static func validProviderResumeSessionId(_ raw: String?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, !isInternalSessionId(trimmed) else { return nil }
+        guard !trimmed.isEmpty, !AgentLaunchCommand.isMeee2InternalSessionId(trimmed) else { return nil }
         return trimmed
     }
 

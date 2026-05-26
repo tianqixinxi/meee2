@@ -87,9 +87,13 @@ class SessionTerminalStore {
             info.termBundleId = termBundleId ?? info.termBundleId
             info.cmuxSocketPath = cmuxSocketPath ?? info.cmuxSocketPath
             info.cmuxSurfaceId = cmuxSurfaceId ?? info.cmuxSurfaceId
-            info.command = command ?? info.command
+            if let command {
+                info.command = Self.commandForStorage(provider: provider ?? info.provider, command: command)
+            }
             info.provider = provider ?? info.provider
-            info.providerResumeSessionId = providerResumeSessionId ?? info.providerResumeSessionId
+            if let providerResumeSessionId {
+                info.providerResumeSessionId = Self.validProviderResumeSessionId(providerResumeSessionId)
+            }
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
             info.cwd = cwd
@@ -130,11 +134,19 @@ class SessionTerminalStore {
         guard !trimmed.isEmpty else { return }
         performSync {
             guard var info = store[sessionId] else { return }
-            info.providerResumeSessionId = trimmed
+            guard let validResumeId = Self.validProviderResumeSessionId(trimmed) else {
+                info.providerResumeSessionId = nil
+                info.lastActivityAt = Date()
+                store[sessionId] = info
+                save()
+                NSLog("[SessionTerminalStore] Ignored invalid provider resume id for internal session \(sessionId.prefix(8))")
+                return
+            }
+            info.providerResumeSessionId = validResumeId
             info.lastActivityAt = Date()
             store[sessionId] = info
             save()
-            NSLog("[SessionTerminalStore] Linked internal session \(sessionId.prefix(8)) to provider resume id \(trimmed.prefix(8))")
+            NSLog("[SessionTerminalStore] Linked internal session \(sessionId.prefix(8)) to provider resume id \(validResumeId.prefix(8))")
         }
     }
 
@@ -192,15 +204,15 @@ class SessionTerminalStore {
         for (sessionId, var info) in store {
             var entryChanged = false
             let providerResume = info.providerResumeSessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let hasValidProviderResume = !providerResume.isEmpty && !Self.isMeee2InternalSessionId(providerResume)
+            let hasValidProviderResume = Self.validProviderResumeSessionId(providerResume) != nil
             if !providerResume.isEmpty && !hasValidProviderResume {
                 info.providerResumeSessionId = nil
                 entryChanged = true
             }
-            if Self.isMeee2InternalSessionId(sessionId),
+            if AgentLaunchCommand.isMeee2InternalSessionId(sessionId),
                !hasValidProviderResume,
                let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines),
-               Self.commandUsesInternalResumeId(command, sessionId: sessionId) {
+               AgentLaunchCommand.commandRequestsResume(command) {
                 info.command = Self.freshCommand(provider: info.provider, command: command)
                 entryChanged = true
             }
@@ -215,21 +227,23 @@ class SessionTerminalStore {
         return changed
     }
 
-    private static func isMeee2InternalSessionId(_ raw: String) -> Bool {
-        let lower = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+    private static func validProviderResumeSessionId(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, !AgentLaunchCommand.isMeee2InternalSessionId(trimmed) else {
+            return nil
+        }
+        return trimmed
     }
 
-    private static func commandUsesInternalResumeId(_ command: String, sessionId: String) -> Bool {
-        let lower = command.lowercased()
-        return lower.contains("resume") && lower.contains(sessionId.lowercased())
+    private static func commandForStorage(provider: String?, command: String) -> String {
+        if AgentLaunchCommand.commandUsesInternalResumeId(command) {
+            return freshCommand(provider: provider, command: command)
+        }
+        return command
     }
 
     private static func freshCommand(provider: String?, command: String?) -> String {
         let haystack = "\(provider ?? "") \(command ?? "")".lowercased()
-        if haystack.contains("codex") {
-            return "codex --dangerously-bypass-approvals-and-sandbox"
-        }
-        return "claude --dangerously-skip-permissions"
+        return AgentLaunchCommand.fullAccessCommand(forProvider: haystack.contains("codex") ? "codex" : "claude")
     }
 }

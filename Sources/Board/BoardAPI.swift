@@ -2606,14 +2606,17 @@ enum BoardAPI {
         guard node.workflowRunState == .dispatched else { return nil }
         guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return nil }
         let cwd = try explicitSessionCwd(cwdOverride) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-        let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawCommand = command?.isEmpty == false
-            ? command!
+        let storedCommand = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawCommand = storedCommand?.isEmpty == false
+            ? storedCommand!
             : (dispatch.runner.spawnCommand ?? "claude")
         let launch = AgentLaunchCommand.normalize(
             command: rawCommand,
             fallbackProvider: dispatch.runner.rawValue
         )
+        let command = AgentLaunchCommand.commandRequestsResume(launch.command)
+            ? AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+            : launch.command
         // Purpose is tagged with the *step* node id; the session PlanningNode
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
@@ -2622,7 +2625,7 @@ enum BoardAPI {
         try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
-            command: launch.command,
+            command: command,
             provider: launch.provider,
             purpose: purpose,
             initialPrompt: includeInitialPromptInIntent ? initialPrompt : nil,
@@ -2630,7 +2633,7 @@ enum BoardAPI {
         )
         return PlannerDispatchSpawnRequest(
             cwd: cwd,
-            command: launch.command,
+            command: command,
             provider: launch.provider,
             purpose: purpose,
             initialPrompt: initialPrompt
@@ -2804,15 +2807,15 @@ enum BoardAPI {
             command: rawCommand?.isEmpty == false ? rawCommand! : fallback,
             fallbackProvider: node?.dispatch?.runner.rawValue ?? "claude"
         )
+        if AgentLaunchCommand.commandRequestsResume(launch.command) {
+            return AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+        }
         return launch.command
     }
 
     private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
-        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-") {
-            return false
-        }
-        return true
+        let trimmed = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && !AgentLaunchCommand.isMeee2InternalSessionId(trimmed)
     }
 
     private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
