@@ -17,6 +17,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var lastSyncedSize: (cols: UInt16, rows: UInt16)?
     private var lastLayoutFrame: NSRect = .zero
     private var pendingOutput = Data()
+    private var hiddenOutput = Data()
     private var outputFlushScheduled = false
     private var surfaceVisible = false
     private var refitScheduled = false
@@ -83,6 +84,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     func hide() {
         guard !detached else { return }
+        flushPendingOutput()
         setTerminalSurfaceVisible(false)
         view.isHidden = true
     }
@@ -109,9 +111,11 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             view.isHidden = hidden
         }
         guard !hidden else {
+            flushPendingOutput()
             setTerminalSurfaceVisible(false)
             return
         }
+        flushHiddenOutput()
         setTerminalSurfaceVisible(true)
         if frameChanged {
             scheduleRefit()
@@ -120,6 +124,10 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
         flushPendingOutput()
+        guard !view.isHidden, surfaceVisible else {
+            hiddenOutput.append(data)
+            return
+        }
         terminalSession.receive(data)
         scheduleRefit(includeFollowUp: true)
     }
@@ -174,6 +182,10 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     private func enqueueOutput(_ data: Data) {
         guard !detached, !data.isEmpty else { return }
+        if view.isHidden || !surfaceVisible {
+            hiddenOutput.append(data)
+            return
+        }
         pendingOutput.append(data)
         if pendingOutput.count >= Self.maxPendingOutputBytes {
             flushPendingOutput()
@@ -192,6 +204,15 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         let data = pendingOutput
         pendingOutput.removeAll(keepingCapacity: true)
         terminalSession.receive(data)
+    }
+
+    private func flushHiddenOutput() {
+        guard !hiddenOutput.isEmpty else { return }
+        let data = hiddenOutput
+        hiddenOutput.removeAll(keepingCapacity: true)
+        pendingOutput.append(data)
+        flushPendingOutput()
+        scheduleRefit(includeFollowUp: true)
     }
 
     private func scheduleRefit(includeFollowUp: Bool = false) {
