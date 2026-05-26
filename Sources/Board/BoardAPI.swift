@@ -329,11 +329,13 @@ enum BoardAPI {
     private static func feedPlannerSessionRunStates(_ sessions: [SessionDTO]) {
         for session in sessions {
             let status = SessionStatus.from(rawString: session.status)
-            PlannerSessionRunStateBridge.observeBound(
+            let boundRecord = PlannerSessionRunStateBridge.observeBound(
                 sessionId: session.id,
                 status: status
             )
-            syncPlannerSessionOutputArtifacts(sessionId: session.id)
+            if boundRecord != nil {
+                syncPlannerSessionOutputArtifacts(sessionId: session.id)
+            }
         }
     }
 
