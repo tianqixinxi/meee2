@@ -23,7 +23,7 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
   const inFlight = useRef(false)
   const pendingRefetch = useRef(false)
   const pendingWhileHidden = useRef(false)
-  const debounceTimer = useRef<number | null>(null)
+  const burstRefetchTimer = useRef<number | null>(null)
   const hasState = useRef(false)
   // 上一次 setState 的 payload 指纹（JSON）。Claude 活跃时 WS 每秒 push 多次
   // state.changed，但绝大多数 tick 的内容没变——还是会让全 App 重渲一次。
@@ -68,7 +68,10 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
       if (pendingRefetch.current) {
         pendingRefetch.current = false
         // queue a follow-up to collapse bursts
-        debounceTimer.current = window.setTimeout(() => void refresh(), 750)
+        burstRefetchTimer.current = window.setTimeout(() => {
+          burstRefetchTimer.current = null
+          void refresh()
+        }, 160)
       }
     }
   }, [])
@@ -79,13 +82,11 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
       return
     }
     onStateChangedEvent?.()
-    if (debounceTimer.current) {
-      window.clearTimeout(debounceTimer.current)
+    if (burstRefetchTimer.current !== null) {
+      window.clearTimeout(burstRefetchTimer.current)
+      burstRefetchTimer.current = null
     }
-    debounceTimer.current = window.setTimeout(() => {
-      debounceTimer.current = null
-      void refresh()
-    }, 750)
+    void refresh()
   }, [onStateChangedEvent, refresh])
 
   useEffect(() => {
@@ -105,9 +106,9 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
     return () => {
       dispose()
       document.removeEventListener('visibilitychange', onVisible)
-      if (debounceTimer.current) {
-        window.clearTimeout(debounceTimer.current)
-        debounceTimer.current = null
+      if (burstRefetchTimer.current) {
+        window.clearTimeout(burstRefetchTimer.current)
+        burstRefetchTimer.current = null
       }
     }
   }, [onStateChangedEvent, refresh, scheduleRefresh])
