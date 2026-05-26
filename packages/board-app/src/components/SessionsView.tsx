@@ -34,6 +34,8 @@ export function SessionsView({
   const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
+  const switchStartedAtRef = useRef<Record<string, number>>({})
+  const switchTraceIdRef = useRef<Record<string, string>>({})
   const sessions = state?.sessions ?? []
   const attentionCount = useMemo(
     () => sessions.filter((session) => sessionNeedsAttention(session) || unreadSids.has(session.id)).length,
@@ -83,9 +85,23 @@ export function SessionsView({
     if (selectedSessionId && selectedSession) setActiveKindTab('internal')
   }, [selectedSession, selectedSessionId])
 
+  const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
+    const startedAt = Date.now()
+    const traceId = `switch-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    switchStartedAtRef.current[session.id] = startedAt
+    switchTraceIdRef.current[session.id] = traceId
+    console.debug('[TerminalSwitchPerf]', {
+      traceId,
+      phase,
+      sessionId: session.id,
+      surfaceId: session.surfaceId,
+    })
+    onSelectedSessionChange?.(session.id)
+  }, [onSelectedSessionChange])
+
   const openSession = useCallback(async (session: Session) => {
     if (isInternalSession(session)) {
-      onSelectedSessionChange?.(session.id)
+      selectInternalSession(session, 'react.rowOpen')
       return
     }
     setOpeningId(session.id)
@@ -93,7 +109,7 @@ export function SessionsView({
     const ok = await activateSession(session.id)
     setOpeningId(null)
     if (!ok) setOpenErrorId(session.id)
-  }, [onSelectedSessionChange])
+  }, [selectInternalSession])
 
   return (
     <section className="sessions-workspace" aria-label={t('sessions.title')}>
@@ -167,7 +183,7 @@ export function SessionsView({
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
-                            onSelect={() => onSelectedSessionChange?.(session.id)}
+                            onSelect={() => selectInternalSession(session)}
                             onOpen={() => openSession(session)}
                             t={t}
                           />
@@ -205,6 +221,8 @@ export function SessionsView({
                     session={selectedSession}
                     opening={openingId === selectedSession?.id}
                     openError={openErrorId === selectedSession?.id}
+                    switchStartedAt={selectedSession ? switchStartedAtRef.current[selectedSession.id] : undefined}
+                    switchTraceId={selectedSession ? switchTraceIdRef.current[selectedSession.id] : undefined}
                     onOpen={() => selectedSession && openSession(selectedSession)}
                     t={t}
                   />
@@ -362,12 +380,16 @@ function SessionDetail({
   session,
   opening,
   openError,
+  switchStartedAt,
+  switchTraceId,
   onOpen,
   t,
 }: {
   session: Session | null
   opening: boolean
   openError: boolean
+  switchStartedAt?: number
+  switchTraceId?: string
   onOpen: () => void
   t: ReturnType<typeof useI18n>['t']
 }) {
@@ -437,7 +459,7 @@ function SessionDetail({
       {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
       {stopError && <p className="sessions-detail__error">{stopError}</p>}
       {internal && session.surfaceId && liveInternal ? (
-        <NativeTerminalPanel session={session} />
+        <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
       ) : internal ? (
         <div className="sessions-external">
           <TerminalIcon size={18} aria-hidden />
@@ -453,7 +475,15 @@ function SessionDetail({
   )
 }
 
-function NativeTerminalPanel({ session }: { session: Session }) {
+function NativeTerminalPanel({
+  session,
+  switchStartedAt,
+  switchTraceId,
+}: {
+  session: Session
+  switchStartedAt?: number
+  switchTraceId?: string
+}) {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
@@ -462,10 +492,27 @@ function NativeTerminalPanel({ session }: { session: Session }) {
   const syncNative = useCallback((type: 'attach' | 'layout' | 'focus' = 'attach') => {
     if (!session.surfaceId || !hostRef.current) return false
     const rect = hostRef.current.getBoundingClientRect()
+    const sentAtMs = Date.now()
+    const traceId = switchTraceId ?? `terminal-${session.id.slice(0, 8)}-${sentAtMs.toString(36)}`
+    console.debug('[TerminalSwitchPerf]', {
+      traceId,
+      phase: `web.${type}.send`,
+      sessionId: session.id,
+      surfaceId: session.surfaceId,
+      clickToSendMs: switchStartedAt === undefined ? undefined : sentAtMs - switchStartedAt,
+      rect: {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+    })
     const ok = openNativeTerminalSurface({
       type,
       surfaceId: session.surfaceId,
       sessionId: session.id,
+      traceId,
+      clickStartedAtMs: switchStartedAt,
+      sentAtMs,
+      webPhase: type,
       rect: {
         x: rect.left,
         y: rect.top,
@@ -475,7 +522,7 @@ function NativeTerminalPanel({ session }: { session: Session }) {
     })
     setOpenError(!ok)
     return ok
-  }, [session.id, session.surfaceId])
+  }, [session.id, session.surfaceId, switchStartedAt, switchTraceId])
 
   const scheduleLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) return

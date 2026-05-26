@@ -387,30 +387,35 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func handleNativeTerminalMessage(_ payload: [String: Any]) {
         let type = payload["type"] as? String ?? "attach"
+        logTerminalTrace(payload, phase: "native.received", extra: "type=\(type)")
         switch type {
         case "attach", "embed", "open":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
             let rectPayload = payload["rect"] as? [String: Any]
-            embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload)
+            embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload, tracePayload: payload)
         case "layout":
             if let rectPayload = payload["rect"] as? [String: Any] {
-                updateEmbeddedTerminalFrame(rectPayload)
+                updateEmbeddedTerminalFrame(rectPayload, tracePayload: payload)
             }
         case "focus":
             embeddedTerminal?.focus()
+            logTerminalTrace(payload, phase: "native.focus.done", extra: "hasTerminal=\(embeddedTerminal != nil)")
         case "hide", "detach":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
             hideEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId)
+            logTerminalTrace(payload, phase: "native.hide.done")
         default:
             break
         }
     }
 
-    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?) {
+    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, tracePayload: [String: Any]? = nil) {
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        let cacheHit = embeddedTerminals[key] != nil
+        let activeChanged = activeEmbeddedTerminalKey != key
         if activeEmbeddedTerminalKey != key {
             embeddedTerminal?.hide()
             let controller: EmbeddedNativeTerminalController
@@ -418,6 +423,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 controller = cached
             } else {
                 guard let created = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+                    logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=\(activeChanged)")
                     NSSound.beep()
                     return
                 }
@@ -437,6 +443,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
             guard let controller = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+                logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=false")
                 NSSound.beep()
                 return
             }
@@ -448,9 +455,14 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             terminalHostView.addSubview(controller.view)
         }
         if let rectPayload {
-            updateEmbeddedTerminalFrame(rectPayload)
+            updateEmbeddedTerminalFrame(rectPayload, tracePayload: tracePayload)
         }
         embeddedTerminal?.focus()
+        logTerminalTrace(
+            tracePayload,
+            phase: "native.embed.done",
+            extra: "cacheHit=\(cacheHit) activeChanged=\(activeChanged) cacheCount=\(embeddedTerminals.count)"
+        )
     }
 
     private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) {
@@ -486,14 +498,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
     }
 
-    private func updateEmbeddedTerminalFrame(_ rectPayload: [String: Any]) {
-        guard let embeddedTerminal else { return }
+    private func updateEmbeddedTerminalFrame(_ rectPayload: [String: Any], tracePayload: [String: Any]? = nil) {
+        guard let embeddedTerminal else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=noTerminal")
+            return
+        }
         guard
             let x = Self.doubleValue(rectPayload["x"]),
             let y = Self.doubleValue(rectPayload["y"]),
             let width = Self.doubleValue(rectPayload["width"]),
             let height = Self.doubleValue(rectPayload["height"])
         else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
             return
         }
         let rootHeight = rootView.bounds.height
@@ -503,7 +519,13 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             width: max(1, width),
             height: max(1, height)
         ).integral
-        embeddedTerminal.layout(in: frame, hidden: width < 8 || height < 8)
+        let hidden = width < 8 || height < 8
+        embeddedTerminal.layout(in: frame, hidden: hidden)
+        logTerminalTrace(
+            tracePayload,
+            phase: "native.layout.done",
+            extra: "frame=\(Int(frame.width))x\(Int(frame.height)) hidden=\(hidden)"
+        )
     }
 
     private func requestEmbeddedTerminalLayout() {
@@ -518,6 +540,34 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         if let value = value as? NSNumber { return value.doubleValue }
         if let value = value as? String { return Double(value) }
         return nil
+    }
+
+    private func logTerminalTrace(_ payload: [String: Any]?, phase: String, extra: String = "") {
+        guard
+            let payload,
+            let traceId = payload["traceId"] as? String,
+            !traceId.isEmpty
+        else {
+            return
+        }
+        let now = Self.timestampMillis()
+        let sentAt = Self.doubleValue(payload["sentAtMs"])
+        let clickStartedAt = Self.doubleValue(payload["clickStartedAtMs"])
+        let sendToNative = sentAt.map { Self.formatMillis(now - $0) } ?? "-"
+        let clickToNative = clickStartedAt.map { Self.formatMillis(now - $0) } ?? "-"
+        let webPhase = payload["webPhase"] as? String ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative)\(suffix)"
+        )
+    }
+
+    private static func timestampMillis() -> Double {
+        Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func formatMillis(_ value: Double) -> String {
+        String(format: "%.1f", value)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

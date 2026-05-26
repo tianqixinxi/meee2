@@ -642,6 +642,10 @@ export function openNativeTerminalSurface(input: {
   sessionId?: string
   rect?: NativeTerminalRect
   type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus'
+  traceId?: string
+  clickStartedAtMs?: number
+  sentAtMs?: number
+  webPhase?: string
 }): boolean {
   const bridge = window.webkit?.messageHandlers?.meee2NativeTerminal
   if (!bridge) return false
@@ -650,6 +654,10 @@ export function openNativeTerminalSurface(input: {
     surfaceId: input.surfaceId,
     sessionId: input.sessionId,
     rect: input.rect,
+    traceId: input.traceId,
+    clickStartedAtMs: input.clickStartedAtMs,
+    sentAtMs: input.sentAtMs,
+    webPhase: input.webPhase,
   })
   return true
 }
