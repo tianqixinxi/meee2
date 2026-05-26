@@ -119,7 +119,8 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
  * 计算 BoardState 的内容指纹。故意排除"churny" 字段（lastActivity、
  * startedAt —— 这些每个 WS tick 都在刷新但 UI 不直接渲染它们）。
  * 只对"真变了用户才关心"的字段做比对：sessions 的 id/status/title/project/
- * currentTool/inboxPending/pendingPermissionTool/older(派生)/recentMessages、channels。
+ * terminal surface identity/lifecycle/currentTool/inboxPending/
+ * pendingPermissionTool/older(派生)/recentMessages、channels。
  *
  * `older` 改成前端从 lastActivity 派生（isOlderSession）。在 signature 里
  * 记录其布尔值，确保 1h 阈值翻越时下游 UI 能拿到 new state 触发重渲。
@@ -131,6 +132,10 @@ function signatureFor(s: BoardState): string {
       title: x.title,
       project: x.project,
       status: x.status,
+      terminalKind: x.terminalKind,
+      surfaceId: x.surfaceId,
+      surfaceStatus: x.surfaceStatus,
+      canOpenExternal: x.canOpenExternal,
       currentTool: x.currentTool,
       inboxPending: x.inboxPending,
       pendingPermissionTool: x.pendingPermissionTool,
