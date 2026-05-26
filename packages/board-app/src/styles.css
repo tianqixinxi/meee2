@@ -1558,6 +1558,13 @@ textarea {
   font-weight: 700;
 }
 
+/* UI-simplification §3.C — positionTag pill on artifact cards */
+.artifacts-card__position { text-transform: uppercase; letter-spacing: 0.04em; }
+.artifacts-card__position--candidate { background: rgba(168, 165, 155, 0.14); color: var(--text-dim); }
+.artifacts-card__position--discarded { background: rgba(168, 165, 155, 0.08); color: var(--text-faint); text-decoration: line-through; }
+.artifacts-card__position--promoted  { background: rgba(204, 120, 92, 0.16); color: var(--accent); }
+.artifacts-card__position--proposed  { background: rgba(212, 163, 115, 0.16); color: var(--warning); }
+
 .artifacts-card h3 {
   margin: 0;
   font-size: 14px;

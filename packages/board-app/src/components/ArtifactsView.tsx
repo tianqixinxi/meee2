@@ -314,6 +314,11 @@ export function ArtifactsView({
                           <div className="artifacts-card__eyebrow">
                             <span>{slot.latest.kind}</span>
                             <span>{slot.latest.status}</span>
+                            {slot.latest.positionTag && slot.latest.positionTag !== 'latest' && (
+                              <span className={`artifacts-card__position artifacts-card__position--${slot.latest.positionTag}`}>
+                                {slot.latest.positionTag}
+                              </span>
+                            )}
                           </div>
                           <h3>{slot.latest.title}</h3>
                           <p>{slot.latest.reference}</p>

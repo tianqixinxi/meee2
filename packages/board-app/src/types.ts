@@ -491,6 +491,33 @@ export type ArtifactPositionTag =
   | 'promoted'    // 已被提升为独立画板节点(原 kanban item 等)
   | 'proposed'    // agent 提议要提升,等 owner 批
 
+/**
+ * Artifact payload discriminated union(UI-simplification §3.E).
+ * 替代原来的 `payload: unknown`:用 type tag 区分,每种 payload 自带强类型字段。
+ *
+ * 现有 PlannerArtifactPayloadType('text'|'html'|'kanban'|'integration'|'json'|'file')
+ * 是「技术形态」分类;ArtifactPayload 是「语义形态」分类。两者并存:旧的
+ * payload(写到 PlannerArtifactContent.payload)保留兼容;新写入走 typed
+ * ArtifactPayload。Consumers 优先看 ArtifactPayload,缺失则 fallback 到旧 payload。
+ */
+export type ArtifactPayload =
+  | { type: 'prd';          tldr: string; sections: Array<{ heading: string; lines: number }> }
+  | { type: 'kanban';       columns: Array<{ name: string; items: string[] }> }
+  | { type: 'impl-pr';      number: number; branch: string; baseBranch: string;
+                            filesChanged: number; insertions: number; deletions: number;
+                            ciStatus: 'pass' | 'fail' | 'running';
+                            reviewers: string[] }
+  | { type: 'check-result'; pass: number; fail: number; skip: number;
+                            failing: string[] }
+  | { type: 'file';         filename: string; mime: string; sizeBytes: number;
+                            lines?: number | null }
+  | { type: 'markdown';     preview: string }
+  | { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
+                            externalId: string; externalUrl?: string | null;
+                            summary?: string | null }
+
+export type ArtifactPayloadType = ArtifactPayload['type']
+
 export interface PlannerArtifact {
   id: string
   canvasId: string
@@ -500,7 +527,10 @@ export interface PlannerArtifact {
   reference: string
   status: string
   createdAt: string
+  /** Legacy free-form payload(`PlannerArtifactPayloadType` 系统),保留向后兼容。新写入用 `typedPayload`。 */
   payload?: unknown
+  /** UI-simplification §3.E: 强类型 payload。Consumer 优先用这个,缺失则 fallback `payload`. */
+  typedPayload?: ArtifactPayload | null
   /** UI-simplification §3.C: position tag for clipboard model. Defaults to 'latest' if missing. */
   positionTag?: ArtifactPositionTag
 }
