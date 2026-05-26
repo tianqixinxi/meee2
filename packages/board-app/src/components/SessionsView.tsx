@@ -37,6 +37,7 @@ export function SessionsView({
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
+  const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
   const sessions = state?.sessions ?? []
   const attentionCount = useMemo(
     () => sessions.filter((session) => sessionNeedsAttention(session) || unreadSids.has(session.id)).length,
@@ -85,6 +86,26 @@ export function SessionsView({
   useEffect(() => {
     if (selectedSessionId && selectedSession) setActiveKindTab('internal')
   }, [selectedSession, selectedSessionId])
+
+  useEffect(() => {
+    if (activeKindTab !== 'internal') return
+    const targets = internalSessions
+      .filter((session) => session.surfaceId && isLiveInternalSession(session))
+      .slice(0, 4)
+    if (targets.length === 0) return
+    const timer = window.setTimeout(() => {
+      for (const session of targets) {
+        if (!session.surfaceId || prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) continue
+        const ok = openNativeTerminalSurface({
+          type: 'prewarm',
+          surfaceId: session.surfaceId,
+          sessionId: session.id,
+        })
+        if (ok) prewarmedInternalSurfaceIdsRef.current.add(session.surfaceId)
+      }
+    }, 160)
+    return () => window.clearTimeout(timer)
+  }, [activeKindTab, internalSessions])
 
   const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
     const startedAt = Date.now()

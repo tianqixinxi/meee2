@@ -641,7 +641,7 @@ export function openNativeTerminalSurface(input: {
   surfaceId?: string
   sessionId?: string
   rect?: NativeTerminalRect
-  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus'
+  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | 'prewarm'
   traceId?: string
   clickStartedAtMs?: number
   sentAtMs?: number

@@ -389,6 +389,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let type = payload["type"] as? String ?? "attach"
         logTerminalTrace(payload, phase: "native.received", extra: "type=\(type)")
         switch type {
+        case "prewarm":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            prewarmEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId, tracePayload: payload)
         case "attach", "embed", "open":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
@@ -409,6 +413,24 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         default:
             break
         }
+    }
+
+    private func prewarmEmbeddedTerminal(surfaceId: String, sessionId: String?, tracePayload: [String: Any]? = nil) {
+        guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
+        let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        if embeddedTerminals[key] != nil {
+            rememberEmbeddedTerminal(key)
+            logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
+            return
+        }
+        guard let created = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+            logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
+            return
+        }
+        created.hide()
+        embeddedTerminals[key] = created
+        rememberEmbeddedTerminal(key)
+        logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false cacheCount=\(embeddedTerminals.count)")
     }
 
     private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, tracePayload: [String: Any]? = nil) {
@@ -492,8 +514,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         embeddedTerminalLRU.removeAll { $0 == key }
         embeddedTerminalLRU.append(key)
         while embeddedTerminalLRU.count > Self.maxEmbeddedTerminalCacheCount {
-            let evictedKey = embeddedTerminalLRU.removeFirst()
-            guard evictedKey != activeEmbeddedTerminalKey else { continue }
+            guard let evictedKey = embeddedTerminalLRU.first(where: { $0 != activeEmbeddedTerminalKey }) else {
+                break
+            }
+            embeddedTerminalLRU.removeAll { $0 == evictedKey }
             embeddedTerminals.removeValue(forKey: evictedKey)?.detach()
         }
     }
