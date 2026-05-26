@@ -662,6 +662,14 @@ export function openNativeTerminalSurface(input: {
   return true
 }
 
+export interface NativeTerminalPrewarmAck {
+  surfaceId?: string
+  sessionId?: string
+  ready?: boolean
+  cacheHit?: boolean
+  reason?: string
+}
+
 // -- planner ---------------------------------------------------------------
 
 export function fetchPlannerCanvasState(canvasId: string): Promise<PlannerCanvasState> {

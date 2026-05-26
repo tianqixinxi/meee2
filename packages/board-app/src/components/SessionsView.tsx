@@ -8,7 +8,7 @@ import {
   Terminal as TerminalIcon,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalRect } from '../api'
+import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
 
@@ -88,8 +88,22 @@ export function SessionsView({
       sessionId: session.id,
       webPhase: reason,
     })
-    if (ok) prewarmedInternalSurfaceIdsRef.current.add(session.surfaceId)
     return ok
+  }, [])
+
+  useEffect(() => {
+    const handlePrewarmAck = (event: Event) => {
+      const detail = (event as CustomEvent<NativeTerminalPrewarmAck>).detail
+      const surfaceId = detail?.surfaceId?.trim()
+      if (!surfaceId) return
+      if (detail.ready) {
+        prewarmedInternalSurfaceIdsRef.current.add(surfaceId)
+      } else {
+        prewarmedInternalSurfaceIdsRef.current.delete(surfaceId)
+      }
+    }
+    window.addEventListener('meee2:native-terminal-prewarm', handlePrewarmAck)
+    return () => window.removeEventListener('meee2:native-terminal-prewarm', handlePrewarmAck)
   }, [])
 
   useEffect(() => {

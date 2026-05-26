@@ -437,21 +437,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
         if embeddedTerminals[key] != nil {
             rememberEmbeddedTerminal(key)
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: true)
             logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
             return
         }
         let webPhase = tracePayload?["webPhase"] as? String ?? ""
         if webPhase == "react.idleTabPrewarm" {
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: false, cacheHit: false, reason: "backgroundIdle")
             logTerminalTrace(tracePayload, phase: "native.prewarm.skipped", extra: "reason=backgroundIdle cacheHit=false cacheCount=\(embeddedTerminals.count)")
             return
         }
         guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: false, cacheHit: false, reason: "createFailed")
             logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
             return
         }
         created.hide()
         embeddedTerminals[key] = created
         rememberEmbeddedTerminal(key)
+        dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: false)
         logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false cacheCount=\(embeddedTerminals.count)")
     }
 
@@ -651,6 +655,33 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private func requestEmbeddedTerminalLayout() {
         webView.evaluateJavaScript("""
         window.dispatchEvent(new CustomEvent('meee2:layout-native-terminal'));
+        """, completionHandler: nil)
+    }
+
+    private func dispatchNativeTerminalPrewarmAck(
+        surfaceId: String,
+        sessionId: String?,
+        ready: Bool,
+        cacheHit: Bool,
+        reason: String? = nil
+    ) {
+        var detail: [String: Any] = [
+            "surfaceId": surfaceId,
+            "ready": ready,
+            "cacheHit": cacheHit,
+        ]
+        if let sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let reason, !reason.isEmpty {
+            detail["reason"] = reason
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: detail),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:native-terminal-prewarm', { detail: \(json) }));
         """, completionHandler: nil)
     }
 
