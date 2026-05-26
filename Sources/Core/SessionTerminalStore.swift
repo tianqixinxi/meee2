@@ -64,10 +64,8 @@ class SessionTerminalStore {
         canvasId: String? = nil,
         nodeId: String? = nil
     ) {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
-            var info = self.store[sessionId] ?? SessionTerminalInfo(
+        performSync {
+            var info = store[sessionId] ?? SessionTerminalInfo(
                 sessionId: sessionId,
                 tty: tty,
                 termProgram: termProgram,
@@ -98,8 +96,8 @@ class SessionTerminalStore {
             info.lastActivityAt = Date()
             info.status = status
 
-            self.store[sessionId] = info
-            self.save()
+            store[sessionId] = info
+            save()
 
             NSLog("[SessionTerminalStore] Updated session \(sessionId.prefix(8)): tty=\(tty ?? "nil"), term=\(termProgram ?? "nil"), cmuxSocket=\(cmuxSocketPath ?? "nil")")
         }
@@ -130,12 +128,12 @@ class SessionTerminalStore {
     func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
         let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        queue.async { [weak self] in
-            guard let self, var info = self.store[sessionId] else { return }
+        performSync {
+            guard var info = store[sessionId] else { return }
             info.providerResumeSessionId = trimmed
             info.lastActivityAt = Date()
-            self.store[sessionId] = info
-            self.save()
+            store[sessionId] = info
+            save()
             NSLog("[SessionTerminalStore] Linked internal session \(sessionId.prefix(8)) to provider resume id \(trimmed.prefix(8))")
         }
     }
