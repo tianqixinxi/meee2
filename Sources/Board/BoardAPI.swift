@@ -1351,7 +1351,8 @@ enum BoardAPI {
             let surface: InternalTerminalSurfaceSnapshot
             if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !sessionId.isEmpty {
-                if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId) {
+                if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
+                   isReusableInternalSurface(existingSurface) {
                     surface = existingSurface
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
@@ -1434,6 +1435,11 @@ enum BoardAPI {
         } catch {
             return errorResponse("spawn_failed", error.localizedDescription, status: 500)
         }
+    }
+
+    private static func isReusableInternalSurface(_ surface: InternalTerminalSurfaceSnapshot) -> Bool {
+        surface.status == InternalTerminalLifecycle.starting.rawValue
+            || surface.status == InternalTerminalLifecycle.running.rawValue
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -2712,7 +2718,13 @@ enum BoardAPI {
 
     private static func isPlannerSessionLive(_ sessionId: String, in sessions: [SessionDTO]) -> Bool {
         sessions.contains { session in
-            boardSession(session, matches: sessionId)
+            guard boardSession(session, matches: sessionId) else { return false }
+            if session.status == SessionStatus.dead.rawValue { return false }
+            if let surfaceStatus = session.surfaceStatus?.lowercased(),
+               surfaceStatus == "exited" || surfaceStatus == "failed" {
+                return false
+            }
+            return true
         }
     }
 

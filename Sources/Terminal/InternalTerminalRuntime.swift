@@ -146,8 +146,12 @@ public final class InternalTerminalRuntime {
         lock.lock()
         if let existingSurfaceId = surfaceBySessionId[sessionId],
            let existingSurface = surfaces[existingSurfaceId] {
-            lock.unlock()
-            return existingSurface.snapshot()
+            if existingSurface.isReusable {
+                lock.unlock()
+                return existingSurface.snapshot()
+            }
+            surfaces.removeValue(forKey: existingSurfaceId)
+            surfaceBySessionId.removeValue(forKey: sessionId)
         }
         lock.unlock()
 
@@ -445,7 +449,7 @@ final class InternalTerminalSurface {
         let key = ObjectIdentifier(client)
         lock.lock()
         nativeClients[key] = WeakInternalTerminalSurfaceClient(client)
-        let replay = scrollback
+        let replay = status == .running ? scrollback : Data()
         let snapshot = snapshotLocked()
         lock.unlock()
 
@@ -659,6 +663,12 @@ final class InternalTerminalSurface {
             createdAt: createdAt,
             updatedAt: updatedAt
         )
+    }
+
+    var isReusable: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return status == .starting || status == .running
     }
 
     private func startupEnvironment(cols: UInt16, rows: UInt16) -> [String: String] {

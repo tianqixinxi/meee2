@@ -382,6 +382,7 @@ function SessionDetail({
     )
   }
   const internal = isInternalSession(session)
+  const liveInternal = internal && isLiveInternalSession(session)
   const stopInternal = async () => {
     if (!session.surfaceId) return
     setStopping(true)
@@ -435,8 +436,13 @@ function SessionDetail({
       </dl>
       {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
       {stopError && <p className="sessions-detail__error">{stopError}</p>}
-      {internal && session.surfaceId ? (
+      {internal && session.surfaceId && liveInternal ? (
         <NativeTerminalPanel session={session} />
+      ) : internal ? (
+        <div className="sessions-external">
+          <TerminalIcon size={18} aria-hidden />
+          <span>{t('sessions.internalEndedSummary')}</span>
+        </div>
       ) : (
         <div className="sessions-external">
           <ExternalLink size={18} aria-hidden />
@@ -553,6 +559,11 @@ function FilterButton({
 
 function isInternalSession(session: Session): boolean {
   return session.terminalKind === 'internal' || Boolean(session.surfaceId)
+}
+
+function isLiveInternalSession(session: Session): boolean {
+  const status = (session.surfaceStatus || session.status || '').toLowerCase()
+  return status !== 'exited' && status !== 'failed' && status !== 'dead'
 }
 
 function sessionNeedsAttention(session: Session): boolean {
