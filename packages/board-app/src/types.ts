@@ -479,6 +479,18 @@ export interface PlannerNodeDispatch {
   fallbackRunner?: PlannerDispatchRunner | null
 }
 
+/**
+ * Artifact 在剪贴板里的位置标签(UI-simplification §3.C).
+ * 跟 status (freeform string) 互补:status 描述「这份成果完成度」,
+ * positionTag 描述「这份成果在 inspector 剪贴板里的角色」。
+ */
+export type ArtifactPositionTag =
+  | 'latest'      // 默认引用的那份(主推)
+  | 'candidate'   // 同节点的其他版本
+  | 'discarded'   // 不再考虑但留档
+  | 'promoted'    // 已被提升为独立画板节点(原 kanban item 等)
+  | 'proposed'    // agent 提议要提升,等 owner 批
+
 export interface PlannerArtifact {
   id: string
   canvasId: string
@@ -489,6 +501,8 @@ export interface PlannerArtifact {
   status: string
   createdAt: string
   payload?: unknown
+  /** UI-simplification §3.C: position tag for clipboard model. Defaults to 'latest' if missing. */
+  positionTag?: ArtifactPositionTag
 }
 
 export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'
@@ -721,6 +735,9 @@ export interface PlanningNode {
   id: string
   canvasId: string
   title: string
+  /** 1-2 line description shown on the canvas node card under the title.
+   *  Optional; UI hides the line when empty. UI-simplification §2.6/§3.1. */
+  desc?: string | null
   schema: NodeSchema
   contextSources: ContextSource[]
   executionMode: ExecutionMode
@@ -769,6 +786,8 @@ export interface PlanChange {
   node?: PlanningNode | null
   nodeId?: string | null
   title?: string | null
+  /** UI-simplification §3.1: proposals can attach a new 1-2 line desc to a node. */
+  desc?: string | null
   status?: PlanningNodeStatus | null
   schema?: NodeSchema | null
   contextSources?: ContextSource[] | null

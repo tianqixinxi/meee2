@@ -183,6 +183,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           </div>
         </div>
         <div className="planner-node__title">{node.title}</div>
+        {node.desc && <div className="planner-node__desc">{node.desc}</div>}
         {data.artifactDirection !== 'input' && (
           <div className="planner-node__artifact-ref" title={node.schema?.goal || node.title}>
             {node.schema?.goal || node.title}
@@ -376,6 +377,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       </div>
 
       <div className="planner-node__title">{node.title}</div>
+      {node.desc && <div className="planner-node__desc">{node.desc}</div>}
 
       {nodeKind === 'step' && (
         <div className="planner-node__meta" aria-label="Runtime">
@@ -1412,6 +1414,7 @@ function SubCanvasRefCard({
         </div>
       </div>
       <div className="planner-node__title">{node.title}</div>
+      {node.desc && <div className="planner-node__desc">{node.desc}</div>}
       <div className="planner-node__subcanvas-ref-body">
         <div className="planner-node__subcanvas-ref-meta">
           <span className="planner-node__chip">
