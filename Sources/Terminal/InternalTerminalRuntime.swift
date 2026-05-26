@@ -87,10 +87,13 @@ public final class InternalTerminalRuntime {
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
 
         var restored = 0
+        var removedUnrestorable = 0
         for info in candidates {
             if isInternalSession(info.sessionId) { continue }
             let storedSession = SessionStore.shared.get(info.sessionId)
             guard let command = restoreCommand(for: info, storedSession: storedSession) else {
+                SessionTerminalStore.shared.remove(sessionId: info.sessionId)
+                removedUnrestorable += 1
                 continue
             }
             let provider = Self.restoreProvider(for: info, command: command)
@@ -125,6 +128,9 @@ public final class InternalTerminalRuntime {
         }
         if restored > 0 {
             MLog("[InternalTerminalRuntime] restored \(restored) persisted internal session surface(s)")
+        }
+        if removedUnrestorable > 0 {
+            MLog("[InternalTerminalRuntime] removed \(removedUnrestorable) unrestorable internal session mapping(s)")
         }
         return restored
     }
