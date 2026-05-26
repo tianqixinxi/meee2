@@ -19,6 +19,8 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var pendingOutput = Data()
     private var outputFlushScheduled = false
     private var surfaceVisible = false
+    private var refitScheduled = false
+    private var followUpRefitScheduled = false
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -112,14 +114,14 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         }
         setTerminalSurfaceVisible(true)
         if frameChanged {
-            refitSurface()
+            scheduleRefit()
         }
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
         flushPendingOutput()
         terminalSession.receive(data)
-        scheduleRefit()
+        scheduleRefit(includeFollowUp: true)
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReceiveOutput data: Data) {
@@ -192,13 +194,23 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         terminalSession.receive(data)
     }
 
-    private func scheduleRefit() {
-        Task { @MainActor [weak self] in
-            self?.refitSurface()
+    private func scheduleRefit(includeFollowUp: Bool = false) {
+        if !refitScheduled {
+            refitScheduled = true
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refitScheduled = false
+                self.refitSurface()
+            }
         }
+
+        guard includeFollowUp, !followUpRefitScheduled else { return }
+        followUpRefitScheduled = true
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 50_000_000)
-            self?.refitSurface()
+            guard let self else { return }
+            self.followUpRefitScheduled = false
+            self.scheduleRefit()
         }
     }
 
