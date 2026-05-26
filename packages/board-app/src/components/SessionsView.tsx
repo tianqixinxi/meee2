@@ -7,8 +7,8 @@ import {
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, openNativeTerminalSurface } from '../api'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalRect } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
 
@@ -21,6 +21,7 @@ interface Props {
 
 type SessionFilter = 'all' | 'attention' | 'unread'
 type SessionKindTab = 'internal' | 'external'
+type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 export function SessionsView({
   state,
@@ -487,11 +488,22 @@ function NativeTerminalPanel({
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
+  const lastSentRectRef = useRef<NativeTerminalRect | null>(null)
+  const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null)
   const [openError, setOpenError] = useState(false)
 
-  const syncNative = useCallback((type: 'attach' | 'layout' | 'focus' = 'attach') => {
+  const syncNative = useCallback((type: NativeTerminalSyncType = 'attach') => {
     if (!session.surfaceId || !hostRef.current) return false
     const rect = hostRef.current.getBoundingClientRect()
+    const nativeRect = {
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
+    }
+    if (type === 'layout' && sameNativeRect(lastSentRectRef.current, nativeRect)) {
+      return true
+    }
     const sentAtMs = Date.now()
     const traceId = switchTraceId ?? `terminal-${session.id.slice(0, 8)}-${sentAtMs.toString(36)}`
     console.debug('[TerminalSwitchPerf]', {
@@ -513,13 +525,9 @@ function NativeTerminalPanel({
       clickStartedAtMs: switchStartedAt,
       sentAtMs,
       webPhase: type,
-      rect: {
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
-      },
+      rect: nativeRect,
     })
+    if (ok) lastSentRectRef.current = nativeRect
     setOpenError(!ok)
     return ok
   }, [session.id, session.surfaceId, switchStartedAt, switchTraceId])
@@ -532,13 +540,31 @@ function NativeTerminalPanel({
     })
   }, [syncNative])
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (!session.surfaceId) return
+    lastSentRectRef.current = null
+    lastObservedSizeRef.current = null
     syncNative('attach')
     const surfaceId = session.surfaceId
     const sessionId = session.id
-    const resizeObserver = hostRef.current ? new ResizeObserver(scheduleLayout) : null
-    if (hostRef.current) resizeObserver?.observe(hostRef.current)
+    const resizeObserver = hostRef.current ? new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const width = Math.round(entry.contentRect.width)
+      const height = Math.round(entry.contentRect.height)
+      const last = lastObservedSizeRef.current
+      if (last && last.width === width && last.height === height) return
+      lastObservedSizeRef.current = { width, height }
+      scheduleLayout()
+    }) : null
+    if (hostRef.current) {
+      const initial = hostRef.current.getBoundingClientRect()
+      lastObservedSizeRef.current = {
+        width: Math.round(initial.width),
+        height: Math.round(initial.height),
+      }
+      resizeObserver?.observe(hostRef.current)
+    }
     window.addEventListener('resize', scheduleLayout)
     window.addEventListener('meee2:layout-native-terminal', scheduleLayout)
     return () => {
@@ -596,6 +622,14 @@ function FilterButton({
       <em>{count}</em>
     </button>
   )
+}
+
+function sameNativeRect(a: NativeTerminalRect | null, b: NativeTerminalRect): boolean {
+  if (!a) return false
+  return Math.abs(a.x - b.x) < 0.5
+    && Math.abs(a.y - b.y) < 0.5
+    && Math.abs(a.width - b.width) < 0.5
+    && Math.abs(a.height - b.height) < 0.5
 }
 
 function isInternalSession(session: Session): boolean {
