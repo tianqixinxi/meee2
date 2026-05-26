@@ -697,6 +697,7 @@ export default function App() {
     : workspaceCanvases[0]?.id ?? activeCanvasId
   const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
+  const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -794,7 +795,7 @@ export default function App() {
               onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
-          {activeCanvasLoading && (
+          {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
               <div className="canvas-global-loading__label">{t('common.switchingCanvas')}</div>

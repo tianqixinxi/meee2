@@ -503,28 +503,12 @@ final class InternalTerminalSurface {
         updatedAt = Date()
         lock.unlock()
 
-        SessionStore.shared.update(sessionId) { session in
-            session.status = .dead
-            session.currentTool = nil
-            session.lastMessage = "Internal terminal exited with code \(code)"
-        }
-        SessionTerminalStore.shared.update(
-            sessionId: sessionId,
-            tty: nil,
-            termProgram: "meee2-internal",
-            termBundleId: "meee2-internal",
-            cmuxSocketPath: nil,
-            cmuxSurfaceId: surfaceId,
-            cwd: cwd,
-            status: InternalTerminalLifecycle.exited.rawValue,
-            command: command,
-            provider: provider,
-            canvasId: canvasId,
-            nodeId: nodeId
-        )
         let snapshot = snapshot()
         notifyNativeClientsStatus(snapshot)
         notifyNativeClientsExit(code)
+        InternalTerminalRuntime.shared.remove(surface: self)
+        SessionStore.shared.delete(sessionId)
+        SessionTerminalStore.shared.remove(sessionId: sessionId)
         BoardServer.shared.broadcastStateChanged()
     }
 
