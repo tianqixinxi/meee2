@@ -338,6 +338,10 @@ enum BoardAPI {
     }
 
     private static func syncPlannerSessionOutputArtifacts(sessionId: String? = nil, canvasId: String? = nil) {
+        if let sessionId,
+           (SessionStore.shared.get(sessionId)?.transcriptPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return
+        }
         let snapshot = BoardLayoutStore.shared.snapshot()
         let canvases = snapshot.canvases.filter { canvasId == nil || $0.id == canvasId }
         for canvas in canvases {
