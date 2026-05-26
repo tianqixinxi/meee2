@@ -23,6 +23,9 @@ importers:
       '@meee1/board-persistence-http':
         specifier: workspace:*
         version: link:../board-persistence-http
+      '@meee1/recap-core':
+        specifier: workspace:*
+        version: link:../recap-core
       '@xyflow/react':
         specifier: ^12.10.2
         version: 12.10.2(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -140,6 +143,12 @@ importers:
       remark-gfm:
         specifier: ^4.0.1
         version: 4.0.1
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
+  packages/recap-core:
+    devDependencies:
       typescript:
         specifier: ^5
         version: 5.9.3
