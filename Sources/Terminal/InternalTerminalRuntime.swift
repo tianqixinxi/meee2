@@ -366,6 +366,7 @@ public final class InternalTerminalRuntime {
 
 final class InternalTerminalSurface {
     private static let maxScrollbackBytes = 96_000
+    private static let maxPendingClientOutputBytes = 64_000
     private static let scrollbackTrimSearchBytes = 8_192
     private static let replayResetPrefix = Data("\u{001B}[0m\u{001B}[?25h\r\n".utf8)
 
@@ -385,6 +386,8 @@ final class InternalTerminalSurface {
     private var nativeClients: [ObjectIdentifier: WeakInternalTerminalSurfaceClient] = [:]
     private var scrollback = Data()
     private var scrollbackWasTrimmed = false
+    private var pendingNativeClientOutput = Data()
+    private var nativeClientOutputFlushScheduled = false
     private var status: InternalTerminalLifecycle = .starting
     private var pid: Int?
     private var exitCode: Int?
@@ -550,6 +553,7 @@ final class InternalTerminalSurface {
         updatedAt = Date()
         lock.unlock()
 
+        flushNativeClientOutput()
         let snapshot = snapshot()
         notifyNativeClientsStatus(snapshot)
         notifyNativeClientsExit(code)
@@ -623,12 +627,53 @@ final class InternalTerminalSurface {
 
     private func emitOutput(_ data: Data) {
         touch()
+        var immediateOutput: Data?
+        var immediateClients: [InternalTerminalSurfaceClient] = []
+        var shouldScheduleFlush = false
         lock.lock()
         appendScrollbackLocked(data)
-        let nativeClients = compactNativeClientsLocked()
+        pendingNativeClientOutput.append(data)
+        if pendingNativeClientOutput.count >= Self.maxPendingClientOutputBytes {
+            immediateOutput = pendingNativeClientOutput
+            pendingNativeClientOutput.removeAll(keepingCapacity: true)
+            nativeClientOutputFlushScheduled = false
+            immediateClients = compactNativeClientsLocked()
+        } else if !nativeClientOutputFlushScheduled {
+            nativeClientOutputFlushScheduled = true
+            shouldScheduleFlush = true
+        }
         lock.unlock()
 
-        for client in nativeClients {
+        if let immediateOutput {
+            notifyNativeClientsOutput(immediateOutput, clients: immediateClients)
+        }
+        if shouldScheduleFlush {
+            DispatchQueue.main.async { [weak self] in
+                self?.flushNativeClientOutput()
+            }
+        }
+    }
+
+    private func flushNativeClientOutput() {
+        var output: Data?
+        var nativeClients: [InternalTerminalSurfaceClient] = []
+        lock.lock()
+        nativeClientOutputFlushScheduled = false
+        if !pendingNativeClientOutput.isEmpty {
+            output = pendingNativeClientOutput
+            pendingNativeClientOutput.removeAll(keepingCapacity: true)
+            nativeClients = compactNativeClientsLocked()
+        }
+        lock.unlock()
+
+        if let output {
+            notifyNativeClientsOutput(output, clients: nativeClients)
+        }
+    }
+
+    private func notifyNativeClientsOutput(_ data: Data, clients: [InternalTerminalSurfaceClient]) {
+        guard !data.isEmpty else { return }
+        for client in clients {
             Task { @MainActor in
                 client.internalTerminalSurface(self.surfaceId, didReceiveOutput: data)
             }
