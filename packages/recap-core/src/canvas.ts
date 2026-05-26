@@ -64,9 +64,9 @@ export function buildCanvasStatusRecap(state: CanvasStatusRecapState, now = new 
 export function buildCanvasRecap(input: RecapInput): CanvasRecap {
   const policy = input.template ?? DEFAULT_RECAP_TEMPLATE_POLICY
   const fingerprint = stableRecapFingerprint(recapFingerprintPayload(input, policy))
-  const statusCounts = buildStatusCounts(input)
-  const blockers = policy.surfaceBlocked ? extractBlockers(input) : []
-  const approvals = policy.surfaceApprovals ? extractApprovals(input) : []
+  const blockers = policy.surfaceBlocked ? extractBlockers(input, policy) : []
+  const approvals = policy.surfaceApprovals ? extractApprovals(input, policy) : []
+  const statusCounts = buildStatusCounts(input, { blockers, approvals })
   const evidenceRefs = collectEvidenceRefs(input, policy.maxEvidenceRefs)
   const sessionRefs = unique([
     ...input.sessions.map((session) => session.id),
@@ -136,27 +136,28 @@ export function formatRecapAge(updatedAt: string, nowMs: number): string {
   return `${Math.floor(elapsedHours / 24)}d前`
 }
 
-function buildStatusCounts(input: RecapInput): RecapStatusCount[] {
+function buildStatusCounts(
+  input: RecapInput,
+  surfaced: { blockers: RecapBlocker[]; approvals: RecapApproval[] },
+): RecapStatusCount[] {
   const nodes = input.nodes
   const ready = nodes.filter((node) => node.status === 'ready')
   const running = nodes.filter((node) => node.status === 'working' || node.workflowRunState === 'running')
-  const approvals = extractApprovals(input)
-  const attention = extractBlockers(input)
   const done = nodes.filter((node) => node.status === 'done' || node.workflowRunState === 'done')
   const failed = nodes.filter((node) => node.workflowRunState === 'failed')
 
   return [
     { label: 'Ready', value: ready.length, tone: 'ready' },
     { label: 'Running', value: running.length, tone: 'running' },
-    { label: 'Approval', value: approvals.length, tone: 'approval' },
-    { label: 'Attention', value: attention.length, tone: 'attention' },
+    { label: 'Approval', value: surfaced.approvals.length, tone: 'approval' },
+    { label: 'Attention', value: surfaced.blockers.length, tone: 'attention' },
     { label: 'Done', value: done.length, tone: 'done' },
     { label: 'Failed', value: failed.length, tone: 'failed' },
     { label: 'Artifacts', value: input.artifacts.length, tone: 'neutral' },
   ]
 }
 
-function extractBlockers(input: RecapInput): RecapBlocker[] {
+function extractBlockers(input: RecapInput, policy: RecapTemplatePolicy): RecapBlocker[] {
   const nodeBlockers = input.nodes
     .filter((node) => node.status === 'blocked' || node.workflowRunState === 'failed' || node.blockedReason)
     .map((node): RecapBlocker => ({
@@ -177,19 +178,19 @@ function extractBlockers(input: RecapInput): RecapBlocker[] {
       evidenceRefs: evidenceForSubject(input.artifacts, { sessionId: session.id }),
     }))
 
-  const subCanvasBlockers = input.subCanvases.flatMap((canvas): RecapBlocker[] => (
+  const subCanvasBlockers = policy.surfaceSubCanvasRollups ? input.subCanvases.flatMap((canvas): RecapBlocker[] => (
     canvas.recap?.blockers.map((blocker) => ({
       ...blocker,
       subjectKind: 'canvas' as const,
       subjectId: canvas.id,
       title: `${canvas.title}: ${blocker.title}`,
     })) ?? []
-  ))
+  )) : []
 
   return [...nodeBlockers, ...sessionBlockers, ...subCanvasBlockers]
 }
 
-function extractApprovals(input: RecapInput): RecapApproval[] {
+function extractApprovals(input: RecapInput, policy: RecapTemplatePolicy): RecapApproval[] {
   const sessionApprovals = input.sessions
     .filter((session) => session.status === 'permissionRequired' || session.pendingPermissionTool || session.pendingPermissionMessage)
     .map((session): RecapApproval => ({
@@ -220,14 +221,14 @@ function extractApprovals(input: RecapInput): RecapApproval[] {
       evidenceRefs: [],
     }))
 
-  const subCanvasApprovals = input.subCanvases.flatMap((canvas): RecapApproval[] => (
+  const subCanvasApprovals = policy.surfaceSubCanvasRollups ? input.subCanvases.flatMap((canvas): RecapApproval[] => (
     canvas.recap?.approvals.map((approval) => ({
       ...approval,
       subjectKind: 'gate' as const,
       subjectId: canvas.id,
       title: `${canvas.title}: ${approval.title}`,
     })) ?? []
-  ))
+  )) : []
 
   return [...sessionApprovals, ...gateApprovals, ...proposalApprovals, ...subCanvasApprovals]
 }
