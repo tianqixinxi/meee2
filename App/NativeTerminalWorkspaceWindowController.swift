@@ -10,11 +10,12 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     private let terminalSession: InMemoryTerminalSession
     private let terminalController: GhosttyTerminal.TerminalController
+    private let onExit: (String, String?) -> Void
     private var detached = false
     private var lastSyncedSize: (cols: UInt16, rows: UInt16)?
     private var lastLayoutFrame: NSRect = .zero
 
-    init?(surfaceId: String, sessionId: String?) {
+    init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
 
         let resolvedSurfaceId: String
@@ -47,6 +48,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         Self.configureGhosttyResourcesIfNeeded()
         self.terminalController = GhosttyTerminal.TerminalController(configFilePath: Self.ghosttyConfigPath())
         self.view = TerminalView(frame: .zero)
+        self.onExit = onExit
 
         super.init()
 
@@ -115,6 +117,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     func internalTerminalSurface(_ surfaceId: String, didExitWithCode code: Int) {
         terminalSession.finish(exitCode: UInt32(max(0, code)), runtimeMilliseconds: 0)
+        onExit(self.surfaceId, sessionId)
     }
 
     private static func ghosttyConfigPath() -> String? {

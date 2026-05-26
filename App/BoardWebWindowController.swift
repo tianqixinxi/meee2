@@ -426,7 +426,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
             return
         }
-        guard let created = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+        guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
             logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
             return
         }
@@ -448,7 +448,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             if let cached = embeddedTerminals[key] {
                 controller = cached
             } else {
-                guard let created = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+                guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
                     logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=\(activeChanged)")
                     NSSound.beep()
                     return
@@ -461,7 +461,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
-            guard let controller = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+            guard let controller = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
                 logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=false")
                 NSSound.beep()
                 return
@@ -480,6 +480,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             phase: "native.embed.done",
             extra: "cacheHit=\(cacheHit) activeChanged=\(activeChanged) cacheCount=\(embeddedTerminals.count)"
         )
+    }
+
+    private func makeEmbeddedTerminal(surfaceId: String, sessionId: String?) -> EmbeddedNativeTerminalController? {
+        EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) { [weak self] exitedSurfaceId, exitedSessionId in
+            self?.removeEmbeddedTerminal(surfaceId: exitedSurfaceId, sessionId: exitedSessionId)
+        }
     }
 
     private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, hidden: Bool) {
@@ -512,6 +518,20 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         embeddedTerminals.removeAll()
         embeddedTerminalLRU.removeAll()
         activeEmbeddedTerminalKey = nil
+    }
+
+    private func removeEmbeddedTerminal(surfaceId: String, sessionId: String?) {
+        let directKey = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        let matchingKeys = embeddedTerminals.compactMap { key, controller in
+            key == directKey || controller.matches(surfaceId: surfaceId, sessionId: sessionId) ? key : nil
+        }
+        for key in matchingKeys {
+            embeddedTerminals.removeValue(forKey: key)?.detach()
+            embeddedTerminalLRU.removeAll { $0 == key }
+            if activeEmbeddedTerminalKey == key {
+                activeEmbeddedTerminalKey = nil
+            }
+        }
     }
 
     private func embeddedTerminalCacheKey(surfaceId: String, sessionId: String?) -> String {
