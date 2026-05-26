@@ -30,11 +30,13 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   ArrowUpRight,
+  ChevronDown,
   Clock3,
   GitBranch,
   History,
   Layers,
   ShieldAlert,
+  Sparkles,
   Users,
   X,
 } from 'lucide-react'
@@ -43,6 +45,11 @@ import { fetchRecentArtifactVersions, type ArtifactVersionSummary, type UserProf
 import './planner.css'
 
 interface Props {
+  /**
+   * UI-simplification §4.3: drawer is always-mounted, collapsed/expanded toggled
+   * by clicking the header. `open` retained for back-compat with CanvasToolbar
+   * but now treated as "expanded" — false collapses to a 44px header bar.
+   */
   open: boolean
   onClose: () => void
   canvasId: string
@@ -248,11 +255,27 @@ export function AIRecapDrawer({
     onClose()
   }
 
-  if (!open) return null
+  // UI-simplification §4.3: always-mounted, `open` now controls collapsed/expanded.
+  const collapsed = !open
+  const toggleCollapsed = () => {
+    if (collapsed) {
+      onClose()  // back-compat: toolbar still tracks via the same boolean
+    } else {
+      onClose()
+    }
+  }
 
   return (
-    <div className="ai-recap-drawer" role="dialog" aria-label={`AI recap for ${canvasName}`}>
-      <header className="ai-recap-drawer__header">
+    <div
+      className={`ai-recap-drawer${collapsed ? ' is-collapsed' : ''}`}
+      role="region"
+      aria-label={`AI recap for ${canvasName}`}
+    >
+      <header
+        className="ai-recap-drawer__header"
+        onClick={toggleCollapsed}
+        style={{ cursor: 'pointer' }}
+      >
         <div className="ai-recap-drawer__title">
           <strong>AI Recap</strong>
           <span>{canvasName}</span>
@@ -260,12 +283,27 @@ export function AIRecapDrawer({
         <button
           type="button"
           className="ai-recap-drawer__close"
-          aria-label="Close AI recap drawer"
-          onClick={onClose}
+          aria-label={collapsed ? 'Expand AI recap drawer' : 'Collapse AI recap drawer'}
+          onClick={(e) => { e.stopPropagation(); toggleCollapsed() }}
         >
-          <X size={14} aria-hidden />
+          {collapsed ? <ChevronDown size={14} aria-hidden /> : <X size={14} aria-hidden />}
         </button>
       </header>
+
+      {/* Canvas summary — BYOA LLM narrative refresh every 5 min(UI-simplification §4.3).
+       *  TODO server-side: /api/v1/canvas/:id/recap-summary endpoint(planner-runtime cron + cache).
+       *  Currently shows a derived placeholder; once endpoint lands the body comes from API. */}
+      {!collapsed && (
+        <section className="ai-recap-drawer__section ai-recap-drawer__summary">
+          <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <h3 style={{ margin: 0 }}><Sparkles size={12} aria-hidden /> Canvas summary</h3>
+            <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>refreshed — · 每 5 min · BYOA</span>
+          </header>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--text)', lineHeight: 1.6 }}>
+            {deriveSummaryPlaceholder(canvasName, plannerState)}
+          </p>
+        </section>
+      )}
 
       {/* ── Top: pinned event highlights ─────────────────────────────── */}
       <section className="ai-recap-drawer__section ai-recap-drawer__highlights">
@@ -624,4 +662,26 @@ function relativeTime(iso: string | null | undefined): string {
   const h = Math.floor(min / 60)
   if (h < 24) return `${h}h ago`
   return `${Math.floor(h / 24)}d ago`
+}
+
+/**
+ * Placeholder canvas summary while the backend recap-summary endpoint
+ * is being built (UI-simplification §4.3 Wave 2). Once
+ * `/api/v1/canvas/:id/recap-summary` lands, fetch the BYOA-generated
+ * narrative and feed it in instead.
+ */
+function deriveSummaryPlaceholder(
+  canvasName: string,
+  plannerState: PlannerGraphState | null,
+): string {
+  if (!plannerState || plannerState.nodes.length === 0) {
+    return `「${canvasName}」 还没有节点。开始聊点想法,agent 会出提议。`
+  }
+  const nodes = plannerState.nodes
+  const total = nodes.length
+  const done = nodes.filter((n) => n.status === 'done').length
+  const blocked = nodes.filter((n) => n.status === 'blocked').length
+  const working = nodes.filter((n) => n.status === 'working').length
+  return `「${canvasName}」 共 ${total} 节点 — ${done} 完成 · ${working} 运行中 · ${blocked} 卡住。` +
+    (blocked > 0 ? '建议优先解掉卡住的节点。' : working > 0 ? '等待运行中节点出新版本。' : '')
 }
