@@ -89,6 +89,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         flushPendingOutput()
         deactivateOutput()
         view.isHidden = true
+        view.removeFromSuperview()
     }
 
     func matches(surfaceId rawSurfaceId: String, sessionId rawSessionId: String?) -> Bool {
