@@ -32,6 +32,7 @@ Types are grouped by module. Each entry lists the **file path**, **purpose**, **
   - [ChannelDTO / MemberDTO](#channeldto--memberdto)
   - [MessageDTO](#messagedto)
   - [ErrorDTO + envelopes](#errordto--envelopes)
+  - [Node Contract v2](#node-contract-v2)
 
 ---
 
@@ -598,6 +599,68 @@ struct OkEnvelope       { ok: Bool }
 struct CardTemplateEnvelope  { template: CardTemplateStore.Entry }
 struct CardTemplatesEnvelope { templates: [CardTemplateStore.Entry] }
 ```
+
+---
+
+### Node Contract v2
+
+**File** `Sources/Board/PlannerCore.swift` (types: `NodeContractV2`, `NodeContractInput`, `NodeContractUpstreamInput`, `NodeContractExternalInput`, `NodeContractDialogueInput`, `NodeContractOutput`, `NodeContractExternalWriteTarget`; validator: `NodeContractValidator`).
+
+**Purpose** Versioned contract that describes how a planner node consumes input and produces output. Replaces the implicit v1 contract that derived a single upstream stream from `dependsOnNodeIds` and per-field mappings. The v2 block is embedded inside the existing `PlannerNodeContract` envelope (the response of `GET /api/planner/.../contract` and the MCP `read_node_contract` tool) as a top-level `v2` field, so v1 consumers keep working while v2 consumers (the runtime input merger, the version chain, sub-canvas assign, and the new UI) read `v2` directly.
+
+**Shape** (snake_case on the wire, camelCase in Swift / TS)
+
+```yaml
+version: 2
+input:
+  upstream:
+    mode: passthrough | item_scoped       # passthrough for workflow downchain;
+                                          # item_scoped for sub-canvas inheriting one list item
+    source_node: <node_id | null>          # null = canvas root entry
+  external:
+    - connector: <connector_id>            # e.g. "notion", "lark", "gmail" (free-form until INT-2)
+      ref: <opaque connector-specific ref> # e.g. "db://abc", "doc://xyz"
+      sync_session: <session_id | null>    # bound sync session (ENG-2 auto-creates if absent)
+  dialogue:
+    enabled: true
+    window:
+      kind: rolling
+      n_turns: 20
+output:
+  cardinality: single | list
+  payload_kind: artifact_ref | inline
+  external_write_target:                   # optional — declared write-back target
+    connector: <connector_id>
+    ref: <opaque>
+```
+
+**Design rules** (enforced by `NodeContractValidator`):
+
+- Output is **always full** — `submit_node_output` rejects any payload with `replace_strategy`, `output.kind: increment`, or `output_kind: increment`.
+- v1-style per-field mapping (`field_mapping`, `inputs[].source_field`, `inputs[].target_field`) is rejected.
+- Unknown `version` values throw `NodeContractValidationError.unknownContractVersion`. v1 contracts (no `version`) auto-migrate at read time via `NodeContractV2.derive(from:)`.
+
+**Auto-migration** from v1 fields on a `PlanningNode`:
+
+| v1 source | v2 target | Notes |
+|---|---|---|
+| `dependsOnNodeIds.first` | `input.upstream.source_node` | Extra deps emit a `MLog`-level warning — declare them as external inputs |
+| `nodeKind == .subCanvas` | `input.upstream.mode = item_scoped` | Else `passthrough` |
+| `contextSources[].reference` | `input.external[]` | Connector inferred from URI scheme (`notion://`, `https://github.com`, …); unknown schemes get `connector: "unknown"` and a warning |
+| `contextSources[kind == .chatHistory]` | dropped | The dialogue input subsumes chat history |
+| `nodeKind == .external` | `output.cardinality = list` | Else `single` |
+| _no v1 equivalent_ | `output.payload_kind = artifact_ref` | Default; explicit `inline` requires v2-native declaration |
+| _no v1 equivalent_ | `output.external_write_target = null` | Opt-in via v2-native declaration |
+
+Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every read — operators can grep `/tmp/meee2.log` for `NodeContractV2` to find lossy fixtures.
+
+**TypeScript mirror** lives at `packages/board-app/src/types.ts` (`NodeContractV2`, `NodeContractInput`, etc.). The board-app `fetchPlannerNodeContract` always returns the embedded `v2` field for new contracts.
+
+**Out of scope for ENG-1** (do not implement here):
+
+- Runtime input merging that actually consumes the three sources → ENG-2 E2.5.
+- Version chain that snapshots all three sources per submit → ENG-3.
+- Sub-canvas atomic assign that flips a node to `item_scoped` in-place → ENG-4.
 
 ---
 

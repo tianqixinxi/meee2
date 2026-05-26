@@ -329,6 +329,12 @@ export interface PlanningCanvas {
   plannerContext: string
   /** Visibility tier for the canvas. */
   visibility?: PlannerCanvasVisibility
+  /** ENG-4: parent canvas if this canvas is a sub-canvas (`null` for top-level). */
+  parentCanvasId?: string | null
+  /** ENG-4: id of the parent canvas's node that owns this sub-canvas. */
+  parentNodeId?: string | null
+  /** ENG-4: frozen Node Contract v2 snapshot, written at assign time. */
+  frozenIOContract?: NodeContractV2 | null
 }
 
 export interface NodeSchema {
@@ -363,7 +369,7 @@ export type PlanningNodeStatus = 'draft' | 'ready' | 'working' | 'blocked' | 'do
 export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'
-export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'gate-wait' | 'done' | 'failed'
+export type PlannerWorkflowRunState = 'pending' | 'ready_to_start' | 'dispatched' | 'running' | 'awaiting-input' | 'gate-wait' | 'done' | 'failed'
 export type PlannerDispatchRunner = 'claude' | 'codex' | 'byoa-local' | 'ci-agent' | 'human'
 export type PlannerArtifactKind =
   | 'idea-draft'
@@ -437,6 +443,38 @@ export interface PlannerArtifactContent {
   blobRef?: string | null
   content?: string | null
   payload?: unknown
+}
+
+// ENG-3 · Artifact version chain — every submit_node_output appends a new
+// version row keyed by (canvasId, nodeId, normalized reference). The desktop
+// exposes these through `/api/planner/canvases/:id/nodes/:nodeId/artifact-versions`
+// and `/api/planner/canvases/:id/artifact-versions/:versionId`. UI-1 consumes
+// them for the version dropdown.
+export type PlannerArtifactDisplayStrategy = 'latest' | 'merged_view'
+export type PlannerArtifactVersionSubmitterKind = 'agent' | 'human' | 'system' | 'integration'
+
+export interface PlannerArtifactInputSnapshot {
+  upstream_artifact_ref?: string | null
+  external_outputs?: unknown[]
+  dialogue_window?: unknown
+}
+
+export interface PlannerArtifactVersion {
+  version_id: string
+  parent_version_id?: string | null
+  canvas_id: string
+  node_id: string
+  artifact_id: string
+  artifact_slot_key: string
+  payload_ref: string
+  payload_inline?: unknown
+  input_snapshot?: PlannerArtifactInputSnapshot | null
+  display_strategy: PlannerArtifactDisplayStrategy
+  force_new_version: boolean
+  submitted_by?: string | null
+  submitted_by_kind: PlannerArtifactVersionSubmitterKind
+  metadata?: unknown
+  created_at: string
 }
 
 export interface KanbanArtifactPayload {
@@ -541,6 +579,68 @@ export interface PlannerNodeContract {
   inlinePayloadLimitBytes?: number
   artifactPayloadTypes?: PlannerArtifactPayloadType[]
   completionCriteria: string[]
+  /**
+   * Node Contract v2 (ENG-1). Three-source input合流 +
+   * cardinality/payload_kind output. Embedded alongside the v1 envelope so
+   * downstream consumers can migrate incrementally; the runtime always
+   * populates this for new contracts.
+   */
+  v2: NodeContractV2
+}
+
+/* ---------- Node Contract v2 (ENG-1) ---------- */
+
+export type NodeContractUpstreamMode = 'passthrough' | 'item_scoped'
+
+export interface NodeContractUpstreamInput {
+  mode: NodeContractUpstreamMode
+  /** Source node id; `null` means canvas root entry. */
+  source_node: string | null
+}
+
+export interface NodeContractExternalInput {
+  connector: string
+  ref: string
+  sync_session: string | null
+}
+
+export type NodeContractDialogueWindowKind = 'rolling'
+
+export interface NodeContractDialogueWindow {
+  kind: NodeContractDialogueWindowKind
+  n_turns: number
+}
+
+export interface NodeContractDialogueInput {
+  enabled: boolean
+  window: NodeContractDialogueWindow
+}
+
+export interface NodeContractInput {
+  upstream: NodeContractUpstreamInput
+  external: NodeContractExternalInput[]
+  dialogue: NodeContractDialogueInput
+}
+
+export type NodeContractCardinality = 'single' | 'list'
+export type NodeContractPayloadKind = 'artifact_ref' | 'inline'
+
+export interface NodeContractExternalWriteTarget {
+  connector: string
+  ref: string
+}
+
+export interface NodeContractOutput {
+  cardinality: NodeContractCardinality
+  payload_kind: NodeContractPayloadKind
+  external_write_target?: NodeContractExternalWriteTarget | null
+}
+
+export interface NodeContractV2 {
+  /** Contract schema version. Always `2` for the v2 shape. */
+  version: number
+  input: NodeContractInput
+  output: NodeContractOutput
 }
 
 export interface PlannerOutputRoute {
@@ -695,6 +795,19 @@ export interface PlannerCanvasState {
   events?: PlannerEvent[]
   artifacts?: PlannerArtifact[]
   edges?: PlannerGraphEdge[]
+  /**
+   * UI-2: Active assignments rooted in this canvas. Each row collapses the
+   * matching node to a sub-canvas ref chip in `PlannerGraph`.
+   */
+  nodeAssignments?: NodeAssignment[]
+  /**
+   * UI-2: Whether the calling user can mutate this canvas's internals
+   * (mirror of `meee2_can_edit_canvas_internals(canvas_id)`). Used to gate
+   * edit affordances on the parent canvas after the owner reassigned a node
+   * (the owner keeps SELECT but loses UPDATE on the sub-canvas; ENG-4 RLS
+   * is authoritative — this flag only suppresses the UI affordance).
+   */
+  canEditInternals?: boolean
 }
 
 export type PlannerGraphState = PlannerCanvasState & {
@@ -860,6 +973,49 @@ export interface SelectedCanvasElementContext {
 
 export interface ApiError {
   error: { code: string; message: string }
+}
+
+/**
+ * UI-2: Active assignment of a node to a person. When present, the node card
+ * collapses to a sub-canvas reference chip; the source node is no longer
+ * editable in-place by the parent canvas owner (ENG-4 RLS enforces this on
+ * the server). One active row per (sourceCanvasId, sourceNodeId).
+ */
+export interface NodeAssignment {
+  sourceCanvasId: string
+  sourceNodeId: string
+  assigneeUserId: string
+  subCanvasId: string
+  subCanvasName: string
+  /** Snapshot of the parent node's I/O contract — what the assignee owes back. */
+  frozenIOContract: NodeContractV2 | null
+  /** Billing team that pays for sub-canvas work (inherits from the parent). */
+  billingTeamId: string
+  /** Server-side count of session links re-bound to the new sub-canvas. */
+  sessionCountRebound?: number | null
+  assignedAt?: string | null
+}
+
+/** UI-2: Result of a successful assign call, mirrored from the ENG-4 event payload. */
+export interface AssignPlannerNodeResult {
+  assignment: NodeAssignment
+  /**
+   * Whether the source canvas was upgraded from `private` to `public` as part
+   * of this assign. UI-2 surfaces a different success toast when this happens.
+   */
+  visibilityUpgraded: boolean
+  graph: PlannerGraphState
+}
+
+/** UI-2: One sub-canvas the calling user owns (from `meee2_list_owned_canvases`). */
+export interface OwnedCanvasSummary {
+  id: string
+  teamId: string
+  name: string
+  parentCanvasId: string | null
+  parentNodeId: string | null
+  frozenIOContract: NodeContractV2 | null
+  updatedAt: string | null
 }
 
 // Selection state — what's picked on the board.

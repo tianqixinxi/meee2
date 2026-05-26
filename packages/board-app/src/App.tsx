@@ -10,13 +10,16 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
+import { ArtifactsView } from './components/ArtifactsView'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
-import { PreferencesDialog } from './components/PreferencesDialog'
+import { SettingsView } from './components/SettingsView'
+import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
+import { useI18n } from './lib/i18n'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
@@ -24,7 +27,6 @@ import type {
   Meee2AgentRuntimeStatus,
   SpawnProvider,
 } from './types'
-import { spawnProviderLabel } from './preferences'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
 import type {
   CanvasPersistence,
@@ -55,6 +57,9 @@ interface HydratedState {
 }
 
 const FALLBACK_CANVAS_ID = 'personal-default'
+const WORKSPACE_RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
+const FIRST_RUN_ONBOARDING_COMPLETED_KEY = 'meee2.onboarding.completed.v1'
+const BOARD_DEV_MODE = readBoardDevMode()
 // Minimum loading-overlay duration when an uncached canvas is hydrated.
 // Previously 3000ms — that made every fresh canvas switch feel sluggish even
 // when the real fetch returned in <100ms. 250ms is enough to smooth flicker
@@ -172,6 +177,7 @@ const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
 
 export default function App() {
+  const { t } = useI18n()
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
   const canvasListSignatureRef = useRef('')
   const applyCanvasList = useCallback((list: CanvasList) => {
@@ -225,7 +231,16 @@ export default function App() {
       })
   }, [applyCanvasList])
   const refreshCanvasesTimerRef = useRef<number | null>(null)
+  // U5.1 — auto-refresh on notification.
+  // bump this counter whenever a WS state.changed event arrives. Anything that
+  // renders the active canvas (PlannerGraph etc.) takes it as a prop and uses
+  // it as an effect dep to refetch its server state without a manual canvas
+  // switch.
+  const [activeCanvasRefreshTick, setActiveCanvasRefreshTick] = useState(0)
   const scheduleCanvasListRefresh = useCallback(() => {
+    // bump the per-canvas refresh tick immediately so consumers diff against
+    // the server in <1s of the notification (acceptance #1).
+    setActiveCanvasRefreshTick((value) => value + 1)
     if (refreshCanvasesTimerRef.current !== null) {
       window.clearTimeout(refreshCanvasesTimerRef.current)
     }
@@ -325,7 +340,9 @@ export default function App() {
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
-  const [preferencesOpen, setPreferencesOpen] = useState(false)
+  const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
+  const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
   const [agentRuntimeInstallTarget, setAgentRuntimeInstallTarget] = useState<'claude' | 'codex' | 'all' | null>(null)
@@ -406,16 +423,47 @@ export default function App() {
   const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
     fetchMeee2AgentRuntimeStatus()
       .then((status) => {
+        setAgentRuntimeInstallError(null)
         setAgentRuntimeStatus(status)
         if (showModal && status.needsAttention) setAgentRuntimeModalOpen(true)
       })
       .catch((err) => {
         console.warn('[App] fetchMeee2AgentRuntimeStatus failed:', (err as Error).message)
+        setAgentRuntimeStatus(null)
+        setAgentRuntimeInstallError((err as Error).message || 'Failed to check Meee2 Agent Runtime')
       })
   }, [])
 
   useEffect(() => {
-    refreshAgentRuntimeStatus(true)
+    refreshAgentRuntimeStatus(firstRunOnboardingCompletedAtMountRef.current)
+  }, [refreshAgentRuntimeStatus])
+
+  useEffect(() => {
+    const openSettings = () => setWorkspaceMode('settings')
+    window.addEventListener('meee2:open-settings', openSettings)
+    return () => window.removeEventListener('meee2:open-settings', openSettings)
+  }, [])
+
+  const completeFirstRunOnboarding = useCallback(() => {
+    setFirstRunOnboardingCompleted(true)
+    try {
+      window.localStorage.setItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY, '1')
+    } catch {
+      // Persistence is best-effort; entering the app should still work.
+    }
+  }, [])
+
+  const restartFirstRunOnboarding = useCallback(() => {
+    try {
+      window.localStorage.removeItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY)
+    } catch {
+      // Persistence is best-effort; the in-memory flag still reopens onboarding.
+    }
+    setAgentRuntimeInstallError(null)
+    setAgentRuntimeInstallLogs([])
+    setAgentRuntimeInstallTarget(null)
+    setFirstRunOnboardingCompleted(false)
+    refreshAgentRuntimeStatus(false)
   }, [refreshAgentRuntimeStatus])
 
   const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
@@ -427,7 +475,7 @@ export default function App() {
         setAgentRuntimeStatus(result.status)
         setAgentRuntimeInstallLogs(result.logs?.length ? result.logs : result.messages)
         if (result.ok) {
-          pushToast('success', 'Meee2 Agent Runtime is ready')
+          pushToast('success', t('toast.runtimeReady'))
           if (!result.status.needsAttention) setAgentRuntimeModalOpen(false)
         } else {
           const message = result.messages.find((item) => /failed|skipped/i.test(item))
@@ -441,7 +489,7 @@ export default function App() {
         setAgentRuntimeInstallLogs((current) => [...current, (err as Error).message || 'Failed to install Meee2 Agent Runtime'])
       })
       .finally(() => setAgentRuntimeInstallTarget(null))
-  }, [pushToast])
+  }, [pushToast, t])
 
   const handleOpenAgentRuntimeSetup = useCallback((_target?: SpawnProvider) => {
     refreshAgentRuntimeStatus(false)
@@ -579,6 +627,15 @@ export default function App() {
     if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
   }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
+  const handleWorkspaceRailCollapsedChange = useCallback((collapsed: boolean) => {
+    setWorkspaceRailCollapsed(collapsed)
+    try {
+      window.localStorage.setItem(WORKSPACE_RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
+    } catch {
+      // Persistence is nice-to-have; keep the in-memory state.
+    }
+  }, [])
+
   const refreshUserProfile = useCallback(() => {
     fetchUserProfile()
       .then(setUserProfile)
@@ -591,6 +648,30 @@ export default function App() {
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
 
+  if (!firstRunOnboardingCompleted) {
+    return (
+      <ToastContext.Provider value={toastCtx}>
+        <FirstRunOnboarding
+          status={agentRuntimeStatus}
+          installingTarget={agentRuntimeInstallTarget}
+          installError={agentRuntimeInstallError}
+          installLogs={agentRuntimeInstallLogs}
+          onInstall={handleInstallAgentRuntime}
+          onRefresh={() => refreshAgentRuntimeStatus(false)}
+          onComplete={completeFirstRunOnboarding}
+          onSkip={completeFirstRunOnboarding}
+        />
+        <div className="toasts">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast ${t.kind}`}>
+              {t.text}
+            </div>
+          ))}
+        </div>
+      </ToastContext.Provider>
+    )
+  }
+
   if (!hydrated || !canvasList) {
     return (
       <div className="app boot">
@@ -599,7 +680,6 @@ export default function App() {
     )
   }
 
-  const activeCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
   const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
   const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
@@ -617,8 +697,9 @@ export default function App() {
           mode={workspaceMode}
           unreadSids={unreadSids}
           userProfile={userProfile}
+          collapsed={workspaceRailCollapsed}
+          onCollapsedChange={handleWorkspaceRailCollapsedChange}
           onModeChange={handleWorkspaceModeChange}
-          onPreferences={() => setPreferencesOpen(true)}
         />
         <div className="board-area">
           {workspaceMode === 'planner' ? (
@@ -629,6 +710,7 @@ export default function App() {
               userProfile={userProfile}
               boardState={boardState.state}
               clearRevision={plannerClearRevision}
+              refreshTick={activeCanvasRefreshTick}
               onOpenSubCanvas={handleSetActiveCanvas}
               onNotify={pushToast}
             />
@@ -643,6 +725,15 @@ export default function App() {
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView state={boardState.state} unreadSids={unreadSids} />
+          ) : workspaceMode === 'artifacts' ? (
+            <ArtifactsView
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              onOpenCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView
               state={boardState.state}
@@ -652,10 +743,19 @@ export default function App() {
               }}
             />
           ) : workspaceMode === 'team' ? (
-            <TeamView
-              state={boardState.state}
-              activeCanvas={activeCanvas ?? null}
-              userProfile={userProfile}
+            <TeamView userProfile={userProfile} />
+          ) : workspaceMode === 'settings' ? (
+            <SettingsView
+              onSaved={() => {
+                refreshUserProfile()
+                refreshAgentRuntimeStatus(false)
+              }}
+              onToast={pushToast}
+              agentRuntimeStatus={agentRuntimeStatus}
+              onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
+              onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+              devMode={BOARD_DEV_MODE}
+              onRestartOnboarding={restartFirstRunOnboarding}
             />
           ) : (
             <WorkspaceMonitor />
@@ -673,12 +773,15 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
           {activeCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
-              <div className="canvas-global-loading__label">Switching canvas</div>
+              <div className="canvas-global-loading__label">{t('common.switchingCanvas')}</div>
             </div>
           )}
           {boardState.error && (
@@ -687,20 +790,6 @@ export default function App() {
             </div>
           )}
         </div>
-        {preferencesOpen && (
-          <PreferencesDialog
-            onClose={() => setPreferencesOpen(false)}
-            onSaved={(provider) => {
-              pushToast('success', `Default spawn provider: ${spawnProviderLabel(provider)}`)
-              refreshUserProfile()
-              refreshAgentRuntimeStatus(false)
-            }}
-            onToast={pushToast}
-            agentRuntimeStatus={agentRuntimeStatus}
-            onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
-            onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
-          />
-        )}
         {agentRuntimeModalOpen && agentRuntimeStatus && (
           <AgentRuntimeSetupModal
             status={agentRuntimeStatus}
@@ -721,4 +810,37 @@ export default function App() {
       </div>
     </ToastContext.Provider>
   )
+}
+
+function readWorkspaceRailCollapsed(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    const stored = window.localStorage.getItem(WORKSPACE_RAIL_COLLAPSED_KEY)
+    if (stored === '1') return true
+    if (stored === '0') return false
+    return window.matchMedia('(max-width: 720px)').matches
+  } catch {
+    return false
+  }
+}
+
+function readFirstRunOnboardingCompleted(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    return window.localStorage.getItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY) === '1'
+  } catch {
+    return true
+  }
+}
+
+function readBoardDevMode(): boolean {
+  if ((import.meta as { env?: { DEV?: boolean } }).env?.DEV === true) return true
+  if (typeof window === 'undefined') return false
+  try {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('devUpdate') === '1') return true
+    return window.localStorage.getItem('meee2.devUpdate') === '1'
+  } catch {
+    return false
+  }
 }

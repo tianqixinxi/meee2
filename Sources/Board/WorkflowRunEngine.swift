@@ -78,6 +78,8 @@ enum WorkflowRunEngine {
             return .confirmArtifacts
         case .gateWait:
             return .gateReview
+        case .awaitingInput:
+            return .needsAttention
         case .dispatched, .running:
             return .inProgress
         case .readyToStart:

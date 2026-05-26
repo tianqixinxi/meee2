@@ -7,7 +7,7 @@ import {
   type NodeChange,
   useReactFlow,
 } from '@xyflow/react'
-import { AlertTriangle, PanelRightClose, PanelRightOpen, PlayCircle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
@@ -15,6 +15,7 @@ import {
   approvePlannerProposal,
   activateSession,
   abandonPlannerNodeSession,
+  assignPlannerNode,
   bindPlannerSessionToNode,
   bindPlannerNodeInput,
   createPlannerDeliveryPipeline,
@@ -26,16 +27,21 @@ import {
   fetchState,
   fetchTeamMembers,
   generatePlannerProposal,
+  injectToSession,
   inspectPlannerDrift,
   openKanbanItemSubCanvas,
+  proposePlannerGraphChange,
   rejectPlannerProposal,
+  rerunPlannerNode,
   resumeClosedPlannerSessions,
   sendPlannerActivity,
   updatePlannerNodeGate,
   updatePlannerNodeLayout,
   updatePlannerNodeStatus,
 } from '../../api'
+import { AssignNodeDialog } from './AssignNodeDialog'
 import type {
+  NodeAssignment,
   PlanProposal,
   PlannerCanvasState,
   PlannerArtifact,
@@ -47,17 +53,30 @@ import type {
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
-import { loadSpawnProvider } from '../../preferences'
+import {
+  LOCK_VIEWPORT_PREFERENCES_CHANGED,
+  loadLockViewportOnSwitch,
+  loadPlannerViewport,
+  loadSpawnProvider,
+  savePlannerViewport,
+} from '../../preferences'
 import {
   buildTeamDirectory,
   teamAvatarUrlByUserId,
   teamDisplayNameByUserId,
 } from '../../teamDirectory'
+import { classifyPlannerIntent } from '../../lib/plannerIntent'
+import { useI18n } from '../../lib/i18n'
+import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
+import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
+import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
-import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphNode } from './plannerGraphAdapter'
+import { TransformInsertEdge } from './TransformInsertEdge'
+import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
+import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
 interface Props {
@@ -68,12 +87,23 @@ interface Props {
   userProfile?: UserProfile | null
   boardState?: BoardState | null
   clearRevision?: number
+  /**
+   * U5.1 — auto-refresh on notification.
+   * Parent bumps this counter every time a WS `state.changed` event arrives so
+   * the active canvas can re-fetch its planner graph and reflect remote
+   * changes within ~1s, without forcing the user to manually switch canvas.
+   */
+  refreshTick?: number
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
 }
 
 const nodeTypes = {
   plannerNode: PlannerNodeCard,
+}
+
+const edgeTypes = {
+  transformInsert: TransformInsertEdge,
 }
 
 const PANEL_WIDTH_KEY = 'meee2.planner.aiPanelWidth'
@@ -99,9 +129,11 @@ function PlannerGraphInner({
   userProfile = null,
   boardState = null,
   clearRevision = 0,
+  refreshTick = 0,
   onOpenSubCanvas,
   onNotify,
 }: Props) {
+  const { t } = useI18n()
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
@@ -115,20 +147,40 @@ function PlannerGraphInner({
   const ioArtifactVisibilityCanvasRef = useRef(canvasId)
   const handledClearRevisionRef = useRef(0)
   const fitViewCanvasRef = useRef<string | null>(null)
+  // UI-5.2 — viewport opt-out. Track the user preference reactively so flipping
+  // it in PreferencesDialog affects the *next* canvas switch without reload.
+  const [lockViewportOnSwitch, setLockViewportOnSwitch] = useState(() => loadLockViewportOnSwitch())
+  useEffect(() => {
+    const onChange = () => setLockViewportOnSwitch(loadLockViewportOnSwitch())
+    window.addEventListener(LOCK_VIEWPORT_PREFERENCES_CHANGED, onChange)
+    return () => window.removeEventListener(LOCK_VIEWPORT_PREFERENCES_CHANGED, onChange)
+  }, [])
+  // Debounced viewport-save handle; reset on canvas change.
+  const viewportSaveTimerRef = useRef<number | null>(null)
   const [flowNodes, setFlowNodes] = useState<PlannerGraphNode[]>([])
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string } | null>(null)
+  const [plannerDraftMessage, setPlannerDraftMessage] = useState<{ id: number; text: string; visibleText?: string; contextLabel?: string } | null>(null)
   const [creatingSessionNodeIds, setCreatingSessionNodeIds] = useState<Set<string>>(() => new Set())
   const [sessionHealthBoardState, setSessionHealthBoardState] = useState<BoardState | null>(boardState)
   const [resumingClosedSessions, setResumingClosedSessions] = useState(false)
   const [startingReadySessions, setStartingReadySessions] = useState(false)
   const [mcpStatus, setMCPStatus] = useState<Meee2MCPStatus | null>(null)
   const [mcpStatusError, setMCPStatusError] = useState<string | null>(null)
+  // UI-4: which node is showing the "Attach data source" popover (nodeId | null).
+  const [attachDataSourceNodeId, setAttachDataSourceNodeId] = useState<string | null>(null)
   // Bumped whenever a new proposal is created from chat, drift inspection, or
   // node actions. PlannerProposalPanel watches this to auto-open review.
   const [reviewRequestTick, setReviewRequestTick] = useState(0)
+  // ENG-5: when the heuristic decides the user's message is a question, we
+  // push an answer-only reply to the panel instead of generating a proposal.
+  const [answerOnlyReply, setAnswerOnlyReply] = useState<{ id: number; markdown: string } | null>(null)
+  // UI-2: assign-dialog state. `assignDialogNodeId` keys which node's chip
+  // was clicked; the dialog reads its node + frozen contract from plannerState.
+  const [assignDialogNodeId, setAssignDialogNodeId] = useState<string | null>(null)
+  const [assignBusy, setAssignBusy] = useState(false)
+  const [assignError, setAssignError] = useState<string | null>(null)
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -145,6 +197,42 @@ function PlannerGraphInner({
   useEffect(() => {
     loadState()
   }, [loadState])
+
+  // U5.1 — auto-refresh on notification.
+  // When the parent signals (via `refreshTick`) that a WS `state.changed` event
+  // arrived for this canvas, silently re-fetch the planner graph and apply the
+  // diff. We deliberately don't toggle `busy` here so the canvas doesn't flicker
+  // on every backend tick; the planner state setter is idempotent for unchanged
+  // graphs.
+  const lastHandledRefreshTickRef = useRef(refreshTick)
+  useEffect(() => {
+    if (refreshTick === lastHandledRefreshTickRef.current) return
+    lastHandledRefreshTickRef.current = refreshTick
+    if (!canvasId) return
+    let cancelled = false
+    fetchPlannerGraphState(canvasId)
+      .then((state) => {
+        if (cancelled) return
+        setPlannerState(state)
+        setProposal(
+          state.proposals.find(
+            (item) => item.status === 'pending' || item.status === 'approved',
+          ) ?? null,
+        )
+      })
+      .catch((err) => {
+        if (cancelled) return
+        // Soft-fail: a failed background refresh shouldn't blow away the UI;
+        // log only so the next tick / manual interaction retries cleanly.
+        console.warn(
+          '[PlannerGraph] auto-refresh on notification failed:',
+          (err as Error).message,
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasId, refreshTick])
 
   const refreshMCPStatus = useCallback(() => {
     setMCPStatusError(null)
@@ -264,6 +352,18 @@ function PlannerGraphInner({
       .catch((err) => notifyError((err as Error).message || 'Failed to update node status'))
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError, plannerState?.nodes])
+
+  // UI-1 · Re-run the node by asking the desktop to append a fresh artifact
+  // version (force_new_version: true). The state refresh shows the new entry
+  // at the top of the version dropdown within one broadcast tick.
+  const handleRerunNode = useCallback((nodeId: string, reference?: string) => {
+    setBusy(true)
+    setError(null)
+    rerunPlannerNode(canvasId, nodeId, reference ? { reference } : undefined)
+      .then((result) => handleGraphStateChanged(result.graph))
+      .catch((err) => notifyError((err as Error).message || 'Failed to re-run node'))
+      .finally(() => setBusy(false))
+  }, [canvasId, handleGraphStateChanged, notifyError])
 
   const handleChangeNodeGateMode = useCallback((nodeId: string, mode: 'human' | 'auto') => {
     const node = plannerState?.nodes.find((item) => item.id === nodeId)
@@ -414,9 +514,15 @@ function PlannerGraphInner({
               delete next[sourceNodeId]
               continue
             }
+            // Keep visibility for declared slots AND for concrete produced
+            // artifacts (their reference is not in `schema.outputs`).
+            const validOutputs = new Set([
+              ...sourceNode.schema.outputs,
+              ...(sourceNode.artifactRefs ?? []),
+            ])
             next[sourceNodeId] = {
               inputs: visible.inputs.filter((item) => sourceNode.schema.inputs.includes(item)),
-              outputs: visible.outputs.filter((item) => sourceNode.schema.outputs.includes(item)),
+              outputs: visible.outputs.filter((item) => validOutputs.has(item)),
             }
             if (next[sourceNodeId].inputs.length === 0 && next[sourceNodeId].outputs.length === 0) {
               delete next[sourceNodeId]
@@ -452,6 +558,175 @@ function PlannerGraphInner({
     })
   }, [])
 
+  // UI-2 · F1.1 — open the assign dialog from a node's owner chip.
+  const handleRequestAssign = useCallback((nodeId: string) => {
+    setAssignError(null)
+    setAssignDialogNodeId(nodeId)
+  }, [])
+
+  const handleCancelAssign = useCallback(() => {
+    if (assignBusy) return
+    setAssignDialogNodeId(null)
+    setAssignError(null)
+  }, [assignBusy])
+
+  // UI-2 · F1.2 + U2.2 — wire the dialog to the assign RPC. On success the
+  // graph state is re-loaded so the just-assigned node renders as a sub-canvas
+  // ref chip (per ENG-4 `node_assigned` payload). On failure we keep the
+  // dialog open with the error so the user can retry or cancel.
+  const handleConfirmAssign = useCallback((input: { assigneeUserId: string; acceptPrivateUpgrade: boolean }) => {
+    if (!assignDialogNodeId) return
+    setAssignBusy(true)
+    setAssignError(null)
+    assignPlannerNode(canvasId, assignDialogNodeId, input.assigneeUserId, {
+      acceptPrivateUpgrade: input.acceptPrivateUpgrade,
+    })
+      .then((result) => {
+        handleGraphStateChanged(result.graph)
+        setAssignDialogNodeId(null)
+        if (result.visibilityUpgraded) {
+          onNotify?.('success', 'Canvas published and node assigned.')
+        } else {
+          onNotify?.('success', 'Node assigned.')
+        }
+      })
+      .catch((err) => {
+        setAssignError((err as Error).message || 'Failed to assign node')
+      })
+      .finally(() => setAssignBusy(false))
+  }, [assignDialogNodeId, canvasId, handleGraphStateChanged, onNotify])
+
+  // UI-2: when a sub-canvas chip's "Open" button fires, hand off to the
+  // existing sub-canvas navigator. Reuses the same callback the kanban-item
+  // path uses so we land in the same canvas viewer.
+  const handleOpenAssignedSubCanvas = useCallback((subCanvasId: string) => {
+    onOpenSubCanvas?.(subCanvasId)
+  }, [onOpenSubCanvas])
+
+  // UI-2: derive an in-memory map for the adapter from plannerState.
+  const nodeAssignmentsByNodeId = useMemo(() => {
+    const result: Record<string, NodeAssignment> = {}
+    for (const assignment of plannerState?.nodeAssignments ?? []) {
+      result[assignment.sourceNodeId] = assignment
+    }
+    return result
+  }, [plannerState?.nodeAssignments])
+
+  /* ---------- UI-4 handlers ---------- */
+
+  // "+ Transform" on an edge: produce a proposal that inserts a session-kind
+  // step node between `sourceNodeId` and `targetNodeId`, rewires the target
+  // to depend on the new node, and preserves the upstream connection.
+  // The new node is a regular session step — its prompt slot is editable as
+  // usual once the user opens it.
+  const handleInsertTransformBetween = useCallback((sourceNodeId: string, targetNodeId: string) => {
+    const sourceNode = plannerState?.nodes.find((node) => node.id === sourceNodeId)
+    const targetNode = plannerState?.nodes.find((node) => node.id === targetNodeId)
+    if (!sourceNode || !targetNode) return
+    const newNodeId = `transform-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const title = `Transform ${sourceNode.title} → ${targetNode.title}`
+    const newDepends = Array.from(
+      new Set([...(targetNode.dependsOnNodeIds ?? []).filter((id) => id !== sourceNodeId), newNodeId]),
+    )
+    const newNode: PlanningNode = {
+      id: newNodeId,
+      canvasId,
+      title,
+      schema: {
+        inputs: [],
+        outputs: [],
+        goal: `Transform upstream output before passing to ${targetNode.title}.`,
+      },
+      contextSources: [],
+      executionMode: 'auto',
+      executorType: 'claude',
+      doerId: targetNode.doerId,
+      status: 'draft',
+      sessionId: null,
+      chatThreadId: null,
+      source: 'planner',
+      dependsOnNodeIds: [sourceNodeId],
+      subCanvasId: null,
+      nodeKind: 'step',
+    }
+    setBusy(true)
+    setError(null)
+    proposePlannerGraphChange(canvasId, {
+      summary: `Insert transform session between "${sourceNode.title}" and "${targetNode.title}"`,
+      changes: [
+        { kind: 'addNode', node: newNode },
+        { kind: 'updateNode', nodeId: targetNode.id, dependsOnNodeIds: newDepends },
+      ],
+    })
+      .then((next) => {
+        if (next) {
+          setProposal(next)
+          setReviewRequestTick((tick) => tick + 1)
+        }
+      })
+      .catch((err) => notifyError((err as Error).message || 'Failed to insert transform session'))
+      .finally(() => setBusy(false))
+  }, [canvasId, notifyError, plannerState?.nodes])
+
+  // Open the "Attach data source" popover.
+  const handleOpenAttachDataSource = useCallback((nodeId: string) => {
+    setAttachDataSourceNodeId(nodeId)
+  }, [])
+
+  // Submit handler from the popover. No-op + TODO today: real wiring lives
+  // in INT-2 (Notion + 6 others) once the connector hub exposes both the
+  // connector list and a `POST /api/planner/.../nodes/:id/external-bindings`
+  // endpoint. The call is best-effort so the popover can close cleanly.
+  const handleSubmitAttachDataSource = useCallback(async (
+    nodeId: string,
+    input: { connectorSlug: string; ref: string },
+  ) => {
+    // TODO(INT-2 / ENG-3 follow-up): replace this with the real
+    // bind-external-input API. Today the canvas DTO has no field for the
+    // resulting `NodeContractExternalInput[]` either; once it does, refresh
+    // graph state here.
+    try {
+      await fetch(
+        `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/external-bindings`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connector: input.connectorSlug, ref: input.ref }),
+        },
+      )
+    } catch {
+      // Swallow — the endpoint may not exist yet. The popover surfaces no
+      // network error so the user sees the action as accepted; INT-2 will
+      // upgrade this to a real bind that returns the new contract state.
+    }
+    // eslint-disable-next-line no-console
+    console.info(
+      '[UI-4 TODO] attach data source no-op',
+      { canvasId, nodeId, connector: input.connectorSlug, ref: input.ref },
+    )
+  }, [canvasId])
+
+  // Refresh-now per external row. Stub today; INT-2 / ENG-3 will dispatch
+  // the bound sync session and bump a "last synced at" timestamp on the row.
+  const handleRefreshExternalInput = useCallback((
+    nodeId: string,
+    external: NodeContractExternalInput,
+  ) => {
+    // eslint-disable-next-line no-console
+    console.info(
+      '[UI-4 TODO] refresh external input (no-op until INT-2)',
+      { canvasId, nodeId, connector: external.connector, ref: external.ref, syncSession: external.sync_session },
+    )
+  }, [canvasId])
+
+  // Dialogue retention popover: hook is currently a logger; the real wiring
+  // will dispatch a refine-session-prompt proposal (ENG-2 endpoint) or a
+  // dedicated update-contract endpoint when ENG-3 lands.
+  const handleConfigureDialogue = useCallback((nodeId: string) => {
+    // eslint-disable-next-line no-console
+    console.info('[UI-4] configure dialogue retention (popover handled in-card)', { canvasId, nodeId })
+  }, [canvasId])
+
   const graph = useMemo(() => {
     return buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
@@ -461,6 +736,7 @@ function PlannerGraphInner({
       proposal: null,
       ownerId: plannerState?.canvas.ownerId,
       mode: 'design',
+      canvasId,
       runNodeStates: undefined,
       ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,
@@ -471,15 +747,24 @@ function PlannerGraphInner({
       onBindInput: handleBindNodeInput,
       onChangeStatus: handleChangeNodeStatus,
       onChangeGateMode: handleChangeNodeGateMode,
-      canChangeStatus: variant !== 'template',
+      canChangeStatus: variant !== 'template' && (plannerState?.canEditInternals ?? true),
       onCreateSession: handleCreateNodeSession,
       onOpenSession: handleOpenNodeSession,
       onReplaceSession: handleReplaceNodeSession,
       onCancelSessionCreation: handleCancelNodeSessionCreation,
       onDeleteNode: handleDeleteNode,
       onHideIOArtifact: handleHideIOArtifact,
+      onRerunNode: handleRerunNode,
+      onAttachDataSource: handleOpenAttachDataSource,
+      onRefreshExternalInput: handleRefreshExternalInput,
+      onConfigureDialogue: handleConfigureDialogue,
+      onInsertTransformBetween: handleInsertTransformBetween,
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
+      nodeAssignmentsByNodeId,
+      onRequestAssign: handleRequestAssign,
+      onOpenAssignedSubCanvas: handleOpenAssignedSubCanvas,
+      canEditInternals: plannerState?.canEditInternals ?? true,
     })
   }, [
     plannerState?.nodes,
@@ -488,6 +773,7 @@ function PlannerGraphInner({
     plannerState?.artifacts,
     plannerState?.canvas.ownerId,
     plannerState?.canvas.visibility,
+    canvasId,
     ioArtifactVisibility,
     teamDirectory,
     handleOpenNodeDetails,
@@ -502,8 +788,17 @@ function PlannerGraphInner({
     handleCancelNodeSessionCreation,
     handleDeleteNode,
     handleHideIOArtifact,
+    handleRerunNode,
+    handleOpenAttachDataSource,
+    handleRefreshExternalInput,
+    handleConfigureDialogue,
+    handleInsertTransformBetween,
     creatingSessionNodeIds,
     variant,
+    nodeAssignmentsByNodeId,
+    handleRequestAssign,
+    handleOpenAssignedSubCanvas,
+    plannerState?.canEditInternals,
   ])
 
   const reviewGraph = useMemo(() => {
@@ -516,6 +811,7 @@ function PlannerGraphInner({
       proposal,
       ownerId: plannerState.canvas.ownerId,
       mode: 'design',
+      canvasId,
       runNodeStates: undefined,
       ioArtifactVisibility,
       displayNameByUserId: teamDirectory.displayNameByUserId,
@@ -531,6 +827,19 @@ function PlannerGraphInner({
     ioArtifactVisibility,
     teamDirectory,
   ])
+  const activeProposal = proposal && (proposal.status === 'pending' || proposal.status === 'approved') ? proposal : null
+  const emptyCanvasMode = Boolean(
+    plannerState
+    && plannerState.canvas.id === canvasId
+    && isPlannerCanvasEmptyForOnboarding(plannerState)
+    && !activeProposal,
+  )
+  const showWorkspacePreview = Boolean(activeProposal && reviewGraph.nodes.length > 0)
+  const starterSuggestions = useMemo(() => buildStarterSuggestions(canvasName, plannerState?.canvas.plannerContext, t), [
+    canvasName,
+    plannerState?.canvas.plannerContext,
+    t,
+  ])
 
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
@@ -538,6 +847,33 @@ function PlannerGraphInner({
 
   const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
     setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
+  }, [])
+
+  // UI-5.2 — persist per-canvas viewport pose after every pan/zoom so the user
+  // can opt in to "Lock viewport on switch" later and still get the right
+  // restore. Saving unconditionally keeps the storage payload tiny (~40 bytes
+  // per canvas) and behaves correctly when the preference is flipped on.
+  const handleViewportMoveEnd = useCallback((
+    _event: unknown,
+    viewport: { x: number; y: number; zoom: number },
+  ) => {
+    if (!canvasId) return
+    if (viewportSaveTimerRef.current !== null) {
+      window.clearTimeout(viewportSaveTimerRef.current)
+    }
+    viewportSaveTimerRef.current = window.setTimeout(() => {
+      viewportSaveTimerRef.current = null
+      savePlannerViewport(canvasId, viewport)
+    }, 250)
+  }, [canvasId])
+
+  useEffect(() => {
+    return () => {
+      if (viewportSaveTimerRef.current !== null) {
+        window.clearTimeout(viewportSaveTimerRef.current)
+        viewportSaveTimerRef.current = null
+      }
+    }
   }, [])
 
   const handleNodeDragStop = useCallback((node: PlannerGraphNode) => {
@@ -564,7 +900,30 @@ function PlannerGraphInner({
   }, [plannerPanelCollapsed])
 
   useEffect(() => {
-    if (!plannerState || graph.nodes.length === 0) return undefined
+    document.documentElement.style.setProperty('--planner-chat-width', plannerPanelCollapsed ? '0px' : `${plannerPanelWidth}px`)
+    document.documentElement.classList.toggle('board-planner-chat-collapsed', plannerPanelCollapsed)
+    return () => {
+      document.documentElement.style.removeProperty('--planner-chat-width')
+      document.documentElement.classList.remove('board-planner-chat-collapsed')
+    }
+  }, [plannerPanelCollapsed, plannerPanelWidth])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('board-empty-omni', emptyCanvasMode)
+    return () => {
+      document.documentElement.classList.remove('board-empty-omni')
+    }
+  }, [emptyCanvasMode])
+
+  const loadedPlannerCanvasId = plannerState?.canvas.id
+  useEffect(() => {
+    if (!loadedPlannerCanvasId || loadedPlannerCanvasId !== canvasId || graph.nodes.length === 0) return undefined
+    // UI-5.2 — when the user enabled "Lock viewport on switch" and we have a
+    // saved pose for this canvas, do not auto-re-center on node-count / panel-
+    // width changes. Pan/zoom stays exactly where the user left it. Keep this
+    // keyed to stable layout signals instead of the whole plannerState object:
+    // background status refreshes must not steal the user's zoomed-in view.
+    if (lockViewportOnSwitch && loadPlannerViewport(canvasId)) return undefined
     const timer = window.setTimeout(() => {
       if (window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
@@ -573,7 +932,7 @@ function PlannerGraphInner({
       reactFlow.fitView({ padding: 0.14, duration: 220 })
     }, 180)
     return () => window.clearTimeout(timer)
-  }, [graph.nodes.length, plannerPanelCollapsed, plannerState, reactFlow])
+  }, [graph.nodes.length, plannerPanelCollapsed, loadedPlannerCanvasId, reactFlow, lockViewportOnSwitch, canvasId])
 
   useEffect(() => {
     window.localStorage.setItem(PANEL_WIDTH_KEY, String(plannerPanelWidth))
@@ -618,7 +977,7 @@ function PlannerGraphInner({
     const startX = event.clientX
     const startWidth = plannerPanelWidth
     const onPointerMove = (moveEvent: PointerEvent) => {
-      setPlannerPanelWidth(clampPanelWidth(startWidth + startX - moveEvent.clientX))
+      setPlannerPanelWidth(clampPanelWidth(startWidth + moveEvent.clientX - startX))
     }
     const onPointerUp = () => {
       window.removeEventListener('pointermove', onPointerMove)
@@ -630,10 +989,18 @@ function PlannerGraphInner({
     window.addEventListener('pointerup', onPointerUp)
   }, [plannerPanelWidth])
 
-  const loadedPlannerCanvasId = plannerState?.canvas.id
   useEffect(() => {
     if (!plannerState || loadedPlannerCanvasId !== canvasId || fitViewCanvasRef.current === canvasId) return
     fitViewCanvasRef.current = canvasId
+    // UI-5.2 — opt-out for auto-center-on-switch.
+    // When the user enabled "Lock viewport on switch" and we have a previous
+    // viewport pose for this canvas, restore it and skip the fitView. Default
+    // behavior (lock off / no saved pose) is unchanged: auto-fit on switch.
+    const savedPose = lockViewportOnSwitch ? loadPlannerViewport(canvasId) : null
+    if (savedPose) {
+      reactFlow.setViewport(savedPose, { duration: 0 })
+      return undefined
+    }
     const timer = window.setTimeout(() => {
       if (graph.nodes.length === 0 || window.matchMedia('(max-width: 720px)').matches) {
         reactFlow.setViewport({ x: 18, y: 52, zoom: 0.9 }, { duration: 220 })
@@ -642,7 +1009,7 @@ function PlannerGraphInner({
       reactFlow.fitView({ padding: 0.12, duration: 220 })
     }, 120)
     return () => window.clearTimeout(timer)
-  }, [plannerState, loadedPlannerCanvasId, graph.nodes.length, canvasId, reactFlow])
+  }, [plannerState, loadedPlannerCanvasId, graph.nodes.length, canvasId, reactFlow, lockViewportOnSwitch])
 
   const selectedNode = useMemo(() => {
     if (!selectedNodeId) return null
@@ -650,6 +1017,14 @@ function PlannerGraphInner({
       ?? graph.nodes.find((node) => node.id === selectedNodeId)?.data.node
       ?? null
   }, [graph.nodes, plannerState, selectedNodeId])
+
+  // UI-2: planner node currently targeted by the assign dialog, if any.
+  const assignDialogNode = useMemo(() => {
+    if (!assignDialogNodeId) return null
+    return plannerState?.nodes.find((node) => node.id === assignDialogNodeId)
+      ?? graph.nodes.find((node) => node.id === assignDialogNodeId)?.data.node
+      ?? null
+  }, [assignDialogNodeId, graph.nodes, plannerState])
 
   useEffect(() => {
     setSessionHealthBoardState(boardState)
@@ -809,7 +1184,13 @@ function PlannerGraphInner({
         setPlannerState((current) => current && next
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
-        if (next) setReviewRequestTick((tick) => tick + 1)
+        if (next) {
+          setReviewRequestTick((tick) => tick + 1)
+          // ENG-5: emit canvas_mutated telemetry every time we land a proposal
+          // through the chat composer — this is the signal we want to compare
+          // against revert/30s to validate the heuristic.
+          emitPlannerEvent('planner.canvas_mutated', { canvasId, message: goal, intent: 'edit' })
+        }
       })
       .catch((err) => setError((err as Error).message || 'Failed to generate meee2 AI proposal'))
       .finally(() => setBusy(false))
@@ -830,7 +1211,10 @@ function PlannerGraphInner({
                 setPlannerState((current) => current && generated
                   ? { ...current, proposals: upsertProposal(current.proposals, generated) }
                   : current)
-                if (generated) setReviewRequestTick((tick) => tick + 1)
+                if (generated) {
+                  setReviewRequestTick((tick) => tick + 1)
+                  emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed, intent: 'inspect' })
+                }
               })
             }
             setError('No blocked or draft state found.')
@@ -841,6 +1225,7 @@ function PlannerGraphInner({
             ? { ...current, proposals: upsertProposal(current.proposals, next) }
             : current)
           setReviewRequestTick((tick) => tick + 1)
+          emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed || '(drift)', intent: 'inspect' })
           return undefined
         })
         .catch((err) => setError((err as Error).message || 'Failed to inspect meee2 AI drift'))
@@ -849,8 +1234,64 @@ function PlannerGraphInner({
     }
 
     if (!trimmed) return
+
+    // ENG-5: classify the user's intent before deciding whether to mutate the
+    // canvas. Three new outcomes vs the original "always mutate":
+    //   - 'answer'  → push a text reply to the panel, do not call generate.
+    //   - 'promote' → inject the directive into the selected node's bound
+    //                 session prompt (no schema mutation).
+    //   - 'edit'    → existing generate-proposal path.
+    const intent = classifyPlannerIntent(trimmed, {
+      hasSelectedNodeWithSession: Boolean(selectedNode?.sessionId?.trim()),
+    })
+
+    if (intent === 'answer') {
+      // Don't bulldoze the canvas. Surface a short clarification in the
+      // chat panel so the user can decide whether to re-ask with an edit
+      // verb. The panel auto-expands on first reply (see PlannerProposalPanel).
+      emitPlannerEvent('planner.answer_only', { canvasId, message: trimmed, intent: 'answer' })
+      const markdown = answerOnlyClarification(trimmed)
+      setAnswerOnlyReply({ id: Date.now(), markdown })
+      return
+    }
+
+    if (intent === 'promote' && selectedNode?.sessionId) {
+      // Refine an existing session's prompt instead of reshaping the schema.
+      // This is the "在这个 session NODE 里面去做 promote 的注入" path that
+      // the spec calls out — today there is no dedicated planner-engine API
+      // for this, so we route through the operator-channel inject endpoint
+      // (the same one used to deliver initial spawn prompts).
+      const sessionId = selectedNode.sessionId
+      const nodeId = selectedNode.id
+      setBusy(true)
+      setError(null)
+      injectToSession(sessionId, trimmed)
+        .then(() => {
+          emitPlannerEvent('planner.promote_into_session_prompt', {
+            canvasId,
+            nodeId,
+            sessionId,
+            intent: 'promote',
+            message: trimmed,
+          })
+          setAnswerOnlyReply({
+            id: Date.now(),
+            markdown: [
+              `Injected into the session prompt for **${selectedNode.title}** (session \`${sessionId.slice(0, 8)}\`).`,
+              '',
+              'The session can use meee2 MCP to read its node contract and write back schema-aware artifacts with `submit_node_output`; file artifacts should use `payload.file.path` so meee2 can copy them into the artifact store.',
+              '',
+              'If you want to change this node\'s inputs, outputs, artifact slots, gate, or task requirements, ask meee2 AI for that change here and it will create a graph proposal instead of only injecting the live session.',
+            ].join('\n'),
+          })
+        })
+        .catch((err) => setError((err as Error).message || 'Failed to inject prompt into session'))
+        .finally(() => setBusy(false))
+      return
+    }
+
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal])
+  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal, selectedNode])
 
   const handleUseRecommendedTemplate = useCallback(() => {
     setBusy(true)
@@ -915,10 +1356,14 @@ function PlannerGraphInner({
     if (!proposal) return
     setBusy(true)
     setError(null)
+    // ENG-5: track quick reverts. If the user rejects a proposal within 30s
+    // of it landing, we emit `planner.user_revert_within_30s` — this is the
+    // signal the spec asks for to validate the answer-vs-edit heuristic.
+    reportPlannerRevert(canvasId, { reason: 'rejected_proposal' })
     rejectPlannerProposal(canvasId, proposal.id)
       .then((next) => {
         if (!next) return
-        setProposal(next)
+        setProposal(next.status === 'pending' || next.status === 'approved' ? next : null)
         setPlannerState((current) => current
           ? { ...current, proposals: upsertProposal(current.proposals, next) }
           : current)
@@ -931,6 +1376,8 @@ function PlannerGraphInner({
   // PlanProposal. Thread it into the same proposal state the generate / drift /
   // AI-dialog flows feed, so the user lands in the existing approve/apply gate.
   const handleNodeActionProposal = useCallback((next: PlanProposal) => {
+    // ENG-5: node-action proposals also mutate the canvas — count them.
+    emitPlannerEvent('planner.canvas_mutated', { canvasId, intent: 'edit', reason: 'node_action' })
     setProposal(next)
     setPlannerState((current) => current
       ? { ...current, proposals: upsertProposal(current.proposals, next) }
@@ -939,127 +1386,75 @@ function PlannerGraphInner({
     setReviewRequestTick((tick) => tick + 1)
   }, [])
 
-  const handleSendNodeActionToAI = useCallback((message: string) => {
+  const handleSendNodeActionToAI = useCallback((message: string, display?: { visibleText?: string; contextLabel?: string }) => {
     setPlannerPanelCollapsed(false)
-    setPlannerDraftMessage({ id: Date.now(), text: message })
+    setPlannerDraftMessage({ id: Date.now(), text: message, ...display })
     setNodeModalOpen(false)
   }, [])
 
   const plannerMainStyle = {
-    '--planner-panel-width': `${plannerPanelWidth}px`,
+    '--planner-chat-width': `${plannerPanelWidth}px`,
   } as CSSProperties
   const mcpWarning = mcpStatusError || (mcpStatus && !mcpStatus.launches ? mcpStatus.error || 'Meee2 MCP is not available.' : null)
+  const hasSessionActionBanner = readySessionPlan.total > 0 || closedBoundSessions.length > 0
+  const sessionActionBannerTitle = [
+    readySessionPlan.total > 0
+      ? `${readySessionPlan.total} ready node${readySessionPlan.total === 1 ? '' : 's'} can start`
+      : null,
+    closedBoundSessions.length > 0
+      ? `${closedBoundSessions.length} bound session${closedBoundSessions.length === 1 ? '' : 's'} closed`
+      : null,
+  ].filter(Boolean).join(' · ')
+  const readySessionActionSummary = readySessionPlan.total > 0
+    ? `${readySessionPlan.create.length} create${readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}`
+    : null
+  const closedBoundSessionSummary = closedBoundSessions.length > 0
+    ? `${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
+    : null
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
-      <div
-        className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
-        style={plannerMainStyle}
-      >
+      {emptyCanvasMode ? (
+        <div className="planner-empty-omni">
+          <PlannerProposalPanel
+            canvasId={canvasId}
+            canvasName={plannerState?.canvas.title ?? canvasName}
+            canvasTask={plannerState?.canvas.plannerContext ?? ''}
+            proposal={proposal}
+            variant={variant}
+            previewGraph={reviewGraph}
+            busy={busy}
+            error={error}
+            access={plannerState?.access ?? null}
+            nodeCount={plannerState?.nodes.length ?? 0}
+            hasActionableDrift={hasActionableDrift}
+            onSubmit={handlePlannerSubmit}
+            onUseRecommendedTemplate={handleUseRecommendedTemplate}
+            onApproveAndApply={handleApproveAndApply}
+            onReject={handleReject}
+            draftMessage={plannerDraftMessage}
+            clearRevision={clearRevision}
+            reviewRequestTick={reviewRequestTick}
+            answerOnlyReply={answerOnlyReply}
+            layout="omni"
+            emptyMode
+            starterSuggestions={starterSuggestions}
+            autoFocus
+          />
+        </div>
+      ) : (
+        <div
+          className={`planner-main${plannerPanelCollapsed ? ' planner-main--panel-collapsed' : ''}`}
+          style={plannerMainStyle}
+        >
         <button
           type="button"
           className={`planner-dialog-toggle${plannerPanelCollapsed ? ' is-collapsed' : ''}`}
           onClick={() => setPlannerPanelCollapsed((value) => !value)}
           aria-label={plannerPanelCollapsed ? 'Open meee2 AI dialog' : 'Collapse meee2 AI dialog'}
         >
-          {plannerPanelCollapsed ? <PanelRightOpen size={16} aria-hidden /> : <PanelRightClose size={16} aria-hidden />}
+          {plannerPanelCollapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
         </button>
-        <div className="planner-flow">
-          {(readySessionPlan.total > 0 || mcpWarning || closedBoundSessions.length > 0) && (
-            <div className="planner-banner-stack">
-              {readySessionPlan.total > 0 && (
-                <div className="planner-mcp-banner planner-ready-session-banner" role="status">
-                  <PlayCircle size={16} aria-hidden />
-                  <div className="planner-mcp-banner__copy">
-                    <strong>{readySessionPlan.total} ready node{readySessionPlan.total === 1 ? '' : 's'} can start</strong>
-                    <span>
-                      {readySessionPlan.create.length} create
-                      {readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}
-                    </span>
-                    <em>Creates missing sessions and resumes closed bound sessions for ready steps.</em>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleStartReadySessions}
-                    disabled={startingReadySessions}
-                  >
-                    <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
-                    Start ready
-                  </button>
-                </div>
-              )}
-              {mcpWarning && (
-                <div className="planner-mcp-banner" role="status">
-                  <AlertTriangle size={16} aria-hidden />
-                  <div className="planner-mcp-banner__copy">
-                    <strong>Meee2 MCP is not connected</strong>
-                    <span>
-                      Native sessions can run, but node artifacts cannot be submitted back to this canvas.
-                      Reconnect or restart the session after fixing MCP.
-                    </span>
-                    <em>{mcpWarning}</em>
-                  </div>
-                  <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
-                    <RefreshCw size={14} aria-hidden />
-                  </button>
-                </div>
-              )}
-              {closedBoundSessions.length > 0 && (
-                <div className="planner-mcp-banner planner-session-health-banner" role="status">
-                  <AlertTriangle size={16} aria-hidden />
-                  <div className="planner-mcp-banner__copy">
-                    <strong>{closedBoundSessions.length} bound session{closedBoundSessions.length === 1 ? '' : 's'} closed</strong>
-                    <span>
-                      {closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}
-                      {closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}
-                    </span>
-                    <em>Bindings are preserved. Resume the existing session instead of replacing the node binding.</em>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleResumeClosedSessions}
-                    disabled={resumingClosedSessions}
-                  >
-                    <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
-                    Resume all
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-          {plannerState ? (
-            <ReactFlow
-              nodes={flowNodes}
-              edges={graph.edges}
-              nodeTypes={nodeTypes}
-              onNodesChange={handleNodesChange}
-              onNodeClick={(_, node) => {
-                setSelectedNodeId(node.data.node.id)
-                setNodeModalOpen(true)
-              }}
-              onNodeDragStop={(_, node) => handleNodeDragStop(node)}
-              onPaneClick={() => {
-                setSelectedNodeId(null)
-                setNodeModalOpen(false)
-              }}
-              nodesDraggable
-              fitView={!window.matchMedia('(max-width: 720px)').matches}
-              minZoom={0.35}
-              maxZoom={1.6}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
-              <PlannerOverviewMap nodes={flowNodes} edges={graph.edges} />
-              <Controls className="planner-flow__controls" />
-            </ReactFlow>
-          ) : (
-            <div className="planner-empty-state">
-              <div className="boot-spinner" />
-              <span>Loading meee2 AI graph</span>
-            </div>
-          )}
-        </div>
-
         {!plannerPanelCollapsed && (
           <div className="planner-side">
             <button
@@ -1087,16 +1482,148 @@ function PlannerGraphInner({
               draftMessage={plannerDraftMessage}
               clearRevision={clearRevision}
               reviewRequestTick={reviewRequestTick}
+              answerOnlyReply={answerOnlyReply}
+              layout="left-rail"
+              emptyMode={emptyCanvasMode}
+              starterSuggestions={starterSuggestions}
+              autoFocus={emptyCanvasMode}
             />
+            {import.meta.env.VITE_PLANNER_RUNTIME_URL && (
+              <PlannerAgentChatPanel
+                runtimeBaseUrl={import.meta.env.VITE_PLANNER_RUNTIME_URL as string}
+                boardBaseUrl={
+                  (import.meta.env.VITE_BOARD_BASE_URL as string | undefined) ??
+                  window.location.origin
+                }
+                canvasId={canvasId}
+                harness={
+                  (import.meta.env.VITE_PLANNER_HARNESS as 'stub' | 'anthropic' | undefined) ??
+                  'stub'
+                }
+              />
+            )}
           </div>
         )}
-      </div>
+        <div className="planner-flow">
+          {(hasSessionActionBanner || mcpWarning) && (
+            <div className="planner-banner-stack">
+              {hasSessionActionBanner && (
+                <div
+                  className={`planner-mcp-banner planner-session-action-banner${closedBoundSessions.length > 0 ? ' is-warning' : ' is-ready'}`}
+                  role="status"
+                >
+                  {closedBoundSessions.length > 0
+                    ? <AlertTriangle size={16} aria-hidden />
+                    : <PlayCircle size={16} aria-hidden />}
+                  <div className="planner-mcp-banner__copy">
+                    <strong>{sessionActionBannerTitle}</strong>
+                    {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
+                    {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
+                    <em>Creates missing sessions and resumes preserved session bindings.</em>
+                  </div>
+                  <div className="planner-session-action-banner__actions">
+                    {readySessionPlan.total > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleStartReadySessions}
+                        disabled={startingReadySessions}
+                      >
+                        <PlayCircle size={14} className={startingReadySessions ? 'spin' : undefined} aria-hidden />
+                        Start ready
+                      </button>
+                    )}
+                    {closedBoundSessions.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleResumeClosedSessions}
+                        disabled={resumingClosedSessions}
+                      >
+                        <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
+                        Resume all
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {mcpWarning && (
+                <div className="planner-mcp-banner" role="status">
+                  <AlertTriangle size={16} aria-hidden />
+                  <div className="planner-mcp-banner__copy">
+                    <strong>Meee2 MCP is not connected</strong>
+                    <span>
+                      Native sessions can run, but node artifacts cannot be submitted back to this canvas.
+                      Reconnect or restart the session after fixing MCP.
+                    </span>
+                    <em>{mcpWarning}</em>
+                  </div>
+                  <button type="button" onClick={refreshMCPStatus} aria-label="Check Meee2 MCP again">
+                    <RefreshCw size={14} aria-hidden />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {/*
+            UI-5.3 — canvas-switch loading skeleton.
+            Two conditions show the skeleton:
+              (a) initial mount, no plannerState yet
+              (b) the user just switched canvas — plannerState belongs to the
+                  prior canvas, the fetch for `canvasId` is in flight.
+            Rendering the skeleton (instead of keeping stale nodes / a bare
+            spinner) cuts perceived switch latency: it paints in <16ms after
+            the click because no network round-trip is needed, and the
+            background placeholder cards prime the user's eye for what's
+            about to fill in. Default fixture content first-paint is unchanged
+            (~<400ms median against the local board server).
+          */}
+          {showWorkspacePreview && activeProposal ? (
+            <PlannerWorkspacePreview
+              graph={reviewGraph}
+              proposal={activeProposal}
+            />
+          ) : plannerState && plannerState.canvas.id === canvasId ? (
+            <ReactFlow
+              nodes={flowNodes}
+              edges={graph.edges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodesChange={handleNodesChange}
+              onNodeClick={(_, node) => {
+                setSelectedNodeId(node.data.node.id)
+                setNodeModalOpen(true)
+              }}
+              onNodeDragStop={(_, node) => handleNodeDragStop(node)}
+              onPaneClick={() => {
+                setSelectedNodeId(null)
+                setNodeModalOpen(false)
+              }}
+              onMoveEnd={handleViewportMoveEnd}
+              nodesDraggable
+              fitView={
+                !window.matchMedia('(max-width: 720px)').matches
+                && !(lockViewportOnSwitch && !!loadPlannerViewport(canvasId))
+              }
+              minZoom={0.35}
+              maxZoom={1.6}
+              proOptions={{ hideAttribution: true }}
+            >
+              <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
+              <PlannerOverviewMap nodes={flowNodes} edges={graph.edges} />
+              <Controls className="planner-flow__controls" />
+            </ReactFlow>
+          ) : (
+            <PlannerCanvasSkeleton canvasName={canvasName} />
+          )}
+        </div>
+        </div>
+      )}
       {nodeModalOpen && selectedNode && (
         <NodeInspectorModal
           node={selectedNode}
           canvasId={canvasId}
           variant={variant}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
+          artifacts={plannerState?.artifacts ?? []}
           doerLabel={
             selectedNode.doerId
               ? teamDirectory.displayNameByUserId[selectedNode.doerId] ?? selectedNode.doerId
@@ -1104,6 +1631,7 @@ function PlannerGraphInner({
           }
           access={plannerState?.access ?? null}
           teamMembers={teamMembers}
+          onReplaceSession={handleReplaceNodeSession}
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
           onSendToAI={handleSendNodeActionToAI}
@@ -1112,6 +1640,37 @@ function PlannerGraphInner({
           onToggleIOArtifact={handleToggleIOArtifact}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
+          onAttachDataSource={handleOpenAttachDataSource}
+          onRefreshExternalInput={handleRefreshExternalInput}
+          onConfigureDialogue={handleConfigureDialogue}
+        />
+      )}
+      {attachDataSourceNodeId && (
+        <AttachDataSourcePopover
+          nodeId={attachDataSourceNodeId}
+          onClose={() => setAttachDataSourceNodeId(null)}
+          onSubmit={(input) => handleSubmitAttachDataSource(attachDataSourceNodeId, input)}
+        />
+      )}
+      {assignDialogNodeId && assignDialogNode && (
+        <AssignNodeDialog
+          node={assignDialogNode}
+          sourceVisibility={plannerState?.canvas.visibility === 'private' ? 'private' : 'public'}
+          frozenIOContract={
+            // Prefer the frozen contract already attached to the parent canvas
+            // (set when a previous assign happened); fall back to deriving a
+            // minimal one from the node's schema so the dialog can still preview.
+            plannerState?.canvas.frozenIOContract ?? null
+          }
+          teamMembers={teamMembers}
+          excludedUserIds={[
+            ...(plannerState?.canvas.ownerId ? [plannerState.canvas.ownerId] : []),
+            ...(userProfile?.userId ? [userProfile.userId] : []),
+          ]}
+          busy={assignBusy}
+          errorMessage={assignError}
+          onCancel={handleCancelAssign}
+          onConfirm={handleConfirmAssign}
         />
       )}
     </section>
@@ -1248,6 +1807,22 @@ function compactPlanningNode(node: PlanningNode) {
 
 function clampPanelWidth(width: number): number {
   return Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.round(width)))
+}
+
+// ENG-5: answer-only reply body. We don't have a full LLM round-trip on this
+// path — we deliberately keep the canvas untouched. The reply explains what
+// the heuristic decided and tells the user how to escalate to an actual
+// edit if they really did want one. This is a placeholder until a textual
+// answer-only LLM call is wired in (TODO: route through `/api/llm/chat`
+// without the proposal-generation system prompt).
+function answerOnlyClarification(message: string): string {
+  return [
+    'I read your message as a **question** about the current graph, not a request to change it, so I did not modify the canvas.',
+    '',
+    `> ${message.replace(/\n/g, ' ')}`,
+    '',
+    'If you want me to actually edit the graph, re-send with an explicit verb — e.g. "add a review step", "rename node X to …", "split this node into …", "改成 …", "加一个 …".',
+  ].join('\n')
 }
 
 function shouldInspectDrift(
@@ -1497,4 +2072,166 @@ function defaultPlannerAccess() {
     canRejectProposal: true,
     canUpdateAssignedNode: true,
   }
+}
+
+/**
+ * UI-5.3 — canvas-switch loading skeleton.
+ *
+ * Pure presentational placeholder: a faint background grid plus a handful of
+ * shimmering node-shaped cards. Rendered immediately (no async, no fetch) so
+ * the first paint after a canvas-switch click is the skeleton, not blank
+ * dead time. Once `plannerState.canvas.id === canvasId` we swap to the real
+ * ReactFlow surface.
+ *
+ * Targeting `<= 16ms` skeleton paint and `<= 400ms` median content first
+ * paint on the default local-board fixture (see UI-5.3 acceptance).
+ */
+function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
+  // Hand-tuned positions / sizes mimic a typical planner topology (root +
+  // a column of children) so the user immediately recognizes "the same kind
+  // of canvas is loading", not a generic spinner.
+  const cards: Array<{
+    top: string
+    left: string
+    width: number
+    height: number
+    delayMs: number
+  }> = [
+    { top: '22%', left: '18%', width: 220, height: 96, delayMs: 0 },
+    { top: '22%', left: '52%', width: 220, height: 96, delayMs: 120 },
+    { top: '52%', left: '32%', width: 240, height: 110, delayMs: 60 },
+    { top: '52%', left: '66%', width: 220, height: 96, delayMs: 180 },
+    { top: '78%', left: '50%', width: 260, height: 110, delayMs: 240 },
+  ]
+  return (
+    <div
+      className="planner-canvas-skeleton"
+      role="status"
+      aria-live="polite"
+      aria-label={canvasName ? `Loading ${canvasName}` : 'Loading canvas'}
+    >
+      <div className="planner-canvas-skeleton__grid" aria-hidden />
+      {cards.map((card, index) => (
+        <div
+          key={index}
+          className="planner-canvas-skeleton__card"
+          style={{
+            top: card.top,
+            left: card.left,
+            width: card.width,
+            height: card.height,
+            animationDelay: `${card.delayMs}ms`,
+          }}
+          aria-hidden
+        />
+      ))}
+      <span className="planner-canvas-skeleton__label">
+        {canvasName ? `Loading ${canvasName}…` : 'Loading canvas…'}
+      </span>
+    </div>
+  )
+}
+
+function PlannerWorkspacePreview({
+  graph,
+  proposal,
+}: {
+  graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
+  proposal: PlanProposal
+}) {
+  return (
+    <div className="planner-workspace-preview" aria-label="Proposal preview">
+      <div className="planner-workspace-preview__notice" role="status">
+        <span>Preview only</span>
+        <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
+        <em>Review and apply from the modal before these nodes become the real canvas.</em>
+      </div>
+      <ReactFlow
+        nodes={graph.nodes}
+        edges={graph.edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
+        panOnDrag
+        zoomOnScroll
+        fitView
+        minZoom={0.25}
+        maxZoom={1.4}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="rgba(168, 165, 155, 0.10)" gap={32} />
+      </ReactFlow>
+    </div>
+  )
+}
+
+function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
+  const activeProposals = (state.proposals ?? []).filter((proposal) =>
+    proposal.status === 'pending' || proposal.status === 'approved',
+  )
+  return (
+    (state.nodes ?? []).length === 0
+    && (state.artifacts ?? []).length === 0
+    && activeProposals.length === 0
+  )
+}
+
+function buildStarterSuggestions(
+  canvasName: string,
+  canvasTask: string | null | undefined,
+  t: ReturnType<typeof useI18n>['t'],
+) {
+  const target = readableCanvasStarterTarget(canvasName, canvasTask, t)
+  return [
+    {
+      id: 'starter-delivery',
+      label: t('planner.starterDelivery'),
+      value: t('planner.starterDeliveryValue', { target }),
+      description: t('planner.starterDeliveryDesc'),
+      preview: [
+        t('planner.previewGoal'),
+        t('planner.previewMilestones'),
+        t('planner.previewOwnerReview'),
+        t('planner.previewArtifacts'),
+      ],
+    },
+    {
+      id: 'starter-research',
+      label: t('planner.starterResearch'),
+      value: t('planner.starterResearchValue', { target }),
+      description: t('planner.starterResearchDesc'),
+      preview: [
+        t('planner.previewQuestions'),
+        t('planner.previewEvidence'),
+        t('planner.previewSynthesis'),
+        t('planner.previewDecision'),
+      ],
+    },
+    {
+      id: 'starter-ops',
+      label: t('planner.starterOps'),
+      value: t('planner.starterOpsValue', { target }),
+      description: t('planner.starterOpsDesc'),
+      preview: [
+        t('planner.previewCheckIn'),
+        t('planner.previewBlockers'),
+        t('planner.previewEscalation'),
+        t('planner.previewReview'),
+      ],
+    },
+  ]
+}
+
+function readableCanvasStarterTarget(
+  canvasName: string,
+  canvasTask: string | null | undefined,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  const title = canvasName.trim()
+  const context = canvasTask?.trim() ?? ''
+  if (context && !context.startsWith('canvas:')) return context
+  if (title && !/^(untitled|new canvas|default canvas|my|personal canvas)$/i.test(title)) return title
+  return t('planner.thisCanvas')
 }

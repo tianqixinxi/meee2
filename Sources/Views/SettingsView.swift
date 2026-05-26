@@ -82,7 +82,7 @@ public struct SettingsView: View {
 
     /// Machine ID (auto-generated)
     private var meee2MachineId: String {
-        Host.current().name ?? "unknown"
+        Meee2Identity.machineId
     }
 
     /// Session Key (per session, not stored)
@@ -576,7 +576,7 @@ public struct SettingsView: View {
                 "defaultSyncEnabled": meee2Online,
                 "enabledSessionIds": Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")),
                 "disabledSessionIds": Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")),
-                "machineId": Host.current().name ?? "unknown",
+                "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
         ]

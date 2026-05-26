@@ -5,8 +5,12 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   fetchLocalAssistantSessionMessages,
+  streamAssistantChat,
+  type AssistantMessage,
   type LocalAssistantSessionMessage,
 } from '../../api'
+import { useI18n } from '../../lib/i18n'
+import { readLlmSettings } from '../../lib/llmSettings'
 import type { PlanProposal, PlannerAccess } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
@@ -27,11 +31,19 @@ interface Props {
   onUseRecommendedTemplate?: () => void
   onApproveAndApply: () => void
   onReject: () => void
-  draftMessage?: { id: number; text: string } | null
+  draftMessage?: PlannerDraftMessage | null
   clearRevision?: number
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
   reviewRequestTick?: number
+  /** ENG-5: incremented when a planner turn produces an answer-only reply
+   *  (no canvas mutation). Adds the reply to history and force-expands it
+   *  so the user sees the textual answer instead of an empty turn. */
+  answerOnlyReply?: { id: number; markdown: string } | null
+  layout?: 'side' | 'left-rail' | 'omni'
+  emptyMode?: boolean
+  starterSuggestions?: PlannerChatChoice[]
+  autoFocus?: boolean
 }
 
 const reviewNodeTypes = {
@@ -43,7 +55,47 @@ interface PlannerChatMessage {
   role: 'user' | 'planner' | 'injected'
   markdown: string
   meta?: string[]
+  planCard?: PlannerPlanCard
 }
+
+interface PlannerDraftMessage {
+  id: number
+  text: string
+  visibleText?: string
+  contextLabel?: string
+}
+
+interface PlannerChatChoice {
+  id: string
+  label: string
+  value: string
+  description?: string
+  preview?: string[]
+}
+
+interface PlannerChatChoiceGroup {
+  id: string
+  question?: string
+  choices: PlannerChatChoice[]
+}
+
+interface PlannerPlanCardStep {
+  title: string
+  body: string
+}
+
+interface PlannerPlanCard {
+  title: string
+  intro: string
+  steps: PlannerPlanCardStep[]
+  prompt: string
+}
+
+const PERSISTED_CHAT_LIMIT = 30
+const SESSION_SYNC_LIMIT = 12
+const VISIBLE_HISTORY_LIMIT = 12
+const COLLAPSE_LINE_LIMIT = 8
+const COLLAPSE_CHAR_LIMIT = 900
 
 export function PlannerProposalPanel({
   canvasId,
@@ -64,24 +116,59 @@ export function PlannerProposalPanel({
   draftMessage = null,
   clearRevision = 0,
   reviewRequestTick,
+  answerOnlyReply = null,
+  layout = 'side',
+  emptyMode = false,
+  starterSuggestions = [],
+  autoFocus = false,
 }: Props) {
+  const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const emptyIntakeAbortRef = useRef<AbortController | null>(null)
   const handledClearRevisionRef = useRef(0)
+  const handledAnswerOnlyIdRef = useRef(0)
+  // ENG-5: first-Q&A auto-expand. We flip historyOpen=true the first time a
+  // planner reply (proposal OR answer-only) lands following a user message,
+  // so the textual answer doesn't stay buried in a collapsed panel — which
+  // is the exact bug benjamin reported in the 2026-05-22 meeting.
+  const autoExpandedRef = useRef(false)
   const [message, setMessage] = useState('')
-  const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
+  const isEmptyOmniIntake = emptyMode && layout === 'omni' && !proposal
+  const [history, setHistory] = useState<PlannerChatMessage[]>(() => isEmptyOmniIntake ? [] : readChatHistory(canvasId))
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [emptyIntakeError, setEmptyIntakeError] = useState<string | null>(null)
+  const [draftContext, setDraftContext] = useState<{ text: string; label: string } | null>(null)
   const isTemplate = variant === 'template'
 
-  useEffect(() => {
-    setHistory(readChatHistory(canvasId))
-    setHistoryOpen(false)
-  }, [canvasId])
+  function abortEmptyIntakeRequest() {
+    if (!emptyIntakeAbortRef.current) return
+    emptyIntakeAbortRef.current.abort()
+    emptyIntakeAbortRef.current = null
+  }
 
   useEffect(() => {
+    abortEmptyIntakeRequest()
+    if (isEmptyOmniIntake) {
+      clearChatHistory(canvasId)
+      setHistory([])
+      setEmptyIntakeError(null)
+    } else {
+      setHistory(readChatHistory(canvasId))
+    }
+    setHistoryOpen(false)
+    autoExpandedRef.current = false
+  }, [canvasId, isEmptyOmniIntake])
+
+  useEffect(() => {
+    return () => abortEmptyIntakeRequest()
+  }, [])
+
+  useEffect(() => {
+    if (isEmptyOmniIntake) return
     let cancelled = false
-    fetchLocalAssistantSessionMessages(canvasId)
+    fetchLocalAssistantSessionMessages(canvasId, SESSION_SYNC_LIMIT)
       .then(({ sessionId, messages }) => {
         if (cancelled) return
         setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
@@ -92,12 +179,13 @@ export function PlannerProposalPanel({
     return () => {
       cancelled = true
     }
-  }, [canvasId])
+  }, [canvasId, isEmptyOmniIntake])
 
   useEffect(() => {
+    if (isEmptyOmniIntake) return
     if (busy) return
     let cancelled = false
-    fetchLocalAssistantSessionMessages(canvasId)
+    fetchLocalAssistantSessionMessages(canvasId, SESSION_SYNC_LIMIT)
       .then(({ sessionId, messages }) => {
         if (cancelled) return
         setHistory((current) => mergeClaudeSessionMessages(current, sessionId, messages))
@@ -108,11 +196,12 @@ export function PlannerProposalPanel({
     return () => {
       cancelled = true
     }
-  }, [busy, canvasId])
+  }, [busy, canvasId, isEmptyOmniIntake])
 
   useEffect(() => {
+    if (emptyMode && layout === 'omni') return
     writeChatHistory(canvasId, history)
-  }, [canvasId, history])
+  }, [canvasId, emptyMode, history, layout])
 
   useEffect(() => {
     if (clearRevision <= 0) return
@@ -122,6 +211,8 @@ export function PlannerProposalPanel({
     setHistory([])
     setReviewOpen(false)
     setThinking(false)
+    setEmptyIntakeError(null)
+    abortEmptyIntakeRequest()
   }, [canvasId, clearRevision])
 
   useEffect(() => {
@@ -136,8 +227,42 @@ export function PlannerProposalPanel({
         `${proposal.changes.length} ${proposal.changes.length === 1 ? 'change' : 'changes'}`,
       ].filter(Boolean),
     }
-    setHistory((current) => upsertChatMessage(current, nextMessage))
+    setHistory((current) => {
+      const next = upsertChatMessage(current, nextMessage)
+      // ENG-5: first-Q&A auto-expand. If the user has anything in history
+      // (i.e. they just asked something), open the panel so they see the
+      // answer alongside the canvas mutation summary.
+      if (!autoExpandedRef.current && next.some((item) => item.role === 'user')) {
+        autoExpandedRef.current = true
+        setHistoryOpen(true)
+      }
+      return next
+    })
   }, [proposal])
+
+  // ENG-5: answer-only path. PlannerGraph hands us a markdown string when it
+  // decides the user's message was a question that does not warrant a canvas
+  // mutation. We add it to history and force-expand the panel on first reply.
+  useEffect(() => {
+    if (!answerOnlyReply) return
+    if (handledAnswerOnlyIdRef.current === answerOnlyReply.id) return
+    handledAnswerOnlyIdRef.current = answerOnlyReply.id
+    setThinking(false)
+    const nextMessage: PlannerChatMessage = {
+      id: `answer:${answerOnlyReply.id}`,
+      role: 'planner',
+      markdown: answerOnlyReply.markdown,
+      meta: ['answer'],
+    }
+    setHistory((current) => {
+      const next = upsertChatMessage(current, nextMessage)
+      if (!autoExpandedRef.current && next.some((item) => item.role === 'user')) {
+        autoExpandedRef.current = true
+        setHistoryOpen(true)
+      }
+      return next
+    })
+  }, [answerOnlyReply])
 
   useEffect(() => {
     if (error) setThinking(false)
@@ -147,48 +272,125 @@ export function PlannerProposalPanel({
     if (!busy) setThinking(false)
   }, [busy])
 
-  // A node action just produced a proposal — surface it immediately.
+  // A new proposal just arrived from chat, drift inspection, or a node action.
+  // Surface the review gate in every layout so the preview cannot be mistaken
+  // for already-applied canvas state.
   useEffect(() => {
+    if (!proposal || proposal.status === 'applied' || proposal.status === 'rejected') return
     if (reviewRequestTick && reviewRequestTick > 0) setReviewOpen(true)
-  }, [reviewRequestTick])
+  }, [proposal, reviewRequestTick])
+
+  useEffect(() => {
+    if (!autoFocus) return
+    window.requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [autoFocus, canvasId])
 
   useEffect(() => {
     if (!draftMessage) return
-    setMessage(draftMessage.text)
+    const visibleText = draftMessage.visibleText ?? draftMessage.text
+    setMessage(visibleText)
+    setDraftContext(draftMessage.visibleText
+      ? { text: draftMessage.text, label: draftMessage.contextLabel ?? 'Selected node' }
+      : null)
     window.requestAnimationFrame(() => textareaRef.current?.focus())
   }, [draftMessage])
 
   const canCreateProposal = access?.canCreateProposal ?? true
-  const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && canCreateProposal
+  const showOmniConversation = isEmptyOmniIntake && history.length > 0
+  const canSend = (message.trim().length > 0 || hasActionableDrift) && !busy && !thinking && canCreateProposal
   const templateRecommendation = recommendTemplate(canvasName, canvasTask, nodeCount, variant)
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
+  const visibleHistory = history.slice(-VISIBLE_HISTORY_LIMIT)
+  const hiddenHistoryCount = Math.max(0, history.length - visibleHistory.length)
+  const placeholder = emptyMode
+    ? t('planner.emptyPlaceholder')
+    : hasActionableDrift
+      ? t('planner.driftPlaceholder')
+      : t('planner.adjustPlaceholder')
   const submitMessage = () => {
     if (!canSend) return
     const next = message.trim()
-    const displayMessage = next || 'Inspect the current graph drift.'
+    const displayMessage = next || t('planner.inspectDrift')
+    const outboundMessage = draftContext
+      ? `${draftContext.text}\n\nUser request: ${displayMessage}`
+      : next
+    if (isEmptyOmniIntake) {
+      submitEmptyIntakeTurn(displayMessage)
+      setMessage('')
+      setDraftContext(null)
+      return
+    }
     setHistory((current) => [
       ...current,
       {
         id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
         role: 'user',
         markdown: displayMessage,
+        meta: draftContext ? [draftContext.label] : undefined,
       },
     ])
     setThinking(true)
-    onSubmit(next)
+    onSubmit(outboundMessage)
     setMessage('')
+    setDraftContext(null)
+  }
+
+  const submitEmptyIntakeTurn = (displayMessage: string) => {
+    if (!displayMessage.trim()) return
+    const userMessage: PlannerChatMessage = {
+      id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      role: 'user',
+      markdown: displayMessage,
+      meta: draftContext ? [draftContext.label] : undefined,
+    }
+    const nextHistory = [...history, userMessage]
+    setHistory(nextHistory)
+    setEmptyIntakeError(null)
+    setThinking(true)
+    abortEmptyIntakeRequest()
+    const controller = new AbortController()
+    emptyIntakeAbortRef.current = controller
+    requestEmptyCanvasAIReply({
+      canvasId,
+      canvasName,
+      canvasTask,
+      history: nextHistory,
+      signal: controller.signal,
+    })
+      .then((reply) => {
+        if (controller.signal.aborted) return
+        setHistory((current) => [...current, reply])
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return
+        setEmptyIntakeError((err as Error).message || t('planner.continueError'))
+      })
+      .finally(() => {
+        if (emptyIntakeAbortRef.current === controller) {
+          emptyIntakeAbortRef.current = null
+        }
+        if (!controller.signal.aborted) setThinking(false)
+      })
+  }
+
+  const buildConfirmedPlan = (prompt: string) => {
+    if (!prompt.trim() || busy || thinking || !canCreateProposal) return
+    setThinking(true)
+    onSubmit(prompt)
   }
 
   return (
-    <aside className="planner-proposal-panel">
+    <aside className={`planner-proposal-panel planner-proposal-panel--${layout}${emptyMode ? ' is-empty-mode' : ''}${showOmniConversation ? ' has-omni-conversation' : ''}`}>
       <div className="planner-dialog">
         <div className="planner-dialog__messages">
-          <WorkflowGuide
-            proposal={proposal}
-            nodeCount={nodeCount}
-            hasActionableDrift={hasActionableDrift}
-          />
-          {templateRecommendation && !proposal && (
+          {emptyMode && !proposal && !showOmniConversation && (
+            <div className="planner-dialog__onboarding" role="note">
+              <span>meee2 AI</span>
+              <strong>{t('planner.emptyTitle')}</strong>
+              <p>{t('planner.emptySubtitle')}</p>
+            </div>
+          )}
+          {templateRecommendation && !proposal && !(emptyMode && layout === 'omni') && (
             <RecommendedTemplate
               recommendation={templateRecommendation}
               busy={busy}
@@ -196,8 +398,60 @@ export function PlannerProposalPanel({
               onUse={onUseRecommendedTemplate}
             />
           )}
-          {error && <div className="planner-dialog__message planner-dialog__message--error">{error}</div>}
-          {history.length > 0 && (
+          {emptyMode && layout !== 'omni' && starterSuggestions.length > 0 && !proposal && (
+            <div className="planner-dialog__starter-suggestions" aria-label={t('planner.starterSuggestions')}>
+              {starterSuggestions.map((choice) => (
+                <button
+                  key={choice.id}
+                  type="button"
+                  onClick={() => {
+                    setMessage(choice.value)
+                    window.requestAnimationFrame(() => textareaRef.current?.focus())
+                  }}
+                  title={choice.description}
+                >
+                  <span>{choice.label}</span>
+                  {choice.description && <small>{choice.description}</small>}
+                  {choice.preview && choice.preview.length > 0 && (
+                    <div className="planner-template-preview" aria-hidden>
+                      {choice.preview.map((item) => (
+                        <i key={item}>{item}</i>
+                      ))}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+          {(error || emptyIntakeError) && (
+            <div className="planner-dialog__message planner-dialog__message--error">
+              {error ?? emptyIntakeError}
+            </div>
+          )}
+          {showOmniConversation && (
+            <div className="planner-dialog__history planner-dialog__history--omni-chat" aria-label={t('planner.conversation')}>
+              {hiddenHistoryCount > 0 && (
+                <div className="planner-dialog__history-trimmed">
+                  Showing latest {visibleHistory.length} messages. {hiddenHistoryCount} older {hiddenHistoryCount === 1 ? 'message is' : 'messages are'} kept out of this view.
+                </div>
+              )}
+              {visibleHistory.map((item) => (
+                <PlannerChatMessageRow
+                  key={item.id}
+                  item={item}
+                  proposal={proposal}
+                  busy={busy || thinking}
+                  onReview={() => setReviewOpen(true)}
+                  onBuildPlan={buildConfirmedPlan}
+                  onChoice={(value) => {
+                    if (!value.trim() || thinking) return
+                    submitEmptyIntakeTurn(value)
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          {history.length > 0 && !showOmniConversation && (
             <div className={`planner-dialog__history${historyOpen ? ' is-open' : ''}`}>
               <button
                 type="button"
@@ -209,37 +463,30 @@ export function PlannerProposalPanel({
                 <span>History</span>
                 <em>{history.length}</em>
               </button>
-              {historyOpen && history.map((item) => (
-                <div
-                  key={item.id}
-                  className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
-                >
-                  {item.meta && item.meta.length > 0 && (
-                    <div className="planner-dialog__message-meta">
-                      {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
-                    </div>
-                  )}
-                  <MarkdownMessage markdown={item.markdown} />
-                  {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
-                    <div className="planner-dialog__actions planner-dialog__actions--single">
-                      <button
-                        type="button"
-                        className="planner-proposal__preview"
-                        disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
-                        onClick={() => setReviewOpen(true)}
-                      >
-                        <Eye size={14} aria-hidden />
-                        Review changes
-                      </button>
-                    </div>
-                  )}
+              {historyOpen && hiddenHistoryCount > 0 && (
+                <div className="planner-dialog__history-trimmed">
+                  Showing latest {visibleHistory.length} messages. {hiddenHistoryCount} older {hiddenHistoryCount === 1 ? 'message is' : 'messages are'} kept out of this panel.
                 </div>
+              )}
+              {historyOpen && visibleHistory.map((item) => (
+                <PlannerChatMessageRow
+                  key={item.id}
+                  item={item}
+                  proposal={proposal}
+                  busy={busy}
+                  onReview={() => setReviewOpen(true)}
+                  onBuildPlan={buildConfirmedPlan}
+                  onChoice={(value) => {
+                    setMessage(value)
+                    window.requestAnimationFrame(() => textareaRef.current?.focus())
+                  }}
+                />
               ))}
             </div>
           )}
           {thinking && (
             <div className="planner-dialog__message planner-dialog__message--planner planner-dialog__message--thinking">
-              <span>meee2 AI is thinking</span>
+              <span>{t('planner.thinking')}</span>
               <span className="planner-thinking-dots" aria-hidden>
                 <i />
                 <i />
@@ -253,7 +500,7 @@ export function PlannerProposalPanel({
                 <span>{proposal.status}</span>
                 <span>{proposal.changes.length} changes</span>
               </div>
-              <MarkdownMessage markdown={proposalChatMarkdown(proposal)} />
+              <MarkdownMessage markdown={proposalChatMarkdown(proposal)} collapsible />
               <div className="planner-dialog__actions planner-dialog__actions--single">
                 <button
                   type="button"
@@ -279,6 +526,18 @@ export function PlannerProposalPanel({
       </div>
 
       <div className="planner-dialog__composer">
+        {draftContext && (
+          <div className="planner-dialog__selection" aria-label="Selected context">
+            <span>{draftContext.label}</span>
+            <button
+              type="button"
+              onClick={() => setDraftContext(null)}
+              aria-label="Clear selected node context"
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={message}
@@ -289,22 +548,53 @@ export function PlannerProposalPanel({
               submitMessage()
             }
           }}
-          placeholder={hasActionableDrift ? 'Ask meee2 AI what to fix, or send empty to inspect drift' : 'Ask meee2 AI to change the graph'}
+          placeholder={placeholder}
           rows={5}
         />
-        <div className="planner-proposal-panel__buttons" aria-label="Send message">
+        <div className="planner-proposal-panel__buttons" aria-label={t('planner.sendMessage')}>
           <button
             type="button"
             className="primary"
             disabled={!canSend}
             onClick={submitMessage}
-            title={!canCreateProposal ? 'Only canvas owner can create topology proposals in this build.' : undefined}
-            aria-label="Send to meee2 AI"
+            title={!canCreateProposal ? t('planner.ownerOnly') : undefined}
+            aria-label={t('planner.sendToAi')}
           >
             <Send size={14} aria-hidden />
+            {emptyMode && <span>{t('planner.buildIt')}</span>}
           </button>
         </div>
       </div>
+
+      {emptyMode && layout === 'omni' && starterSuggestions.length > 0 && !proposal && !showOmniConversation && (
+        <div className="planner-dialog__starter-suggestions" aria-label={t('planner.starterSuggestions')}>
+          <div className="planner-dialog__starter-heading">
+            <strong>{t('planner.officialTemplates')}</strong>
+            <span>{t('planner.templatesHelp')}</span>
+          </div>
+          {starterSuggestions.map((choice) => (
+            <button
+              key={choice.id}
+              type="button"
+              onClick={() => {
+                setMessage(choice.value)
+                window.requestAnimationFrame(() => textareaRef.current?.focus())
+              }}
+              title={choice.description}
+            >
+              <span>{choice.label}</span>
+              {choice.description && <small>{choice.description}</small>}
+              {choice.preview && choice.preview.length > 0 && (
+                <div className="planner-template-preview" aria-hidden>
+                  {choice.preview.map((item) => (
+                    <i key={item}>{item}</i>
+                  ))}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {reviewOpen && proposal && (
         <div
@@ -463,60 +753,6 @@ function isGenericCanvasTitle(title: string): boolean {
   return /^(untitled|new canvas|default canvas|personal canvas)$/i.test(title)
 }
 
-function WorkflowGuide({
-  proposal,
-  nodeCount,
-  hasActionableDrift,
-}: {
-  proposal: PlanProposal | null
-  nodeCount: number
-  hasActionableDrift: boolean
-}) {
-  const copy = workflowGuideCopy(proposal, nodeCount, hasActionableDrift)
-  return (
-    <div className="planner-workflow-guide" aria-label="Workflow next step">
-      <span>Next</span>
-      <strong>{copy.title}</strong>
-      <p>{copy.body}</p>
-    </div>
-  )
-}
-
-function workflowGuideCopy(
-  proposal: PlanProposal | null,
-  nodeCount: number,
-  hasActionableDrift: boolean,
-): { title: string; body: string } {
-  if (proposal?.status === 'pending') {
-    return {
-      title: 'Review these changes',
-      body: 'Open the preview modal. The canvas is unchanged until you apply.',
-    }
-  }
-  if (proposal?.status === 'approved') {
-    return {
-      title: 'Apply these changes',
-      body: 'This proposal is already approved. Apply it to update the canvas.',
-    }
-  }
-  if (nodeCount === 0) {
-    return {
-      title: 'Co-create the canvas with meee2 AI',
-      body: 'Describe the outcome you want and meee2 AI will shape the canvas with you.',
-    }
-  }
-  if (hasActionableDrift) {
-    return {
-      title: 'Inspect blocked or review nodes',
-      body: 'Ask meee2 AI to inspect drift, then approve a repair proposal. Open a node for details or outputs.',
-    }
-  }
-  return {
-    title: 'Start the next step',
-    body: 'Keep talking with meee2 AI or open a node to adjust details and attach outputs.',
-  }
-}
-
 function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null): boolean {
   if (proposal.status === 'pending') {
     return Boolean(access?.canApproveProposal && access?.canApplyProposal)
@@ -525,6 +761,354 @@ function canApproveAndApply(proposal: PlanProposal, access: PlannerAccess | null
     return Boolean(access?.canApplyProposal)
   }
   return false
+}
+
+function PlannerChatMessageRow({
+  item,
+  proposal,
+  busy,
+  onReview,
+  onBuildPlan,
+  onChoice,
+}: {
+  item: PlannerChatMessage
+  proposal: PlanProposal | null
+  busy: boolean
+  onReview: () => void
+  onBuildPlan: (prompt: string) => void
+  onChoice: (value: string) => void
+}) {
+  const choiceBlocks = parseChoiceBlocks(item.markdown)
+  return (
+    <div
+      className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
+    >
+      {item.meta && item.meta.length > 0 && (
+        <div className="planner-dialog__message-meta">
+          {item.meta.map((meta) => <span key={meta}>{meta}</span>)}
+        </div>
+      )}
+      {item.planCard ? (
+        <PlannerPlanCardView plan={item.planCard} busy={busy} onBuild={onBuildPlan} />
+      ) : (
+        <MarkdownMessage markdown={choiceBlocks.markdown} collapsible />
+      )}
+      {choiceBlocks.groups.length > 0 && (
+        <div className="planner-dialog__choices" aria-label="Message choices">
+          {choiceBlocks.groups.map((group) => (
+            <div key={group.id} className="planner-dialog__choice-group">
+              {group.question && <strong>{group.question}</strong>}
+              <div className="planner-dialog__choice-list">
+                {group.choices.map((choice) => (
+                  <button
+                    key={choice.id}
+                    type="button"
+                    onClick={() => onChoice(choice.value)}
+                    title={choice.description}
+                  >
+                    <span>{choice.label}</span>
+                    {choice.description && <small>{choice.description}</small>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {item.role === 'planner' && item.id === `proposal:${proposal?.id ?? ''}` && (
+        <div className="planner-dialog__actions planner-dialog__actions--single">
+          <button
+            type="button"
+            className="planner-proposal__preview"
+            disabled={busy || proposal?.status === 'applied' || proposal?.status === 'rejected'}
+            onClick={onReview}
+          >
+            <Eye size={14} aria-hidden />
+            Review changes
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlannerPlanCardView({
+  plan,
+  busy,
+  onBuild,
+}: {
+  plan: PlannerPlanCard
+  busy: boolean
+  onBuild: (prompt: string) => void
+}) {
+  return (
+    <div className="planner-plan-card" aria-label="Draft plan">
+      <div className="planner-plan-card__header">
+        <span className="planner-plan-card__icon" aria-hidden>
+          <Check size={16} />
+        </span>
+        <div>
+          <p>{plan.intro}</p>
+          <h3>{plan.title}</h3>
+        </div>
+      </div>
+      <ol className="planner-plan-card__steps">
+        {plan.steps.map((step) => (
+          <li key={step.title}>
+            <strong>{step.title}</strong>
+            <span>{step.body}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="planner-plan-card__footer">
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() => onBuild(plan.prompt)}
+        >
+          <span className="planner-thinking-dots" aria-hidden>
+            <i />
+            <i />
+            <i />
+          </span>
+          Build it
+        </button>
+        <span>Tell me what to change, or build this plan.</span>
+      </div>
+    </div>
+  )
+}
+
+async function requestEmptyCanvasAIReply({
+  canvasId,
+  canvasName,
+  canvasTask,
+  history,
+  signal,
+}: {
+  canvasId: string
+  canvasName: string
+  canvasTask: string
+  history: PlannerChatMessage[]
+  signal: AbortSignal
+}): Promise<PlannerChatMessage> {
+  const llm = readLlmSettings()
+  let text = ''
+  for await (const ev of streamAssistantChat({
+    messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
+    settings: {
+      provider: llm.provider,
+      apiKey: llm.apiKey,
+      baseUrl: llm.baseUrl,
+      model: llm.model,
+      enabledTools: [],
+      scope: 'this-mac',
+      canvasId,
+      canvasName,
+    },
+    signal,
+  })) {
+    if (ev.type === 'delta') text += ev.text
+    if (ev.type === 'error') throw new Error(ev.message)
+  }
+  return emptyCanvasAIReplyToMessage(text, history)
+}
+
+function buildEmptyCanvasAIMessages(
+  canvasName: string,
+  canvasTask: string,
+  history: PlannerChatMessage[],
+): AssistantMessage[] {
+  const conversation = history.map((item) => ({
+    role: item.role === 'user' ? 'user' : 'assistant',
+    content: item.planCard ? `${item.planCard.intro}\n\nPlan: ${item.planCard.title}` : item.markdown,
+  }))
+  const prompt = {
+    instruction: [
+      'You are meee2 AI helping a user start from an empty meee2 canvas.',
+      'Do not create a canvas proposal yet. Your job is only to conduct intake and decide the next conversational step.',
+      'If the request lacks critical information, ask exactly one helpful follow-up question.',
+      'When asking, include 2-4 concrete option chips and keep free-form typing possible through the composer.',
+      'If the user has provided enough information, produce a concise plan for user confirmation.',
+      'Only after the user confirms the plan will the app generate a preview. Do not mention hidden implementation details.',
+      'Avoid calling the structure a workflow unless the user explicitly says workflow.',
+      'Use the user language when practical.',
+    ],
+    responseFormat: {
+      ask: {
+        action: 'ask',
+        message: 'Short assistant message before the question.',
+        question: 'The single question to answer next.',
+        choices: [
+          { label: 'Option label', value: 'Full value sent if selected', description: 'Optional short description' },
+        ],
+      },
+      plan: {
+        action: 'plan',
+        message: 'One sentence explaining your understanding.',
+        plan: {
+          title: 'Plan title',
+          intro: 'Summary asking whether this looks right.',
+          steps: [
+            { title: 'Step title', body: 'What this part will cover.' },
+          ],
+          prompt: 'A complete prompt that can be sent to the canvas proposal generator if the user clicks Build it.',
+        },
+      },
+    },
+    rules: [
+      'Return JSON only, no markdown fence.',
+      'For action=ask, choices must come from your reasoning about the user request, not a generic fixed template.',
+      'For action=plan, include 3-5 steps and a prompt that preserves all user details and the confirmed plan.',
+      'If the user is correcting a previous plan, produce an updated plan instead of asking again unless one key detail is still missing.',
+    ],
+    canvas: {
+      name: canvasName,
+      context: canvasTask || null,
+    },
+    conversation,
+  }
+  return [{ role: 'user', content: JSON.stringify(prompt, null, 2) }]
+}
+
+function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessage[]): PlannerChatMessage {
+  const parsed = parseEmptyCanvasAIReply(rawText)
+  if (parsed?.action === 'ask') {
+    const choices = normalizeAIChoices(parsed.choices)
+    const message = stringValue(parsed.message) ?? 'I need one more detail before I can draft the plan.'
+    const question = stringValue(parsed.question) ?? 'What should I optimize for?'
+    return {
+      id: `planner:intake:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      role: 'planner',
+      markdown: choiceMarkdown(message, question, choices),
+      meta: ['question'],
+    }
+  }
+  if (parsed?.action === 'plan') {
+    const planCard = normalizeAIPlanCard(parsed.plan, history, parsed.message)
+    return {
+      id: `planner:plan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      role: 'planner',
+      markdown: planCard.intro,
+      meta: ['plan'],
+      planCard,
+    }
+  }
+  throw new Error('meee2 AI returned an unsupported setup response.')
+}
+
+function parseEmptyCanvasAIReply(rawText: string): Record<string, unknown> | null {
+  const trimmed = rawText.trim()
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/)
+  const candidates = [
+    fenced?.[1]?.trim(),
+    trimmed,
+    jsonObjectSlice(trimmed),
+  ].filter((item): item is string => Boolean(item))
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown
+      if (parsed && typeof parsed === 'object') return parsed as Record<string, unknown>
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null
+}
+
+function jsonObjectSlice(value: string): string | null {
+  const start = value.indexOf('{')
+  const end = value.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  return value.slice(start, end + 1)
+}
+
+function normalizeAIChoices(raw: unknown): PlannerChatChoice[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((choice, index): PlannerChatChoice | null => {
+      const normalized = normalizeChoice(choice, index)
+      if (!normalized) return null
+      return {
+        ...normalized,
+        id: normalized.id || `ai-choice:${index}`,
+      }
+    })
+    .filter((choice): choice is PlannerChatChoice => Boolean(choice))
+    .slice(0, 4)
+}
+
+function normalizeAIPlanCard(
+  rawPlan: unknown,
+  history: PlannerChatMessage[],
+  rawMessage: unknown,
+): PlannerPlanCard {
+  const plan = rawPlan && typeof rawPlan === 'object' ? rawPlan as Record<string, unknown> : {}
+  const title = stringValue(plan.title) ?? 'Draft canvas plan'
+  const intro = stringValue(plan.intro)
+    ?? stringValue(rawMessage)
+    ?? 'Here is the plan I understand. Does this look right?'
+  const steps = Array.isArray(plan.steps)
+    ? plan.steps
+      .map((step): PlannerPlanCardStep | null => {
+        if (!step || typeof step !== 'object') return null
+        const item = step as Record<string, unknown>
+        const stepTitle = stringValue(item.title)
+        const body = stringValue(item.body) ?? stringValue(item.description)
+        if (!stepTitle || !body) return null
+        return { title: stepTitle, body }
+      })
+      .filter((step): step is PlannerPlanCardStep => Boolean(step))
+      .slice(0, 5)
+    : []
+  const finalSteps = steps.length > 0
+    ? steps
+    : [{ title: 'Clarify the canvas structure', body: 'Turn the conversation into a concrete meee2 canvas plan.' }]
+  return {
+    title,
+    intro,
+    steps: finalSteps,
+    prompt: stringValue(plan.prompt) ?? buildEmptyCanvasPlanPromptFromHistory(title, intro, finalSteps, history),
+  }
+}
+
+function choiceMarkdown(intro: string, question: string, choices: PlannerChatChoice[]): string {
+  if (choices.length === 0) {
+    return [intro, '', question].join('\n')
+  }
+  return [
+    intro,
+    '',
+    '```choices',
+    JSON.stringify({ question, choices }, null, 2),
+    '```',
+  ].join('\n')
+}
+
+function buildEmptyCanvasPlanPromptFromHistory(
+  title: string,
+  intro: string,
+  steps: PlannerPlanCardStep[],
+  history: PlannerChatMessage[],
+): string {
+  const userMessages = history
+    .filter((item) => item.role === 'user')
+    .map((item) => item.markdown)
+    .join('\n\n')
+  return [
+    'Create a meee2 canvas from this confirmed plan.',
+    'Tailor the result to the original request and the follow-up answers. Use canvas and session language; avoid calling the structure a workflow unless the user explicitly asks for one.',
+    '',
+    `Canvas title: ${title}`,
+    `Plan summary: ${intro}`,
+    '',
+    'User conversation:',
+    userMessages || '(not provided)',
+    '',
+    'Confirmed plan:',
+    ...steps.map((step, index) => `${index + 1}. ${step.title}: ${step.body}`),
+  ].join('\n')
 }
 
 function chatHistoryKey(canvasId: string): string {
@@ -546,24 +1130,51 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
         const meta = Array.isArray(item.meta)
           ? item.meta.filter((value: unknown): value is string => typeof value === 'string')
           : undefined
+        const planCard = normalizePersistedPlanCard(item.planCard)
         return {
           id: item.id,
           role: item.role,
           markdown: item.markdown,
           meta,
+          planCard,
         }
       })
       .filter((item): item is PlannerChatMessage => Boolean(item))
-    return normalizeChatHistoryOrder(history).slice(-80)
+    return normalizeChatHistoryOrder(history).slice(-PERSISTED_CHAT_LIMIT)
   } catch {
     return []
+  }
+}
+
+function normalizePersistedPlanCard(raw: unknown): PlannerPlanCard | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const item = raw as Record<string, unknown>
+  if (typeof item.title !== 'string' || typeof item.intro !== 'string' || typeof item.prompt !== 'string') {
+    return undefined
+  }
+  if (!Array.isArray(item.steps)) return undefined
+  const steps = item.steps
+    .map((step): PlannerPlanCardStep | null => {
+      if (!step || typeof step !== 'object') return null
+      const next = step as Record<string, unknown>
+      if (typeof next.title !== 'string' || typeof next.body !== 'string') return null
+      return { title: next.title, body: next.body }
+    })
+    .filter((step): step is PlannerPlanCardStep => Boolean(step))
+  if (steps.length === 0) return undefined
+  return {
+    title: item.title,
+    intro: item.intro,
+    steps,
+    prompt: item.prompt,
   }
 }
 
 function writeChatHistory(canvasId: string, history: PlannerChatMessage[]) {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(normalizeChatHistoryOrder(history).slice(-80)))
+    const localHistory = history.filter((item) => !item.id.startsWith('claude:'))
+    window.localStorage.setItem(chatHistoryKey(canvasId), JSON.stringify(normalizeChatHistoryOrder(localHistory).slice(-PERSISTED_CHAT_LIMIT)))
   } catch {
     // History persistence is best-effort; chat actions still work without it.
   }
@@ -580,7 +1191,7 @@ function clearChatHistory(canvasId: string) {
 
 function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessage): PlannerChatMessage[] {
   const index = history.findIndex((item) => item.id === next.id)
-  if (index < 0) return normalizeChatHistoryOrder([...history, next]).slice(-80)
+  if (index < 0) return normalizeChatHistoryOrder([...history, next]).slice(-PERSISTED_CHAT_LIMIT)
   return normalizeChatHistoryOrder(history.map((item, itemIndex) => (itemIndex === index ? next : item)))
 }
 
@@ -613,7 +1224,7 @@ function mergeClaudeSessionMessages(
   }
 
   if (restored.length === 0) return normalizeChatHistoryOrder(history)
-  return normalizeChatHistoryOrder([...history, ...restored]).slice(-80)
+  return normalizeChatHistoryOrder([...history, ...restored]).slice(-PERSISTED_CHAT_LIMIT)
 }
 
 function normalizeChatHistoryOrder(history: PlannerChatMessage[]): PlannerChatMessage[] {
@@ -630,14 +1241,129 @@ function contentKey(item: PlannerChatMessage): string {
   return `${item.role}:${item.markdown.replace(/\s+/g, ' ').trim()}`
 }
 
-function MarkdownMessage({ markdown }: { markdown: string }) {
+function MarkdownMessage({ markdown, collapsible = false }: { markdown: string; collapsible?: boolean }) {
+  const [expanded, setExpanded] = useState(false)
+  const displayMarkdown = normalizeJsonMarkdown(markdown)
+  const shouldCollapse = collapsible && isLongMarkdown(displayMarkdown)
   return (
-    <div className="planner-markdown">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {markdown}
-      </ReactMarkdown>
-    </div>
+    <>
+      <div className={`planner-markdown${shouldCollapse ? ' is-collapsible' : ''}${shouldCollapse && !expanded ? ' is-collapsed' : ''}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {displayMarkdown}
+        </ReactMarkdown>
+      </div>
+      {shouldCollapse && (
+        <button
+          type="button"
+          className="planner-markdown__expand"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </>
   )
+}
+
+function isLongMarkdown(markdown: string): boolean {
+  return markdown.length > COLLAPSE_CHAR_LIMIT || markdown.split('\n').length > COLLAPSE_LINE_LIMIT
+}
+
+function normalizeJsonMarkdown(markdown: string): string {
+  const trimmed = markdown.trim()
+  const fullJson = formatJsonIfObject(trimmed)
+  if (fullJson) return `\`\`\`json\n${fullJson}\n\`\`\``
+
+  return markdown.replace(/```([a-zA-Z0-9_-]*)?\s*\n([\s\S]*?)```/g, (raw, lang = '', body: string) => {
+    const normalizedLang = lang.trim().toLowerCase()
+    if (normalizedLang && normalizedLang !== 'json') return raw
+    const formatted = formatJsonIfObject(body.trim())
+    return formatted ? `\`\`\`json\n${formatted}\n\`\`\`` : raw
+  })
+}
+
+function formatJsonIfObject(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (!parsed || (typeof parsed !== 'object' && !Array.isArray(parsed))) return null
+    return JSON.stringify(parsed, null, 2)
+  } catch {
+    return null
+  }
+}
+
+function parseChoiceBlocks(markdown: string): { markdown: string; groups: PlannerChatChoiceGroup[] } {
+  const groups: PlannerChatChoiceGroup[] = []
+  const nextMarkdown = markdown.replace(/```(?:choices|ask_user)\s*\n([\s\S]*?)\n```/g, (raw, jsonText: string) => {
+    const parsed = parseChoiceGroup(jsonText, groups.length)
+    if (!parsed) return raw
+    groups.push(parsed)
+    return ''
+  }).trim()
+  return { markdown: nextMarkdown || markdown, groups }
+}
+
+function parseChoiceGroup(raw: string, index: number): PlannerChatChoiceGroup | null {
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!data || typeof data !== 'object') return null
+  const item = data as Record<string, unknown>
+  const question = typeof item.question === 'string'
+    ? item.question
+    : typeof item.prompt === 'string'
+      ? item.prompt
+      : undefined
+  const rawChoices = Array.isArray(item.choices)
+    ? item.choices
+    : Array.isArray(item.options)
+      ? item.options
+      : Array.isArray(item.questions)
+        ? choiceOptionsFromAskUserQuestions(item.questions)
+        : []
+  const choices = rawChoices
+    .map((choice, choiceIndex): PlannerChatChoice | null => normalizeChoice(choice, choiceIndex))
+    .filter((choice): choice is PlannerChatChoice => Boolean(choice))
+  if (choices.length === 0) return null
+  return {
+    id: `choices:${index}`,
+    question,
+    choices,
+  }
+}
+
+function choiceOptionsFromAskUserQuestions(rawQuestions: unknown[]): unknown[] {
+  const first = rawQuestions.find((item) => item && typeof item === 'object') as Record<string, unknown> | undefined
+  if (!first) return []
+  if (Array.isArray(first.options)) return first.options
+  if (Array.isArray(first.choices)) return first.choices
+  return []
+}
+
+function normalizeChoice(raw: unknown, index: number): PlannerChatChoice | null {
+  if (typeof raw === 'string') {
+    const label = raw.trim()
+    return label ? { id: `choice:${index}`, label, value: label } : null
+  }
+  if (!raw || typeof raw !== 'object') return null
+  const item = raw as Record<string, unknown>
+  const label = stringValue(item.label) ?? stringValue(item.title) ?? stringValue(item.text) ?? stringValue(item.value)
+  if (!label) return null
+  return {
+    id: stringValue(item.id) ?? `choice:${index}`,
+    label,
+    value: stringValue(item.value) ?? label,
+    description: stringValue(item.description),
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string {
@@ -656,9 +1382,11 @@ function plannerGuidance(nodeCount: number, hasActionableDrift: boolean): string
     ].join('\n')
   }
   return [
-    'Ask meee2 AI to adjust the graph in the box below.',
+    'Ask meee2 AI to adjust the canvas plan in the box below.',
     '',
-    'It decides whether to reshape the canvas or inspect the current state.',
+    'Natural language changes to a node schema, inputs, outputs, artifacts, gates, or task requirements become a proposal you can review and approve.',
+    '',
+    'For a node that already has a live session, direct execution notes can still be injected into that session prompt.',
   ].join('\n')
 }
 

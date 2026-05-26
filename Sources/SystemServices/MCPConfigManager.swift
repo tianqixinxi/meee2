@@ -137,22 +137,6 @@ public final class MCPConfigManager {
     /// 应用启动时调；无论现在是啥状态都收敛到"已注册，命令指向当前的 server.js
     /// 绝对路径"。
     public func ensureRegistered() {
-        // 检查 Node.js 是否可用
-        let whichNode = Process()
-        whichNode.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        whichNode.arguments = ["which", "node"]
-        whichNode.standardOutput = Pipe()
-        whichNode.standardError = Pipe()
-        do {
-            try whichNode.run()
-            whichNode.waitUntilExit()
-            if whichNode.terminationStatus != 0 {
-                NSLog("[MCPConfigManager] WARNING: Node.js not found in PATH. MCP server will be registered but cannot run until Node.js >= 18 is installed.")
-            }
-        } catch {
-            NSLog("[MCPConfigManager] WARNING: Cannot check for Node.js availability.")
-        }
-
         let expectedServerPath = resolveServerScriptPath()
         NSLog("[MCPConfigManager] expected server.js path: \(expectedServerPath)")
 
@@ -161,10 +145,15 @@ public final class MCPConfigManager {
             return
         }
 
-        // node 路径——Claude 的其他 MCP 条目都是裸 "node" / "npx"，靠 PATH
-        // 解析。这里也用 `node`，不写死绝对路径（brew / nvm / asdf 下各家位置
-        // 都不一样；子进程能从 PATH 里找到）。
-        let nodeBin = "node"
+        // node 路径——meee2 作为 launchd 启动的 GUI app，PATH 是精简版，不含
+        // nvm / Homebrew 目录；裸 `node` 的 MCP 条目在 meee2 自己以及它派发的
+        // session 里都起不来。注册时解析出一个绝对路径写进去。
+        let nodeBin = resolveNodeBinary()
+        if nodeBin == "node" {
+            NSLog("[MCPConfigManager] WARNING: could not resolve an absolute node path; falling back to bare `node` (requires Node.js >= 18 on the spawner PATH).")
+        } else {
+            NSLog("[MCPConfigManager] resolved node binary → \(nodeBin)")
+        }
 
         var rootObject: [String: Any] = readConfig() ?? [:]
         var mcpServers = (rootObject["mcpServers"] as? [String: Any]) ?? [:]
@@ -177,19 +166,41 @@ public final class MCPConfigManager {
         // Already correctly registered → 跳过 mcpServers 写入但 permissions
         // allowlist 仍要 ensure（旧版本 meee2 注册了 server 但没配 allowlist，
         // 升级到新版后第一次启动需要补上）。
-        if existingCmd == nodeBin, existingArgsFirst == expectedServerPath {
-            NSLog("[MCPConfigManager] already registered with correct path, noop")
+        // 同时检查 env 里有没有 MEEE2_API_URL —— M1 之前注册的 entry 没这个
+        // 字段，MCP server 会一直降级走老的直连 Supabase 路径并喷 deprecation
+        // warning，所以发现缺失也要重写。
+        // 仅当用户显式配置了 self-hosted base URL 时才注入 MEEE2_API_URL。
+        // 默认 SaaS 场景下不写,这样 MCP server 的 discoverAPI() 仍可以走
+        // 本机 127.0.0.1 BoardServer 优先发现路径,避免 session/inbox/planner
+        // 这种本地接口被强制重路由到公网导致功能丢失。
+        let existingEnv = existing?["env"] as? [String: String] ?? [:]
+        let apiUrlOverride = Meee2Identity.apiUrlOverride
+        let envIsCorrect: Bool = {
+            if let override = apiUrlOverride {
+                return existingEnv["MEEE2_API_URL"] == override
+            } else {
+                return existingEnv["MEEE2_API_URL"] == nil
+            }
+        }()
+        if existingCmd == nodeBin,
+           existingArgsFirst == expectedServerPath,
+           envIsCorrect {
+            NSLog("[MCPConfigManager] already registered with correct path + env, noop")
             ensurePermissionsAllowlist()
             ensureCodexMCPServer(nodeBin: nodeBin, serverPath: expectedServerPath)
             return
         }
 
-        let entry: [String: Any] = [
+        // env: 用户配置了 self-hosted base URL 时才传 MEEE2_API_URL,
+        // 让 SaaS 默认安装保留 MCP server 的本地优先 discovery 行为。
+        var entry: [String: Any] = [
             "type": "stdio",
             "command": nodeBin,
-            "args": [expectedServerPath],
-            "env": [:] as [String: String]
+            "args": [expectedServerPath]
         ]
+        if let override = apiUrlOverride {
+            entry["env"] = ["MEEE2_API_URL": override]
+        }
         mcpServers[serverName] = entry
         rootObject["mcpServers"] = mcpServers
 
@@ -387,7 +398,87 @@ public final class MCPConfigManager {
         return "\"\(escaped)\""
     }
 
+    /// Resolve an absolute path to a `node` binary.
+    ///
+    /// meee2 runs as a launchd-started GUI app with a minimal PATH that does
+    /// not include nvm / Homebrew / asdf dirs, so a bare `node` command in the
+    /// MCP config fails to launch (both for meee2's own probe and for the
+    /// sessions it dispatches). We resolve a concrete path at registration
+    /// time instead. Order: the user's login shell (respects nvm's default
+    /// alias) → known install locations → bare `node` as a last resort.
+    private func resolveNodeBinary() -> String {
+        let fm = FileManager.default
+
+        // 1) Ask the user's login+interactive shell — loads nvm/asdf/volta from
+        //    the rc files and picks whatever `node` the user actually uses.
+        //    Bounded: a launchd GUI app inherits a minimal env, and a slow or
+        //    prompting `.zshrc`/`.bashrc` under `-lic` must not hang startup.
+        if let shell = ProcessInfo.processInfo.environment["SHELL"],
+           shell.hasPrefix("/"),
+           fm.isExecutableFile(atPath: shell),
+           let output = runWithTimeout(shell, ["-lic", "command -v node"], seconds: 3) {
+            let resolved = output
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .last { $0.hasPrefix("/") }
+            if let resolved, fm.isExecutableFile(atPath: resolved) {
+                return resolved
+            }
+        }
+
+        // 2) Scan known install locations. nvm: newest version wins.
+        let nvmRoot = "\(NSHomeDirectory())/.nvm/versions/node"
+        if let versions = try? fm.contentsOfDirectory(atPath: nvmRoot) {
+            let newestFirst = versions.sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            for version in newestFirst {
+                let candidate = "\(nvmRoot)/\(version)/bin/node"
+                if fm.isExecutableFile(atPath: candidate) { return candidate }
+            }
+        }
+        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+            if fm.isExecutableFile(atPath: candidate) { return candidate }
+        }
+
+        // 3) Last resort — bare command, relies on the spawner's PATH.
+        return "node"
+    }
+
+    /// Run `command` with `arguments`, returning its stdout on a clean
+    /// (status 0) exit within `seconds`, or `nil` on launch failure, a
+    /// non-zero exit, or a timeout. stdin is `/dev/null` so an rc script that
+    /// prompts gets an immediate EOF instead of blocking the caller; on
+    /// timeout the process is sent SIGTERM and `nil` is returned without
+    /// waiting further, so a stalled shell can never hang `ensureRegistered()`.
+    private func runWithTimeout(_ command: String, _ arguments: [String], seconds: TimeInterval) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command)
+        process.arguments = arguments
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = Pipe()
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+
+        let exited = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .utility).async {
+            process.waitUntilExit()
+            exited.signal()
+        }
+        if exited.wait(timeout: .now() + seconds) == .timedOut {
+            process.terminate()
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        return String(bytes: data, encoding: .utf8)
+    }
+
     private func commandAvailable(_ command: String) -> Bool {
+        // An absolute path (what `resolveNodeBinary` writes) — check directly;
+        // `which` is for PATH lookups of bare command names.
+        if command.hasPrefix("/") {
+            return FileManager.default.isExecutableFile(atPath: command)
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["which", command]

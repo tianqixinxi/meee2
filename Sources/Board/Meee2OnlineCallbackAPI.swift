@@ -28,11 +28,18 @@ public struct Meee2OnlineCallbackAPI {
         let supabaseUrl = decode("supabase_url")
         let supabaseKey = decode("supabase_key")
         let teamsJSON = decode("teams")
+        let apiUrlParam = decode("api_url")
 
         // 验证必要参数
         if teamId.isEmpty || userId.isEmpty || supabaseUrl.isEmpty || supabaseKey.isEmpty {
             return errorResponse(message: "Missing required parameters")
         }
+
+        // Optional: meee2-online forwards its own base URL so we can route
+        // MCP-server writes back through /api/v1/* (M1). Persisted only after
+        // required-param validation succeeds, so a malformed callback cannot
+        // poison meee2ApiUrl with a stray host.
+        Meee2Identity.setApiUrlIfProvided(apiUrlParam)
         let teams = parseTeams(
             teamsJSON: teamsJSON,
             fallbackTeamId: teamId,
@@ -122,7 +129,7 @@ public struct Meee2OnlineCallbackAPI {
                 "supabaseUrl": supabaseUrl,
                 "supabaseKey": supabaseKey,
                 "teams": teams,
-                "machineId": Host.current().name ?? "unknown",
+                "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
         ]

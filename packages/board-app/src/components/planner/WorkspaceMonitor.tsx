@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, Route, Signpost } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
+import { useI18n } from '../../lib/i18n'
 import type { NodeRunState, PlannerMonitorState } from '../../types'
 import './planner.css'
 
@@ -13,6 +14,7 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 }
 
 export function WorkspaceMonitor() {
+  const { t } = useI18n()
   const [monitor, setMonitor] = useState<PlannerMonitorState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -21,8 +23,8 @@ export function WorkspaceMonitor() {
     setError(null)
     fetchPlannerWorkspaceMonitor()
       .then(setMonitor)
-      .catch((err) => setError((err as Error).message || 'Failed to load meee2 AI monitor'))
-  }, [])
+      .catch((err) => setError((err as Error).message || t('monitor.loadFailed')))
+  }, [t])
 
   useEffect(() => {
     loadMonitor()
@@ -40,29 +42,29 @@ export function WorkspaceMonitor() {
       ].some((value) => value.toLowerCase().includes(term))
     })
     return [
-      { key: 'delivery', label: 'Deliveries', items: items.filter((item) => item.kind === 'delivery') },
-      { key: 'risk', label: 'Blocked', items: items.filter((item) => item.riskRank <= 1) },
-      { key: 'active', label: 'Working / Draft', items: items.filter((item) => item.riskRank === 2 || item.riskRank === 3) },
-      { key: 'ready', label: 'Ready', items: items.filter((item) => item.riskRank >= 4) },
+      { key: 'delivery', label: t('monitor.deliveries'), items: items.filter((item) => item.kind === 'delivery') },
+      { key: 'risk', label: t('monitor.blocked'), items: items.filter((item) => item.riskRank <= 1) },
+      { key: 'active', label: t('monitor.workingDraft'), items: items.filter((item) => item.riskRank === 2 || item.riskRank === 3) },
+      { key: 'ready', label: t('monitor.ready'), items: items.filter((item) => item.riskRank >= 4) },
     ]
-  }, [monitor, query])
+  }, [monitor, query, t])
 
   return (
-    <section className="planner-monitor" aria-label="Workspace monitor">
+    <section className="planner-monitor" aria-label={t('monitor.title')}>
       <div className="planner-monitor__body">
         <div className="planner-monitor__search">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search deliveries, canvases, nodes"
-            aria-label="Search deliveries"
+            placeholder={t('monitor.searchPlaceholder')}
+            aria-label={t('monitor.searchLabel')}
           />
         </div>
         {error && <div className="planner-proposal-panel__error">{error}</div>}
         {!monitor && !error ? (
           <div className="planner-empty-state">
             <div className="boot-spinner" />
-            <span>Loading workspace monitor</span>
+            <span>{t('monitor.loading')}</span>
           </div>
         ) : (
           groups.map((group) => (
@@ -106,7 +108,7 @@ export function WorkspaceMonitor() {
                   )
                 })}
                 {group.items.length === 0 && (
-                  <div className="planner-monitor__empty">No items</div>
+                  <div className="planner-monitor__empty">{t('monitor.empty')}</div>
                 )}
               </div>
             </section>

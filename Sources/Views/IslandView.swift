@@ -42,6 +42,9 @@ public struct IslandView: View {
     /// 上提示，只是不再"弹窗"。设置在 SettingsView 的 "Auto Expand & Close"。
     @AppStorage("autoExpandEnabled") private var autoExpandEnabled: Bool = true
 
+    /// 手动展开后的自动收起时间。
+    @AppStorage("autoCloseInterval") private var autoCloseInterval: Double = 8
+
     /// Codex 超过 1 小时未更新的 session 默认折叠；24 小时以上由 CodexPlugin
     /// 不再返回。这里持久化用户是否展开 1h-24h 分组。
     @AppStorage("islandOlderCodexExpanded") private var olderCodexExpanded: Bool = false
@@ -127,7 +130,6 @@ public struct IslandView: View {
     // MARK: - Constants
 
     private let animation: Animation = .interactiveSpring(duration: 0.5, extraBounce: 0.2, blendDuration: 0.1)
-    private let autoCloseInterval: TimeInterval = 8
     private let hoverExpandDelay: TimeInterval = 0.3  // 悬停展开延迟
     private let hoverCloseDelay: TimeInterval = 1.0   // 悬停离开后关闭延迟
 

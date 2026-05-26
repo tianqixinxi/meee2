@@ -1,4 +1,5 @@
 import { KeyRound, ShieldCheck } from 'lucide-react'
+import { useI18n } from '../lib/i18n'
 import type { BoardState } from '../types'
 import { AgentIntegrationMatrix } from './AgentIntegrationMatrix'
 
@@ -19,16 +20,17 @@ interface Props {
  * App.tsx 的调用签名,本组件未使用。
  */
 export function IntegrationsView(props: Props) {
+  const { t } = useI18n()
   return (
-    <section className="integrations-view" aria-label="Integrations">
+    <section className="integrations-view" aria-label={t('integrations.kicker')}>
       <header className="integrations-view__header">
         <div>
-          <span>Integrations</span>
-          <h1>External systems</h1>
+          <span>{t('integrations.kicker')}</span>
+          <h1>{t('integrations.title')}</h1>
         </div>
         <div className="integrations-view__summary">
           <ShieldCheck size={14} aria-hidden />
-          Explicit binding only
+          {t('integrations.summary')}
         </div>
       </header>
 
@@ -37,14 +39,9 @@ export function IntegrationsView(props: Props) {
       <section className="integrations-view__contract">
         <div>
           <KeyRound size={15} aria-hidden />
-          <strong>Runtime boundary</strong>
+          <strong>{t('integrations.boundaryTitle')}</strong>
         </div>
-        <p>
-          Integrations are not new Planner node types. They are readable output
-          sources for planner nodes. To use one in a workflow, open a node and
-          attach the chosen item as evidence — existing sessions are never
-          auto-linked.
-        </p>
+        <p>{t('integrations.boundaryText')}</p>
       </section>
     </section>
   )

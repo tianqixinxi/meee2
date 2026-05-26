@@ -2,6 +2,7 @@ import { ArrowLeft, Globe2, LockKeyhole, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import type { BoardState, CanvasInfo, CanvasScope } from '../types'
 import { fetchTeamMembers, type UserProfile } from '../api'
+import { useI18n } from '../lib/i18n'
 import { PlannerGraph } from './planner/PlannerGraph'
 
 interface OwnerIdentity {
@@ -27,6 +28,7 @@ export function TemplatesView({
   onOpenCanvas,
   onCreateTemplate,
 }: TemplatesViewProps) {
+  const { t } = useI18n()
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
@@ -91,12 +93,13 @@ export function TemplatesView({
         setScopeDraft('personal')
         setCreating(false)
       })
-      .catch((err) => setError((err as Error).message || 'Failed to create template'))
+      .catch((err) => setError((err as Error).message || t('templates.createFailed')))
   }
 
   if (selectedTemplate) {
+    const selectedVisibilityLabel = visibilityLabel(selectedTemplate, t)
     return (
-      <section className="templates-workspace templates-workspace--editor" aria-label="Template editor">
+      <section className="templates-workspace templates-workspace--editor" aria-label={t('templates.editorKicker')}>
         <div className="templates-editor-bar">
           <button
             type="button"
@@ -104,15 +107,15 @@ export function TemplatesView({
             onClick={() => setSelectedTemplateId(null)}
           >
             <ArrowLeft size={15} aria-hidden />
-            Templates
+            {t('templates.kicker')}
           </button>
           <div className="templates-editor-bar__title">
-            <span>Template</span>
+            <span>{t('templates.editorKicker')}</span>
             <strong>{displayCanvasName(selectedTemplate)}</strong>
           </div>
-          <span className={`templates-visibility templates-visibility--${visibilityLabel(selectedTemplate).toLowerCase()}`}>
+          <span className={`templates-visibility templates-visibility--${visibilityTone(selectedTemplate)}`}>
             {selectedTemplate.scope === 'team' ? <Globe2 size={11} aria-hidden /> : <LockKeyhole size={11} aria-hidden />}
-            {visibilityLabel(selectedTemplate)}
+            {selectedVisibilityLabel}
           </span>
         </div>
         <PlannerGraph
@@ -128,12 +131,12 @@ export function TemplatesView({
   }
 
   return (
-    <section className="templates-workspace" aria-label="Templates">
+    <section className="templates-workspace" aria-label={t('templates.kicker')}>
       <div className="templates-workspace__inner">
         <header className="templates-workspace__header">
           <div>
-            <span>Templates</span>
-            <h1>Workflow templates</h1>
+            <span>{t('templates.kicker')}</span>
+            <h1>{t('templates.title')}</h1>
           </div>
           <div className="templates-workspace__tools">
             <label className="templates-search">
@@ -141,7 +144,7 @@ export function TemplatesView({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Find template"
+                placeholder={t('templates.searchPlaceholder')}
               />
             </label>
             <button
@@ -154,7 +157,7 @@ export function TemplatesView({
               }}
             >
               <Plus size={14} aria-hidden />
-              New template
+              {t('templates.new')}
             </button>
           </div>
         </header>
@@ -182,17 +185,17 @@ export function TemplatesView({
                   <div className="template-row__side">
                     <span
                       className="template-row__owner"
-                      title={`Owner: ${owner.name}`}
-                      aria-label={`Owner: ${owner.name}`}
+                      title={t('templates.owner', { name: owner.name })}
+                      aria-label={t('templates.owner', { name: owner.name })}
                     >
                       <span className={`template-row__owner-avatar${owner.avatarUrl ? ' has-image' : ''}`}>
                         {owner.avatarUrl ? <img src={owner.avatarUrl} alt="" /> : owner.initials}
                       </span>
                       <span className="template-row__owner-name">{owner.name}</span>
                     </span>
-                    <span className={`templates-visibility templates-visibility--${visibilityLabel(template).toLowerCase()}`}>
+                    <span className={`templates-visibility templates-visibility--${visibilityTone(template)}`}>
                       {template.scope === 'team' ? <Globe2 size={11} aria-hidden /> : <LockKeyhole size={11} aria-hidden />}
-                      {visibilityLabel(template)}
+                      {visibilityLabel(template, t)}
                     </span>
                   </div>
                 </button>
@@ -201,7 +204,7 @@ export function TemplatesView({
           </div>
         ) : (
           <div className="templates-empty">
-            {templates.length === 0 ? 'No templates yet' : 'No matching template'}
+            {templates.length === 0 ? t('templates.empty') : t('templates.noMatch')}
           </div>
         )}
       </div>
@@ -213,10 +216,10 @@ export function TemplatesView({
             if (event.target === event.currentTarget) setCreating(false)
           }}
         >
-          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Create template">
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('templates.new')}>
             <div className="modal-header">
-              <div className="modal-title">New template</div>
-              <div className="modal-subtitle">Choose who can view this template canvas.</div>
+              <div className="modal-title">{t('templates.new')}</div>
+              <div className="modal-subtitle">{t('templates.newSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
               <input
@@ -226,10 +229,10 @@ export function TemplatesView({
                   if (event.key === 'Enter') submitCreate()
                   if (event.key === 'Escape') setCreating(false)
                 }}
-                placeholder="Template name"
+                placeholder={t('templates.namePlaceholder')}
                 autoFocus
               />
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Template visibility">
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('templates.visibility')}>
                 {(['personal', 'team'] as CanvasScope[]).map((scope) => (
                   <button
                     key={scope}
@@ -238,20 +241,20 @@ export function TemplatesView({
                     aria-pressed={scopeDraft === scope}
                     onClick={() => setScopeDraft(scope)}
                   >
-                    {scope === 'team' ? 'Public' : 'Private'}
+                    {scope === 'team' ? t('templates.public') : t('templates.private')}
                   </button>
                 ))}
               </div>
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setCreating(false)}>Cancel</button>
+              <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
               <button
                 className="primary"
                 type="button"
                 onClick={submitCreate}
                 disabled={!nameDraft.trim()}
               >
-                Create
+                {t('common.create')}
               </button>
             </div>
           </div>
@@ -261,8 +264,12 @@ export function TemplatesView({
   )
 }
 
-function visibilityLabel(canvas: CanvasInfo): 'Private' | 'Public' {
-  return canvas.scope === 'team' ? 'Public' : 'Private'
+function visibilityTone(canvas: CanvasInfo): 'private' | 'public' {
+  return canvas.scope === 'team' ? 'public' : 'private'
+}
+
+function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
+  return canvas.scope === 'team' ? t('templates.public') : t('templates.private')
 }
 
 function ownerIdentity(

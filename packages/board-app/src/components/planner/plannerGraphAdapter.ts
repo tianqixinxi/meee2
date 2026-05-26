@@ -1,5 +1,7 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
+  NodeAssignment,
+  NodeContractExternalInput,
   NodeStateSnapshot,
   PlanChange,
   PlanProposal,
@@ -41,6 +43,9 @@ export interface PlannerNodeData extends Record<string, unknown> {
   sourceNodeId?: string
   ioItem?: string
   inputReference?: string | null
+  /** UI-1 · Canvas id surfaced to the card so the version dropdown can call
+   *  the artifact-versions endpoints without bubbling up. */
+  canvasId?: string
   onOpenDetails?: (nodeId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
@@ -54,12 +59,42 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  /** UI-1 · Re-run a node by appending a new artifact version. */
+  onRerunNode?: (nodeId: string, reference?: string) => void
+  /**
+   * UI-4: pre-resolved title of the upstream source node, used by the
+   * three-section Input card.
+   */
+  upstreamSourceLabel?: string | null
+  /** UI-4: open the "Attach data source" popover for this node. */
+  onAttachDataSource?: (nodeId: string) => void
+  /** UI-4: trigger a one-off sync for a specific external input. */
+  onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
+  /** UI-4: open the dialogue retention popover for this node. */
+  onConfigureDialogue?: (nodeId: string) => void
   creatingSession?: boolean
   showResponsibleInfo?: boolean
+  /** UI-2: active assignment for this node, when present. */
+  assignment?: NodeAssignment | null
+  /** UI-2: opens the assign dialog (top-right owner chip click). */
+  onRequestAssign?: (nodeId: string) => void
+  /** UI-2: opens the assigned sub-canvas from the chip. */
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  /** UI-2: false when ENG-4 RLS would refuse internal edits. */
+  canEditInternals?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
-export type PlannerGraphEdge = Edge<{ preview: boolean; perception: PlannerEdgePerception }>
+export interface PlannerGraphEdgeData extends Record<string, unknown> {
+  preview: boolean
+  perception: PlannerEdgePerception
+  /** UI-4: handler for the "+ Transform" floating button. */
+  onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void
+  /** UI-4: when true, suppresses the + insert button (artifact / preview edges). */
+  suppressInsert?: boolean
+}
+
+export type PlannerGraphEdge = Edge<PlannerGraphEdgeData>
 
 interface PlannerGraphInput {
   nodes: PlanningNode[]
@@ -69,6 +104,9 @@ interface PlannerGraphInput {
   proposal?: PlanProposal | null
   ownerId?: string
   mode: PlannerGraphMode
+  /** UI-1 · Canvas id passed straight through to every node card so the
+   *  version dropdown / re-run button can address the right canvas. */
+  canvasId?: string
   /** nodeId → run state, from the run being viewed (Run mode only). */
   runNodeStates?: Record<string, RunNodeState>
   ioArtifactVisibility?: Record<string, IOArtifactVisibility>
@@ -87,8 +125,23 @@ interface PlannerGraphInput {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  onRerunNode?: (nodeId: string, reference?: string) => void
+  /** UI-4 hooks — see PlannerNodeData for descriptions. */
+  onAttachDataSource?: (nodeId: string) => void
+  onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
+  onConfigureDialogue?: (nodeId: string) => void
+  /** UI-4: + Transform button on edge. */
+  onInsertTransformBetween?: (sourceNodeId: string, targetNodeId: string) => void
   creatingSessionNodeIds?: Set<string>
   showResponsibleInfo?: boolean
+  /** UI-2: assignments keyed by source node id. */
+  nodeAssignmentsByNodeId?: Record<string, NodeAssignment>
+  /** UI-2: open the assign dialog for a node. */
+  onRequestAssign?: (nodeId: string) => void
+  /** UI-2: navigate into an assigned sub-canvas. */
+  onOpenAssignedSubCanvas?: (subCanvasId: string) => void
+  /** UI-2: whether the parent canvas owner can still edit node internals. */
+  canEditInternals?: boolean
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -105,6 +158,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     artifactsByNodeId.set(artifact.nodeId, artifacts)
   }
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
+  const titleByNodeId = new Map(previewNodes.map(({ node }) => [node.id, node.title]))
   const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
     const position = node.layout
@@ -146,6 +200,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
           input.avatarUrlByUserId,
         ),
         virtual: false,
+        canvasId: input.canvasId,
         onOpenDetails: input.onOpenDetails,
         onOpenSubCanvas: input.onOpenSubCanvas,
         onOpenKanbanItem: input.onOpenKanbanItem,
@@ -157,8 +212,20 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onReplaceSession: input.onReplaceSession,
         onCancelSessionCreation: input.onCancelSessionCreation,
         onDeleteNode: input.onDeleteNode,
+        onRerunNode: input.onRerunNode,
+        upstreamSourceLabel: (() => {
+          const firstDep = (node.dependsOnNodeIds ?? [])[0]
+          return firstDep ? titleByNodeId.get(firstDep) ?? firstDep : null
+        })(),
+        onAttachDataSource: input.onAttachDataSource,
+        onRefreshExternalInput: input.onRefreshExternalInput,
+        onConfigureDialogue: input.onConfigureDialogue,
         creatingSession: input.creatingSessionNodeIds?.has(node.id) ?? false,
         showResponsibleInfo: input.showResponsibleInfo ?? true,
+        assignment: input.nodeAssignmentsByNodeId?.[node.id] ?? null,
+        onRequestAssign: input.onRequestAssign,
+        onOpenAssignedSubCanvas: input.onOpenAssignedSubCanvas,
+        canEditInternals: input.canEditInternals ?? true,
       },
     }
   })
@@ -174,7 +241,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
 
   const perceptionByNodeId = new Map(graphNodes.map((node) => [node.id, node.data.perception]))
   const edges = [
-    ...buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges),
+    ...buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges, input.onInsertTransformBetween),
     ...buildIOArtifactEdges(virtualArtifactNodes),
   ]
   return { nodes: [...graphNodes, ...virtualArtifactNodes.map((item) => item.node)], edges }
@@ -329,6 +396,126 @@ function dedupeIOArtifactItems(values: Array<string | null | undefined>): string
     result.push(normalized)
   }
   return result
+}
+
+/** A schema output slot may carry `<token>` placeholders (e.g. `<slug>`,
+ *  `<date>`, `<id>`). True when the reference still has an unfilled token. */
+export function hasTemplateToken(reference: string): boolean {
+  return /<[^<>]+>/.test(reference)
+}
+
+/** Treat each `<token>` in a slot as a wildcard within one path segment, so a
+ *  concrete `…/prd/monitor-session-block-status.md` is recognised as filling
+ *  the declared slot `…/prd/<slug>.md`. Scheme-agnostic — works for
+ *  `repo://`, `lark://`, `git://…/pull/<id>`, `artifact://…` alike. */
+export function referenceFulfillsSlot(reference: string, slot: string): boolean {
+  const ref = reference.trim()
+  const slotTrimmed = slot.trim()
+  if (!ref || !slotTrimmed) return false
+  if (!hasTemplateToken(slotTrimmed)) {
+    return ref.toLowerCase() === slotTrimmed.toLowerCase()
+  }
+  const pattern = slotTrimmed
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/<[^<>]+>/g, '[^/]*')
+  return new RegExp(`^${pattern}$`, 'i').test(ref)
+}
+
+export type ResolvedOutputStatus = 'pending' | 'current' | 'superseded'
+
+export interface ResolvedNodeOutput {
+  /** Reference to display and to key the visibility toggle on. */
+  reference: string
+  status: ResolvedOutputStatus
+  artifact: PlannerArtifact | null
+  /** The schema slot this output fills, when it fills one. */
+  fromSlot: string | null
+}
+
+/** A concrete output a node produced — either a `PlannerArtifact` record or a
+ *  bare reference persisted on `node.artifactRefs` with no artifact object. */
+interface ConcreteNodeOutput {
+  reference: string
+  artifact: PlannerArtifact | null
+  /** Sort key for supersession ordering (artifact `createdAt`; 0 otherwise). */
+  order: number
+}
+
+/** Reconcile a node's declared output slots with the outputs it actually
+ *  produced. A concrete output that matches a templated slot *fills* it
+ *  (the template stops showing alongside it); when several outputs fill the
+ *  same slot the newest is `current` and the rest are `superseded`. The
+ *  synthetic `artifact://<nodeId>/output` handle and template-token
+ *  placeholder references are never surfaced as real outputs.
+ *
+ *  Outputs come from three sources: `PlannerArtifact` records (the primary
+ *  source — they carry `createdAt` for supersession ordering), bare
+ *  `node.artifactRefs` persisted via `updateNode`, and `runtimeRefs` —
+ *  state-time output references (e.g. `subcanvas:<id>` injected by
+ *  `serviceArtifactRefs`) that are neither persisted on the node nor backed
+ *  by an artifact object. A node can legitimately hold outputs in any of
+ *  these without a matching artifact, so all are kept as artifact-less
+ *  outputs — otherwise those references would silently vanish from the
+ *  inspector. */
+export function resolveNodeOutputs(
+  node: PlanningNode,
+  artifacts: PlannerArtifact[],
+  runtimeRefs: string[] = [],
+): ResolvedNodeOutput[] {
+  const slots = (node.schema?.outputs ?? []).map((s) => s.trim()).filter(Boolean)
+  const syntheticOutput = `artifact://${node.id}/output`
+  const isRealOutput = (reference: string): boolean => {
+    const ref = reference.trim()
+    return ref !== '' && ref !== syntheticOutput && !hasTemplateToken(ref)
+  }
+
+  const fromArtifacts: ConcreteNodeOutput[] = artifacts
+    .filter((a) => a.nodeId === node.id && isRealOutput(a.reference))
+    .map((a) => ({ reference: a.reference.trim(), artifact: a, order: Date.parse(a.createdAt) || 0 }))
+  const seen = new Set(fromArtifacts.map((o) => o.reference.toLowerCase()))
+  const fromRefs: ConcreteNodeOutput[] = dedupeIOArtifactItems([
+    ...(node.artifactRefs ?? []),
+    ...runtimeRefs,
+  ])
+    .filter((ref) => isRealOutput(ref) && !seen.has(ref.trim().toLowerCase()))
+    .map((ref) => ({ reference: ref.trim(), artifact: null, order: 0 }))
+  // Artifact-less refs sort first — treated as the oldest known outputs, so a
+  // later real artifact filling the same slot supersedes them, not vice versa.
+  const concrete = [...fromRefs, ...fromArtifacts].sort((a, b) => a.order - b.order)
+
+  const claimed = new Set<ConcreteNodeOutput>()
+  const result: ResolvedNodeOutput[] = []
+
+  for (const slot of slots) {
+    const matches = concrete.filter((o) => !claimed.has(o) && referenceFulfillsSlot(o.reference, slot))
+    matches.forEach((o) => claimed.add(o))
+    if (matches.length === 0) {
+      result.push({ reference: slot, status: 'pending', artifact: null, fromSlot: slot })
+      continue
+    }
+    const current = matches[matches.length - 1]
+    result.push({ reference: current.reference, status: 'current', artifact: current.artifact, fromSlot: slot })
+    for (const old of matches.slice(0, -1)) {
+      result.push({ reference: old.reference, status: 'superseded', artifact: old.artifact, fromSlot: slot })
+    }
+  }
+  for (const o of concrete) {
+    if (claimed.has(o)) continue
+    result.push({ reference: o.reference, status: 'current', artifact: o.artifact, fromSlot: null })
+  }
+  return result
+}
+
+/** The output references worth surfacing — `current` artifacts plus
+ *  still-unfilled slot templates. Superseded artifacts are dropped. */
+export function visibleOutputReferences(
+  node: PlanningNode,
+  artifacts: PlannerArtifact[],
+  runtimeRefs: string[] = [],
+): string[] {
+  return resolveNodeOutputs(node, artifacts, runtimeRefs)
+    .filter((output) => output.status !== 'superseded')
+    .map((output) => output.reference)
 }
 
 function artifactKindFor(value: string): IOArtifactKind {
@@ -516,6 +703,7 @@ function buildDependencyEdges(
   previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
   perceptionByNodeId: Map<string, PlannerNodePerception>,
   stateEdges?: PlannerGraphStateEdge[],
+  onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void,
 ): PlannerGraphEdge[] {
   const nodeIds = new Set(previewNodes.map((item) => item.node.id))
   if (stateEdges?.length) {
@@ -528,6 +716,7 @@ function buildDependencyEdges(
         perception: edgePerception(edge.sourceNodeId, edge.targetNodeId, perceptionByNodeId, false),
         preview: false,
         forceAnimated: edge.kind === 'subCanvas',
+        onInsertTransform,
       }))
   }
   const edges: PlannerGraphEdge[] = []
@@ -540,6 +729,7 @@ function buildDependencyEdges(
         target: current.node.id,
         perception: edgePerception(dependencyId, current.node.id, perceptionByNodeId, current.previewKind !== 'none'),
         preview: current.previewKind !== 'none',
+        onInsertTransform,
       }))
     }
   }
@@ -554,6 +744,7 @@ function buildDependencyEdges(
       target: current.node.id,
       perception: edgePerception(previous.node.id, current.node.id, perceptionByNodeId, current.previewKind !== 'none'),
       preview: current.previewKind !== 'none',
+      onInsertTransform,
     }))
   }
   return edges
@@ -566,12 +757,16 @@ function edgeFor(input: {
   perception: PlannerEdgePerception
   preview: boolean
   forceAnimated?: boolean
+  onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void
 }): PlannerGraphEdge {
   return {
     id: input.id,
     source: input.source,
     target: input.target,
-    type: 'bezier',
+    // UI-4: use the transform-insert edge type so hovered edges expose a +
+    // button. The renderer falls back to a plain bezier path; behaviour is
+    // identical when `onInsertTransform` is undefined or `preview` is true.
+    type: 'transformInsert',
     animated: false,
     markerEnd: {
       type: MarkerType.ArrowClosed,
@@ -582,6 +777,10 @@ function edgeFor(input: {
     data: {
       preview: input.preview,
       perception: input.perception,
+      onInsertTransform: input.onInsertTransform,
+      // Preview edges and subCanvas edges should not show the + (would
+      // try to mutate a state that doesn't exist yet).
+      suppressInsert: input.preview || Boolean(input.forceAnimated),
     },
     className: [
       'planner-flow__edge',
@@ -619,6 +818,7 @@ function perceptionForNode(
         return 'done'
       case 'failed':
       case 'gate-wait':
+      case 'awaiting-input':
       case 'ready_to_start':
         return 'attention'
       case 'dispatched':

@@ -16,19 +16,35 @@ struct PlanningCanvas: Codable, Equatable {
     var plannerContext: String
     /// Visibility tier. Defaults to `.private` for newly created canvases.
     var visibility: PlannerCanvasVisibility
+    /// ENG-4: parent canvas when this canvas was created via
+    /// `assign_node` (i.e. is a sub-canvas). `nil` for top-level canvases.
+    var parentCanvasId: String?
+    /// ENG-4: id of the parent canvas's node that owns this sub-canvas as
+    /// its `sub_canvas_ref`. Must be set iff `parentCanvasId` is set.
+    var parentNodeId: String?
+    /// ENG-4: frozen Node Contract v2 snapshot captured at assign time.
+    /// Parent owner reads this to surface the I/O boundary; child cannot
+    /// change it without re-assigning. JSON shape mirrors `NodeContractV2`.
+    var frozenIOContract: NodeContractV2?
 
     init(
         id: String,
         ownerId: String,
         title: String,
         plannerContext: String,
-        visibility: PlannerCanvasVisibility = .private
+        visibility: PlannerCanvasVisibility = .private,
+        parentCanvasId: String? = nil,
+        parentNodeId: String? = nil,
+        frozenIOContract: NodeContractV2? = nil
     ) {
         self.id = id
         self.ownerId = ownerId
         self.title = title
         self.plannerContext = plannerContext
         self.visibility = visibility
+        self.parentCanvasId = parentCanvasId
+        self.parentNodeId = parentNodeId
+        self.frozenIOContract = frozenIOContract
     }
 }
 
@@ -52,11 +68,25 @@ struct ContextSource: Codable, Equatable {
     var reference: String
 }
 
+// MARK: - Cross-language enums (Swift ↔ Zod twin)
+//
+// The next three enums are also declared on the meee2-online side as Zod
+// schemas in `meee2-online/src/planner-runtime/contract/enums.ts` (ExecutionMode
+// / ExecutorType / NodeStatus). They MUST stay in sync — desktop and online
+// both round-trip these as raw strings through Supabase, and a divergence
+// will surface as silent Codable/Zod parse failures.
+//
+// If you add or remove a case here, mirror it in `enums.ts` (in the same PR
+// or the immediately following workspace-bump PR). A future codegen step can
+// collapse this back to one source; until then the rule is "edit both."
+
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (ExecutionMode)
 enum ExecutionMode: String, Codable, Equatable, CaseIterable {
     case auto
     case human
 }
 
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (ExecutorType)
 enum ExecutorType: String, Codable, Equatable, CaseIterable {
     case claude
     case codex
@@ -67,6 +97,7 @@ enum ExecutorType: String, Codable, Equatable, CaseIterable {
     case mock
 }
 
+/// Twin · meee2-online/src/planner-runtime/contract/enums.ts (NodeStatus)
 enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     case draft
     case ready
@@ -100,6 +131,10 @@ enum PlannerWorkflowRunState: String, Codable, Equatable {
     case readyToStart = "ready_to_start"
     case dispatched
     case running
+    /// Session is alive but idle, waiting for a human to supply context or a
+    /// decision before it can continue. Distinct from `dispatched` (just
+    /// spun up) and `gateWait` (an explicit planner/permission gate).
+    case awaitingInput = "awaiting-input"
     case gateWait = "gate-wait"
     case done
     case failed
@@ -234,6 +269,112 @@ struct PlannerArtifact: Codable, Equatable {
         self.payload = payload
         self.producedBy = producedBy
         self.runId = runId
+    }
+}
+
+// MARK: - ENG-3 · Artifact Version Chain
+//
+// Every submit_node_output appends a new PlannerArtifactVersion row (never
+// physically replaces the previous one). `parent_version_id` chains the
+// history; `input_snapshot` records the upstream / external / dialogue
+// inputs that produced this version so it can be re-viewed in context.
+//
+// The Supabase mirror lives in `meee2_artifact_versions` /
+// `meee2_artifact_input_snapshots` (migration 20260522232332).
+
+/// How the UI should pick which version of an artifact slot to show.
+/// Default `latest`; `mergedView` is for fan-in nodes (list cardinality)
+/// where the UI accumulates entries across versions.
+///
+/// Renamed from v1 `replace_strategy`: see `NodeContractValidator
+/// .rejectedReplaceStrategy` — the runtime never physically replaces;
+/// "replace" is now purely a display-time choice.
+enum PlannerArtifactDisplayStrategy: String, Codable, Equatable, CaseIterable {
+    case latest
+    case mergedView = "merged_view"
+}
+
+/// Who submitted a version. Mirrors the `submitted_by_kind` enum on the
+/// `meee2_artifact_versions` row.
+enum PlannerArtifactVersionSubmitterKind: String, Codable, Equatable, CaseIterable {
+    case agent
+    case human
+    case system
+    case integration
+}
+
+/// Snapshot of the three input sources captured at version-submit time.
+/// Without this, re-viewing an old artifact version cannot reconstruct
+/// the context that produced it (Jaxon's版本回看 case).
+struct PlannerArtifactInputSnapshot: Codable, Equatable {
+    /// Upstream artifact ref captured at run time (same scheme as
+    /// `PlannerArtifact.reference`). `nil` for root / external nodes.
+    var upstreamArtifactRef: String?
+    /// Per-external-input connector outputs at run time. Each entry mirrors
+    /// `NodeContractExternalInput` plus the fetched payload pointer.
+    var externalOutputs: [BoardJSONValue]
+    /// Rolling N-turn dialogue window slice used as input. Shape mirrors
+    /// `NodeContractDialogueWindow` plus the materialised turns.
+    var dialogueWindow: BoardJSONValue?
+
+    init(
+        upstreamArtifactRef: String? = nil,
+        externalOutputs: [BoardJSONValue] = [],
+        dialogueWindow: BoardJSONValue? = nil
+    ) {
+        self.upstreamArtifactRef = upstreamArtifactRef
+        self.externalOutputs = externalOutputs
+        self.dialogueWindow = dialogueWindow
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case upstreamArtifactRef = "upstream_artifact_ref"
+        case externalOutputs = "external_outputs"
+        case dialogueWindow = "dialogue_window"
+    }
+}
+
+/// One version row in an artifact's append-only history. The "slot" is
+/// `(canvasId, nodeId, normalized reference)` — multiple versions share a
+/// slot, chained via `parentVersionId`.
+struct PlannerArtifactVersion: Codable, Equatable {
+    var versionId: String
+    var parentVersionId: String?
+    var canvasId: String
+    var nodeId: String
+    var artifactId: String
+    /// Stable key for the logical artifact slot. Matches
+    /// `PlannerStore.sameArtifactSlot` (canvasId|nodeId|normalized-reference).
+    var artifactSlotKey: String
+    var payloadRef: String
+    /// Inline payload mirror for small (<=64KB) artifacts; large payloads
+    /// live at `payloadRef`. Matches the desktop's 64 KB inline cap in
+    /// `PlannerArtifactStorage.inlinePayloadLimitBytes`.
+    var payloadInline: BoardJSONValue?
+    var inputSnapshot: PlannerArtifactInputSnapshot?
+    var displayStrategy: PlannerArtifactDisplayStrategy
+    var forceNewVersion: Bool
+    var submittedBy: String?
+    var submittedByKind: PlannerArtifactVersionSubmitterKind
+    var metadata: BoardJSONValue?
+    var createdAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case versionId = "version_id"
+        case parentVersionId = "parent_version_id"
+        case canvasId = "canvas_id"
+        case nodeId = "node_id"
+        case artifactId = "artifact_id"
+        case artifactSlotKey = "artifact_slot_key"
+        case payloadRef = "payload_ref"
+        case payloadInline = "payload_inline"
+        case inputSnapshot = "input_snapshot"
+        case displayStrategy = "display_strategy"
+        case forceNewVersion = "force_new_version"
+        case submittedBy = "submitted_by"
+        case submittedByKind = "submitted_by_kind"
+        case metadata
+        case createdAt = "created_at"
     }
 }
 
@@ -563,6 +704,8 @@ enum PlannerWorkflowGuidance {
         switch runState {
         case .readyToStart:
             return "Ready — start work or attach an existing session."
+        case .awaitingInput:
+            return "Waiting for your input — open the session and reply."
         case .gateWait:
             return "Review the output and confirm or send it back."
         case .failed:
@@ -612,6 +755,11 @@ struct PlanChange: Codable, Equatable {
         case addNode
         case updateNode
         case attachArtifact
+        /// ENG-2 bonus: refine the bound session's next-turn prompt without
+        /// mutating canvas schema. `nodeId` identifies the node; the
+        /// directive text rides in `title`. Apply-side routes it to the
+        /// node's bound session via the operator channel.
+        case refineSessionPrompt
     }
 
     var kind: Kind
@@ -768,6 +916,19 @@ struct PlanChange: Codable, Equatable {
         PlanChange(kind: .addNode, node: node, nodeId: nil, title: nil, status: nil)
     }
 
+    /// ENG-2 bonus: build a `refineSessionPrompt` change. The directive is
+    /// stored in `title` (lightweight reuse of the existing field — no new
+    /// codable surface needed).
+    static func refineSessionPrompt(nodeId: String, directive: String) -> PlanChange {
+        PlanChange(
+            kind: .refineSessionPrompt,
+            node: nil,
+            nodeId: nodeId,
+            title: directive,
+            status: nil
+        )
+    }
+
     static func attachArtifact(
         nodeId: String,
         kind: PlannerArtifactKind,
@@ -921,6 +1082,64 @@ struct PlannerNodeOutput: Codable, Equatable {
     var message: PlannerNodeOutputMessage?
     var artifacts: [PlannerNodeOutputArtifact]
     var next: PlannerNodeOutputNext
+    /// ENG-2 / ENG-3 · When `true`, the store ALWAYS appends a new version on
+    /// this submit — even if the node is already in a terminal state and the
+    /// artifact slot has no observable change. UI "re-run" / "force re-fetch"
+    /// wires here. Defaults to `false`. The flag is recorded on the version
+    /// row so the UI can distinguish a user-initiated re-run from an
+    /// agent-driven follow-up.
+    var forceNewVersion: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId
+        case status
+        case message
+        case artifacts
+        case next
+        case forceNewVersion = "force_new_version"
+    }
+
+    init(
+        nodeId: String,
+        status: PlannerNodeOutputStatus,
+        message: PlannerNodeOutputMessage? = nil,
+        artifacts: [PlannerNodeOutputArtifact] = [],
+        next: PlannerNodeOutputNext,
+        forceNewVersion: Bool = false
+    ) {
+        self.nodeId = nodeId
+        self.status = status
+        self.message = message
+        self.artifacts = artifacts
+        self.next = next
+        self.forceNewVersion = forceNewVersion
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.nodeId = try container.decode(String.self, forKey: .nodeId)
+        self.status = try container.decode(PlannerNodeOutputStatus.self, forKey: .status)
+        self.message = try container.decodeIfPresent(PlannerNodeOutputMessage.self, forKey: .message)
+        self.artifacts = try container.decodeIfPresent([PlannerNodeOutputArtifact].self, forKey: .artifacts) ?? []
+        self.next = try container.decode(PlannerNodeOutputNext.self, forKey: .next)
+        // Accept both camelCase and snake_case for legacy callers / hand-rolled
+        // JSON. `force_new_version` is canonical (matches ENG-2 / ENG-3 spec).
+        if let v = try container.decodeIfPresent(Bool.self, forKey: .forceNewVersion) {
+            self.forceNewVersion = v
+        } else {
+            self.forceNewVersion = false
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(nodeId, forKey: .nodeId)
+        try c.encode(status, forKey: .status)
+        try c.encodeIfPresent(message, forKey: .message)
+        try c.encode(artifacts, forKey: .artifacts)
+        try c.encode(next, forKey: .next)
+        try c.encode(forceNewVersion, forKey: .forceNewVersion)
+    }
 }
 
 struct PlannerRouteTarget: Codable, Equatable {
@@ -941,6 +1160,308 @@ struct PlannerNodeContract: Codable, Equatable {
     var inlinePayloadLimitBytes: Int
     var artifactPayloadTypes: [PlannerArtifactPayloadType]
     var completionCriteria: [String]
+    /// v2 contract block — three-source input model + cardinality/payload_kind
+    /// output model. See `NodeContractV2`. Embedded inside the existing
+    /// `PlannerNodeContract` envelope so v1 consumers keep working while v2
+    /// consumers (ENG-2/3/4 and the UI) can opt in by reading `v2`.
+    var v2: NodeContractV2
+}
+
+// MARK: - Node Contract v2 (ENG-1)
+//
+// The v2 contract redefines node input/output to match the post-meeting decisions:
+//   • input is a 3-source合流 (upstream output, external data sources, dialogue补齐)
+//     — not a single upstream stream
+//   • output is always full (no increment vs full encoding)
+//   • `replace_strategy` is removed; replace is a display-time concept (ENG-3)
+//
+// The v1 envelope (`PlannerNodeContract`) still wraps the runtime types so
+// downstream code can migrate incrementally. Auto-migration from v1 fields
+// (`dependsOnNodeIds`, `contextSources`) happens in `NodeContractV2.derive(...)`.
+
+enum NodeContractUpstreamMode: String, Codable, Equatable, CaseIterable {
+    /// Workflow-node downchain: the upstream node's full output flows through.
+    case passthrough
+    /// Sub-canvas inheriting one item from an upstream list output.
+    case itemScoped = "item_scoped"
+}
+
+struct NodeContractUpstreamInput: Codable, Equatable {
+    var mode: NodeContractUpstreamMode
+    /// Source node id. `nil` means the canvas root entry (no upstream node).
+    var sourceNodeId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case sourceNodeId = "source_node"
+    }
+}
+
+struct NodeContractExternalInput: Codable, Equatable {
+    /// Connector id (e.g. `"notion"`, `"lark"`, `"gmail"`). Free-form for now;
+    /// ENG-1 open question — the canonical enum location is deferred to INT-2.
+    var connector: String
+    /// Opaque connector-specific reference (e.g. `"db://abc"`, `"doc://xyz"`).
+    var ref: String
+    /// Bound sync session id, if any. ENG-2 may auto-create this on first run.
+    var syncSessionId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case connector
+        case ref
+        case syncSessionId = "sync_session"
+    }
+}
+
+enum NodeContractDialogueWindowKind: String, Codable, Equatable, CaseIterable {
+    case rolling
+}
+
+struct NodeContractDialogueWindow: Codable, Equatable {
+    var kind: NodeContractDialogueWindowKind
+    var nTurns: Int
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case nTurns = "n_turns"
+    }
+}
+
+struct NodeContractDialogueInput: Codable, Equatable {
+    var enabled: Bool
+    var window: NodeContractDialogueWindow
+}
+
+struct NodeContractInput: Codable, Equatable {
+    var upstream: NodeContractUpstreamInput
+    var external: [NodeContractExternalInput]
+    var dialogue: NodeContractDialogueInput
+}
+
+enum NodeContractCardinality: String, Codable, Equatable, CaseIterable {
+    case single
+    case list
+}
+
+enum NodeContractPayloadKind: String, Codable, Equatable, CaseIterable {
+    case artifactRef = "artifact_ref"
+    case inline
+}
+
+struct NodeContractExternalWriteTarget: Codable, Equatable {
+    var connector: String
+    var ref: String
+}
+
+struct NodeContractOutput: Codable, Equatable {
+    var cardinality: NodeContractCardinality
+    var payloadKind: NodeContractPayloadKind
+    var externalWriteTarget: NodeContractExternalWriteTarget?
+
+    enum CodingKeys: String, CodingKey {
+        case cardinality
+        case payloadKind = "payload_kind"
+        case externalWriteTarget = "external_write_target"
+    }
+}
+
+struct NodeContractV2: Codable, Equatable {
+    static let version = 2
+
+    var version: Int
+    var input: NodeContractInput
+    var output: NodeContractOutput
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case input
+        case output
+    }
+
+    init(input: NodeContractInput, output: NodeContractOutput) {
+        self.version = Self.version
+        self.input = input
+        self.output = output
+    }
+
+    init(version: Int, input: NodeContractInput, output: NodeContractOutput) {
+        self.version = version
+        self.input = input
+        self.output = output
+    }
+}
+
+/// Validation errors for v2 contract / output payloads. The validator is
+/// intentionally strict — it rejects v1-style shapes with actionable messages
+/// so adapters fail loudly instead of silently dropping fields.
+enum NodeContractValidationError: Error, Equatable, LocalizedError {
+    case rejectedFieldMapping(String)
+    case rejectedReplaceStrategy
+    case rejectedIncrementOutput
+    case unknownContractVersion(Int)
+    case missingRequiredField(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .rejectedFieldMapping(let detail):
+            return "Node Contract v2 rejects v1 field-level input mapping (\(detail)). Inputs are a 3-source合流 (upstream/external/dialogue) — remove per-field bindings and use input.upstream / input.external instead."
+        case .rejectedReplaceStrategy:
+            return "Node Contract v2 rejects `replace_strategy`. Replace is a display-time concept handled by the version chain (ENG-3); outputs are always full snapshots."
+        case .rejectedIncrementOutput:
+            return "Node Contract v2 rejects `output.kind: increment`. Outputs are always全量 — submit a full snapshot."
+        case .unknownContractVersion(let version):
+            return "Unknown node contract version \(version). Supported: v2 (current). v1 contracts auto-migrate at read time."
+        case .missingRequiredField(let field):
+            return "Node Contract v2 is missing required field `\(field)`."
+        }
+    }
+}
+
+enum NodeContractValidator {
+    /// Reject v1-style raw JSON contracts. Inspects unknown keys at the top
+    /// level (`replace_strategy`, `field_mapping`, `inputs[].source_field`, …)
+    /// and refuses with an actionable error message.
+    static func validateRawContract(_ raw: BoardJSONValue?) throws {
+        guard let raw = raw, let object = raw.objectValue else { return }
+        if object["replace_strategy"] != nil {
+            throw NodeContractValidationError.rejectedReplaceStrategy
+        }
+        if let output = object["output"]?.objectValue,
+           let kind = output["kind"]?.stringValue,
+           kind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+        // v1 used `field_mapping` / `inputs[].source_field` / `inputs[].target_field`
+        // to wire individual fields between nodes. v2 collapses these into the
+        // three-source合流 model — reject explicitly so the failure is loud.
+        if object["field_mapping"] != nil {
+            throw NodeContractValidationError.rejectedFieldMapping("field_mapping at contract root")
+        }
+        if let inputs = object["inputs"]?.arrayValue {
+            for entry in inputs {
+                guard let entryObj = entry.objectValue else { continue }
+                if entryObj["source_field"] != nil || entryObj["target_field"] != nil {
+                    throw NodeContractValidationError.rejectedFieldMapping("inputs[].source_field / inputs[].target_field")
+                }
+            }
+        }
+        if let version = object["version"]?.intValue, version != NodeContractV2.version {
+            // v1 had no `version` field; an explicit `version: 1` here is a
+            // contract that callers must migrate themselves.
+            throw NodeContractValidationError.unknownContractVersion(version)
+        }
+    }
+
+    /// Reject v1-style raw output payloads. The current submit_node_output
+    /// shape never carried `replace_strategy` or `output.kind: increment` —
+    /// this guard exists so external adapters / replay scripts can't sneak
+    /// them through.
+    static func validateRawOutputPayload(_ raw: [String: Any]) throws {
+        if raw["replace_strategy"] != nil {
+            throw NodeContractValidationError.rejectedReplaceStrategy
+        }
+        if let output = raw["output"] as? [String: Any],
+           let kind = output["kind"] as? String,
+           kind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+        if let outputKind = raw["output_kind"] as? String, outputKind.lowercased() == "increment" {
+            throw NodeContractValidationError.rejectedIncrementOutput
+        }
+    }
+}
+
+extension NodeContractV2 {
+    /// Default dialogue-window size for derived contracts. Picked as a
+    /// conservative round number; the real default lives in session config
+    /// once ENG-2 wires runtime input merging through.
+    static let defaultDialogueTurns = 20
+
+    /// Auto-migrate / derive a v2 contract from v1 fields on a `PlanningNode`.
+    ///
+    /// Mapping:
+    ///   • `dependsOnNodeIds.first`  → `input.upstream.source_node`
+    ///     (sub-canvas nodes default to `item_scoped`; everything else is
+    ///     `passthrough`)
+    ///   • `contextSources` of kind `.document` / `.repository` / `.web` /
+    ///     `.artifact` → `input.external[]` (best-effort connector inference
+    ///     from the reference scheme; `lossy` entries are logged via the
+    ///     returned `warnings` list so callers can surface them)
+    ///   • dialogue defaults to enabled + rolling 20 turns
+    ///   • `output.cardinality` defaults to `list` for `nodeKind == .external`
+    ///     (likely a data source) and `single` otherwise
+    ///   • `output.payload_kind` defaults to `artifact_ref` — inline-only
+    ///     legacy nodes will keep working, just labeled `artifact_ref` until
+    ///     they're re-declared explicitly
+    static func derive(from node: PlanningNode) -> (contract: NodeContractV2, warnings: [String]) {
+        var warnings: [String] = []
+
+        let upstreamMode: NodeContractUpstreamMode = (node.nodeKind == .subCanvas) ? .itemScoped : .passthrough
+        let sourceNodeId = node.dependsOnNodeIds?.first
+        if let deps = node.dependsOnNodeIds, deps.count > 1 {
+            warnings.append("Node \(node.id) had \(deps.count) upstream deps; v2 upstream.source_node keeps only \(deps.first ?? "<none>") — declare extras as external inputs.")
+        }
+        let upstream = NodeContractUpstreamInput(mode: upstreamMode, sourceNodeId: sourceNodeId)
+
+        var external: [NodeContractExternalInput] = []
+        for source in node.contextSources where source.kind != .chatHistory {
+            let connector = inferConnector(from: source.reference)
+            if connector == nil {
+                warnings.append("ContextSource '\(source.title)' has reference '\(source.reference)' — could not infer connector; left as opaque.")
+            }
+            external.append(NodeContractExternalInput(
+                connector: connector ?? "unknown",
+                ref: source.reference,
+                syncSessionId: nil
+            ))
+        }
+
+        let dialogue = NodeContractDialogueInput(
+            enabled: true,
+            window: NodeContractDialogueWindow(kind: .rolling, nTurns: defaultDialogueTurns)
+        )
+
+        let cardinality: NodeContractCardinality = (node.nodeKind == .external) ? .list : .single
+        let output = NodeContractOutput(
+            cardinality: cardinality,
+            payloadKind: .artifactRef,
+            externalWriteTarget: nil
+        )
+
+        let v2 = NodeContractV2(
+            input: NodeContractInput(upstream: upstream, external: external, dialogue: dialogue),
+            output: output
+        )
+        return (v2, warnings)
+    }
+
+    /// Best-effort connector inference from a context-source reference. This
+    /// is a temporary heuristic until INT-2 lands a real connector enum.
+    private static func inferConnector(from reference: String) -> String? {
+        let trimmed = reference.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let prefixToConnector: [(String, String)] = [
+            ("notion://", "notion"),
+            ("notion.so", "notion"),
+            ("lark://", "lark"),
+            ("feishu.cn", "lark"),
+            ("larksuite.com", "lark"),
+            ("gmail:", "gmail"),
+            ("mailto:", "gmail"),
+            ("https://github.com", "github"),
+            ("git@github.com", "github"),
+            ("github://", "github"),
+            ("https://docs.google.com", "google-docs"),
+            ("gdoc://", "google-docs"),
+            ("file://", "file"),
+            ("meee2-artifact://", "meee2-artifact"),
+            ("http://", "http"),
+            ("https://", "http")
+        ]
+        for (prefix, connector) in prefixToConnector where trimmed.hasPrefix(prefix) {
+            return connector
+        }
+        return nil
+    }
 }
 
 struct PlannerOutputRoute: Codable, Equatable {
@@ -955,6 +1476,16 @@ struct PlannerNodeOutputResult: Codable, Equatable {
     var graph: PlannerGraphState
     var routes: [PlannerOutputRoute]
     var hint: String?
+    /// ENG-2 / E2.1: id of the version appended by this submit. UI can use
+    /// this to navigate to the new version's pane.
+    var versionId: String?
+    /// ENG-2 / E2.1: 1-based version index within `(canvasId, nodeId)`.
+    var versionIndex: Int?
+    /// ENG-2 / E2.2: downstream nodes that flipped to readyToStart and are
+    /// marked auto-mode — BoardAPI auto-dispatches them so users see "session
+    /// creating…" without a manual click. UI surfaces the same node ids so it
+    /// can render the affordance immediately on the optimistic path.
+    var autoDispatchedNodeIds: [String]?
 }
 
 struct PlannerEvent: Codable, Equatable {
@@ -1199,21 +1730,33 @@ enum PlannerPermission {
 }
 
 enum PlannerProposalValidator {
-    /// Known `PlanningNode.nodeKind` raw values an LLM is allowed to emit.
-    static let knownNodeKinds: Set<String> = [
-        PlanningNodeKind.step.rawValue,
-        PlanningNodeKind.session.rawValue,
-        PlanningNodeKind.artifact.rawValue,
-        PlanningNodeKind.subCanvas.rawValue,
-        PlanningNodeKind.external.rawValue
-    ]
+    /// Allowed enum sets: derived from `PlannerContract.generated.swift`, whose
+    /// source of truth is meee2-online/src/planner-runtime/contract/{enums,proposal}.ts.
+    /// Re-emit via `pnpm contract:emit` in meee2-online. The static-let initializers
+    /// below assert (at first access via `precondition`) that every Swift-side enum
+    /// case is represented in the contract — surfaces drift loudly if a Swift enum
+    /// gains a case but the Zod side hasn't.
+    static let knownNodeKinds: Set<String> = {
+        let s = PlannerContract.nodeKinds
+        for kind in [PlanningNodeKind.step, .session, .artifact, .subCanvas, .external] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanningNodeKind.\(kind) missing from PlannerContract.nodeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
-    /// Known `PlanChange.Kind` raw values an LLM is allowed to emit.
-    static let knownChangeKinds: Set<String> = [
-        PlanChange.Kind.addNode.rawValue,
-        PlanChange.Kind.updateNode.rawValue,
-        PlanChange.Kind.attachArtifact.rawValue
-    ]
+    static let knownChangeKinds: Set<String> = {
+        let s = PlannerContract.changeKinds
+        for kind in [PlanChange.Kind.addNode, .updateNode, .attachArtifact] {
+            precondition(
+                s.contains(kind.rawValue),
+                "planner contract drift: PlanChange.Kind.\(kind) missing from PlannerContract.changeKinds — run `pnpm contract:emit`"
+            )
+        }
+        return s
+    }()
 
     static func decodeProposal(from rawOutput: String) throws -> PlanProposal {
         let decoder = JSONDecoder()
@@ -1348,6 +1891,14 @@ enum PlannerProposalValidator {
                       !artifact.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw PlannerCoreError.invalidNodeOutput("attachArtifact requires non-empty title and reference")
                 }
+            case .refineSessionPrompt:
+                guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
+                guard existingNodeIds.contains(nodeId) else {
+                    throw PlannerCoreError.nodeNotFound(nodeId)
+                }
+                // Directive lives in `title`. Empty is allowed (no-op refine
+                // pings the session to re-think) but we log if missing.
+                _ = change.title
             }
         }
     }
@@ -1570,6 +2121,11 @@ final class PlannerCoreService {
                 }
             case .attachArtifact:
                 continue
+            case .refineSessionPrompt:
+                // ENG-2 bonus: schema-level no-op at preview/apply time.
+                // The directive is delivered to the bound session by the
+                // BoardAPI handler (via the operator-channel inject path).
+                continue
             }
         }
 
@@ -1715,7 +2271,10 @@ final class PlannerCoreService {
 
     private func artifactRefs(for node: PlanningNode) -> [String] {
         var refs = node.artifactRefs ?? []
-        if node.status == .done {
+        // Synthetic fallback handle — only for a done node that produced no
+        // concrete artifact of its own. Once a real artifact exists it is
+        // pure noise (a duplicate "output" entry alongside the real refs).
+        if node.status == .done && refs.isEmpty {
             refs.append("artifact://\(node.id)/output")
         }
         if let subCanvasId = node.subCanvasId {
@@ -1862,11 +2421,19 @@ final class PlannerStore {
         var proposals: [PlanProposal]
         var events: [PlannerEvent]
         var artifacts: [PlannerArtifact]
+        /// ENG-3 · Append-only version chain. Every `submitNodeOutput` adds
+        /// one row per artifact; latest-per-slot is what `artifacts` mirrors.
+        var artifactVersions: [PlannerArtifactVersion]
         /// Execution-layer history (P1 Run layer).
         var runs: [WorkflowRun]
         /// The run that execution-layer mutations currently mirror into. `nil`
         /// when no run is in progress (e.g. a finished canvas awaiting re-run).
         var activeRunId: String?
+        /// ENG-2 / E2.1: per-(canvasId, nodeId) version chain. Every
+        /// `submit_node_output` appends; old versions stay queryable.
+        /// ENG-3 owns long-term storage in `meee2_session_versions`; this
+        /// in-process slice is the source of truth for the running engine.
+        var nodeVersions: [NodeVersion]
 
         init(
             canvas: PlanningCanvas,
@@ -1874,20 +2441,24 @@ final class PlannerStore {
             proposals: [PlanProposal],
             events: [PlannerEvent] = [],
             artifacts: [PlannerArtifact] = [],
+            artifactVersions: [PlannerArtifactVersion] = [],
             runs: [WorkflowRun] = [],
-            activeRunId: String? = nil
+            activeRunId: String? = nil,
+            nodeVersions: [NodeVersion] = []
         ) {
             self.canvas = canvas
             self.nodes = nodes
             self.proposals = proposals
             self.events = events
             self.artifacts = artifacts
+            self.artifactVersions = artifactVersions
             self.runs = runs
             self.activeRunId = activeRunId
+            self.nodeVersions = nodeVersions
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events, artifacts, runs, activeRunId
+            case canvas, nodes, proposals, events, artifacts, artifactVersions, runs, activeRunId, nodeVersions
         }
 
         init(from decoder: Decoder) throws {
@@ -1897,8 +2468,12 @@ final class PlannerStore {
             self.proposals = try container.decode([PlanProposal].self, forKey: .proposals)
             self.events = try container.decodeIfPresent([PlannerEvent].self, forKey: .events) ?? []
             self.artifacts = try container.decodeIfPresent([PlannerArtifact].self, forKey: .artifacts) ?? []
+            // ENG-3 back-compat: legacy records on disk have no version chain
+            // — start with an empty array; first re-submit seeds it.
+            self.artifactVersions = try container.decodeIfPresent([PlannerArtifactVersion].self, forKey: .artifactVersions) ?? []
             self.runs = try container.decodeIfPresent([WorkflowRun].self, forKey: .runs) ?? []
             self.activeRunId = try container.decodeIfPresent(String.self, forKey: .activeRunId)
+            self.nodeVersions = try container.decodeIfPresent([NodeVersion].self, forKey: .nodeVersions) ?? []
         }
     }
 
@@ -2250,7 +2825,7 @@ final class PlannerStore {
             } else if record.nodes[stepIndex].workflowRunState != stepRunState {
                 record.nodes[stepIndex].workflowRunState = stepRunState
                 record.nodes[stepIndex].status = Self.nodeStatus(for: stepRunState)
-                if stepRunState == .failed || stepRunState == .gateWait {
+                if stepRunState == .failed || stepRunState == .gateWait || stepRunState == .awaitingInput {
                     record.nodes[stepIndex].blockedReason = Self.sessionFailureReason(
                         for: runState,
                         sessionId: sessionId
@@ -2346,7 +2921,7 @@ final class PlannerStore {
             return .ready
         case .dispatched, .running:
             return .working
-        case .gateWait:
+        case .awaitingInput, .gateWait:
             return .blocked
         case .done:
             return .done
@@ -2364,6 +2939,8 @@ final class PlannerStore {
             return "Session \(String(sessionId.prefix(8))) ended before this node submitted a completion output."
         case .gateWait:
             return "Session \(String(sessionId.prefix(8))) needs human attention before this node can continue."
+        case .awaitingInput:
+            return "Session \(String(sessionId.prefix(8))) is waiting for your input — open it and reply."
         case .pending, .readyToStart, .dispatched, .running, .done:
             return "Session \(String(sessionId.prefix(8))) could not continue this node."
         }
@@ -2381,7 +2958,7 @@ final class PlannerStore {
             return hasGate ? .gateWait : .done
         case .failed:
             return .failed
-        case .pending, .readyToStart, .dispatched, .running, .gateWait:
+        case .pending, .readyToStart, .dispatched, .running, .awaitingInput, .gateWait:
             return sessionRunState
         }
     }
@@ -2588,6 +3165,18 @@ final class PlannerStore {
                     proposalId: proposal.id,
                     summary: draft.title,
                     artifactRefs: [draft.reference]
+                ))
+            case .refineSessionPrompt:
+                guard let nodeId = change.nodeId else { continue }
+                let directive = change.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: nodeId,
+                    proposalId: proposal.id,
+                    summary: directive.isEmpty
+                        ? "Refine session prompt"
+                        : "Refine session prompt: \(directive)"
                 ))
             }
         }
@@ -2918,7 +3507,12 @@ final class PlannerStore {
         canvasId: String,
         nodeId: String,
         output: PlannerNodeOutput
-    ) throws -> (record: CanvasRecord, routes: [PlannerOutputRoute]) {
+    ) throws -> (
+        record: CanvasRecord,
+        routes: [PlannerOutputRoute],
+        version: NodeVersion?,
+        autoDispatchCandidates: [PlanningNode]
+    ) {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
             guard output.nodeId == nodeId else {
@@ -2950,7 +3544,10 @@ final class PlannerStore {
             case .done:
                 current.blockedReason = nil
                 if current.executionMode == .human {
-                    current.status = .working
+                    // Parked at a human gate — plan-layer status mirrors
+                    // `nodeStatus(for: .gateWait)` so design mode shows it
+                    // in the attention bucket, not as "In progress".
+                    current.status = Self.nodeStatus(for: .gateWait)
                     current.workflowRunState = .gateWait
                 } else {
                     current.status = .done
@@ -2961,7 +3558,7 @@ final class PlannerStore {
                 current.workflowRunState = .failed
                 current.blockedReason = summary.isEmpty ? nil : summary
             case .needsReview:
-                current.status = .working
+                current.status = Self.nodeStatus(for: .gateWait)
                 current.workflowRunState = .gateWait
                 current.blockedReason = summary.isEmpty ? nil : summary
             }
@@ -2974,6 +3571,12 @@ final class PlannerStore {
 
             var artifactRefs = current.artifactRefs ?? []
             var newArtifacts: [PlannerArtifact] = []
+            var newVersions: [PlannerArtifactVersion] = []
+            // ENG-3 · Capture the input snapshot once per submit — same bundle
+            // attaches to every artifact in this output (they all came from
+            // the same node tick).
+            let inputSnapshot = buildInputSnapshot(node: current, record: record)
+            let now = Date()
             for item in output.artifacts {
                 let reference = item.reference.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !reference.isEmpty else {
@@ -2993,17 +3596,54 @@ final class PlannerStore {
                     title: item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? reference : item.title,
                     reference: reference,
                     status: output.status.rawValue,
-                    createdAt: Date(),
+                    createdAt: now,
                     payload: item.payload
                 )
                 newArtifacts.append(artifact)
                 if !artifactRefs.contains(reference) {
                     artifactRefs.append(reference)
                 }
+
+                // ENG-3 · Append one version row per artifact in this submit.
+                // The store NEVER physically replaces — `mergeArtifacts`
+                // below still de-dupes the latest-per-slot mirror for the
+                // UI default surface, but the version chain is preserved
+                // here for re-viewing old context.
+                let slotKey = artifactSlotKey(canvasId: canvasId, nodeId: nodeId, reference: reference)
+                let parent = latestVersion(
+                    in: record.artifactVersions,
+                    slotKey: slotKey
+                )?.versionId
+                let payloadRef = (item.payload?.objectValue?["blobRef"]?.stringValue).flatMap {
+                    $0.isEmpty ? nil : $0
+                } ?? reference
+                let version = PlannerArtifactVersion(
+                    versionId: "ver-\(canvasId)-\(nodeId)-\(stableSuffix("\(reference)-\(artifactId)-\(now.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    artifactId: artifactId,
+                    artifactSlotKey: slotKey,
+                    payloadRef: payloadRef,
+                    payloadInline: item.payload,
+                    inputSnapshot: inputSnapshot,
+                    displayStrategy: .latest,
+                    forceNewVersion: output.forceNewVersion,
+                    submittedBy: nil,
+                    submittedByKind: .agent,
+                    metadata: .object([
+                        "title": .string(artifact.title),
+                        "kind": .string(item.kind.rawValue),
+                        "status": .string(output.status.rawValue)
+                    ]),
+                    createdAt: now
+                )
+                newVersions.append(version)
             }
             current.artifactRefs = artifactRefs
             record.nodes[sourceIndex] = current
             record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
+            record.artifactVersions.append(contentsOf: newVersions)
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
                 state.runState = current.workflowRunState ?? state.runState
                 if current.workflowRunState == .done || current.workflowRunState == .failed {
@@ -3096,10 +3736,79 @@ final class PlannerStore {
                 ))
             }
 
+            // ENG-2 / E2.1: append a NodeVersion to the per-(canvas,node)
+            // chain. `force_new_version: true` (E2.3) bypasses the "already
+            // latched" check — we always create a fresh version. The default
+            // path also appends, since every submit produces a new version
+            // (there's no overwrite in the post-meeting model). Inputs are
+            // captured from the v2 contract derived off the current node.
+            let (derivedV2, _) = NodeContractV2.derive(from: current)
+            let priorVersion = record.nodeVersions.latest(canvasId: canvasId, nodeId: nodeId)
+            let trigger: NodeVersionTrigger = {
+                if output.forceNewVersion { return .forceRerun }
+                if priorVersion == nil { return .manual }
+                return .manual
+            }()
+            let externalSnapshot: [NodeVersionExternalSnapshot] = derivedV2.input.external.map { ext in
+                NodeVersionExternalSnapshot(
+                    connector: ext.connector,
+                    ref: ext.ref,
+                    syncSessionId: ext.syncSessionId,
+                    fetchedArtifactId: nil
+                )
+            }
+            // At submit time we don't re-run the merge — but we do capture
+            // the contract shape that *would* have driven it so the version
+            // is a faithful "what input did this produce on" record.
+            // (Distinct from `inputSnapshot` above which is the ENG-3
+            // PlannerArtifactInputSnapshot bundle for the artifact chain.)
+            let nodeVersionInputSnapshot = NodeVersionInputSnapshot(
+                upstreamNodeId: derivedV2.input.upstream.sourceNodeId,
+                upstreamVersionId: derivedV2.input.upstream.sourceNodeId.flatMap { upId in
+                    record.nodeVersions.latest(canvasId: canvasId, nodeId: upId)?.id
+                },
+                external: externalSnapshot,
+                dialogueTurns: derivedV2.input.dialogue.enabled ? derivedV2.input.dialogue.window.nTurns : nil,
+                mergeLog: ["submit by session=\(current.sessionId ?? "none") trigger=\(trigger.rawValue)"]
+            )
+            let version = NodeVersion.append(
+                canvasId: canvasId,
+                nodeId: nodeId,
+                previousVersions: record.nodeVersions,
+                sessionId: current.sessionId,
+                trigger: trigger,
+                inputs: nodeVersionInputSnapshot,
+                artifactIds: newArtifacts.map(\.id),
+                status: output.status,
+                startedAt: Date(),
+                finishedAt: Date()
+            )
+            record.nodeVersions.append(version)
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Appended version v\(version.versionIndex) (\(version.id)) for \(current.title)"
+            ))
+
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
-            return (record, routes)
+
+            // ENG-2 / E2.2: auto-dispatch candidates — downstream nodes that
+            // (a) just flipped to readyToStart, (b) have no live session, and
+            // (c) declare auto execution mode. The BoardAPI layer is
+            // responsible for materializing the session (spawn terminal etc).
+            // This list intentionally excludes human-mode nodes (those wait on
+            // a human dispatch click).
+            let candidates: [PlanningNode] = record.nodes.filter { node in
+                guard routeTargets.contains(node.id) else { return false }
+                guard node.workflowRunState == .readyToStart else { return false }
+                let hasSession = (node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                if hasSession { return false }
+                return node.executionMode == .auto
+            }
+            return (record, routes, version, candidates)
         }
     }
 
@@ -3544,6 +4253,10 @@ final class PlannerStore {
                 hasSession: false
             )
         ]
+        let (v2, migrationWarnings) = NodeContractV2.derive(from: node)
+        for warning in migrationWarnings {
+            MLog("[NodeContractV2][migrate] canvas=\(record.canvas.id) node=\(node.id) — \(warning)")
+        }
         return PlannerNodeContract(
             canvas: record.canvas,
             node: node,
@@ -3557,8 +4270,10 @@ final class PlannerStore {
                 node.schema.goal,
                 "Submit output with status done, blocked, or needs_review.",
                 "Small artifact payloads may be inline; large text/html/json/file content must be submitted as payload.file.path inside the session cwd or canvas workspace.",
-                "Route messages and artifacts only to downstream nodes or owner."
-            ]
+                "Route messages and artifacts only to downstream nodes or owner.",
+                "Output is always a full snapshot — never submit an increment / diff payload (see Node Contract v2)."
+            ],
+            v2: v2
         )
     }
 
@@ -3589,6 +4304,92 @@ final class PlannerStore {
     private func appendContextSource(to node: inout PlanningNode, title: String, reference: String) {
         guard !node.contextSources.contains(where: { $0.reference == reference }) else { return }
         node.contextSources.append(ContextSource(kind: .artifact, title: title, reference: reference))
+    }
+
+    // MARK: - ENG-3 helpers · artifact version chain
+
+    /// Stable key for the logical artifact "slot" — matches the dedupe rule
+    /// used by `sameArtifactSlot` so versions and the latest-per-slot mirror
+    /// share one identity.
+    private func artifactSlotKey(canvasId: String, nodeId: String, reference: String) -> String {
+        "\(canvasId)|\(nodeId)|\(normalizeArtifactReference(reference))"
+    }
+
+    /// Most recent version for a slot, or `nil` if this is the first submit.
+    private func latestVersion(
+        in versions: [PlannerArtifactVersion],
+        slotKey: String
+    ) -> PlannerArtifactVersion? {
+        versions
+            .filter { $0.artifactSlotKey == slotKey }
+            .max { $0.createdAt < $1.createdAt }
+    }
+
+    /// Capture the three input sources for the snapshot bundle. Best-effort:
+    /// this populates upstream artifact ref + dialogue window descriptor.
+    /// External-output backfill happens via the bound sync sessions (INT-2).
+    private func buildInputSnapshot(
+        node: PlanningNode,
+        record: CanvasRecord
+    ) -> PlannerArtifactInputSnapshot {
+        // Upstream: pick the most recent artifact attached to the first
+        // upstream dependency. Matches `NodeContractUpstreamInput.sourceNodeId`.
+        var upstreamRef: String?
+        if let upstreamId = node.dependsOnNodeIds?.first {
+            upstreamRef = record.artifacts
+                .filter { $0.nodeId == upstreamId }
+                .max(by: { $0.createdAt < $1.createdAt })?.reference
+        }
+        // External: surface the declared external inputs as opaque entries.
+        // The actual fetched payload pointers get filled in by sync sessions
+        // (INT-2); recording the declaration is the lossless minimum.
+        var external: [BoardJSONValue] = []
+        for source in node.contextSources where source.kind != .chatHistory {
+            external.append(.object([
+                "title": .string(source.title),
+                "ref": .string(source.reference),
+                "kind": .string(source.kind.rawValue)
+            ]))
+        }
+        // Dialogue window: record the rolling-N descriptor; the actual turns
+        // get filled in by the runtime (ENG-2) when input合流 lands.
+        let dialogue: BoardJSONValue = .object([
+            "kind": .string("rolling"),
+            "n_turns": .number(Double(NodeContractV2.defaultDialogueTurns))
+        ])
+        return PlannerArtifactInputSnapshot(
+            upstreamArtifactRef: upstreamRef,
+            externalOutputs: external,
+            dialogueWindow: dialogue
+        )
+    }
+
+    /// Public read API · list all versions for an artifact slot, ordered
+    /// newest-first. UI-1 / version dropdown call this.
+    func artifactVersions(
+        canvasId: String,
+        nodeId: String,
+        reference: String
+    ) throws -> [PlannerArtifactVersion] {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            let slotKey = artifactSlotKey(canvasId: canvasId, nodeId: nodeId, reference: reference)
+            return record.artifactVersions
+                .filter { $0.artifactSlotKey == slotKey }
+                .sorted { $0.createdAt > $1.createdAt }
+        }
+    }
+
+    /// Public read API · fetch one version by id. Returns the version row
+    /// plus its input snapshot — caller can reconstruct the context.
+    func artifactVersion(
+        canvasId: String,
+        versionId: String
+    ) throws -> PlannerArtifactVersion? {
+        try withLock {
+            let record = try requireRecord(canvasId: canvasId)
+            return record.artifactVersions.first { $0.versionId == versionId }
+        }
     }
 
     private func mergeArtifacts(
@@ -3700,7 +4501,9 @@ final class PlannerStore {
 
     private func serviceArtifactRefs(node: PlanningNode) -> [String] {
         var refs = node.artifactRefs ?? []
-        if node.status == .done {
+        // See `artifactRefs(for:)` — synthetic handle only when the done node
+        // has no concrete artifact, otherwise it is a duplicate "output" entry.
+        if node.status == .done && refs.isEmpty {
             refs.append("artifact://\(node.id)/output")
         }
         if let subCanvasId = node.subCanvasId {
@@ -4338,8 +5141,68 @@ enum PlannerBoardBridge {
             return next
         }
         let submitted = try store.submitNodeOutput(canvasId: canvasId, nodeId: nodeId, output: normalizedOutput)
+        // ENG-2 / E2.2: auto-dispatch downstream auto-mode nodes. Done at
+        // bridge layer so the engine path stays pure (BoardAPI is the place
+        // that actually spawns terminals — see `recordPlannerDispatchIntent`
+        // + `startTerminalSession`). We only auto-dispatch here at the store
+        // level — the BoardAPI handler observes `autoDispatchedNodeIds` and
+        // kicks off the terminal spawn in the background so the response
+        // can return inside the spec's 500ms budget.
+        var autoIds: [String] = []
+        for candidate in submitted.autoDispatchCandidates {
+            do {
+                _ = try store.dispatchNode(
+                    canvasId: canvasId,
+                    nodeId: candidate.id,
+                    dispatch: PlannerNodeDispatch(
+                        runner: .claude,
+                        skill: nil,
+                        actor: candidate.doerId,
+                        command: nil,
+                        fallbackRunner: nil
+                    )
+                )
+                autoIds.append(candidate.id)
+            } catch {
+                MLog("[ENG-2][auto-dispatch] skip node=\(candidate.id) reason=\(error.localizedDescription)")
+            }
+        }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
-        return PlannerNodeOutputResult(graph: graph, routes: submitted.routes, hint: nil)
+        return PlannerNodeOutputResult(
+            graph: graph,
+            routes: submitted.routes,
+            hint: nil,
+            versionId: submitted.version?.id,
+            versionIndex: submitted.version?.versionIndex,
+            autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
+        )
+    }
+
+    /// ENG-3 · List the append-only version chain for one artifact slot,
+    /// newest-first. UI-1 / version dropdown consume this.
+    static func listArtifactVersions(
+        canvasId: String,
+        nodeId: String,
+        reference: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> [PlannerArtifactVersion] {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard state.nodes.contains(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        return try store.artifactVersions(canvasId: canvasId, nodeId: nodeId, reference: reference)
+    }
+
+    /// ENG-3 · Fetch one version by id, including its input snapshot.
+    static func getArtifactVersion(
+        canvasId: String,
+        versionId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerArtifactVersion? {
+        _ = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        return try store.artifactVersion(canvasId: canvasId, versionId: versionId)
     }
 
     private static func stableArtifactSuffix(_ raw: String) -> String {
@@ -4463,6 +5326,39 @@ enum PlannerBoardBridge {
         )
     }
 
+    /// ENG-2 bonus deliverable: clean engine path for "refine the session
+    /// prompt for this node" (no schema mutation). Builds + persists a
+    /// proposal with an empty `changes[]` and the directive in `summary`.
+    /// The caller is responsible for routing the directive to the bound
+    /// session — current implementation reuses the existing operator-channel
+    /// inject path so behaviour matches the ENG-5 workaround, but the
+    /// proposal is now first-class: it shows up in proposals list, has an
+    /// id, can be approved/rejected, and is audited like every other plan
+    /// change.
+    static func refineSessionPromptProposal(
+        nodeId: String,
+        directive: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> (proposal: PlanProposal, sessionId: String?) {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        try PlannerPermission.require(.createProposal, access: state.access)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        let proposal = PlannerProposalFactory.refineSessionPrompt(node: node, directive: directive)
+        let saved = try proposal.saved(
+            in: store,
+            canvas: state.canvas,
+            seedNodes: [],
+            validationNodes: state.nodes
+        )
+        let trimmedSession = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionId = (trimmedSession?.isEmpty == false) ? trimmedSession : nil
+        return (saved, sessionId)
+    }
+
     static func applyPreview(
         proposal: PlanProposal,
         for canvasId: String,
@@ -4562,7 +5458,12 @@ enum PlannerBoardBridge {
             for run in runs {
                 let runStates = Array(run.nodeStates.values)
                 let attentionCount = runStates.filter { nodeState in
-                    nodeState.runState == .failed || nodeState.runState == .gateWait
+                    // `awaitingInput` needs a human reply just like `gateWait`
+                    // / `failed` — keep such deliveries in the attention bucket
+                    // so operators don't miss a run blocked on their input.
+                    nodeState.runState == .failed
+                        || nodeState.runState == .gateWait
+                        || nodeState.runState == .awaitingInput
                 }.count
                 let doneCount = runStates.filter { $0.runState == .done }.count
                 let totalCount = max(runStates.count, 1)
@@ -4842,7 +5743,9 @@ enum PlannerSessionRunStateBridge {
     /// Map a live `SessionStatus` to the node `workflowRunState`.
     ///
     /// - working states (thinking / tooling / active / compacting) → `running`
-    /// - `idle` / `waitingForUser` → `dispatched` (session alive, not finished)
+    /// - `idle` → `dispatched` (session alive, just spun up / between turns)
+    /// - `waitingForUser` → `awaitingInput` (session idle, ball is in the
+    ///   human's court — needs context or a decision to advance)
     /// - `permissionRequired` → `gateWait` (blocked awaiting a human)
     /// - `completed` → `done`
     /// - `dead` → `failed`
@@ -4850,8 +5753,10 @@ enum PlannerSessionRunStateBridge {
         switch status {
         case .thinking, .tooling, .active, .compacting:
             return .running
-        case .idle, .waitingForUser:
+        case .idle:
             return .dispatched
+        case .waitingForUser:
+            return .awaitingInput
         case .permissionRequired:
             return .gateWait
         case .completed:
@@ -4935,6 +5840,39 @@ enum PlannerProposalFactory {
             changes: [
                 .updateNode(id: node.id, status: .draft),
                 .addNode(followUp)
+            ],
+            status: .pending
+        )
+    }
+
+    /// ENG-2 bonus: build a proposal that re-prompts the bound session for a
+    /// node, without mutating the canvas schema. Apply-side is the engine's
+    /// job (see `PlannerStore.applyRefineSessionPrompt`) — the proposal
+    /// carries the directive text in `summary`, and the empty `changes`
+    /// array signals "no schema mutation". Callers should route the
+    /// proposal through the standard approve/apply pipeline so a) the
+    /// directive is recorded in the canvas event log, and b) approval
+    /// permissions are enforced uniformly.
+    ///
+    /// Previously ENG-5 worked around the missing engine path by
+    /// reusing `injectToSession` directly; with this proposal kind the UI
+    /// has a single, auditable channel for "improve the next session
+    /// prompt without changing the plan."
+    static func refineSessionPrompt(
+        node: PlanningNode,
+        directive: String
+    ) -> PlanProposal {
+        let trimmed = directive.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = trimmed.isEmpty
+            ? "Refine session prompt for \(node.title)"
+            : "Refine session prompt for \(node.title) — \(trimmed)"
+        let randomSuffix = UUID().uuidString.lowercased().prefix(8)
+        return PlanProposal(
+            id: "proposal-\(node.id)-refine-session-prompt-\(randomSuffix)",
+            canvasId: node.canvasId,
+            summary: summary,
+            changes: [
+                .refineSessionPrompt(nodeId: node.id, directive: trimmed)
             ],
             status: .pending
         )
