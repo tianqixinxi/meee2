@@ -942,11 +942,10 @@ public struct SettingsView: View {
 
                         Spacer()
 
-                        // 触发 Sparkle modal —— 不再走 GitHub 网页手动下载。
-                        // AppDelegate 接到这条通知会调
-                        // SPUStandardUpdaterController.checkForUpdates,弹
-                        // "Install / Skip / Remind" 对话框,用户点 Install
-                        // 后 Sparkle 自动 download → verify EdDSA → relaunch。
+                        // 触发 Sparkle install flow —— 不再走 GitHub 网页手动下载。
+                        // AppDelegate 接到这条通知会优先消费已经 staged 的包;
+                        // 没有 staged 包或 staged 已过时则跑 user-initiated
+                        // checkForUpdates 下载、验签并重启。
                         Button("Install Update…") {
                             NotificationCenter.default.post(
                                 name: Notification.Name("meee2.checkForUpdates"),
@@ -960,9 +959,8 @@ public struct SettingsView: View {
 
                 // "Check for Updates" 同时干两件事：
                 //   1. 跑自己的 appcast 拉取，刷 Settings 的 Current/Latest 显示
-                //   2. 发通知让 AppDelegate 调 SPUStandardUpdaterController 起
-                //      Sparkle 的标准 modal flow（找到新版 → Install/Skip/Later
-                //      用户对话框 → 下载 → 重启）。
+                //   2. 发通知让 AppDelegate 走同一套 Sparkle staged/fresh-check
+                //      安装分支。
                 // 数据源（appcast.xml）是一份的，这里只是把"显示新版本号"
                 // 跟"真去装"两个动作合到一个按钮上。
                 Button("Check for Updates") {

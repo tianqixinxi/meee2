@@ -13,10 +13,22 @@ Sparkle owns:
 - checking the appcast
 - downloading signed/notarized app archives
 - replacing the installed app
-- prompting for restart when needed
+- relaunching after the user chooses to install
 
 This is the path for Swift code, the BoardServer, entitlements, bundled
 plugins, and the fallback WebDist.
+
+The current client uses `SPUUpdater` with `SilentInstallUserDriver`:
+
+- Sparkle automatic checks are enabled with `SUScheduledCheckInterval=3600`.
+- `AppDelegate` also kicks one background check shortly after launch.
+- Background checks download, verify, and stage the DMG, then halt before
+  install.
+- The Board Update pill polls `/api/version` locally; no push channel is
+  required for update discovery.
+- When the user clicks the pill, the already staged update is applied and the
+  app relaunches immediately. If the staged version is stale or missing, the app
+  runs a user-initiated Sparkle check and installs the current latest version.
 
 ## Board Shell
 

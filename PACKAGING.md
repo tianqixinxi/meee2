@@ -17,9 +17,8 @@ export NOTARY_PROFILE=meee2-notary    # one-time setup below
 export VERSION=0.3.0
 NOTARIZE=1 NOTARIZE_APP=1 UNIVERSAL=1 ./create-dmg.sh
 
-# CI auto-release (push tag v0.3.0): GitHub Actions does the same thing
-# IF the secrets below are configured. Otherwise it produces an ad-hoc DMG.
-git tag v0.3.0 && git push origin v0.3.0
+# CI release: Actions → Release → Run workflow, enter version 0.3.0.
+# Build runs first, publish waits for the `release` environment approval.
 ```
 
 ## Scripts
@@ -98,7 +97,7 @@ Verify:
 xcrun notarytool history --keychain-profile meee2-notary
 ```
 
-## GitHub Secrets (for CI auto-release)
+## GitHub Secrets (for release workflow)
 
 `.github/workflows/release.yml` looks for these. Missing ANY of the
 signing trio → auto-fallback to ad-hoc. Missing notary trio → sign but
@@ -221,16 +220,16 @@ and "manual triggered, human-approved publish."
 - [x] **Uninstall script** (`uninstall.sh`) — surgical cleanup of state +
   Claude hooks + MCP registrations. dry-run by default.
 - [x] **Sparkle auto-update** — `sparkle-project/Sparkle` 2.x added as
-  SwiftPM dep, `SPUStandardUpdaterController` wired into `AppDelegate`,
-  status-bar menu has "Check for Updates…" item. `App/Info.plist` carries
-  `SUFeedURL` (raw appcast.xml on the `appcast` branch — kept off `main`
-  because `main` has branch protection that blocks even GITHUB_TOKEN's
-  push) + `SUPublicEDKey`. Each release CI run (when
+  SwiftPM dep, `SPUUpdater` + `SilentInstallUserDriver` wired into
+  `AppDelegate`, and the status-bar menu has "Check for Updates…" item.
+  `App/Info.plist` carries `SUFeedURL` (raw appcast.xml on the `appcast`
+  branch — kept off `main` because `main` has branch protection that blocks
+  even GITHUB_TOKEN's push) + `SUPublicEDKey`. Each release CI run (when
   `SPARKLE_ED_PRIVATE_KEY_BASE64` secret is set) signs the notarized DMG
   with EdDSA and pushes a fresh `<item>` into `appcast.xml` on the
-  `appcast` branch via `scripts/sparkle-publish.sh`. Skips silently when
-  the secret is missing — DMG still ships, just no auto-update for that
-  version.
+  `appcast` branch via `scripts/sparkle-publish.sh`. If the secret is
+  missing, the workflow still publishes the signed/notarized DMG but skips
+  the appcast update, so older clients will not auto-discover that version.
 
 ### NOT done — needs your input
 
@@ -259,15 +258,16 @@ and "manual triggered, human-approved publish."
 ./deploy.sh           # ad-hoc OK; will warn but works
 ```
 
-### "I'm shipping a release tag right now"
+### "I'm shipping a release right now"
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
-# CI does the rest (assuming secrets are wired)
+# GitHub UI: Actions → Release → Run workflow
+# version: 0.3.0
+# prerelease: false
+# Approve the publish job in the `release` environment after checking the artifact.
 ```
 
-### "I want to manually sanity-check a notarized DMG before tagging"
+### "I want to manually sanity-check a notarized DMG before release"
 
 ```bash
 export IDENTITY="Developer ID Application: ... (TEAMID)"
