@@ -432,9 +432,6 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
         let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
         if embeddedTerminals[key] != nil {
-            if activeEmbeddedTerminalKey != key, let cached = embeddedTerminals[key] {
-                hostEmbeddedTerminalView(cached, hidden: true)
-            }
             rememberEmbeddedTerminal(key)
             logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
             return
@@ -445,7 +442,6 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
         created.hide()
         embeddedTerminals[key] = created
-        hostEmbeddedTerminalView(created, hidden: true)
         rememberEmbeddedTerminal(key)
         logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false cacheCount=\(embeddedTerminals.count)")
     }
