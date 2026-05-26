@@ -457,11 +457,11 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
             return
         }
-        created.hide()
+        hostEmbeddedTerminalView(created, frame: .zero, hidden: true)
         embeddedTerminals[key] = created
         rememberEmbeddedTerminal(key)
         dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: false)
-        logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false cacheCount=\(embeddedTerminals.count)")
+        logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false hosted=true cacheCount=\(embeddedTerminals.count)")
     }
 
     private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, tracePayload: [String: Any]? = nil) -> Bool {
