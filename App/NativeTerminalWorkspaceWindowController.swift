@@ -70,6 +70,18 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         view.removeFromSuperview()
     }
 
+    func hide() {
+        guard !detached else { return }
+        view.setSurfaceVisible(false)
+        view.isHidden = true
+    }
+
+    func matches(surfaceId rawSurfaceId: String, sessionId rawSessionId: String?) -> Bool {
+        if !rawSurfaceId.isEmpty, rawSurfaceId == surfaceId { return true }
+        if let rawSessionId, !rawSessionId.isEmpty, rawSessionId == sessionId { return true }
+        return false
+    }
+
     func focus() {
         view.window?.makeFirstResponder(view)
         view.setSurfaceVisible(true)

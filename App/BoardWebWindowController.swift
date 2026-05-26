@@ -174,6 +174,7 @@ private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
 
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
+    private static let maxEmbeddedTerminalCacheCount = 6
 
     private let rootView = NSView()
     private let webView: DragRegionWebView
@@ -182,7 +183,13 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var isShowingLoadError = false
     private let jsConsoleBridge = JSConsoleBridge()
     private let nativeTerminalBridge = NativeTerminalBridge()
-    private var embeddedTerminal: EmbeddedNativeTerminalController?
+    private var embeddedTerminals: [String: EmbeddedNativeTerminalController] = [:]
+    private var embeddedTerminalLRU: [String] = []
+    private var activeEmbeddedTerminalKey: String?
+    private var embeddedTerminal: EmbeddedNativeTerminalController? {
+        guard let activeEmbeddedTerminalKey else { return nil }
+        return embeddedTerminals[activeEmbeddedTerminalKey]
+    }
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     var onClose: (() -> Void)?
@@ -353,8 +360,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowWillClose(_ notification: Notification) {
         MInfo("[BoardWebWindow] windowWillClose")
-        embeddedTerminal?.detach()
-        embeddedTerminal = nil
+        detachAllEmbeddedTerminals()
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
@@ -375,8 +381,9 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         case "focus":
             embeddedTerminal?.focus()
         case "hide", "detach":
-            embeddedTerminal?.detach()
-            embeddedTerminal = nil
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            hideEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId)
         default:
             break
         }
@@ -384,13 +391,39 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?) {
         guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
-        if embeddedTerminal?.surfaceId != surfaceId && embeddedTerminal?.sessionId != sessionId {
-            embeddedTerminal?.detach()
+        let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        if activeEmbeddedTerminalKey != key {
+            embeddedTerminal?.hide()
+            let controller: EmbeddedNativeTerminalController
+            if let cached = embeddedTerminals[key] {
+                controller = cached
+            } else {
+                guard let created = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+                    NSSound.beep()
+                    return
+                }
+                controller = created
+                embeddedTerminals[key] = created
+            }
+            activeEmbeddedTerminalKey = key
+            rememberEmbeddedTerminal(key)
+            if controller.view.superview == nil {
+                controller.view.frame = .zero
+                controller.view.autoresizingMask = []
+                rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+            } else {
+                controller.view.removeFromSuperview()
+                rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+            }
+        } else if embeddedTerminal == nil {
+            activeEmbeddedTerminalKey = nil
             guard let controller = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
                 NSSound.beep()
                 return
             }
-            embeddedTerminal = controller
+            embeddedTerminals[key] = controller
+            activeEmbeddedTerminalKey = key
+            rememberEmbeddedTerminal(key)
             controller.view.frame = .zero
             controller.view.autoresizingMask = []
             rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
@@ -399,6 +432,39 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             updateEmbeddedTerminalFrame(rectPayload)
         }
         embeddedTerminal?.focus()
+    }
+
+    private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) {
+        guard let active = embeddedTerminal else { return }
+        guard surfaceId.isEmpty && (sessionId?.isEmpty ?? true) || active.matches(surfaceId: surfaceId, sessionId: sessionId) else {
+            return
+        }
+        active.hide()
+        activeEmbeddedTerminalKey = nil
+    }
+
+    private func detachAllEmbeddedTerminals() {
+        for controller in embeddedTerminals.values {
+            controller.detach()
+        }
+        embeddedTerminals.removeAll()
+        embeddedTerminalLRU.removeAll()
+        activeEmbeddedTerminalKey = nil
+    }
+
+    private func embeddedTerminalCacheKey(surfaceId: String, sessionId: String?) -> String {
+        if !surfaceId.isEmpty { return "surface:\(surfaceId)" }
+        return "session:\(sessionId ?? "")"
+    }
+
+    private func rememberEmbeddedTerminal(_ key: String) {
+        embeddedTerminalLRU.removeAll { $0 == key }
+        embeddedTerminalLRU.append(key)
+        while embeddedTerminalLRU.count > Self.maxEmbeddedTerminalCacheCount {
+            let evictedKey = embeddedTerminalLRU.removeFirst()
+            guard evictedKey != activeEmbeddedTerminalKey else { continue }
+            embeddedTerminals.removeValue(forKey: evictedKey)?.detach()
+        }
     }
 
     private func updateEmbeddedTerminalFrame(_ rectPayload: [String: Any]) {
