@@ -172,11 +172,24 @@ private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class NativeTerminalHostView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        for subview in subviews.reversed() where !subview.isHidden && subview.alphaValue > 0.01 {
+            let converted = convert(point, to: subview)
+            if let hit = subview.hitTest(converted) {
+                return hit
+            }
+        }
+        return nil
+    }
+}
+
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
     private static let maxEmbeddedTerminalCacheCount = 6
 
     private let rootView = NSView()
+    private let terminalHostView = NativeTerminalHostView()
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
@@ -282,11 +295,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         webView.translatesAutoresizingMaskIntoConstraints = false
         rootView.addSubview(webView)
+        terminalHostView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.addSubview(terminalHostView)
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             webView.topAnchor.constraint(equalTo: rootView.topAnchor),
             webView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            terminalHostView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            terminalHostView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            terminalHostView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            terminalHostView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
         ])
         window.contentView = rootView
         webView.navigationDelegate = self
@@ -410,10 +429,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             if controller.view.superview == nil {
                 controller.view.frame = .zero
                 controller.view.autoresizingMask = []
-                rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+                terminalHostView.addSubview(controller.view)
             } else {
                 controller.view.removeFromSuperview()
-                rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+                terminalHostView.addSubview(controller.view)
             }
         } else if embeddedTerminal == nil {
             activeEmbeddedTerminalKey = nil
@@ -426,7 +445,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             rememberEmbeddedTerminal(key)
             controller.view.frame = .zero
             controller.view.autoresizingMask = []
-            rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+            terminalHostView.addSubview(controller.view)
         }
         if let rectPayload {
             updateEmbeddedTerminalFrame(rectPayload)
