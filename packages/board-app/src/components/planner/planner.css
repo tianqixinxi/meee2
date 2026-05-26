@@ -1457,6 +1457,35 @@
   overflow: hidden;
 }
 
+/* UI-simplification §3.1: 「成果 · {title} [展开 ⊞]」行 */
+.planner-node__output-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 6px 9px;
+  background: rgba(168, 165, 155, 0.06);
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.planner-node__output-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: 10.5px; font-weight: 600;
+}
+.planner-node__output-title {
+  flex: 1; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.planner-node__output-expand {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  background: transparent; border: 1px solid rgba(168, 165, 155, 0.22);
+  color: var(--accent); font-size: 10.5px; cursor: pointer; font-family: inherit;
+}
+.planner-node__output-expand:hover {
+  background: rgba(204, 120, 92, 0.10);
+  border-color: rgba(204, 120, 92, 0.32);
+}
+
 .planner-node__responsible {
   display: flex;
   align-items: center;

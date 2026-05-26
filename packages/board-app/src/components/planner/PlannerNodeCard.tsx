@@ -383,6 +383,32 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
        *  blockers 全部下沉到 inspector(进展/成果/足迹三段);schedule/gate 信息已折入 mode badge。
        *  详情、re-run、mark-down 通过点击节点打开 inspector 操作。 */}
 
+      {/* UI-simplification §3.1 — 「成果」行:有 artifact 时显示主推 artifact + 展开按钮。
+       *  点击 [展开] 暂时打开 inspector 的 成果·剪贴板 段(Wave 4 计划把它升级为
+       *  在 canvas 上 spawn 一个数据节点 capsule,按 typedPayload 渲染) */}
+      {nodeKind === 'step' && !data.virtual && data.artifacts && data.artifacts.length > 0 && (
+        <div className="planner-node__output-row">
+          <span className="planner-node__output-label">
+            <ArrowUpRight size={11} aria-hidden /> 成果
+          </span>
+          <span className="planner-node__output-title">
+            {data.artifacts[0]?.title ?? compactArtifactLabel(data.artifacts[0]?.reference ?? '')}
+          </span>
+          <button
+            type="button"
+            className="planner-node__output-expand nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              data.onOpenDetails?.(node.id)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            title="展开 — 打开 inspector 看完整剪贴板"
+          >
+            展开 ⊞
+          </button>
+        </div>
+      )}
+
       {(primaryAction || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
           {/* UI-1 · Re-run / Mark down sit in the same bottom action row as the
