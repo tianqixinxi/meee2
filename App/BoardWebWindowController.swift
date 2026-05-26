@@ -516,9 +516,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             controller.view.removeFromSuperview()
             terminalHostView.addSubview(controller.view)
         }
-        if hidden {
-            controller.layout(in: .zero, hidden: true)
-        }
+        controller.layout(in: hidden ? .zero : controller.view.frame, hidden: hidden)
     }
 
     private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) {
