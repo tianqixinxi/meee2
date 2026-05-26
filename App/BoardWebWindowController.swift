@@ -399,12 +399,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             let rectPayload = payload["rect"] as? [String: Any]
             embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload, tracePayload: payload)
         case "layout":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
             if let rectPayload = payload["rect"] as? [String: Any] {
-                updateEmbeddedTerminalFrame(rectPayload, tracePayload: payload)
+                updateEmbeddedTerminalFrame(
+                    rectPayload,
+                    surfaceId: surfaceId,
+                    sessionId: sessionId,
+                    tracePayload: payload
+                )
             }
         case "focus":
-            embeddedTerminal?.focus()
-            logTerminalTrace(payload, phase: "native.focus.done", extra: "hasTerminal=\(embeddedTerminal != nil)")
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            if activeEmbeddedTerminalMatches(surfaceId: surfaceId, sessionId: sessionId) {
+                embeddedTerminal?.focus()
+                logTerminalTrace(payload, phase: "native.focus.done", extra: "hasTerminal=\(embeddedTerminal != nil)")
+            } else {
+                logTerminalTrace(payload, phase: "native.focus.skipped", extra: "reason=staleTarget")
+            }
         case "hide", "detach":
             let surfaceId = payload["surfaceId"] as? String ?? ""
             let sessionId = payload["sessionId"] as? String
@@ -472,7 +485,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             hostEmbeddedTerminalView(controller, hidden: rectPayload == nil)
         }
         if let rectPayload {
-            updateEmbeddedTerminalFrame(rectPayload, tracePayload: tracePayload)
+            updateEmbeddedTerminalFrame(
+                rectPayload,
+                surfaceId: surfaceId,
+                sessionId: sessionId,
+                tracePayload: tracePayload
+            )
         }
         embeddedTerminal?.focus()
         logTerminalTrace(
@@ -509,6 +527,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
         active.hide()
         activeEmbeddedTerminalKey = nil
+    }
+
+    private func activeEmbeddedTerminalMatches(surfaceId: String, sessionId: String?) -> Bool {
+        guard let active = embeddedTerminal else { return false }
+        if surfaceId.isEmpty && (sessionId?.isEmpty ?? true) { return true }
+        return active.matches(surfaceId: surfaceId, sessionId: sessionId)
     }
 
     private func detachAllEmbeddedTerminals() {
@@ -551,9 +575,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
     }
 
-    private func updateEmbeddedTerminalFrame(_ rectPayload: [String: Any], tracePayload: [String: Any]? = nil) {
+    private func updateEmbeddedTerminalFrame(
+        _ rectPayload: [String: Any],
+        surfaceId: String = "",
+        sessionId: String? = nil,
+        tracePayload: [String: Any]? = nil
+    ) {
         guard let embeddedTerminal else {
             logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=noTerminal")
+            return
+        }
+        guard activeEmbeddedTerminalMatches(surfaceId: surfaceId, sessionId: sessionId) else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=staleTarget")
             return
         }
         guard
