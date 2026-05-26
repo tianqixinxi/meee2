@@ -9,6 +9,10 @@ struct SessionTerminalInfo: Codable {
     var cwd: String
     var lastActivityAt: Date
     var status: String
+    var command: String?
+    var provider: String?
+    var canvasId: String?
+    var nodeId: String?
 
     // cmux 专用
     var cmuxSocketPath: String?
@@ -42,7 +46,20 @@ class SessionTerminalStore {
     // MARK: - Public Methods
 
     /// 更新 session 的终端信息
-    func update(sessionId: String, tty: String?, termProgram: String?, termBundleId: String?, cmuxSocketPath: String?, cmuxSurfaceId: String?, cwd: String, status: String) {
+    func update(
+        sessionId: String,
+        tty: String?,
+        termProgram: String?,
+        termBundleId: String?,
+        cmuxSocketPath: String?,
+        cmuxSurfaceId: String?,
+        cwd: String,
+        status: String,
+        command: String? = nil,
+        provider: String? = nil,
+        canvasId: String? = nil,
+        nodeId: String? = nil
+    ) {
         queue.async { [weak self] in
             guard let self = self else { return }
 
@@ -54,6 +71,10 @@ class SessionTerminalStore {
                 cwd: cwd,
                 lastActivityAt: Date(),
                 status: status,
+                command: command,
+                provider: provider,
+                canvasId: canvasId,
+                nodeId: nodeId,
                 cmuxSocketPath: cmuxSocketPath,
                 cmuxSurfaceId: cmuxSurfaceId
             )
@@ -63,6 +84,10 @@ class SessionTerminalStore {
             info.termBundleId = termBundleId ?? info.termBundleId
             info.cmuxSocketPath = cmuxSocketPath ?? info.cmuxSocketPath
             info.cmuxSurfaceId = cmuxSurfaceId ?? info.cmuxSurfaceId
+            info.command = command ?? info.command
+            info.provider = provider ?? info.provider
+            info.canvasId = canvasId ?? info.canvasId
+            info.nodeId = nodeId ?? info.nodeId
             info.cwd = cwd
             info.lastActivityAt = Date()
             info.status = status

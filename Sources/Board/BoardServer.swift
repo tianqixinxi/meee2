@@ -395,6 +395,10 @@ public final class BoardServer {
         server.POST["/api/sessions/:id/inject"] = BoardAPI.injectToSession
         server.POST["/api/sessions/:id/push-now"] = BoardServer.cors(BoardAPI.pushToDesktopNow)
         server.DELETE["/api/sessions/:id"] = BoardServer.cors(BoardAPI.closeSession)
+        server.GET["/api/session-surfaces"] = BoardServer.cors(BoardAPI.listSessionSurfaces)
+        server.POST["/api/session-surfaces"] = BoardServer.cors(BoardAPI.createSessionSurface)
+        server.GET["/api/session-surfaces/:id"] = BoardServer.cors(BoardAPI.getSessionSurface)
+        server.POST["/api/session-surfaces/:id/close"] = BoardServer.cors(BoardAPI.closeSessionSurface)
         server.POST["/api/system/open-accessibility-settings"] = BoardServer.cors(BoardAPI.openAccessibilitySettings)
         server.GET["/api/whoami"] = BoardServer.cors(BoardAPI.getWhoami)
         server.GET["/api/version"] = BoardServer.cors(BoardAPI.getVersion)
@@ -437,6 +441,7 @@ public final class BoardServer {
         server.POST["/api/planner/canvases/:id/proposals/:proposalId/reject"] = BoardServer.cors(BoardAPI.rejectPlannerProposal)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/bind-session"] = BoardServer.cors(BoardAPI.bindPlannerSessionToNode)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/dispatch"] = BoardServer.cors(BoardAPI.dispatchPlannerNodeSession)
+        server.POST["/api/planner/canvases/:id/nodes/:nodeId/internal-session"] = BoardServer.cors(BoardAPI.ensurePlannerNodeInternalSession)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/abandon-session"] = BoardServer.cors(BoardAPI.abandonPlannerNodeSession)
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/detach-session"] = BoardServer.cors(BoardAPI.detachPlannerNodeSession)
         server.POST["/api/planner/canvases/:id/sessions/resume-closed"] = BoardServer.cors(BoardAPI.resumeClosedPlannerSessions)

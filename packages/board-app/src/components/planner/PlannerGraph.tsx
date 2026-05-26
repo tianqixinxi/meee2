@@ -13,7 +13,6 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
   applyPlannerProposal,
   approvePlannerProposal,
-  activateSession,
   abandonPlannerNodeSession,
   assignPlannerNode,
   bindPlannerSessionToNode,
@@ -22,6 +21,7 @@ import {
   deletePlannerNode,
   detachPlannerNodeSession,
   dispatchPlannerNodeSession,
+  ensurePlannerNodeInternalSession,
   fetchMeee2MCPStatus,
   fetchPlannerGraphState,
   fetchState,
@@ -391,6 +391,32 @@ function PlannerGraphInner({
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError])
 
+  const openInternalSessionForNode = useCallback((
+    nodeId: string,
+    runner?: PlannerDispatchRunner,
+  ) => {
+    const cwd = workspacePath.trim()
+    return ensurePlannerNodeInternalSession(canvasId, nodeId, {
+      runner,
+      cwd: cwd || undefined,
+    })
+      .then((result) => {
+        handleGraphStateChanged(result.graph)
+        window.dispatchEvent(new CustomEvent('meee2:open-session', {
+          detail: {
+            sessionId: result.sessionId,
+            surfaceId: result.surfaceId,
+          },
+        }))
+        void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+        return true
+      })
+      .catch((err) => {
+        notifyError((err as Error).message || 'Failed to open internal session')
+        return false
+      })
+  }, [canvasId, handleGraphStateChanged, notifyError, workspacePath])
+
   const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
     if (!cwd) {
@@ -414,12 +440,15 @@ function PlannerGraphInner({
                 next.delete(nodeId)
                 return next
               })
+            }, (sessionId) => {
+              void sessionId
+              void openInternalSessionForNode(nodeId, runner)
             })
           })
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to create node session'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError, warnMCPWritebackIfNeeded, workspacePath])
+  }, [canvasId, handleGraphStateChanged, notifyError, openInternalSessionForNode, warnMCPWritebackIfNeeded, workspacePath])
 
   const handleReplaceNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
@@ -446,40 +475,32 @@ function PlannerGraphInner({
                 next.delete(nodeId)
                 return next
               })
+            }, (sessionId) => {
+              void sessionId
+              void openInternalSessionForNode(nodeId, runner)
             })
           })
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to create a new node session'))
       .finally(() => setBusy(false))
-  }, [canvasId, handleGraphStateChanged, notifyError, warnMCPWritebackIfNeeded, workspacePath])
+  }, [canvasId, handleGraphStateChanged, notifyError, openInternalSessionForNode, warnMCPWritebackIfNeeded, workspacePath])
 
   const handleOpenNodeSession = useCallback((sessionId: string, nodeId: string) => {
     const trimmed = sessionId.trim()
     if (!trimmed) return
     setBusy(true)
     setError(null)
-    activateSession(trimmed)
+    openInternalSessionForNode(nodeId)
       .then((ok) => {
-        if (ok) return
-        const sessionStillVisible = (boardState?.sessions ?? []).some((session) => sessionMatchesBoundId(session.id, trimmed))
-        if (!sessionStillVisible && nodeId) {
-          return resumeClosedPlannerSessions(canvasId, [trimmed])
-            .then((result) => {
-              if (result.resumed.length > 0) {
-                onNotify?.('success', 'Session is closed; resuming it in the canvas workspace.')
-                void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
-                loadState()
-                return
-              }
-              const reason = result.skipped[0]?.reason || 'Session is unavailable and could not be resumed.'
-              notifyError(reason)
-            })
+        if (ok) {
+          const sessionStillVisible = (boardState?.sessions ?? []).some((session) => (
+            session.terminalKind === 'internal' && sessionMatchesBoundId(session.id, trimmed)
+          ))
+          if (!sessionStillVisible) onNotify?.('success', 'Opening this node in an internal terminal.')
         }
-        notifyError('Failed to open session')
-        return undefined
       })
       .finally(() => setBusy(false))
-  }, [boardState?.sessions, canvasId, loadState, notifyError, onNotify])
+  }, [boardState?.sessions, onNotify, openInternalSessionForNode])
 
   const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
     setBusy(true)
@@ -1067,6 +1088,13 @@ function PlannerGraphInner({
       .then((result) => {
         if (result.resumed.length > 0) {
           onNotify?.('success', `Resuming ${result.resumed.length} closed session${result.resumed.length === 1 ? '' : 's'}.`)
+          const first = result.resumed[0]
+          window.dispatchEvent(new CustomEvent('meee2:open-session', {
+            detail: {
+              sessionId: first.sessionId,
+              surfaceId: first.surfaceId,
+            },
+          }))
           loadState()
           void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         }
@@ -1095,6 +1123,15 @@ function PlannerGraphInner({
         const work: Promise<unknown>[] = []
         if (resumeSessionIds.length > 0) {
           work.push(resumeClosedPlannerSessions(canvasId, resumeSessionIds).then((result) => {
+            if (result.resumed.length > 0 && createNodeIds.length === 0) {
+              const first = result.resumed[0]
+              window.dispatchEvent(new CustomEvent('meee2:open-session', {
+                detail: {
+                  sessionId: first.sessionId,
+                  surfaceId: first.surfaceId,
+                },
+              }))
+            }
             if (result.skipped.length > 0) {
               notifyError(result.skipped.map((item) => item.reason).join('; '))
             }
@@ -1982,8 +2019,15 @@ async function pollForBoundNodeSession(
   existingSessionIds: Set<string>,
   onState: (state: PlannerGraphState) => void,
   onDone: () => void,
+  onBound?: (sessionId: string) => void,
 ) {
   let sawNewSession = false
+  let notifiedSessionId: string | null = null
+  const notifyBound = (sessionId: string | null | undefined) => {
+    if (!sessionId || notifiedSessionId === sessionId) return
+    notifiedSessionId = sessionId
+    onBound?.(sessionId)
+  }
   try {
     for (let attempt = 0; attempt < 36; attempt += 1) {
       await delay(attempt < 4 ? 900 : 1800)
@@ -1995,7 +2039,11 @@ async function pollForBoundNodeSession(
           try {
             const bound = await bindPlannerSessionToNode(canvasId, nodeId, newSession.id)
             onState(bound)
-            if (bound.nodes.find((item) => item.id === nodeId)?.sessionId) return
+            const boundSessionId = bound.nodes.find((item) => item.id === nodeId)?.sessionId
+            if (boundSessionId) {
+              notifyBound(boundSessionId)
+              return
+            }
           } catch {
             // The backend spawn-intent matcher may still bind it on the next state refresh.
           }
@@ -2003,7 +2051,10 @@ async function pollForBoundNodeSession(
         const state = await fetchPlannerGraphState(canvasId)
         onState(state)
         const node = state.nodes.find((item) => item.id === nodeId)
-        if (node?.sessionId) return
+        if (node?.sessionId) {
+          notifyBound(node.sessionId)
+          return
+        }
         if (node?.workflowRunState !== 'dispatched' && node?.workflowRunState !== 'running') return
       } catch {
         // The terminal session may not have reported yet; keep polling.

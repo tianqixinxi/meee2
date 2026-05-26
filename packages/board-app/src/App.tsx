@@ -342,6 +342,7 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -442,6 +443,16 @@ export default function App() {
     const openSettings = () => setWorkspaceMode('settings')
     window.addEventListener('meee2:open-settings', openSettings)
     return () => window.removeEventListener('meee2:open-settings', openSettings)
+  }, [])
+
+  useEffect(() => {
+    const openSession = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
+      setSelectedSessionId(detail?.sessionId ?? detail?.surfaceId ?? null)
+      setWorkspaceMode('sessions')
+    }
+    window.addEventListener('meee2:open-session', openSession)
+    return () => window.removeEventListener('meee2:open-session', openSession)
   }, [])
 
   const completeFirstRunOnboarding = useCallback(() => {
@@ -724,7 +735,12 @@ export default function App() {
               onCreateTemplate={handleCreateTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
-            <SessionsView state={boardState.state} unreadSids={unreadSids} />
+            <SessionsView
+              state={boardState.state}
+              unreadSids={unreadSids}
+              selectedSessionId={selectedSessionId}
+              onSelectedSessionChange={setSelectedSessionId}
+            />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView
               canvases={workspaceCanvases}

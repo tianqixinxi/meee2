@@ -159,15 +159,32 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
     """
 }
 
+private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
+    static let messageName = "meee2NativeTerminal"
+    weak var owner: BoardWebWindowController?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any] else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.handleNativeTerminalMessage(payload)
+        }
+    }
+}
+
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
 
+    private let rootView = NSView()
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
     private var isShowingLoadError = false
     private let jsConsoleBridge = JSConsoleBridge()
+    private let nativeTerminalBridge = NativeTerminalBridge()
+    private var embeddedTerminal: EmbeddedNativeTerminalController?
     private var pendingOpenSettings = false
+    private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -208,6 +225,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             forMainFrameOnly: false
         ))
         userContentController.add(jsConsoleBridge, name: JSConsoleBridge.messageName)
+        userContentController.add(nativeTerminalBridge, name: NativeTerminalBridge.messageName)
         configuration.userContentController = userContentController
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
@@ -251,8 +269,19 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         super.init(window: window)
 
+        nativeTerminalBridge.owner = self
         window.delegate = self
-        window.contentView = webView
+        rootView.wantsLayer = true
+        rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+        ])
+        window.contentView = rootView
         webView.navigationDelegate = self
         webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
@@ -289,6 +318,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSettingsIfPossible()
     }
 
+    func openSession(sessionId: String?, surfaceId: String?) {
+        pendingOpenSession = (sessionId, surfaceId)
+        show()
+        dispatchOpenSessionIfPossible()
+    }
+
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
@@ -318,9 +353,86 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowWillClose(_ notification: Notification) {
         MInfo("[BoardWebWindow] windowWillClose")
+        embeddedTerminal?.detach()
+        embeddedTerminal = nil
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
+    }
+
+    func handleNativeTerminalMessage(_ payload: [String: Any]) {
+        let type = payload["type"] as? String ?? "attach"
+        switch type {
+        case "attach", "embed", "open":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            let rectPayload = payload["rect"] as? [String: Any]
+            embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload)
+        case "layout":
+            if let rectPayload = payload["rect"] as? [String: Any] {
+                updateEmbeddedTerminalFrame(rectPayload)
+            }
+        case "focus":
+            embeddedTerminal?.focus()
+        case "hide", "detach":
+            embeddedTerminal?.detach()
+            embeddedTerminal = nil
+        default:
+            break
+        }
+    }
+
+    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?) {
+        guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
+        if embeddedTerminal?.surfaceId != surfaceId && embeddedTerminal?.sessionId != sessionId {
+            embeddedTerminal?.detach()
+            guard let controller = EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) else {
+                NSSound.beep()
+                return
+            }
+            embeddedTerminal = controller
+            controller.view.frame = .zero
+            controller.view.autoresizingMask = []
+            rootView.addSubview(controller.view, positioned: .above, relativeTo: webView)
+        }
+        if let rectPayload {
+            updateEmbeddedTerminalFrame(rectPayload)
+        }
+        embeddedTerminal?.focus()
+    }
+
+    private func updateEmbeddedTerminalFrame(_ rectPayload: [String: Any]) {
+        guard let embeddedTerminal else { return }
+        guard
+            let x = Self.doubleValue(rectPayload["x"]),
+            let y = Self.doubleValue(rectPayload["y"]),
+            let width = Self.doubleValue(rectPayload["width"]),
+            let height = Self.doubleValue(rectPayload["height"])
+        else {
+            return
+        }
+        let rootHeight = rootView.bounds.height
+        let frame = NSRect(
+            x: x,
+            y: rootHeight - y - height,
+            width: max(1, width),
+            height: max(1, height)
+        ).integral
+        embeddedTerminal.layout(in: frame, hidden: width < 8 || height < 8)
+    }
+
+    private func requestEmbeddedTerminalLayout() {
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:layout-native-terminal'));
+        """, completionHandler: nil)
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? CGFloat { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -344,6 +456,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // 切换时也要更新（NSWindow.didResize 通知触发）。
         injectTitlebarMetrics()
         dispatchOpenSettingsIfPossible()
+        dispatchOpenSessionIfPossible()
     }
 
     private func dispatchOpenSettingsIfPossible() {
@@ -355,6 +468,32 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             if let error {
                 MWarn("[BoardWebWindow] open settings event failed: \(error.localizedDescription)")
                 self?.pendingOpenSettings = true
+            }
+        }
+    }
+
+    private func dispatchOpenSessionIfPossible() {
+        guard let pendingOpenSession, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        var detail: [String: String] = [:]
+        if let sessionId = pendingOpenSession.sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let surfaceId = pendingOpenSession.surfaceId, !surfaceId.isEmpty {
+            detail["surfaceId"] = surfaceId
+        }
+        guard !detail.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else {
+            self.pendingOpenSession = nil
+            return
+        }
+        self.pendingOpenSession = nil
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:open-session', { detail: \(json) }));
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open session event failed: \(error.localizedDescription)")
+                self?.pendingOpenSession = pendingOpenSession
             }
         }
     }
@@ -437,14 +576,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowDidResize(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     /// HTTP 4xx / 5xx 不会触发 `didFail*` —— WKWebView 把"服务器有响应"当成

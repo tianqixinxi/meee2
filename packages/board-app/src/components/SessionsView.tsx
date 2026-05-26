@@ -1,20 +1,37 @@
-import { AlertCircle, CheckCircle2, Clock3, ExternalLink, Search, Terminal } from 'lucide-react'
-import { useMemo, useState } from 'react'
-import { activateSession } from '../api'
+import {
+  AlertCircle,
+  CheckCircle2,
+  CircleStop,
+  Clock3,
+  ExternalLink,
+  Search,
+  Terminal as TerminalIcon,
+} from 'lucide-react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { activateSession, closeSessionSurface, openNativeTerminalSurface } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
 
 interface Props {
   state: BoardState | null
   unreadSids: Set<string>
+  selectedSessionId?: string | null
+  onSelectedSessionChange?: (id: string | null) => void
 }
 
 type SessionFilter = 'all' | 'attention' | 'unread'
+type SessionKindTab = 'internal' | 'external'
 
-export function SessionsView({ state, unreadSids }: Props) {
+export function SessionsView({
+  state,
+  unreadSids,
+  selectedSessionId,
+  onSelectedSessionChange,
+}: Props) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<SessionFilter>('attention')
+  const [filter, setFilter] = useState<SessionFilter>('all')
+  const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
   const sessions = state?.sessions ?? []
@@ -37,14 +54,46 @@ export function SessionsView({ state, unreadSids }: Props) {
       })
       .sort((a, b) => compareSessions(a, b, unreadSids))
   }, [filter, query, sessions, unreadSids])
+  const selectedSession = useMemo(() => {
+    if (!selectedSessionId) return null
+    return sessions.find((session) => (
+      isInternalSession(session)
+      && (session.id === selectedSessionId || session.surfaceId === selectedSessionId)
+    )) ?? null
+  }, [selectedSessionId, sessions])
+  const internalSessions = useMemo(() => {
+    const list = visibleSessions.filter(isInternalSession)
+    if (selectedSession && !list.some((session) => session.id === selectedSession.id)) {
+      return [selectedSession, ...list]
+    }
+    return list
+  }, [selectedSession, visibleSessions])
+  const externalSessions = useMemo(
+    () => visibleSessions.filter((session) => !isInternalSession(session)),
+    [visibleSessions],
+  )
 
-  const openSession = async (session: Session) => {
+  useEffect(() => {
+    if (selectedSession || internalSessions.length === 0) return
+    const next = internalSessions[0]
+    onSelectedSessionChange?.(next?.id ?? null)
+  }, [internalSessions, onSelectedSessionChange, selectedSession])
+
+  useEffect(() => {
+    if (selectedSessionId && selectedSession) setActiveKindTab('internal')
+  }, [selectedSession, selectedSessionId])
+
+  const openSession = useCallback(async (session: Session) => {
+    if (isInternalSession(session)) {
+      onSelectedSessionChange?.(session.id)
+      return
+    }
     setOpeningId(session.id)
     setOpenErrorId(null)
     const ok = await activateSession(session.id)
     setOpeningId(null)
     if (!ok) setOpenErrorId(session.id)
-  }
+  }, [onSelectedSessionChange])
 
   return (
     <section className="sessions-workspace" aria-label={t('sessions.title')}>
@@ -72,36 +121,96 @@ export function SessionsView({ state, unreadSids }: Props) {
         </div>
         {sessions.length === 0 ? (
           <div className="sessions-empty">
-            <Terminal size={18} aria-hidden />
+            <TerminalIcon size={18} aria-hidden />
             <span>{t('sessions.empty')}</span>
           </div>
-        ) : visibleSessions.length === 0 ? (
-          <div className="sessions-empty">
-            <Search size={18} aria-hidden />
-            <span>{t('sessions.noMatch')}</span>
-          </div>
         ) : (
-          <div className="sessions-table" role="table" aria-label={t('sessions.table')}>
-            <div className="sessions-table__head" role="row">
-              <span>{t('sessions.columnSession')}</span>
-              <span>{t('sessions.columnStatus')}</span>
-              <span>{t('sessions.columnContext')}</span>
-              <span>{t('sessions.columnSignal')}</span>
-              <span />
-            </div>
-            <div className="sessions-table__body">
-              {visibleSessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  opening={openingId === session.id}
-                  openError={openErrorId === session.id}
-                  unread={unreadSids.has(session.id)}
-                  onOpen={() => openSession(session)}
-                  t={t}
-                />
-              ))}
-            </div>
+          <div className="sessions-board">
+            {visibleSessions.length === 0 ? (
+              <div className="sessions-empty sessions-empty--compact">
+                <Search size={18} aria-hidden />
+                <span>{t('sessions.noMatch')}</span>
+              </div>
+            ) : (
+              <div className={`sessions-console sessions-console--${activeKindTab}`}>
+                <aside className="sessions-console__sidebar">
+                  <div className="sessions-kind-tabs" role="tablist" aria-label={t('sessions.kindTabs')}>
+                    <KindTabButton
+                      label={t('sessions.internalSessions')}
+                      count={internalSessions.length}
+                      icon={<TerminalIcon size={13} aria-hidden />}
+                      active={activeKindTab === 'internal'}
+                      onClick={() => setActiveKindTab('internal')}
+                    />
+                    <KindTabButton
+                      label={t('sessions.externalSessions')}
+                      count={externalSessions.length}
+                      icon={<ExternalLink size={13} aria-hidden />}
+                      active={activeKindTab === 'external'}
+                      onClick={() => setActiveKindTab('external')}
+                    />
+                  </div>
+                  {activeKindTab === 'internal' ? (
+                    <SessionsSection
+                      title={t('sessions.internalSessions')}
+                      subtitle={t('sessions.internalSubtitle')}
+                      count={internalSessions.length}
+                      emptyIcon={<TerminalIcon size={18} aria-hidden />}
+                      emptyText={t('sessions.noInternalSessions')}
+                    >
+                      <div className="sessions-list sessions-list--internal" aria-label={t('sessions.internalSessions')}>
+                        {internalSessions.map((session) => (
+                          <SessionRow
+                            key={session.id}
+                            session={session}
+                            selected={selectedSession?.id === session.id}
+                            opening={openingId === session.id}
+                            openError={openErrorId === session.id}
+                            unread={unreadSids.has(session.id)}
+                            onSelect={() => onSelectedSessionChange?.(session.id)}
+                            onOpen={() => openSession(session)}
+                            t={t}
+                          />
+                        ))}
+                      </div>
+                    </SessionsSection>
+                  ) : (
+                    <SessionsSection
+                      title={t('sessions.externalSessions')}
+                      subtitle={t('sessions.externalSubtitle')}
+                      count={externalSessions.length}
+                      emptyIcon={<ExternalLink size={18} aria-hidden />}
+                      emptyText={t('sessions.noExternalSessions')}
+                    >
+                      <div className="sessions-list sessions-list--external" aria-label={t('sessions.externalSessions')}>
+                        {externalSessions.map((session) => (
+                          <SessionRow
+                            key={session.id}
+                            session={session}
+                            selected={false}
+                            opening={openingId === session.id}
+                            openError={openErrorId === session.id}
+                            unread={unreadSids.has(session.id)}
+                            onSelect={() => undefined}
+                            onOpen={() => openSession(session)}
+                            t={t}
+                          />
+                        ))}
+                      </div>
+                    </SessionsSection>
+                  )}
+                </aside>
+                {activeKindTab === 'internal' && (
+                  <SessionDetail
+                    session={selectedSession}
+                    opening={openingId === selectedSession?.id}
+                    openError={openErrorId === selectedSession?.id}
+                    onOpen={() => selectedSession && openSession(selectedSession)}
+                    t={t}
+                  />
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -109,18 +218,84 @@ export function SessionsView({ state, unreadSids }: Props) {
   )
 }
 
-function SessionRow({
+function KindTabButton({
+  label,
+  count,
+  icon,
+  active,
+  onClick,
+}: {
+  label: string
+  count: number
+  icon: ReactNode
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      className={`sessions-kind-tab${active ? ' is-active' : ''}`}
+      onClick={onClick}
+    >
+      {icon}
+      <span>{label}</span>
+      <em>{count}</em>
+    </button>
+  )
+}
+
+function SessionsSection({
+  title,
+  subtitle,
+  count,
+  emptyIcon,
+  emptyText,
+  children,
+}: {
+  title: string
+  subtitle: string
+  count: number
+  emptyIcon: ReactNode
+  emptyText: string
+  children: ReactNode
+}) {
+  return (
+    <section className="sessions-section" aria-label={title}>
+      <div className="sessions-section__heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+        <span>{count}</span>
+      </div>
+      {count === 0 ? (
+        <div className="sessions-empty sessions-empty--compact">
+          {emptyIcon}
+          <span>{emptyText}</span>
+        </div>
+      ) : children}
+    </section>
+  )
+}
+
+const SessionRow = memo(function SessionRow({
   session,
+  selected,
   opening,
   openError,
   unread,
+  onSelect,
   onOpen,
   t,
 }: {
   session: Session
+  selected: boolean
   opening: boolean
   openError: boolean
   unread: boolean
+  onSelect: () => void
   onOpen: () => void
   t: ReturnType<typeof useI18n>['t']
 }) {
@@ -130,11 +305,14 @@ function SessionRow({
     <article
       className={[
         'sessions-row',
+        isInternalSession(session) ? 'sessions-row--internal' : 'sessions-row--external',
+        selected ? 'is-selected' : '',
         attention ? 'sessions-row--attention' : '',
         unread ? 'sessions-row--unread' : '',
       ].filter(Boolean).join(' ')}
+      onClick={onSelect}
       onDoubleClick={onOpen}
-      title={t('sessions.doubleClickOpen')}
+      aria-label={isInternalSession(session) ? t('sessions.doubleClickSelect') : t('sessions.doubleClickOpen')}
     >
       <div className="sessions-row__identity">
         <div className="sessions-row__icon" style={{ color: session.pluginColor || undefined }}>
@@ -144,6 +322,7 @@ function SessionRow({
           <div className="sessions-row__title">
             <strong>{session.title || shortId(session.id)}</strong>
             <div className="sessions-row__badges">
+              <span className="sessions-row__kind">{isInternalSession(session) ? t('sessions.internal') : t('sessions.external')}</span>
               {unread && <span className="sessions-row__unread">{t('sessions.unread')}</span>}
               {attention && <span className="sessions-row__attention">{t('sessions.attention')}</span>}
               {session.inboxPending > 0 && <span className="sessions-row__count">{session.inboxPending}</span>}
@@ -156,7 +335,7 @@ function SessionRow({
         </div>
       </div>
       <div className="sessions-row__status">
-        <strong>{session.status}</strong>
+        <strong>{session.surfaceStatus || session.status}</strong>
         {session.currentTool && <span>{session.currentTool}</span>}
       </div>
       <div className="sessions-row__context">
@@ -168,12 +347,183 @@ function SessionRow({
       </div>
       <div className="sessions-row__actions">
         {openError && <span>{t('common.openFailed')}</span>}
-        <button type="button" onClick={onOpen} disabled={opening}>
-          <ExternalLink size={13} aria-hidden />
-          {opening ? t('common.opening') : t('common.open')}
-        </button>
+        {!isInternalSession(session) && (
+          <button type="button" onClick={(event) => { event.stopPropagation(); onOpen() }} disabled={opening}>
+            <ExternalLink size={13} aria-hidden />
+            {opening ? t('common.opening') : t('sessions.openExternal')}
+          </button>
+        )}
       </div>
     </article>
+  )
+})
+
+function SessionDetail({
+  session,
+  opening,
+  openError,
+  onOpen,
+  t,
+}: {
+  session: Session | null
+  opening: boolean
+  openError: boolean
+  onOpen: () => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  const [stopping, setStopping] = useState(false)
+  const [stopError, setStopError] = useState<string | null>(null)
+  if (!session) {
+    return (
+      <aside className="sessions-detail sessions-detail--empty">
+        <TerminalIcon size={18} aria-hidden />
+        <span>{t('sessions.selectSession')}</span>
+      </aside>
+    )
+  }
+  const internal = isInternalSession(session)
+  const stopInternal = async () => {
+    if (!session.surfaceId) return
+    setStopping(true)
+    setStopError(null)
+    try {
+      await closeSessionSurface(session.surfaceId)
+    } catch (err) {
+      setStopError((err as Error).message || t('sessions.stopFailed'))
+    } finally {
+      setStopping(false)
+    }
+  }
+  return (
+    <aside className="sessions-detail">
+      <div className="sessions-detail__header">
+        <div>
+          <span>{internal ? t('sessions.internal') : t('sessions.external')}</span>
+          <h2>{session.title || shortId(session.id)}</h2>
+        </div>
+        <div className="sessions-detail__actions">
+          {internal ? (
+            <button
+              type="button"
+              onClick={stopInternal}
+              disabled={stopping || session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'}
+            >
+              <CircleStop size={14} aria-hidden />
+              {stopping ? t('sessions.stopping') : t('sessions.stop')}
+            </button>
+          ) : (
+            <button type="button" onClick={onOpen} disabled={opening}>
+              <ExternalLink size={14} aria-hidden />
+              {opening ? t('common.opening') : t('sessions.openExternal')}
+            </button>
+          )}
+        </div>
+      </div>
+      <dl className="sessions-detail__meta">
+        <div>
+          <dt>{t('sessions.columnStatus')}</dt>
+          <dd>{session.surfaceStatus || session.status}</dd>
+        </div>
+        <div>
+          <dt>{t('sessions.columnContext')}</dt>
+          <dd>{session.project || t('sessions.noProject')}</dd>
+        </div>
+        <div>
+          <dt>{t('sessions.id')}</dt>
+          <dd>{session.id}</dd>
+        </div>
+      </dl>
+      {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
+      {stopError && <p className="sessions-detail__error">{stopError}</p>}
+      {internal && session.surfaceId ? (
+        <NativeTerminalPanel session={session} />
+      ) : (
+        <div className="sessions-external">
+          <ExternalLink size={18} aria-hidden />
+          <span>{t('sessions.externalSummary')}</span>
+        </div>
+      )}
+    </aside>
+  )
+}
+
+function NativeTerminalPanel({ session }: { session: Session }) {
+  const { t } = useI18n()
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const layoutFrameRef = useRef<number | null>(null)
+  const [openError, setOpenError] = useState(false)
+
+  const syncNative = useCallback((type: 'attach' | 'layout' | 'focus' = 'attach') => {
+    if (!session.surfaceId || !hostRef.current) return false
+    const rect = hostRef.current.getBoundingClientRect()
+    const ok = openNativeTerminalSurface({
+      type,
+      surfaceId: session.surfaceId,
+      sessionId: session.id,
+      rect: {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      },
+    })
+    setOpenError(!ok)
+    return ok
+  }, [session.id, session.surfaceId])
+
+  const scheduleLayout = useCallback(() => {
+    if (layoutFrameRef.current !== null) return
+    layoutFrameRef.current = window.requestAnimationFrame(() => {
+      layoutFrameRef.current = null
+      syncNative('layout')
+    })
+  }, [syncNative])
+
+  useEffect(() => {
+    if (!session.surfaceId) return
+    const surfaceId = session.surfaceId
+    const frame = window.requestAnimationFrame(() => {
+      syncNative('attach')
+    })
+    const resizeObserver = hostRef.current ? new ResizeObserver(scheduleLayout) : null
+    if (hostRef.current) resizeObserver?.observe(hostRef.current)
+    window.addEventListener('resize', scheduleLayout)
+    window.addEventListener('meee2:layout-native-terminal', scheduleLayout)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      if (layoutFrameRef.current !== null) {
+        window.cancelAnimationFrame(layoutFrameRef.current)
+        layoutFrameRef.current = null
+      }
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', scheduleLayout)
+      window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
+      openNativeTerminalSurface({
+        type: 'detach',
+        surfaceId,
+        sessionId: session.id,
+      })
+    }
+  }, [scheduleLayout, session.id, session.surfaceId, syncNative])
+
+  return (
+    <div
+      ref={hostRef}
+      className="sessions-native-terminal"
+      aria-label={t('sessions.terminal')}
+      onDoubleClick={() => syncNative('focus')}
+    >
+      <TerminalIcon size={28} aria-hidden />
+      <div>
+        <h3>{t('sessions.nativeTerminalTitle')}</h3>
+        <p>{t('sessions.nativeTerminalBody')}</p>
+        {openError && <span>{t('sessions.nativeTerminalUnavailable')}</span>}
+      </div>
+      <button type="button" onClick={() => syncNative('attach')}>
+        <TerminalIcon size={14} aria-hidden />
+        {t('sessions.openNativeTerminal')}
+      </button>
+    </div>
   )
 }
 
@@ -201,6 +551,10 @@ function FilterButton({
   )
 }
 
+function isInternalSession(session: Session): boolean {
+  return session.terminalKind === 'internal' || Boolean(session.surfaceId)
+}
+
 function sessionNeedsAttention(session: Session): boolean {
   return session.status === 'permissionRequired'
     || session.status === 'waitingForUser'
@@ -209,31 +563,18 @@ function sessionNeedsAttention(session: Session): boolean {
 }
 
 function attentionReason(session: Session, unread: boolean, t: ReturnType<typeof useI18n>['t']): string {
-  if (session.pendingPermissionTool) {
-    return t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
-  }
-  if (session.pendingPermissionMessage) {
-    return session.pendingPermissionMessage
-  }
-  if (session.inboxPending > 0) {
-    return t('sessions.pendingMessages', { count: session.inboxPending })
-  }
-  if (session.status === 'waitingForUser') {
-    return t('sessions.waitingUser')
-  }
-  if (unread) {
-    return t('sessions.unreadActivity')
-  }
+  if (session.pendingPermissionTool) return t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+  if (session.pendingPermissionMessage) return session.pendingPermissionMessage
+  if (session.inboxPending > 0) return t('sessions.pendingMessages', { count: session.inboxPending })
+  if (session.status === 'waitingForUser') return t('sessions.waitingUser')
+  if (unread) return t('sessions.unreadActivity')
   return t('sessions.permissionRequired')
 }
 
 function sessionIcon(session: Session) {
-  if (session.status === 'permissionRequired' || session.status === 'waitingForUser') {
-    return <AlertCircle size={16} aria-hidden />
-  }
-  if (session.status === 'completed' || session.status === 'done') {
-    return <CheckCircle2 size={16} aria-hidden />
-  }
+  if (isInternalSession(session)) return <TerminalIcon size={16} aria-hidden />
+  if (session.status === 'permissionRequired' || session.status === 'waitingForUser') return <AlertCircle size={16} aria-hidden />
+  if (session.status === 'completed' || session.status === 'done') return <CheckCircle2 size={16} aria-hidden />
   return <Clock3 size={16} aria-hidden />
 }
 
@@ -246,10 +587,12 @@ function sessionMatchesQuery(session: Session, query: string): boolean {
   const values = [
     session.title,
     session.id,
+    session.surfaceId,
     session.pluginId,
     session.pluginDisplayName,
     session.project,
     session.status,
+    session.surfaceStatus,
     session.currentTool,
     session.currentTask,
     session.latestRecap?.content,
@@ -263,6 +606,8 @@ function compareSessions(a: Session, b: Session, unreadSids: Set<string>): numbe
     Number(sessionNeedsAttention(b) || unreadSids.has(b.id)) -
     Number(sessionNeedsAttention(a) || unreadSids.has(a.id))
   if (attentionDelta !== 0) return attentionDelta
+  const internalDelta = Number(isInternalSession(b)) - Number(isInternalSession(a))
+  if (internalDelta !== 0) return internalDelta
   const workingDelta = Number(isWorkingSession(b)) - Number(isWorkingSession(a))
   if (workingDelta !== 0) return workingDelta
   return timestamp(b.lastActivity) - timestamp(a.lastActivity)

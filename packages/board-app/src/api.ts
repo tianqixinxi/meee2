@@ -41,6 +41,14 @@ import type {
   OwnedCanvasSummary,
 } from './types'
 
+declare global {
+  interface Window {
+    webkit?: {
+      messageHandlers?: Record<string, { postMessage: (payload: unknown) => void } | undefined>
+    }
+  }
+}
+
 /** Uniform error thrown by the API helpers. */
 export class ApiRequestError extends Error {
   code: string
@@ -585,14 +593,65 @@ export function spawnGlobalSession(
   canvasId: string,
   provider: SpawnProvider,
   cwd?: string,
-): Promise<{ ok: boolean; cwd: string; command: string }> {
-  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+): Promise<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }>(
     `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
     {
       method: 'POST',
       body: JSON.stringify({ provider, cwd }),
     },
   )
+}
+
+export interface SessionSurface {
+  surfaceId: string
+  sessionId: string
+  provider: 'claude' | 'codex' | string
+  title: string
+  cwd: string
+  command: string
+  canvasId?: string | null
+  nodeId?: string | null
+  status: 'starting' | 'running' | 'exited' | 'failed' | string
+  pid?: number | null
+  exitCode?: number | null
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export function listSessionSurfaces(): Promise<SessionSurface[]> {
+  return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
+}
+
+export function closeSessionSurface(id: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`/api/session-surfaces/${encodeURIComponent(id)}/close`, {
+    method: 'POST',
+  })
+}
+
+export interface NativeTerminalRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export function openNativeTerminalSurface(input: {
+  surfaceId?: string
+  sessionId?: string
+  rect?: NativeTerminalRect
+  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus'
+}): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2NativeTerminal
+  if (!bridge) return false
+  bridge.postMessage({
+    type: input.type ?? 'attach',
+    surfaceId: input.surfaceId,
+    sessionId: input.sessionId,
+    rect: input.rect,
+  })
+  return true
 }
 
 // -- planner ---------------------------------------------------------------
@@ -904,6 +963,33 @@ export function dispatchPlannerNodeSession(
   )
 }
 
+export interface PlannerNodeInternalSessionResult {
+  ok: boolean
+  sessionId: string
+  surfaceId: string
+  cwd: string
+  command: string
+  terminalKind: 'internal' | string
+  graph: PlannerGraphState
+}
+
+export function ensurePlannerNodeInternalSession(
+  canvasId: string,
+  nodeId: string,
+  input?: {
+    runner?: PlannerDispatchRunner
+    cwd?: string
+  },
+): Promise<PlannerNodeInternalSessionResult> {
+  return jsonRequest<PlannerNodeInternalSessionResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/internal-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input ?? {}),
+    },
+  )
+}
+
 export function updatePlannerNodeGate(
   canvasId: string,
   nodeId: string,
@@ -946,9 +1032,11 @@ export function detachPlannerNodeSession(
 
 export interface ResumeClosedPlannerSessionResult {
   sessionId: string
+  surfaceId: string
   nodeIds: string[]
   cwd: string
   command: string
+  terminalKind: 'internal' | string
 }
 
 export interface ResumeClosedPlannerSessionsResponse {
@@ -1913,16 +2001,17 @@ export async function dropMessage(id: string): Promise<Message> {
 }
 
 /**
- * Spawn 一个新 Claude CLI session：按 cwd 打开一个新的 Ghostty 窗口，里面自动
- * 跑 `claude`（沿用本地 `~/.claude/` 的 OAuth，无需重新登录）。
+ * Spawn 一个新 CLI session。默认创建 meee2 内置终端；传
+ * `terminalMode: "external"` 时保留旧的外部终端行为。
  */
 export async function spawnSession(input: {
   cwd: string
   command?: string
   createIfMissing?: boolean
   termProgram?: string
-}): Promise<{ ok: boolean; cwd: string; command: string }> {
-  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+  terminalMode?: 'internal' | 'external'
+}): Promise<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }>(
     '/api/sessions/spawn',
     {
       method: 'POST',
@@ -2267,10 +2356,18 @@ function fileToBase64(file: File): Promise<string> {
 export async function activateSession(id: string): Promise<boolean> {
   // console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
   try {
-    await jsonRequest<{ ok: boolean }>(
+    const response = await jsonRequest<{ ok: boolean; terminalKind?: string; surfaceId?: string; sessionId?: string }>(
       `/api/sessions/${encodeURIComponent(id)}/activate`,
       { method: 'POST' },
     )
+    if (response.terminalKind === 'internal' && response.surfaceId) {
+      window.dispatchEvent(new CustomEvent('meee2:open-session', {
+        detail: {
+          sessionId: response.sessionId ?? id,
+          surfaceId: response.surfaceId,
+        },
+      }))
+    }
     // console.log('[activateSession] OK for', id.slice(0, 8))
     return true
   } catch (e) {
