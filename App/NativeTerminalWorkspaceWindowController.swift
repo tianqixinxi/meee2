@@ -105,11 +105,12 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     func layout(in frame: NSRect, hidden: Bool) {
         let frameChanged = frame != lastLayoutFrame
+        let visibilityChanged = view.isHidden != hidden
         lastLayoutFrame = frame
         if frameChanged {
             view.frame = frame
         }
-        if view.isHidden != hidden {
+        if visibilityChanged {
             view.isHidden = hidden
         }
         guard !hidden else {
@@ -136,7 +137,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             }
         }
         setTerminalSurfaceVisible(true)
-        if frameChanged {
+        if frameChanged || visibilityChanged {
             scheduleRefit()
         }
     }
