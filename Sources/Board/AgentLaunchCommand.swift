@@ -20,6 +20,12 @@ enum AgentLaunchCommand {
         return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
     }
 
+    static func isLikelyProviderResumeSessionId(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isMeee2InternalSessionId(trimmed) else { return false }
+        return UUID(uuidString: trimmed) != nil
+    }
+
     static func commandRequestsResume(_ rawCommand: String) -> Bool {
         let lower = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !lower.isEmpty else { return false }

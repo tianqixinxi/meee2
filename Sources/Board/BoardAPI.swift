@@ -2814,15 +2814,14 @@ enum BoardAPI {
     }
 
     private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
-        let trimmed = sessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && !AgentLaunchCommand.isMeee2InternalSessionId(trimmed)
+        AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId)
     }
 
     private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
         if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !mapped.isEmpty,
-           isProviderResumeSessionId(mapped) {
+           !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
             return mapped
         }
         return isProviderResumeSessionId(sessionId) ? sessionId : nil

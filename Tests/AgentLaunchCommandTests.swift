@@ -31,4 +31,11 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertEqual(launch.provider, "claude")
         XCTAssertEqual(launch.command, "claude --resume 8db44e39-685d-47ab-bd0e-5e97386ded80 --dangerously-skip-permissions")
     }
+
+    func testProviderResumeIdHeuristicRequiresRealUuidAndRejectsInternalIds() {
+        XCTAssertTrue(AgentLaunchCommand.isLikelyProviderResumeSessionId("8db44e39-685d-47ab-bd0e-5e97386ded80"))
+        XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-8db44e39-685d-47ab-bd0e-5e97386ded80"))
+        XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-123"))
+        XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("planner-node-session"))
+    }
 }
