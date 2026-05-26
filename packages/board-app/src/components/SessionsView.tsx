@@ -80,7 +80,8 @@ export function SessionsView({
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
     if (reason === 'react.idleTabPrewarm') return false
-    if (prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
+    const criticalInteraction = reason.startsWith('react.rowSelect') || reason.startsWith('react.rowOpen')
+    if (!criticalInteraction && prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
     const ok = openNativeTerminalSurface({
       type: 'prewarm',
       surfaceId: session.surfaceId,
