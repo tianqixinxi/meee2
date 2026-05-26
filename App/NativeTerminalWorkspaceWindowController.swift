@@ -5,7 +5,6 @@ import meee2Kit
 @MainActor
 final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceClient {
     private static let maxPendingOutputBytes = 64_000
-    private static let maxHiddenOutputBytes = 256_000
 
     let surfaceId: String
     let sessionId: String?
@@ -18,12 +17,12 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var lastSyncedSize: (cols: UInt16, rows: UInt16)?
     private var lastLayoutFrame: NSRect = .zero
     private var pendingOutput = Data()
-    private var hiddenOutput = Data()
     private var outputFlushScheduled = false
     private var surfaceVisible = false
     private var refitScheduled = false
     private var followUpRefitScheduled = false
     private var needsInitialReplay = true
+    private var pausedOutputPosition: Int64?
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -72,7 +71,12 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             context: .window
         )
 
-        _ = InternalTerminalRuntime.shared.addClient(self, surfaceOrSessionId: resolvedSurfaceId, replay: false)
+        _ = InternalTerminalRuntime.shared.addClient(
+            self,
+            surfaceOrSessionId: resolvedSurfaceId,
+            replay: false,
+            wantsOutput: false
+        )
     }
 
     func detach() {
@@ -87,7 +91,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     func hide() {
         guard !detached else { return }
         flushPendingOutput()
-        setTerminalSurfaceVisible(false)
+        deactivateOutput()
         view.isHidden = true
     }
 
@@ -114,18 +118,24 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         }
         guard !hidden else {
             flushPendingOutput()
-            setTerminalSurfaceVisible(false)
+            deactivateOutput()
             return
         }
+        var replaySince = pausedOutputPosition
         if needsInitialReplay {
-            hiddenOutput.removeAll(keepingCapacity: true)
             needsInitialReplay = false
-            if let replay = InternalTerminalRuntime.shared.replayOutputData(surfaceOrSessionId: surfaceId) {
-                terminalSession.receive(replay)
-                scheduleRefit(includeFollowUp: true)
-            }
+            replaySince = nil
         }
-        flushHiddenOutput()
+        let replay = InternalTerminalRuntime.shared.resumeClientOutput(
+            self,
+            surfaceOrSessionId: surfaceId,
+            since: replaySince
+        )
+        pausedOutputPosition = nil
+        if let replay {
+            terminalSession.receive(replay)
+            scheduleRefit(includeFollowUp: true)
+        }
         setTerminalSurfaceVisible(true)
         if frameChanged {
             scheduleRefit()
@@ -134,10 +144,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
         flushPendingOutput()
-        guard !view.isHidden, surfaceVisible else {
-            enqueueHiddenOutput(data)
-            return
-        }
+        guard !view.isHidden, surfaceVisible else { return }
         terminalSession.receive(data)
         scheduleRefit(includeFollowUp: true)
     }
@@ -192,10 +199,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
     private func enqueueOutput(_ data: Data) {
         guard !detached, !data.isEmpty else { return }
-        if view.isHidden || !surfaceVisible {
-            enqueueHiddenOutput(data)
-            return
-        }
+        guard !view.isHidden, surfaceVisible else { return }
         pendingOutput.append(data)
         if pendingOutput.count >= Self.maxPendingOutputBytes {
             flushPendingOutput()
@@ -216,21 +220,10 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         terminalSession.receive(data)
     }
 
-    private func enqueueHiddenOutput(_ data: Data) {
-        hiddenOutput.append(data)
-        guard hiddenOutput.count >= Self.maxHiddenOutputBytes else { return }
-        let overflow = hiddenOutput
-        hiddenOutput.removeAll(keepingCapacity: true)
-        terminalSession.receive(overflow)
-    }
-
-    private func flushHiddenOutput() {
-        guard !hiddenOutput.isEmpty else { return }
-        let data = hiddenOutput
-        hiddenOutput.removeAll(keepingCapacity: true)
-        pendingOutput.append(data)
-        flushPendingOutput()
-        scheduleRefit(includeFollowUp: true)
+    private func deactivateOutput() {
+        guard !detached else { return }
+        pausedOutputPosition = InternalTerminalRuntime.shared.pauseClientOutput(self, surfaceOrSessionId: surfaceId)
+        setTerminalSurfaceVisible(false)
     }
 
     private func scheduleRefit(includeFollowUp: Bool = false) {
