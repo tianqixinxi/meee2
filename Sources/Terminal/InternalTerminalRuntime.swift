@@ -701,15 +701,21 @@ final class InternalTerminalSurface {
         var shouldScheduleFlush = false
         lock.lock()
         appendScrollbackLocked(data)
-        pendingNativeClientOutput.append(data)
-        if pendingNativeClientOutput.count >= Self.maxPendingClientOutputBytes {
-            immediateOutput = pendingNativeClientOutput
+        let hasOutputClients = hasNativeOutputClientsLocked()
+        if hasOutputClients {
+            pendingNativeClientOutput.append(data)
+            if pendingNativeClientOutput.count >= Self.maxPendingClientOutputBytes {
+                immediateOutput = pendingNativeClientOutput
+                pendingNativeClientOutput.removeAll(keepingCapacity: true)
+                nativeClientOutputFlushScheduled = false
+                immediateClients = compactNativeClientsLocked(wantsOutputOnly: true)
+            } else if !nativeClientOutputFlushScheduled {
+                nativeClientOutputFlushScheduled = true
+                shouldScheduleFlush = true
+            }
+        } else if !pendingNativeClientOutput.isEmpty {
             pendingNativeClientOutput.removeAll(keepingCapacity: true)
             nativeClientOutputFlushScheduled = false
-            immediateClients = compactNativeClientsLocked(wantsOutputOnly: true)
-        } else if !nativeClientOutputFlushScheduled {
-            nativeClientOutputFlushScheduled = true
-            shouldScheduleFlush = true
         }
         lock.unlock()
 
@@ -808,6 +814,20 @@ final class InternalTerminalSurface {
             }
         }
         return live
+    }
+
+    private func hasNativeOutputClientsLocked() -> Bool {
+        var hasOutputClient = false
+        for (key, box) in nativeClients {
+            if box.value == nil {
+                nativeClients.removeValue(forKey: key)
+                continue
+            }
+            if box.wantsOutput {
+                hasOutputClient = true
+            }
+        }
+        return hasOutputClient
     }
 
     private func notifyNativeClientsStatus(_ snapshot: InternalTerminalSurfaceSnapshot) {
