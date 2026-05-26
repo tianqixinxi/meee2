@@ -9,22 +9,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// 状态栏图标
     private var statusItem: NSStatusItem?
 
-    /// Sparkle 自动更新控制器。Standard 版自带 UI（"Check for Updates…"
-    /// 弹框、下载进度、relaunch 流程），用 Info.plist 的 SUFeedURL +
-    /// SUPublicEDKey 决定从哪拉 appcast 以及拿什么公钥校验签名。
+    /// Sparkle 自动更新入口。用 Info.plist 的 SUFeedURL + SUPublicEDKey
+    /// 决定从哪拉 appcast 以及拿什么公钥校验下载签名。
     ///
     /// 自定义 user driver —— 把 Sparkle 所有交互 dialog 全自动 confirm,
     /// 实现"点 pill 直接装 + relaunch,零弹框"。详见 SilentInstallUserDriver。
     private let silentDriver = SilentInstallUserDriver()
 
-    /// SPUUpdater + 自定义 driver(取代 SPUStandardUpdaterController + 标准
-    /// driver)。Sparkle 后台 24h 调度 + SUAutomaticallyUpdate=YES 自动下载
-    /// stage,用户点 pill / menubar item 时调 installUpdatesIfAvailable() 立即
-    /// apply,silentDriver 把所有"Install and Relaunch"等确认框自动 confirm。
+    /// SPUUpdater + 自定义 driver。Sparkle 按 1h 本地轮询 + 启动后一次
+    /// background check 自动下载并 stage。用户点 pill / menubar item 时,
+    /// 如果 staged 包仍是最新版就 confirmPendingInstall() 立即 apply;
+    /// 否则跑 user-initiated checkForUpdates() 下载并安装当前最新版。
     ///
-    /// 历史:之前用 SPUStandardUpdaterController(startingUpdater:true) + 标准
-    /// driver,一定会弹 "Install and Relaunch" 框。改成自管 SPUUpdater 是为
-    /// 了能注入自定义 driver。
+    /// 自管 SPUUpdater 的主要原因是注入自定义 driver,让后台下载完成后
+    /// halt 到用户点 pill,而不是马上安装或展示 Sparkle 标准对话框。
     private lazy var updater: SPUUpdater = {
         let u = SPUUpdater(
             hostBundle: Bundle.main,
@@ -157,7 +155,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
             guard let self = self else { return }
             // 强制 init Sparkle updater(lazy var,不主动 touch 永远不创建,
-            // 后台 24h 调度也跑不起来)。延后到首帧之后，避免 Sparkle 初始化影响
+            // Sparkle 自己的 1h 调度也跑不起来)。延后到首帧之后，避免 Sparkle 初始化影响
             // 菜单栏/Island 出现速度。
             _ = self.updater
 
@@ -270,9 +268,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         // SettingsView (在 meee2Kit 模块,不能直接 import Sparkle) 发的
-        // "Check for Updates" 通知 → 在这里桥到 SPUStandardUpdaterController。
-        // 这条通道把 Settings 那个按钮和 menubar "Check for Updates…" 完全
-        // 整成一套：触发同样的 Sparkle modal,同样的下载/安装流程。
+        // "Check for Updates" 通知 → 在这里桥到 SPUUpdater。Settings、
+        // Board Update pill 和 menubar 都走同一套 staged/fresh-check 分支。
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleCheckForUpdatesRequest),
@@ -312,7 +309,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// SPUUpdater.checkForUpdatesInBackground —— silent 路径,driver 也都 no-op。
     /// 走完整 cycle:fetch appcast → 下载 → 验签 → stage。
     /// dev UI 的 "Check" pill 调这个让 Sparkle 把 DMG 预下好,之后点 Update
-    /// 才能立即 apply 不再下载。生产环境靠 24h 调度自己跑这条。
+    /// 才能立即 apply 不再下载。生产环境靠 Sparkle 的 1h 本地轮询和
+    /// 启动后主动 kick 的 background check 自己跑这条。
     @objc private func handleBackgroundUpdateRequest() {
         updater.checkForUpdatesInBackground()
     }

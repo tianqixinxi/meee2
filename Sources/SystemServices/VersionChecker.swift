@@ -23,9 +23,9 @@ public class VersionChecker: ObservableObject {
     @Published public var lastError: String?
 
     private var timer: Timer?
-    /// Background check interval. Lower than Sparkle's 24h schedule so the
-    /// Settings UI's "Latest" stays fresh while the panel is open; Sparkle's
-    /// own scheduler still owns the actual update prompt timing.
+    /// Background check interval for display-only appcast metadata. Sparkle's
+    /// own 1h scheduler owns the real download/stage cycle; this cache only
+    /// feeds Settings and /api/version.
     private let checkInterval: TimeInterval = 6 * 3600
 
     public init() {
@@ -88,8 +88,7 @@ public class VersionChecker: ObservableObject {
     }
 
     /// Releases 页面 URL —— 仅作 fallback 给 Settings 的 "Download" link 用。
-    /// 正经 update flow 走 Sparkle（settingsView 的按钮调
-    /// SPUStandardUpdaterController.checkForUpdates(_:)）。
+    /// 正经 update flow 走 AppDelegate 里的 SPUUpdater + SilentInstallUserDriver。
     var releasesPageUrl: URL? {
         URL(string: "https://github.com/tianqixinxi/meee2/releases")
     }

@@ -10,18 +10,19 @@ import { Tooltip } from './Tooltip'
 
 /**
  * Codex-style "Update" pill —— sidebar header 右上角(traffic-light 旁边),
- * 只在 hasUpdate=true 时出现。点一下走 Sparkle 安装流程:
+ * 生产模式只在 hasUpdate=true 且 isStaged=true 时出现。点一下走 Sparkle 安装流程:
  *
- *   1. 后台 (SUAutomaticallyUpdate=YES + 24h 调度) 已经下载 + 验签好新版
+ *   1. 后台 (SUAutomaticallyUpdate=YES + 1h 本地轮询,启动后也会主动 kick)
+ *      已经下载 + 验签好新版
  *   2. 点 pill → POST /api/update/install → AppDelegate 调
- *      SPUStandardUpdaterController.checkForUpdates(_:)
- *   3. Sparkle 跳过下载步,弹 "Install and Relaunch" 一键确认框
- *   4. 用户点一下 → app 立即 apply + relaunch 到新版本
+ *      SilentInstallUserDriver.confirmPendingInstall()
+ *   3. Sparkle 跳过下载步 → app 立即 apply + relaunch 到新版本
  *
  * 没新版时整个组件不渲染任何东西,sidebar header 右侧空白。
  *
- * 轮询间隔:8 分钟。频率低是因为后端 VersionChecker 自己每 6h 才刷一次 cache,
- * webui 这边主要为了"启动后立刻看到状态" + "几分钟内 catch 上 cache 刷新"。
+ * Web 端不需要 push;它每 8 分钟本地轮询 /api/version,并在 tab 回到前台时
+ * 立即刷新。后端 VersionChecker 每 6h 刷一次显示用 latest cache,Sparkle
+ * 自己的 1h 调度负责真正的下载/stage。
  */
 const POLL_INTERVAL_MS = 8 * 60 * 1000
 
@@ -89,7 +90,7 @@ export function UpdatePill() {
    *    立即更新 webui 显示的 latest/hasUpdate。
    * 2. POST /api/update/check-in-background —— silent 走 Sparkle 完整 cycle:
    *    appcast → 下载 DMG → 验签 → stage。让你之后点 Update pill 时是
-   *    "立刻 Install and Relaunch"(没下载等待),复刻生产 24h 调度后的体验。
+   *    "立刻 Install and Relaunch"(没下载等待),复刻生产本地轮询后的体验。
    *
    * 没 #2 的话,dev 下点 Update 会真去下载,要等几秒到几十秒,看不出
    * "预下载完了点击秒装" 那个效果。
