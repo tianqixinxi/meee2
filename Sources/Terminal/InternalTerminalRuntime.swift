@@ -205,7 +205,14 @@ public final class InternalTerminalRuntime {
             nodeId: nodeId
         )
 
-        try surface.start(cols: cols, rows: rows)
+        do {
+            try surface.start(cols: cols, rows: rows)
+        } catch {
+            remove(surface: surface)
+            SessionStore.shared.delete(sessionId)
+            SessionTerminalStore.shared.remove(sessionId: sessionId)
+            throw error
+        }
         if let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.2) {
                 surface.writeInput(prompt + "\n")
