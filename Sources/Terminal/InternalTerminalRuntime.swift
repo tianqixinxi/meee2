@@ -98,6 +98,13 @@ public final class InternalTerminalRuntime {
                 removedUnrestorable += 1
                 continue
             }
+            guard shouldRestorePersistedSurface(info, command: command) else {
+                SessionStore.shared.delete(info.sessionId)
+                SessionTerminalStore.shared.remove(sessionId: info.sessionId)
+                removedUnrestorable += 1
+                MLog("[InternalTerminalRuntime] dropped stale planner internal session sid=\(info.sessionId.prefix(8)); missing provider resume id")
+                continue
+            }
             let provider = Self.restoreProvider(for: info, command: command)
             do {
                 _ = try createSurface(
@@ -347,6 +354,33 @@ public final class InternalTerminalRuntime {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(Self.shellQuote(sessionId))"
         }
         return "claude --resume \(Self.shellQuote(sessionId)) --dangerously-skip-permissions"
+    }
+
+    private func shouldRestorePersistedSurface(_ info: SessionTerminalInfo, command: String) -> Bool {
+        guard isPlannerBound(info) else { return true }
+        if Self.validProviderResumeSessionId(info.providerResumeSessionId) != nil {
+            return true
+        }
+        return !isAgentTerminal(info, command: command)
+    }
+
+    private func isPlannerBound(_ info: SessionTerminalInfo) -> Bool {
+        let canvasId = info.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let nodeId = info.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !canvasId.isEmpty || !nodeId.isEmpty
+    }
+
+    private func isAgentTerminal(_ info: SessionTerminalInfo, command: String) -> Bool {
+        let haystack = [
+            info.provider,
+            info.command,
+            command,
+            info.sessionId,
+        ]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+        return haystack.contains("claude") || haystack.contains("codex")
     }
 
     private static func restoreProvider(for info: SessionTerminalInfo, command: String) -> String {
