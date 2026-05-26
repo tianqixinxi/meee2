@@ -9,7 +9,6 @@ import {
 } from 'react'
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
-import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView } from './components/ArtifactsView'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'

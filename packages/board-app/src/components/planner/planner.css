@@ -505,29 +505,41 @@
 }
 
 /* Full node detail modal — mirrors the .planner-proposal-modal pattern. */
+/* Node inspector — right-side drawer, doesn't block canvas
+ * (simplification spec §2.9: modal → side drawer) */
 .planner-node-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 70;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgba(18, 18, 16, 0.52);
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  background: rgba(18, 18, 16, 0.35);
+  backdrop-filter: blur(1.5px);
+  pointer-events: none;            /* let canvas clicks pass through except for the panel */
 }
+.planner-node-modal-backdrop > * { pointer-events: auto; }
 
 .planner-node-modal {
   position: relative;
-  width: min(540px, calc(100vw - 36px));
-  max-height: min(760px, calc(100vh - 36px));
+  width: min(540px, calc(100vw - 60px));
+  height: 100vh;
+  max-height: 100vh;
   overflow: auto;
   display: grid;
   gap: 12px;
-  padding: 18px;
-  border: 1px solid rgba(168, 165, 155, 0.22);
-  border-radius: var(--radius);
+  padding: 24px 22px 28px;
+  border: none;
+  border-left: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 0;
   background: rgba(35, 35, 32, 0.98);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
   color: var(--text);
+  animation: planner-node-modal-slide-in 200ms ease-out;
+}
+@keyframes planner-node-modal-slide-in {
+  from { transform: translateX(40px); opacity: 0.4; }
+  to   { transform: translateX(0); opacity: 1; }
 }
 
 .planner-node-modal__close {
