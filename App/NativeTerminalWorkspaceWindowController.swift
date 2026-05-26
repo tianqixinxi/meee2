@@ -4,6 +4,8 @@ import meee2Kit
 
 @MainActor
 final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceClient {
+    private static let maxPendingOutputBytes = 64_000
+
     let surfaceId: String
     let sessionId: String?
     let view: TerminalView
@@ -14,6 +16,8 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var detached = false
     private var lastSyncedSize: (cols: UInt16, rows: UInt16)?
     private var lastLayoutFrame: NSRect = .zero
+    private var pendingOutput = Data()
+    private var outputFlushScheduled = false
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -68,6 +72,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     func detach() {
         guard !detached else { return }
         detached = true
+        flushPendingOutput()
         InternalTerminalRuntime.shared.removeClient(self, surfaceOrSessionId: surfaceId)
         view.setSurfaceVisible(false)
         view.removeFromSuperview()
@@ -107,15 +112,17 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
+        flushPendingOutput()
         terminalSession.receive(data)
         scheduleRefit()
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReceiveOutput data: Data) {
-        terminalSession.receive(data)
+        enqueueOutput(data)
     }
 
     func internalTerminalSurface(_ surfaceId: String, didExitWithCode code: Int) {
+        flushPendingOutput()
         terminalSession.finish(exitCode: UInt32(max(0, code)), runtimeMilliseconds: 0)
         onExit(self.surfaceId, sessionId)
     }
@@ -150,6 +157,28 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         guard !detached, !view.isHidden else { return }
         view.layoutSubtreeIfNeeded()
         view.fitToSize()
+    }
+
+    private func enqueueOutput(_ data: Data) {
+        guard !detached, !data.isEmpty else { return }
+        pendingOutput.append(data)
+        if pendingOutput.count >= Self.maxPendingOutputBytes {
+            flushPendingOutput()
+            return
+        }
+        guard !outputFlushScheduled else { return }
+        outputFlushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.flushPendingOutput()
+        }
+    }
+
+    private func flushPendingOutput() {
+        outputFlushScheduled = false
+        guard !pendingOutput.isEmpty else { return }
+        let data = pendingOutput
+        pendingOutput.removeAll(keepingCapacity: true)
+        terminalSession.receive(data)
     }
 
     private func scheduleRefit() {
