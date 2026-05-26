@@ -18,6 +18,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var lastLayoutFrame: NSRect = .zero
     private var pendingOutput = Data()
     private var outputFlushScheduled = false
+    private var surfaceVisible = false
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -74,13 +75,13 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         detached = true
         flushPendingOutput()
         InternalTerminalRuntime.shared.removeClient(self, surfaceOrSessionId: surfaceId)
-        view.setSurfaceVisible(false)
+        setTerminalSurfaceVisible(false)
         view.removeFromSuperview()
     }
 
     func hide() {
         guard !detached else { return }
-        view.setSurfaceVisible(false)
+        setTerminalSurfaceVisible(false)
         view.isHidden = true
     }
 
@@ -91,8 +92,9 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     func focus() {
+        guard !detached, !view.isHidden else { return }
         view.window?.makeFirstResponder(view)
-        view.setSurfaceVisible(true)
+        setTerminalSurfaceVisible(true)
     }
 
     func layout(in frame: NSRect, hidden: Bool) {
@@ -104,8 +106,11 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         if view.isHidden != hidden {
             view.isHidden = hidden
         }
-        guard !hidden else { return }
-        view.setSurfaceVisible(true)
+        guard !hidden else {
+            setTerminalSurfaceVisible(false)
+            return
+        }
+        setTerminalSurfaceVisible(true)
         if frameChanged {
             refitSurface()
         }
@@ -157,6 +162,12 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         guard !detached, !view.isHidden else { return }
         view.layoutSubtreeIfNeeded()
         view.fitToSize()
+    }
+
+    private func setTerminalSurfaceVisible(_ visible: Bool) {
+        guard surfaceVisible != visible else { return }
+        surfaceVisible = visible
+        view.setSurfaceVisible(visible)
     }
 
     private func enqueueOutput(_ data: Data) {
@@ -229,6 +240,6 @@ extension EmbeddedNativeTerminalController:
     }
 
     func terminalDidChangeFocus(_ focused: Bool) {
-        view.setSurfaceVisible(focused || view.window != nil)
+        setTerminalSurfaceVisible(!view.isHidden && (focused || view.window != nil))
     }
 }
