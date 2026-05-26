@@ -124,9 +124,9 @@ export function SessionsView({
       ...internalSessions,
     ])
       .filter((session) => session.surfaceId && isLiveInternalSession(session))
-      .slice(0, 6)
+      .slice(0, 1)
     if (targets.length === 0) return
-    return scheduleStaggeredInternalPrewarm(targets, prewarmInternalSession)
+    return scheduleInternalTabPrewarm(targets[0], prewarmInternalSession)
   }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSession])
 
   const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
@@ -765,31 +765,29 @@ function uniqueSessionsById(sessions: Session[]): Session[] {
   return result
 }
 
-function scheduleStaggeredInternalPrewarm(
-  sessions: Session[],
+function scheduleInternalTabPrewarm(
+  session: Session,
   prewarm: (session: Session, reason?: string) => boolean,
 ): () => void {
   let cancelled = false
   const cancelTimers: Array<() => void> = []
-  sessions.forEach((session, index) => {
-    const timeoutId = window.setTimeout(() => {
-      if (cancelled) return
-      const idleWindow = window as Window & {
-        requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
-        cancelIdleCallback?: (handle: number) => void
-      }
-      const run = () => {
-        if (!cancelled) prewarm(session, index === 0 ? 'react.tabPrewarm' : 'react.idleTabPrewarm')
-      }
-      if (idleWindow.requestIdleCallback) {
-        const idleHandle = idleWindow.requestIdleCallback(run, { timeout: 900 })
-        cancelTimers.push(() => idleWindow.cancelIdleCallback?.(idleHandle))
-      } else {
-        run()
-      }
-    }, index === 0 ? 180 : 420 + index * 260)
-    cancelTimers.push(() => window.clearTimeout(timeoutId))
-  })
+  const timeoutId = window.setTimeout(() => {
+    if (cancelled) return
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number
+      cancelIdleCallback?: (handle: number) => void
+    }
+    const run = () => {
+      if (!cancelled) prewarm(session, 'react.tabPrewarm')
+    }
+    if (idleWindow.requestIdleCallback) {
+      const idleHandle = idleWindow.requestIdleCallback(run, { timeout: 900 })
+      cancelTimers.push(() => idleWindow.cancelIdleCallback?.(idleHandle))
+    } else {
+      run()
+    }
+  }, 180)
+  cancelTimers.push(() => window.clearTimeout(timeoutId))
   return () => {
     cancelled = true
     for (const cancel of cancelTimers) cancel()
