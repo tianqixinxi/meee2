@@ -86,14 +86,17 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     func focus() {
         view.window?.makeFirstResponder(view)
         view.setSurfaceVisible(true)
-        refitSurface()
     }
 
     func layout(in frame: NSRect, hidden: Bool) {
         let frameChanged = frame != lastLayoutFrame
         lastLayoutFrame = frame
-        view.frame = frame
-        view.isHidden = hidden
+        if frameChanged {
+            view.frame = frame
+        }
+        if view.isHidden != hidden {
+            view.isHidden = hidden
+        }
         guard !hidden else { return }
         view.setSurfaceVisible(true)
         if frameChanged {

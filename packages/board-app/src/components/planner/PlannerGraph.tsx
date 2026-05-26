@@ -1087,7 +1087,7 @@ function PlannerGraphInner({
     resumeClosedPlannerSessions(canvasId, sessionIds)
       .then((result) => {
         if (result.resumed.length > 0) {
-          onNotify?.('success', `Resuming ${result.resumed.length} closed session${result.resumed.length === 1 ? '' : 's'}.`)
+          onNotify?.('success', `Restoring ${result.resumed.length} closed session${result.resumed.length === 1 ? '' : 's'}.`)
           const first = result.resumed[0]
           window.dispatchEvent(new CustomEvent('meee2:open-session', {
             detail: {
@@ -1102,7 +1102,7 @@ function PlannerGraphInner({
           notifyError(result.skipped.map((item) => item.reason).join('; '))
         }
       })
-      .catch((err) => notifyError((err as Error).message || 'Failed to resume closed sessions'))
+      .catch((err) => notifyError((err as Error).message || 'Failed to restore closed sessions'))
       .finally(() => setResumingClosedSessions(false))
   }, [canvasId, closedBoundSessions, loadState, notifyError, onNotify])
 
@@ -1443,7 +1443,7 @@ function PlannerGraphInner({
       : null,
   ].filter(Boolean).join(' · ')
   const readySessionActionSummary = readySessionPlan.total > 0
-    ? `${readySessionPlan.create.length} create${readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} resume` : ''}`
+    ? `${readySessionPlan.create.length} create${readySessionPlan.resume.length > 0 ? ` · ${readySessionPlan.resume.length} restore` : ''}`
     : null
   const closedBoundSessionSummary = closedBoundSessions.length > 0
     ? `${closedBoundSessions.slice(0, 2).map((item) => item.nodeTitles.join(', ')).join('; ')}${closedBoundSessions.length > 2 ? ` and ${closedBoundSessions.length - 2} more` : ''}`
@@ -1556,7 +1556,7 @@ function PlannerGraphInner({
                     <strong>{sessionActionBannerTitle}</strong>
                     {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
                     {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
-                    <em>Creates missing sessions and resumes preserved session bindings.</em>
+                    <em>Creates missing sessions and restores preserved session bindings.</em>
                   </div>
                   <div className="planner-session-action-banner__actions">
                     {readySessionPlan.total > 0 && (
@@ -1576,7 +1576,7 @@ function PlannerGraphInner({
                         disabled={resumingClosedSessions}
                       >
                         <RefreshCw size={14} className={resumingClosedSessions ? 'spin' : undefined} aria-hidden />
-                        Resume all
+                        Restore all
                       </button>
                     )}
                   </div>

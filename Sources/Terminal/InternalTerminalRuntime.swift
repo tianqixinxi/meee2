@@ -93,7 +93,7 @@ public final class InternalTerminalRuntime {
             guard let command = restoreCommand(for: info, storedSession: storedSession) else {
                 continue
             }
-            let provider = restoreProvider(for: info, command: command)
+            let provider = Self.restoreProvider(for: info, command: command)
             do {
                 _ = try createSurface(
                     provider: provider,
@@ -294,19 +294,25 @@ public final class InternalTerminalRuntime {
 
     private func restoreCommand(for info: SessionTerminalInfo, storedSession: SessionData?) -> String? {
         if let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty {
+            if Self.commandUsesInternalResumeId(command, sessionId: info.sessionId) {
+                return Self.freshCommand(for: info, command: command)
+            }
             return command
         }
         guard storedSession != nil else {
             return nil
         }
         let sessionId = info.sessionId
+        guard !Self.isInternalSessionId(sessionId) else {
+            return Self.freshCommand(for: info, command: nil)
+        }
         if sessionId.lowercased().contains("codex") {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(Self.shellQuote(sessionId))"
         }
         return "claude --resume \(Self.shellQuote(sessionId)) --dangerously-skip-permissions"
     }
 
-    private func restoreProvider(for info: SessionTerminalInfo, command: String) -> String {
+    private static func restoreProvider(for info: SessionTerminalInfo, command: String) -> String {
         if let provider = info.provider?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !provider.isEmpty {
             return provider == "codex" ? "codex" : "claude"
         }
@@ -319,6 +325,25 @@ public final class InternalTerminalRuntime {
 
     private static func shellQuote(_ raw: String) -> String {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
+    }
+
+    private static func isInternalSessionId(_ sessionId: String) -> Bool {
+        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+    }
+
+    private static func commandUsesInternalResumeId(_ command: String, sessionId: String) -> Bool {
+        guard isInternalSessionId(sessionId) else { return false }
+        let lower = command.lowercased()
+        return lower.contains("resume") && lower.contains(sessionId.lowercased())
+    }
+
+    private static func freshCommand(for info: SessionTerminalInfo, command: String?) -> String {
+        let provider = restoreProvider(for: info, command: command ?? "")
+        if provider == "codex" {
+            return "codex --dangerously-bypass-approvals-and-sandbox"
+        }
+        return "claude --dangerously-skip-permissions"
     }
 }
 
@@ -689,6 +714,11 @@ final class InternalTerminalSurface {
 
         let flags = Int16(POSIX_SPAWN_SETSID)
         posix_spawnattr_setflags(&spawnAttributes, flags)
+        // Internal terminal children must not inherit BoardServer sockets,
+        // WebSocket clients, log files, or any other host descriptors. Leaking
+        // those FDs keeps old ports alive after meee2 exits and makes Board
+        // reloads/switches look randomly slow or stale.
+        addCloseInheritedFileActions(&fileActions)
         posix_spawn_file_actions_addclose(&fileActions, inheritedMasterFD)
 
         var spawnedPid: pid_t = 0
@@ -714,6 +744,15 @@ final class InternalTerminalSurface {
             )
         }
         return spawnedPid
+    }
+
+    private static func addCloseInheritedFileActions(_ fileActions: inout posix_spawn_file_actions_t?) {
+        let sysMax = Darwin.sysconf(_SC_OPEN_MAX)
+        let maxFD = min(max(sysMax > 0 ? Int(sysMax) : 256, 256), 4096)
+        guard maxFD > 3 else { return }
+        for fd in 3..<maxFD {
+            posix_spawn_file_actions_addclose(&fileActions, Int32(fd))
+        }
     }
 
     private static func withCStringArray<Result>(

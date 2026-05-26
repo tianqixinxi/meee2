@@ -436,7 +436,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 controller.view.frame = .zero
                 controller.view.autoresizingMask = []
                 terminalHostView.addSubview(controller.view)
-            } else {
+            } else if controller.view.superview !== terminalHostView {
                 controller.view.removeFromSuperview()
                 terminalHostView.addSubview(controller.view)
             }

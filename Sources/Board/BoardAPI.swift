@@ -1357,7 +1357,10 @@ enum BoardAPI {
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-                    let command = plannerResumeCommand(for: existingNode, sessionId: sessionId)
+                    let canResume = isProviderResumeSessionId(sessionId)
+                    let command = canResume
+                        ? plannerResumeCommand(for: existingNode, sessionId: sessionId)
+                        : plannerFreshCommand(for: existingNode)
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     surface = try createInternalSessionSurface(
                         provider: provider,
@@ -1366,13 +1369,21 @@ enum BoardAPI {
                         createIfMissing: true,
                         canvasId: canvasId,
                         nodeId: nodeId,
-                        initialPrompt: nil,
-                        preferredSessionId: sessionId
+                        initialPrompt: canResume ? nil : plannerDispatchPrompt(for: existingNode, canvasId: canvasId, cwd: cwd),
+                        preferredSessionId: canResume ? sessionId : nil
                     )
-                    _ = PlannerSessionRunStateBridge.observeBound(
-                        sessionId: surface.sessionId,
-                        status: .active
-                    )
+                    if canResume {
+                        _ = PlannerSessionRunStateBridge.observeBound(
+                            sessionId: surface.sessionId,
+                            status: .active
+                        )
+                    } else {
+                        _ = PlannerSessionRunStateBridge.observe(
+                            sessionId: surface.sessionId,
+                            purpose: "planner:\(nodeId)",
+                            status: .active
+                        )
+                    }
                     BoardServer.shared.broadcastStateChanged()
                     state = try PlannerBoardBridge.graphState(
                         for: canvasId,
@@ -1558,7 +1569,10 @@ enum BoardAPI {
                     for node in nodes {
                         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
                     }
-                    let command = plannerResumeCommand(for: nodes.first, sessionId: sessionId)
+                    let canResume = isProviderResumeSessionId(sessionId)
+                    let command = canResume
+                        ? plannerResumeCommand(for: nodes.first, sessionId: sessionId)
+                        : plannerFreshCommand(for: nodes.first)
                     let provider = AgentLaunchCommand.provider(forCommand: command)
                     let surface = try createInternalSessionSurface(
                         provider: provider,
@@ -1567,13 +1581,23 @@ enum BoardAPI {
                         createIfMissing: true,
                         canvasId: canvasId,
                         nodeId: nodes.first?.id,
-                        initialPrompt: nil,
-                        preferredSessionId: sessionId
+                        initialPrompt: canResume ? nil : nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) },
+                        preferredSessionId: canResume ? sessionId : nil
                     )
-                    _ = PlannerSessionRunStateBridge.observeBound(
-                        sessionId: surface.sessionId,
-                        status: .active
-                    )
+                    if canResume {
+                        _ = PlannerSessionRunStateBridge.observeBound(
+                            sessionId: surface.sessionId,
+                            status: .active
+                        )
+                    } else {
+                        for node in nodes {
+                            _ = PlannerSessionRunStateBridge.observe(
+                                sessionId: surface.sessionId,
+                                purpose: "planner:\(node.id)",
+                                status: .active
+                            )
+                        }
+                    }
                     resumed.append(ResumedSession(
                         sessionId: surface.sessionId,
                         surfaceId: surface.surfaceId,
@@ -2751,6 +2775,24 @@ enum BoardAPI {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(quotedSessionId)"
         }
         return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+    }
+
+    private static func plannerFreshCommand(for node: PlanningNode?) -> String {
+        let rawCommand = node?.dispatch?.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = node?.dispatch?.runner.spawnCommand ?? AgentLaunchCommand.fullAccessCommand(forProvider: node?.dispatch?.runner.rawValue ?? "claude")
+        let launch = AgentLaunchCommand.normalize(
+            command: rawCommand?.isEmpty == false ? rawCommand! : fallback,
+            fallbackProvider: node?.dispatch?.runner.rawValue ?? "claude"
+        )
+        return launch.command
+    }
+
+    private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
+        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-") {
+            return false
+        }
+        return true
     }
 
     private static func shellQuote(_ raw: String) -> String {
