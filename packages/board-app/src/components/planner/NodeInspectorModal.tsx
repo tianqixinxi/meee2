@@ -46,6 +46,7 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onOpenArtifacts?: () => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -77,6 +78,7 @@ export function NodeInspectorModal({
   onGraphStateChanged,
   onSendToAI,
   onReplaceSession,
+  onOpenArtifacts,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
@@ -112,6 +114,13 @@ export function NodeInspectorModal({
   const outputItems = dedupeStrings(
     visibleOutputReferences(node, artifacts, state?.artifactRefs ?? []),
   )
+  const nodeArtifacts = artifacts
+    .filter((artifact) => artifact.nodeId === node.id)
+    .sort(sortArtifactsNewestFirst)
+  const persistedArtifactRefs = new Set(nodeArtifacts.map((artifact) => artifact.reference.trim()).filter(Boolean))
+  const runtimeArtifactRefs = dedupeStrings(state?.artifactRefs ?? [])
+    .filter((reference) => !persistedArtifactRefs.has(reference))
+  const deliveryEvidenceCount = nodeArtifacts.length + runtimeArtifactRefs.length
   const nextAction = node.nextAction?.trim() || null
   const responsibleId = node.doerId?.trim() ?? ''
   const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)
@@ -257,6 +266,44 @@ export function NodeInspectorModal({
             </div>
           </div>
         </div>
+
+        {deliveryEvidenceCount > 0 && (
+          <div className="planner-node-modal__section">
+            <div className="planner-node-modal__section-heading">
+              <h3><FileText size={13} aria-hidden /> Delivery evidence</h3>
+              {onOpenArtifacts && (
+                <button type="button" onClick={onOpenArtifacts}>
+                  <ExternalLink size={12} aria-hidden /> Artifacts
+                </button>
+              )}
+            </div>
+            <div className="planner-node-modal__evidence">
+              {nodeArtifacts.slice(0, 4).map((artifact) => (
+                <div className="planner-node-modal__evidence-item" key={artifact.id}>
+                  <div>
+                    <strong title={artifact.title}>{artifact.title}</strong>
+                    <span title={artifact.reference}>{artifact.kind} · {compactLabel(artifact.reference)}</span>
+                  </div>
+                  <em>{artifact.status} · {formatArtifactDate(artifact.createdAt)}</em>
+                </div>
+              ))}
+              {runtimeArtifactRefs.map((reference) => (
+                <div className="planner-node-modal__evidence-item" key={reference}>
+                  <div>
+                    <strong title={reference}>{compactLabel(reference)}</strong>
+                    <span title={reference}>{reference}</span>
+                  </div>
+                  <em>runtime</em>
+                </div>
+              ))}
+              {onOpenArtifacts && nodeArtifacts.length > 4 && (
+                <button type="button" className="planner-node-modal__evidence-more" onClick={onOpenArtifacts}>
+                  View {nodeArtifacts.length - 4} more
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {nextAction && !isTemplate && (
           <div className="planner-node-modal__next-action">
@@ -559,6 +606,21 @@ function compactLabel(value: string): string {
   const withoutQuery = value.trim().split('?')[0]
   const parts = withoutQuery.split(/[/:#]/).filter(Boolean)
   return parts[parts.length - 1]?.trim() || value
+}
+
+function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact): number {
+  return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+}
+
+function formatArtifactDate(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 function gateModeLabel(node: PlanningNode): 'Human' | 'Auto' {

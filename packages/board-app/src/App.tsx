@@ -847,6 +847,7 @@ export default function App() {
                   setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
                 }}
                 onOpenSubCanvas={handleSetActiveCanvas}
+                onOpenArtifacts={() => setWorkspaceMode('artifacts')}
                 onNotify={pushToast}
               />
             )

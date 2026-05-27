@@ -98,6 +98,7 @@ interface Props {
   focusRequestId?: number
   onFocusNodeHandled?: (requestId: number) => void
   onOpenSubCanvas?: (canvasId: string) => void
+  onOpenArtifacts?: () => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
 }
 
@@ -137,6 +138,7 @@ function PlannerGraphInner({
   focusRequestId = 0,
   onFocusNodeHandled,
   onOpenSubCanvas,
+  onOpenArtifacts,
   onNotify,
 }: Props) {
   const { t } = useI18n()
@@ -1712,6 +1714,7 @@ function PlannerGraphInner({
           showOwnerInfo={plannerState?.canvas.visibility !== 'private'}
           visibleIOArtifacts={ioArtifactVisibility[selectedNode.id] ?? { inputs: [], outputs: [] }}
           onToggleIOArtifact={handleToggleIOArtifact}
+          onOpenArtifacts={onOpenArtifacts}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}
           onAttachDataSource={handleOpenAttachDataSource}
