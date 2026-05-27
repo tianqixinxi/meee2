@@ -112,6 +112,24 @@ export interface ReadinessRepairResult {
   report: ReadinessReport
 }
 
+export interface SessionIntakeDiagnosticItem {
+  id: string
+  severity: 'info' | 'warn' | 'error' | string
+  title: string
+  detail: string
+  sessionId: string | null
+  recoveryAction: string | null
+}
+
+export interface SessionIntakeDiagnostics {
+  ok: boolean
+  liveSessions: number
+  storedSessions: number
+  historicalSessions: number
+  items: SessionIntakeDiagnosticItem[]
+  checkedAt: string
+}
+
 export interface Session {
   id: string
   title: string

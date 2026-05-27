@@ -4,13 +4,14 @@ import {
   CircleStop,
   Clock3,
   ExternalLink,
+  RefreshCw,
   Search,
   Terminal as TerminalIcon,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck } from '../api'
-import { useI18n } from '../lib/i18n'
-import type { BoardState, Session } from '../types'
+import { activateSession, closeSessionSurface, fetchSessionIntakeDiagnostics, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck } from '../api'
+import { useI18n, type TranslationKey } from '../lib/i18n'
+import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
   state: BoardState | null
@@ -35,6 +36,9 @@ export function SessionsView({
   const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<SessionIntakeDiagnostics | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
   const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
@@ -90,6 +94,19 @@ export function SessionsView({
     })
     return ok
   }, [])
+
+  const refreshDiagnostics = useCallback(() => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    fetchSessionIntakeDiagnostics()
+      .then(setDiagnostics)
+      .catch((err: unknown) => setDiagnosticsError((err as Error).message || 'Failed to load diagnostics'))
+      .finally(() => setDiagnosticsLoading(false))
+  }, [])
+
+  useEffect(() => {
+    refreshDiagnostics()
+  }, [refreshDiagnostics, sessions.length])
 
   useEffect(() => {
     const handlePrewarmAck = (event: Event) => {
@@ -184,6 +201,13 @@ export function SessionsView({
             </div>
           </div>
         </div>
+        <SessionIntakePanel
+          diagnostics={diagnostics}
+          error={diagnosticsError}
+          loading={diagnosticsLoading}
+          onRefresh={refreshDiagnostics}
+          t={t}
+        />
         {sessions.length === 0 ? (
           <div className="sessions-empty">
             <TerminalIcon size={18} aria-hidden />
@@ -283,6 +307,58 @@ export function SessionsView({
           </div>
         )}
       </div>
+    </section>
+  )
+}
+
+function SessionIntakePanel({
+  diagnostics,
+  error,
+  loading,
+  onRefresh,
+  t,
+}: {
+  diagnostics: SessionIntakeDiagnostics | null
+  error: string | null
+  loading: boolean
+  onRefresh: () => void
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+}) {
+  const hasItems = (diagnostics?.items.length ?? 0) > 0
+  const tone = error ? 'error' : diagnostics?.ok === false ? 'warn' : 'ok'
+  const summary = error
+    ? error
+    : diagnostics
+      ? t('sessions.intakeSummary', {
+          live: diagnostics.liveSessions,
+          stored: diagnostics.storedSessions,
+          historical: diagnostics.historicalSessions,
+        })
+      : t('sessions.intakeLoading')
+
+  return (
+    <section className={`session-intake session-intake--${tone}`} aria-label={t('sessions.intakeTitle')}>
+      <div className="session-intake__main">
+        {tone === 'ok' ? <CheckCircle2 size={15} aria-hidden /> : <AlertCircle size={15} aria-hidden />}
+        <div>
+          <strong>{diagnostics?.ok === false ? t('sessions.intakeNeedsAttention') : t('sessions.intakeTitle')}</strong>
+          <span>{summary}</span>
+        </div>
+      </div>
+      {hasItems && (
+        <ul className="session-intake__items">
+          {diagnostics!.items.slice(0, 3).map((item) => (
+            <li key={item.id}>
+              <span>{item.title}</span>
+              <em>{item.detail}</em>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button type="button" className="session-intake__refresh" onClick={onRefresh} disabled={loading}>
+        <RefreshCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
+        <span>{t('common.refresh')}</span>
+      </button>
     </section>
   )
 }

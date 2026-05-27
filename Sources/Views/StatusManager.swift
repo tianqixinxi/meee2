@@ -126,7 +126,7 @@ public class StatusManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
                 guard let self = self else { return }
-                self.sessions = sessions
+                self.sessions = sessions.filter { !$0.status.isHistorical || $0.urgentEvent != nil }
                 self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
@@ -135,7 +135,7 @@ public class StatusManager: ObservableObject {
 
         // 检测 urgent 状态
         pluginManager.$sessions
-            .map { $0.contains { $0.urgentEvent != nil } }
+            .map { $0.contains { !$0.status.isHistorical && $0.urgentEvent != nil } }
             .receive(on: DispatchQueue.main)
             .assign(to: &$hasUrgentSession)
     }
@@ -143,11 +143,6 @@ public class StatusManager: ObservableObject {
     private func updateSystemStatus() {
         if sessions.isEmpty {
             systemStatus = .idle
-            return
-        }
-
-        if sessions.contains(where: { $0.status == .dead }) {
-            systemStatus = .error
             return
         }
 

@@ -9,6 +9,7 @@ import type {
   Meee2AgentRuntimeStatus,
   ReadinessRepairResult,
   ReadinessReport,
+  SessionIntakeDiagnostics,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -417,6 +418,10 @@ async function jsonRequest<T>(
 export function fetchState(): Promise<BoardState> {
   if (PLANNER_DEMO_MODE) return Promise.resolve(demoBoardState())
   return jsonRequest<BoardState>('/api/state')
+}
+
+export function fetchSessionIntakeDiagnostics(): Promise<SessionIntakeDiagnostics> {
+  return jsonRequest<SessionIntakeDiagnostics>('/api/sessions/intake-diagnostics')
 }
 
 export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {

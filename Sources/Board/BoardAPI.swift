@@ -150,6 +150,130 @@ enum BoardAPI {
         return jsonResponse(result, status: result.ok ? 200 : 400, reason: result.ok ? "OK" : "Bad Request")
     }
 
+    // MARK: - GET /api/sessions/intake-diagnostics
+
+    private struct SessionIntakeDiagnosticItem: Encodable {
+        let id: String
+        let severity: String
+        let title: String
+        let detail: String
+        let sessionId: String?
+        let recoveryAction: String?
+    }
+
+    private struct SessionIntakeDiagnostics: Encodable {
+        let ok: Bool
+        let liveSessions: Int
+        let storedSessions: Int
+        let historicalSessions: Int
+        let items: [SessionIntakeDiagnosticItem]
+        let checkedAt: String
+    }
+
+    static func getSessionIntakeDiagnostics(_ req: HttpRequest) -> HttpResponse {
+        let readiness = ReadinessDoctor.diagnose()
+        let stored = SessionStore.shared.listAll()
+        let pluginSessions = PluginManager.shared.sessions
+            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
+        let livePluginSessions = pluginSessions.filter { !$0.status.isHistorical }
+        let liveKeys = Set(livePluginSessions.map(canonicalSessionKey))
+        let historical = stored.filter { session in
+            session.status.isHistorical || TranscriptStatusResolver.resolve(for: session).isHistorical
+        }
+
+        var items: [SessionIntakeDiagnosticItem] = []
+        if readiness.requiredFailed > 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "local-readiness-failing",
+                severity: "error",
+                title: "Local session readiness is incomplete",
+                detail: "\(readiness.requiredFailed) required readiness check(s) are failing before real session intake can be trusted.",
+                sessionId: nil,
+                recoveryAction: "Open Settings and run the failing readiness recovery actions."
+            ))
+        }
+
+        if livePluginSessions.isEmpty && readiness.requiredFailed == 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "no-live-provider-sessions",
+                severity: "warn",
+                title: "No live provider sessions are visible",
+                detail: "meee2 is ready, but no live Claude Code or Codex session is currently being reported by enabled providers.",
+                sessionId: nil,
+                recoveryAction: "Start or resume a real Claude Code/Codex session, then refresh this view."
+            ))
+        }
+
+        for session in stored {
+            guard !session.status.isHistorical,
+                  let pid = session.pid,
+                  !SessionStore.processAlive(pid) else { continue }
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stale-runtime-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session has a stale runtime",
+                detail: "Session \(String(session.sessionId.prefix(8))) still points at pid \(pid), but that process is gone. The record should be preserved and marked historical.",
+                sessionId: session.sessionId,
+                recoveryAction: "Refresh sessions; meee2 will keep the record and mark the runtime ended."
+            ))
+        }
+
+        let storedActiveNotSurfaced = stored.filter { session in
+            guard !session.status.isHistorical else { return false }
+            return !liveKeys.contains(canonicalSessionKey(pluginId: "com.meee2.plugin.claude", sessionId: session.sessionId))
+        }
+        for session in storedActiveNotSurfaced.prefix(5) {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stored-not-surfaced-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session is not in the live provider view",
+                detail: "Session \(String(session.sessionId.prefix(8))) is persisted locally but is not currently surfaced by the enabled Claude provider.",
+                sessionId: session.sessionId,
+                recoveryAction: "Check whether the provider is disabled, the session is archived, or the provider needs refresh."
+            ))
+        }
+
+        let duplicateLivePids = Dictionary(grouping: stored.compactMap { session -> (Int, String)? in
+            guard let pid = session.pid,
+                  !session.status.isHistorical,
+                  SessionStore.processAlive(pid) else { return nil }
+            return (pid, session.sessionId)
+        }, by: { $0.0 })
+            .filter { $0.value.count > 1 }
+        for (pid, entries) in duplicateLivePids.prefix(5) {
+            let ids = entries.map { String($0.1.prefix(8)) }.joined(separator: ", ")
+            items.append(SessionIntakeDiagnosticItem(
+                id: "duplicate-live-pid-\(pid)",
+                severity: "error",
+                title: "Multiple stored sessions point at one live runtime",
+                detail: "pid \(pid) is attached to multiple stored sessions: \(ids). This usually means stale-id recovery should merge instead of duplicate.",
+                sessionId: entries.first?.1,
+                recoveryAction: "Wait for the next provider refresh; if it persists, capture debug export."
+            ))
+        }
+
+        if historical.count > 0 && items.isEmpty {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "historical-records-preserved",
+                severity: "info",
+                title: "Historical sessions are preserved",
+                detail: "\(historical.count) completed or dead session record(s) are retained for continuity and hidden from the default live monitor.",
+                sessionId: nil,
+                recoveryAction: nil
+            ))
+        }
+
+        let ok = !items.contains { $0.severity == "error" }
+        return jsonResponse(SessionIntakeDiagnostics(
+            ok: ok,
+            liveSessions: livePluginSessions.count,
+            storedSessions: stored.count,
+            historicalSessions: historical.count,
+            items: items,
+            checkedAt: BoardDTOBuilder.iso(Date())
+        ))
+    }
+
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
@@ -160,10 +284,8 @@ enum BoardAPI {
                 MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
             }
         }
-        // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
-        // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
-        // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
-        // PluginManager 的全集。
+        // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
+        // SessionStore 供 history / diagnostic / recovery 使用。
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
         let sessions = currentBoardSessions()
@@ -2785,7 +2907,7 @@ enum BoardAPI {
     private static func isPlannerSessionLive(_ sessionId: String, in sessions: [SessionDTO]) -> Bool {
         sessions.contains { session in
             guard boardSession(session, matches: sessionId) else { return false }
-            if session.status == SessionStatus.dead.rawValue { return false }
+            if SessionStatus.from(rawString: session.status).isHistorical { return false }
             if let surfaceStatus = session.surfaceStatus?.lowercased(),
                surfaceStatus == "exited" || surfaceStatus == "failed" {
                 return false
@@ -2864,6 +2986,7 @@ enum BoardAPI {
         }()
         let internalSessions = InternalTerminalRuntime.shared
             .listSnapshots()
+            .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
         let internalProviderResumeIds = Set(internalSessions.compactMap {
             SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
@@ -2871,7 +2994,7 @@ enum BoardAPI {
         }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
             .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
-            .filter { $0.status != .dead }
+            .filter { !$0.status.isHistorical }
             .filter { session in
                 let realSid = session.id.hasPrefix("\(session.pluginId)-")
                     ? String(session.id.dropFirst("\(session.pluginId)-".count))
@@ -2901,6 +3024,18 @@ enum BoardAPI {
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
         }
         return internalSessions + realSessions + syntheticDesktopSessions
+    }
+
+    private static func canonicalSessionKey(_ session: PluginSession) -> String {
+        canonicalSessionKey(pluginId: session.pluginId, sessionId: session.id)
+    }
+
+    private static func canonicalSessionKey(pluginId: String, sessionId: String) -> String {
+        let prefix = "\(pluginId)-"
+        let rawId = sessionId.hasPrefix(prefix)
+            ? String(sessionId.dropFirst(prefix.count))
+            : sessionId
+        return "\(pluginId)::\(rawId)"
     }
 
     private static func explicitSessionCwd(_ raw: String?) throws -> String? {

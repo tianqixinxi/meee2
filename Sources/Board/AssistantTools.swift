@@ -162,7 +162,7 @@ enum AssistantTools {
             let visibleSessionIds = Set(visibleMemberships.map { $0.sessionId })
 
             var sessions: [[String: Any]] = []
-            for s in PluginManager.shared.sessions where s.status != .dead && visibleSessionIds.contains(s.id) {
+            for s in PluginManager.shared.sessions where !s.status.isHistorical && visibleSessionIds.contains(s.id) {
                 var row: [String: Any] = [
                     "id": s.id,
                     "title": s.title,
@@ -266,7 +266,7 @@ enum AssistantTools {
         let projectFilter = args["project"] as? String
 
         var rows: [[String: Any]] = []
-        for s in PluginManager.shared.sessions where s.status != .dead {
+        for s in PluginManager.shared.sessions where !s.status.isHistorical {
             if let pf = pluginFilter, s.pluginId != pf { continue }
             if let sf = statusFilter, statusName(s.status).lowercased() != sf { continue }
             if let proj = projectFilter,
@@ -1373,7 +1373,9 @@ enum AssistantTools {
                 return .failure("create_coordinator_session requires at least two selected sessions")
             }
 
-            let live = Dictionary(uniqueKeysWithValues: PluginManager.shared.sessions.map { ($0.id, $0) })
+            let live = Dictionary(uniqueKeysWithValues: PluginManager.shared.sessions
+                .filter { !$0.status.isHistorical }
+                .map { ($0.id, $0) })
             let missing = ids.filter { live[$0] == nil }
             guard missing.isEmpty else {
                 return .failure("selected sessions are not live: \(missing.joined(separator: ", "))")

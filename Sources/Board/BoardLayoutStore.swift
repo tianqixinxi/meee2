@@ -1420,7 +1420,8 @@ public final class BoardLayoutStore {
             return true
         }
         return PluginManager.shared.sessions.contains { session in
-            !aliases.isDisjoint(with: Meee2OnlinePusher.sessionIdAliases(session.id))
+            guard !session.status.isHistorical else { return false }
+            return !aliases.isDisjoint(with: Meee2OnlinePusher.sessionIdAliases(session.id))
         }
     }
 

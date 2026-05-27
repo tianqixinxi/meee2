@@ -213,6 +213,35 @@ public struct SessionData: Codable, Identifiable {
         try container.encodeIfPresent(pendingPermissionTool, forKey: .pendingPermissionTool)
         try container.encodeIfPresent(pendingPermissionMessage, forKey: .pendingPermissionMessage)
     }
+
+    /// Copy this record to a recovered provider id while preserving the
+    /// user-owned and accumulated metadata attached to the session.
+    public func withSessionId(_ newSessionId: String) -> SessionData {
+        var copy = SessionData(
+            sessionId: newSessionId,
+            project: project,
+            cwd: cwd,
+            pid: pid,
+            ghosttyTerminalId: ghosttyTerminalId,
+            iTermSessionId: iTermSessionId,
+            appleTerminalSessionId: appleTerminalSessionId,
+            transcriptPath: transcriptPath,
+            startedAt: startedAt,
+            lastActivity: lastActivity,
+            status: status,
+            currentTool: currentTool,
+            description: description,
+            tasks: tasks,
+            currentTask: currentTask,
+            terminalInfo: terminalInfo,
+            usageStats: usageStats,
+            lastMessage: lastMessage
+        )
+        copy.schemaVersion = schemaVersion
+        copy.pendingPermissionTool = pendingPermissionTool
+        copy.pendingPermissionMessage = pendingPermissionMessage
+        return copy
+    }
 }
 
 // MARK: - 未读通知
@@ -324,6 +353,36 @@ public class SessionStore: ObservableObject {
 
         SessionEventBus.shared.publish(.sessionRemoved(sessionId: sessionId))
         MLog("[SessionStore] Deleted session: \(sessionId.prefix(8))")
+    }
+
+    /// 将同一真实会话的本地记录迁移到恢复后的 provider-native id。
+    ///
+    /// 这条路径不同于 delete/create：它保留 notes、任务、终端绑定、队列和未读状态，
+    /// 用于 Claude `--resume` 或 provider metadata 暴露出更准确 session id 的情况。
+    @discardableResult
+    public func rekeySession(_ oldSessionId: String, to newSessionId: String) -> Bool {
+        guard oldSessionId != newSessionId else {
+            return exists(oldSessionId)
+        }
+        guard let oldSession = sessions.first(where: { $0.sessionId == oldSessionId }) else {
+            return false
+        }
+
+        let existingTarget = sessions.first(where: { $0.sessionId == newSessionId })
+        let recovered = existingTarget
+            .map { Self.mergeContinuity(from: oldSession, into: $0) }
+            ?? oldSession.withSessionId(newSessionId)
+
+        sessions.removeAll { $0.sessionId == oldSessionId || $0.sessionId == newSessionId }
+        sessions.append(recovered)
+        saveToDisk(recovered)
+        deleteFromDisk(oldSessionId)
+        moveContinuitySidecars(from: oldSessionId, to: newSessionId)
+
+        SessionEventBus.shared.publish(.sessionRemoved(sessionId: oldSessionId))
+        SessionEventBus.shared.publish(existingTarget == nil ? .sessionAdded(sessionId: newSessionId) : .sessionMetadataChanged(sessionId: newSessionId))
+        MLog("[SessionStore] Rekeyed session \(oldSessionId.prefix(8)) → \(newSessionId.prefix(8))")
+        return true
     }
 
     /// 更新或插入会话 (自动更新 @Published sessions)
@@ -505,6 +564,61 @@ public class SessionStore: ObservableObject {
 
     private func queuePath(_ sessionId: String) -> URL {
         queuesDir.appendingPathComponent("\(sessionId).queue")
+    }
+
+    private func unreadPath(_ sessionId: String) -> URL {
+        unreadDir.appendingPathComponent(sessionId)
+    }
+
+    private static func mergeContinuity(from old: SessionData, into target: SessionData) -> SessionData {
+        var merged = target
+
+        if (merged.cwd ?? "").isEmpty { merged.cwd = old.cwd }
+        if merged.pid == nil { merged.pid = old.pid }
+        if (merged.ghosttyTerminalId ?? "").isEmpty { merged.ghosttyTerminalId = old.ghosttyTerminalId }
+        if (merged.iTermSessionId ?? "").isEmpty { merged.iTermSessionId = old.iTermSessionId }
+        if (merged.appleTerminalSessionId ?? "").isEmpty { merged.appleTerminalSessionId = old.appleTerminalSessionId }
+        if (merged.transcriptPath ?? "").isEmpty { merged.transcriptPath = old.transcriptPath }
+        if merged.description == nil { merged.description = old.description }
+        if merged.tasks.isEmpty { merged.tasks = old.tasks }
+        if merged.currentTask == nil { merged.currentTask = old.currentTask }
+        if merged.terminalInfo == nil { merged.terminalInfo = old.terminalInfo }
+        if merged.usageStats == nil { merged.usageStats = old.usageStats }
+        if merged.lastMessage == nil { merged.lastMessage = old.lastMessage }
+        if merged.currentTool == nil { merged.currentTool = old.currentTool }
+        if merged.pendingPermissionTool == nil { merged.pendingPermissionTool = old.pendingPermissionTool }
+        if merged.pendingPermissionMessage == nil { merged.pendingPermissionMessage = old.pendingPermissionMessage }
+        if merged.startedAt > old.startedAt { merged.startedAt = old.startedAt }
+
+        return merged
+    }
+
+    private func moveContinuitySidecars(from oldSessionId: String, to newSessionId: String) {
+        moveOrMergeFile(from: queuePath(oldSessionId), to: queuePath(newSessionId), append: true)
+        moveOrMergeFile(from: unreadPath(oldSessionId), to: unreadPath(newSessionId), append: false)
+    }
+
+    private func moveOrMergeFile(from source: URL, to target: URL, append: Bool) {
+        guard fileManager.fileExists(atPath: source.path) else { return }
+
+        if fileManager.fileExists(atPath: target.path) {
+            if append,
+               let sourceData = try? Data(contentsOf: source),
+               let handle = try? FileHandle(forWritingTo: target) {
+                defer { try? handle.close() }
+                handle.seekToEndOfFile()
+                handle.write(Data("\n".utf8))
+                handle.write(sourceData)
+            }
+            try? fileManager.removeItem(at: source)
+            return
+        }
+
+        do {
+            try fileManager.moveItem(at: source, to: target)
+        } catch {
+            MLog("[SessionStore] Failed to move continuity sidecar \(source.lastPathComponent): \(error)")
+        }
     }
 
     private func loadFromDisk(_ path: URL) -> SessionData? {

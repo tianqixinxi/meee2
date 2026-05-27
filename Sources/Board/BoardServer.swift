@@ -380,6 +380,7 @@ public final class BoardServer {
         server.POST["/api/system/meee2-agent-runtime-install"] = BoardServer.cors(BoardAPI.installMeee2AgentRuntime)
         server.GET["/api/system/readiness"] = BoardServer.cors(BoardAPI.getReadiness)
         server.POST["/api/system/readiness/repair"] = BoardServer.cors(BoardAPI.repairReadiness)
+        server.GET["/api/sessions/intake-diagnostics"] = BoardServer.cors(BoardAPI.getSessionIntakeDiagnostics)
         server.GET["/api/app-settings"] = BoardServer.cors(BoardAPI.getAppSettings)
         server.PATCH["/api/app-settings"] = BoardServer.cors(BoardAPI.updateAppSettings)
         server.GET["/api/user-profile"] = BoardServer.cors(BoardAPI.getUserProfile)
