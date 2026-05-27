@@ -35,7 +35,6 @@ import {
   History,
   Layers,
   ShieldAlert,
-  Sparkles,
   Users,
   X,
 } from 'lucide-react'
@@ -280,18 +279,13 @@ export function AIRecapDrawer({
         </button>
       </header>
 
-      {/* Canvas summary — BYOA LLM narrative refresh every 5 min(UI-simplification §4.3).
-       *  TODO server-side: /api/v1/canvas/:id/recap-summary endpoint(planner-runtime cron + cache).
-       *  Currently shows a derived placeholder; once endpoint lands the body comes from API. */}
-      <section className="ai-recap-drawer__section ai-recap-drawer__summary">
-        <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <h3 style={{ margin: 0 }}><Sparkles size={12} aria-hidden /> Canvas summary</h3>
-          <span style={{ fontSize: 10, color: 'var(--text-faint)' }}>refreshed — · 每 5 min · BYOA</span>
-        </header>
-        <p style={{ margin: 0, fontSize: 12, color: 'var(--text)', lineHeight: 1.6 }}>
-          {deriveSummaryPlaceholder(canvasName, plannerState)}
-        </p>
-      </section>
+      {/* Canvas summary 段已移除 —— CanvasToolbar 的 preview recap 卡片(parseRecapJSON
+       *  + headline/details/formatRecapAge,见 CanvasToolbar.tsx ~line 820)已经在被动
+       *  展示同样信息(headline + details + 「刚刚」时间戳)。
+       *  把 summary 也塞进 drawer 顶部等于两套 recap overlay 重叠。
+       *  Spec §4.3 的「每 5min BYOA narrative」是数据源升级,不需要 UI 新位置 —— 等
+       *  /api/v1/canvas/:id/recap-summary endpoint 落地后,直接喂给现有 toolbar banner 即可。
+       *  drawer 里仍提供 Needs attention + Activity 的细节聚合(下方两段)。 */}
 
       {/* ── Top: pinned event highlights ─────────────────────────────── */}
       <section className="ai-recap-drawer__section ai-recap-drawer__highlights">
@@ -652,24 +646,3 @@ function relativeTime(iso: string | null | undefined): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-/**
- * Placeholder canvas summary while the backend recap-summary endpoint
- * is being built (UI-simplification §4.3 Wave 2). Once
- * `/api/v1/canvas/:id/recap-summary` lands, fetch the BYOA-generated
- * narrative and feed it in instead.
- */
-function deriveSummaryPlaceholder(
-  canvasName: string,
-  plannerState: PlannerGraphState | null,
-): string {
-  if (!plannerState || plannerState.nodes.length === 0) {
-    return `「${canvasName}」 还没有节点。开始聊点想法,agent 会出提议。`
-  }
-  const nodes = plannerState.nodes
-  const total = nodes.length
-  const done = nodes.filter((n) => n.status === 'done').length
-  const blocked = nodes.filter((n) => n.status === 'blocked').length
-  const working = nodes.filter((n) => n.status === 'working').length
-  return `「${canvasName}」 共 ${total} 节点 — ${done} 完成 · ${working} 运行中 · ${blocked} 卡住。` +
-    (blocked > 0 ? '建议优先解掉卡住的节点。' : working > 0 ? '等待运行中节点出新版本。' : '')
-}

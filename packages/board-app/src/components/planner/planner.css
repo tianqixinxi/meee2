@@ -6177,13 +6177,9 @@
   background: rgba(168, 113, 50, 0.06);
 }
 
-/* UI-simplification §4.3 — canvas summary section(shown only when drawer is open).
- * 之前实验性的 .is-collapsed 常驻状态因为跟 canvas toolbar / preview / refreshing
- * banner 在同一坐标 + 同 z-index 区间堆叠,UI 重叠成一锅粥(commit 218245b 回退,
- * 现在恢复 modal-style: 点 toolbar 按钮才显示)。 */
-.ai-recap-drawer__summary {
-  background: linear-gradient(180deg, rgba(204, 120, 92, 0.08), rgba(204, 120, 92, 0.02));
-}
+/* 原 .ai-recap-drawer__summary 段已删 —— CanvasToolbar 的 parseRecapJSON banner
+ * 已经在 toolbar 上被动展示 headline + details + 「刚刚」时间戳,跟我之前加在 drawer 顶部
+ * 的 Canvas summary 等价。两套并存就视觉重叠,以 toolbar 那套为单一来源。 */
 
 .ai-recap-drawer__subsection {
   margin-bottom: 10px;
