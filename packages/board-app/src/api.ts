@@ -1887,9 +1887,9 @@ export function checkForVersionUpdate(): Promise<VersionInfo> {
   return jsonRequest<VersionInfo>('/api/version/check', { method: 'POST' })
 }
 
-/// 触发 Sparkle 安装流程。如果 SUAutomaticallyUpdate=YES 且后台已下载 + 验签
-/// 完成,Sparkle 会跳过下载步直接弹 "Install and Relaunch" 一键确认框,
-/// 用户点一下立刻 apply + relaunch。
+/// 触发 Sparkle 安装流程。如果后台已下载 + 验签 + staged 完成,AppDelegate
+/// 会直接确认 pending install 并 relaunch;否则走 user-initiated check 下载
+/// 并安装当前最新版。
 export function installAppUpdate(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/update/install', { method: 'POST' })
 }

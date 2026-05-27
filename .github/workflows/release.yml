@@ -331,8 +331,10 @@ jobs:
       # enforce_admins) that blocks even the GITHUB_TOKEN from pushing,
       # so we keep the feed file off main. SUFeedURL in App/Info.plist
       # points at https://raw.githubusercontent.com/.../appcast/appcast.xml
-      # to match. Same gate pattern as signing/notary — skipped silently
-      # when SPARKLE_ED_PRIVATE_KEY_BASE64 is unset.
+      # to match. Same gate pattern as signing/notary: when
+      # SPARKLE_ED_PRIVATE_KEY_BASE64 is unset, the GitHub Release still
+      # publishes but appcast.xml is not updated, so existing clients will not
+      # auto-discover that version.
       - name: Compute sparkle-secret gate
         id: sparkle-gate
         run: |

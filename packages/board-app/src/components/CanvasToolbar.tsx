@@ -25,6 +25,15 @@ import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
 import type { UserProfile } from '../api'
 import { AIRecapDrawer } from './planner/AIRecapDrawer'
+import {
+  buildAIRecapPrompt,
+  buildCanvasStatusRecap as buildCoreCanvasStatusRecap,
+  buildEmptyCanvasRecap as buildCoreEmptyCanvasRecap,
+  editableCanvasDescription,
+  formatRecapAge,
+  parseAIRecap,
+  type CanvasStatusRecap as CoreCanvasStatusRecap,
+} from '@meee1/recap-core'
 
 interface Props {
   canvases: CanvasInfo[]
@@ -49,17 +58,9 @@ interface Props {
   onOpenAllSessions?: () => void
 }
 
-interface CanvasRecap {
+type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
-  description: string
-  headline: string
-  statuses: Array<{ label: string; value: number; tone: CanvasStatusTone }>
-  details: string[]
-  updatedAt: string
 }
-
-type CanvasStatusTone = 'ready' | 'running' | 'attention' | 'done' | 'neutral'
-
 export function CanvasToolbar({
   canvases,
   activeCanvasId,
@@ -672,47 +673,22 @@ function displayCanvasName(canvas: CanvasInfo): string {
 }
 
 function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {
-  const nodes = state.nodes ?? []
-  const artifacts = state.artifacts ?? []
-  const ready = nodes.filter((node) => node.status === 'ready')
-  const working = nodes.filter((node) => node.status === 'working' || node.workflowRunState === 'running')
-  const blocked = nodes.filter((node) => node.status === 'blocked' || node.workflowRunState === 'failed' || node.blockedReason)
-  const done = nodes.filter((node) => node.status === 'done')
-  const scheduled = nodes.filter((node) => node.schedule?.enabled)
-  const description = editableCanvasDescription(state.canvas?.plannerContext)
-
+  const recap = buildCoreCanvasStatusRecap(state)
   return {
+    ...recap,
     mode: 'ai',
-    description,
     headline: t('canvas.generatingRecap'),
-    statuses: [
-      { label: t('canvas.statusReady'), value: ready.length, tone: 'ready' },
-      { label: t('canvas.statusRunning'), value: working.length, tone: 'running' },
-      { label: t('canvas.statusAttention'), value: blocked.length, tone: 'attention' },
-      { label: t('canvas.statusDone'), value: done.length, tone: 'done' },
-      { label: t('canvas.statusArtifacts'), value: artifacts.length, tone: 'neutral' },
-      { label: t('canvas.statusScheduled'), value: scheduled.length, tone: 'neutral' },
-    ],
-    details: [],
-    updatedAt: new Date().toISOString(),
+    statuses: localizeStatusLabels(recap.statuses, t),
   }
 }
 
 function buildEmptyCanvasRecap(t: ReturnType<typeof useI18n>['t'], headline = t('canvas.generatingRecap')): CanvasRecap {
+  const recap = buildCoreEmptyCanvasRecap(headline)
   return {
+    ...recap,
     mode: 'ai',
-    description: '',
     headline,
-    statuses: [
-      { label: t('canvas.statusReady'), value: 0, tone: 'ready' },
-      { label: t('canvas.statusRunning'), value: 0, tone: 'running' },
-      { label: t('canvas.statusAttention'), value: 0, tone: 'attention' },
-      { label: t('canvas.statusDone'), value: 0, tone: 'done' },
-      { label: t('canvas.statusArtifacts'), value: 0, tone: 'neutral' },
-      { label: t('canvas.statusScheduled'), value: 0, tone: 'neutral' },
-    ],
-    details: [],
-    updatedAt: new Date().toISOString(),
+    statuses: localizeStatusLabels(recap.statuses, t),
   }
 }
 
@@ -735,10 +711,30 @@ function isBlankPlannerCanvas(state: PlannerGraphState): boolean {
   return nodes.length === 0 && artifacts.length === 0
 }
 
-function editableCanvasDescription(value: string | null | undefined): string {
-  const trimmed = value?.trim() ?? ''
-  if (trimmed && !/^canvas:/i.test(trimmed)) return trimmed
-  return ''
+function localizeStatusLabels(
+  statuses: CoreCanvasStatusRecap['statuses'],
+  t: ReturnType<typeof useI18n>['t'],
+): CoreCanvasStatusRecap['statuses'] {
+  return statuses.map((item) => ({ ...item, label: localizeStatusLabel(item.label, t) }))
+}
+
+function localizeStatusLabel(label: string, t: ReturnType<typeof useI18n>['t']): string {
+  switch (label) {
+  case 'Ready':
+    return t('canvas.statusReady')
+  case 'Running':
+    return t('canvas.statusRunning')
+  case 'Attention':
+    return t('canvas.statusAttention')
+  case 'Done':
+    return t('canvas.statusDone')
+  case 'Artifacts':
+    return t('canvas.statusArtifacts')
+  case 'Scheduled':
+    return t('canvas.statusScheduled')
+  default:
+    return label
+  }
 }
 
 async function generateAIRecap(
@@ -765,99 +761,4 @@ async function generateAIRecap(
     if (ev.type === 'error') throw new Error(ev.message)
   }
   return parseAIRecap(text)
-}
-
-function buildAIRecapPrompt(state: PlannerGraphState): string {
-  const payload = {
-    canvas: {
-      title: state.canvas.title,
-      context: state.canvas.plannerContext,
-    },
-    nodes: state.nodes.slice(0, 24).map((node) => ({
-      title: node.title,
-      status: node.status,
-      workflowRunState: node.workflowRunState ?? null,
-      blockedReason: node.blockedReason ?? null,
-      nextAction: node.nextAction ?? null,
-      inputs: node.schema.inputs,
-      outputs: node.schema.outputs,
-      dependsOnNodeIds: node.dependsOnNodeIds ?? [],
-      hasSession: Boolean(node.sessionId),
-      scheduled: Boolean(node.schedule?.enabled),
-    })),
-    artifacts: state.artifacts.slice(-12).map((artifact) => ({
-      title: artifact.title,
-      kind: artifact.kind,
-      status: artifact.status,
-      nodeId: artifact.nodeId,
-      createdAt: artifact.createdAt,
-    })),
-    pendingProposals: state.proposals
-      .filter((proposal) => proposal.status === 'pending')
-      .slice(0, 5)
-      .map((proposal) => ({ summary: proposal.summary, changeCount: proposal.changes.length })),
-    latestEvents: [...(state.events ?? [])]
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
-      .slice(0, 8)
-      .map((event) => ({
-        type: event.type,
-        summary: event.summary,
-        createdAt: event.createdAt,
-      })),
-  }
-  return [
-    '你是 meee2 的画板 recap writer。只根据下面 JSON 生成用户能快速理解画板的摘要。',
-    '不要复述状态计数，不要写 ready/running/done/artifacts 的数字串；那些会由 UI 单独显示。',
-    'headline 必须是最重要的业务判断、风险、瓶颈或下一步，不是状态标题。',
-    '用中文。返回严格 JSON，不要 markdown，不要代码块。',
-    '格式: {"headline":"不超过32个中文字符","details":["2-4条，每条不超过48个中文字符"]}',
-    '',
-    JSON.stringify(payload),
-  ].join('\n')
-}
-
-function parseAIRecap(raw: string): Pick<CanvasRecap, 'headline' | 'details'> {
-  const text = raw.trim()
-  const jsonText = text
-    .replace(/^```(?:json)?/i, '')
-    .replace(/```$/i, '')
-    .trim()
-  const objectMatch = jsonText.match(/\{[\s\S]*\}/)
-  const candidate = objectMatch?.[0] ?? jsonText
-  try {
-    const parsed = JSON.parse(candidate) as { headline?: unknown; details?: unknown }
-    const headline = typeof parsed.headline === 'string'
-      ? trimToSentence(parsed.headline.trim(), 92)
-      : trimToSentence(text, 92)
-    const details = Array.isArray(parsed.details)
-      ? parsed.details
-        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-        .slice(0, 4)
-        .map((item) => trimToSentence(item.trim(), 120))
-      : []
-    return { headline: headline || 'AI recap generated.', details }
-  } catch {
-    const lines = text.split('\n').map((line) => line.replace(/^[-*]\s*/, '').trim()).filter(Boolean)
-    return {
-      headline: trimToSentence(lines[0] ?? text, 92),
-      details: lines.slice(1, 5).map((line) => trimToSentence(line, 120)),
-    }
-  }
-}
-
-function formatRecapAge(updatedAt: string, nowMs: number): string {
-  const updatedMs = Date.parse(updatedAt)
-  if (Number.isNaN(updatedMs)) return ''
-  const elapsedSeconds = Math.max(0, Math.floor((nowMs - updatedMs) / 1000))
-  if (elapsedSeconds < 60) return '刚刚'
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60)
-  if (elapsedMinutes < 60) return `${elapsedMinutes}m前`
-  const elapsedHours = Math.floor(elapsedMinutes / 60)
-  if (elapsedHours < 24) return `${elapsedHours}h前`
-  return `${Math.floor(elapsedHours / 24)}d前`
-}
-
-function trimToSentence(value: string, maxLength: number): string {
-  if (value.length <= maxLength) return value
-  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`
 }

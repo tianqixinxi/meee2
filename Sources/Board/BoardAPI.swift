@@ -3956,7 +3956,8 @@ enum BoardAPI {
     /// Silent 触发 Sparkle 跑一次完整 background cycle:fetch appcast →
     /// 下载 DMG → 验 EdDSA → stage 到本地。不弹任何 UI。下载完成后再调
     /// /api/update/install 才会一次到位 "Install and Relaunch"。
-    /// 主要给 dev 测预下载流程用 —— 生产环境靠 24h 调度。
+    /// 主要给 dev 测预下载流程用 —— 生产环境靠 Sparkle 的 1h 本地轮询和
+    /// 启动后主动 background check。
     static func checkUpdateInBackground(_ req: HttpRequest) -> HttpResponse {
         #if canImport(AppKit)
         DispatchQueue.main.async {
@@ -3972,11 +3973,10 @@ enum BoardAPI {
     }
 
     /// POST /api/update/install
-    /// 触发 Sparkle 安装流程。如果 SUAutomaticallyUpdate=YES 且后台已经
-    /// 下载好新版,这一步会立刻 apply + relaunch(codex-style 体验);
-    /// 否则会弹 Sparkle 的标准 modal 让用户确认。具体路径由 Sparkle 自
-    /// 决定 —— BoardAPI 这边只发通知,AppDelegate 接住调
-    /// SPUStandardUpdaterController.checkForUpdates(_:)。
+    /// 触发 Sparkle 安装流程。如果后台已经下载并 staged 最新版,这一步
+    /// 会立刻 apply + relaunch(codex-style 体验);否则 AppDelegate 会跑
+    /// user-initiated checkForUpdates 下载并安装当前最新版。BoardAPI 这边
+    /// 只发通知,不直接 import Sparkle。
     static func installUpdate(_ req: HttpRequest) -> HttpResponse {
         #if canImport(AppKit)
         DispatchQueue.main.async {

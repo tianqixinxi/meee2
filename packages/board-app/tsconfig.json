@@ -22,6 +22,7 @@
   "include": ["src"],
   "references": [
     { "path": "../board-core" },
-    { "path": "../board-persistence-http" }
+    { "path": "../board-persistence-http" },
+    { "path": "../recap-core" }
   ]
 }

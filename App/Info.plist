@@ -49,8 +49,8 @@
     <key>NSAppleEventsUsageDescription</key>
     <string>meee2 scripts terminal apps and Claude.app to focus session windows and to deliver messages typed in the meee2 board into the running session.</string>
 
-    <!-- Sparkle auto-update. SUFeedURL is the appcast.xml that lives in the
-         repo root on the main branch (raw-served by GitHub) — release.yml's
+    <!-- Sparkle auto-update. SUFeedURL is the appcast.xml that lives on the
+         dedicated appcast branch (raw-served by GitHub) — release.yml's
          Sparkle publish step appends a new <item> after each notarized DMG
          lands on Releases. SUPublicEDKey verifies sign_update's EdDSA
          signature on download; rotating it requires regenerating the matching
@@ -68,14 +68,13 @@
          3600 对生产用户也合理(更新很少这么频繁)。 -->
     <key>SUScheduledCheckInterval</key>
     <integer>3600</integer>
-    <!-- Codex 风格 Update pill 体验的关键:Sparkle 24h 调度里发现新版后,
+    <!-- Codex 风格 Update pill 体验的关键:Sparkle 1h 本地轮询或启动后的
+         background check 发现新版后,
          自动下载 + EdDSA 验签,把 staged update 缓存到本地。用户点 pill
-         时 Sparkle 跳过"下载进度"环节,直接弹 "Install and Relaunch" 一
-         键确认框 → app 立即 apply 已下好的包并重启。
+         时 Sparkle 跳过"下载进度"环节,custom user driver 自动确认 install,
+         app 立即 apply 已下好的包并重启。
          没这个 key 的话:点 pill 才开始下载 → 用户要等几十秒。
-         (注:Sparkle 标准 user driver 下,最终那一下"Install and Relaunch"
-         确认框无法消除;真要做成 zero-click 无弹框需要自定义
-         SPUStandardUserDriverDelegate。) -->
+         (注:zero-click 体验依赖 App/SilentInstallUserDriver.swift。) -->
     <key>SUAutomaticallyUpdate</key>
     <true/>
 </dict>

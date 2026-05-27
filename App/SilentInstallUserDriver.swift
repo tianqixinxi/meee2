@@ -4,7 +4,8 @@ import AppKit
 
 /// Custom SPUUserDriver —— codex-style "gentle reminders" 模式:
 ///
-/// 1. **后台调度**(SUEnableAutomaticChecks 24h)发现新版 → driver
+/// 1. **后台调度**(SUEnableAutomaticChecks + SUScheduledCheckInterval=1h,
+///    启动后也会主动 kick 一次 background check)发现新版 → driver
 ///    auto-confirm 让 Sparkle 跑下载 → staged + verified 后**halt**
 ///    (`showReady(toInstallAndRelaunch:)` 不立即 reply,把 reply closure
 ///    保存,把 `isReadyToInstall=true` 暴露给外部观察)。
@@ -42,9 +43,9 @@ final class SilentInstallUserDriver: NSObject, SPUUserDriver {
     ///     掉旧 reply,跑 fresh checkForUpdates 下最新的
     private(set) var stagedVersion: String?
 
-    /// 通知外部 isReadyToInstall 翻转 —— BoardServer 的 /api/version 通过
-    /// `VersionChecker.shared.recomputeAfterStateChange()` 轮询,这里发个
-    /// notification 触发 webui 提前刷新而不必等下次 8min poll。
+    /// 通知外部 isReadyToInstall 翻转。当前生产 UI 不靠 push;Board
+    /// UpdatePill 本地轮询 /api/version,这个 notification 只保留为
+    /// 将来进程内观察者的轻量 hook。
     static let stagedStateDidChange = Notification.Name("meee2.sparkle.stagedStateChanged")
 
     /// host 观测的"可以瞬间装了吗" —— UpdatePill 渲染条件。

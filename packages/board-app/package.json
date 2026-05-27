@@ -22,6 +22,7 @@
   "dependencies": {
     "@meee1/board-core": "workspace:*",
     "@meee1/board-persistence-http": "workspace:*",
+    "@meee1/recap-core": "workspace:*",
     "@xyflow/react": "^12.10.2",
     "lucide-react": "^1.14.0",
     "react": "19.2.4",
