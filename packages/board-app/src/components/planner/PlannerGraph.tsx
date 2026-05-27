@@ -1627,6 +1627,9 @@ function PlannerGraphInner({
             <PlannerWorkspacePreview
               graph={reviewGraph}
               proposal={activeProposal}
+              onApply={handleApproveAndApply}
+              onReject={handleReject}
+              busy={busy}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -2249,9 +2252,15 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 function PlannerWorkspacePreview({
   graph,
   proposal,
+  onApply,
+  onReject,
+  busy,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
   proposal: PlanProposal
+  onApply?: () => void
+  onReject?: () => void
+  busy?: boolean
 }) {
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview">
@@ -2260,6 +2269,34 @@ function PlannerWorkspacePreview({
         <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
         <em>Review and apply from the modal before these nodes become the real canvas.</em>
       </div>
+      {/* UI-simplification — user 反馈:preview 模式 canvas 是只读的(elementsSelectable=false)
+       *  会卡死 —— 没明显的退出入口。把 Apply / Reject 显式放在画板右上角。 */}
+      {(onApply || onReject) && (
+        <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
+          {onReject && (
+            <button
+              type="button"
+              className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
+              onClick={onReject}
+              disabled={busy}
+              title="Reject this proposal — revert to previous canvas"
+            >
+              {busy ? '…' : '✕ Reject'}
+            </button>
+          )}
+          {onApply && (
+            <button
+              type="button"
+              className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
+              onClick={onApply}
+              disabled={busy}
+              title="Approve & apply this proposal — make these changes real"
+            >
+              {busy ? '…' : '✓ Apply'}
+            </button>
+          )}
+        </div>
+      )}
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}
