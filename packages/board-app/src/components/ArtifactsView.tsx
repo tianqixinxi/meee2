@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   Archive,
   CheckCircle2,
   ExternalLink,
@@ -15,7 +16,7 @@ import {
   getPlannerArtifactContent,
   listArtifactVersions,
 } from '../api'
-import { useI18n } from '../lib/i18n'
+import { useI18n, type TranslationKey } from '../lib/i18n'
 import type {
   CanvasInfo,
   PlannerArtifact,
@@ -61,10 +62,15 @@ interface ArtifactSlot {
 }
 
 interface ArtifactRequirementSummary {
+  fitStatus: 'complete' | 'partial' | 'missing'
   expectedOutputs: string[]
   requiredRefs: string[]
   producedKinds: string[]
   producedRefs: string[]
+  matchedExpectedOutputs: string[]
+  missingExpectedOutputs: string[]
+  matchedRequiredRefs: string[]
+  missingRequiredRefs: string[]
 }
 
 const KIND_FILTERS: ArtifactFilter[] = [
@@ -589,11 +595,18 @@ function ArtifactRequirementStrip({
   t: ReturnType<typeof useI18n>['t']
 }) {
   if (!summary) return null
-  const matchedRequired = countMatchedRequiredRefs(summary)
   return (
-    <div className="artifacts-requirement-strip" aria-label={t('artifacts.requirements')}>
+    <div
+      className={`artifacts-requirement-strip artifacts-requirement-strip--${summary.fitStatus}`}
+      aria-label={t('artifacts.requirements')}
+    >
+      <span className="artifacts-requirement-strip__fit">
+        {summary.fitStatus === 'complete'
+          ? <CheckCircle2 size={11} aria-hidden />
+          : <AlertCircle size={11} aria-hidden />}
+        {t(`artifacts.fit.${summary.fitStatus}` as TranslationKey)}
+      </span>
       <span>
-        <CheckCircle2 size={11} aria-hidden />
         {t('artifacts.producedCount', { count: String(summary.producedRefs.length) })}
       </span>
       {summary.expectedOutputs.length > 0 && (
@@ -601,7 +614,7 @@ function ArtifactRequirementStrip({
       )}
       {summary.requiredRefs.length > 0 && (
         <span>{t('artifacts.requiredMatch', {
-          matched: String(matchedRequired),
+          matched: String(summary.matchedRequiredRefs.length),
           total: String(summary.requiredRefs.length),
         })}</span>
       )}
@@ -618,15 +631,29 @@ function ArtifactRequirementPanel({
 }) {
   if (!summary) return null
   return (
-    <section className="artifacts-requirements" aria-label={t('artifacts.requirements')}>
+    <section
+      className={`artifacts-requirements artifacts-requirements--${summary.fitStatus}`}
+      aria-label={t('artifacts.requirements')}
+    >
       <div className="artifacts-requirements__head">
         <span>{t('artifacts.requirements')}</span>
-        <strong>{t('artifacts.producedCount', { count: String(summary.producedRefs.length) })}</strong>
+        <strong>{t(`artifacts.fit.${summary.fitStatus}` as TranslationKey)}</strong>
       </div>
+      {(summary.missingExpectedOutputs.length > 0 || summary.missingRequiredRefs.length > 0) && (
+        <RequirementChipRow
+          label={t('artifacts.missing')}
+          values={[...summary.missingExpectedOutputs, ...summary.missingRequiredRefs]}
+          limit={4}
+          tone="missing"
+        />
+      )}
       {summary.expectedOutputs.length > 0 && (
         <RequirementChipRow
           label={t('artifacts.expected')}
-          values={summary.expectedOutputs}
+          values={summary.expectedOutputs.map((output) => requirementMatchLabel(
+            output,
+            summary.matchedExpectedOutputs,
+          ))}
           limit={3}
         />
       )}
@@ -640,7 +667,7 @@ function ArtifactRequirementPanel({
       {summary.requiredRefs.length > 0 && (
         <RequirementChipRow
           label={t('artifacts.gateRefs')}
-          values={summary.requiredRefs.map((ref) => requiredRefLabel(ref, summary.producedRefs))}
+          values={summary.requiredRefs.map((ref) => requirementMatchLabel(ref, summary.matchedRequiredRefs))}
           limit={3}
         />
       )}
@@ -652,15 +679,17 @@ function RequirementChipRow({
   label,
   values,
   limit,
+  tone,
 }: {
   label: string
   values: string[]
   limit: number
+  tone?: 'missing'
 }) {
   const visible = values.slice(0, limit)
   const hidden = values.length - visible.length
   return (
-    <div className="artifacts-requirements__row">
+    <div className={`artifacts-requirements__row${tone ? ` artifacts-requirements__row--${tone}` : ''}`}>
       <span>{label}</span>
       <div>
         {visible.map((value) => (
@@ -680,6 +709,18 @@ function buildRequirementSummary(
   const requiredRefs = uniqueNonEmpty(node?.gate?.requiredArtifactRefs ?? [])
   const producedKinds = uniqueNonEmpty(artifacts.map((artifact) => artifact.kind))
   const producedRefs = uniqueNonEmpty(artifacts.map((artifact) => artifact.reference))
+  const matchedExpectedOutputs = expectedOutputs.filter((output) => (
+    artifacts.some((artifact) => artifactSatisfiesExpectation(artifact, output))
+  ))
+  const missingExpectedOutputs = expectedOutputs.filter((output) => (
+    !matchedExpectedOutputs.some((matched) => sameRequirement(matched, output))
+  ))
+  const matchedRequiredRefs = requiredRefs.filter((ref) => (
+    artifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, ref))
+  ))
+  const missingRequiredRefs = requiredRefs.filter((ref) => (
+    !matchedRequiredRefs.some((matched) => sameRequirement(matched, ref))
+  ))
   if (
     expectedOutputs.length === 0
     && requiredRefs.length === 0
@@ -688,11 +729,27 @@ function buildRequirementSummary(
   ) {
     return null
   }
+  const hasRequirements = expectedOutputs.length > 0 || requiredRefs.length > 0
+  const missingCount = missingExpectedOutputs.length + missingRequiredRefs.length
+  const matchedCount = matchedExpectedOutputs.length + matchedRequiredRefs.length
   return {
+    fitStatus: hasRequirements
+      ? missingCount === 0
+        ? 'complete'
+        : matchedCount > 0 || producedRefs.length > 0
+          ? 'partial'
+          : 'missing'
+      : producedRefs.length > 0 || producedKinds.length > 0
+        ? 'complete'
+        : 'missing',
     expectedOutputs,
     requiredRefs,
     producedKinds,
     producedRefs,
+    matchedExpectedOutputs,
+    missingExpectedOutputs,
+    matchedRequiredRefs,
+    missingRequiredRefs,
   }
 }
 
@@ -708,15 +765,41 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
   return result
 }
 
-function countMatchedRequiredRefs(summary: ArtifactRequirementSummary): number {
-  return summary.requiredRefs.filter((ref) => (
-    summary.producedRefs.some((produced) => produced.toLowerCase() === ref.toLowerCase())
-  )).length
+function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: string): boolean {
+  const expected = normalizeRequirementToken(expectation)
+  if (!expected) return false
+  return [
+    artifact.kind,
+    artifact.reference,
+    artifact.title,
+    artifact.status,
+  ].some((candidate) => {
+    const normalized = normalizeRequirementToken(candidate)
+    if (!normalized) return false
+    return normalized === expected
+      || normalized.includes(expected)
+      || expected.includes(normalized)
+  })
 }
 
-function requiredRefLabel(ref: string, producedRefs: string[]): string {
-  const matched = producedRefs.some((produced) => produced.toLowerCase() === ref.toLowerCase())
-  return matched ? `ok ${ref}` : ref
+function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
+  return sameRequirement(artifact.reference, requiredRef)
+    || sameRequirement(artifact.title, requiredRef)
+}
+
+function sameRequirement(left: string, right: string): boolean {
+  return normalizeRequirementToken(left) === normalizeRequirementToken(right)
+}
+
+function normalizeRequirementToken(value: string | null | undefined): string {
+  return (value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '-')
+}
+
+function requirementMatchLabel(value: string, matchedValues: string[]): string {
+  return matchedValues.some((matched) => sameRequirement(matched, value)) ? `ok ${value}` : value
 }
 
 function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: ReturnType<typeof useI18n>['t'] }) {
