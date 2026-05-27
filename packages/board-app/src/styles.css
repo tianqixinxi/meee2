@@ -1491,7 +1491,7 @@ textarea {
   gap: 2px;
 }
 
-.artifacts-focus span {
+.artifacts-focus__eyebrow {
   color: var(--text-faint);
   font-size: 10px;
   font-weight: 800;
@@ -1516,6 +1516,33 @@ textarea {
   color: var(--text-dim);
   font-size: 11px;
   font-style: normal;
+}
+
+.artifacts-requirement-strip {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.artifacts-requirement-strip span {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-height: 19px;
+  padding: 0 6px;
+  border: 1px solid rgba(204, 120, 92, 0.22);
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .artifacts-focus button {
@@ -1683,6 +1710,63 @@ textarea {
   min-width: 0;
   color: var(--text-dim);
   font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.artifacts-requirements {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(168, 165, 155, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(12, 12, 11, 0.16);
+}
+
+.artifacts-requirements__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.artifacts-requirements__head span,
+.artifacts-requirements__row > span {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.artifacts-requirements__head strong {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.artifacts-requirements__row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.artifacts-requirements__row div {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.artifacts-requirements__row em {
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(245, 244, 239, 0.07);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -11102,6 +11186,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-meta div,
 :root[data-theme="light"] .artifacts-file-meta div,
 :root[data-theme="light"] .artifacts-version-summary div,
+:root[data-theme="light"] .artifacts-requirements,
 :root[data-theme="light"] .artifacts-version-stack div,
 :root[data-theme="light"] .artifacts-compare div,
 :root[data-theme="light"] .artifacts-focus,
@@ -11127,7 +11212,9 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-meta dt,
 :root[data-theme="light"] .artifacts-file-meta dt,
 :root[data-theme="light"] .artifacts-version-summary dt,
-:root[data-theme="light"] .artifacts-focus span,
+:root[data-theme="light"] .artifacts-requirements__head span,
+:root[data-theme="light"] .artifacts-requirements__row > span,
+:root[data-theme="light"] .artifacts-focus__eyebrow,
 :root[data-theme="light"] .templates-workspace__header span,
 :root[data-theme="light"] .templates-editor-bar__title span,
 :root[data-theme="light"] .sessions-table__head,
@@ -11150,6 +11237,13 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .agent-matrix__recommend p,
 :root[data-theme="light"] .agent-matrix__browse-header,
 :root[data-theme="light"] .agent-matrix__runbook-path {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .artifacts-requirement-strip span,
+:root[data-theme="light"] .artifacts-requirements__row em {
+  background: var(--bg-paper);
+  border-color: var(--border);
   color: var(--text-dim);
 }
 

@@ -1,5 +1,6 @@
 import {
   Archive,
+  CheckCircle2,
   ExternalLink,
   FileText,
   GitCompare,
@@ -57,6 +58,13 @@ interface ArtifactSlot {
   node?: PlanningNode
   latest: PlannerArtifact
   artifacts: PlannerArtifact[]
+}
+
+interface ArtifactRequirementSummary {
+  expectedOutputs: string[]
+  requiredRefs: string[]
+  producedKinds: string[]
+  producedRefs: string[]
 }
 
 const KIND_FILTERS: ArtifactFilter[] = [
@@ -189,6 +197,7 @@ export function ArtifactsView({
     const matchingSlots = canvasGroups
       .flatMap((group) => group.slots)
       .filter((slot) => slotMatchesFocus(slot, focusTarget))
+    const matchingArtifacts = matchingSlots.flatMap((slot) => slot.artifacts)
     return {
       canvasId: focusTarget.canvasId,
       nodeId: focusTarget.nodeId?.trim() || null,
@@ -196,6 +205,7 @@ export function ArtifactsView({
       node,
       nodeLabel,
       matchingSlots,
+      requirement: buildRequirementSummary(node, matchingArtifacts),
     }
   }, [canvasArtifacts, canvasGroups, canvases, focusTarget, t])
 
@@ -337,7 +347,7 @@ export function ArtifactsView({
         {focusSummary && (
           <div className="artifacts-focus" role="status">
             <div>
-              <span>{t('artifacts.focusLabel')}</span>
+              <span className="artifacts-focus__eyebrow">{t('artifacts.focusLabel')}</span>
               <strong>{focusSummary.nodeLabel}</strong>
               <em>
                 {loading
@@ -347,6 +357,7 @@ export function ArtifactsView({
                     count: String(focusSummary.matchingSlots.length),
                   })}
               </em>
+              <ArtifactRequirementStrip summary={focusSummary.requirement} t={t} />
             </div>
             {focusSummary.nodeId && (
               <button
@@ -405,6 +416,10 @@ export function ArtifactsView({
                   const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
                   const isExpanded = expandedSlots.has(slot.key)
                   const isFocused = focusTarget ? slotMatchesFocus(slot, focusTarget) : false
+                  const nodeArtifacts = group.slots
+                    .filter((candidate) => candidate.latest.nodeId === slot.latest.nodeId)
+                    .flatMap((candidate) => candidate.artifacts)
+                  const requirement = buildRequirementSummary(slot.node, nodeArtifacts)
                   return (
                     <article
                       className={`artifacts-card${isFocused ? ' is-focused' : ''}`}
@@ -432,6 +447,7 @@ export function ArtifactsView({
                           <dd>{formatDate(slot.latest.createdAt)}</dd>
                         </div>
                       </dl>
+                      <ArtifactRequirementPanel summary={requirement} t={t} />
                       <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
                         <button
                           type="button"
@@ -563,6 +579,144 @@ function ArtifactContentPreview({ content, t }: { content?: PlannerArtifactConte
       {preview || t('artifacts.noPreview')}
     </pre>
   )
+}
+
+function ArtifactRequirementStrip({
+  summary,
+  t,
+}: {
+  summary: ArtifactRequirementSummary | null
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  if (!summary) return null
+  const matchedRequired = countMatchedRequiredRefs(summary)
+  return (
+    <div className="artifacts-requirement-strip" aria-label={t('artifacts.requirements')}>
+      <span>
+        <CheckCircle2 size={11} aria-hidden />
+        {t('artifacts.producedCount', { count: String(summary.producedRefs.length) })}
+      </span>
+      {summary.expectedOutputs.length > 0 && (
+        <span>{t('artifacts.expectedCount', { count: String(summary.expectedOutputs.length) })}</span>
+      )}
+      {summary.requiredRefs.length > 0 && (
+        <span>{t('artifacts.requiredMatch', {
+          matched: String(matchedRequired),
+          total: String(summary.requiredRefs.length),
+        })}</span>
+      )}
+    </div>
+  )
+}
+
+function ArtifactRequirementPanel({
+  summary,
+  t,
+}: {
+  summary: ArtifactRequirementSummary | null
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  if (!summary) return null
+  return (
+    <section className="artifacts-requirements" aria-label={t('artifacts.requirements')}>
+      <div className="artifacts-requirements__head">
+        <span>{t('artifacts.requirements')}</span>
+        <strong>{t('artifacts.producedCount', { count: String(summary.producedRefs.length) })}</strong>
+      </div>
+      {summary.expectedOutputs.length > 0 && (
+        <RequirementChipRow
+          label={t('artifacts.expected')}
+          values={summary.expectedOutputs}
+          limit={3}
+        />
+      )}
+      {summary.producedKinds.length > 0 && (
+        <RequirementChipRow
+          label={t('artifacts.produced')}
+          values={summary.producedKinds}
+          limit={4}
+        />
+      )}
+      {summary.requiredRefs.length > 0 && (
+        <RequirementChipRow
+          label={t('artifacts.gateRefs')}
+          values={summary.requiredRefs.map((ref) => requiredRefLabel(ref, summary.producedRefs))}
+          limit={3}
+        />
+      )}
+    </section>
+  )
+}
+
+function RequirementChipRow({
+  label,
+  values,
+  limit,
+}: {
+  label: string
+  values: string[]
+  limit: number
+}) {
+  const visible = values.slice(0, limit)
+  const hidden = values.length - visible.length
+  return (
+    <div className="artifacts-requirements__row">
+      <span>{label}</span>
+      <div>
+        {visible.map((value) => (
+          <em key={value}>{value}</em>
+        ))}
+        {hidden > 0 && <em>+{hidden}</em>}
+      </div>
+    </div>
+  )
+}
+
+function buildRequirementSummary(
+  node: PlanningNode | null | undefined,
+  artifacts: PlannerArtifact[],
+): ArtifactRequirementSummary | null {
+  const expectedOutputs = uniqueNonEmpty(node?.schema?.outputs ?? [])
+  const requiredRefs = uniqueNonEmpty(node?.gate?.requiredArtifactRefs ?? [])
+  const producedKinds = uniqueNonEmpty(artifacts.map((artifact) => artifact.kind))
+  const producedRefs = uniqueNonEmpty(artifacts.map((artifact) => artifact.reference))
+  if (
+    expectedOutputs.length === 0
+    && requiredRefs.length === 0
+    && producedKinds.length === 0
+    && producedRefs.length === 0
+  ) {
+    return null
+  }
+  return {
+    expectedOutputs,
+    requiredRefs,
+    producedKinds,
+    producedRefs,
+  }
+}
+
+function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const normalized = value?.trim()
+    if (!normalized || seen.has(normalized.toLowerCase())) continue
+    seen.add(normalized.toLowerCase())
+    result.push(normalized)
+  }
+  return result
+}
+
+function countMatchedRequiredRefs(summary: ArtifactRequirementSummary): number {
+  return summary.requiredRefs.filter((ref) => (
+    summary.producedRefs.some((produced) => produced.toLowerCase() === ref.toLowerCase())
+  )).length
+}
+
+function requiredRefLabel(ref: string, producedRefs: string[]): string {
+  const matched = producedRefs.some((produced) => produced.toLowerCase() === ref.toLowerCase())
+  return matched ? `ok ${ref}` : ref
 }
 
 function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: ReturnType<typeof useI18n>['t'] }) {
