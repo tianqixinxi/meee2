@@ -1679,6 +1679,7 @@ function PlannerGraphInner({
           access={plannerState?.access ?? null}
           teamMembers={teamMembers}
           onReplaceSession={handleReplaceNodeSession}
+          onOpenSession={handleOpenNodeSession}
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
           onSendToAI={handleSendNodeActionToAI}

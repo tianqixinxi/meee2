@@ -505,8 +505,11 @@
 }
 
 /* Full node detail modal — mirrors the .planner-proposal-modal pattern. */
-/* Node inspector — right-side drawer, doesn't block canvas
- * (simplification spec §2.9: modal → side drawer) */
+/* Node inspector — right-side drawer (simplification spec §2.9: modal → side drawer).
+ * 之前实验性的 `pointer-events: none` 让 backdrop 不挡 click,目的是让 canvas 仍可点;
+ * 但副作用是 backdrop 的 onMouseDown(点 backdrop 关闭)永远不触发 + 所有事件穿透到
+ * canvas 后会再次触发 onPaneClick / onNodeClick 形成 click 循环,导致用户感受
+ * 「canvas 无法操作只能拖动」。回退成标准 modal backdrop 行为:挡 click,点 backdrop 关闭。 */
 .planner-node-modal-backdrop {
   position: fixed;
   inset: 0;
@@ -516,9 +519,7 @@
   align-items: stretch;
   background: rgba(18, 18, 16, 0.35);
   backdrop-filter: blur(1.5px);
-  pointer-events: none;            /* let canvas clicks pass through except for the panel */
 }
-.planner-node-modal-backdrop > * { pointer-events: auto; }
 
 .planner-node-modal {
   position: relative;
@@ -583,6 +584,30 @@
   letter-spacing: 0.08em;
 }
 .planner-node-modal__group-label:first-of-type { margin-top: 6px; }
+
+/* UI-simplification — hover-revealed shortcut button on 「进展」 group label.
+ * Always laid out (no width jump on hover); fades from 0 → 1 opacity. */
+.planner-node-modal__open-session {
+  margin-left: auto;
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid rgba(168, 165, 155, 0.20);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.planner-node-modal__group-label--progress:hover .planner-node-modal__open-session,
+.planner-node-modal__open-session:focus-visible {
+  opacity: 1;
+}
+.planner-node-modal__open-session:hover {
+  background: rgba(204, 120, 92, 0.08);
+  border-color: rgba(204, 120, 92, 0.32);
+}
 
 .planner-node-modal__header-tags {
   display: flex;

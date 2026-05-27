@@ -46,6 +46,10 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  /** UI-simplification — open the bound session(replaces the「Open session」 button
+   *  that used to live on the node card). Surfaced as a hover-revealed link on
+   *  the 进展 group label so it's reachable without cluttering canvas. */
+  onOpenSession?: (sessionId: string, nodeId: string) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -77,6 +81,7 @@ export function NodeInspectorModal({
   onGraphStateChanged,
   onSendToAI,
   onReplaceSession,
+  onOpenSession,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
@@ -206,9 +211,24 @@ export function NodeInspectorModal({
          *  further down by activity / version history sections (out of view
          *  in this hunk). */}
 
-        <div className="planner-node-modal__group-label">
+        <div className="planner-node-modal__group-label planner-node-modal__group-label--progress">
           <span>进展</span>
           <small>progress · session 当前态</small>
+          {/* UI-simplification — 「Open session」 hover-revealed shortcut here,
+           *  replaces the canvas card button per user spec. Only shown when a
+           *  session is bound;按钮在 group label hover 时淡入。 */}
+          {node.sessionId && onOpenSession && (
+            <button
+              type="button"
+              className="planner-node-modal__open-session"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenSession(node.sessionId!, node.id)
+              }}
+            >
+              → Open session
+            </button>
+          )}
         </div>
 
         {blockers.length > 0 && (

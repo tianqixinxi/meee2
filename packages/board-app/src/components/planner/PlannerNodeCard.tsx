@@ -1105,10 +1105,14 @@ function primaryActionLabel(input: {
   canCreateSession: boolean
   creatingSession: boolean
 }): string {
+  // UI-simplification — "Open session" 已从卡片主操作砍掉(user 反馈):
+  // 平替在 inspector 进展段 hover 上,见 NodeInspectorModal 的 sessions-detail peek。
+  // 这里返回空字符串等于不显示主操作按钮 → 卡片上没有 session 入口,用户点节点开
+  // inspector,在 进展 hover 出 session detail。
   if (input.mode === 'design') {
     if (input.nodeKind === 'subCanvas') return 'Open sub-flow'
     if (input.nodeKind === 'step') {
-      if (input.sessionId) return 'Open session'
+      if (input.sessionId) return ''  // 之前是 'Open session' — 改走 inspector hover
       if (input.creatingSession) return 'Creating session...'
       return input.canCreateSession ? 'Create session' : ''
     }
@@ -1120,7 +1124,7 @@ function primaryActionLabel(input: {
   if (input.runStatus === 'failed' || input.runStatus === 'gate-wait' || input.blockers.length > 0) {
     return 'Resolve'
   }
-  if (input.sessionId) return 'Open session'
+  if (input.sessionId) return ''  // 同上,不显示 Open session 按钮
   if (input.creatingSession) return 'Creating session...'
   if (input.runStatus === 'ready_to_start' || input.runStatus === 'pending') return 'Open'
   return 'Open'
