@@ -138,7 +138,7 @@ export function PlannerProposalPanel({
   const autoExpandedRef = useRef(false)
   const [message, setMessage] = useState('')
   const isEmptyOmniIntake = emptyMode && layout === 'omni' && !proposal
-  const [history, setHistory] = useState<PlannerChatMessage[]>(() => isEmptyOmniIntake ? [] : readChatHistory(canvasId))
+  const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
@@ -155,13 +155,8 @@ export function PlannerProposalPanel({
 
   useEffect(() => {
     abortEmptyIntakeRequest()
-    if (isEmptyOmniIntake) {
-      clearChatHistory(canvasId)
-      setHistory([])
-      setEmptyIntakeError(null)
-    } else {
-      setHistory(readChatHistory(canvasId))
-    }
+    setHistory(readChatHistory(canvasId))
+    if (isEmptyOmniIntake) setEmptyIntakeError(null)
     setHistoryOpen(false)
     autoExpandedRef.current = false
   }, [canvasId, isEmptyOmniIntake])
@@ -204,9 +199,8 @@ export function PlannerProposalPanel({
   }, [busy, canvasId, isEmptyOmniIntake])
 
   useEffect(() => {
-    if (emptyMode && layout === 'omni') return
     writeChatHistory(canvasId, history)
-  }, [canvasId, emptyMode, history, layout])
+  }, [canvasId, history])
 
   useEffect(() => {
     if (clearRevision <= 0) return
