@@ -43,7 +43,7 @@ interface Props {
   onActiveCanvasChange: (canvasId: string) => void
   onGoBack?: () => void
   onGoForward?: () => void
-  onCreateCanvas: (name: string, scope: CanvasScope) => Promise<void> | void
+  onCreateCanvas: (name: string, scope: CanvasScope, initialGoal?: string) => Promise<unknown> | unknown
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
@@ -89,6 +89,7 @@ export function CanvasToolbar({
   const [infoTab, setInfoTab] = useState<'overview' | 'settings' | 'danger'>('overview')
   const [canvasQuery, setCanvasQuery] = useState('')
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
+  const [canvasGoalDraft, setCanvasGoalDraft] = useState('')
   const [canvasDescriptionDraft, setCanvasDescriptionDraft] = useState('')
   const [canvasDescriptionSaving, setCanvasDescriptionSaving] = useState(false)
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
@@ -198,10 +199,12 @@ export function CanvasToolbar({
   }, [recapIntervalMinutes, refreshRecap])
 
   const submitCreate = () => {
-    const name = canvasNameDraft.trim()
+    const goal = canvasGoalDraft.trim()
+    const name = canvasNameDraft.trim() || deriveCanvasNameFromGoal(goal, t('canvas.untitled'))
     if (!name) return
-    Promise.resolve(onCreateCanvas(name, canvasScopeDraft)).then(() => {
+    Promise.resolve(onCreateCanvas(name, canvasScopeDraft, goal)).then(() => {
       setCanvasNameDraft('')
+      setCanvasGoalDraft('')
       setCanvasScopeDraft('personal')
       setCanvasQuery('')
       setCreating(false)
@@ -310,6 +313,7 @@ export function CanvasToolbar({
                 className="canvas-toolbar__new-canvas"
                 onClick={() => {
                   setCanvasNameDraft('')
+                  setCanvasGoalDraft('')
                   setCanvasScopeDraft('personal')
                   setDeleteConfirming(false)
                   setCreating(true)
@@ -585,6 +589,23 @@ export function CanvasToolbar({
               <div className="modal-subtitle">{t('canvas.createSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
+              <label className="canvas-create-field">
+                <span>{t('canvas.goal')}</span>
+                <textarea
+                  value={canvasGoalDraft}
+                  onChange={(event) => setCanvasGoalDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setCreating(false)
+                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault()
+                      submitCreate()
+                    }
+                  }}
+                  placeholder={t('canvas.goalPlaceholder')}
+                  rows={4}
+                  autoFocus
+                />
+              </label>
               <input
                 value={canvasNameDraft}
                 onChange={(event) => setCanvasNameDraft(event.target.value)}
@@ -592,8 +613,7 @@ export function CanvasToolbar({
                   if (event.key === 'Enter') submitCreate()
                   if (event.key === 'Escape') setCreating(false)
                 }}
-                placeholder={t('canvas.namePlaceholder')}
-                autoFocus
+                placeholder={t('canvas.nameOptionalPlaceholder')}
               />
               <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('canvas.visibilityLabel')}>
                 {(['personal', 'team'] as CanvasScope[]).map((scope) => (
@@ -615,7 +635,7 @@ export function CanvasToolbar({
                 className="primary"
                 type="button"
                 onClick={submitCreate}
-                disabled={!canvasNameDraft.trim()}
+                disabled={!canvasNameDraft.trim() && !canvasGoalDraft.trim()}
               >
                 {t('common.create')}
               </button>
@@ -693,6 +713,17 @@ function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
   if (canvas.kind === 'monitor') return t('canvas.type.monitor')
   if (canvas.kind === 'template') return t('canvas.type.template')
   return t('canvas.type.board')
+}
+
+function deriveCanvasNameFromGoal(goal: string, fallback: string): string {
+  const normalized = goal
+    .replace(/\s+/g, ' ')
+    .replace(/^[#*\-\s]+/, '')
+    .trim()
+  if (!normalized) return fallback
+  const firstStop = normalized.search(/[。.!?？]/)
+  const firstSentence = firstStop > 0 ? normalized.slice(0, firstStop) : normalized
+  return firstSentence.length > 42 ? `${firstSentence.slice(0, 42).trim()}...` : firstSentence
 }
 
 function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {

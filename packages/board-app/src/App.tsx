@@ -46,6 +46,7 @@ import {
   fetchUserProfile,
   installMeee2AgentRuntime,
   repairReadiness,
+  setPlannerCanvasDescription,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -648,12 +649,21 @@ export default function App() {
     }, 2000)
   }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
 
-  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
+  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope, initialGoal?: string) => {
     return createCanvas({ name, scope })
-      .then((list) => {
+      .then(async (list) => {
         applyCanvasList(list)
+        const goal = initialGoal?.trim()
+        if (goal && list.activeCanvasId) {
+          try {
+            await setPlannerCanvasDescription(list.activeCanvasId, goal)
+          } catch (err) {
+            pushToast('error', (err as Error).message || 'Failed to save canvas goal')
+          }
+        }
+        return list.activeCanvasId
       })
-  }, [applyCanvasList])
+  }, [applyCanvasList, pushToast])
 
   const handleCreateTemplate = useCallback((name: string, scope: CanvasScope) => {
     return createCanvas({ name, scope, kind: 'template' })
