@@ -1,5 +1,8 @@
 import {
+  Component,
   createContext,
+  type ErrorInfo,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -188,6 +191,58 @@ interface ToastCtx {
 }
 const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
+
+interface WorkspaceSurfaceErrorBoundaryProps {
+  resetKey: string
+  onOpenSettings: () => void
+  children: ReactNode
+}
+
+interface WorkspaceSurfaceErrorBoundaryState {
+  error: Error | null
+}
+
+class WorkspaceSurfaceErrorBoundary extends Component<
+  WorkspaceSurfaceErrorBoundaryProps,
+  WorkspaceSurfaceErrorBoundaryState
+> {
+  state: WorkspaceSurfaceErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: Error): WorkspaceSurfaceErrorBoundaryState {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.warn('[App] workspace surface failed:', error.message, info.componentStack)
+  }
+
+  componentDidUpdate(prevProps: WorkspaceSurfaceErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null })
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="workspace-surface-error" role="alert">
+        <div>
+          <span>Workspace surface paused</span>
+          <h2>This view failed to render.</h2>
+          <p>{this.state.error.message || 'The current workspace surface hit an unexpected UI error.'}</p>
+        </div>
+        <div className="workspace-surface-error__actions">
+          <button type="button" onClick={() => this.setState({ error: null })}>
+            Retry
+          </button>
+          <button type="button" onClick={this.props.onOpenSettings}>
+            Open Settings
+          </button>
+        </div>
+      </div>
+    )
+  }
+}
 
 export default function App() {
   const { t } = useI18n()
@@ -831,6 +886,12 @@ export default function App() {
   const activeWorkspaceCanvasKind = canvasKind(activeWorkspaceCanvas)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
   const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
+  const surfaceResetKey = [
+    workspaceMode,
+    activeWorkspaceCanvasId,
+    activeCanvasRefreshTick,
+    plannerClearRevision,
+  ].join(':')
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -858,147 +919,152 @@ export default function App() {
               </button>
             </div>
           )}
-          {workspaceMode === 'planner' ? (
-            activeWorkspaceCanvasKind === 'monitor' ? (
-              <WorkspaceMonitor
-                activeCanvasId={activeWorkspaceCanvasId}
-                canvases={workspaceCanvases}
-                refreshTick={activeCanvasRefreshTick}
-                onOpenItem={handleOpenMonitorItem}
-                onOpenAllSessions={() => setWorkspaceMode('sessions')}
-              />
-            ) : (
-              <PlannerGraph
-                canvasId={activeWorkspaceCanvasId}
-                canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
-                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+          <WorkspaceSurfaceErrorBoundary
+            resetKey={surfaceResetKey}
+            onOpenSettings={() => setWorkspaceMode('settings')}
+          >
+            {workspaceMode === 'planner' ? (
+              activeWorkspaceCanvasKind === 'monitor' ? (
+                <WorkspaceMonitor
+                  activeCanvasId={activeWorkspaceCanvasId}
+                  canvases={workspaceCanvases}
+                  refreshTick={activeCanvasRefreshTick}
+                  onOpenItem={handleOpenMonitorItem}
+                  onOpenAllSessions={() => setWorkspaceMode('sessions')}
+                />
+              ) : (
+                <PlannerGraph
+                  canvasId={activeWorkspaceCanvasId}
+                  canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+                  workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+                  userProfile={userProfile}
+                  boardState={boardState.state}
+                  clearRevision={plannerClearRevision}
+                  refreshTick={activeCanvasRefreshTick}
+                  focusNodeId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.nodeId : null}
+                  focusRequestId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.requestId : 0}
+                  initialIntakeMessage={initialPlannerIntake?.canvasId === activeWorkspaceCanvasId ? initialPlannerIntake : null}
+                  onFocusNodeHandled={(requestId) => {
+                    setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
+                  }}
+                  onInitialIntakeHandled={(requestId) => {
+                    setInitialPlannerIntake((current) => current?.id === requestId ? null : current)
+                  }}
+                  onOpenSubCanvas={handleSetActiveCanvas}
+                  onOpenArtifacts={(focus) => {
+                    setArtifactFocusTarget(focus
+                      ? { ...focus, id: Date.now() }
+                      : null)
+                    setWorkspaceMode('artifacts')
+                  }}
+                  onNotify={pushToast}
+                />
+              )
+            ) : workspaceMode === 'templates' ? (
+              <TemplatesView
+                canvases={canvasList.canvases}
+                activeCanvasId={activeCanvasId}
                 userProfile={userProfile}
                 boardState={boardState.state}
-                clearRevision={plannerClearRevision}
-                refreshTick={activeCanvasRefreshTick}
-                focusNodeId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.nodeId : null}
-                focusRequestId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.requestId : 0}
-                initialIntakeMessage={initialPlannerIntake?.canvasId === activeWorkspaceCanvasId ? initialPlannerIntake : null}
-                onFocusNodeHandled={(requestId) => {
-                  setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
+                onOpenCanvas={handleSetActiveCanvas}
+                onCreateTemplate={handleCreateTemplate}
+              />
+            ) : workspaceMode === 'sessions' ? (
+              <SessionsView
+                state={boardState.state}
+                canvases={workspaceCanvases}
+                unreadSids={unreadSids}
+                selectedSessionId={selectedSessionId}
+                onSelectedSessionChange={setSelectedSessionId}
+                onOpenPlannerNode={(canvasId, nodeId) => {
+                  handleSetActiveCanvas(canvasId)
+                  setWorkspaceMode('planner')
+                  setPlannerFocusTarget({
+                    canvasId,
+                    nodeId,
+                    requestId: Date.now(),
+                  })
                 }}
-                onInitialIntakeHandled={(requestId) => {
-                  setInitialPlannerIntake((current) => current?.id === requestId ? null : current)
-                }}
-                onOpenSubCanvas={handleSetActiveCanvas}
                 onOpenArtifacts={(focus) => {
-                  setArtifactFocusTarget(focus
-                    ? { ...focus, id: Date.now() }
-                    : null)
+                  setArtifactFocusTarget({
+                    id: Date.now(),
+                    canvasId: focus.canvasId,
+                    nodeId: focus.nodeId,
+                    nodeTitle: focus.nodeTitle,
+                  })
                   setWorkspaceMode('artifacts')
                 }}
-                onNotify={pushToast}
               />
-            )
-          ) : workspaceMode === 'templates' ? (
-            <TemplatesView
-              canvases={canvasList.canvases}
-              activeCanvasId={activeCanvasId}
-              userProfile={userProfile}
-              boardState={boardState.state}
-              onOpenCanvas={handleSetActiveCanvas}
-              onCreateTemplate={handleCreateTemplate}
-            />
-          ) : workspaceMode === 'sessions' ? (
-            <SessionsView
-              state={boardState.state}
-              canvases={workspaceCanvases}
-              unreadSids={unreadSids}
-              selectedSessionId={selectedSessionId}
-              onSelectedSessionChange={setSelectedSessionId}
-              onOpenPlannerNode={(canvasId, nodeId) => {
-                handleSetActiveCanvas(canvasId)
-                setWorkspaceMode('planner')
-                setPlannerFocusTarget({
-                  canvasId,
-                  nodeId,
-                  requestId: Date.now(),
-                })
-              }}
-              onOpenArtifacts={(focus) => {
-                setArtifactFocusTarget({
-                  id: Date.now(),
-                  canvasId: focus.canvasId,
-                  nodeId: focus.nodeId,
-                  nodeTitle: focus.nodeTitle,
-                })
-                setWorkspaceMode('artifacts')
-              }}
-            />
-          ) : workspaceMode === 'artifacts' ? (
-            <ArtifactsView
-              canvases={workspaceCanvases}
-              activeCanvasId={activeWorkspaceCanvasId}
-              focusTarget={artifactFocusTarget}
-              onOpenCanvas={(canvasId) => {
-                handleSetActiveCanvas(canvasId)
-                setWorkspaceMode('planner')
-              }}
-              onOpenPlannerNode={(canvasId, nodeId) => {
-                handleSetActiveCanvas(canvasId)
-                setWorkspaceMode('planner')
-                setPlannerFocusTarget({
-                  canvasId,
-                  nodeId,
-                  requestId: Date.now(),
-                })
-              }}
-              onClearFocus={() => setArtifactFocusTarget(null)}
-            />
-          ) : workspaceMode === 'integrations' ? (
-            <IntegrationsView
-              state={boardState.state}
-              onJumpToCanvas={(canvasId) => {
-                handleSetActiveCanvas(canvasId)
-                setWorkspaceMode('planner')
-              }}
-            />
-          ) : workspaceMode === 'team' ? (
-            <TeamView userProfile={userProfile} />
-          ) : workspaceMode === 'settings' ? (
-            <SettingsView
-              onSaved={() => {
-                refreshUserProfile()
-                refreshAgentRuntimeStatus(false)
-                refreshReadiness()
-              }}
-              onToast={pushToast}
-              agentRuntimeStatus={agentRuntimeStatus}
-              onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
-              onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
-              readinessReport={readinessReport}
-              readinessRepairAction={readinessRepairAction}
-              readinessRepairError={readinessRepairError}
-              readinessRepairLogs={readinessRepairLogs}
-              onRepairReadiness={handleRepairReadiness}
-              onRefreshReadiness={refreshReadiness}
-              devMode={BOARD_DEV_MODE}
-              onRestartOnboarding={restartFirstRunOnboarding}
-            />
-          ) : null}
-          {workspaceMode === 'planner' && (
-            <CanvasToolbar
-              canvases={workspaceCanvases}
-              activeCanvasId={activeWorkspaceCanvasId}
-              canGoBack={canvasHistoryIndex > 0}
-              canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
-              onActiveCanvasChange={handleSetActiveCanvas}
-              onGoBack={handleCanvasHistoryBack}
-              onGoForward={handleCanvasHistoryForward}
-              onCreateCanvas={handleCreateCanvas}
-              onRenameCanvas={handleRenameCanvas}
-              onClearCanvas={handleClearCanvas}
-              onDeleteCanvas={handleDeleteCanvas}
-              userProfile={userProfile}
-              boardState={boardState.state}
-              onOpenAllSessions={() => setWorkspaceMode('sessions')}
-            />
-          )}
+            ) : workspaceMode === 'artifacts' ? (
+              <ArtifactsView
+                canvases={workspaceCanvases}
+                activeCanvasId={activeWorkspaceCanvasId}
+                focusTarget={artifactFocusTarget}
+                onOpenCanvas={(canvasId) => {
+                  handleSetActiveCanvas(canvasId)
+                  setWorkspaceMode('planner')
+                }}
+                onOpenPlannerNode={(canvasId, nodeId) => {
+                  handleSetActiveCanvas(canvasId)
+                  setWorkspaceMode('planner')
+                  setPlannerFocusTarget({
+                    canvasId,
+                    nodeId,
+                    requestId: Date.now(),
+                  })
+                }}
+                onClearFocus={() => setArtifactFocusTarget(null)}
+              />
+            ) : workspaceMode === 'integrations' ? (
+              <IntegrationsView
+                state={boardState.state}
+                onJumpToCanvas={(canvasId) => {
+                  handleSetActiveCanvas(canvasId)
+                  setWorkspaceMode('planner')
+                }}
+              />
+            ) : workspaceMode === 'team' ? (
+              <TeamView userProfile={userProfile} />
+            ) : workspaceMode === 'settings' ? (
+              <SettingsView
+                onSaved={() => {
+                  refreshUserProfile()
+                  refreshAgentRuntimeStatus(false)
+                  refreshReadiness()
+                }}
+                onToast={pushToast}
+                agentRuntimeStatus={agentRuntimeStatus}
+                onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
+                onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+                readinessReport={readinessReport}
+                readinessRepairAction={readinessRepairAction}
+                readinessRepairError={readinessRepairError}
+                readinessRepairLogs={readinessRepairLogs}
+                onRepairReadiness={handleRepairReadiness}
+                onRefreshReadiness={refreshReadiness}
+                devMode={BOARD_DEV_MODE}
+                onRestartOnboarding={restartFirstRunOnboarding}
+              />
+            ) : null}
+            {workspaceMode === 'planner' && (
+              <CanvasToolbar
+                canvases={workspaceCanvases}
+                activeCanvasId={activeWorkspaceCanvasId}
+                canGoBack={canvasHistoryIndex > 0}
+                canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
+                onActiveCanvasChange={handleSetActiveCanvas}
+                onGoBack={handleCanvasHistoryBack}
+                onGoForward={handleCanvasHistoryForward}
+                onCreateCanvas={handleCreateCanvas}
+                onRenameCanvas={handleRenameCanvas}
+                onClearCanvas={handleClearCanvas}
+                onDeleteCanvas={handleDeleteCanvas}
+                userProfile={userProfile}
+                boardState={boardState.state}
+                onOpenAllSessions={() => setWorkspaceMode('sessions')}
+              />
+            )}
+          </WorkspaceSurfaceErrorBoundary>
           {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />

@@ -1131,6 +1131,72 @@ textarea {
   overflow: hidden;
 }
 
+.workspace-surface-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 16px;
+  padding: 32px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.workspace-surface-error > div:first-child {
+  width: min(520px, calc(100vw - var(--sidebar-width, 0px) - 64px));
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  border: 1px solid rgba(204, 120, 92, 0.24);
+  border-radius: var(--radius-md);
+  background: rgba(34, 34, 31, 0.78);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-surface-error span {
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workspace-surface-error h2 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.workspace-surface-error p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workspace-surface-error__actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.workspace-surface-error__actions button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(36, 36, 33, 0.82);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.workspace-surface-error__actions button:hover {
+  border-color: rgba(204, 120, 92, 0.36);
+  background: rgba(255, 255, 255, 0.07);
+}
+
 .sessions-workspace {
   position: absolute;
   inset: 0;
@@ -11044,6 +11110,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 
 :root[data-theme="light"] .board-shell,
 :root[data-theme="light"] .board-area,
+:root[data-theme="light"] .workspace-surface-error,
 :root[data-theme="light"] .sessions-workspace,
 :root[data-theme="light"] .artifacts-workspace,
 :root[data-theme="light"] .templates-workspace,
@@ -11052,6 +11119,18 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .settings-page {
   background: var(--bg);
   color: var(--text);
+}
+
+:root[data-theme="light"] .workspace-surface-error > div:first-child,
+:root[data-theme="light"] .workspace-surface-error__actions button {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .workspace-surface-error__actions button:hover {
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
 }
 
 :root[data-theme="light"] .workspace-rail,
