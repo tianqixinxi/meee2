@@ -813,18 +813,24 @@ final class InternalTerminalSurface {
         }
         guard position < totalOutputBytes else { return Data() }
         let start = max(0, min(scrollback.count, Int(position - scrollbackBaseOffset)))
-        return Data(scrollback[start...])
+        let startIndex = scrollback.index(scrollback.startIndex, offsetBy: start)
+        return Data(scrollback[startIndex...])
     }
 
     private static func safeScrollbackTrimIndex(in data: Data, preferredIndex: Int) -> Int {
         guard preferredIndex > 0 else { return 0 }
-        let upper = min(data.count, preferredIndex + scrollbackTrimSearchBytes)
-        var cut = preferredIndex
-        if preferredIndex < upper,
-           let newline = data[preferredIndex..<upper].firstIndex(of: 0x0A) {
-            cut = data.index(after: newline)
+        let preferredOffset = min(preferredIndex, data.count)
+        let upperOffset = min(data.count, preferredOffset + scrollbackTrimSearchBytes)
+        let preferred = data.index(data.startIndex, offsetBy: preferredOffset)
+        let upper = data.index(data.startIndex, offsetBy: upperOffset)
+        var cut = preferredOffset
+        if preferred < upper,
+           let newline = data[preferred..<upper].firstIndex(of: 0x0A) {
+            cut = data.distance(from: data.startIndex, to: data.index(after: newline))
         }
-        while cut < data.count, (data[cut] & 0b1100_0000) == 0b1000_0000 {
+        while cut < data.count {
+            let index = data.index(data.startIndex, offsetBy: cut)
+            guard (data[index] & 0b1100_0000) == 0b1000_0000 else { break }
             cut += 1
         }
         return min(cut, data.count)
