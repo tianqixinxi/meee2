@@ -999,6 +999,7 @@ export default function App() {
               <ArtifactsView
                 canvases={workspaceCanvases}
                 activeCanvasId={activeWorkspaceCanvasId}
+                refreshTick={activeCanvasRefreshTick}
                 focusTarget={artifactFocusTarget}
                 onOpenCanvas={(canvasId) => {
                   handleSetActiveCanvas(canvasId)

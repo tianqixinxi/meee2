@@ -41,6 +41,7 @@ export interface ArtifactFocusTarget {
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
+  refreshTick?: number
   focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
   onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
@@ -88,6 +89,7 @@ const KIND_FILTERS: ArtifactFilter[] = [
 export function ArtifactsView({
   canvases,
   activeCanvasId,
+  refreshTick = 0,
   focusTarget = null,
   onOpenCanvas,
   onOpenPlannerNode,
@@ -151,7 +153,7 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, t])
+  }, [canvasSignature, refreshTick, t])
 
   const canvasGroups = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
