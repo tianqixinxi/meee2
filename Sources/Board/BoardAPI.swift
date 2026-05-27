@@ -3483,7 +3483,7 @@ enum BoardAPI {
                     object: nil,
                     userInfo: [
                         "sessionId": surface.sessionId,
-                        "surfaceId": surface.surfaceId,
+                        "surfaceId": surface.surfaceId
                     ]
                 )
             }
@@ -4105,7 +4105,7 @@ enum BoardAPI {
         let termProgram = (json["termProgram"] as? String)
         let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
 
-        if ((json["terminalMode"] as? String)?.lowercased() == "external") {
+        if (json["terminalMode"] as? String)?.lowercased() == "external" {
             return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: createIfMissing, termProgram: termProgram)
         }
         do {
@@ -4169,7 +4169,7 @@ enum BoardAPI {
                 initialPrompt: nil,
                 layoutHint: nil
             )
-            if ((json["terminalMode"] as? String)?.lowercased() == "external") {
+            if (json["terminalMode"] as? String)?.lowercased() == "external" {
                 return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: termProgram)
             }
             let surface = try createInternalSessionSurface(

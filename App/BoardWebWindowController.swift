@@ -309,7 +309,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             terminalHostView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             terminalHostView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             terminalHostView.topAnchor.constraint(equalTo: rootView.topAnchor),
-            terminalHostView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            terminalHostView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
         ])
         window.contentView = rootView
         webView.navigationDelegate = self
@@ -714,7 +714,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         var detail: [String: Any] = [
             "surfaceId": surfaceId,
             "ready": ready,
-            "cacheHit": cacheHit,
+            "cacheHit": cacheHit
         ]
         if let sessionId, !sessionId.isEmpty {
             detail["sessionId"] = sessionId
@@ -745,7 +745,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             "type": type,
             "surfaceId": surfaceId,
             "ok": ok,
-            "nativeAtMs": Self.timestampMillis(),
+            "nativeAtMs": Self.timestampMillis()
         ]
         if let sessionId, !sessionId.isEmpty {
             detail["sessionId"] = sessionId

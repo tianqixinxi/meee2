@@ -38,11 +38,13 @@ public protocol InternalTerminalSurfaceClient: AnyObject {
 
 public extension InternalTerminalSurfaceClient {
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
-        internalTerminalSurface(surfaceId, didReplayOutput: String(decoding: data, as: UTF8.self))
+        guard let text = String(bytes: data, encoding: .utf8) else { return }
+        internalTerminalSurface(surfaceId, didReplayOutput: text)
     }
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput text: String) {}
     func internalTerminalSurface(_ surfaceId: String, didReceiveOutput data: Data) {
-        internalTerminalSurface(surfaceId, didReceiveOutput: String(decoding: data, as: UTF8.self))
+        guard let text = String(bytes: data, encoding: .utf8) else { return }
+        internalTerminalSurface(surfaceId, didReceiveOutput: text)
     }
     func internalTerminalSurface(_ surfaceId: String, didReceiveOutput text: String) {}
     func internalTerminalSurface(_ surfaceId: String, didChangeStatus snapshot: InternalTerminalSurfaceSnapshot) {}
@@ -375,7 +377,7 @@ public final class InternalTerminalRuntime {
             info.provider,
             info.command,
             command,
-            info.sessionId,
+            info.sessionId
         ]
             .compactMap { $0 }
             .joined(separator: " ")
@@ -442,8 +444,8 @@ final class InternalTerminalSurface {
 
     private let lock = NSLock()
     private var processSource: DispatchSourceProcess?
-    private var masterHandle: FileHandle?
-    private var masterFD: Int32 = -1
+    private var primaryHandle: FileHandle?
+    private var primaryFD: Int32 = -1
     private var nativeClients: [ObjectIdentifier: WeakInternalTerminalSurfaceClient] = [:]
     private var scrollback = Data()
     private var scrollbackWasTrimmed = false
@@ -472,25 +474,25 @@ final class InternalTerminalSurface {
     func start(cols: UInt16, rows: UInt16) throws {
         Self.ensureStandardFileDescriptors()
         Self.markHostFileDescriptorsCloseOnExec()
-        var master: Int32 = -1
-        var slave: Int32 = -1
-        var slaveName = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        var primary: Int32 = -1
+        var secondary: Int32 = -1
+        var secondaryName = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        guard openpty(&master, &slave, &slaveName, nil, &size) == 0 else {
+        guard openpty(&primary, &secondary, &secondaryName, nil, &size) == 0 else {
             markFailed("openpty failed: \(String(cString: strerror(errno)))")
             throw NSError(domain: "InternalTerminalRuntime", code: Int(errno), userInfo: [NSLocalizedDescriptionKey: errorMessage ?? "openpty failed"])
         }
-        Self.setCloseOnExec(master)
-        Self.setCloseOnExec(slave)
-        masterFD = master
-        let masterHandle = FileHandle(fileDescriptor: master, closeOnDealloc: true)
-        self.masterHandle = masterHandle
+        Self.setCloseOnExec(primary)
+        Self.setCloseOnExec(secondary)
+        primaryFD = primary
+        let primaryHandle = FileHandle(fileDescriptor: primary, closeOnDealloc: true)
+        self.primaryHandle = primaryHandle
 
         let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
         let arguments = [shell, "-l", "-c", "cd \(Self.shellQuote(cwd)) && exec \(command)"]
         let environment = startupEnvironment(cols: cols, rows: rows)
 
-        masterHandle.readabilityHandler = { [weak self] handle in
+        primaryHandle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
             self?.emitOutput(data)
@@ -501,9 +503,9 @@ final class InternalTerminalSurface {
                 executable: shell,
                 arguments: arguments,
                 environment: environment,
-                slaveFD: slave
+                secondaryFD: secondary
             )
-            Darwin.close(slave)
+            Darwin.close(secondary)
             pid = Int(launchedPid)
             processSource = makeProcessExitSource(pid: launchedPid)
             status = .running
@@ -530,10 +532,10 @@ final class InternalTerminalSurface {
                 nodeId: nodeId
             )
         } catch {
-            Darwin.close(slave)
-            masterHandle.readabilityHandler = nil
-            masterHandle.closeFile()
-            masterFD = -1
+            Darwin.close(secondary)
+            primaryHandle.readabilityHandler = nil
+            primaryHandle.closeFile()
+            primaryFD = -1
             markFailed("process start failed: \(error.localizedDescription)")
             throw error
         }
@@ -551,10 +553,10 @@ final class InternalTerminalSurface {
     }
 
     func writeInput(_ data: Data) {
-        guard masterFD >= 0, !data.isEmpty else { return }
+        guard primaryFD >= 0, !data.isEmpty else { return }
         data.withUnsafeBytes { rawBuffer in
             guard let base = rawBuffer.baseAddress else { return }
-            _ = Darwin.write(masterFD, base, rawBuffer.count)
+            _ = Darwin.write(primaryFD, base, rawBuffer.count)
         }
         touch()
     }
@@ -615,9 +617,9 @@ final class InternalTerminalSurface {
     }
 
     func resize(cols: UInt16, rows: UInt16) {
-        guard masterFD >= 0 else { return }
+        guard primaryFD >= 0 else { return }
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
-        _ = ioctl(masterFD, TIOCSWINSZ, &size)
+        _ = ioctl(primaryFD, TIOCSWINSZ, &size)
         if let pid, pid > 0 {
             let processGroup = -pid_t(pid)
             if Darwin.kill(processGroup, SIGWINCH) != 0 {
@@ -641,9 +643,9 @@ final class InternalTerminalSurface {
     private func handleExit(code: Int) {
         processSource?.cancel()
         processSource = nil
-        masterHandle?.readabilityHandler = nil
-        masterHandle?.closeFile()
-        masterFD = -1
+        primaryHandle?.readabilityHandler = nil
+        primaryHandle?.closeFile()
+        primaryFD = -1
         lock.lock()
         status = .exited
         exitCode = code
@@ -932,7 +934,7 @@ final class InternalTerminalSurface {
         executable: String,
         arguments: [String],
         environment: [String: String],
-        slaveFD: Int32
+        secondaryFD: Int32
     ) throws -> pid_t {
         var fileActions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&fileActions)
@@ -947,13 +949,13 @@ final class InternalTerminalSurface {
 
         var spawnedPid: pid_t = 0
         let environmentPairs = environment.map { "\($0.key)=\($0.value)" }.sorted()
-        let slaveFlags = fcntl(slaveFD, F_GETFD)
-        let stdinAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDIN_FILENO)
-        let stdoutAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDOUT_FILENO)
-        let stderrAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDERR_FILENO)
+        let secondaryFlags = fcntl(secondaryFD, F_GETFD)
+        let stdinAction = posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, STDIN_FILENO)
+        let stdoutAction = posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, STDOUT_FILENO)
+        let stderrAction = posix_spawn_file_actions_adddup2(&fileActions, secondaryFD, STDERR_FILENO)
         let closeAction: Int32
-        if slaveFD > STDERR_FILENO {
-            closeAction = posix_spawn_file_actions_addclose(&fileActions, slaveFD)
+        if secondaryFD > STDERR_FILENO {
+            closeAction = posix_spawn_file_actions_addclose(&fileActions, secondaryFD)
         } else {
             closeAction = 0
         }
@@ -962,7 +964,7 @@ final class InternalTerminalSurface {
             throw NSError(
                 domain: "InternalTerminalRuntime",
                 code: Int(failedAction),
-                userInfo: [NSLocalizedDescriptionKey: "posix_spawn file action failed: \(String(cString: strerror(failedAction))) slaveFD=\(slaveFD) slaveFlags=\(slaveFlags) actions=\(actionResults)"]
+                userInfo: [NSLocalizedDescriptionKey: "posix_spawn file action failed: \(String(cString: strerror(failedAction))) secondaryFD=\(secondaryFD) secondaryFlags=\(secondaryFlags) actions=\(actionResults)"]
             )
         }
         let result = withCStringArray(arguments) { argv in
@@ -977,7 +979,7 @@ final class InternalTerminalSurface {
             throw NSError(
                 domain: "InternalTerminalRuntime",
                 code: Int(result),
-                userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(result))) slaveFD=\(slaveFD) slaveFlags=\(slaveFlags) actions=\(actionResults)"]
+                userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(result))) secondaryFD=\(secondaryFD) secondaryFlags=\(secondaryFlags) actions=\(actionResults)"]
             )
         }
         return spawnedPid

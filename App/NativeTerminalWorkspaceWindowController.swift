@@ -161,7 +161,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         let fileManager = FileManager.default
         let candidates = [
             "/Applications/Ghostty.app/Contents/Resources/ghostty",
-            Bundle.main.resourceURL?.appendingPathComponent("ghostty").path,
+            Bundle.main.resourceURL?.appendingPathComponent("ghostty").path
         ].compactMap { $0 }
         if let resources = candidates.first(where: { fileManager.fileExists(atPath: $0, isDirectory: nil) }) {
             setenv("GHOSTTY_RESOURCES_DIR", resources, 0)
@@ -249,8 +249,7 @@ extension EmbeddedNativeTerminalController:
     TerminalSurfaceGridResizeDelegate,
     TerminalSurfaceResizeDelegate,
     TerminalSurfaceCloseDelegate,
-    TerminalSurfaceFocusDelegate
-{
+    TerminalSurfaceFocusDelegate {
     func terminalDidChangeTitle(_ title: String) {}
 
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
