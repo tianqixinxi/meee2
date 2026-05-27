@@ -103,6 +103,13 @@ export function CanvasToolbar({
   const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
   const [recapPlannerState, setRecapPlannerState] = useState<PlannerGraphState | null>(null)
 
+  // UI-simplification — hover a canvas in the dropdown → popover shows that
+  // canvas's semantic recap (headline + details). Data source is
+  // recapCacheRef which is populated as user views each canvas; missing
+  // entries fall back to a "not fetched yet" hint.
+  const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
+  const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
+
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
   const filteredCanvases = useMemo(() => canvases.filter((canvas) => {
     const query = canvasQuery.trim().toLowerCase()
@@ -341,6 +348,15 @@ export function CanvasToolbar({
                       setMenuOpen(false)
                       onActiveCanvasChange(canvas.id)
                     }}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      setHoveredCanvasId(canvas.id)
+                      setHoverAnchor({ top: rect.top, right: rect.right })
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredCanvasId(null)
+                      setHoverAnchor(null)
+                    }}
                   >
                     <span className="canvas-toolbar__check">
                       {selected && <Check size={13} aria-hidden />}
@@ -414,6 +430,47 @@ export function CanvasToolbar({
           ))}
         </div>
       )}
+
+      {/* UI-simplification — hover canvas item in dropdown → semantic recap popover */}
+      {hoveredCanvasId && hoverAnchor && (() => {
+        const hovered = canvases.find((c) => c.id === hoveredCanvasId)
+        if (!hovered) return null
+        const cached = recapCacheRef.current[hoveredCanvasId]
+        return (
+          <div
+            className="canvas-toolbar__hover-recap"
+            style={{
+              position: 'fixed',
+              top: hoverAnchor.top,
+              left: hoverAnchor.right + 8,
+              pointerEvents: 'none',
+            }}
+          >
+            <div className="canvas-toolbar__hover-recap-title">{displayCanvasName(hovered)}</div>
+            {cached ? (
+              <>
+                {cached.headline && (
+                  <div className="canvas-toolbar__hover-recap-headline">{cached.headline}</div>
+                )}
+                {cached.details && cached.details.length > 0 && (
+                  <ul className="canvas-toolbar__hover-recap-details">
+                    {cached.details.slice(0, 4).map((d, i) => <li key={i}>{d}</li>)}
+                  </ul>
+                )}
+                {cached.updatedAt && (
+                  <div className="canvas-toolbar__hover-recap-meta">
+                    {formatRecapAge(cached.updatedAt, Date.now())} · {cached.mode}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="canvas-toolbar__hover-recap-empty">
+                还没看过这个画板,recap 待生成
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       <AIRecapDrawer
         open={recapDrawerOpen}
