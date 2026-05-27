@@ -129,6 +129,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const designStatus = data.state?.runState ?? node.status
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
+  // UI-simplification — artifact node 默认收起,仅显示 title + kind + 展开按钮。
+  // 强制展开条件:1) 有 subCanvasId(有下钻子画板)2) 用户点了展开按钮。
+  const hasSubCanvas = Boolean(node.subCanvasId)
+  const [artifactExpanded, setArtifactExpanded] = useState(hasSubCanvas)
   if (data.virtual && nodeKind === 'artifact') {
     const artifact = primaryArtifact
     const inlineKanban = renderKind === 'kanban'
@@ -210,14 +214,49 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             </button>
           </div>
         )}
-        <ArtifactPreview
-          artifact={artifact}
-          kind={renderKind}
-          kanban={kanban}
-          content={artifactContent}
-          error={artifactContentError}
-          onOpenKanbanItem={data.onOpenKanbanItem}
-        />
+        {/* UI-simplification — artifact 默认收起,只显示 title。
+         *  展开条件:(a) 有 subCanvasId(下钻成子画板),自动展开
+         *  (b) 用户点 展开 按钮手动展开。
+         *  收起态只露一个 [展开 ▼] 按钮,canvas 上视觉占用极小 → 不挤占节点交互区域。 */}
+        {artifactExpanded ? (
+          <>
+            <ArtifactPreview
+              artifact={artifact}
+              kind={renderKind}
+              kanban={kanban}
+              content={artifactContent}
+              error={artifactContentError}
+              onOpenKanbanItem={data.onOpenKanbanItem}
+            />
+            {!hasSubCanvas && (
+              <button
+                type="button"
+                className="planner-node__artifact-collapse nodrag"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setArtifactExpanded(false)
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                title="Collapse artifact preview"
+              >
+                收起 ▴
+              </button>
+            )}
+          </>
+        ) : (
+          <button
+            type="button"
+            className="planner-node__artifact-expand nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              setArtifactExpanded(true)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            title="Expand artifact preview"
+          >
+            展开 ▾
+          </button>
+        )}
         <Handle type="source" position={Position.Right} className="planner-node__handle" />
       </div>
     )

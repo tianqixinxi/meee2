@@ -183,7 +183,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,
-        artifacts: artifactsByNodeId.get(node.id) ?? [],
+        artifacts: artifactsByNodeId.get(node.id) ?? EMPTY_ARTIFACTS,
         previewKind,
         perception: perceptionForNode(
           node,

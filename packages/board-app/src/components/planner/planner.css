@@ -837,6 +837,10 @@
 .planner-node {
   width: 320px;
   padding: 12px;
+  /* UI-simplification — min-height 让 Push 1 精简内容后卡片不缩成几十像素的小条:
+   * 内容变短了但点击 / 拖动目标仍需有合理高度。也让 layout 上的相对位置稳定,
+   * 避免 ResizeObserver loop 触发 edge 闪烁。 */
+  min-height: 140px;
   border: 1px solid rgba(168, 165, 155, 0.22);
   border-left-width: 4px;
   border-radius: var(--radius-sm);
@@ -845,6 +849,27 @@
   color: var(--text);
   cursor: grab;
   transition: opacity 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+/* UI-simplification — artifact 折叠/展开按钮 */
+.planner-node__artifact-expand,
+.planner-node__artifact-collapse {
+  margin-top: 8px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+  text-align: center;
+}
+.planner-node__artifact-expand:hover,
+.planner-node__artifact-collapse:hover {
+  background: rgba(168, 165, 155, 0.06);
+  color: var(--text);
 }
 
 .planner-node.is-selected {
