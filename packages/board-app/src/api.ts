@@ -18,6 +18,7 @@ import type {
   PlanProposal,
   PlannerActivity,
   PlannerCanvasState,
+  PlannerGraphEdge,
   PlannerGraphState,
   WorkflowRun,
   PlannerMonitorState,
@@ -869,6 +870,7 @@ export function applyPlannerProposalPreview(
   proposal: PlanProposal
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
+  edges: PlannerGraphEdge[]
 }> {
   if (PLANNER_DEMO_MODE) {
     const nodes = applyDemoChanges(demoNodesByCanvasId[canvasId] ?? demoNodesByCanvasId[DEMO_CANVAS_ID], proposal)
@@ -876,6 +878,12 @@ export function applyPlannerProposalPreview(
       proposal: { ...proposal, status: proposal.status === 'pending' ? 'approved' : proposal.status },
       nodes,
       states: nodes.map(demoNodeState),
+      edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+        id: `edge-${dependencyId}-${node.id}`,
+        sourceNodeId: dependencyId,
+        targetNodeId: node.id,
+        kind: 'dependency',
+      }))),
     })
   }
   return jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/apply-preview`, {
@@ -909,6 +917,7 @@ export function applyPlannerProposal(
   proposal: PlanProposal
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
+  edges: PlannerGraphEdge[]
 }> {
   if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
     const canvasIdToApply = demoProposal.canvasId
@@ -922,6 +931,12 @@ export function applyPlannerProposal(
       proposal: demoProposal,
       nodes,
       states: nodes.map(demoNodeState),
+      edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+        id: `edge-${dependencyId}-${node.id}`,
+        sourceNodeId: dependencyId,
+        targetNodeId: node.id,
+        kind: 'dependency',
+      }))),
     })
   }
   return jsonRequest(

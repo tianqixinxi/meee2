@@ -1316,7 +1316,8 @@ enum BoardAPI {
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: preview.proposal,
                 nodes: preview.nodes,
-                states: preview.states
+                states: preview.states,
+                edges: preview.edges
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2671,7 +2672,8 @@ enum BoardAPI {
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: result.proposal,
                 nodes: result.nodes,
-                states: result.states
+                states: result.states,
+                edges: result.edges
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)

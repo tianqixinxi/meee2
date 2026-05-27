@@ -1422,7 +1422,7 @@ function PlannerGraphInner({
             access: current?.access ?? defaultPlannerAccess(),
             activities: current?.activities ?? [],
             artifacts: current?.artifacts ?? [],
-            edges: [],
+            edges: result.edges,
           }
         })
         window.setTimeout(() => {

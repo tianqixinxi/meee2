@@ -1610,6 +1610,62 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.proposals.first?.status, .pending)
     }
 
+    func testPlannerBoardBridgeApplyPreviewAndApplyReturnGraphEdges() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let upstream = try XCTUnwrap(record.nodes.first)
+        let downstream = PlanningNode(
+            id: "canvas-a-dependent-node",
+            canvasId: "canvas-a",
+            title: "Dependent artifact check",
+            schema: NodeSchema(
+                inputs: ["upstream artifact"],
+                outputs: ["verified artifact"],
+                goal: "verify downstream output"
+            ),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .mock,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: [upstream.id]
+        )
+        let proposal = PlanProposal(
+            id: "proposal-dependent-edge",
+            canvasId: "canvas-a",
+            summary: "Add dependent node",
+            changes: [.addNode(downstream)],
+            status: .pending
+        )
+
+        let preview = try PlannerBoardBridge.applyPreview(
+            proposal: proposal,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertTrue(preview.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+
+        _ = try PlannerBoardBridge.store.saveProposal(
+            proposal,
+            canvas: record.canvas,
+            seedNodes: record.nodes
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertTrue(applied.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+    }
+
     func testPlannerStorePersistsStateAcrossInstances() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
