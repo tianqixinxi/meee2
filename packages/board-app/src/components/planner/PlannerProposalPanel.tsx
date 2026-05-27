@@ -1211,8 +1211,9 @@ function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessa
 function mergeClaudeSessionMessages(
   history: PlannerChatMessage[],
   sessionId: string,
-  messages: LocalAssistantSessionMessage[],
+  messages: LocalAssistantSessionMessage[] | null | undefined,
 ): PlannerChatMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) return normalizeChatHistoryOrder(history)
   const existingIds = new Set(history.map((item) => item.id))
   const existingContent = new Set(history.map(contentKey))
   const restored: PlannerChatMessage[] = []

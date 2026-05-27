@@ -2214,7 +2214,33 @@ export async function fetchLocalAssistantSessionMessages(
   const params = new URLSearchParams()
   if (canvasId) params.set('canvasId', canvasId)
   params.set('limit', String(limit))
-  return jsonRequest(`/api/assistant/local-session/messages?${params.toString()}`)
+  const result = await jsonRequest<unknown>(`/api/assistant/local-session/messages?${params.toString()}`)
+  if (!result || typeof result !== 'object') return { sessionId: '', messages: [] }
+  const item = result as { sessionId?: unknown; messages?: unknown }
+  return {
+    sessionId: typeof item.sessionId === 'string' ? item.sessionId : '',
+    messages: Array.isArray(item.messages)
+      ? item.messages
+        .map(normalizeLocalAssistantSessionMessage)
+        .filter((message): message is LocalAssistantSessionMessage => Boolean(message))
+      : [],
+  }
+}
+
+function normalizeLocalAssistantSessionMessage(raw: unknown): LocalAssistantSessionMessage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const item = raw as Record<string, unknown>
+  const content = typeof item.content === 'string' ? item.content : ''
+  if (!content.trim()) return null
+  const role = item.role === 'assistant' || item.role === 'injected' || item.role === 'user'
+    ? item.role
+    : 'assistant'
+  return {
+    id: typeof item.id === 'string' ? item.id : '',
+    role,
+    content,
+    timestamp: typeof item.timestamp === 'string' ? item.timestamp : null,
+  }
 }
 
 // -- transcript ------------------------------------------------------------
