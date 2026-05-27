@@ -3237,13 +3237,15 @@ textarea {
 .sessions-workspace__inner {
   width: 100%;
   height: 100%;
+  min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
   padding: 18px 22px 22px;
 }
 
 .sessions-workspace__header {
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .sessions-workspace__header h1 {
@@ -3259,23 +3261,33 @@ textarea {
 .sessions-console {
   min-height: 0;
   height: 100%;
+  overflow: hidden;
+}
+
+.sessions-board {
+  gap: 0;
 }
 
 .sessions-console {
   display: grid;
-  grid-template-columns: minmax(292px, 336px) minmax(0, 1fr);
+  grid-template-columns: clamp(320px, 28vw, 420px) minmax(0, 1fr);
   gap: 8px;
 }
 
 .sessions-console--external {
-  grid-template-columns: minmax(292px, 420px) minmax(0, 1fr);
+  grid-template-columns: clamp(340px, 30vw, 460px) minmax(0, 1fr);
 }
 
 .sessions-console__sidebar {
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+}
+
+.sessions-workspace__inner > .session-intake {
+  margin: 0;
 }
 
 .sessions-kind-tabs {
@@ -3897,8 +3909,8 @@ textarea {
   }
 
   .sessions-workspace__inner {
-    width: calc(100% - 24px);
-    padding-top: 24px;
+    width: 100%;
+    padding: 14px 12px 16px;
   }
 
   .sessions-workspace__header {
@@ -3923,6 +3935,7 @@ textarea {
   .sessions-console,
   .sessions-console--external {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(190px, 34%) minmax(0, 1fr);
   }
 
   .sessions-table__head {
@@ -3944,7 +3957,7 @@ textarea {
   }
 
   .sessions-detail {
-    min-height: 460px;
+    min-height: 0;
   }
 
   .sessions-detail__meta {
@@ -3954,7 +3967,7 @@ textarea {
   }
 
   .sessions-runtime {
-    grid-template-rows: minmax(160px, 1fr) minmax(160px, 0.8fr);
+    grid-template-rows: minmax(140px, 1fr) minmax(130px, 0.72fr) minmax(130px, 0.72fr);
   }
 
   .sessions-control__heading,
