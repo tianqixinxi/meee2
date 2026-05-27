@@ -41,6 +41,7 @@ interface ArtifactsViewProps {
   focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
   onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onClearFocus?: () => void
 }
 
 interface CanvasArtifacts {
@@ -74,6 +75,7 @@ export function ArtifactsView({
   focusTarget = null,
   onOpenCanvas,
   onOpenPlannerNode,
+  onClearFocus,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
   const handledFocusRef = useRef(0)
@@ -268,6 +270,7 @@ export function ArtifactsView({
   const showAllArtifacts = () => {
     setKindFilter('all')
     setQuery('')
+    onClearFocus?.()
   }
 
   useEffect(() => {

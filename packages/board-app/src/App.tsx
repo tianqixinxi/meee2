@@ -918,6 +918,7 @@ export default function App() {
                   requestId: Date.now(),
                 })
               }}
+              onClearFocus={() => setArtifactFocusTarget(null)}
             />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView
