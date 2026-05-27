@@ -63,6 +63,7 @@ export function SessionsView({
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const [surfaces, setSurfaces] = useState<SessionSurface[]>([])
+  const routedSelectedSessionIdRef = useRef<string | null>(null)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
   const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
@@ -140,6 +141,14 @@ export function SessionsView({
       ? canvases.find((canvas) => canvas.id === selectedSurface.canvasId) ?? null
       : null
   ), [canvases, selectedSurface?.canvasId])
+
+  useEffect(() => {
+    const selectedKey = selectedSessionId?.trim() || null
+    if (routedSelectedSessionIdRef.current === selectedKey) return
+    routedSelectedSessionIdRef.current = selectedKey
+    if (!selectedSession) return
+    setActiveKindTab(isInternalSession(selectedSession) ? 'internal' : 'external')
+  }, [selectedSession, selectedSessionId])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
