@@ -268,7 +268,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
-export type CanvasKind = 'board' | 'template'
+export type CanvasKind = 'board' | 'monitor' | 'template'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'

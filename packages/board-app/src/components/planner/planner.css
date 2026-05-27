@@ -3402,6 +3402,18 @@
   padding: 18px 148px 28px 240px;
 }
 
+.planner-monitor__tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planner-monitor__search {
+  min-width: 0;
+  flex: 1;
+}
+
 .planner-monitor__search input {
   width: min(520px, 100%);
   border: 1px solid rgba(168, 165, 155, 0.2);
@@ -3410,6 +3422,19 @@
   color: var(--text);
   font-size: 13px;
   padding: 10px 12px;
+}
+
+.planner-monitor__sessions-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(44, 43, 41, 0.78);
+  color: var(--text);
+  font-size: 12px;
 }
 
 .planner-monitor__group {
@@ -3447,11 +3472,24 @@
   grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+  width: 100%;
   padding: 10px 12px;
   border: 1px solid rgba(168, 165, 155, 0.18);
   border-left: 4px solid rgba(168, 165, 155, 0.26);
   border-radius: var(--radius-sm);
   background: rgba(44, 43, 41, 0.78);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.planner-monitor-item:hover,
+.planner-monitor-item:focus-visible,
+.planner-monitor__sessions-button:hover,
+.planner-monitor__sessions-button:focus-visible {
+  border-color: rgba(236, 208, 132, 0.38);
+  background: rgba(60, 58, 54, 0.9);
+  outline: none;
 }
 
 .planner-monitor-item--rank-0 {
@@ -6213,6 +6251,7 @@
 }
 
 :root[data-theme="light"] .planner-monitor__search input,
+:root[data-theme="light"] .planner-monitor__sessions-button,
 :root[data-theme="light"] .planner-role-badge,
 :root[data-theme="light"] .planner-activity-pill,
 :root[data-theme="light"] .planner-monitor-item__icon,

@@ -83,6 +83,7 @@ public final class BoardLayoutStore {
 
     public enum CanvasKind: String, Codable, Equatable {
         case board
+        case monitor
         case template
     }
 
@@ -1320,8 +1321,9 @@ public final class BoardLayoutStore {
         if !store.canvases.contains(where: { $0.id == personalId }) {
             store.canvases.append(Canvas(
                 id: personalId,
-                name: "Default canvas",
+                name: "Monitor",
                 scope: .personal,
+                kind: .monitor,
                 ownerUserId: context.userId,
                 teamId: nil,
                 isDefault: true,
@@ -1332,6 +1334,14 @@ public final class BoardLayoutStore {
             ))
             store.layouts[personalId] = store.layouts[personalId] ?? .empty
             store.memberships[personalId] = store.memberships[personalId] ?? [:]
+        } else if let index = store.canvases.firstIndex(where: { $0.id == personalId }),
+                  store.canvases[index].isDefault,
+                  store.canvases[index].kind != .monitor || store.canvases[index].name == "Default canvas" {
+            store.canvases[index].kind = .monitor
+            if store.canvases[index].name == "Default canvas" {
+                store.canvases[index].name = "Monitor"
+            }
+            store.canvases[index].updatedAt = now
         }
         ensureWorkspaceFolderNamesLocked(&store)
         let defaultSessionIds = sessionIds.filter { (store.sessionHomeCanvasIds ?? [:])[$0] == nil }

@@ -23,6 +23,7 @@ import { useI18n } from './lib/i18n'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
+  CanvasKind,
   CanvasScope,
   Meee2AgentRuntimeStatus,
   ReadinessReport,
@@ -118,9 +119,9 @@ function fallbackCanvasList(): CanvasList {
     memberships: [],
     canvases: [{
       id: FALLBACK_CANVAS_ID,
-      name: 'My',
+      name: 'Monitor',
       scope: 'personal',
-      kind: 'board',
+      kind: 'monitor',
       isDefault: true,
       workspacePath: '',
       ownerUserId: 'local-user',
@@ -129,8 +130,14 @@ function fallbackCanvasList(): CanvasList {
   }
 }
 
-function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): 'board' | 'template' {
-  return canvas?.kind === 'template' ? 'template' : 'board'
+function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): CanvasKind {
+  if (canvas?.kind === 'template') return 'template'
+  if (canvas?.kind === 'monitor') return 'monitor'
+  return 'board'
+}
+
+function isWorkspaceCanvas(canvas: CanvasList['canvases'][number] | null | undefined): boolean {
+  return canvasKind(canvas) !== 'template'
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -143,7 +150,7 @@ function canvasListSignature(list: CanvasList): string {
         id: canvas.id,
         name: canvas.name,
         scope: canvas.scope,
-        kind: canvas.kind === 'template' ? 'template' : 'board',
+        kind: canvasKind(canvas),
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
         ownerUserId: canvas.ownerUserId ?? null,
@@ -575,9 +582,20 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
+  const initialMonitorCanvasSelectedRef = useRef(false)
+  useEffect(() => {
+    if (initialMonitorCanvasSelectedRef.current || !canvasList || workspaceMode !== 'planner') return
+    initialMonitorCanvasSelectedRef.current = true
+    const monitorCanvas = canvasList.canvases.find((canvas) => canvas.kind === 'monitor' && canvas.isDefault)
+      ?? canvasList.canvases.find((canvas) => canvas.kind === 'monitor')
+    if (monitorCanvas && monitorCanvas.id !== activeCanvasId) {
+      handleSetActiveCanvas(monitorCanvas.id)
+    }
+  }, [activeCanvasId, canvasList, handleSetActiveCanvas, workspaceMode])
+
   const workspaceCanvasIds = useMemo(() => (
     (canvasList?.canvases ?? [])
-      .filter((canvas) => canvasKind(canvas) === 'board')
+      .filter(isWorkspaceCanvas)
       .map((canvas) => canvas.id)
   ), [canvasList])
   const activeHistoryCanvasId = workspaceCanvasIds.includes(activeCanvasId)
@@ -691,7 +709,7 @@ export default function App() {
     if (nextMode !== 'planner' || !canvasList) return
     const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
     if (canvasKind(currentCanvas) !== 'template') return
-    const firstWorkspaceCanvas = canvasList.canvases.find((canvas) => canvasKind(canvas) === 'board')
+    const firstWorkspaceCanvas = canvasList.canvases.find(isWorkspaceCanvas)
     if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
   }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
@@ -748,11 +766,12 @@ export default function App() {
     )
   }
 
-  const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
+  const workspaceCanvases = canvasList.canvases.filter(isWorkspaceCanvas)
   const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
     : workspaceCanvases[0]?.id ?? activeCanvasId
   const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
+  const activeWorkspaceCanvasKind = canvasKind(activeWorkspaceCanvas)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
   const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
 
@@ -783,17 +802,26 @@ export default function App() {
             </div>
           )}
           {workspaceMode === 'planner' ? (
-            <PlannerGraph
-              canvasId={activeWorkspaceCanvasId}
-              canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
-              workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
-              userProfile={userProfile}
-              boardState={boardState.state}
-              clearRevision={plannerClearRevision}
-              refreshTick={activeCanvasRefreshTick}
-              onOpenSubCanvas={handleSetActiveCanvas}
-              onNotify={pushToast}
-            />
+            activeWorkspaceCanvasKind === 'monitor' ? (
+              <WorkspaceMonitor
+                activeCanvasId={activeWorkspaceCanvasId}
+                canvases={workspaceCanvases}
+                onOpenCanvas={handleSetActiveCanvas}
+                onOpenAllSessions={() => setWorkspaceMode('sessions')}
+              />
+            ) : (
+              <PlannerGraph
+                canvasId={activeWorkspaceCanvasId}
+                canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+                userProfile={userProfile}
+                boardState={boardState.state}
+                clearRevision={plannerClearRevision}
+                refreshTick={activeCanvasRefreshTick}
+                onOpenSubCanvas={handleSetActiveCanvas}
+                onNotify={pushToast}
+              />
+            )
           ) : workspaceMode === 'templates' ? (
             <TemplatesView
               canvases={canvasList.canvases}
@@ -849,9 +877,7 @@ export default function App() {
               devMode={BOARD_DEV_MODE}
               onRestartOnboarding={restartFirstRunOnboarding}
             />
-          ) : (
-            <WorkspaceMonitor />
-          )}
+          ) : null}
           {workspaceMode === 'planner' && (
             <CanvasToolbar
               canvases={workspaceCanvases}

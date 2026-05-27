@@ -6,7 +6,6 @@ import {
   Network,
   PanelLeftClose,
   PanelLeftOpen,
-  Radar,
   Settings,
   User,
   UsersRound,
@@ -17,7 +16,7 @@ import type { BoardState, CanvasInfo } from '../types'
 import type { UserProfile } from '../api'
 import { useI18n } from '../lib/i18n'
 
-export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'monitor' | 'team' | 'integrations' | 'settings'
+export type WorkspaceMode = 'planner' | 'templates' | 'sessions' | 'artifacts' | 'team' | 'integrations' | 'settings'
 
 interface WorkspaceRailProps {
   state: BoardState | null
@@ -139,13 +138,6 @@ export function WorkspaceRail({
           onClick={() => onModeChange('artifacts')}
         >
           <Archive size={20} />
-        </RailButton>
-        <RailButton
-          label={t('rail.monitor')}
-          active={mode === 'monitor'}
-          onClick={() => onModeChange('monitor')}
-        >
-          <Radar size={20} />
         </RailButton>
         {showTeam && (
           <RailButton

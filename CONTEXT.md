@@ -84,6 +84,26 @@ _Avoid_: Generic empty state, silent recovery failure
 A default monitoring surface that shows sessions still relevant to current work. Completed and dead sessions remain stored for Session Continuity but leave Live Session Surfaces unless they still carry an unresolved user-action signal.
 _Avoid_: History list as monitor, delete-to-hide
 
+**Canvas Workspace**:
+A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and evidence. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
+_Avoid_: Graph editor as the product, separate monitor workspace
+
+**Monitor Canvas**:
+The default Canvas Workspace that aggregates active live sessions, subcanvases, blocked work, approvals, recap, and evidence into a top-level operating view.
+_Avoid_: Separate Monitor product, history dashboard
+
+**Subcanvas Node**:
+A node in one Canvas Workspace that represents another Canvas Workspace and surfaces that child workspace's aggregate state.
+_Avoid_: Link-only shortcut, nested graph detail
+
+**Aggregated Node State**:
+The explainable state of a node derived from its bound live session, workflow state, subcanvas state, approvals, blockers, and evidence rather than only from manual status.
+_Avoid_: Manual status as truth, done-only workflow state
+
+**Canvas Evidence**:
+Traceable work proof attached to a Canvas Workspace or node, such as file diffs, command results, tool calls, documents, screenshots, pull requests, and node outputs.
+_Avoid_: Status without proof, hidden artifact
+
 ## Example Dialogue
 
 Developer: "Is M0 done if the agent runtime is installed?"
@@ -161,3 +181,11 @@ Domain expert: "Yes. Reliable Session Intake can automatically recover unambiguo
 Developer: "If we preserve dead and completed sessions, should the main monitor show all of them?"
 
 Domain expert: "No. The main monitor is a Live Session Surface. Historical records are still available to diagnostics and history, but they do not pollute the default live view."
+
+Developer: "Should Monitor and Canvas be two rail entries?"
+
+Domain expert: "No. Monitor is the default Monitor Canvas inside the Canvas Workspace model; users can drill from it into sessions, nodes, artifacts, and subcanvases without learning a separate product surface."
+
+Developer: "Can a node be marked done just because the workflow says done?"
+
+Domain expert: "Not always. Aggregated Node State must explain which evidence or child state produced it, and live-session or monitor templates are not forced into a done-only lifecycle."

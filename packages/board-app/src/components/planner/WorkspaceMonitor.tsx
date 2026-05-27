@@ -1,8 +1,8 @@
-import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, PlayCircle, Route, Signpost } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Clock3, GitPullRequestArrow, List, PlayCircle, Route, Signpost } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
-import type { NodeRunState, PlannerMonitorState } from '../../types'
+import type { CanvasInfo, NodeRunState, PlannerMonitorState } from '../../types'
 import './planner.css'
 
 const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
@@ -13,11 +13,24 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
   done: CheckCircle2,
 }
 
-export function WorkspaceMonitor() {
+interface WorkspaceMonitorProps {
+  activeCanvasId: string
+  canvases: CanvasInfo[]
+  onOpenCanvas: (canvasId: string) => void
+  onOpenAllSessions: () => void
+}
+
+export function WorkspaceMonitor({
+  activeCanvasId,
+  canvases,
+  onOpenCanvas,
+  onOpenAllSessions,
+}: WorkspaceMonitorProps) {
   const { t } = useI18n()
   const [monitor, setMonitor] = useState<PlannerMonitorState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const activeCanvasName = monitorCanvasName(canvases.find((canvas) => canvas.id === activeCanvasId)?.name ?? t('monitor.title'))
 
   const loadMonitor = useCallback(() => {
     setError(null)
@@ -52,13 +65,24 @@ export function WorkspaceMonitor() {
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
       <div className="planner-monitor__body">
-        <div className="planner-monitor__search">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('monitor.searchPlaceholder')}
-            aria-label={t('monitor.searchLabel')}
-          />
+        <div className="planner-monitor__tools">
+          <div className="planner-monitor__search">
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('monitor.searchPlaceholder')}
+              aria-label={t('monitor.searchLabel')}
+            />
+          </div>
+          <button
+            type="button"
+            className="planner-monitor__sessions-button"
+            onClick={onOpenAllSessions}
+            title={t('monitor.openSessions')}
+          >
+            <List size={13} aria-hidden />
+            <span>{t('monitor.openSessions')}</span>
+          </button>
         </div>
         {error && <div className="planner-proposal-panel__error">{error}</div>}
         {!monitor && !error ? (
@@ -79,13 +103,20 @@ export function WorkspaceMonitor() {
                     ? GitPullRequestArrow
                     : stateIcons[item.runState ?? 'ready'] ?? Clock3
                   return (
-                    <article key={item.id} className={`planner-monitor-item planner-monitor-item--rank-${item.riskRank}`}>
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`planner-monitor-item planner-monitor-item--rank-${item.riskRank}`}
+                      onClick={() => onOpenCanvas(item.canvasId)}
+                      aria-label={`${t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
+                      title={`${t('monitor.openCanvas')}: ${item.canvasTitle}`}
+                    >
                       <div className="planner-monitor-item__icon">
                         <Icon size={15} aria-hidden />
                       </div>
                       <div className="planner-monitor-item__main">
                         <div className="planner-monitor-item__meta">
-                          <span>{item.canvasTitle}</span>
+                          <span>{monitorCanvasName(item.canvasTitle)}</span>
                           <span>{item.kind}</span>
                           {item.runState && <span>{item.runState}</span>}
                           {item.proposalStatus && <span>{item.proposalStatus}</span>}
@@ -104,11 +135,11 @@ export function WorkspaceMonitor() {
                       <div className="planner-monitor-item__side">
                         {item.doerId && <span>{item.doerId}</span>}
                       </div>
-                    </article>
+                    </button>
                   )
                 })}
                 {group.items.length === 0 && (
-                  <div className="planner-monitor__empty">{t('monitor.empty')}</div>
+                  <div className="planner-monitor__empty">{activeCanvasName}: {t('monitor.empty')}</div>
                 )}
               </div>
             </section>
@@ -117,4 +148,8 @@ export function WorkspaceMonitor() {
       </div>
     </section>
   )
+}
+
+function monitorCanvasName(name: string): string {
+  return name === 'Default canvas' ? 'Monitor' : name
 }

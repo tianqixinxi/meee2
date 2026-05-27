@@ -75,7 +75,7 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     id: DEMO_CANVAS_ID,
     name: 'meee2 AI Demo',
     scope: 'personal',
-    kind: 'board',
+    kind: 'monitor',
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
