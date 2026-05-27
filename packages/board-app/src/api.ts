@@ -17,6 +17,8 @@ import type {
   CoordinationGroup,
   PlanProposal,
   PlannerActivity,
+  PlannerArtifact,
+  PlannerArtifactKind,
   PlannerCanvasState,
   PlannerGraphEdge,
   PlannerGraphState,
@@ -31,7 +33,6 @@ import type {
   PlanningNodeStatus,
   PlannerNodeLayout,
   PlanChange,
-  PlannerArtifactKind,
   PlannerDispatchRunner,
   PlannerCanvasVisibility,
   PlanningCanvas,
@@ -382,8 +383,44 @@ function applyDemoChanges(nodes: PlanningNode[], proposal: PlanProposal): Planni
         approvers: change.clearGate ? null : (change.approvers ?? node.approvers),
       } : node)
     }
+    if (change.kind === 'attachArtifact' && change.artifact) {
+      const nodeId = change.artifact.nodeId?.trim() || change.nodeId?.trim()
+      const reference = change.artifact.reference.trim()
+      if (nodeId && reference) {
+        next = next.map((node) => {
+          if (node.id !== nodeId) return node
+          const refs = node.artifactRefs ?? []
+          return refs.includes(reference)
+            ? node
+            : { ...node, artifactRefs: [...refs, reference] }
+        })
+      }
+    }
   }
   return next
+}
+
+function demoArtifactsForProposal(canvasId: string, proposal: PlanProposal): PlannerArtifact[] {
+  const createdAt = new Date().toISOString()
+  return proposal.changes
+    .filter((change) => change.kind === 'attachArtifact' && change.artifact)
+    .map((change, index) => {
+      const artifact = change.artifact!
+      const reference = artifact.reference.trim()
+      const nodeId = artifact.nodeId?.trim() || change.nodeId?.trim() || ''
+      return {
+        id: `artifact-${canvasId}-${nodeId || 'node'}-proposal-${index}-${reference.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()}`,
+        canvasId,
+        nodeId,
+        kind: artifact.kind,
+        title: artifact.title.trim() || reference,
+        reference,
+        status: artifact.status?.trim() || 'attached',
+        createdAt,
+        payload: artifact.payload,
+      }
+    })
+    .filter((artifact) => artifact.nodeId && artifact.reference)
 }
 
 async function jsonRequest<T>(
@@ -871,9 +908,14 @@ export function applyPlannerProposalPreview(
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
   edges: PlannerGraphEdge[]
+  artifacts: PlannerArtifact[]
 }> {
   if (PLANNER_DEMO_MODE) {
     const nodes = applyDemoChanges(demoNodesByCanvasId[canvasId] ?? demoNodesByCanvasId[DEMO_CANVAS_ID], proposal)
+    const artifacts = [
+      ...(demoPlannerState(canvasId).artifacts ?? []),
+      ...demoArtifactsForProposal(canvasId, proposal),
+    ]
     return Promise.resolve({
       proposal: { ...proposal, status: proposal.status === 'pending' ? 'approved' : proposal.status },
       nodes,
@@ -884,6 +926,7 @@ export function applyPlannerProposalPreview(
         targetNodeId: node.id,
         kind: 'dependency',
       }))),
+      artifacts,
     })
   }
   return jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/apply-preview`, {
@@ -918,10 +961,15 @@ export function applyPlannerProposal(
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
   edges: PlannerGraphEdge[]
+  artifacts: PlannerArtifact[]
 }> {
   if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
     const canvasIdToApply = demoProposal.canvasId
     const nodes = applyDemoChanges(demoNodesByCanvasId[canvasIdToApply] ?? [], demoProposal)
+    const artifacts = [
+      ...(demoPlannerState(canvasIdToApply).artifacts ?? []),
+      ...demoArtifactsForProposal(canvasIdToApply, demoProposal),
+    ]
     demoNodesByCanvasId = {
       ...demoNodesByCanvasId,
       [canvasIdToApply]: nodes,
@@ -937,6 +985,7 @@ export function applyPlannerProposal(
         targetNodeId: node.id,
         kind: 'dependency',
       }))),
+      artifacts,
     })
   }
   return jsonRequest(

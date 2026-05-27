@@ -325,6 +325,7 @@ struct PlannerApplyPreviewEnvelope: Encodable {
     let nodes: [PlanningNode]
     let states: [NodeStateSnapshot]
     let edges: [PlannerGraphEdge]
+    let artifacts: [PlannerArtifact]
 }
 struct PlannerMonitorEnvelope: Encodable {
     let generatedAt: Date

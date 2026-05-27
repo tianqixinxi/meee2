@@ -1610,7 +1610,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.proposals.first?.status, .pending)
     }
 
-    func testPlannerBoardBridgeApplyPreviewAndApplyReturnGraphEdges() throws {
+    func testPlannerBoardBridgeApplyPreviewAndApplyReturnGraphEdgesAndArtifacts() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let upstream = try XCTUnwrap(record.nodes.first)
@@ -1634,7 +1634,16 @@ final class PlannerCoreTests: XCTestCase {
             id: "proposal-dependent-edge",
             canvasId: "canvas-a",
             summary: "Add dependent node",
-            changes: [.addNode(downstream)],
+            changes: [
+                .addNode(downstream),
+                .attachArtifact(
+                    nodeId: downstream.id,
+                    kind: .prd,
+                    title: "Verification Notes",
+                    reference: "verification-notes",
+                    payload: .string("ready")
+                )
+            ],
             status: .pending
         )
 
@@ -1645,6 +1654,7 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
         XCTAssertTrue(preview.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+        XCTAssertTrue(preview.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
 
         _ = try PlannerBoardBridge.store.saveProposal(
             proposal,
@@ -1664,6 +1674,7 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
         XCTAssertTrue(applied.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+        XCTAssertTrue(applied.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
     }
 
     func testPlannerStorePersistsStateAcrossInstances() throws {

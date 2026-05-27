@@ -1421,7 +1421,7 @@ function PlannerGraphInner({
             proposals: upsertProposal(current?.proposals ?? [], result.proposal),
             access: current?.access ?? defaultPlannerAccess(),
             activities: current?.activities ?? [],
-            artifacts: current?.artifacts ?? [],
+            artifacts: result.artifacts,
             edges: result.edges,
           }
         })

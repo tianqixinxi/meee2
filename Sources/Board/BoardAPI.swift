@@ -1317,7 +1317,8 @@ enum BoardAPI {
                 proposal: preview.proposal,
                 nodes: preview.nodes,
                 states: preview.states,
-                edges: preview.edges
+                edges: preview.edges,
+                artifacts: preview.artifacts
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2673,7 +2674,8 @@ enum BoardAPI {
                 proposal: result.proposal,
                 nodes: result.nodes,
                 states: result.states,
-                edges: result.edges
+                edges: result.edges,
+                artifacts: result.artifacts
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)

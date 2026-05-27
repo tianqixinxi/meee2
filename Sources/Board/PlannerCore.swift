@@ -2750,13 +2750,18 @@ final class PlannerStore {
         canvas: PlanningCanvas,
         seedNodes: [PlanningNode],
         service: PlannerCoreService
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], artifacts: [PlannerArtifact]) {
         try withLock {
             let record = try record(for: canvas, seedNodes: seedNodes)
             try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: record.nodes)
             let approved = service.approve(proposal)
             let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
-            return (approved, nodes)
+            let artifacts = mergeArtifacts(
+                record.artifacts,
+                proposalArtifacts(from: approved, nodes: nodes, canvasId: canvas.id)
+                    + derivedArtifacts(from: nodes, canvasId: canvas.id)
+            )
+            return (approved, nodes, artifacts)
         }
     }
 
@@ -5380,7 +5385,7 @@ enum PlannerBoardBridge {
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
         guard proposal.canvasId == canvasId else {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
         }
@@ -5396,7 +5401,7 @@ enum PlannerBoardBridge {
         )
         let approved = preview.proposal
         let nodes = preview.nodes
-        return (approved, nodes, service.readNodeState(nodes: nodes), graphEdges(for: nodes))
+        return (approved, nodes, service.readNodeState(nodes: nodes), graphEdges(for: nodes), preview.artifacts)
     }
 
     static func approveProposal(
@@ -5426,14 +5431,14 @@ enum PlannerBoardBridge {
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.applyProposal, access: state.access)
         let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
         guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
             throw PlannerCoreError.proposalNotFound(proposalId)
         }
-        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes), graphEdges(for: record.nodes))
+        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes), graphEdges(for: record.nodes), record.artifacts)
     }
 
     static func workspaceMonitor(
