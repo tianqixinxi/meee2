@@ -66,6 +66,7 @@ const FALLBACK_CANVAS_ID = 'personal-default'
 const WORKSPACE_RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
 const FIRST_RUN_ONBOARDING_COMPLETED_KEY = 'meee2.onboarding.completed.v1'
 const BOARD_DEV_MODE = readBoardDevMode()
+const CANVAS_REFRESH_BURST_WINDOW_MS = 500
 // Minimum loading-overlay duration when an uncached canvas is hydrated.
 // Previously 3000ms — that made every fresh canvas switch feel sluggish even
 // when the real fetch returned in <100ms. 250ms is enough to smooth flicker
@@ -243,16 +244,33 @@ export default function App() {
       })
   }, [applyCanvasList])
   const refreshCanvasesTimerRef = useRef<number | null>(null)
+  const activeCanvasRefreshTimerRef = useRef<number | null>(null)
+  const lastActiveCanvasRefreshAtRef = useRef(0)
   // U5.1 — auto-refresh on notification.
-  // bump this counter whenever a WS state.changed event arrives. Anything that
-  // renders the active canvas (PlannerGraph etc.) takes it as a prop and uses
-  // it as an effect dep to refetch its server state without a manual canvas
-  // switch.
+  // Bump this counter when a WS state.changed event arrives. Anything that
+  // renders the active canvas (PlannerGraph / monitor) takes it as a prop and
+  // uses it to refetch its server state without a manual canvas switch. Claude
+  // can emit bursts while tooling; refresh immediately for the first event,
+  // then coalesce follow-ups so graph/monitor fetches don't churn per frame.
   const [activeCanvasRefreshTick, setActiveCanvasRefreshTick] = useState(0)
   const scheduleCanvasListRefresh = useCallback(() => {
-    // bump the per-canvas refresh tick immediately so consumers diff against
-    // the server in <1s of the notification (acceptance #1).
-    setActiveCanvasRefreshTick((value) => value + 1)
+    const bumpActiveCanvasRefresh = () => {
+      lastActiveCanvasRefreshAtRef.current = Date.now()
+      activeCanvasRefreshTimerRef.current = null
+      setActiveCanvasRefreshTick((value) => value + 1)
+    }
+    const elapsed = Date.now() - lastActiveCanvasRefreshAtRef.current
+    if (elapsed >= CANVAS_REFRESH_BURST_WINDOW_MS) {
+      if (activeCanvasRefreshTimerRef.current !== null) {
+        window.clearTimeout(activeCanvasRefreshTimerRef.current)
+      }
+      bumpActiveCanvasRefresh()
+    } else if (activeCanvasRefreshTimerRef.current === null) {
+      activeCanvasRefreshTimerRef.current = window.setTimeout(
+        bumpActiveCanvasRefresh,
+        CANVAS_REFRESH_BURST_WINDOW_MS - elapsed,
+      )
+    }
     if (refreshCanvasesTimerRef.current !== null) {
       window.clearTimeout(refreshCanvasesTimerRef.current)
     }
@@ -268,6 +286,9 @@ export default function App() {
     return () => {
       if (refreshCanvasesTimerRef.current !== null) {
         window.clearTimeout(refreshCanvasesTimerRef.current)
+      }
+      if (activeCanvasRefreshTimerRef.current !== null) {
+        window.clearTimeout(activeCanvasRefreshTimerRef.current)
       }
     }
   }, [])
