@@ -2,6 +2,7 @@ import {
   AlertCircle,
   Archive,
   CheckCircle2,
+  ChevronDown,
   CircleStop,
   Clock3,
   EyeOff,
@@ -379,7 +380,7 @@ function SessionIntakePanel({
           <span>{summary}</span>
         </div>
       </div>
-      {hasItems && (
+      {hasItems && tone !== 'ok' && (
         <ul className="session-intake__items">
           {diagnostics!.items.slice(0, 3).map((item) => (
             <li key={item.id}>
@@ -764,9 +765,14 @@ function SessionDetail({
   return (
     <aside className="sessions-detail">
       <div className="sessions-detail__header">
-        <div>
+        <div className="sessions-detail__identity">
           <span>{internal ? t('sessions.internal') : t('sessions.external')}</span>
           <h2>{session.title || shortId(session.id)}</h2>
+          <p>
+            <strong>{session.surfaceStatus || session.status}</strong>
+            <span>{session.project || t('sessions.noProject')}</span>
+            <em>{shortId(session.id)}</em>
+          </p>
         </div>
         <div className="sessions-detail__actions">
           <button type="button" onClick={onOpen} disabled={opening}>
@@ -801,66 +807,7 @@ function SessionDetail({
           )}
         </div>
       </div>
-      <dl className="sessions-detail__meta">
-        <div>
-          <dt>{t('sessions.columnStatus')}</dt>
-          <dd>{session.surfaceStatus || session.status}</dd>
-        </div>
-        <div>
-          <dt>{t('sessions.columnContext')}</dt>
-          <dd>{session.project || t('sessions.noProject')}</dd>
-        </div>
-        <div>
-          <dt>{t('sessions.id')}</dt>
-          <dd>{session.id}</dd>
-        </div>
-      </dl>
-      {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
-      {stopError && <p className="sessions-detail__error">{stopError}</p>}
-      <section className="sessions-control" aria-label={t('sessions.control')}>
-        <div className="sessions-control__heading">
-          <div>
-            <strong>{t('sessions.control')}</strong>
-            <span>{session.inboxPending > 0 ? t('sessions.pendingMessages', { count: session.inboxPending }) : t('sessions.controlReady')}</span>
-          </div>
-          {session.pendingPermissionTool && (
-            <div className="sessions-control__permission-actions">
-              <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
-              <button type="button" onClick={() => void answerPermission('allow')}>
-                <ShieldCheck size={13} aria-hidden />
-                {t('sessions.allowPermission')}
-              </button>
-              <button type="button" onClick={() => void answerPermission('deny')}>
-                <ShieldX size={13} aria-hidden />
-                {t('sessions.denyPermission')}
-              </button>
-            </div>
-          )}
-        </div>
-        <div className="sessions-composer">
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={t('sessions.messagePlaceholder')}
-            rows={3}
-          />
-          <div className="sessions-composer__actions">
-            <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
-              <Send size={13} aria-hidden />
-              {sending ? t('sessions.sending') : t('sessions.sendMessage')}
-            </button>
-            {desktopSession && (
-              <button type="button" onClick={pushNow} disabled={pushing}>
-                <Zap size={13} aria-hidden />
-                {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
-              </button>
-            )}
-          </div>
-        </div>
-        {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
-        {controlError && <p className="sessions-detail__error">{controlError}</p>}
-      </section>
-      <section className="sessions-runtime">
+      <section className="sessions-terminal-stage">
         {internal && session.surfaceId && liveInternal ? (
           <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
         ) : internal ? (
@@ -874,38 +821,130 @@ function SessionDetail({
             <span>{t('sessions.externalSummary')}</span>
           </div>
         )}
-        <SessionTimeline
-          entries={timeline}
-          loading={timelineLoading}
-          error={timelineError}
-          session={session}
-          onRefresh={refreshTimeline}
-          t={t}
-        />
-        <SessionMemoryPanel
-          records={memoryRecords}
-          draft={memoryDraft}
-          busyId={memoryBusyId}
-          editingId={memoryEditingId}
-          editDraft={memoryEditDraft}
-          error={memoryError}
-          onDraftChange={setMemoryDraft}
-          onAdd={addMemory}
-          onEdit={(record) => {
-            setMemoryEditingId(record.id)
-            setMemoryEditDraft(record.content)
-          }}
-          onEditDraftChange={setMemoryEditDraft}
-          onSave={saveMemory}
-          onCancelEdit={() => {
-            setMemoryEditingId(null)
-            setMemoryEditDraft('')
-          }}
-          onDelete={removeMemory}
-          t={t}
-        />
       </section>
+      <div className="sessions-detail__drawers">
+        {(openError || stopError) && (
+          <div className="sessions-detail__alerts">
+            {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
+            {stopError && <p className="sessions-detail__error">{stopError}</p>}
+          </div>
+        )}
+        <SessionDrawer
+          title={t('sessions.control')}
+          meta={session.pendingPermissionTool
+            ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+            : session.inboxPending > 0
+              ? t('sessions.pendingMessages', { count: session.inboxPending })
+              : t('sessions.controlReady')}
+          defaultOpen={Boolean(session.pendingPermissionTool || controlStatus || controlError)}
+        >
+          <section className="sessions-control" aria-label={t('sessions.control')}>
+            {session.pendingPermissionTool && (
+              <div className="sessions-control__permission-actions">
+                <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
+                <button type="button" onClick={() => void answerPermission('allow')}>
+                  <ShieldCheck size={13} aria-hidden />
+                  {t('sessions.allowPermission')}
+                </button>
+                <button type="button" onClick={() => void answerPermission('deny')}>
+                  <ShieldX size={13} aria-hidden />
+                  {t('sessions.denyPermission')}
+                </button>
+              </div>
+            )}
+            <div className="sessions-composer">
+              <textarea
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={t('sessions.messagePlaceholder')}
+                rows={2}
+              />
+              <div className="sessions-composer__actions">
+                <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
+                  <Send size={13} aria-hidden />
+                  {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+                </button>
+                {desktopSession && (
+                  <button type="button" onClick={pushNow} disabled={pushing}>
+                    <Zap size={13} aria-hidden />
+                    {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+                  </button>
+                )}
+              </div>
+            </div>
+            {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
+            {controlError && <p className="sessions-detail__error">{controlError}</p>}
+          </section>
+        </SessionDrawer>
+        <SessionDrawer
+          title={t('sessions.timeline')}
+          meta={timelineLoading ? t('sessions.timelineLoading') : t('sessions.timelineCount', { count: timeline.length })}
+        >
+          <SessionTimeline
+            entries={timeline}
+            loading={timelineLoading}
+            error={timelineError}
+            session={session}
+            onRefresh={refreshTimeline}
+            t={t}
+          />
+        </SessionDrawer>
+        <SessionDrawer
+          title={t('sessions.memory')}
+          meta={t('sessions.memoryCount', { count: memoryRecords.length })}
+        >
+          <SessionMemoryPanel
+            records={memoryRecords}
+            draft={memoryDraft}
+            busyId={memoryBusyId}
+            editingId={memoryEditingId}
+            editDraft={memoryEditDraft}
+            error={memoryError}
+            onDraftChange={setMemoryDraft}
+            onAdd={addMemory}
+            onEdit={(record) => {
+              setMemoryEditingId(record.id)
+              setMemoryEditDraft(record.content)
+            }}
+            onEditDraftChange={setMemoryEditDraft}
+            onSave={saveMemory}
+            onCancelEdit={() => {
+              setMemoryEditingId(null)
+              setMemoryEditDraft('')
+            }}
+            onDelete={removeMemory}
+            t={t}
+          />
+        </SessionDrawer>
+      </div>
     </aside>
+  )
+}
+
+function SessionDrawer({
+  title,
+  meta,
+  defaultOpen = false,
+  children,
+}: {
+  title: string
+  meta?: string
+  defaultOpen?: boolean
+  children: ReactNode
+}) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null)
+  useEffect(() => {
+    if (defaultOpen && detailsRef.current) detailsRef.current.open = true
+  }, [defaultOpen])
+  return (
+    <details ref={detailsRef} className="sessions-drawer">
+      <summary>
+        <strong>{title}</strong>
+        {meta && <span>{meta}</span>}
+        <ChevronDown size={13} aria-hidden />
+      </summary>
+      <div className="sessions-drawer__body">{children}</div>
+    </details>
   )
 }
 
