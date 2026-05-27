@@ -24,7 +24,6 @@ import { readLlmSettings } from '../lib/llmSettings'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
 import type { UserProfile } from '../api'
-import { AIRecapDrawer } from './planner/AIRecapDrawer'
 import {
   buildAIRecapPrompt,
   buildCanvasStatusRecap as buildCoreCanvasStatusRecap,
@@ -100,8 +99,7 @@ export function CanvasToolbar({
   // UI-6 · drawer-open state and a cached PlannerGraphState (the same one
   // `refreshRecap` already fetches) so the drawer can render local
   // aggregates without re-fetching.
-  const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
-  const [recapPlannerState, setRecapPlannerState] = useState<PlannerGraphState | null>(null)
+  // AIRecapDrawer removed (user feedback) — toolbar banner is the single recap surface.
 
   // UI-simplification — hover a canvas in the dropdown → popover shows that
   // canvas's semantic recap (headline + details). Data source is
@@ -155,7 +153,6 @@ export function CanvasToolbar({
     try {
       const state = await fetchPlannerGraphState(activeCanvas.id)
       if (recapRequestRef.current !== requestId) return
-      setRecapPlannerState(state)
       const baseRecap = buildCanvasStatusRecap(state, t)
       setRecap(baseRecap)
       if (isBlankPlannerCanvas(state)) {
@@ -383,13 +380,10 @@ export function CanvasToolbar({
       </div>
       <div className="canvas-toolbar__context" aria-live="polite">
         <div className="canvas-toolbar__recap">
-          <button
-            type="button"
+          <div
             className="canvas-toolbar__recap-trigger"
             aria-label={t('canvas.openRecap')}
-            aria-expanded={recapDrawerOpen}
-            title={t('canvas.openRecap')}
-            onClick={() => setRecapDrawerOpen((v) => !v)}
+            title={recap?.headline ?? t('canvas.readingState')}
           >
             <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
@@ -400,7 +394,7 @@ export function CanvasToolbar({
                 <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
               ) : null}
             </span>
-          </button>
+          </div>
           <button
             type="button"
             className="canvas-toolbar__recap-refresh"
@@ -428,6 +422,23 @@ export function CanvasToolbar({
               <small>{item.label}</small>
             </span>
           ))}
+          {/* UI-simplification — monitor 信息简化版,从老 WorkspaceMonitor / drawer 里
+           *  抢救出两条最关键的:failed sessions(boardState.sessions 里 status 异常的)
+           *  + 等批 proposals 数。仅在非 0 时显示,不挤占空间。 */}
+          {(() => {
+            const failedSessions = (boardState?.sessions ?? []).filter((s) =>
+              s.status === 'permissionRequired' ||
+              s.pendingPermissionTool ||
+              s.status === 'failed'
+            ).length
+            if (failedSessions <= 0) return null
+            return (
+              <span className="canvas-toolbar__status-pill is-attention" title="Sessions needing attention">
+                <strong>{failedSessions}</strong>
+                <small>Session attn</small>
+              </span>
+            )
+          })()}
         </div>
       )}
 
@@ -472,16 +483,10 @@ export function CanvasToolbar({
         )
       })()}
 
-      <AIRecapDrawer
-        open={recapDrawerOpen}
-        onClose={() => setRecapDrawerOpen(false)}
-        canvasId={activeCanvas.id}
-        canvasName={displayCanvasName(activeCanvas)}
-        plannerState={recapPlannerState}
-        boardState={boardState}
-        userProfile={userProfile}
-        onOpenAllSessions={onOpenAllSessions}
-      />
+      {/* AIRecapDrawer 已删 — 按 user 反馈,toolbar 自己这条 parseRecapJSON banner
+       *  (headline + details + 「刚刚」age + refresh icon)就够用了,drawer 是冗余。
+       *  之前 drawer 里独有的 monitor 维度信息(gate-blocked / failed sessions /
+       *  recent versions)用 .canvas-toolbar__monitor-strip 简化呈现在 banner 同一区。 */}
 
       {infoOpen && (
         <div

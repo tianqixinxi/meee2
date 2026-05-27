@@ -24,6 +24,13 @@ export interface IOArtifactVisibility {
 }
 type PlannerGraphMode = 'design' | 'run'
 
+// Singleton empty artifacts array — stable reference so PlannerNodeCard's
+// memoization sees props as unchanged when a node has no artifacts. Without
+// this, `?? []` minted a fresh `[]` per adapter call and every poll/state
+// update re-rendered all artifact-less nodes, which caused continuous edge
+// flicker after Push 5(成果 row referenced data.artifacts).
+const EMPTY_ARTIFACTS: PlannerArtifact[] = Object.freeze([]) as unknown as PlannerArtifact[]
+
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
