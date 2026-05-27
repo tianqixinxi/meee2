@@ -8,6 +8,7 @@ import {
   Layers,
   Loader2,
   Search,
+  Terminal as TerminalIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -43,6 +44,7 @@ interface ArtifactsViewProps {
   focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
   onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenSession?: (sessionId: string) => void
   onClearFocus?: () => void
 }
 
@@ -89,6 +91,7 @@ export function ArtifactsView({
   focusTarget = null,
   onOpenCanvas,
   onOpenPlannerNode,
+  onOpenSession,
   onClearFocus,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
@@ -207,6 +210,7 @@ export function ArtifactsView({
     return {
       canvasId: focusTarget.canvasId,
       nodeId: focusTarget.nodeId?.trim() || null,
+      sessionId: node?.sessionId?.trim() || null,
       canvas,
       node,
       nodeLabel,
@@ -375,6 +379,16 @@ export function ArtifactsView({
                 <span>{t('artifacts.openNode')}</span>
               </button>
             )}
+            {focusSummary.sessionId && (
+              <button
+                type="button"
+                onClick={() => onOpenSession?.(focusSummary.sessionId ?? '')}
+                disabled={!onOpenSession}
+              >
+                <TerminalIcon size={13} aria-hidden />
+                <span>{t('sessions.openSession')}</span>
+              </button>
+            )}
             <button type="button" onClick={showAllArtifacts}>
               <Layers size={13} aria-hidden />
               <span>{t('artifacts.showAll')}</span>
@@ -497,6 +511,17 @@ export function ArtifactsView({
                         >
                           {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
                         </button>
+                        {slot.node?.sessionId?.trim() && (
+                          <button
+                            type="button"
+                            className="artifacts-link-button"
+                            onClick={() => onOpenSession?.(slot.node?.sessionId?.trim() ?? '')}
+                            disabled={!onOpenSession}
+                          >
+                            <TerminalIcon size={13} aria-hidden />
+                            {t('sessions.openSession')}
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="artifacts-link-button"

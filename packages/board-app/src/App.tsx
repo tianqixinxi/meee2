@@ -1013,6 +1013,10 @@ export default function App() {
                     requestId: Date.now(),
                   })
                 }}
+                onOpenSession={(sessionId) => {
+                  setSelectedSessionId(sessionId)
+                  setWorkspaceMode('sessions')
+                }}
                 onClearFocus={() => setArtifactFocusTarget(null)}
               />
             ) : workspaceMode === 'integrations' ? (
