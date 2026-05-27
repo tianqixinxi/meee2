@@ -457,7 +457,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
             return
         }
-        hostEmbeddedTerminalView(created, frame: .zero, hidden: true)
+        hostEmbeddedTerminalView(created, frame: defaultHiddenTerminalFrame(), hidden: true)
         embeddedTerminals[key] = created
         rememberEmbeddedTerminal(key)
         dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: false)
@@ -548,15 +548,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
 
     private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, frame: NSRect, hidden: Bool) {
+        let initialFrame = frame.width >= 8 && frame.height >= 8 ? frame : defaultHiddenTerminalFrame()
         if controller.view.superview == nil {
-            controller.view.frame = .zero
+            controller.view.frame = initialFrame
             controller.view.autoresizingMask = []
             terminalHostView.addSubview(controller.view)
         } else if controller.view.superview !== terminalHostView {
             controller.view.removeFromSuperview()
+            controller.view.frame = initialFrame
             terminalHostView.addSubview(controller.view)
         }
-        controller.layout(in: frame, hidden: hidden)
+        controller.layout(in: hidden && (frame.width < 8 || frame.height < 8) ? initialFrame : frame, hidden: hidden)
+    }
+
+    private func defaultHiddenTerminalFrame() -> NSRect {
+        let bounds = terminalHostView.bounds
+        if bounds.width >= 640, bounds.height >= 360 {
+            return NSRect(x: 0, y: 0, width: min(bounds.width, 1180), height: min(bounds.height, 760)).integral
+        }
+        return NSRect(x: 0, y: 0, width: 960, height: 540)
     }
 
     private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) -> Bool {

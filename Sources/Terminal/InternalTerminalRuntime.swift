@@ -470,6 +470,8 @@ final class InternalTerminalSurface {
     }
 
     func start(cols: UInt16, rows: UInt16) throws {
+        Self.ensureStandardFileDescriptors()
+        Self.markHostFileDescriptorsCloseOnExec()
         var master: Int32 = -1
         var slave: Int32 = -1
         var slaveName = [CChar](repeating: 0, count: Int(MAXPATHLEN))
@@ -478,8 +480,8 @@ final class InternalTerminalSurface {
             markFailed("openpty failed: \(String(cString: strerror(errno)))")
             throw NSError(domain: "InternalTerminalRuntime", code: Int(errno), userInfo: [NSLocalizedDescriptionKey: errorMessage ?? "openpty failed"])
         }
-        let slavePath = String(cString: slaveName)
-
+        Self.setCloseOnExec(master)
+        Self.setCloseOnExec(slave)
         masterFD = master
         let masterHandle = FileHandle(fileDescriptor: master, closeOnDealloc: true)
         self.masterHandle = masterHandle
@@ -499,8 +501,7 @@ final class InternalTerminalSurface {
                 executable: shell,
                 arguments: arguments,
                 environment: environment,
-                slavePath: slavePath,
-                inheritedMasterFD: master
+                slaveFD: slave
             )
             Darwin.close(slave)
             pid = Int(launchedPid)
@@ -925,8 +926,7 @@ final class InternalTerminalSurface {
         executable: String,
         arguments: [String],
         environment: [String: String],
-        slavePath: String,
-        inheritedMasterFD: Int32
+        slaveFD: Int32
     ) throws -> pid_t {
         var fileActions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&fileActions)
@@ -938,24 +938,31 @@ final class InternalTerminalSurface {
 
         let flags = Int16(POSIX_SPAWN_SETSID)
         posix_spawnattr_setflags(&spawnAttributes, flags)
-        // Internal terminal children must not inherit BoardServer sockets,
-        // WebSocket clients, log files, or any other host descriptors. Leaking
-        // those FDs keeps old ports alive after meee2 exits and makes Board
-        // reloads/switches look randomly slow or stale.
-        addCloseInheritedFileActions(&fileActions)
-        posix_spawn_file_actions_addclose(&fileActions, inheritedMasterFD)
 
         var spawnedPid: pid_t = 0
         let environmentPairs = environment.map { "\($0.key)=\($0.value)" }.sorted()
-        let result = slavePath.withCString { slavePathPtr in
-            posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, slavePathPtr, O_RDWR, 0)
-            posix_spawn_file_actions_addopen(&fileActions, STDOUT_FILENO, slavePathPtr, O_RDWR, 0)
-            posix_spawn_file_actions_addopen(&fileActions, STDERR_FILENO, slavePathPtr, O_RDWR, 0)
-            return withCStringArray(arguments) { argv in
-                withCStringArray(environmentPairs) { envp in
-                    executable.withCString { executablePtr in
-                        posix_spawn(&spawnedPid, executablePtr, &fileActions, &spawnAttributes, argv, envp)
-                    }
+        let slaveFlags = fcntl(slaveFD, F_GETFD)
+        let stdinAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDIN_FILENO)
+        let stdoutAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDOUT_FILENO)
+        let stderrAction = posix_spawn_file_actions_adddup2(&fileActions, slaveFD, STDERR_FILENO)
+        let closeAction: Int32
+        if slaveFD > STDERR_FILENO {
+            closeAction = posix_spawn_file_actions_addclose(&fileActions, slaveFD)
+        } else {
+            closeAction = 0
+        }
+        let actionResults = [stdinAction, stdoutAction, stderrAction, closeAction]
+        if let failedAction = actionResults.first(where: { $0 != 0 }) {
+            throw NSError(
+                domain: "InternalTerminalRuntime",
+                code: Int(failedAction),
+                userInfo: [NSLocalizedDescriptionKey: "posix_spawn file action failed: \(String(cString: strerror(failedAction))) slaveFD=\(slaveFD) slaveFlags=\(slaveFlags) actions=\(actionResults)"]
+            )
+        }
+        let result = withCStringArray(arguments) { argv in
+            withCStringArray(environmentPairs) { envp in
+                executable.withCString { executablePtr in
+                    posix_spawn(&spawnedPid, executablePtr, &fileActions, &spawnAttributes, argv, envp)
                 }
             }
         }
@@ -964,18 +971,40 @@ final class InternalTerminalSurface {
             throw NSError(
                 domain: "InternalTerminalRuntime",
                 code: Int(result),
-                userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(result)))"]
+                userInfo: [NSLocalizedDescriptionKey: "posix_spawn failed: \(String(cString: strerror(result))) slaveFD=\(slaveFD) slaveFlags=\(slaveFlags) actions=\(actionResults)"]
             )
         }
         return spawnedPid
     }
 
-    private static func addCloseInheritedFileActions(_ fileActions: inout posix_spawn_file_actions_t?) {
+    private static func markHostFileDescriptorsCloseOnExec() {
         let sysMax = Darwin.sysconf(_SC_OPEN_MAX)
         let maxFD = min(max(sysMax > 0 ? Int(sysMax) : 256, 256), 4096)
         guard maxFD > 3 else { return }
         for fd in 3..<maxFD {
-            posix_spawn_file_actions_addclose(&fileActions, Int32(fd))
+            let rawFD = Int32(fd)
+            let flags = fcntl(rawFD, F_GETFD)
+            guard flags != -1 else { continue }
+            _ = fcntl(rawFD, F_SETFD, flags | FD_CLOEXEC)
+        }
+    }
+
+    private static func setCloseOnExec(_ fd: Int32) {
+        guard fd >= 0 else { return }
+        let flags = fcntl(fd, F_GETFD)
+        guard flags != -1 else { return }
+        _ = fcntl(fd, F_SETFD, flags | FD_CLOEXEC)
+    }
+
+    private static func ensureStandardFileDescriptors() {
+        for fd in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] where fcntl(fd, F_GETFD) == -1 {
+            let flags = fd == STDIN_FILENO ? O_RDONLY : O_WRONLY
+            let devNull = Darwin.open("/dev/null", flags)
+            guard devNull >= 0 else { continue }
+            if devNull != fd {
+                dup2(devNull, fd)
+                Darwin.close(devNull)
+            }
         }
     }
 

@@ -21,8 +21,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var surfaceVisible = false
     private var refitScheduled = false
     private var followUpRefitScheduled = false
-    private var needsInitialReplay = true
-    private var pausedOutputPosition: Int64?
+    private var terminalSurfaceAttached = false
 
     init?(surfaceId: String, sessionId: String?, onExit: @escaping (String, String?) -> Void = { _, _ in }) {
         guard Thread.isMainThread else { return nil }
@@ -51,7 +50,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         )
         self.terminalSession = terminalSession
         Self.configureGhosttyResourcesIfNeeded()
-        self.terminalController = GhosttyTerminal.TerminalController(configFilePath: Self.ghosttyConfigPath())
+        self.terminalController = Self.makeEmbeddedTerminalController()
         self.view = TerminalView(frame: .zero)
         self.onExit = onExit
 
@@ -70,8 +69,8 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         _ = InternalTerminalRuntime.shared.addClient(
             self,
             surfaceOrSessionId: resolvedSurfaceId,
-            replay: false,
-            wantsOutput: false
+            replay: true,
+            wantsOutput: true
         )
     }
 
@@ -118,24 +117,6 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             deactivateOutput()
             return
         }
-        let shouldResumeOutput = needsInitialReplay || pausedOutputPosition != nil || !surfaceVisible
-        if shouldResumeOutput {
-            var replaySince = pausedOutputPosition
-            if needsInitialReplay {
-                needsInitialReplay = false
-                replaySince = nil
-            }
-            let replay = InternalTerminalRuntime.shared.resumeClientOutput(
-                self,
-                surfaceOrSessionId: surfaceId,
-                since: replaySince
-            )
-            pausedOutputPosition = nil
-            if let replay {
-                terminalSession.receive(replay)
-                scheduleRefit(includeFollowUp: true)
-            }
-        }
         setTerminalSurfaceVisible(true)
         if frameChanged || visibilityChanged {
             scheduleRefit()
@@ -143,10 +124,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReplayOutput data: Data) {
-        flushPendingOutput()
-        guard !view.isHidden, surfaceVisible else { return }
-        terminalSession.receive(data)
-        scheduleRefit(includeFollowUp: true)
+        enqueueOutput(data, includeFollowUpRefit: true)
     }
 
     func internalTerminalSurface(_ surfaceId: String, didReceiveOutput data: Data) {
@@ -159,14 +137,23 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         onExit(self.surfaceId, sessionId)
     }
 
-    private static func ghosttyConfigPath() -> String? {
-        let fileManager = FileManager.default
-        let home = fileManager.homeDirectoryForCurrentUser
-        let candidates = [
-            home.appendingPathComponent("Library/Application Support/com.mitchellh.ghostty/config.ghostty").path,
-            home.appendingPathComponent(".config/ghostty/config").path,
-        ]
-        return candidates.first { fileManager.fileExists(atPath: $0) }
+    private static func makeEmbeddedTerminalController() -> GhosttyTerminal.TerminalController {
+        let embeddedDarkTheme = TerminalConfiguration { builder in
+            builder.withBackground("#0b0b0b")
+            builder.withForeground("#ebe8de")
+            builder.withCursorStyle(.block)
+            builder.withCursorStyleBlink(true)
+            builder.withCursorColor("#ebe8de")
+            builder.withSelectionBackground("#4d4d4d")
+            builder.withSelectionForeground("#ffffff")
+            builder.withFontSize(14)
+            builder.withFontThicken(true)
+            builder.withWindowPaddingX(10)
+            builder.withWindowPaddingY(8)
+        }
+        return GhosttyTerminal.TerminalController(
+            theme: TerminalTheme(light: embeddedDarkTheme, dark: embeddedDarkTheme)
+        )
     }
 
     private static func configureGhosttyResourcesIfNeeded() {
@@ -197,32 +184,31 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         view.setSurfaceVisible(visible)
     }
 
-    private func enqueueOutput(_ data: Data) {
+    private func enqueueOutput(_ data: Data, includeFollowUpRefit: Bool = false) {
         guard !detached, !data.isEmpty else { return }
-        guard !view.isHidden, surfaceVisible else { return }
         pendingOutput.append(data)
         if pendingOutput.count >= Self.maxPendingOutputBytes {
-            flushPendingOutput()
+            flushPendingOutput(includeFollowUpRefit: includeFollowUpRefit)
             return
         }
         guard !outputFlushScheduled else { return }
         outputFlushScheduled = true
         DispatchQueue.main.async { [weak self] in
-            self?.flushPendingOutput()
+            self?.flushPendingOutput(includeFollowUpRefit: includeFollowUpRefit)
         }
     }
 
-    private func flushPendingOutput() {
+    private func flushPendingOutput(includeFollowUpRefit: Bool = false) {
         outputFlushScheduled = false
-        guard !pendingOutput.isEmpty else { return }
+        guard terminalSurfaceAttached, !pendingOutput.isEmpty else { return }
         let data = pendingOutput
         pendingOutput.removeAll(keepingCapacity: true)
         terminalSession.receive(data)
+        scheduleRefit(includeFollowUp: includeFollowUpRefit)
     }
 
     private func deactivateOutput() {
         guard !detached else { return }
-        pausedOutputPosition = InternalTerminalRuntime.shared.pauseClientOutput(self, surfaceOrSessionId: surfaceId)
         setTerminalSurfaceVisible(false)
     }
 
@@ -247,7 +233,6 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     private func syncPtySize(columns: UInt16, rows: UInt16, force: Bool = false) {
-        guard surfaceVisible, !view.isHidden else { return }
         let cols = Self.clamped(columns, lower: 20, upper: 500)
         let rows = Self.clamped(rows, lower: 8, upper: 200)
         if !force, let lastSyncedSize, lastSyncedSize.cols == cols, lastSyncedSize.rows == rows {
@@ -260,12 +245,22 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
 
 extension EmbeddedNativeTerminalController:
     TerminalSurfaceTitleDelegate,
+    TerminalSurfaceLifecycleDelegate,
     TerminalSurfaceGridResizeDelegate,
     TerminalSurfaceResizeDelegate,
     TerminalSurfaceCloseDelegate,
     TerminalSurfaceFocusDelegate
 {
     func terminalDidChangeTitle(_ title: String) {}
+
+    func terminalDidAttachSurface(_ surface: TerminalSurface) {
+        terminalSurfaceAttached = true
+        flushPendingOutput(includeFollowUpRefit: true)
+    }
+
+    func terminalDidDetachSurface() {
+        terminalSurfaceAttached = false
+    }
 
     func terminalDidResize(_ size: TerminalGridMetrics) {
         syncPtySize(columns: size.columns, rows: size.rows)
