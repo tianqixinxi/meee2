@@ -272,6 +272,24 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const gateLabel = gateModeLabel(node)
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleLabel = scheduleEnabled ? scheduleIntervalLabel(node.schedule?.intervalSeconds ?? 0) : null
+  const reviewableOutput = nodeKind === 'step'
+    && !data.virtual
+    && Boolean(data.onOpenArtifacts && data.canvasId)
+    && hasReviewableOutput({
+      artifacts: data.artifacts,
+      ioOutputs: io.outputs,
+      node,
+      runStatus,
+      designStatus,
+    })
+  const openArtifacts = () => {
+    if (!data.canvasId) return
+    data.onOpenArtifacts?.({
+      canvasId: data.canvasId,
+      nodeId: node.id,
+      nodeTitle: node.title,
+    })
+  }
   // UI-1 · mode badge + re-run gating. Re-run is offered on any non-virtual
   // step whose latest version status is `done` (per spec). Mark-down is a
   // quick-flag → `blocked` action so reviewers can park the node without
@@ -450,7 +468,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
-      {(primaryAction || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
+      {(primaryAction || reviewableOutput || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
           {/* UI-1 · Re-run / Mark down sit in the same bottom action row as the
               primary action so the gate-node controls are co-located. Re-run
@@ -488,6 +506,22 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               <span>Mark down</span>
             </button>
           )}
+          {reviewableOutput && primaryAction !== 'View output' && (
+            <button
+              type="button"
+              className="planner-node__artifact-action nodrag"
+              title="Review output artifacts"
+              aria-label={`Review output for ${node.title}`}
+              onClick={(event) => {
+                event.stopPropagation()
+                openArtifacts()
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <FileText size={11} aria-hidden />
+              <span>Output</span>
+            </button>
+          )}
           {primaryAction && (
             <button
               type="button"
@@ -502,6 +536,8 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
                   data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
                 } else if (primaryAction === 'Open session' && sessionId) {
                   data.onOpenSession?.(sessionId, node.id)
+                } else if (primaryAction === 'View output' && reviewableOutput) {
+                  openArtifacts()
                 } else {
                   data.onOpenDetails?.(node.id)
                 }
@@ -1024,6 +1060,21 @@ function artifactMatchesExpectation(reference: string, expected: string): boolea
   const ref = normalize(reference)
   const target = normalize(expected)
   return Boolean(target) && (ref === target || ref.endsWith(target) || ref.includes(target))
+}
+
+function hasReviewableOutput(input: {
+  artifacts: PlannerArtifact[]
+  ioOutputs: CanvasIOItem[]
+  node: PlanningNode
+  runStatus: PlannerWorkflowRunState
+  designStatus: PlanningNodeStatus
+}): boolean {
+  return input.artifacts.length > 0
+    || input.ioOutputs.some((item) => !item.pending)
+    || (input.node.artifactRefs?.length ?? 0) > 0
+    || input.runStatus === 'done'
+    || input.runStatus === 'gate-wait'
+    || input.designStatus === 'done'
 }
 
 function planStatusLabel(status: string): string {

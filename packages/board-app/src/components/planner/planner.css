@@ -1880,7 +1880,8 @@
 /* UI-1 · Re-run / Mark-down action buttons. They sit beside the primary
    action in the footer and use compact pill styling so they never crowd it. */
 .planner-node__rerun-action,
-.planner-node__markdown-action {
+.planner-node__markdown-action,
+.planner-node__artifact-action {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1903,6 +1904,17 @@
 .planner-node__markdown-action:hover {
   border-color: rgba(204, 120, 92, 0.45);
   color: var(--accent-hover);
+}
+
+.planner-node__artifact-action {
+  border-color: rgba(201, 164, 93, 0.26);
+  background: rgba(201, 164, 93, 0.08);
+  color: #e6ca8f;
+}
+
+.planner-node__artifact-action:hover {
+  border-color: rgba(201, 164, 93, 0.48);
+  color: #f0d99c;
 }
 
 .planner-side {
