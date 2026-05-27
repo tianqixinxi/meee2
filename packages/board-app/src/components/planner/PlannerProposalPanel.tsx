@@ -906,26 +906,31 @@ async function requestEmptyCanvasAIReply({
   history: PlannerChatMessage[]
   signal: AbortSignal
 }): Promise<PlannerChatMessage> {
-  const llm = readLlmSettings()
-  let text = ''
-  for await (const ev of streamAssistantChat({
-    messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
-    settings: {
-      provider: llm.provider,
-      apiKey: llm.apiKey,
-      baseUrl: llm.baseUrl,
-      model: llm.model,
-      enabledTools: [],
-      scope: 'this-mac',
-      canvasId,
-      canvasName,
-    },
-    signal,
-  })) {
-    if (ev.type === 'delta') text += ev.text
-    if (ev.type === 'error') throw new Error(ev.message)
+  try {
+    const llm = readLlmSettings()
+    let text = ''
+    for await (const ev of streamAssistantChat({
+      messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
+      settings: {
+        provider: llm.provider,
+        apiKey: llm.apiKey,
+        baseUrl: llm.baseUrl,
+        model: llm.model,
+        enabledTools: [],
+        scope: 'this-mac',
+        canvasId,
+        canvasName,
+      },
+      signal,
+    })) {
+      if (ev.type === 'delta') text += ev.text
+      if (ev.type === 'error') throw new Error(ev.message)
+    }
+    return emptyCanvasAIReplyToMessage(text, history)
+  } catch (err) {
+    if (signal.aborted) throw err
+    return fallbackEmptyCanvasPlanMessage(canvasName, canvasTask, history, err)
   }
-  return emptyCanvasAIReplyToMessage(text, history)
 }
 
 function buildEmptyCanvasAIMessages(
@@ -1009,6 +1014,77 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
     }
   }
   throw new Error('meee2 AI returned an unsupported setup response.')
+}
+
+function fallbackEmptyCanvasPlanMessage(
+  canvasName: string,
+  canvasTask: string,
+  history: PlannerChatMessage[],
+  err: unknown,
+): PlannerChatMessage {
+  const userText = latestUserRequest(history) || canvasTask || canvasName || 'this canvas'
+  const chinese = containsCJK(userText)
+  const title = inferredPlanTitle(canvasName, userText, chinese)
+  const intro = chinese
+    ? '本地 fallback 已经把你的需求整理成一个可确认计划；你可以继续补充，也可以直接生成画布草案。'
+    : 'Local fallback turned your request into a confirmable plan; you can refine it or build the canvas draft now.'
+  const steps: PlannerPlanCardStep[] = chinese
+    ? [
+        { title: '梳理目标和验收信号', body: '把原始需求拆成目标、边界、产物和通过标准。' },
+        { title: '绘制可执行节点', body: '生成可派发给 Claude/Codex 或人工处理的节点，并保留 owner、gate 和 next action。' },
+        { title: '接入 session 执行', body: '为需要执行的节点创建或绑定 session，后续可从节点直接跳转交互。' },
+        { title: '用 artifact 验收结果', body: '要求输出可追溯 artifact，并用 expected output 与 gate refs 检查是否满足需求。' },
+      ]
+    : [
+        { title: 'Clarify the outcome and checks', body: 'Turn the request into goals, boundaries, expected artifacts, and acceptance signals.' },
+        { title: 'Draft executable nodes', body: 'Create nodes that can be assigned to Claude/Codex or a human, with owners, gates, and next actions.' },
+        { title: 'Attach sessions for execution', body: 'Create or bind sessions for runnable nodes so the user can jump in and interact.' },
+        { title: 'Verify through artifacts', body: 'Require traceable artifacts and compare them against expected outputs and gate refs.' },
+      ]
+  const planCard = {
+    title,
+    intro,
+    steps,
+    prompt: buildEmptyCanvasPlanPromptFromHistory(title, intro, steps, history),
+  }
+  const reason = err instanceof Error ? err.message : String(err || 'assistant unavailable')
+  return {
+    id: `planner:local-plan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    role: 'planner',
+    markdown: intro,
+    meta: chinese ? ['本地计划'] : ['local plan'],
+    planCard: {
+      ...planCard,
+      prompt: [
+        planCard.prompt,
+        '',
+        `Local fallback reason: ${reason.slice(0, 180)}`,
+      ].join('\n'),
+    },
+  }
+}
+
+function latestUserRequest(history: PlannerChatMessage[]): string {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i]
+    if (item.role !== 'user') continue
+    const text = item.markdown.trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function containsCJK(value: string): boolean {
+  return /[\u3400-\u9fff]/.test(value)
+}
+
+function inferredPlanTitle(canvasName: string, userText: string, chinese: boolean): string {
+  const name = canvasName.trim()
+  if (name && !isGenericCanvasTitle(name)) return name
+  const compact = userText.replace(/\s+/g, ' ').trim()
+  if (!compact) return chinese ? '新画布计划' : 'New canvas plan'
+  const limit = chinese ? 18 : 54
+  return compact.length > limit ? `${compact.slice(0, limit).trim()}...` : compact
 }
 
 function parseEmptyCanvasAIReply(rawText: string): Record<string, unknown> | null {
