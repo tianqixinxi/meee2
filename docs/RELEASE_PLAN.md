@@ -34,6 +34,15 @@ Release 承诺：
 - 内部可用 release：2026-05-31。目标是团队可以开始 dogfood，真实会话接入、monitor canvas、session control、状态聚合、artifact/evidence 和基础 recap 跑通。
 - 正式 release：2026-06-04。目标是对外可安装、可更新、可解释、可排障，并具备官方模板、打包签名、隐私说明和基础团队语义。
 
+## 四个 Milestone
+
+| Milestone | 主题 | 核心交付 | 覆盖 Todo | 验收信号 |
+|---|---|---|---|---|
+| M1 | Local Session Readiness | 新用户能完成本机接入，看到 provider、hook socket、BoardServer、planner sidecar、权限和存储路径是否正常 | Onboarding 和健康检查 | 首次启动 3 分钟内接入；异常时有明确修复动作；无 demo mode |
+| M2 | Reliable Session Intake | 真实 Claude/Codex 会话稳定出现、去重、持久化、可恢复，并能解释缺失、重复、失效原因 | 可靠的会话接入 | app/CLI 重启后会话不丢、不重复；失效 session id 可自动恢复或进入 Needs Rebind；有 Session Intake Diagnostic |
+| M3 | Monitor Canvas Workspace | 顶层 monitor 与 canvas 合并，用户能组织 live sessions、subcanvas、状态聚合、recap 和 evidence | 会话工作区和 canvas 基础能力、Monitor 和 canvas 融合、简化 canvas 使用心智、节点状态和聚合模型、Recap 和状态智能、Artifacts 和证据、Official templates / Demo canvases | 首页能下钻到 session、节点、artifact、subcanvas；状态可解释；用户不用先学 graph editor |
+| M4 | Session Control and Release Hardening | 会话可控、内部管控可见，记忆/经验可追溯，本地 planner runtime 稳定，打包更新可用 | 核心会话控制动作、Session 内部管控、记忆和经验沉淀、本地 planner runtime 稳定性、Team-ready 语义模型、打包签名更新、P1 中必须前置的隐私/数据控制 | 用户能从 meee2 控制 session；高危动作二次确认；AI 层故障不影响手动 canvas；可安装、更新、导出 debug |
+
 ## 核心抽象
 
 Release 前需要先把几个核心概念定稳：
@@ -148,7 +157,7 @@ Template 不应该只是“预设一组节点”。它应该定义：
 - 一键配置 Claude hook。
 - 检查 hook socket、BoardServer、planner sidecar、权限和存储路径。
 - 出问题时给清晰的修复动作。
-- 没有真实会话时提供 demo mode。
+- 没有真实会话时显示空状态，引导用户启动第一个真实 Claude Code/Codex session，不用 demo session 代替真实接入。
 
 Release 风险：
 

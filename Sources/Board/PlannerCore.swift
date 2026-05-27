@@ -1538,6 +1538,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var needsOwnerReview: Bool
     var doerId: String?
     var riskRank: Int
+    var evidenceCount: Int
     /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
     /// for proposal items or nodes with no actionable workflow state.
     var nextAction: String?
@@ -1558,6 +1559,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         needsOwnerReview: Bool,
         doerId: String?,
         riskRank: Int,
+        evidenceCount: Int = 0,
         nextAction: String? = nil
     ) {
         self.id = id
@@ -1575,6 +1577,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.needsOwnerReview = needsOwnerReview
         self.doerId = doerId
         self.riskRank = riskRank
+        self.evidenceCount = evidenceCount
         self.nextAction = nextAction
     }
 }
@@ -1596,6 +1599,7 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case updateNodeNoFields(String)
     case canvasNotFound(String)
     case runNotFound(String)
+    case monitorClearNotAllowed(String)
     case permissionDenied(action: String, role: PlannerCanvasRole)
     /// A change references a node whose id belongs to a different canvas.
     case crossCanvasNodeReference(nodeId: String, expectedCanvas: String)
@@ -1630,6 +1634,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "planning canvas not found: \(id)"
         case .runNotFound(let id):
             return "workflow run not found: \(id)"
+        case .monitorClearNotAllowed(let id):
+            return "monitor canvas cannot be cleared: \(id)"
         case .permissionDenied(let action, let role):
             return "meee2 AI \(action) is not allowed for \(role.rawValue)"
         case .crossCanvasNodeReference(let nodeId, let expectedCanvas):
@@ -4655,6 +4661,10 @@ enum PlannerBoardBridge {
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
     ) throws -> PlannerGraphState {
+        let boardCanvas = try requireCanvas(canvasId, in: snapshot)
+        if boardCanvas.kind == .monitor {
+            throw PlannerCoreError.monitorClearNotAllowed(canvasId)
+        }
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.applyProposal, access: state.access)
         let record = try store.clearCanvasContent(canvasId: canvasId)
@@ -5455,6 +5465,7 @@ enum PlannerBoardBridge {
                 : state.nodes
 
             let runs = (try? store.runs(canvasId: state.canvas.id)) ?? []
+            let artifactsByNodeId = Dictionary(grouping: state.artifacts, by: \.nodeId)
             for run in runs {
                 let runStates = Array(run.nodeStates.values)
                 let attentionCount = runStates.filter { nodeState in
@@ -5487,6 +5498,7 @@ enum PlannerBoardBridge {
                     needsOwnerReview: attentionCount > 0,
                     doerId: run.responsibleUserId,
                     riskRank: attentionCount > 0 ? 1 : (run.status == .active ? 3 : 5),
+                    evidenceCount: runStates.reduce(0) { $0 + $1.artifactIds.count },
                     nextAction: "\(doneCount)/\(totalCount) steps"
                 ))
             }
@@ -5510,6 +5522,7 @@ enum PlannerBoardBridge {
                     needsOwnerReview: snapshot.needsOwnerReview,
                     doerId: node.doerId,
                     riskRank: rank,
+                    evidenceCount: (node.artifactRefs ?? []).count + (artifactsByNodeId[node.id]?.count ?? 0),
                     nextAction: PlannerWorkflowGuidance.nextAction(
                         for: node,
                         blockers: snapshot.blockers
@@ -5533,7 +5546,10 @@ enum PlannerBoardBridge {
                         blockers: [],
                         needsOwnerReview: proposal.status == .pending,
                         doerId: nil,
-                        riskRank: proposal.status == .pending ? 1 : 2
+                        riskRank: proposal.status == .pending ? 1 : 2,
+                        evidenceCount: proposal.changes.reduce(0) { total, change in
+                            total + (change.artifactRefs?.count ?? 0) + (change.artifact == nil ? 0 : 1)
+                        }
                     ))
                 }
             }

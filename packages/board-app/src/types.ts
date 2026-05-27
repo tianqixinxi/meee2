@@ -75,6 +75,61 @@ export interface Meee2AgentRuntimeInstallResult {
   status: Meee2AgentRuntimeStatus
 }
 
+export type ReadinessStatus = 'pass' | 'fail' | 'warn' | 'info'
+export type ReadinessSeverity = 'required' | 'recommended' | 'informational'
+export type ReadinessOverallStatus = 'ready' | 'needsSetup' | 'broken'
+
+export interface ReadinessAction {
+  id: string
+  label: string
+  kind: string
+  command: string | null
+}
+
+export interface ReadinessCheck {
+  id: string
+  title: string
+  status: ReadinessStatus
+  severity: ReadinessSeverity
+  detail: string
+  recoveryAction: ReadinessAction | null
+  metadata: Record<string, string>
+}
+
+export interface ReadinessReport {
+  overall: ReadinessOverallStatus
+  ready: boolean
+  requiredFailed: number
+  checks: ReadinessCheck[]
+  checkedAt: string
+}
+
+export interface ReadinessRepairResult {
+  ok: boolean
+  actionId: string
+  messages: string[]
+  logs: string[]
+  report: ReadinessReport
+}
+
+export interface SessionIntakeDiagnosticItem {
+  id: string
+  severity: 'info' | 'warn' | 'error' | string
+  title: string
+  detail: string
+  sessionId: string | null
+  recoveryAction: string | null
+}
+
+export interface SessionIntakeDiagnostics {
+  ok: boolean
+  liveSessions: number
+  storedSessions: number
+  historicalSessions: number
+  items: SessionIntakeDiagnosticItem[]
+  checkedAt: string
+}
+
 export interface Session {
   id: string
   title: string
@@ -110,6 +165,7 @@ export interface Session {
   surfaceId?: string | null
   surfaceStatus?: 'starting' | 'running' | 'exited' | 'failed' | string | null
   canOpenExternal?: boolean
+  controlState?: 'active' | 'hidden' | 'archived' | string
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
@@ -213,7 +269,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
-export type CanvasKind = 'board' | 'template'
+export type CanvasKind = 'board' | 'monitor' | 'template'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
@@ -777,6 +833,7 @@ export interface PlannerMonitorItem {
   needsOwnerReview: boolean
   doerId?: string | null
   riskRank: number
+  evidenceCount?: number
   /**
    * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
    * for proposal items or nodes with no actionable workflow state.

@@ -7,6 +7,9 @@ import type {
   Meee2MCPStatus,
   Meee2AgentRuntimeInstallResult,
   Meee2AgentRuntimeStatus,
+  ReadinessRepairResult,
+  ReadinessReport,
+  SessionIntakeDiagnostics,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -72,7 +75,7 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     id: DEMO_CANVAS_ID,
     name: 'meee2 AI Demo',
     scope: 'personal',
-    kind: 'board',
+    kind: 'monitor',
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
@@ -417,6 +420,10 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+export function fetchSessionIntakeDiagnostics(): Promise<SessionIntakeDiagnostics> {
+  return jsonRequest<SessionIntakeDiagnostics>('/api/sessions/intake-diagnostics')
+}
+
 export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
@@ -445,6 +452,17 @@ export function installMeee2AgentRuntime(target: 'claude' | 'codex' | 'all'): Pr
   return jsonRequest<Meee2AgentRuntimeInstallResult>('/api/system/meee2-agent-runtime-install', {
     method: 'POST',
     body: JSON.stringify({ target }),
+  })
+}
+
+export function fetchReadiness(): Promise<ReadinessReport> {
+  return jsonRequest<ReadinessReport>('/api/system/readiness')
+}
+
+export function repairReadiness(actionId: string): Promise<ReadinessRepairResult> {
+  return jsonRequest<ReadinessRepairResult>('/api/system/readiness/repair', {
+    method: 'POST',
+    body: JSON.stringify({ actionId }),
   })
 }
 
@@ -2246,6 +2264,18 @@ export interface InjectResult {
   delivery: 'queued_until_next_turn' | null
 }
 
+export interface SessionMemoryRecord {
+  id: string
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind: string
+  content: string
+  source: string
+  evidenceRef: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export async function injectToSession(
   id: string,
   content: string,
@@ -2324,6 +2354,70 @@ export async function pushToDesktopNow(
     error: r.error ?? null,
     errorCode,
   }
+}
+
+export async function updateSessionControl(
+  id: string,
+  action: 'hide' | 'archive' | 'restore',
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/control`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  })
+}
+
+export async function respondToSessionPermission(
+  id: string,
+  decision: 'allow' | 'deny',
+  reason?: string,
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/permission`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  })
+}
+
+export async function fetchMemoryRecords(
+  scope: 'session' | 'canvas' | 'node' | string,
+  subjectId: string,
+): Promise<SessionMemoryRecord[]> {
+  const params = new URLSearchParams({ scope, subjectId })
+  const response = await jsonRequest<{ records: SessionMemoryRecord[] }>(`/api/memory?${params.toString()}`)
+  return response.records
+}
+
+export async function createMemoryRecord(input: {
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind?: string
+  content: string
+  source?: string
+  evidenceRef?: string | null
+}): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>('/api/memory', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function updateMemoryRecord(
+  id: string,
+  input: { content: string; kind?: string },
+): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>(`/api/memory/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function deleteMemoryRecord(id: string): Promise<void> {
+  await jsonRequest(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function exportDebugBundle(): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>('/api/system/debug-export', { method: 'POST' })
 }
 
 /// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，

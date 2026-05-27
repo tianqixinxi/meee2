@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { ReadinessChecklist } from './ReadinessChecklist'
 import {
   DEFAULT_SPAWN_PROVIDER,
   loadBoardGridEnabled,
@@ -12,7 +13,7 @@ import {
   saveSpawnProvider,
   spawnProviderLabel,
 } from '../preferences'
-import type { Meee2AgentRuntimeStatus, SpawnProvider } from '../types'
+import type { Meee2AgentRuntimeStatus, ReadinessReport, SpawnProvider } from '../types'
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -26,6 +27,7 @@ import { useI18n, type Locale } from '../lib/i18n'
 import { useTheme, type ThemeMode } from '../lib/theme'
 import {
   disconnectMeee2Online,
+  exportDebugBundle,
   fetchAppSettings,
   fetchUserProfile,
   openMeee2OnlineConnect,
@@ -42,6 +44,12 @@ interface Props {
   agentRuntimeStatus?: Meee2AgentRuntimeStatus | null
   onOpenAgentRuntime?: (target: SpawnProvider) => void
   onRefreshAgentRuntime?: () => void
+  readinessReport?: ReadinessReport | null
+  readinessRepairAction?: string | null
+  readinessRepairError?: string | null
+  readinessRepairLogs?: string[]
+  onRepairReadiness?: (actionId: string) => void
+  onRefreshReadiness?: () => void
   devMode?: boolean
   onRestartOnboarding?: () => void
 }
@@ -65,6 +73,12 @@ export function SettingsView({
   agentRuntimeStatus = null,
   onOpenAgentRuntime,
   onRefreshAgentRuntime,
+  readinessReport = null,
+  readinessRepairAction = null,
+  readinessRepairError = null,
+  readinessRepairLogs = [],
+  onRepairReadiness,
+  onRefreshReadiness,
   devMode = false,
   onRestartOnboarding,
 }: Props) {
@@ -78,6 +92,8 @@ export function SettingsView({
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [saving, setSaving] = useState(false)
+  const [debugExporting, setDebugExporting] = useState(false)
+  const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
   const effectiveAppSettings = normalizeAppSettings(appSettings)
 
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
@@ -133,6 +149,20 @@ export function SettingsView({
       notify('error', (err as Error).message || 'Failed to save settings')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const runDebugExport = async () => {
+    setDebugExporting(true)
+    setDebugExportPath(null)
+    try {
+      const result = await exportDebugBundle()
+      setDebugExportPath(result.path)
+      notify('success', t('settings.debugExportReady'))
+    } catch (err) {
+      notify('error', (err as Error).message || t('settings.debugExportFailed'))
+    } finally {
+      setDebugExporting(false)
     }
   }
 
@@ -402,6 +432,24 @@ export function SettingsView({
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
+              <div className="settings-section-title">{t('settings.debugExport')}</div>
+              <div className="settings-section-caption">{t('settings.debugExportCaption')}</div>
+            </div>
+            <button type="button" className="ghost" onClick={() => void runDebugExport()} disabled={debugExporting}>
+              {debugExporting ? t('common.loading') : t('settings.exportDebug')}
+            </button>
+          </div>
+          {debugExportPath && (
+            <div className="settings-panel settings-debug-export">
+              <span>{t('settings.debugExportSaved')}</span>
+              <code>{debugExportPath}</code>
+            </div>
+          )}
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <div>
               <div className="settings-section-title">{t('settings.canvasDisplay')}</div>
               <div className="settings-section-caption">{t('settings.canvasDisplayCaption')}</div>
             </div>
@@ -440,6 +488,35 @@ export function SettingsView({
               <small>{t('settings.minutes')}</small>
             </span>
           </label>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <div>
+              <div className="settings-section-title">Local session readiness</div>
+              <div className="settings-section-caption">Provider hooks, socket, BoardServer, runtime, and local state.</div>
+            </div>
+            <button type="button" className="ghost" onClick={onRefreshReadiness}>
+              {t('common.check')}
+            </button>
+          </div>
+          <div className="settings-panel settings-readiness-panel">
+            <ReadinessChecklist
+              report={readinessReport}
+              repairingAction={readinessRepairAction}
+              onRepair={(actionId) => onRepairReadiness?.(actionId)}
+              compact
+            />
+            {readinessRepairError && (
+              <div className="first-run__error" role="alert">{readinessRepairError}</div>
+            )}
+            {readinessRepairLogs.length > 0 && (
+              <details className="first-run__logs">
+                <summary>Repair log</summary>
+                <pre>{readinessRepairLogs.join('\n')}</pre>
+              </details>
+            )}
+          </div>
         </section>
 
         <section className="settings-section">

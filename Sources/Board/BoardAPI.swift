@@ -131,6 +131,157 @@ enum BoardAPI {
         return jsonResponse(Meee2AgentRuntimeInstaller.install(target: target))
     }
 
+    // MARK: - Local session readiness
+
+    static func getReadiness(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(ReadinessDoctor.diagnose())
+    }
+
+    static func repairReadiness(_ req: HttpRequest) -> HttpResponse {
+        struct RepairRequest: Decodable {
+            let actionId: String?
+        }
+        let body = decodeJSONBody(req, as: RepairRequest.self)
+        guard let actionId = body?.actionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !actionId.isEmpty else {
+            return errorResponse("bad_request", "actionId is required", status: 400)
+        }
+        let result = ReadinessDoctor.repair(actionId: actionId)
+        return jsonResponse(result, status: result.ok ? 200 : 400, reason: result.ok ? "OK" : "Bad Request")
+    }
+
+    static func exportDebug(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(try DebugExporter.exportToDefaultLocation())
+        } catch {
+            return errorResponse("debug_export_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    // MARK: - GET /api/sessions/intake-diagnostics
+
+    private struct SessionIntakeDiagnosticItem: Encodable {
+        let id: String
+        let severity: String
+        let title: String
+        let detail: String
+        let sessionId: String?
+        let recoveryAction: String?
+    }
+
+    private struct SessionIntakeDiagnostics: Encodable {
+        let ok: Bool
+        let liveSessions: Int
+        let storedSessions: Int
+        let historicalSessions: Int
+        let items: [SessionIntakeDiagnosticItem]
+        let checkedAt: String
+    }
+
+    static func getSessionIntakeDiagnostics(_ req: HttpRequest) -> HttpResponse {
+        let readiness = ReadinessDoctor.diagnose()
+        let stored = SessionStore.shared.listAll()
+        let pluginSessions = PluginManager.shared.sessions
+            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
+        let livePluginSessions = pluginSessions.filter { !$0.status.isHistorical }
+        let liveKeys = Set(livePluginSessions.map(canonicalSessionKey))
+        let historical = stored.filter { session in
+            session.status.isHistorical || TranscriptStatusResolver.resolve(for: session).isHistorical
+        }
+
+        var items: [SessionIntakeDiagnosticItem] = []
+        if readiness.requiredFailed > 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "local-readiness-failing",
+                severity: "error",
+                title: "Local session readiness is incomplete",
+                detail: "\(readiness.requiredFailed) required readiness check(s) are failing before real session intake can be trusted.",
+                sessionId: nil,
+                recoveryAction: "Open Settings and run the failing readiness recovery actions."
+            ))
+        }
+
+        if livePluginSessions.isEmpty && readiness.requiredFailed == 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "no-live-provider-sessions",
+                severity: "warn",
+                title: "No live provider sessions are visible",
+                detail: "meee2 is ready, but no live Claude Code or Codex session is currently being reported by enabled providers.",
+                sessionId: nil,
+                recoveryAction: "Start or resume a real Claude Code/Codex session, then refresh this view."
+            ))
+        }
+
+        for session in stored {
+            guard !session.status.isHistorical,
+                  let pid = session.pid,
+                  !SessionStore.processAlive(pid) else { continue }
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stale-runtime-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session has a stale runtime",
+                detail: "Session \(String(session.sessionId.prefix(8))) still points at pid \(pid), but that process is gone. The record should be preserved and marked historical.",
+                sessionId: session.sessionId,
+                recoveryAction: "Refresh sessions; meee2 will keep the record and mark the runtime ended."
+            ))
+        }
+
+        let storedActiveNotSurfaced = stored.filter { session in
+            guard !session.status.isHistorical else { return false }
+            return !liveKeys.contains(canonicalSessionKey(pluginId: "com.meee2.plugin.claude", sessionId: session.sessionId))
+        }
+        for session in storedActiveNotSurfaced.prefix(5) {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stored-not-surfaced-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session is not in the live provider view",
+                detail: "Session \(String(session.sessionId.prefix(8))) is persisted locally but is not currently surfaced by the enabled Claude provider.",
+                sessionId: session.sessionId,
+                recoveryAction: "Check whether the provider is disabled, the session is archived, or the provider needs refresh."
+            ))
+        }
+
+        let duplicateLivePids = Dictionary(grouping: stored.compactMap { session -> (Int, String)? in
+            guard let pid = session.pid,
+                  !session.status.isHistorical,
+                  SessionStore.processAlive(pid) else { return nil }
+            return (pid, session.sessionId)
+        }, by: { $0.0 })
+            .filter { $0.value.count > 1 }
+        for (pid, entries) in duplicateLivePids.prefix(5) {
+            let ids = entries.map { String($0.1.prefix(8)) }.joined(separator: ", ")
+            items.append(SessionIntakeDiagnosticItem(
+                id: "duplicate-live-pid-\(pid)",
+                severity: "error",
+                title: "Multiple stored sessions point at one live runtime",
+                detail: "pid \(pid) is attached to multiple stored sessions: \(ids). This usually means stale-id recovery should merge instead of duplicate.",
+                sessionId: entries.first?.1,
+                recoveryAction: "Wait for the next provider refresh; if it persists, capture debug export."
+            ))
+        }
+
+        if historical.count > 0 && items.isEmpty {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "historical-records-preserved",
+                severity: "info",
+                title: "Historical sessions are preserved",
+                detail: "\(historical.count) completed or dead session record(s) are retained for continuity and hidden from the default live monitor.",
+                sessionId: nil,
+                recoveryAction: nil
+            ))
+        }
+
+        let ok = !items.contains { $0.severity == "error" }
+        return jsonResponse(SessionIntakeDiagnostics(
+            ok: ok,
+            liveSessions: livePluginSessions.count,
+            storedSessions: stored.count,
+            historicalSessions: historical.count,
+            items: items,
+            checkedAt: BoardDTOBuilder.iso(Date())
+        ))
+    }
+
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
@@ -141,10 +292,8 @@ enum BoardAPI {
                 MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
             }
         }
-        // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
-        // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
-        // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
-        // PluginManager 的全集。
+        // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
+        // SessionStore 供 history / diagnostic / recovery 使用。
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
         let sessions = currentBoardSessions()
@@ -2556,6 +2705,8 @@ enum BoardAPI {
         switch err {
         case .canvasNotFound, .proposalNotFound, .runNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .monitorClearNotAllowed:
+            return errorResponse("monitor_clear_not_allowed", err.localizedDescription, status: 409)
         case .permissionDenied:
             return errorResponse("forbidden", err.localizedDescription, status: 403)
         case .proposalNotApproved,
@@ -2766,7 +2917,7 @@ enum BoardAPI {
     private static func isPlannerSessionLive(_ sessionId: String, in sessions: [SessionDTO]) -> Bool {
         sessions.contains { session in
             guard boardSession(session, matches: sessionId) else { return false }
-            if session.status == SessionStatus.dead.rawValue { return false }
+            if SessionStatus.from(rawString: session.status).isHistorical { return false }
             if let surfaceStatus = session.surfaceStatus?.lowercased(),
                surfaceStatus == "exited" || surfaceStatus == "failed" {
                 return false
@@ -2845,6 +2996,7 @@ enum BoardAPI {
         }()
         let internalSessions = InternalTerminalRuntime.shared
             .listSnapshots()
+            .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
         let internalProviderResumeIds = Set(internalSessions.compactMap {
             SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
@@ -2852,7 +3004,7 @@ enum BoardAPI {
         }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
             .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
-            .filter { $0.status != .dead }
+            .filter { !$0.status.isHistorical }
             .filter { session in
                 let realSid = session.id.hasPrefix("\(session.pluginId)-")
                     ? String(session.id.dropFirst("\(session.pluginId)-".count))
@@ -2882,6 +3034,18 @@ enum BoardAPI {
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
         }
         return internalSessions + realSessions + syntheticDesktopSessions
+    }
+
+    private static func canonicalSessionKey(_ session: PluginSession) -> String {
+        canonicalSessionKey(pluginId: session.pluginId, sessionId: session.id)
+    }
+
+    private static func canonicalSessionKey(pluginId: String, sessionId: String) -> String {
+        let prefix = "\(pluginId)-"
+        let rawId = sessionId.hasPrefix(prefix)
+            ? String(sessionId.dropFirst(prefix.count))
+            : sessionId
+        return "\(pluginId)::\(rawId)"
     }
 
     private static func explicitSessionCwd(_ raw: String?) throws -> String? {
@@ -3560,6 +3724,156 @@ enum BoardAPI {
     private struct CloseEnvelope: Encodable {
         let ok: Bool
         let alreadyDead: Bool
+    }
+
+    static func updateSessionControl(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let action = (json["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing action", status: 400)
+        }
+        let state: SessionControlState
+        switch action {
+        case "hide":
+            state = .hidden
+        case "archive":
+            state = .archived
+        case "restore":
+            state = .active
+        default:
+            return errorResponse("bad_request", "action must be hide, archive, or restore", status: 400)
+        }
+        let resolvedId = resolveSessionControlId(sid) ?? sid
+        let record = SessionControlStore.shared.setState(sessionId: resolvedId, state: state)
+        BoardServer.shared.broadcastStateChanged()
+        struct SessionControlEnvelope: Encodable {
+            let ok: Bool
+            let record: SessionControlRecord
+        }
+        return jsonResponse(SessionControlEnvelope(ok: true, record: record))
+    }
+
+    static func respondToSessionPermission(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let rawDecision = (json["decision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing decision", status: 400)
+        }
+        guard let session = resolvePluginSession(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        guard let event = session.urgentEvent, event.eventType == "permission", event.respond != nil else {
+            return errorResponse("no_pending_permission", "session has no pending permission request", status: 409)
+        }
+        switch rawDecision {
+        case "allow":
+            event.respond?(.allow)
+        case "deny":
+            let reason = (json["reason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            event.respond?(.deny(reason: reason?.isEmpty == true ? nil : reason))
+        default:
+            return errorResponse("bad_request", "decision must be allow or deny", status: 400)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func resolveSessionControlId(_ sid: String) -> String? {
+        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+            return surface.sessionId
+        }
+        if let metadataSid = resolveDesktopMetadataSid(sid) {
+            return metadataSid
+        }
+        if let session = resolvePluginSession(sid) {
+            return inboxSessionId(for: session)
+        }
+        if let stored = SessionStore.shared.get(sid) {
+            return stored.sessionId
+        }
+        let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+        return matches.count == 1 ? matches[0].sessionId : nil
+    }
+
+    static func listMemoryRecords(_ req: HttpRequest) -> HttpResponse {
+        let scope = queryValue(req, name: "scope") ?? "session"
+        guard let subjectId = queryValue(req, name: "subjectId"),
+              !subjectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        struct MemoryListEnvelope: Encodable {
+            let records: [SessionMemoryRecord]
+        }
+        return jsonResponse(MemoryListEnvelope(records: SessionMemoryStore.shared.list(scope: scope, subjectId: subjectId)))
+    }
+
+    static func createMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let scope = ((json["scope"] as? String) ?? "session").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let subjectId = (json["subjectId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !subjectId.isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = ((json["kind"] as? String) ?? "note").trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = ((json["source"] as? String) ?? "operator").trimmingCharacters(in: .whitespacesAndNewlines)
+        let evidenceRef = (json["evidenceRef"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        let record = SessionMemoryStore.shared.create(
+            scope: scope.isEmpty ? "session" : scope,
+            subjectId: subjectId,
+            kind: kind.isEmpty ? "note" : kind,
+            content: content,
+            source: source.isEmpty ? "operator" : source,
+            evidenceRef: evidenceRef?.isEmpty == true ? nil : evidenceRef
+        )
+        return jsonResponse(MemoryEnvelope(record: record), status: 201, reason: "Created")
+    }
+
+    static func updateMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = (json["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let record = SessionMemoryStore.shared.update(id: id, content: content, kind: kind) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        return jsonResponse(MemoryEnvelope(record: record))
+    }
+
+    static func deleteMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard SessionMemoryStore.shared.delete(id: id) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func queryValue(_ req: HttpRequest, name: String) -> String? {
+        req.queryParams.first(where: { $0.0 == name })?.1
     }
 
     /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明
@@ -4630,7 +4944,7 @@ enum BoardAPI {
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
         guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board or template", status: 400)
+            return errorResponse("bad_request", "kind must be board, monitor, or template", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)

@@ -3,6 +3,7 @@
 # Run this before committing. Exit code 0 = safe to commit.
 
 set -e
+set -o pipefail
 cd "$(dirname "$0")/.."
 
 FAILED=0

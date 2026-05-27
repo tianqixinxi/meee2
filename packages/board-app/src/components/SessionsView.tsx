@@ -1,16 +1,30 @@
 import {
   AlertCircle,
+  Archive,
   CheckCircle2,
   CircleStop,
   Clock3,
+  EyeOff,
   ExternalLink,
+  MessageSquareText,
+  Pencil,
+  RefreshCw,
+  RotateCw,
+  RotateCcw,
+  Save,
   Search,
+  Send,
+  ShieldCheck,
+  ShieldX,
   Terminal as TerminalIcon,
+  Trash2,
+  Wrench,
+  Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck } from '../api'
-import { useI18n } from '../lib/i18n'
-import type { BoardState, Session } from '../types'
+import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type TranscriptBlock, type TranscriptEntryFull } from '../api'
+import { useI18n, type TranslationKey } from '../lib/i18n'
+import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
   state: BoardState | null
@@ -21,6 +35,7 @@ interface Props {
 
 type SessionFilter = 'all' | 'attention' | 'unread'
 type SessionKindTab = 'internal' | 'external'
+type SessionControlFilter = 'active' | 'hidden' | 'archived'
 type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 export function SessionsView({
@@ -32,9 +47,13 @@ export function SessionsView({
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<SessionFilter>('all')
+  const [controlFilter, setControlFilter] = useState<SessionControlFilter>('active')
   const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
+  const [diagnostics, setDiagnostics] = useState<SessionIntakeDiagnostics | null>(null)
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
   const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
@@ -47,9 +66,15 @@ export function SessionsView({
     () => sessions.filter((session) => unreadSids.has(session.id)).length,
     [sessions, unreadSids],
   )
+  const controlCounts = useMemo(() => ({
+    active: sessions.filter((session) => sessionControlState(session) === 'active').length,
+    hidden: sessions.filter((session) => sessionControlState(session) === 'hidden').length,
+    archived: sessions.filter((session) => sessionControlState(session) === 'archived').length,
+  }), [sessions])
   const visibleSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return sessions
+      .filter((session) => sessionControlState(session) === controlFilter)
       .filter((session) => sessionMatchesQuery(session, normalized))
       .filter((session) => {
         if (filter === 'attention') return sessionNeedsAttention(session) || unreadSids.has(session.id)
@@ -57,17 +82,16 @@ export function SessionsView({
         return true
       })
       .sort((a, b) => compareSessions(a, b, unreadSids))
-  }, [filter, query, sessions, unreadSids])
+  }, [controlFilter, filter, query, sessions, unreadSids])
   const selectedSession = useMemo(() => {
     if (!selectedSessionId) return null
     return sessions.find((session) => (
-      isInternalSession(session)
-      && (session.id === selectedSessionId || session.surfaceId === selectedSessionId)
+      session.id === selectedSessionId || session.surfaceId === selectedSessionId
     )) ?? null
   }, [selectedSessionId, sessions])
   const internalSessions = useMemo(() => {
     const list = visibleSessions.filter(isInternalSession)
-    if (selectedSession && !list.some((session) => session.id === selectedSession.id)) {
+    if (selectedSession && isInternalSession(selectedSession) && !list.some((session) => session.id === selectedSession.id)) {
       return [selectedSession, ...list]
     }
     return list
@@ -76,6 +100,10 @@ export function SessionsView({
     () => visibleSessions.filter((session) => !isInternalSession(session)),
     [visibleSessions],
   )
+  const selectedSessionOnActiveTab = useMemo(() => {
+    if (!selectedSession) return null
+    return (activeKindTab === 'internal') === isInternalSession(selectedSession) ? selectedSession : null
+  }, [activeKindTab, selectedSession])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
@@ -90,6 +118,19 @@ export function SessionsView({
     })
     return ok
   }, [])
+
+  const refreshDiagnostics = useCallback(() => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsError(null)
+    fetchSessionIntakeDiagnostics()
+      .then(setDiagnostics)
+      .catch((err: unknown) => setDiagnosticsError((err as Error).message || 'Failed to load diagnostics'))
+      .finally(() => setDiagnosticsLoading(false))
+  }, [])
+
+  useEffect(() => {
+    refreshDiagnostics()
+  }, [refreshDiagnostics, sessions.length])
 
   useEffect(() => {
     const handlePrewarmAck = (event: Event) => {
@@ -107,27 +148,30 @@ export function SessionsView({
   }, [])
 
   useEffect(() => {
-    if (activeKindTab !== 'internal' || selectedSession || internalSessions.length === 0) return
+    if (activeKindTab !== 'internal' || selectedSessionOnActiveTab || internalSessions.length === 0) return
     const next = internalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next?.id ?? null)
-  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSession, selectedSessionId])
+  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
-    if (selectedSessionId && selectedSession) setActiveKindTab('internal')
-  }, [selectedSession, selectedSessionId])
+    if (activeKindTab !== 'external' || selectedSessionOnActiveTab || externalSessions.length === 0) return
+    const next = externalSessions[0]
+    if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
+    onSelectedSessionChange?.(next.id)
+  }, [activeKindTab, externalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
     if (activeKindTab !== 'internal') return
     const targets = uniqueSessionsById([
-      ...(selectedSession ? [selectedSession] : []),
+      ...(selectedSessionOnActiveTab ? [selectedSessionOnActiveTab] : []),
       ...internalSessions,
     ])
       .filter((session) => session.surfaceId && isLiveInternalSession(session))
       .slice(0, 1)
     if (targets.length === 0) return
     return scheduleInternalTabPrewarm(targets[0], prewarmInternalSession)
-  }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSession])
+  }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSessionOnActiveTab])
 
   const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
     const startedAt = Date.now()
@@ -143,6 +187,10 @@ export function SessionsView({
     })
     onSelectedSessionChange?.(session.id)
   }, [onSelectedSessionChange, prewarmInternalSession])
+
+  const selectExternalSession = useCallback((session: Session) => {
+    onSelectedSessionChange?.(session.id)
+  }, [onSelectedSessionChange])
 
   const prewarmSessionRow = useCallback((session: Session) => {
     if (isInternalSession(session)) prewarmInternalSession(session, 'react.rowHoverPrewarm')
@@ -182,8 +230,20 @@ export function SessionsView({
               <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
               <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
             </div>
+            <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
+              <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
+              <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
+              <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
+            </div>
           </div>
         </div>
+        <SessionIntakePanel
+          diagnostics={diagnostics}
+          error={diagnosticsError}
+          loading={diagnosticsLoading}
+          onRefresh={refreshDiagnostics}
+          t={t}
+        />
         {sessions.length === 0 ? (
           <div className="sessions-empty">
             <TerminalIcon size={18} aria-hidden />
@@ -228,7 +288,7 @@ export function SessionsView({
                           <SessionRow
                             key={session.id}
                             session={session}
-                            selected={selectedSession?.id === session.id}
+                            selected={selectedSessionOnActiveTab?.id === session.id}
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
@@ -253,11 +313,11 @@ export function SessionsView({
                           <SessionRow
                             key={session.id}
                             session={session}
-                            selected={false}
+                            selected={selectedSessionOnActiveTab?.id === session.id}
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
-                            onSelect={noopSessionAction}
+                            onSelect={selectExternalSession}
                             onOpen={openSession}
                             onPrewarm={noopSessionAction}
                             t={t}
@@ -267,22 +327,72 @@ export function SessionsView({
                     </SessionsSection>
                   )}
                 </aside>
-                {activeKindTab === 'internal' && (
-                  <SessionDetail
-                    session={selectedSession}
-                    opening={openingId === selectedSession?.id}
-                    openError={openErrorId === selectedSession?.id}
-                    switchStartedAt={selectedSession ? switchStartedAtRef.current[selectedSession.id] : undefined}
-                    switchTraceId={selectedSession ? switchTraceIdRef.current[selectedSession.id] : undefined}
-                    onOpen={() => selectedSession && openSession(selectedSession)}
-                    t={t}
-                  />
-                )}
+                <SessionDetail
+                  session={selectedSessionOnActiveTab}
+                  opening={openingId === selectedSessionOnActiveTab?.id}
+                  openError={openErrorId === selectedSessionOnActiveTab?.id}
+                  switchStartedAt={selectedSessionOnActiveTab ? switchStartedAtRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  switchTraceId={selectedSessionOnActiveTab ? switchTraceIdRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  onOpen={() => selectedSessionOnActiveTab && openSession(selectedSessionOnActiveTab)}
+                  t={t}
+                />
               </div>
             )}
           </div>
         )}
       </div>
+    </section>
+  )
+}
+
+function SessionIntakePanel({
+  diagnostics,
+  error,
+  loading,
+  onRefresh,
+  t,
+}: {
+  diagnostics: SessionIntakeDiagnostics | null
+  error: string | null
+  loading: boolean
+  onRefresh: () => void
+  t: (key: TranslationKey, vars?: Record<string, string | number>) => string
+}) {
+  const hasItems = (diagnostics?.items.length ?? 0) > 0
+  const tone = error ? 'error' : diagnostics?.ok === false ? 'warn' : 'ok'
+  const summary = error
+    ? error
+    : diagnostics
+      ? t('sessions.intakeSummary', {
+          live: diagnostics.liveSessions,
+          stored: diagnostics.storedSessions,
+          historical: diagnostics.historicalSessions,
+        })
+      : t('sessions.intakeLoading')
+
+  return (
+    <section className={`session-intake session-intake--${tone}`} aria-label={t('sessions.intakeTitle')}>
+      <div className="session-intake__main">
+        {tone === 'ok' ? <CheckCircle2 size={15} aria-hidden /> : <AlertCircle size={15} aria-hidden />}
+        <div>
+          <strong>{diagnostics?.ok === false ? t('sessions.intakeNeedsAttention') : t('sessions.intakeTitle')}</strong>
+          <span>{summary}</span>
+        </div>
+      </div>
+      {hasItems && (
+        <ul className="session-intake__items">
+          {diagnostics!.items.slice(0, 3).map((item) => (
+            <li key={item.id}>
+              <span>{item.title}</span>
+              <em>{item.detail}</em>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button type="button" className="session-intake__refresh" onClick={onRefresh} disabled={loading}>
+        <RefreshCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
+        <span>{t('common.refresh')}</span>
+      </button>
     </section>
   )
 }
@@ -450,7 +560,63 @@ function SessionDetail({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const [stopping, setStopping] = useState(false)
+  const [stopConfirming, setStopConfirming] = useState(false)
   const [stopError, setStopError] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [pushing, setPushing] = useState(false)
+  const [controlStatus, setControlStatus] = useState<string | null>(null)
+  const [controlError, setControlError] = useState<string | null>(null)
+  const [timeline, setTimeline] = useState<TranscriptEntryFull[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [timelineError, setTimelineError] = useState<string | null>(null)
+  const [memoryRecords, setMemoryRecords] = useState<SessionMemoryRecord[]>([])
+  const [memoryDraft, setMemoryDraft] = useState('')
+  const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null)
+  const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
+  const [memoryEditDraft, setMemoryEditDraft] = useState('')
+  const [memoryError, setMemoryError] = useState<string | null>(null)
+  const refreshTimeline = useCallback(async () => {
+    if (!session) {
+      setTimeline([])
+      return
+    }
+    setTimelineLoading(true)
+    setTimelineError(null)
+    try {
+      const response = await fetchTranscript(session.id, { limit: 48 })
+      setTimeline(response.entries)
+    } catch (err) {
+      setTimeline([])
+      setTimelineError((err as Error).message || t('sessions.timelineLoadFailed'))
+    } finally {
+      setTimelineLoading(false)
+    }
+  }, [session, t])
+  const refreshMemory = useCallback(async () => {
+    if (!session) {
+      setMemoryRecords([])
+      return
+    }
+    setMemoryError(null)
+    try {
+      setMemoryRecords(await fetchMemoryRecords('session', session.id))
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memoryLoadFailed'))
+    }
+  }, [session, t])
+  useEffect(() => {
+    setDraft('')
+    setMemoryDraft('')
+    setMemoryEditingId(null)
+    setMemoryEditDraft('')
+    setControlStatus(null)
+    setControlError(null)
+    setStopError(null)
+    setStopConfirming(false)
+    void refreshTimeline()
+    void refreshMemory()
+  }, [refreshMemory, refreshTimeline])
   if (!session) {
     return (
       <aside className="sessions-detail sessions-detail--empty">
@@ -461,16 +627,138 @@ function SessionDetail({
   }
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
-  const stopInternal = async () => {
-    if (!session.surfaceId) return
+  const desktopSession = session.clientKind === 'desktop' && !internal
+  const controlState = sessionControlState(session)
+  const runControlAction = async (action: 'hide' | 'archive' | 'restore') => {
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      await updateSessionControl(session.id, action)
+      setControlStatus(t(action === 'restore' ? 'sessions.restored' : action === 'archive' ? 'sessions.archived' : 'sessions.hidden'))
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.controlActionFailed'))
+    }
+  }
+  const answerPermission = async (decision: 'allow' | 'deny') => {
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from meee2 Board' : undefined)
+      setControlStatus(t(decision === 'allow' ? 'sessions.permissionAllowed' : 'sessions.permissionDenied'))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.permissionActionFailed'))
+    }
+  }
+  const addMemory = async () => {
+    const content = memoryDraft.trim()
+    if (!content) return
+    setMemoryBusyId('new')
+    setMemoryError(null)
+    try {
+      const record = await createMemoryRecord({
+        scope: 'session',
+        subjectId: session.id,
+        kind: 'lesson',
+        content,
+        source: 'operator',
+        evidenceRef: session.latestRecap?.content ? 'latest-recap' : 'session-detail',
+      })
+      setMemoryRecords((records) => [record, ...records])
+      setMemoryDraft('')
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memorySaveFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
+  const saveMemory = async (record: SessionMemoryRecord) => {
+    const content = memoryEditDraft.trim()
+    if (!content) return
+    setMemoryBusyId(record.id)
+    setMemoryError(null)
+    try {
+      const updated = await updateMemoryRecord(record.id, { content, kind: record.kind })
+      setMemoryRecords((records) => records.map((item) => item.id === updated.id ? updated : item))
+      setMemoryEditingId(null)
+      setMemoryEditDraft('')
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memorySaveFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
+  const removeMemory = async (record: SessionMemoryRecord) => {
+    setMemoryBusyId(record.id)
+    setMemoryError(null)
+    try {
+      await deleteMemoryRecord(record.id)
+      setMemoryRecords((records) => records.filter((item) => item.id !== record.id))
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memoryDeleteFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
+  const sendMessage = async () => {
+    const content = draft.trim()
+    if (!content) return
+    setSending(true)
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      const result = await injectToSession(session.id, content)
+      setDraft('')
+      setControlStatus(result.delivery === 'queued_until_next_turn' ? t('sessions.queuedUntilNextTurn') : t('sessions.sent'))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.sendFailed'))
+    } finally {
+      setSending(false)
+    }
+  }
+  const pushNow = async () => {
+    const content = draft.trim()
+    setPushing(true)
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      const result = await pushToDesktopNow(session.id, content)
+      if (result.error) {
+        setControlError(result.error)
+        if (result.errorCode === 'accessibility_denied') void openAccessibilitySettings()
+        return
+      }
+      if (content) setDraft('')
+      setControlStatus(t('sessions.pushDelivered', { count: result.delivered }))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.pushFailed'))
+    } finally {
+      setPushing(false)
+    }
+  }
+  const stopSession = async () => {
+    if (!stopConfirming) {
+      setStopConfirming(true)
+      return
+    }
     setStopping(true)
     setStopError(null)
     try {
-      await closeSessionSurface(session.surfaceId)
+      if (internal && session.surfaceId) {
+        await closeSessionSurface(session.surfaceId)
+      } else {
+        const result = await closeSession(session.id)
+        if (!result.ok) {
+          setStopError(result.errorCode === 'no_pid' ? t('sessions.stopUnsupported') : (result.error || t('sessions.stopFailed')))
+        }
+      }
     } catch (err) {
       setStopError((err as Error).message || t('sessions.stopFailed'))
     } finally {
       setStopping(false)
+      setStopConfirming(false)
     }
   }
   return (
@@ -481,19 +769,34 @@ function SessionDetail({
           <h2>{session.title || shortId(session.id)}</h2>
         </div>
         <div className="sessions-detail__actions">
-          {internal ? (
-            <button
-              type="button"
-              onClick={stopInternal}
-              disabled={stopping || session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'}
-            >
-              <CircleStop size={14} aria-hidden />
-              {stopping ? t('sessions.stopping') : t('sessions.stop')}
-            </button>
+          <button type="button" onClick={onOpen} disabled={opening}>
+            {internal ? <TerminalIcon size={14} aria-hidden /> : <ExternalLink size={14} aria-hidden />}
+            {opening ? t('common.opening') : t('sessions.openSession')}
+          </button>
+          <button
+            type="button"
+            className={stopConfirming ? 'sessions-detail__danger' : undefined}
+            onClick={stopSession}
+            disabled={stopping || (internal && (session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'))}
+          >
+            <CircleStop size={14} aria-hidden />
+            {stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+          </button>
+          {controlState === 'active' ? (
+            <>
+              <button type="button" onClick={() => void runControlAction('hide')}>
+                <EyeOff size={14} aria-hidden />
+                {t('sessions.hide')}
+              </button>
+              <button type="button" onClick={() => void runControlAction('archive')}>
+                <Archive size={14} aria-hidden />
+                {t('sessions.archive')}
+              </button>
+            </>
           ) : (
-            <button type="button" onClick={onOpen} disabled={opening}>
-              <ExternalLink size={14} aria-hidden />
-              {opening ? t('common.opening') : t('sessions.openExternal')}
+            <button type="button" onClick={() => void runControlAction('restore')}>
+              <RotateCcw size={14} aria-hidden />
+              {t('sessions.restore')}
             </button>
           )}
         </div>
@@ -514,21 +817,327 @@ function SessionDetail({
       </dl>
       {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
       {stopError && <p className="sessions-detail__error">{stopError}</p>}
-      {internal && session.surfaceId && liveInternal ? (
-        <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
-      ) : internal ? (
-        <div className="sessions-external">
-          <TerminalIcon size={18} aria-hidden />
-          <span>{t('sessions.internalEndedSummary')}</span>
+      <section className="sessions-control" aria-label={t('sessions.control')}>
+        <div className="sessions-control__heading">
+          <div>
+            <strong>{t('sessions.control')}</strong>
+            <span>{session.inboxPending > 0 ? t('sessions.pendingMessages', { count: session.inboxPending }) : t('sessions.controlReady')}</span>
+          </div>
+          {session.pendingPermissionTool && (
+            <div className="sessions-control__permission-actions">
+              <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
+              <button type="button" onClick={() => void answerPermission('allow')}>
+                <ShieldCheck size={13} aria-hidden />
+                {t('sessions.allowPermission')}
+              </button>
+              <button type="button" onClick={() => void answerPermission('deny')}>
+                <ShieldX size={13} aria-hidden />
+                {t('sessions.denyPermission')}
+              </button>
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="sessions-external">
-          <ExternalLink size={18} aria-hidden />
-          <span>{t('sessions.externalSummary')}</span>
+        <div className="sessions-composer">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={t('sessions.messagePlaceholder')}
+            rows={3}
+          />
+          <div className="sessions-composer__actions">
+            <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
+              <Send size={13} aria-hidden />
+              {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+            </button>
+            {desktopSession && (
+              <button type="button" onClick={pushNow} disabled={pushing}>
+                <Zap size={13} aria-hidden />
+                {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+              </button>
+            )}
+          </div>
         </div>
-      )}
+        {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
+        {controlError && <p className="sessions-detail__error">{controlError}</p>}
+      </section>
+      <section className="sessions-runtime">
+        {internal && session.surfaceId && liveInternal ? (
+          <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
+        ) : internal ? (
+          <div className="sessions-external">
+            <TerminalIcon size={18} aria-hidden />
+            <span>{t('sessions.internalEndedSummary')}</span>
+          </div>
+        ) : (
+          <div className="sessions-external">
+            <ExternalLink size={18} aria-hidden />
+            <span>{t('sessions.externalSummary')}</span>
+          </div>
+        )}
+        <SessionTimeline
+          entries={timeline}
+          loading={timelineLoading}
+          error={timelineError}
+          session={session}
+          onRefresh={refreshTimeline}
+          t={t}
+        />
+        <SessionMemoryPanel
+          records={memoryRecords}
+          draft={memoryDraft}
+          busyId={memoryBusyId}
+          editingId={memoryEditingId}
+          editDraft={memoryEditDraft}
+          error={memoryError}
+          onDraftChange={setMemoryDraft}
+          onAdd={addMemory}
+          onEdit={(record) => {
+            setMemoryEditingId(record.id)
+            setMemoryEditDraft(record.content)
+          }}
+          onEditDraftChange={setMemoryEditDraft}
+          onSave={saveMemory}
+          onCancelEdit={() => {
+            setMemoryEditingId(null)
+            setMemoryEditDraft('')
+          }}
+          onDelete={removeMemory}
+          t={t}
+        />
+      </section>
     </aside>
   )
+}
+
+function SessionTimeline({
+  entries,
+  loading,
+  error,
+  session,
+  onRefresh,
+  t,
+}: {
+  entries: TranscriptEntryFull[]
+  loading: boolean
+  error: string | null
+  session: Session
+  onRefresh: () => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  const timelineItems = buildTimelineItems(entries, session, t)
+  return (
+    <section className="sessions-timeline" aria-label={t('sessions.timeline')}>
+      <div className="sessions-timeline__heading">
+        <div>
+          <strong>{t('sessions.timeline')}</strong>
+          <span>{loading ? t('sessions.timelineLoading') : t('sessions.timelineCount', { count: timelineItems.length })}</span>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          <RotateCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
+          {t('sessions.refreshTimeline')}
+        </button>
+      </div>
+      {error && <p className="sessions-detail__error">{error}</p>}
+      {timelineItems.length === 0 && !loading ? (
+        <div className="sessions-timeline__empty">
+          <MessageSquareText size={16} aria-hidden />
+          <span>{t('sessions.timelineEmpty')}</span>
+        </div>
+      ) : (
+        <ol className="sessions-timeline__list">
+          {timelineItems.map((item) => (
+            <li key={item.id} className={`sessions-timeline__item sessions-timeline__item--${item.kind}`}>
+              <span className="sessions-timeline__icon">{item.icon}</span>
+              <div>
+                <header>
+                  <strong>{item.title}</strong>
+                  {item.time && <span>{item.time}</span>}
+                </header>
+                <p>{item.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+function SessionMemoryPanel({
+  records,
+  draft,
+  busyId,
+  editingId,
+  editDraft,
+  error,
+  onDraftChange,
+  onAdd,
+  onEdit,
+  onEditDraftChange,
+  onSave,
+  onCancelEdit,
+  onDelete,
+  t,
+}: {
+  records: SessionMemoryRecord[]
+  draft: string
+  busyId: string | null
+  editingId: string | null
+  editDraft: string
+  error: string | null
+  onDraftChange: (value: string) => void
+  onAdd: () => void
+  onEdit: (record: SessionMemoryRecord) => void
+  onEditDraftChange: (value: string) => void
+  onSave: (record: SessionMemoryRecord) => void
+  onCancelEdit: () => void
+  onDelete: (record: SessionMemoryRecord) => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  return (
+    <section className="sessions-memory" aria-label={t('sessions.memory')}>
+      <div className="sessions-timeline__heading">
+        <div>
+          <strong>{t('sessions.memory')}</strong>
+          <span>{t('sessions.memoryCount', { count: records.length })}</span>
+        </div>
+      </div>
+      <div className="sessions-memory__composer">
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          placeholder={t('sessions.memoryPlaceholder')}
+          rows={2}
+        />
+        <button type="button" onClick={onAdd} disabled={busyId === 'new' || draft.trim().length === 0}>
+          <Save size={13} aria-hidden />
+          {t('sessions.addMemory')}
+        </button>
+      </div>
+      {error && <p className="sessions-detail__error">{error}</p>}
+      {records.length === 0 ? (
+        <div className="sessions-timeline__empty">
+          <MessageSquareText size={16} aria-hidden />
+          <span>{t('sessions.memoryEmpty')}</span>
+        </div>
+      ) : (
+        <ol className="sessions-memory__list">
+          {records.map((record) => (
+            <li key={record.id} className="sessions-memory__item">
+              {editingId === record.id ? (
+                <>
+                  <textarea value={editDraft} onChange={(event) => onEditDraftChange(event.target.value)} rows={2} />
+                  <div className="sessions-memory__actions">
+                    <button type="button" onClick={() => onSave(record)} disabled={busyId === record.id || editDraft.trim().length === 0}>
+                      <Save size={13} aria-hidden />
+                      {t('common.save')}
+                    </button>
+                    <button type="button" onClick={onCancelEdit}>{t('common.cancel')}</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <header>
+                    <strong>{record.kind}</strong>
+                    <span>{record.source}{record.evidenceRef ? ` · ${record.evidenceRef}` : ''}</span>
+                  </header>
+                  <p>{record.content}</p>
+                  <div className="sessions-memory__actions">
+                    <button type="button" onClick={() => onEdit(record)}>
+                      <Pencil size={13} aria-hidden />
+                      {t('common.edit')}
+                    </button>
+                    <button type="button" onClick={() => onDelete(record)} disabled={busyId === record.id}>
+                      <Trash2 size={13} aria-hidden />
+                      {t('common.delete')}
+                    </button>
+                  </div>
+                </>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+interface TimelineItem {
+  id: string
+  kind: 'message' | 'tool' | 'permission' | 'recap'
+  title: string
+  body: string
+  time: string | null
+  icon: ReactNode
+}
+
+function buildTimelineItems(
+  entries: TranscriptEntryFull[],
+  session: Session,
+  t: ReturnType<typeof useI18n>['t'],
+): TimelineItem[] {
+  const items: TimelineItem[] = []
+  if (session.pendingPermissionTool || session.pendingPermissionMessage) {
+    items.push({
+      id: `${session.id}:permission`,
+      kind: 'permission',
+      title: session.pendingPermissionTool
+        ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+        : t('sessions.permissionRequired'),
+      body: session.pendingPermissionMessage || t('sessions.waitingUser'),
+      time: session.lastActivity ? relativeTime(session.lastActivity, t) : null,
+      icon: <AlertCircle size={13} aria-hidden />,
+    })
+  }
+  if (session.latestRecap?.content) {
+    items.push({
+      id: `${session.id}:recap`,
+      kind: 'recap',
+      title: t('sessions.recap'),
+      body: compactTimelineText(session.latestRecap.content),
+      time: session.latestRecap.timestamp ? relativeTime(session.latestRecap.timestamp, t) : null,
+      icon: <MessageSquareText size={13} aria-hidden />,
+    })
+  }
+  for (const entry of entries) {
+    const primaryTool = entry.blocks.find((block) => block.type === 'tool_use' || block.type === 'tool_result')
+    const title = primaryTool
+      ? timelineToolTitle(primaryTool, t)
+      : timelineEntryTitle(entry.type, t)
+    items.push({
+      id: entry.id,
+      kind: primaryTool ? 'tool' : 'message',
+      title,
+      body: compactTimelineText(entry.blocks.map(timelineBlockText).filter(Boolean).join(' · ')),
+      time: entry.timestamp ? relativeTime(entry.timestamp, t) : null,
+      icon: primaryTool ? <Wrench size={13} aria-hidden /> : <MessageSquareText size={13} aria-hidden />,
+    })
+  }
+  return items.filter((item) => item.body.length > 0).slice(0, 60)
+}
+
+function timelineToolTitle(block: TranscriptBlock, t: ReturnType<typeof useI18n>['t']): string {
+  if (block.type === 'tool_result') return t('sessions.toolResult')
+  return block.toolName ? t('sessions.toolCallNamed', { tool: block.toolName }) : t('sessions.toolCall')
+}
+
+function timelineEntryTitle(type: TranscriptEntryFull['type'], t: ReturnType<typeof useI18n>['t']): string {
+  if (type === 'user') return t('sessions.userMessage')
+  if (type === 'assistant') return t('sessions.assistantMessage')
+  if (type === 'injected') return t('sessions.injectedMessage')
+  return t('sessions.systemMessage')
+}
+
+function timelineBlockText(block: TranscriptBlock): string {
+  if (block.type === 'text' || block.type === 'thinking') return block.text ?? ''
+  if (block.type === 'tool_use') return block.toolInputJSON ? `${block.toolName ?? 'tool'} ${block.toolInputJSON}` : (block.toolName ?? '')
+  if (block.type === 'tool_result') return block.toolResultText ?? ''
+  return ''
+}
+
+function compactTimelineText(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
 }
 
 function NativeTerminalPanel({
@@ -822,6 +1431,12 @@ function scheduleInternalTabPrewarm(
 }
 
 function noopSessionAction(_session: Session) {}
+
+function sessionControlState(session: Session): SessionControlFilter {
+  return session.controlState === 'hidden' || session.controlState === 'archived'
+    ? session.controlState
+    : 'active'
+}
 
 function isWorkingSession(session: Session): boolean {
   return !['completed', 'done', 'idle'].includes(session.status)

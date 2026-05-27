@@ -107,7 +107,7 @@ export function CanvasToolbar({
   const filteredCanvases = useMemo(() => canvases.filter((canvas) => {
     const query = canvasQuery.trim().toLowerCase()
     if (!query) return true
-    return [canvas.name, canvas.id, visibilityLabel(canvas, t)]
+    return [canvas.name, canvas.id, visibilityLabel(canvas, t), canvasTypeLabel(canvas, t)]
       .some((value) => value.toLowerCase().includes(query))
   }), [canvasQuery, canvases, t])
 
@@ -239,7 +239,7 @@ export function CanvasToolbar({
   }
 
   const submitClear = () => {
-    if (!activeCanvas || !onClearCanvas) return
+    if (!activeCanvas || !onClearCanvas || activeCanvas.kind === 'monitor') return
     Promise.resolve(onClearCanvas(activeCanvas.id)).then(() => {
       setClearConfirming(false)
       setInfoOpen(false)
@@ -248,6 +248,7 @@ export function CanvasToolbar({
   }
 
   if (!activeCanvas) return null
+  const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
 
   return (
     <div className="canvas-toolbar" ref={rootRef}>
@@ -344,13 +345,16 @@ export function CanvasToolbar({
                     <span className="canvas-toolbar__check">
                       {selected && <Check size={13} aria-hidden />}
                     </span>
-                    <span className="canvas-toolbar__item-text">
-                      <span>{displayCanvasName(canvas)}</span>
-                      <span className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}>
-                        {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
-                        {visibilityLabel(canvas, t)}
+                      <span className="canvas-toolbar__item-text">
+                        <span>{displayCanvasName(canvas)}</span>
+                        <span className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}>
+                          {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
+                          {visibilityLabel(canvas, t)}
+                        </span>
+                        <span className={`canvas-toolbar__type canvas-toolbar__type--${canvas.kind ?? 'board'}`}>
+                          {canvasTypeLabel(canvas, t)}
+                        </span>
                       </span>
-                    </span>
                   </button>
                 )
               })}
@@ -432,7 +436,10 @@ export function CanvasToolbar({
           <div className="modal canvas-info-modal" role="dialog" aria-modal="true" aria-label={t('canvas.info')}>
             <div className="modal-header">
               <div className="modal-title">{displayCanvasName(activeCanvas)}</div>
-              <div className="modal-subtitle">{t('canvas.planningCanvas', { visibility: visibilityLabel(activeCanvas, t) })}</div>
+              <div className="modal-subtitle">{t('canvas.typedCanvas', {
+                visibility: visibilityLabel(activeCanvas, t),
+                type: canvasTypeLabel(activeCanvas, t),
+              })}</div>
             </div>
             <div className="canvas-info-modal__tabs" role="tablist" aria-label={t('canvas.sections')}>
               {(['overview', 'settings', 'danger'] as const).map((tab) => (
@@ -450,6 +457,16 @@ export function CanvasToolbar({
             <div className="modal-body col canvas-info-modal__body">
               {infoTab === 'overview' && (
                 <>
+                  <div className="canvas-info-modal__row">
+                    <span>{t('canvas.type')}</span>
+                    <strong>{canvasTypeLabel(activeCanvas, t)}</strong>
+                  </div>
+                  {activeCanvas.kind === 'monitor' && (
+                    <div className="canvas-info-modal__row">
+                      <span>{t('canvas.aggregation')}</span>
+                      <strong>{t('canvas.monitorAggregation')}</strong>
+                    </div>
+                  )}
                   <div className="canvas-info-modal__row">
                     <span>{t('canvas.visibility')}</span>
                     <strong>{visibilityLabel(activeCanvas, t)}</strong>
@@ -506,7 +523,7 @@ export function CanvasToolbar({
               )}
               {infoTab === 'danger' && (
                 <>
-                  {onClearCanvas && (
+                  {canClearCanvas && (
                     <div className="canvas-info-modal__danger">
                       <Eraser size={15} aria-hidden />
                       <div>
@@ -606,7 +623,7 @@ export function CanvasToolbar({
           </div>
         </div>
       )}
-      {clearConfirming && (
+      {clearConfirming && canClearCanvas && (
         <div
           className="modal-backdrop"
           onMouseDown={(event) => {
@@ -669,7 +686,13 @@ function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
 }
 
 function displayCanvasName(canvas: CanvasInfo): string {
-  return canvas.name === 'Default canvas' ? 'My' : canvas.name
+  return canvas.name === 'Default canvas' ? 'Monitor' : canvas.name
+}
+
+function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
+  if (canvas.kind === 'monitor') return t('canvas.type.monitor')
+  if (canvas.kind === 'template') return t('canvas.type.template')
+  return t('canvas.type.board')
 }
 
 function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {

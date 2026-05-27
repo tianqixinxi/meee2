@@ -1403,6 +1403,19 @@ final class PlannerCoreTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testClearCanvasContentRejectsMonitorCanvas() throws {
+        let snapshot = boardSnapshot(canvasId: "monitor-a", ownerId: "owner-a", kind: .monitor)
+        _ = try seedPlannerNodes(canvasId: "monitor-a", ownerId: "owner-a")
+
+        XCTAssertThrowsError(try PlannerBoardBridge.clearCanvasContent(
+            for: "monitor-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .monitorClearNotAllowed("monitor-a"))
+        }
+    }
+
     func testPlannerBoardBridgeTreatsPersonalCanvasActorAsOwnerWhenStoredOwnerIsStale() throws {
         let defaults = UserDefaults.standard
         let oldConnected = defaults.object(forKey: "meee2Connected")

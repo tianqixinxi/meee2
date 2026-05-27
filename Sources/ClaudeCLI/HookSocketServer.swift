@@ -258,6 +258,11 @@ public class HookSocketServer {
         }
 
         let data = allData
+        if Self.isSyntheticProbe(data) {
+            writeProbeResponse(to: clientSocket)
+            close(clientSocket)
+            return
+        }
 
         guard var event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
             logger.warning("Failed to parse event: \(String(data: data, encoding: .utf8) ?? "?", privacy: .public)")
@@ -354,6 +359,25 @@ public class HookSocketServer {
         }
 
         eventHandler?(event)
+    }
+
+    private static func isSyntheticProbe(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return object["meee2_probe"] as? Bool == true
+    }
+
+    private func writeProbeResponse(to socket: Int32) {
+        let payload = #"{"ok":true,"kind":"meee2.synthetic-probe"}"#
+        guard let data = payload.data(using: .utf8) else { return }
+        data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            let n = write(socket, base, data.count)
+            if n < 0 {
+                NSLog("[HookSocketServer] writeProbeResponse failed errno=\(errno)")
+            }
+        }
     }
 
     /// 桌面版 Stop hook 的 inline drain。仅在确认是 `entrypoint=claude-desktop`

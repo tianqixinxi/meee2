@@ -101,6 +101,12 @@ public enum SessionStatus: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// Historical sessions are retained for continuity and diagnostics, but
+    /// should not appear in default live-monitor surfaces.
+    public var isHistorical: Bool {
+        self == .completed || self == .dead
+    }
+
     public var description: String {
         switch self {
         case .idle, .waitingForUser: return "Idle"
