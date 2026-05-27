@@ -356,6 +356,7 @@ export default function App() {
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [plannerFocusTarget, setPlannerFocusTarget] = useState<{ canvasId: string; nodeId: string; requestId: number } | null>(null)
+  const [initialPlannerIntake, setInitialPlannerIntake] = useState<{ canvasId: string; id: number; text: string } | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -673,6 +674,8 @@ export default function App() {
           } catch (err) {
             pushToast('error', (err as Error).message || 'Failed to save canvas goal')
           }
+          setWorkspaceMode('planner')
+          setInitialPlannerIntake({ canvasId: list.activeCanvasId, id: Date.now(), text: goal })
         }
         return list.activeCanvasId
       })
@@ -843,8 +846,12 @@ export default function App() {
                 refreshTick={activeCanvasRefreshTick}
                 focusNodeId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.nodeId : null}
                 focusRequestId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.requestId : 0}
+                initialIntakeMessage={initialPlannerIntake?.canvasId === activeWorkspaceCanvasId ? initialPlannerIntake : null}
                 onFocusNodeHandled={(requestId) => {
                   setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
+                }}
+                onInitialIntakeHandled={(requestId) => {
+                  setInitialPlannerIntake((current) => current?.id === requestId ? null : current)
                 }}
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onOpenArtifacts={() => setWorkspaceMode('artifacts')}

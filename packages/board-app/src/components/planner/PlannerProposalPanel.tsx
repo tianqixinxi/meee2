@@ -32,6 +32,8 @@ interface Props {
   onApproveAndApply: () => void
   onReject: () => void
   draftMessage?: PlannerDraftMessage | null
+  initialIntakeMessage?: { id: number; text: string } | null
+  onInitialIntakeHandled?: (requestId: number) => void
   clearRevision?: number
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
@@ -114,6 +116,8 @@ export function PlannerProposalPanel({
   onApproveAndApply,
   onReject,
   draftMessage = null,
+  initialIntakeMessage = null,
+  onInitialIntakeHandled,
   clearRevision = 0,
   reviewRequestTick,
   answerOnlyReply = null,
@@ -141,6 +145,7 @@ export function PlannerProposalPanel({
   const [emptyIntakeError, setEmptyIntakeError] = useState<string | null>(null)
   const [draftContext, setDraftContext] = useState<{ text: string; label: string } | null>(null)
   const isTemplate = variant === 'template'
+  const handledInitialIntakeRef = useRef(0)
 
   function abortEmptyIntakeRequest() {
     if (!emptyIntakeAbortRef.current) return
@@ -372,6 +377,17 @@ export function PlannerProposalPanel({
         if (!controller.signal.aborted) setThinking(false)
       })
   }
+
+  useEffect(() => {
+    const intake = initialIntakeMessage
+    if (!intake) return
+    const seed = intake.text.trim()
+    if (!seed || !isEmptyOmniIntake || proposal || thinking || busy) return
+    if (handledInitialIntakeRef.current === intake.id) return
+    handledInitialIntakeRef.current = intake.id
+    submitEmptyIntakeTurn(seed)
+    onInitialIntakeHandled?.(intake.id)
+  }, [busy, initialIntakeMessage, isEmptyOmniIntake, onInitialIntakeHandled, proposal, thinking])
 
   const buildConfirmedPlan = (prompt: string) => {
     if (!prompt.trim() || busy || thinking || !canCreateProposal) return

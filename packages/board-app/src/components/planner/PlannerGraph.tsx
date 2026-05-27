@@ -96,7 +96,9 @@ interface Props {
   refreshTick?: number
   focusNodeId?: string | null
   focusRequestId?: number
+  initialIntakeMessage?: { id: number; text: string } | null
   onFocusNodeHandled?: (requestId: number) => void
+  onInitialIntakeHandled?: (requestId: number) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onOpenArtifacts?: () => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
@@ -136,7 +138,9 @@ function PlannerGraphInner({
   refreshTick = 0,
   focusNodeId = null,
   focusRequestId = 0,
+  initialIntakeMessage = null,
   onFocusNodeHandled,
+  onInitialIntakeHandled,
   onOpenSubCanvas,
   onOpenArtifacts,
   onNotify,
@@ -1509,6 +1513,8 @@ function PlannerGraphInner({
             onApproveAndApply={handleApproveAndApply}
             onReject={handleReject}
             draftMessage={plannerDraftMessage}
+            initialIntakeMessage={initialIntakeMessage}
+            onInitialIntakeHandled={onInitialIntakeHandled}
             clearRevision={clearRevision}
             reviewRequestTick={reviewRequestTick}
             answerOnlyReply={answerOnlyReply}
