@@ -2705,6 +2705,8 @@ enum BoardAPI {
         switch err {
         case .canvasNotFound, .proposalNotFound, .runNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .monitorClearNotAllowed:
+            return errorResponse("monitor_clear_not_allowed", err.localizedDescription, status: 409)
         case .permissionDenied:
             return errorResponse("forbidden", err.localizedDescription, status: 403)
         case .proposalNotApproved,

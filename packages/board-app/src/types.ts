@@ -833,6 +833,7 @@ export interface PlannerMonitorItem {
   needsOwnerReview: boolean
   doerId?: string | null
   riskRank: number
+  evidenceCount?: number
   /**
    * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
    * for proposal items or nodes with no actionable workflow state.

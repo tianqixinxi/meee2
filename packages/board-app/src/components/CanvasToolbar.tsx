@@ -239,7 +239,7 @@ export function CanvasToolbar({
   }
 
   const submitClear = () => {
-    if (!activeCanvas || !onClearCanvas) return
+    if (!activeCanvas || !onClearCanvas || activeCanvas.kind === 'monitor') return
     Promise.resolve(onClearCanvas(activeCanvas.id)).then(() => {
       setClearConfirming(false)
       setInfoOpen(false)
@@ -248,6 +248,7 @@ export function CanvasToolbar({
   }
 
   if (!activeCanvas) return null
+  const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
 
   return (
     <div className="canvas-toolbar" ref={rootRef}>
@@ -522,7 +523,7 @@ export function CanvasToolbar({
               )}
               {infoTab === 'danger' && (
                 <>
-                  {onClearCanvas && (
+                  {canClearCanvas && (
                     <div className="canvas-info-modal__danger">
                       <Eraser size={15} aria-hidden />
                       <div>
@@ -622,7 +623,7 @@ export function CanvasToolbar({
           </div>
         </div>
       )}
-      {clearConfirming && (
+      {clearConfirming && canClearCanvas && (
         <div
           className="modal-backdrop"
           onMouseDown={(event) => {

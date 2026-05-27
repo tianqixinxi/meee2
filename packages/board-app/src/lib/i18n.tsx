@@ -314,6 +314,35 @@ const translations = {
     'monitor.empty': 'No items',
     'monitor.openCanvas': 'Open canvas',
     'monitor.openSessions': 'Open sessions',
+    'monitor.quickFilters': 'Quick monitor filters',
+    'monitor.filters': 'Monitor filters',
+    'monitor.status': 'Status',
+    'monitor.allStatus': 'All status',
+    'monitor.source': 'Source',
+    'monitor.sourceAll': 'All sources',
+    'monitor.sourceLive': 'Live session',
+    'monitor.sourceNode': 'Node',
+    'monitor.sourceApproval': 'Approval',
+    'monitor.sourceArtifact': 'Artifact',
+    'monitor.sort': 'Sort',
+    'monitor.sortSeverity': 'Severity',
+    'monitor.sortUpdated': 'Updated',
+    'monitor.density': 'Density',
+    'monitor.compact': 'Compact',
+    'monitor.comfortable': 'Comfortable',
+    'monitor.evidenceOnly': 'Evidence',
+    'monitor.blockedOnly': 'Blocked',
+    'monitor.approvalOnly': 'Approval',
+    'monitor.laneBlocked': 'Blocked',
+    'monitor.laneApproval': 'Approval',
+    'monitor.laneRunning': 'Running',
+    'monitor.laneReady': 'Ready',
+    'monitor.laneDone': 'Done',
+    'monitor.resultCount': '{count} items',
+    'monitor.expandLane': 'Expand lane',
+    'monitor.collapseLane': 'Collapse lane',
+    'monitor.evidenceCount': '{count} evidence',
+    'monitor.unassigned': 'Unassigned',
     'canvas.canvas': 'Canvas',
     'canvas.back': 'Back to previous canvas',
     'canvas.forward': 'Forward to next canvas',
@@ -775,6 +804,35 @@ const translations = {
     'monitor.empty': '没有项目',
     'monitor.openCanvas': '打开画布',
     'monitor.openSessions': '打开会话',
+    'monitor.quickFilters': '监控快捷筛选',
+    'monitor.filters': '监控筛选',
+    'monitor.status': '状态',
+    'monitor.allStatus': '全部状态',
+    'monitor.source': '来源',
+    'monitor.sourceAll': '全部来源',
+    'monitor.sourceLive': '实时会话',
+    'monitor.sourceNode': '节点',
+    'monitor.sourceApproval': '审批',
+    'monitor.sourceArtifact': '证据',
+    'monitor.sort': '排序',
+    'monitor.sortSeverity': '严重度',
+    'monitor.sortUpdated': '更新时间',
+    'monitor.density': '密度',
+    'monitor.compact': '紧凑',
+    'monitor.comfortable': '舒适',
+    'monitor.evidenceOnly': '有证据',
+    'monitor.blockedOnly': '阻塞',
+    'monitor.approvalOnly': '审批',
+    'monitor.laneBlocked': '阻塞',
+    'monitor.laneApproval': '审批',
+    'monitor.laneRunning': '运行中',
+    'monitor.laneReady': '就绪',
+    'monitor.laneDone': '完成',
+    'monitor.resultCount': '{count} 项',
+    'monitor.expandLane': '展开泳道',
+    'monitor.collapseLane': '折叠泳道',
+    'monitor.evidenceCount': '{count} 个证据',
+    'monitor.unassigned': '未分配',
     'canvas.canvas': '画布',
     'canvas.back': '返回上一个画布',
     'canvas.forward': '前往下一个画布',
@@ -951,9 +1009,14 @@ function normalizeLocale(value: string | null | undefined): Locale | null {
 
 function readStoredLocale(): Locale {
   if (typeof window === 'undefined') return 'en'
-  return normalizeLocale(window.localStorage.getItem(STORAGE_KEY))
-    ?? normalizeLocale(window.navigator.language)
-    ?? 'en'
+  const browserLocale = typeof window.navigator === 'undefined' ? null : window.navigator.language
+  try {
+    return normalizeLocale(window.localStorage.getItem(STORAGE_KEY))
+      ?? normalizeLocale(browserLocale)
+      ?? 'en'
+  } catch {
+    return normalizeLocale(browserLocale) ?? 'en'
+  }
 }
 
 function format(template: string, params?: TranslationParams): string {
@@ -965,7 +1028,11 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(() => readStoredLocale())
 
   const setLocale = useCallback((nextLocale: Locale) => {
-    window.localStorage.setItem(STORAGE_KEY, nextLocale)
+    try {
+      window.localStorage.setItem(STORAGE_KEY, nextLocale)
+    } catch {
+      // Locale changes should still work in storage-restricted WebViews.
+    }
     setLocaleState(nextLocale)
   }, [])
 
