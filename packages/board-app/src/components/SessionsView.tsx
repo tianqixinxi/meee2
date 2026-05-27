@@ -7,6 +7,7 @@ import {
   Clock3,
   EyeOff,
   ExternalLink,
+  FileText,
   MessageSquareText,
   Pencil,
   RefreshCw,
@@ -23,15 +24,18 @@ import {
   Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type TranscriptBlock, type TranscriptEntryFull } from '../api'
+import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
-import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
+import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
   state: BoardState | null
+  canvases?: CanvasInfo[]
   unreadSids: Set<string>
   selectedSessionId?: string | null
   onSelectedSessionChange?: (id: string | null) => void
+  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId: string; nodeTitle?: string | null }) => void
 }
 
 type SessionFilter = 'all' | 'attention' | 'unread'
@@ -41,9 +45,12 @@ type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 export function SessionsView({
   state,
+  canvases = [],
   unreadSids,
   selectedSessionId,
   onSelectedSessionChange,
+  onOpenPlannerNode,
+  onOpenArtifacts,
 }: Props) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -55,6 +62,7 @@ export function SessionsView({
   const [diagnostics, setDiagnostics] = useState<SessionIntakeDiagnostics | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [surfaces, setSurfaces] = useState<SessionSurface[]>([])
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
   const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
@@ -105,6 +113,33 @@ export function SessionsView({
     if (!selectedSession) return null
     return (activeKindTab === 'internal') === isInternalSession(selectedSession) ? selectedSession : null
   }, [activeKindTab, selectedSession])
+  const sessionSurfaceSignature = useMemo(
+    () => sessions.map((session) => `${session.id}:${session.surfaceId ?? ''}:${session.surfaceStatus ?? ''}`).sort().join('|'),
+    [sessions],
+  )
+  useEffect(() => {
+    let cancelled = false
+    listSessionSurfaces()
+      .then((items) => {
+        if (!cancelled) setSurfaces(items)
+      })
+      .catch(() => {
+        if (!cancelled) setSurfaces([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionSurfaceSignature])
+  const selectedSurface = useMemo(() => (
+    selectedSessionOnActiveTab
+      ? surfaces.find((surface) => surfaceMatchesSession(surface, selectedSessionOnActiveTab)) ?? null
+      : null
+  ), [selectedSessionOnActiveTab, surfaces])
+  const selectedSurfaceCanvas = useMemo(() => (
+    selectedSurface?.canvasId
+      ? canvases.find((canvas) => canvas.id === selectedSurface.canvasId) ?? null
+      : null
+  ), [canvases, selectedSurface?.canvasId])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
@@ -334,7 +369,11 @@ export function SessionsView({
                   openError={openErrorId === selectedSessionOnActiveTab?.id}
                   switchStartedAt={selectedSessionOnActiveTab ? switchStartedAtRef.current[selectedSessionOnActiveTab.id] : undefined}
                   switchTraceId={selectedSessionOnActiveTab ? switchTraceIdRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  surface={selectedSurface}
+                  surfaceCanvas={selectedSurfaceCanvas}
                   onOpen={() => selectedSessionOnActiveTab && openSession(selectedSessionOnActiveTab)}
+                  onOpenPlannerNode={onOpenPlannerNode}
+                  onOpenArtifacts={onOpenArtifacts}
                   t={t}
                 />
               </div>
@@ -549,7 +588,11 @@ function SessionDetail({
   openError,
   switchStartedAt,
   switchTraceId,
+  surface,
+  surfaceCanvas,
   onOpen,
+  onOpenPlannerNode,
+  onOpenArtifacts,
   t,
 }: {
   session: Session | null
@@ -557,7 +600,11 @@ function SessionDetail({
   openError: boolean
   switchStartedAt?: number
   switchTraceId?: string
+  surface?: SessionSurface | null
+  surfaceCanvas?: CanvasInfo | null
   onOpen: () => void
+  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId: string; nodeTitle?: string | null }) => void
   t: ReturnType<typeof useI18n>['t']
 }) {
   const [stopping, setStopping] = useState(false)
@@ -630,6 +677,9 @@ function SessionDetail({
   const liveInternal = internal && isLiveInternalSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
   const controlState = sessionControlState(session)
+  const boundCanvasId = surface?.canvasId?.trim() || ''
+  const boundNodeId = surface?.nodeId?.trim() || ''
+  const boundNodeTitle = surface?.title?.trim() || session.title || boundNodeId
   const runControlAction = async (action: 'hide' | 'archive' | 'restore') => {
     setControlError(null)
     setControlStatus(null)
@@ -807,6 +857,35 @@ function SessionDetail({
           )}
         </div>
       </div>
+      {boundCanvasId && boundNodeId && (
+        <div className="sessions-detail__context">
+          <div>
+            <span>{t('sessions.boundNode')}</span>
+            <strong>{boundNodeTitle}</strong>
+            <em>{surfaceCanvas?.name ?? shortId(boundCanvasId)}</em>
+          </div>
+          <button
+            type="button"
+            onClick={() => onOpenPlannerNode?.(boundCanvasId, boundNodeId)}
+            disabled={!onOpenPlannerNode}
+          >
+            <ExternalLink size={13} aria-hidden />
+            {t('sessions.openNode')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenArtifacts?.({
+              canvasId: boundCanvasId,
+              nodeId: boundNodeId,
+              nodeTitle: boundNodeTitle,
+            })}
+            disabled={!onOpenArtifacts}
+          >
+            <FileText size={13} aria-hidden />
+            {t('sessions.openArtifacts')}
+          </button>
+        </div>
+      )}
       <section className="sessions-terminal-stage">
         {internal && session.surfaceId && liveInternal ? (
           <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
@@ -1177,6 +1256,13 @@ function timelineBlockText(block: TranscriptBlock): string {
 function compactTimelineText(value: string): string {
   const normalized = value.replace(/\s+/g, ' ').trim()
   return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
+}
+
+function surfaceMatchesSession(surface: SessionSurface, session: Session): boolean {
+  return surface.surfaceId === session.surfaceId
+    || surface.sessionId === session.id
+    || Boolean(session.surfaceId && surface.sessionId === session.surfaceId)
+    || Boolean(session.surfaceId && surface.surfaceId === session.id)
 }
 
 function NativeTerminalPanel({

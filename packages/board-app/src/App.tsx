@@ -877,9 +877,28 @@ export default function App() {
           ) : workspaceMode === 'sessions' ? (
             <SessionsView
               state={boardState.state}
+              canvases={workspaceCanvases}
               unreadSids={unreadSids}
               selectedSessionId={selectedSessionId}
               onSelectedSessionChange={setSelectedSessionId}
+              onOpenPlannerNode={(canvasId, nodeId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+                setPlannerFocusTarget({
+                  canvasId,
+                  nodeId,
+                  requestId: Date.now(),
+                })
+              }}
+              onOpenArtifacts={(focus) => {
+                setArtifactFocusTarget({
+                  id: Date.now(),
+                  canvasId: focus.canvasId,
+                  nodeId: focus.nodeId,
+                  nodeTitle: focus.nodeTitle,
+                })
+                setWorkspaceMode('artifacts')
+              }}
             />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView
