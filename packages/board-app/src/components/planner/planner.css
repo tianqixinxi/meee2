@@ -4387,6 +4387,7 @@
 .planner-node-modal__evidence-item {
   min-width: 0;
   display: grid;
+  width: 100%;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
@@ -4394,6 +4395,16 @@
   border: 1px solid rgba(168, 165, 155, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(245, 244, 239, 0.035);
+  text-align: left;
+}
+
+.planner-node-modal__evidence-item:not(:disabled) {
+  cursor: pointer;
+}
+
+.planner-node-modal__evidence-item:not(:disabled):hover {
+  border-color: rgba(204, 120, 92, 0.36);
+  background: rgba(204, 120, 92, 0.10);
 }
 
 .planner-node-modal__evidence-item > div {

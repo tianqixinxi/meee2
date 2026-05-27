@@ -136,6 +136,17 @@ export function NodeInspectorModal({
   const permissionTooltip = canAssignOwner ? undefined : 'Only the canvas owner can assign this node.'
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleNextRun = formatScheduleDate(node.schedule?.nextRunAt)
+  const openArtifactsForNode = () => onOpenArtifacts?.({
+    canvasId,
+    nodeId: node.id,
+    nodeTitle: node.title,
+  })
+  const openArtifactsForReference = (reference: string) => onOpenArtifacts?.({
+    canvasId,
+    nodeId: node.id,
+    nodeTitle: node.title,
+    reference,
+  })
 
   const runProposalAction = (work: () => Promise<PlanProposal | null>) => {
     setActionBusy(true)
@@ -277,11 +288,7 @@ export function NodeInspectorModal({
               {onOpenArtifacts && (
                 <button
                   type="button"
-                  onClick={() => onOpenArtifacts({
-                    canvasId,
-                    nodeId: node.id,
-                    nodeTitle: node.title,
-                  })}
+                  onClick={openArtifactsForNode}
                 >
                   <ExternalLink size={12} aria-hidden /> Artifacts
                 </button>
@@ -289,32 +296,40 @@ export function NodeInspectorModal({
             </div>
             <div className="planner-node-modal__evidence">
               {nodeArtifacts.slice(0, 4).map((artifact) => (
-                <div className="planner-node-modal__evidence-item" key={artifact.id}>
+                <button
+                  type="button"
+                  className="planner-node-modal__evidence-item"
+                  key={artifact.id}
+                  disabled={!onOpenArtifacts}
+                  onClick={() => openArtifactsForReference(artifact.reference)}
+                >
                   <div>
                     <strong title={artifact.title}>{artifact.title}</strong>
                     <span title={artifact.reference}>{artifact.kind} · {compactLabel(artifact.reference)}</span>
                   </div>
                   <em>{artifact.status} · {formatArtifactDate(artifact.createdAt)}</em>
-                </div>
+                </button>
               ))}
               {runtimeArtifactRefs.map((reference) => (
-                <div className="planner-node-modal__evidence-item" key={reference}>
+                <button
+                  type="button"
+                  className="planner-node-modal__evidence-item"
+                  key={reference}
+                  disabled={!onOpenArtifacts}
+                  onClick={() => openArtifactsForReference(reference)}
+                >
                   <div>
                     <strong title={reference}>{compactLabel(reference)}</strong>
                     <span title={reference}>{reference}</span>
                   </div>
                   <em>runtime</em>
-                </div>
+                </button>
               ))}
               {onOpenArtifacts && nodeArtifacts.length > 4 && (
                 <button
                   type="button"
                   className="planner-node-modal__evidence-more"
-                  onClick={() => onOpenArtifacts({
-                    canvasId,
-                    nodeId: node.id,
-                    nodeTitle: node.title,
-                  })}
+                  onClick={openArtifactsForNode}
                 >
                   View {nodeArtifacts.length - 4} more
                 </button>

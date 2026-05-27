@@ -565,8 +565,9 @@ function slotMatchesFocus(slot: ArtifactSlot, focus: ArtifactFocusTarget): boole
   if (slot.canvas.id !== focus.canvasId) return false
   const nodeId = focus.nodeId?.trim()
   const reference = focus.reference?.trim().toLowerCase()
-  if (nodeId && slot.latest.nodeId === nodeId) return true
   if (reference && slot.latest.reference.trim().toLowerCase() === reference) return true
+  if (reference) return false
+  if (nodeId && slot.latest.nodeId === nodeId) return true
   return false
 }
 
