@@ -122,7 +122,7 @@ export function SessionsView({
     let cancelled = false
     listSessionSurfaces()
       .then((items) => {
-        if (!cancelled) setSurfaces(items)
+        if (!cancelled) setSurfaces(Array.isArray(items) ? items : [])
       })
       .catch(() => {
         if (!cancelled) setSurfaces([])
@@ -407,14 +407,18 @@ function SessionIntakeStatus({
   onRefresh: () => void
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string
 }) {
+  const diagnosticItems = Array.isArray(diagnostics?.items) ? diagnostics.items : []
+  const liveSessions = diagnostics?.liveSessions ?? 0
+  const storedSessions = diagnostics?.storedSessions ?? 0
+  const historicalSessions = diagnostics?.historicalSessions ?? 0
   const tone = error ? 'error' : diagnostics?.ok === false ? 'warn' : 'ok'
   const summary = error
     ? error
     : diagnostics
       ? t('sessions.intakeSummary', {
-          live: diagnostics.liveSessions,
-          stored: diagnostics.storedSessions,
-          historical: diagnostics.historicalSessions,
+          live: liveSessions,
+          stored: storedSessions,
+          historical: historicalSessions,
         })
       : t('sessions.intakeLoading')
   const title = diagnostics?.ok === false
@@ -422,7 +426,7 @@ function SessionIntakeStatus({
     : tone === 'ok'
       ? t('sessions.intakeOk')
       : t('sessions.intakeTitle')
-  const detail = diagnostics?.items.slice(0, 2).map((item) => `${item.title}: ${item.detail}`).join('\n') || summary
+  const detail = diagnosticItems.slice(0, 2).map((item) => `${item.title}: ${item.detail}`).join('\n') || summary
 
   return (
     <button
