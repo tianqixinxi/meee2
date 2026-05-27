@@ -1472,6 +1472,78 @@ textarea {
   color: var(--warn);
 }
 
+.artifacts-focus {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(204, 120, 92, 0.26);
+  border-radius: var(--radius-sm);
+  background: rgba(204, 120, 92, 0.1);
+}
+
+.artifacts-focus > div {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+
+.artifacts-focus span {
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.artifacts-focus strong,
+.artifacts-focus em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifacts-focus strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.artifacts-focus em {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.artifacts-focus button {
+  flex: none;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid rgba(204, 120, 92, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(24, 23, 22, 0.42);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.artifacts-focus button:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+}
+
+.artifacts-focus button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 .artifacts-groups {
   display: grid;
   gap: 18px;
@@ -10865,6 +10937,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-open-button,
 :root[data-theme="light"] .artifacts-card__actions button,
 :root[data-theme="light"] .artifacts-link-button,
+:root[data-theme="light"] .artifacts-focus button,
 :root[data-theme="light"] .templates-editor-bar__back,
 :root[data-theme="light"] .team-view__icon-button,
 :root[data-theme="light"] .team-view__action,
@@ -10893,6 +10966,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-card__actions button.is-active,
 :root[data-theme="light"] .artifacts-link-button:hover,
 :root[data-theme="light"] .artifacts-open-button:hover,
+:root[data-theme="light"] .artifacts-focus button:hover,
 :root[data-theme="light"] .template-row:hover,
 :root[data-theme="light"] .template-row.is-active,
 :root[data-theme="light"] .agent-matrix__categories button:hover,
@@ -10963,6 +11037,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-version-summary div,
 :root[data-theme="light"] .artifacts-version-stack div,
 :root[data-theme="light"] .artifacts-compare div,
+:root[data-theme="light"] .artifacts-focus,
 :root[data-theme="light"] .agent-matrix__runbook-content,
 :root[data-theme="light"] .agent-matrix__dispatch code,
 :root[data-theme="light"] .integration-picker__item-main code {
@@ -10985,6 +11060,7 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .artifacts-meta dt,
 :root[data-theme="light"] .artifacts-file-meta dt,
 :root[data-theme="light"] .artifacts-version-summary dt,
+:root[data-theme="light"] .artifacts-focus span,
 :root[data-theme="light"] .templates-workspace__header span,
 :root[data-theme="light"] .templates-editor-bar__title span,
 :root[data-theme="light"] .sessions-table__head,

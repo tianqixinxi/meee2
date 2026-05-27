@@ -40,6 +40,7 @@ interface ArtifactsViewProps {
   activeCanvasId: string
   focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
+  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
 }
 
 interface CanvasArtifacts {
@@ -72,6 +73,7 @@ export function ArtifactsView({
   activeCanvasId,
   focusTarget = null,
   onOpenCanvas,
+  onOpenPlannerNode,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
   const handledFocusRef = useRef(0)
@@ -175,6 +177,25 @@ export function ArtifactsView({
   }, [canvasArtifacts, kindFilter, query])
 
   const totalSlots = canvasGroups.reduce((count, group) => count + group.slots.length, 0)
+  const focusSummary = useMemo(() => {
+    if (!focusTarget) return null
+    const canvas = canvases.find((item) => item.id === focusTarget.canvasId) ?? null
+    const node = canvasArtifacts
+      .find((item) => item.canvas.id === focusTarget.canvasId)
+      ?.nodes.find((item) => item.id === focusTarget.nodeId) ?? null
+    const nodeLabel = focusTarget.nodeTitle?.trim() || node?.title || focusTarget.nodeId || focusTarget.reference || t('artifacts.focusFallback')
+    const matchingSlots = canvasGroups
+      .flatMap((group) => group.slots)
+      .filter((slot) => slotMatchesFocus(slot, focusTarget))
+    return {
+      canvasId: focusTarget.canvasId,
+      nodeId: focusTarget.nodeId?.trim() || null,
+      canvas,
+      node,
+      nodeLabel,
+      matchingSlots,
+    }
+  }, [canvasArtifacts, canvasGroups, canvases, focusTarget, t])
 
   const toggleSlot = (key: string) => {
     setExpandedSlots((current) => {
@@ -244,6 +265,11 @@ export function ArtifactsView({
       .catch(() => undefined)
   }
 
+  const showAllArtifacts = () => {
+    setKindFilter('all')
+    setQuery('')
+  }
+
   useEffect(() => {
     if (!focusTarget || handledFocusRef.current === focusTarget.id) return
     handledFocusRef.current = focusTarget.id
@@ -305,6 +331,36 @@ export function ArtifactsView({
         </header>
 
         {error && <div className="artifacts-banner" role="status">{error}</div>}
+        {focusSummary && (
+          <div className="artifacts-focus" role="status">
+            <div>
+              <span>{t('artifacts.focusLabel')}</span>
+              <strong>{focusSummary.nodeLabel}</strong>
+              <em>
+                {loading
+                  ? t('artifacts.focusLoading', { canvas: focusSummary.canvas?.name ?? shortId(focusSummary.canvasId) })
+                  : t('artifacts.focusMeta', {
+                    canvas: focusSummary.canvas?.name ?? shortId(focusSummary.canvasId),
+                    count: String(focusSummary.matchingSlots.length),
+                  })}
+              </em>
+            </div>
+            {focusSummary.nodeId && (
+              <button
+                type="button"
+                onClick={() => onOpenPlannerNode?.(focusSummary.canvasId, focusSummary.nodeId ?? '')}
+                disabled={!onOpenPlannerNode}
+              >
+                <ExternalLink size={13} aria-hidden />
+                <span>{t('artifacts.openNode')}</span>
+              </button>
+            )}
+            <button type="button" onClick={showAllArtifacts}>
+              <Layers size={13} aria-hidden />
+              <span>{t('artifacts.showAll')}</span>
+            </button>
+          </div>
+        )}
         {loading && (
           <div className="artifacts-empty" role="status">
             <Loader2 size={15} className="spin" aria-hidden />
@@ -314,7 +370,7 @@ export function ArtifactsView({
         {!loading && canvasGroups.length === 0 && (
           <div className="artifacts-empty">
             <Archive size={15} aria-hidden />
-            <span>{t('artifacts.empty')}</span>
+            <span>{focusSummary ? t('artifacts.focusEmpty', { node: focusSummary.nodeLabel }) : t('artifacts.empty')}</span>
           </div>
         )}
 
@@ -595,6 +651,10 @@ function formatBytes(value: number | null | undefined, t: ReturnType<typeof useI
   if (value < 1024) return `${value} B`
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function shortId(value: string): string {
+  return value.length > 8 ? value.slice(0, 8).toUpperCase() : value.toUpperCase()
 }
 
 function stringifyPreview(value: unknown): string {

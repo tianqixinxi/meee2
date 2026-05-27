@@ -909,6 +909,15 @@ export default function App() {
                 handleSetActiveCanvas(canvasId)
                 setWorkspaceMode('planner')
               }}
+              onOpenPlannerNode={(canvasId, nodeId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+                setPlannerFocusTarget({
+                  canvasId,
+                  nodeId,
+                  requestId: Date.now(),
+                })
+              }}
             />
           ) : workspaceMode === 'integrations' ? (
             <IntegrationsView
