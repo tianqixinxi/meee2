@@ -271,15 +271,15 @@ export function SessionsView({
               <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
               <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
             </div>
+            <SessionIntakeStatus
+              diagnostics={diagnostics}
+              error={diagnosticsError}
+              loading={diagnosticsLoading}
+              onRefresh={refreshDiagnostics}
+              t={t}
+            />
           </div>
         </div>
-        <SessionIntakePanel
-          diagnostics={diagnostics}
-          error={diagnosticsError}
-          loading={diagnosticsLoading}
-          onRefresh={refreshDiagnostics}
-          t={t}
-        />
         {sessions.length === 0 ? (
           <div className="sessions-empty">
             <TerminalIcon size={18} aria-hidden />
@@ -385,7 +385,7 @@ export function SessionsView({
   )
 }
 
-function SessionIntakePanel({
+function SessionIntakeStatus({
   diagnostics,
   error,
   loading,
@@ -398,7 +398,6 @@ function SessionIntakePanel({
   onRefresh: () => void
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string
 }) {
-  const hasItems = (diagnostics?.items.length ?? 0) > 0
   const tone = error ? 'error' : diagnostics?.ok === false ? 'warn' : 'ok'
   const summary = error
     ? error
@@ -409,31 +408,29 @@ function SessionIntakePanel({
           historical: diagnostics.historicalSessions,
         })
       : t('sessions.intakeLoading')
+  const title = diagnostics?.ok === false
+    ? t('sessions.intakeNeedsAttention')
+    : tone === 'ok'
+      ? t('sessions.intakeOk')
+      : t('sessions.intakeTitle')
+  const detail = diagnostics?.items.slice(0, 2).map((item) => `${item.title}: ${item.detail}`).join('\n') || summary
 
   return (
-    <section className={`session-intake session-intake--${tone}`} aria-label={t('sessions.intakeTitle')}>
-      <div className="session-intake__main">
-        {tone === 'ok' ? <CheckCircle2 size={15} aria-hidden /> : <AlertCircle size={15} aria-hidden />}
-        <div>
-          <strong>{diagnostics?.ok === false ? t('sessions.intakeNeedsAttention') : t('sessions.intakeTitle')}</strong>
-          <span>{summary}</span>
-        </div>
-      </div>
-      {hasItems && tone !== 'ok' && (
-        <ul className="session-intake__items">
-          {diagnostics!.items.slice(0, 3).map((item) => (
-            <li key={item.id}>
-              <span>{item.title}</span>
-              <em>{item.detail}</em>
-            </li>
-          ))}
-        </ul>
-      )}
-      <button type="button" className="session-intake__refresh" onClick={onRefresh} disabled={loading}>
+    <button
+      type="button"
+      className={`session-intake-status session-intake-status--${tone}`}
+      onClick={onRefresh}
+      disabled={loading}
+      title={detail}
+      aria-label={t('sessions.intakeTitle')}
+    >
+      {tone === 'ok' ? <CheckCircle2 size={13} aria-hidden /> : <AlertCircle size={13} aria-hidden />}
+      <span>{title}</span>
+      <em>{summary}</em>
+      <span className="session-intake-status__refresh">
         <RefreshCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
-        <span>{t('common.refresh')}</span>
-      </button>
-    </section>
+      </span>
+    </button>
   )
 }
 
@@ -909,12 +906,12 @@ function SessionDetail({
           </div>
         )}
         <SessionDrawer
-          title={t('sessions.control')}
+          title={t('sessions.actions')}
           meta={session.pendingPermissionTool
             ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
             : session.inboxPending > 0
               ? t('sessions.pendingMessages', { count: session.inboxPending })
-              : t('sessions.controlReady')}
+              : t('sessions.actionsReady')}
           defaultOpen={Boolean(session.pendingPermissionTool || controlStatus || controlError)}
         >
           <section className="sessions-control" aria-label={t('sessions.control')}>
