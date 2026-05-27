@@ -1199,6 +1199,15 @@ function PlannerGraphInner({
             return next
           })
           void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+        }, ({ nodeId, sessionId, surfaceId }) => {
+          const title = readySessionPlan.create.find((node) => node.id === nodeId)?.title ?? 'ready node'
+          window.dispatchEvent(new CustomEvent('meee2:open-session', {
+            detail: {
+              sessionId,
+              surfaceId: surfaceId ?? sessionId,
+            },
+          }))
+          onNotify?.('success', `Opened ${title} in Sessions.`)
         })
       })
       .catch((err) => notifyError((err as Error).message || 'Failed to start ready sessions'))
@@ -2171,13 +2180,15 @@ async function pollForReadyNodeSessions(
   nodeIds: string[],
   onState: (state: PlannerGraphState) => void,
   onDone: () => void,
+  onFirstBound?: (session: { nodeId: string; sessionId: string; surfaceId?: string | null }) => void,
 ) {
   const pending = new Set(nodeIds)
+  let firstBoundOpened = false
   try {
     for (let attempt = 0; attempt < 36 && pending.size > 0; attempt += 1) {
       await delay(attempt < 4 ? 900 : 1800)
       try {
-        await fetchState()
+        const board = await fetchState()
         const state = await fetchPlannerGraphState(canvasId)
         onState(state)
         for (const nodeId of [...pending]) {
@@ -2186,8 +2197,21 @@ async function pollForReadyNodeSessions(
             pending.delete(nodeId)
             continue
           }
-          if (node.sessionId?.trim()) {
+          const boundSessionId = node.sessionId?.trim()
+          if (boundSessionId) {
             pending.delete(nodeId)
+            if (!firstBoundOpened && onFirstBound) {
+              firstBoundOpened = true
+              const liveSession = board.sessions.find((session) => (
+                sessionMatchesBoundId(session.id, boundSessionId)
+                || Boolean(session.surfaceId && sessionMatchesBoundId(session.surfaceId, boundSessionId))
+              ))
+              onFirstBound({
+                nodeId,
+                sessionId: liveSession?.id ?? boundSessionId,
+                surfaceId: liveSession?.surfaceId ?? null,
+              })
+            }
             continue
           }
           if (node.workflowRunState !== 'dispatched' && node.workflowRunState !== 'running') {
