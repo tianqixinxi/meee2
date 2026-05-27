@@ -954,6 +954,12 @@ class ClaudePlugin: SessionPlugin {
                 // 需要删除旧记录，用真实的 session ID 创建新记录
                 if existingPidMatch.sessionId != realSessionId {
                     NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Deleting old and creating new.")
+                    if Self.isMeee2InternalSessionId(existingPidMatch.sessionId) {
+                        SessionTerminalStore.shared.setProviderResumeSessionId(
+                            sessionId: existingPidMatch.sessionId,
+                            providerResumeSessionId: realSessionId
+                        )
+                    }
                     // 旧 record 上的 ghosttyTerminalId（如果有）属于同一个物理 Ghostty
                     // terminal（同一 PID = 同一 Claude CLI 实例 = 同一 tty）。
                     // 删旧之前先把它 buffer 到 realSessionId 上，避免新 record 失去
@@ -1109,6 +1115,11 @@ class ClaudePlugin: SessionPlugin {
         }
         lastMessageCacheLock.unlock()
         return value
+    }
+
+    private static func isMeee2InternalSessionId(_ sessionId: String) -> Bool {
+        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
     }
 
     private static func fileFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {

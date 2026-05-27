@@ -49,6 +49,12 @@ struct SessionDTO: Encodable {
     let tty: String?
     /// 终端程序名（诊断用）；未知时为 null
     let termProgram: String?
+    /// "internal" means meee2 owns the PTY/surface; "external" means the
+    /// session still lives in Ghostty/iTerm/Terminal/cmux.
+    let terminalKind: String
+    let surfaceId: String?
+    let surfaceStatus: String?
+    let canOpenExternal: Bool
 
     /// 当前后台在跑的 Claude Code 子 agent / task（Agent run_in_background / Monitor / Bash run_in_background）。
     /// 主 agent status 和这个字段是正交维度：主可以是 idle 而后台同时有 N 条在跑。
@@ -799,6 +805,10 @@ enum BoardDTOBuilder {
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,
             tty: tty,
             termProgram: termProgram,
+            terminalKind: "external",
+            surfaceId: nil,
+            surfaceStatus: nil,
+            canOpenExternal: true,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
             clientKind: clientKind,
@@ -857,9 +867,65 @@ enum BoardDTOBuilder {
             ghosttyTerminalId: nil,
             tty: nil,
             termProgram: nil,
+            terminalKind: "external",
+            surfaceId: nil,
+            surfaceStatus: nil,
+            canOpenExternal: true,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "desktop",
+            syncEnabled: sync.enabled,
+            syncTeamId: sync.teamId,
+            syncTeamName: sync.teamName
+        )
+    }
+
+    static func internalSessionDTO(_ surface: InternalTerminalSurfaceSnapshot) -> SessionDTO {
+        let isCodex = surface.provider == "codex"
+        let pluginId = isCodex ? "com.meee2.plugin.codex" : "com.meee2.plugin.claude"
+        let info = PluginManager.shared.getPluginInfo(for: pluginId)
+        let displayName = info?.displayName ?? (isCodex ? "Codex" : "Claude Code")
+        let colorHex = info.map { hexString(from: $0.themeColor) } ?? (isCodex ? "#3B82F6" : "#FF9230")
+        let sessionData = SessionStore.shared.get(surface.sessionId)
+        let lifecycleStatus: SessionStatus = {
+            switch surface.status {
+            case "starting", "running":
+                return sessionData?.status == .dead ? .dead : .active
+            case "exited", "failed":
+                return .dead
+            default:
+                return sessionData?.status ?? .idle
+            }
+        }()
+        let sync = syncInfo(forSessionId: surface.sessionId)
+        return SessionDTO(
+            id: surface.sessionId,
+            title: surface.title,
+            project: surface.cwd,
+            pluginId: pluginId,
+            pluginDisplayName: displayName,
+            pluginColor: colorHex,
+            status: lifecycleStatus.rawValue,
+            inboxPending: directInboxCount(for: surface.sessionId),
+            recentMessages: [],
+            currentTool: surface.status == "running" ? "terminal" : nil,
+            startedAt: iso8601.string(from: surface.createdAt),
+            lastActivity: iso8601.string(from: surface.updatedAt),
+            usageStats: nil,
+            tasks: [],
+            currentTask: surface.nodeId.map { "Node \($0)" },
+            pendingPermissionTool: sessionData?.pendingPermissionTool,
+            pendingPermissionMessage: sessionData?.pendingPermissionMessage,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: "meee2-internal",
+            terminalKind: "internal",
+            surfaceId: surface.surfaceId,
+            surfaceStatus: surface.status,
+            canOpenExternal: false,
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: "cli",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
             syncTeamName: sync.teamName

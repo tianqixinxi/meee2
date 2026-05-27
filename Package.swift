@@ -16,6 +16,7 @@ let package = Package(
         .package(name: "Meee2PluginKit", path: "meee2-plugin-kit"),
         .package(name: "Meee2CommKit", path: "meee2-comm-kit"),
         .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0"),
+        .package(url: "https://github.com/Lakr233/libghostty-spm.git", from: "1.1.9"),
         // Sparkle —— Andy Matuschak's auto-update framework. EdDSA-signed
         // appcast feed at SUFeedURL (raw.githubusercontent.com/.../appcast.xml);
         // public key in App/Info.plist's SUPublicEDKey; private key only
@@ -53,6 +54,7 @@ let package = Package(
                 "meee2Kit",
                 .product(name: "Meee2PluginKit", package: "Meee2PluginKit"),
                 .product(name: "Meee2CommKit", package: "Meee2CommKit"),
+                .product(name: "GhosttyTerminal", package: "libghostty-spm"),
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "App",

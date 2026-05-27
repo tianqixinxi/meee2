@@ -342,6 +342,7 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -443,6 +444,19 @@ export default function App() {
     window.addEventListener('meee2:open-settings', openSettings)
     return () => window.removeEventListener('meee2:open-settings', openSettings)
   }, [])
+
+  useEffect(() => {
+    const openSession = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
+      const surfaceId = detail?.surfaceId?.trim()
+      const sessionId = detail?.sessionId?.trim()
+      setSelectedSessionId(sessionId || surfaceId || null)
+      setWorkspaceMode('sessions')
+      boardState.refresh()
+    }
+    window.addEventListener('meee2:open-session', openSession)
+    return () => window.removeEventListener('meee2:open-session', openSession)
+  }, [boardState.refresh])
 
   const completeFirstRunOnboarding = useCallback(() => {
     setFirstRunOnboardingCompleted(true)
@@ -686,6 +700,7 @@ export default function App() {
     : workspaceCanvases[0]?.id ?? activeCanvasId
   const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
+  const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -724,7 +739,12 @@ export default function App() {
               onCreateTemplate={handleCreateTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
-            <SessionsView state={boardState.state} unreadSids={unreadSids} />
+            <SessionsView
+              state={boardState.state}
+              unreadSids={unreadSids}
+              selectedSessionId={selectedSessionId}
+              onSelectedSessionChange={setSelectedSessionId}
+            />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView
               canvases={workspaceCanvases}
@@ -778,7 +798,7 @@ export default function App() {
               onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
-          {activeCanvasLoading && (
+          {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
               <div className="canvas-global-loading__label">{t('common.switchingCanvas')}</div>

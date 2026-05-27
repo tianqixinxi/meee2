@@ -9,6 +9,11 @@ struct SessionTerminalInfo: Codable {
     var cwd: String
     var lastActivityAt: Date
     var status: String
+    var command: String?
+    var provider: String?
+    var providerResumeSessionId: String?
+    var canvasId: String?
+    var nodeId: String?
 
     // cmux 专用
     var cmuxSocketPath: String?
@@ -24,11 +29,13 @@ class SessionTerminalStore {
     private let storeURL: URL
     private var store: [String: SessionTerminalInfo] = [:]
     private let queue = DispatchQueue(label: "com.meee2.terminalstore", qos: .utility)
+    private let queueKey = DispatchSpecificKey<Void>()
 
     private init() {
         let home = NSHomeDirectory()
         let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
         storeURL = dir.appendingPathComponent("session-terminals.json")
+        queue.setSpecific(key: queueKey, value: ())
 
         // 确保目录存在
         try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -42,11 +49,23 @@ class SessionTerminalStore {
     // MARK: - Public Methods
 
     /// 更新 session 的终端信息
-    func update(sessionId: String, tty: String?, termProgram: String?, termBundleId: String?, cmuxSocketPath: String?, cmuxSurfaceId: String?, cwd: String, status: String) {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
-            var info = self.store[sessionId] ?? SessionTerminalInfo(
+    func update(
+        sessionId: String,
+        tty: String?,
+        termProgram: String?,
+        termBundleId: String?,
+        cmuxSocketPath: String?,
+        cmuxSurfaceId: String?,
+        cwd: String,
+        status: String,
+        command: String? = nil,
+        provider: String? = nil,
+        providerResumeSessionId: String? = nil,
+        canvasId: String? = nil,
+        nodeId: String? = nil
+    ) {
+        performSync {
+            var info = store[sessionId] ?? SessionTerminalInfo(
                 sessionId: sessionId,
                 tty: tty,
                 termProgram: termProgram,
@@ -54,6 +73,11 @@ class SessionTerminalStore {
                 cwd: cwd,
                 lastActivityAt: Date(),
                 status: status,
+                command: command,
+                provider: provider,
+                providerResumeSessionId: providerResumeSessionId,
+                canvasId: canvasId,
+                nodeId: nodeId,
                 cmuxSocketPath: cmuxSocketPath,
                 cmuxSurfaceId: cmuxSurfaceId
             )
@@ -63,12 +87,21 @@ class SessionTerminalStore {
             info.termBundleId = termBundleId ?? info.termBundleId
             info.cmuxSocketPath = cmuxSocketPath ?? info.cmuxSocketPath
             info.cmuxSurfaceId = cmuxSurfaceId ?? info.cmuxSurfaceId
+            if let command {
+                info.command = Self.commandForStorage(provider: provider ?? info.provider, command: command)
+            }
+            info.provider = provider ?? info.provider
+            if let providerResumeSessionId {
+                info.providerResumeSessionId = Self.validProviderResumeSessionId(providerResumeSessionId)
+            }
+            info.canvasId = canvasId ?? info.canvasId
+            info.nodeId = nodeId ?? info.nodeId
             info.cwd = cwd
             info.lastActivityAt = Date()
             info.status = status
 
-            self.store[sessionId] = info
-            self.save()
+            store[sessionId] = info
+            save()
 
             NSLog("[SessionTerminalStore] Updated session \(sessionId.prefix(8)): tty=\(tty ?? "nil"), term=\(termProgram ?? "nil"), cmuxSocket=\(cmuxSocketPath ?? "nil")")
         }
@@ -90,26 +123,49 @@ class SessionTerminalStore {
 
     /// 删除已结束的 session
     func remove(sessionId: String) {
-        queue.async { [weak self] in
-            self?.store.removeValue(forKey: sessionId)
-            self?.save()
+        performSync {
+            store.removeValue(forKey: sessionId)
+            save()
+        }
+    }
+
+    func setProviderResumeSessionId(sessionId: String, providerResumeSessionId: String) {
+        let trimmed = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        performSync {
+            guard var info = store[sessionId] else { return }
+            guard let validResumeId = Self.validProviderResumeSessionId(trimmed) else {
+                info.providerResumeSessionId = nil
+                info.lastActivityAt = Date()
+                store[sessionId] = info
+                save()
+                NSLog("[SessionTerminalStore] Ignored invalid provider resume id for internal session \(sessionId.prefix(8))")
+                return
+            }
+            info.providerResumeSessionId = validResumeId
+            info.lastActivityAt = Date()
+            store[sessionId] = info
+            save()
+            NSLog("[SessionTerminalStore] Linked internal session \(sessionId.prefix(8)) to provider resume id \(validResumeId.prefix(8))")
         }
     }
 
     /// 清理过期 session (超过 24 小时无活动)
     func cleanupExpired() {
-        queue.async { [weak self] in
-            guard let self = self else { return }
-
+        performSync {
             let threshold = Date().addingTimeInterval(-24 * 60 * 60)
-            let before = self.store.count
+            let before = store.count
+            var changed = false
 
-            self.store = self.store.filter { $0.value.lastActivityAt > threshold }
+            store = store.filter { $0.value.lastActivityAt > threshold }
+            changed = migrateInvalidInternalResumeCommandsLocked() || changed
 
-            let removed = before - self.store.count
+            let removed = before - store.count
             if removed > 0 {
                 NSLog("[SessionTerminalStore] Cleaned up \(removed) expired sessions")
-                self.save()
+            }
+            if removed > 0 || changed {
+                save()
             }
         }
     }
@@ -124,11 +180,70 @@ class SessionTerminalStore {
         }
 
         store = decoded
+        if migrateInvalidInternalResumeCommandsLocked() {
+            save()
+        }
         NSLog("[SessionTerminalStore] Loaded \(store.count) session-terminal mappings")
     }
 
     private func save() {
         guard let data = try? JSONEncoder().encode(store) else { return }
         try? data.write(to: storeURL)
+    }
+
+    private func performSync(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            work()
+        } else {
+            queue.sync(execute: work)
+        }
+    }
+
+    private func migrateInvalidInternalResumeCommandsLocked() -> Bool {
+        var changed = false
+        for (sessionId, var info) in store {
+            var entryChanged = false
+            let providerResume = info.providerResumeSessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasValidProviderResume = Self.validProviderResumeSessionId(providerResume) != nil
+            if !providerResume.isEmpty && !hasValidProviderResume {
+                info.providerResumeSessionId = nil
+                entryChanged = true
+            }
+            if AgentLaunchCommand.isMeee2InternalSessionId(sessionId),
+               !hasValidProviderResume,
+               let command = info.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+               AgentLaunchCommand.commandRequestsResume(command) {
+                info.command = Self.freshCommand(provider: info.provider, command: command)
+                entryChanged = true
+            }
+            if entryChanged {
+                store[sessionId] = info
+                changed = true
+            }
+        }
+        if changed {
+            NSLog("[SessionTerminalStore] Migrated invalid internal resume commands")
+        }
+        return changed
+    }
+
+    private static func validProviderResumeSessionId(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, !AgentLaunchCommand.isMeee2InternalSessionId(trimmed) else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func commandForStorage(provider: String?, command: String) -> String {
+        if AgentLaunchCommand.commandUsesInternalResumeId(command) {
+            return freshCommand(provider: provider, command: command)
+        }
+        return command
+    }
+
+    private static func freshCommand(provider: String?, command: String?) -> String {
+        let haystack = "\(provider ?? "") \(command ?? "")".lowercased()
+        return AgentLaunchCommand.fullAccessCommand(forProvider: haystack.contains("codex") ? "codex" : "claude")
     }
 }
