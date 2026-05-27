@@ -842,6 +842,7 @@ export default function App() {
               <WorkspaceMonitor
                 activeCanvasId={activeWorkspaceCanvasId}
                 canvases={workspaceCanvases}
+                refreshTick={activeCanvasRefreshTick}
                 onOpenItem={handleOpenMonitorItem}
                 onOpenAllSessions={() => setWorkspaceMode('sessions')}
               />

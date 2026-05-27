@@ -835,6 +835,7 @@ export interface PlannerMonitorItem {
   doerId?: string | null
   riskRank: number
   evidenceCount?: number
+  updatedAt?: string | null
   /**
    * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
    * for proposal items or nodes with no actionable workflow state.

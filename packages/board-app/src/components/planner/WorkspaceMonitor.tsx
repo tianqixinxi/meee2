@@ -44,6 +44,7 @@ interface MonitorLane {
 interface WorkspaceMonitorProps {
   activeCanvasId: string
   canvases: CanvasInfo[]
+  refreshTick: number
   onOpenItem: (item: PlannerMonitorItem) => void
   onOpenAllSessions: () => void
 }
@@ -51,6 +52,7 @@ interface WorkspaceMonitorProps {
 export function WorkspaceMonitor({
   activeCanvasId,
   canvases,
+  refreshTick,
   onOpenItem,
   onOpenAllSessions,
 }: WorkspaceMonitorProps) {
@@ -75,7 +77,7 @@ export function WorkspaceMonitor({
 
   useEffect(() => {
     loadMonitor()
-  }, [loadMonitor])
+  }, [loadMonitor, refreshTick])
 
   const lanes = useMemo<MonitorLane[]>(() => {
     const term = query.trim().toLowerCase()
@@ -290,7 +292,7 @@ function MonitorCard({
           <Icon size={12} aria-hidden />
           {sourceLabel(item, t)}
         </span>
-        <span className="planner-monitor-card__time">{formatGeneratedAt(generatedAt)}</span>
+        <span className="planner-monitor-card__time">{formatRelativeTimestamp(item.updatedAt ?? generatedAt)}</span>
       </div>
       <h3>{item.nodeTitle ?? item.summary}</h3>
       <div className="planner-monitor-card__meta">
@@ -362,6 +364,10 @@ function evidenceCount(item: PlannerMonitorItem): number {
 
 function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode: MonitorSort): number {
   if (sortMode === 'severity' && a.riskRank !== b.riskRank) return a.riskRank - b.riskRank
+  if (sortMode === 'updated') {
+    const delta = timestampForItem(b) - timestampForItem(a)
+    if (delta !== 0) return delta
+  }
   if (a.canvasTitle !== b.canvasTitle) return a.canvasTitle.localeCompare(b.canvasTitle)
   return a.summary.localeCompare(b.summary)
 }
@@ -389,7 +395,12 @@ function statusLabel(item: PlannerMonitorItem, t: Translator): string {
   }
 }
 
-function formatGeneratedAt(value?: string): string {
+function timestampForItem(item: PlannerMonitorItem): number {
+  const timestamp = Date.parse(item.updatedAt ?? '')
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function formatRelativeTimestamp(value?: string | null): string {
   if (!value) return ''
   const timestamp = Date.parse(value)
   if (Number.isNaN(timestamp)) return ''

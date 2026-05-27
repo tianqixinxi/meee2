@@ -1540,6 +1540,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var doerId: String?
     var riskRank: Int
     var evidenceCount: Int
+    var updatedAt: Date?
     /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
     /// for proposal items or nodes with no actionable workflow state.
     var nextAction: String?
@@ -1562,6 +1563,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         doerId: String?,
         riskRank: Int,
         evidenceCount: Int = 0,
+        updatedAt: Date? = nil,
         nextAction: String? = nil
     ) {
         self.id = id
@@ -1581,6 +1583,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.doerId = doerId
         self.riskRank = riskRank
         self.evidenceCount = evidenceCount
+        self.updatedAt = updatedAt
         self.nextAction = nextAction
     }
 }
@@ -5513,6 +5516,7 @@ enum PlannerBoardBridge {
                     doerId: run.responsibleUserId,
                     riskRank: attentionCount > 0 ? 1 : (run.status == .active ? 3 : 5),
                     evidenceCount: runStates.reduce(0) { $0 + $1.artifactIds.count },
+                    updatedAt: run.updatedAt,
                     nextAction: "\(doneCount)/\(totalCount) steps"
                 ))
             }
@@ -5538,6 +5542,8 @@ enum PlannerBoardBridge {
                     doerId: node.doerId,
                     riskRank: rank,
                     evidenceCount: (node.artifactRefs ?? []).count + (artifactsByNodeId[node.id]?.count ?? 0),
+                    updatedAt: latestPlannerEventDate(in: state.events, nodeId: node.id)
+                        ?? node.outputSubmittedAt,
                     nextAction: PlannerWorkflowGuidance.nextAction(
                         for: node,
                         blockers: snapshot.blockers
@@ -5564,7 +5570,8 @@ enum PlannerBoardBridge {
                         riskRank: proposal.status == .pending ? 1 : 2,
                         evidenceCount: proposal.changes.reduce(0) { total, change in
                             total + (change.artifactRefs?.count ?? 0) + (change.artifact == nil ? 0 : 1)
-                        }
+                        },
+                        updatedAt: latestPlannerEventDate(in: state.events, proposalId: proposal.id)
                     ))
                 }
             }
@@ -5576,6 +5583,21 @@ enum PlannerBoardBridge {
             return $0.summary < $1.summary
         }
         return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
+    private static func latestPlannerEventDate(
+        in events: [PlannerEvent],
+        nodeId: String? = nil,
+        proposalId: String? = nil
+    ) -> Date? {
+        events
+            .filter { event in
+                if let nodeId, event.nodeId == nodeId { return true }
+                if let proposalId, event.proposalId == proposalId { return true }
+                return false
+            }
+            .map(\.createdAt)
+            .max()
     }
 
     private static func monitorSessionPriority(for nodeState: RunNodeState) -> Int {
