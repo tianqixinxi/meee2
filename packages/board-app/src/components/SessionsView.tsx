@@ -4,12 +4,17 @@ import {
   CircleStop,
   Clock3,
   ExternalLink,
+  MessageSquareText,
   RefreshCw,
+  RotateCw,
   Search,
+  Send,
   Terminal as TerminalIcon,
+  Wrench,
+  Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSessionSurface, fetchSessionIntakeDiagnostics, openNativeTerminalSurface, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck } from '../api'
+import { activateSession, closeSession, closeSessionSurface, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
 
@@ -65,13 +70,12 @@ export function SessionsView({
   const selectedSession = useMemo(() => {
     if (!selectedSessionId) return null
     return sessions.find((session) => (
-      isInternalSession(session)
-      && (session.id === selectedSessionId || session.surfaceId === selectedSessionId)
+      session.id === selectedSessionId || session.surfaceId === selectedSessionId
     )) ?? null
   }, [selectedSessionId, sessions])
   const internalSessions = useMemo(() => {
     const list = visibleSessions.filter(isInternalSession)
-    if (selectedSession && !list.some((session) => session.id === selectedSession.id)) {
+    if (selectedSession && isInternalSession(selectedSession) && !list.some((session) => session.id === selectedSession.id)) {
       return [selectedSession, ...list]
     }
     return list
@@ -80,6 +84,10 @@ export function SessionsView({
     () => visibleSessions.filter((session) => !isInternalSession(session)),
     [visibleSessions],
   )
+  const selectedSessionOnActiveTab = useMemo(() => {
+    if (!selectedSession) return null
+    return (activeKindTab === 'internal') === isInternalSession(selectedSession) ? selectedSession : null
+  }, [activeKindTab, selectedSession])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
@@ -124,27 +132,30 @@ export function SessionsView({
   }, [])
 
   useEffect(() => {
-    if (activeKindTab !== 'internal' || selectedSession || internalSessions.length === 0) return
+    if (activeKindTab !== 'internal' || selectedSessionOnActiveTab || internalSessions.length === 0) return
     const next = internalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next?.id ?? null)
-  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSession, selectedSessionId])
+  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
-    if (selectedSessionId && selectedSession) setActiveKindTab('internal')
-  }, [selectedSession, selectedSessionId])
+    if (activeKindTab !== 'external' || selectedSessionOnActiveTab || externalSessions.length === 0) return
+    const next = externalSessions[0]
+    if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
+    onSelectedSessionChange?.(next.id)
+  }, [activeKindTab, externalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
     if (activeKindTab !== 'internal') return
     const targets = uniqueSessionsById([
-      ...(selectedSession ? [selectedSession] : []),
+      ...(selectedSessionOnActiveTab ? [selectedSessionOnActiveTab] : []),
       ...internalSessions,
     ])
       .filter((session) => session.surfaceId && isLiveInternalSession(session))
       .slice(0, 1)
     if (targets.length === 0) return
     return scheduleInternalTabPrewarm(targets[0], prewarmInternalSession)
-  }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSession])
+  }, [activeKindTab, internalSessions, prewarmInternalSession, selectedSessionOnActiveTab])
 
   const selectInternalSession = useCallback((session: Session, phase = 'react.rowSelect') => {
     const startedAt = Date.now()
@@ -160,6 +171,10 @@ export function SessionsView({
     })
     onSelectedSessionChange?.(session.id)
   }, [onSelectedSessionChange, prewarmInternalSession])
+
+  const selectExternalSession = useCallback((session: Session) => {
+    onSelectedSessionChange?.(session.id)
+  }, [onSelectedSessionChange])
 
   const prewarmSessionRow = useCallback((session: Session) => {
     if (isInternalSession(session)) prewarmInternalSession(session, 'react.rowHoverPrewarm')
@@ -252,7 +267,7 @@ export function SessionsView({
                           <SessionRow
                             key={session.id}
                             session={session}
-                            selected={selectedSession?.id === session.id}
+                            selected={selectedSessionOnActiveTab?.id === session.id}
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
@@ -277,11 +292,11 @@ export function SessionsView({
                           <SessionRow
                             key={session.id}
                             session={session}
-                            selected={false}
+                            selected={selectedSessionOnActiveTab?.id === session.id}
                             opening={openingId === session.id}
                             openError={openErrorId === session.id}
                             unread={unreadSids.has(session.id)}
-                            onSelect={noopSessionAction}
+                            onSelect={selectExternalSession}
                             onOpen={openSession}
                             onPrewarm={noopSessionAction}
                             t={t}
@@ -291,17 +306,15 @@ export function SessionsView({
                     </SessionsSection>
                   )}
                 </aside>
-                {activeKindTab === 'internal' && (
-                  <SessionDetail
-                    session={selectedSession}
-                    opening={openingId === selectedSession?.id}
-                    openError={openErrorId === selectedSession?.id}
-                    switchStartedAt={selectedSession ? switchStartedAtRef.current[selectedSession.id] : undefined}
-                    switchTraceId={selectedSession ? switchTraceIdRef.current[selectedSession.id] : undefined}
-                    onOpen={() => selectedSession && openSession(selectedSession)}
-                    t={t}
-                  />
-                )}
+                <SessionDetail
+                  session={selectedSessionOnActiveTab}
+                  opening={openingId === selectedSessionOnActiveTab?.id}
+                  openError={openErrorId === selectedSessionOnActiveTab?.id}
+                  switchStartedAt={selectedSessionOnActiveTab ? switchStartedAtRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  switchTraceId={selectedSessionOnActiveTab ? switchTraceIdRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  onOpen={() => selectedSessionOnActiveTab && openSession(selectedSessionOnActiveTab)}
+                  t={t}
+                />
               </div>
             )}
           </div>
@@ -526,7 +539,41 @@ function SessionDetail({
   t: ReturnType<typeof useI18n>['t']
 }) {
   const [stopping, setStopping] = useState(false)
+  const [stopConfirming, setStopConfirming] = useState(false)
   const [stopError, setStopError] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [pushing, setPushing] = useState(false)
+  const [controlStatus, setControlStatus] = useState<string | null>(null)
+  const [controlError, setControlError] = useState<string | null>(null)
+  const [timeline, setTimeline] = useState<TranscriptEntryFull[]>([])
+  const [timelineLoading, setTimelineLoading] = useState(false)
+  const [timelineError, setTimelineError] = useState<string | null>(null)
+  const refreshTimeline = useCallback(async () => {
+    if (!session) {
+      setTimeline([])
+      return
+    }
+    setTimelineLoading(true)
+    setTimelineError(null)
+    try {
+      const response = await fetchTranscript(session.id, { limit: 48 })
+      setTimeline(response.entries)
+    } catch (err) {
+      setTimeline([])
+      setTimelineError((err as Error).message || t('sessions.timelineLoadFailed'))
+    } finally {
+      setTimelineLoading(false)
+    }
+  }, [session, t])
+  useEffect(() => {
+    setDraft('')
+    setControlStatus(null)
+    setControlError(null)
+    setStopError(null)
+    setStopConfirming(false)
+    void refreshTimeline()
+  }, [refreshTimeline])
   if (!session) {
     return (
       <aside className="sessions-detail sessions-detail--empty">
@@ -537,16 +584,66 @@ function SessionDetail({
   }
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
-  const stopInternal = async () => {
-    if (!session.surfaceId) return
+  const desktopSession = session.clientKind === 'desktop' && !internal
+  const sendMessage = async () => {
+    const content = draft.trim()
+    if (!content) return
+    setSending(true)
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      const result = await injectToSession(session.id, content)
+      setDraft('')
+      setControlStatus(result.delivery === 'queued_until_next_turn' ? t('sessions.queuedUntilNextTurn') : t('sessions.sent'))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.sendFailed'))
+    } finally {
+      setSending(false)
+    }
+  }
+  const pushNow = async () => {
+    const content = draft.trim()
+    setPushing(true)
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      const result = await pushToDesktopNow(session.id, content)
+      if (result.error) {
+        setControlError(result.error)
+        if (result.errorCode === 'accessibility_denied') void openAccessibilitySettings()
+        return
+      }
+      if (content) setDraft('')
+      setControlStatus(t('sessions.pushDelivered', { count: result.delivered }))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.pushFailed'))
+    } finally {
+      setPushing(false)
+    }
+  }
+  const stopSession = async () => {
+    if (!stopConfirming) {
+      setStopConfirming(true)
+      return
+    }
     setStopping(true)
     setStopError(null)
     try {
-      await closeSessionSurface(session.surfaceId)
+      if (internal && session.surfaceId) {
+        await closeSessionSurface(session.surfaceId)
+      } else {
+        const result = await closeSession(session.id)
+        if (!result.ok) {
+          setStopError(result.errorCode === 'no_pid' ? t('sessions.stopUnsupported') : (result.error || t('sessions.stopFailed')))
+        }
+      }
     } catch (err) {
       setStopError((err as Error).message || t('sessions.stopFailed'))
     } finally {
       setStopping(false)
+      setStopConfirming(false)
     }
   }
   return (
@@ -557,21 +654,19 @@ function SessionDetail({
           <h2>{session.title || shortId(session.id)}</h2>
         </div>
         <div className="sessions-detail__actions">
-          {internal ? (
-            <button
-              type="button"
-              onClick={stopInternal}
-              disabled={stopping || session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'}
-            >
-              <CircleStop size={14} aria-hidden />
-              {stopping ? t('sessions.stopping') : t('sessions.stop')}
-            </button>
-          ) : (
-            <button type="button" onClick={onOpen} disabled={opening}>
-              <ExternalLink size={14} aria-hidden />
-              {opening ? t('common.opening') : t('sessions.openExternal')}
-            </button>
-          )}
+          <button type="button" onClick={onOpen} disabled={opening}>
+            {internal ? <TerminalIcon size={14} aria-hidden /> : <ExternalLink size={14} aria-hidden />}
+            {opening ? t('common.opening') : t('sessions.openSession')}
+          </button>
+          <button
+            type="button"
+            className={stopConfirming ? 'sessions-detail__danger' : undefined}
+            onClick={stopSession}
+            disabled={stopping || (internal && (session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'))}
+          >
+            <CircleStop size={14} aria-hidden />
+            {stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+          </button>
         </div>
       </div>
       <dl className="sessions-detail__meta">
@@ -590,21 +685,196 @@ function SessionDetail({
       </dl>
       {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
       {stopError && <p className="sessions-detail__error">{stopError}</p>}
-      {internal && session.surfaceId && liveInternal ? (
-        <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
-      ) : internal ? (
-        <div className="sessions-external">
-          <TerminalIcon size={18} aria-hidden />
-          <span>{t('sessions.internalEndedSummary')}</span>
+      <section className="sessions-control" aria-label={t('sessions.control')}>
+        <div className="sessions-control__heading">
+          <div>
+            <strong>{t('sessions.control')}</strong>
+            <span>{session.inboxPending > 0 ? t('sessions.pendingMessages', { count: session.inboxPending }) : t('sessions.controlReady')}</span>
+          </div>
+          {session.pendingPermissionTool && (
+            <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
+          )}
         </div>
-      ) : (
-        <div className="sessions-external">
-          <ExternalLink size={18} aria-hidden />
-          <span>{t('sessions.externalSummary')}</span>
+        <div className="sessions-composer">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={t('sessions.messagePlaceholder')}
+            rows={3}
+          />
+          <div className="sessions-composer__actions">
+            <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
+              <Send size={13} aria-hidden />
+              {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+            </button>
+            {desktopSession && (
+              <button type="button" onClick={pushNow} disabled={pushing}>
+                <Zap size={13} aria-hidden />
+                {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+              </button>
+            )}
+          </div>
         </div>
-      )}
+        {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
+        {controlError && <p className="sessions-detail__error">{controlError}</p>}
+      </section>
+      <section className="sessions-runtime">
+        {internal && session.surfaceId && liveInternal ? (
+          <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
+        ) : internal ? (
+          <div className="sessions-external">
+            <TerminalIcon size={18} aria-hidden />
+            <span>{t('sessions.internalEndedSummary')}</span>
+          </div>
+        ) : (
+          <div className="sessions-external">
+            <ExternalLink size={18} aria-hidden />
+            <span>{t('sessions.externalSummary')}</span>
+          </div>
+        )}
+        <SessionTimeline
+          entries={timeline}
+          loading={timelineLoading}
+          error={timelineError}
+          session={session}
+          onRefresh={refreshTimeline}
+          t={t}
+        />
+      </section>
     </aside>
   )
+}
+
+function SessionTimeline({
+  entries,
+  loading,
+  error,
+  session,
+  onRefresh,
+  t,
+}: {
+  entries: TranscriptEntryFull[]
+  loading: boolean
+  error: string | null
+  session: Session
+  onRefresh: () => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  const timelineItems = buildTimelineItems(entries, session, t)
+  return (
+    <section className="sessions-timeline" aria-label={t('sessions.timeline')}>
+      <div className="sessions-timeline__heading">
+        <div>
+          <strong>{t('sessions.timeline')}</strong>
+          <span>{loading ? t('sessions.timelineLoading') : t('sessions.timelineCount', { count: timelineItems.length })}</span>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={loading}>
+          <RotateCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
+          {t('sessions.refreshTimeline')}
+        </button>
+      </div>
+      {error && <p className="sessions-detail__error">{error}</p>}
+      {timelineItems.length === 0 && !loading ? (
+        <div className="sessions-timeline__empty">
+          <MessageSquareText size={16} aria-hidden />
+          <span>{t('sessions.timelineEmpty')}</span>
+        </div>
+      ) : (
+        <ol className="sessions-timeline__list">
+          {timelineItems.map((item) => (
+            <li key={item.id} className={`sessions-timeline__item sessions-timeline__item--${item.kind}`}>
+              <span className="sessions-timeline__icon">{item.icon}</span>
+              <div>
+                <header>
+                  <strong>{item.title}</strong>
+                  {item.time && <span>{item.time}</span>}
+                </header>
+                <p>{item.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+interface TimelineItem {
+  id: string
+  kind: 'message' | 'tool' | 'permission' | 'recap'
+  title: string
+  body: string
+  time: string | null
+  icon: ReactNode
+}
+
+function buildTimelineItems(
+  entries: TranscriptEntryFull[],
+  session: Session,
+  t: ReturnType<typeof useI18n>['t'],
+): TimelineItem[] {
+  const items: TimelineItem[] = []
+  if (session.pendingPermissionTool || session.pendingPermissionMessage) {
+    items.push({
+      id: `${session.id}:permission`,
+      kind: 'permission',
+      title: session.pendingPermissionTool
+        ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+        : t('sessions.permissionRequired'),
+      body: session.pendingPermissionMessage || t('sessions.waitingUser'),
+      time: session.lastActivity ? relativeTime(session.lastActivity, t) : null,
+      icon: <AlertCircle size={13} aria-hidden />,
+    })
+  }
+  if (session.latestRecap?.content) {
+    items.push({
+      id: `${session.id}:recap`,
+      kind: 'recap',
+      title: t('sessions.recap'),
+      body: compactTimelineText(session.latestRecap.content),
+      time: session.latestRecap.timestamp ? relativeTime(session.latestRecap.timestamp, t) : null,
+      icon: <MessageSquareText size={13} aria-hidden />,
+    })
+  }
+  for (const entry of entries) {
+    const primaryTool = entry.blocks.find((block) => block.type === 'tool_use' || block.type === 'tool_result')
+    const title = primaryTool
+      ? timelineToolTitle(primaryTool, t)
+      : timelineEntryTitle(entry.type, t)
+    items.push({
+      id: entry.id,
+      kind: primaryTool ? 'tool' : 'message',
+      title,
+      body: compactTimelineText(entry.blocks.map(timelineBlockText).filter(Boolean).join(' · ')),
+      time: entry.timestamp ? relativeTime(entry.timestamp, t) : null,
+      icon: primaryTool ? <Wrench size={13} aria-hidden /> : <MessageSquareText size={13} aria-hidden />,
+    })
+  }
+  return items.filter((item) => item.body.length > 0).slice(0, 60)
+}
+
+function timelineToolTitle(block: TranscriptBlock, t: ReturnType<typeof useI18n>['t']): string {
+  if (block.type === 'tool_result') return t('sessions.toolResult')
+  return block.toolName ? t('sessions.toolCallNamed', { tool: block.toolName }) : t('sessions.toolCall')
+}
+
+function timelineEntryTitle(type: TranscriptEntryFull['type'], t: ReturnType<typeof useI18n>['t']): string {
+  if (type === 'user') return t('sessions.userMessage')
+  if (type === 'assistant') return t('sessions.assistantMessage')
+  if (type === 'injected') return t('sessions.injectedMessage')
+  return t('sessions.systemMessage')
+}
+
+function timelineBlockText(block: TranscriptBlock): string {
+  if (block.type === 'text' || block.type === 'thinking') return block.text ?? ''
+  if (block.type === 'tool_use') return block.toolInputJSON ? `${block.toolName ?? 'tool'} ${block.toolInputJSON}` : (block.toolName ?? '')
+  if (block.type === 'tool_result') return block.toolResultText ?? ''
+  return ''
+}
+
+function compactTimelineText(value: string): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
 }
 
 function NativeTerminalPanel({
