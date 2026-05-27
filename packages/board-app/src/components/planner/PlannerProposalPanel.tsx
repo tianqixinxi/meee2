@@ -519,7 +519,7 @@ export function PlannerProposalPanel({
                   onClick={() => setReviewOpen(true)}
                 >
                   <Eye size={14} aria-hidden />
-                  Review changes
+                  {t('planner.reviewChanges')}
                 </button>
               </div>
             </div>
@@ -613,28 +613,29 @@ export function PlannerProposalPanel({
             if (event.target === event.currentTarget) setReviewOpen(false)
           }}
         >
-          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label="Review changes">
+          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label={t('planner.reviewChanges')}>
             <button
               type="button"
               className="planner-proposal-modal__close"
               onClick={() => setReviewOpen(false)}
-              aria-label="Close proposal review"
+              aria-label={t('planner.closeProposalReview')}
             >
               <X size={15} aria-hidden />
             </button>
             <div className="planner-proposal-modal__header">
               <span>{proposal.status}</span>
               <h2>{proposal.summary}</h2>
-              <p>Preview only. The canvas changes after you apply.</p>
+              <p>{t('planner.previewOnly')}. {t('planner.previewOnlyDetail')}</p>
             </div>
             <div className="planner-proposal-modal__body">
-              <section className="planner-proposal-modal__changes" aria-label="Proposed changes">
+              <section className="planner-proposal-modal__changes" aria-label={t('planner.proposedChanges')}>
+                <h3>{t('planner.proposedChanges')}</h3>
                 <MarkdownMessage markdown={proposalMarkdown(proposal)} />
               </section>
-              <section className="planner-proposal-modal__preview-canvas" aria-label="Preview canvas">
+              <section className="planner-proposal-modal__preview-canvas" aria-label={t('planner.previewCanvas')}>
                 <div className="planner-proposal-modal__preview-head">
-                  <span>Preview</span>
-                  <em>{proposal.changes.length} {proposal.changes.length === 1 ? 'change' : 'changes'}</em>
+                  <span>{t('planner.preview')}</span>
+                  <em>{t('planner.changeCount', { count: String(proposal.changes.length) })}</em>
                 </div>
                 <div className="planner-proposal-modal__preview-viewport">
                   {previewGraph.nodes.length > 0 ? (
@@ -657,7 +658,7 @@ export function PlannerProposalPanel({
                       </ReactFlow>
                     </ReactFlowProvider>
                   ) : (
-                    <div className="planner-proposal-modal__preview-empty">No preview available</div>
+                    <div className="planner-proposal-modal__preview-empty">{t('planner.noPreviewAvailable')}</div>
                   )}
                 </div>
               </section>
@@ -671,10 +672,10 @@ export function PlannerProposalPanel({
                   onApproveAndApply()
                   setReviewOpen(false)
                 }}
-                title={isTemplate ? 'Write the previewed changes into this template.' : 'Apply these changes to the canvas.'}
+                title={isTemplate ? t('planner.applyTemplateTitle') : t('planner.applyCanvasTitle')}
               >
                 <Check size={14} aria-hidden />
-                {isTemplate ? 'Apply to template' : 'Apply to canvas'}
+                {isTemplate ? t('planner.applyToTemplate') : t('planner.applyToCanvas')}
               </button>
               <button
                 type="button"
@@ -684,7 +685,7 @@ export function PlannerProposalPanel({
                   setReviewOpen(false)
                 }}
               >
-                {isTemplate ? 'Discard' : 'Reject'}
+                {isTemplate ? t('planner.discardProposal') : t('planner.rejectProposal')}
               </button>
             </div>
           </div>
@@ -788,6 +789,7 @@ function PlannerChatMessageRow({
   onBuildPlan: (prompt: string) => void
   onChoice: (value: string) => void
 }) {
+  const { t } = useI18n()
   const choiceBlocks = parseChoiceBlocks(item.markdown)
   return (
     <div
@@ -834,7 +836,7 @@ function PlannerChatMessageRow({
             onClick={onReview}
           >
             <Eye size={14} aria-hidden />
-            Review changes
+            {t('planner.reviewChanges')}
           </button>
         </div>
       )}
@@ -851,8 +853,9 @@ function PlannerPlanCardView({
   busy: boolean
   onBuild: (prompt: string) => void
 }) {
+  const { t } = useI18n()
   return (
-    <div className="planner-plan-card" aria-label="Draft plan">
+    <div className="planner-plan-card" aria-label={t('planner.draftPlan')}>
       <div className="planner-plan-card__header">
         <span className="planner-plan-card__icon" aria-hidden>
           <Check size={16} />
@@ -882,9 +885,9 @@ function PlannerPlanCardView({
             <i />
             <i />
           </span>
-          Build it
+          {t('planner.buildIt')}
         </button>
-        <span>Tell me what to change, or build this plan.</span>
+        <span>{t('planner.buildPlanHelp')}</span>
       </div>
     </div>
   )

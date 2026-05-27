@@ -316,9 +316,9 @@
 
 .planner-workspace-preview__notice {
   position: absolute;
-  top: 14px;
+  top: 76px;
   left: 16px;
-  z-index: 22;
+  z-index: 260;
   display: grid;
   gap: 4px;
   width: min(420px, calc(100% - 32px));
@@ -327,7 +327,7 @@
   border-radius: 8px;
   background: rgba(43, 35, 31, 0.94);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 .planner-workspace-preview__notice span {
@@ -354,6 +354,24 @@
   font-size: 11px;
   font-style: normal;
   line-height: 1.35;
+}
+
+.planner-workspace-preview__notice button {
+  width: fit-content;
+  height: 28px;
+  margin-top: 4px;
+  padding: 0 10px;
+  border: 1px solid rgba(204, 120, 92, 0.38);
+  border-radius: 7px;
+  background: rgba(204, 120, 92, 0.18);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.planner-workspace-preview__notice button:hover {
+  background: rgba(204, 120, 92, 0.28);
 }
 
 .planner-workspace-preview .react-flow {
@@ -3187,6 +3205,15 @@
   border: 1px solid rgba(168, 165, 155, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(245, 244, 239, 0.035);
+}
+
+.planner-proposal-modal__changes h3 {
+  margin: 0 0 10px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .planner-proposal-modal__preview-canvas {

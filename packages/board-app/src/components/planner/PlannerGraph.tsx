@@ -1672,6 +1672,7 @@ function PlannerGraphInner({
             <PlannerWorkspacePreview
               graph={reviewGraph}
               proposal={activeProposal}
+              onReview={() => setReviewRequestTick((tick) => tick + 1)}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -2309,16 +2310,22 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 function PlannerWorkspacePreview({
   graph,
   proposal,
+  onReview,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
   proposal: PlanProposal
+  onReview: () => void
 }) {
+  const { t } = useI18n()
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview">
       <div className="planner-workspace-preview__notice" role="status">
-        <span>Preview only</span>
-        <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
-        <em>Review and apply from the modal before these nodes become the real canvas.</em>
+        <span>{t('planner.previewOnly')}</span>
+        <strong>{proposal.summary || t('planner.proposalFallbackSummary')}</strong>
+        <em>{t('planner.workspacePreviewDetail')}</em>
+        <button type="button" onClick={onReview}>
+          {t('planner.reviewChanges')}
+        </button>
       </div>
       <ReactFlow
         nodes={graph.nodes}
