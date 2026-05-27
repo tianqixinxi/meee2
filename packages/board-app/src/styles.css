@@ -1531,6 +1531,12 @@ textarea {
   box-shadow: 0 14px 38px rgba(0, 0, 0, 0.14);
 }
 
+.artifacts-card.is-focused {
+  border-color: rgba(204, 120, 92, 0.56);
+  background: rgba(204, 120, 92, 0.11);
+  box-shadow: 0 0 0 1px rgba(204, 120, 92, 0.18), 0 18px 44px rgba(0, 0, 0, 0.18);
+}
+
 .artifacts-card__top {
   display: flex;
   align-items: flex-start;

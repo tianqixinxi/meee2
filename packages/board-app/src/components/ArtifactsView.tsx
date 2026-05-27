@@ -7,7 +7,7 @@ import {
   Loader2,
   Search,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchPlannerGraphState,
   getArtifactVersion,
@@ -27,9 +27,18 @@ import type {
 type ArtifactFilter = 'all' | PlannerArtifactKind
 type SlotDisplayMode = 'latest' | 'merged' | 'compare'
 
+export interface ArtifactFocusTarget {
+  id: number
+  canvasId: string
+  nodeId?: string | null
+  nodeTitle?: string | null
+  reference?: string | null
+}
+
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
+  focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
 }
 
@@ -61,9 +70,11 @@ const KIND_FILTERS: ArtifactFilter[] = [
 export function ArtifactsView({
   canvases,
   activeCanvasId,
+  focusTarget = null,
   onOpenCanvas,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
+  const handledFocusRef = useRef(0)
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<ArtifactFilter>('all')
   const [canvasArtifacts, setCanvasArtifacts] = useState<CanvasArtifacts[]>([])
@@ -233,6 +244,33 @@ export function ArtifactsView({
       .catch(() => undefined)
   }
 
+  useEffect(() => {
+    if (!focusTarget || handledFocusRef.current === focusTarget.id) return
+    handledFocusRef.current = focusTarget.id
+    setKindFilter('all')
+    setQuery(focusTarget.reference?.trim() || focusTarget.nodeTitle?.trim() || focusTarget.nodeId?.trim() || '')
+  }, [focusTarget])
+
+  useEffect(() => {
+    if (!focusTarget || loading || canvasGroups.length === 0) return
+    const matchingSlots = canvasGroups
+      .flatMap((group) => group.slots)
+      .filter((slot) => slotMatchesFocus(slot, focusTarget))
+    if (matchingSlots.length === 0) return
+    setExpandedSlots((current) => {
+      const next = new Set(current)
+      matchingSlots.forEach((slot) => next.add(slot.key))
+      return next
+    })
+    matchingSlots.slice(0, 3).forEach((slot) => loadContent(slot.latest))
+    window.requestAnimationFrame(() => {
+      document.getElementById(artifactSlotDomId(matchingSlots[0].key))?.scrollIntoView({
+        block: 'center',
+        behavior: 'smooth',
+      })
+    })
+  }, [canvasGroups, focusTarget, loading])
+
   return (
     <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
       <div className="artifacts-workspace__inner">
@@ -307,8 +345,13 @@ export function ArtifactsView({
                   const selectedVersionId = selectedVersionBySlot[slot.key]
                   const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
                   const isExpanded = expandedSlots.has(slot.key)
+                  const isFocused = focusTarget ? slotMatchesFocus(slot, focusTarget) : false
                   return (
-                    <article className="artifacts-card" key={slot.key}>
+                    <article
+                      className={`artifacts-card${isFocused ? ' is-focused' : ''}`}
+                      id={artifactSlotDomId(slot.key)}
+                      key={slot.key}
+                    >
                       <div className="artifacts-card__top">
                         <div>
                           <div className="artifacts-card__eyebrow">
@@ -516,6 +559,19 @@ function CompareVersionView({ versions, t }: { versions: PlannerArtifactVersion[
 
 function slotKey(artifact: PlannerArtifact): string {
   return `${artifact.canvasId}:${artifact.nodeId}:${artifact.reference.trim().toLowerCase()}`
+}
+
+function slotMatchesFocus(slot: ArtifactSlot, focus: ArtifactFocusTarget): boolean {
+  if (slot.canvas.id !== focus.canvasId) return false
+  const nodeId = focus.nodeId?.trim()
+  const reference = focus.reference?.trim().toLowerCase()
+  if (nodeId && slot.latest.nodeId === nodeId) return true
+  if (reference && slot.latest.reference.trim().toLowerCase() === reference) return true
+  return false
+}
+
+function artifactSlotDomId(key: string): string {
+  return `artifact-slot-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`
 }
 
 function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact): number {

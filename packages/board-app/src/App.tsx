@@ -10,7 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
-import { ArtifactsView } from './components/ArtifactsView'
+import { ArtifactsView, type ArtifactFocusTarget } from './components/ArtifactsView'
 import { SessionsView } from './components/SessionsView'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -357,6 +357,7 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [plannerFocusTarget, setPlannerFocusTarget] = useState<{ canvasId: string; nodeId: string; requestId: number } | null>(null)
   const [initialPlannerIntake, setInitialPlannerIntake] = useState<{ canvasId: string; id: number; text: string } | null>(null)
+  const [artifactFocusTarget, setArtifactFocusTarget] = useState<ArtifactFocusTarget | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -731,6 +732,7 @@ export default function App() {
   }, [boardSessionSignature, refreshCanvases])
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
+    if (nextMode === 'artifacts') setArtifactFocusTarget(null)
     setWorkspaceMode(nextMode)
     if (nextMode !== 'planner' || !canvasList) return
     const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
@@ -854,7 +856,12 @@ export default function App() {
                   setInitialPlannerIntake((current) => current?.id === requestId ? null : current)
                 }}
                 onOpenSubCanvas={handleSetActiveCanvas}
-                onOpenArtifacts={() => setWorkspaceMode('artifacts')}
+                onOpenArtifacts={(focus) => {
+                  setArtifactFocusTarget(focus
+                    ? { ...focus, id: Date.now() }
+                    : null)
+                  setWorkspaceMode('artifacts')
+                }}
                 onNotify={pushToast}
               />
             )
@@ -878,6 +885,7 @@ export default function App() {
             <ArtifactsView
               canvases={workspaceCanvases}
               activeCanvasId={activeWorkspaceCanvasId}
+              focusTarget={artifactFocusTarget}
               onOpenCanvas={(canvasId) => {
                 handleSetActiveCanvas(canvasId)
                 setWorkspaceMode('planner')

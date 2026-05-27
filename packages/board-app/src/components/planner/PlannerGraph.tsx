@@ -76,6 +76,7 @@ import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 import { TransformInsertEdge } from './TransformInsertEdge'
 import { buildPlannerGraph, type IOArtifactDirection, type IOArtifactVisibility, type PlannerGraphEdge, type PlannerGraphNode } from './plannerGraphAdapter'
+import type { ArtifactFocusTarget } from '../ArtifactsView'
 import type { NodeContractExternalInput } from '../../types'
 import './planner.css'
 
@@ -100,7 +101,7 @@ interface Props {
   onFocusNodeHandled?: (requestId: number) => void
   onInitialIntakeHandled?: (requestId: number) => void
   onOpenSubCanvas?: (canvasId: string) => void
-  onOpenArtifacts?: () => void
+  onOpenArtifacts?: (focus?: Omit<ArtifactFocusTarget, 'id'>) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
 }
 

@@ -19,6 +19,9 @@ import {
 import { loadSpawnProvider } from '../../preferences'
 import type { TeamMember } from '../../api'
 import type {
+  ArtifactFocusTarget,
+} from '../ArtifactsView'
+import type {
   NodeContractExternalInput,
   NodeStateSnapshot,
   PlanProposal,
@@ -46,7 +49,7 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
-  onOpenArtifacts?: () => void
+  onOpenArtifacts?: (focus?: Omit<ArtifactFocusTarget, 'id'>) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -272,7 +275,14 @@ export function NodeInspectorModal({
             <div className="planner-node-modal__section-heading">
               <h3><FileText size={13} aria-hidden /> Delivery evidence</h3>
               {onOpenArtifacts && (
-                <button type="button" onClick={onOpenArtifacts}>
+                <button
+                  type="button"
+                  onClick={() => onOpenArtifacts({
+                    canvasId,
+                    nodeId: node.id,
+                    nodeTitle: node.title,
+                  })}
+                >
                   <ExternalLink size={12} aria-hidden /> Artifacts
                 </button>
               )}
@@ -297,7 +307,15 @@ export function NodeInspectorModal({
                 </div>
               ))}
               {onOpenArtifacts && nodeArtifacts.length > 4 && (
-                <button type="button" className="planner-node-modal__evidence-more" onClick={onOpenArtifacts}>
+                <button
+                  type="button"
+                  className="planner-node-modal__evidence-more"
+                  onClick={() => onOpenArtifacts({
+                    canvasId,
+                    nodeId: node.id,
+                    nodeTitle: node.title,
+                  })}
+                >
                   View {nodeArtifacts.length - 4} more
                 </button>
               )}
