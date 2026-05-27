@@ -1529,6 +1529,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var canvasTitle: String
     var nodeId: String?
     var nodeTitle: String?
+    var sessionId: String?
     var deliveryId: String?
     var proposalId: String?
     var proposalStatus: PlanProposalStatus?
@@ -1550,6 +1551,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         canvasTitle: String,
         nodeId: String?,
         nodeTitle: String?,
+        sessionId: String? = nil,
         deliveryId: String? = nil,
         proposalId: String?,
         proposalStatus: PlanProposalStatus?,
@@ -1568,6 +1570,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.canvasTitle = canvasTitle
         self.nodeId = nodeId
         self.nodeTitle = nodeTitle
+        self.sessionId = sessionId
         self.deliveryId = deliveryId
         self.proposalId = proposalId
         self.proposalStatus = proposalStatus
@@ -5482,6 +5485,16 @@ enum PlannerBoardBridge {
                     return nodeState.assigneeId == actorId
                 }
                 guard includeForDoer else { continue }
+                let liveSessionId = runStates
+                    .sorted { lhs, rhs in
+                        monitorSessionPriority(for: lhs) < monitorSessionPriority(for: rhs)
+                    }
+                    .first { nodeState in
+                        guard let sessionId = nodeState.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !sessionId.isEmpty else { return false }
+                        return monitorSessionPriority(for: nodeState) < Int.max
+                    }?
+                    .sessionId
                 items.append(PlannerMonitorItem(
                     id: "delivery-\(run.id)",
                     kind: .delivery,
@@ -5489,6 +5502,7 @@ enum PlannerBoardBridge {
                     canvasTitle: state.canvas.title,
                     nodeId: nil,
                     nodeTitle: nil,
+                    sessionId: liveSessionId,
                     deliveryId: run.id,
                     proposalId: nil,
                     proposalStatus: nil,
@@ -5514,6 +5528,7 @@ enum PlannerBoardBridge {
                     canvasTitle: state.canvas.title,
                     nodeId: node.id,
                     nodeTitle: node.title,
+                    sessionId: node.sessionId,
                     proposalId: nil,
                     proposalStatus: nil,
                     summary: node.title,
@@ -5561,6 +5576,19 @@ enum PlannerBoardBridge {
             return $0.summary < $1.summary
         }
         return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
+    private static func monitorSessionPriority(for nodeState: RunNodeState) -> Int {
+        switch nodeState.runState {
+        case .awaitingInput, .gateWait, .failed:
+            return 0
+        case .running:
+            return 1
+        case .pending, .readyToStart, .dispatched:
+            return 2
+        case .done:
+            return Int.max
+        }
     }
 
     private static func requireCanvas(

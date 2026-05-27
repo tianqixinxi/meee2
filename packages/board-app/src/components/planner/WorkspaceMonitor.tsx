@@ -44,7 +44,7 @@ interface MonitorLane {
 interface WorkspaceMonitorProps {
   activeCanvasId: string
   canvases: CanvasInfo[]
-  onOpenItem: (canvasId: string, nodeId?: string | null) => void
+  onOpenItem: (item: PlannerMonitorItem) => void
   onOpenAllSessions: () => void
 }
 
@@ -270,7 +270,7 @@ function MonitorCard({
 }: {
   item: PlannerMonitorItem
   generatedAt?: string
-  onOpenItem: (canvasId: string, nodeId?: string | null) => void
+  onOpenItem: (item: PlannerMonitorItem) => void
   t: Translator
 }) {
   const Icon = item.kind === 'proposal'
@@ -281,9 +281,9 @@ function MonitorCard({
     <button
       type="button"
       className={`planner-monitor-card planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
-      onClick={() => onOpenItem(item.canvasId, item.nodeId)}
-      aria-label={`${item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
-      title={`${item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.canvasTitle}`}
+      onClick={() => onOpenItem(item)}
+      aria-label={`${item.sessionId ? t('monitor.openSession') : item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
+      title={`${item.sessionId ? t('monitor.openSession') : item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.canvasTitle}`}
     >
       <div className="planner-monitor-card__top">
         <span className="planner-monitor-card__source">
@@ -338,7 +338,7 @@ function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): b
     case 'all':
       return true
     case 'live':
-      return item.kind === 'delivery'
+      return item.kind === 'delivery' || Boolean(item.sessionId?.trim())
     case 'node':
       return item.kind === 'node'
     case 'approval':
@@ -367,7 +367,7 @@ function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode
 }
 
 function sourceLabel(item: PlannerMonitorItem, t: Translator): string {
-  if (item.kind === 'delivery') return t('monitor.sourceLive')
+  if (item.sessionId || item.kind === 'delivery') return t('monitor.sourceLive')
   if (item.kind === 'proposal' || item.needsOwnerReview) return t('monitor.sourceApproval')
   return t('monitor.sourceNode')
 }

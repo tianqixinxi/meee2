@@ -26,6 +26,7 @@ import type {
   CanvasKind,
   CanvasScope,
   Meee2AgentRuntimeStatus,
+  PlannerMonitorItem,
   ReadinessReport,
   SpawnProvider,
 } from './types'
@@ -586,17 +587,24 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
-  const handleOpenMonitorItem = useCallback((canvasId: string, nodeId?: string | null) => {
-    handleSetActiveCanvas(canvasId)
+  const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
+    const sessionId = item.sessionId?.trim()
+    if (sessionId) {
+      setSelectedSessionId(sessionId)
+      setWorkspaceMode('sessions')
+      boardState.refresh()
+      return
+    }
+    handleSetActiveCanvas(item.canvasId)
     setWorkspaceMode('planner')
-    if (nodeId?.trim()) {
+    if (item.nodeId?.trim()) {
       setPlannerFocusTarget({
-        canvasId,
-        nodeId: nodeId.trim(),
+        canvasId: item.canvasId,
+        nodeId: item.nodeId.trim(),
         requestId: Date.now(),
       })
     }
-  }, [handleSetActiveCanvas])
+  }, [boardState.refresh, handleSetActiveCanvas])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {

@@ -824,6 +824,7 @@ export interface PlannerMonitorItem {
   canvasTitle: string
   nodeId?: string | null
   nodeTitle?: string | null
+  sessionId?: string | null
   deliveryId?: string | null
   proposalId?: string | null
   proposalStatus?: PlanProposalStatus | null
