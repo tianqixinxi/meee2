@@ -627,6 +627,22 @@
 }
 .planner-node-modal__group-label:first-of-type { margin-top: 6px; }
 
+/* UI-simplification — 进展 段单行替代之前的 5-tile info grid + 独立 next-action 块 */
+.planner-node-modal__progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+}
+.planner-node-modal__progress-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* UI-simplification — hover-revealed shortcut button on 「进展」 group label.
  * Always laid out (no width jump on hover); fades from 0 → 1 opacity. */
 .planner-node-modal__open-session {

@@ -231,6 +231,12 @@ export function NodeInspectorModal({
           )}
         </div>
 
+        {/* UI-simplification — 进展 段精简:
+         *  - blockers 保留(stuck 提醒优先级最高)
+         *  - 原 5-tile info grid(Status/Owner/Gate/Schedule/Type)→ 单 Status tile,
+         *    其他维度都在节点卡片 header / mode badge / owner chip 已展示
+         *  - next-action 从下面独立块移上来,跟 status 一起在 进展 段
+         *  - AI callout 保留(是个核心动作,但 padding 收紧)*/}
         {blockers.length > 0 && (
           <div className="planner-node-modal__blockers">
             {blockers.map((blocker) => (
@@ -239,15 +245,18 @@ export function NodeInspectorModal({
           </div>
         )}
 
-        <div className="planner-node-modal__info-grid">
-          {!isTemplate && (
-            <InfoTile label="Status" value={displayRunState(String(runState))} />
-          )}
-          {showOwnerInfo && <InfoTile label="Owner" value={responsibleLabel} />}
-          <InfoTile label="Gate" value={gateModeLabel(node)} />
-          <InfoTile label="Schedule" value={scheduleEnabled ? `Every ${Math.round((node.schedule?.intervalSeconds ?? 60) / 60)}m` : 'Off'} />
-          <InfoTile label="Type" value={nodeKind} />
-        </div>
+        {!isTemplate && (
+          <div className="planner-node-modal__progress-line">
+            <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>
+              {displayRunState(String(runState))}
+            </span>
+            {nextAction && (
+              <span className="planner-node-modal__progress-next">
+                <Signpost size={11} aria-hidden /> {nextAction}
+              </span>
+            )}
+          </div>
+        )}
 
         {canUseStepActions && (
           <div className="planner-node-modal__ai-callout">
@@ -293,19 +302,10 @@ export function NodeInspectorModal({
               switchesEnabled={canShowIOArtifactSwitches}
               onToggle={(item, visible) => onToggleIOArtifact?.(node.id, 'outputs', item, visible)}
             />
-            <div className="planner-node-modal__schema-row planner-node-modal__schema-row--wide">
-              <span>Do what</span>
-              <strong>{node.schema?.goal || nextAction || 'Discuss with meee2 AI to define this step.'}</strong>
-            </div>
+            {/* UI-simplification — 「Do what」 wide row 移除,信息已在节点 title/desc 体现;
+             *  next-action 也不再独立块,已并入 进展 段(.planner-node-modal__progress-line)。 */}
           </div>
         </div>
-
-        {nextAction && !isTemplate && (
-          <div className="planner-node-modal__next-action">
-            <Signpost size={13} aria-hidden />
-            <div><em>Next step</em><strong>{nextAction}</strong></div>
-          </div>
-        )}
 
         {canUseStepActions && (
           <div className="planner-node-modal__section">
