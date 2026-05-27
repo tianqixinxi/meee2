@@ -150,6 +150,14 @@ enum BoardAPI {
         return jsonResponse(result, status: result.ok ? 200 : 400, reason: result.ok ? "OK" : "Bad Request")
     }
 
+    static func exportDebug(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(try DebugExporter.exportToDefaultLocation())
+        } catch {
+            return errorResponse("debug_export_failed", error.localizedDescription, status: 500)
+        }
+    }
+
     // MARK: - GET /api/sessions/intake-diagnostics
 
     private struct SessionIntakeDiagnosticItem: Encodable {
@@ -3714,6 +3722,156 @@ enum BoardAPI {
     private struct CloseEnvelope: Encodable {
         let ok: Bool
         let alreadyDead: Bool
+    }
+
+    static func updateSessionControl(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let action = (json["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing action", status: 400)
+        }
+        let state: SessionControlState
+        switch action {
+        case "hide":
+            state = .hidden
+        case "archive":
+            state = .archived
+        case "restore":
+            state = .active
+        default:
+            return errorResponse("bad_request", "action must be hide, archive, or restore", status: 400)
+        }
+        let resolvedId = resolveSessionControlId(sid) ?? sid
+        let record = SessionControlStore.shared.setState(sessionId: resolvedId, state: state)
+        BoardServer.shared.broadcastStateChanged()
+        struct SessionControlEnvelope: Encodable {
+            let ok: Bool
+            let record: SessionControlRecord
+        }
+        return jsonResponse(SessionControlEnvelope(ok: true, record: record))
+    }
+
+    static func respondToSessionPermission(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let rawDecision = (json["decision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing decision", status: 400)
+        }
+        guard let session = resolvePluginSession(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        guard let event = session.urgentEvent, event.eventType == "permission", event.respond != nil else {
+            return errorResponse("no_pending_permission", "session has no pending permission request", status: 409)
+        }
+        switch rawDecision {
+        case "allow":
+            event.respond?(.allow)
+        case "deny":
+            let reason = (json["reason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            event.respond?(.deny(reason: reason?.isEmpty == true ? nil : reason))
+        default:
+            return errorResponse("bad_request", "decision must be allow or deny", status: 400)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func resolveSessionControlId(_ sid: String) -> String? {
+        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+            return surface.sessionId
+        }
+        if let metadataSid = resolveDesktopMetadataSid(sid) {
+            return metadataSid
+        }
+        if let session = resolvePluginSession(sid) {
+            return inboxSessionId(for: session)
+        }
+        if let stored = SessionStore.shared.get(sid) {
+            return stored.sessionId
+        }
+        let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+        return matches.count == 1 ? matches[0].sessionId : nil
+    }
+
+    static func listMemoryRecords(_ req: HttpRequest) -> HttpResponse {
+        let scope = queryValue(req, name: "scope") ?? "session"
+        guard let subjectId = queryValue(req, name: "subjectId"),
+              !subjectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        struct MemoryListEnvelope: Encodable {
+            let records: [SessionMemoryRecord]
+        }
+        return jsonResponse(MemoryListEnvelope(records: SessionMemoryStore.shared.list(scope: scope, subjectId: subjectId)))
+    }
+
+    static func createMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let scope = ((json["scope"] as? String) ?? "session").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let subjectId = (json["subjectId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !subjectId.isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = ((json["kind"] as? String) ?? "note").trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = ((json["source"] as? String) ?? "operator").trimmingCharacters(in: .whitespacesAndNewlines)
+        let evidenceRef = (json["evidenceRef"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        let record = SessionMemoryStore.shared.create(
+            scope: scope.isEmpty ? "session" : scope,
+            subjectId: subjectId,
+            kind: kind.isEmpty ? "note" : kind,
+            content: content,
+            source: source.isEmpty ? "operator" : source,
+            evidenceRef: evidenceRef?.isEmpty == true ? nil : evidenceRef
+        )
+        return jsonResponse(MemoryEnvelope(record: record), status: 201, reason: "Created")
+    }
+
+    static func updateMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = (json["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let record = SessionMemoryStore.shared.update(id: id, content: content, kind: kind) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        return jsonResponse(MemoryEnvelope(record: record))
+    }
+
+    static func deleteMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard SessionMemoryStore.shared.delete(id: id) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func queryValue(_ req: HttpRequest, name: String) -> String? {
+        req.queryParams.first(where: { $0.0 == name })?.1
     }
 
     /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明

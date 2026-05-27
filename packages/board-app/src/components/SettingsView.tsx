@@ -27,6 +27,7 @@ import { useI18n, type Locale } from '../lib/i18n'
 import { useTheme, type ThemeMode } from '../lib/theme'
 import {
   disconnectMeee2Online,
+  exportDebugBundle,
   fetchAppSettings,
   fetchUserProfile,
   openMeee2OnlineConnect,
@@ -91,6 +92,8 @@ export function SettingsView({
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [saving, setSaving] = useState(false)
+  const [debugExporting, setDebugExporting] = useState(false)
+  const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
   const effectiveAppSettings = normalizeAppSettings(appSettings)
 
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
@@ -146,6 +149,20 @@ export function SettingsView({
       notify('error', (err as Error).message || 'Failed to save settings')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const runDebugExport = async () => {
+    setDebugExporting(true)
+    setDebugExportPath(null)
+    try {
+      const result = await exportDebugBundle()
+      setDebugExportPath(result.path)
+      notify('success', t('settings.debugExportReady'))
+    } catch (err) {
+      notify('error', (err as Error).message || t('settings.debugExportFailed'))
+    } finally {
+      setDebugExporting(false)
     }
   }
 
@@ -410,6 +427,24 @@ export function SettingsView({
               </div>
             )}
           </div>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <div>
+              <div className="settings-section-title">{t('settings.debugExport')}</div>
+              <div className="settings-section-caption">{t('settings.debugExportCaption')}</div>
+            </div>
+            <button type="button" className="ghost" onClick={() => void runDebugExport()} disabled={debugExporting}>
+              {debugExporting ? t('common.loading') : t('settings.exportDebug')}
+            </button>
+          </div>
+          {debugExportPath && (
+            <div className="settings-panel settings-debug-export">
+              <span>{t('settings.debugExportSaved')}</span>
+              <code>{debugExportPath}</code>
+            </div>
+          )}
         </section>
 
         <section className="settings-section">

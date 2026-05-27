@@ -1,20 +1,28 @@
 import {
   AlertCircle,
+  Archive,
   CheckCircle2,
   CircleStop,
   Clock3,
+  EyeOff,
   ExternalLink,
   MessageSquareText,
+  Pencil,
   RefreshCw,
   RotateCw,
+  RotateCcw,
+  Save,
   Search,
   Send,
+  ShieldCheck,
+  ShieldX,
   Terminal as TerminalIcon,
+  Trash2,
   Wrench,
   Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSession, closeSessionSurface, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type TranscriptBlock, type TranscriptEntryFull } from '../api'
+import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
 
@@ -27,6 +35,7 @@ interface Props {
 
 type SessionFilter = 'all' | 'attention' | 'unread'
 type SessionKindTab = 'internal' | 'external'
+type SessionControlFilter = 'active' | 'hidden' | 'archived'
 type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 export function SessionsView({
@@ -38,6 +47,7 @@ export function SessionsView({
   const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<SessionFilter>('all')
+  const [controlFilter, setControlFilter] = useState<SessionControlFilter>('active')
   const [activeKindTab, setActiveKindTab] = useState<SessionKindTab>('internal')
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
@@ -56,9 +66,15 @@ export function SessionsView({
     () => sessions.filter((session) => unreadSids.has(session.id)).length,
     [sessions, unreadSids],
   )
+  const controlCounts = useMemo(() => ({
+    active: sessions.filter((session) => sessionControlState(session) === 'active').length,
+    hidden: sessions.filter((session) => sessionControlState(session) === 'hidden').length,
+    archived: sessions.filter((session) => sessionControlState(session) === 'archived').length,
+  }), [sessions])
   const visibleSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return sessions
+      .filter((session) => sessionControlState(session) === controlFilter)
       .filter((session) => sessionMatchesQuery(session, normalized))
       .filter((session) => {
         if (filter === 'attention') return sessionNeedsAttention(session) || unreadSids.has(session.id)
@@ -66,7 +82,7 @@ export function SessionsView({
         return true
       })
       .sort((a, b) => compareSessions(a, b, unreadSids))
-  }, [filter, query, sessions, unreadSids])
+  }, [controlFilter, filter, query, sessions, unreadSids])
   const selectedSession = useMemo(() => {
     if (!selectedSessionId) return null
     return sessions.find((session) => (
@@ -213,6 +229,11 @@ export function SessionsView({
               <FilterButton label={t('sessions.filterAll')} count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
               <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
               <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
+            </div>
+            <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
+              <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
+              <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
+              <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
             </div>
           </div>
         </div>
@@ -549,6 +570,12 @@ function SessionDetail({
   const [timeline, setTimeline] = useState<TranscriptEntryFull[]>([])
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [timelineError, setTimelineError] = useState<string | null>(null)
+  const [memoryRecords, setMemoryRecords] = useState<SessionMemoryRecord[]>([])
+  const [memoryDraft, setMemoryDraft] = useState('')
+  const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null)
+  const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
+  const [memoryEditDraft, setMemoryEditDraft] = useState('')
+  const [memoryError, setMemoryError] = useState<string | null>(null)
   const refreshTimeline = useCallback(async () => {
     if (!session) {
       setTimeline([])
@@ -566,14 +593,30 @@ function SessionDetail({
       setTimelineLoading(false)
     }
   }, [session, t])
+  const refreshMemory = useCallback(async () => {
+    if (!session) {
+      setMemoryRecords([])
+      return
+    }
+    setMemoryError(null)
+    try {
+      setMemoryRecords(await fetchMemoryRecords('session', session.id))
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memoryLoadFailed'))
+    }
+  }, [session, t])
   useEffect(() => {
     setDraft('')
+    setMemoryDraft('')
+    setMemoryEditingId(null)
+    setMemoryEditDraft('')
     setControlStatus(null)
     setControlError(null)
     setStopError(null)
     setStopConfirming(false)
     void refreshTimeline()
-  }, [refreshTimeline])
+    void refreshMemory()
+  }, [refreshMemory, refreshTimeline])
   if (!session) {
     return (
       <aside className="sessions-detail sessions-detail--empty">
@@ -585,6 +628,78 @@ function SessionDetail({
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
+  const controlState = sessionControlState(session)
+  const runControlAction = async (action: 'hide' | 'archive' | 'restore') => {
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      await updateSessionControl(session.id, action)
+      setControlStatus(t(action === 'restore' ? 'sessions.restored' : action === 'archive' ? 'sessions.archived' : 'sessions.hidden'))
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.controlActionFailed'))
+    }
+  }
+  const answerPermission = async (decision: 'allow' | 'deny') => {
+    setControlError(null)
+    setControlStatus(null)
+    try {
+      await respondToSessionPermission(session.id, decision, decision === 'deny' ? 'Denied from meee2 Board' : undefined)
+      setControlStatus(t(decision === 'allow' ? 'sessions.permissionAllowed' : 'sessions.permissionDenied'))
+      void refreshTimeline()
+    } catch (err) {
+      setControlError((err as Error).message || t('sessions.permissionActionFailed'))
+    }
+  }
+  const addMemory = async () => {
+    const content = memoryDraft.trim()
+    if (!content) return
+    setMemoryBusyId('new')
+    setMemoryError(null)
+    try {
+      const record = await createMemoryRecord({
+        scope: 'session',
+        subjectId: session.id,
+        kind: 'lesson',
+        content,
+        source: 'operator',
+        evidenceRef: session.latestRecap?.content ? 'latest-recap' : 'session-detail',
+      })
+      setMemoryRecords((records) => [record, ...records])
+      setMemoryDraft('')
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memorySaveFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
+  const saveMemory = async (record: SessionMemoryRecord) => {
+    const content = memoryEditDraft.trim()
+    if (!content) return
+    setMemoryBusyId(record.id)
+    setMemoryError(null)
+    try {
+      const updated = await updateMemoryRecord(record.id, { content, kind: record.kind })
+      setMemoryRecords((records) => records.map((item) => item.id === updated.id ? updated : item))
+      setMemoryEditingId(null)
+      setMemoryEditDraft('')
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memorySaveFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
+  const removeMemory = async (record: SessionMemoryRecord) => {
+    setMemoryBusyId(record.id)
+    setMemoryError(null)
+    try {
+      await deleteMemoryRecord(record.id)
+      setMemoryRecords((records) => records.filter((item) => item.id !== record.id))
+    } catch (err) {
+      setMemoryError((err as Error).message || t('sessions.memoryDeleteFailed'))
+    } finally {
+      setMemoryBusyId(null)
+    }
+  }
   const sendMessage = async () => {
     const content = draft.trim()
     if (!content) return
@@ -667,6 +782,23 @@ function SessionDetail({
             <CircleStop size={14} aria-hidden />
             {stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
           </button>
+          {controlState === 'active' ? (
+            <>
+              <button type="button" onClick={() => void runControlAction('hide')}>
+                <EyeOff size={14} aria-hidden />
+                {t('sessions.hide')}
+              </button>
+              <button type="button" onClick={() => void runControlAction('archive')}>
+                <Archive size={14} aria-hidden />
+                {t('sessions.archive')}
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => void runControlAction('restore')}>
+              <RotateCcw size={14} aria-hidden />
+              {t('sessions.restore')}
+            </button>
+          )}
         </div>
       </div>
       <dl className="sessions-detail__meta">
@@ -692,7 +824,17 @@ function SessionDetail({
             <span>{session.inboxPending > 0 ? t('sessions.pendingMessages', { count: session.inboxPending }) : t('sessions.controlReady')}</span>
           </div>
           {session.pendingPermissionTool && (
-            <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
+            <div className="sessions-control__permission-actions">
+              <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
+              <button type="button" onClick={() => void answerPermission('allow')}>
+                <ShieldCheck size={13} aria-hidden />
+                {t('sessions.allowPermission')}
+              </button>
+              <button type="button" onClick={() => void answerPermission('deny')}>
+                <ShieldX size={13} aria-hidden />
+                {t('sessions.denyPermission')}
+              </button>
+            </div>
           )}
         </div>
         <div className="sessions-composer">
@@ -738,6 +880,28 @@ function SessionDetail({
           error={timelineError}
           session={session}
           onRefresh={refreshTimeline}
+          t={t}
+        />
+        <SessionMemoryPanel
+          records={memoryRecords}
+          draft={memoryDraft}
+          busyId={memoryBusyId}
+          editingId={memoryEditingId}
+          editDraft={memoryEditDraft}
+          error={memoryError}
+          onDraftChange={setMemoryDraft}
+          onAdd={addMemory}
+          onEdit={(record) => {
+            setMemoryEditingId(record.id)
+            setMemoryEditDraft(record.content)
+          }}
+          onEditDraftChange={setMemoryEditDraft}
+          onSave={saveMemory}
+          onCancelEdit={() => {
+            setMemoryEditingId(null)
+            setMemoryEditDraft('')
+          }}
+          onDelete={removeMemory}
           t={t}
         />
       </section>
@@ -791,6 +955,105 @@ function SessionTimeline({
                 </header>
                 <p>{item.body}</p>
               </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+function SessionMemoryPanel({
+  records,
+  draft,
+  busyId,
+  editingId,
+  editDraft,
+  error,
+  onDraftChange,
+  onAdd,
+  onEdit,
+  onEditDraftChange,
+  onSave,
+  onCancelEdit,
+  onDelete,
+  t,
+}: {
+  records: SessionMemoryRecord[]
+  draft: string
+  busyId: string | null
+  editingId: string | null
+  editDraft: string
+  error: string | null
+  onDraftChange: (value: string) => void
+  onAdd: () => void
+  onEdit: (record: SessionMemoryRecord) => void
+  onEditDraftChange: (value: string) => void
+  onSave: (record: SessionMemoryRecord) => void
+  onCancelEdit: () => void
+  onDelete: (record: SessionMemoryRecord) => void
+  t: ReturnType<typeof useI18n>['t']
+}) {
+  return (
+    <section className="sessions-memory" aria-label={t('sessions.memory')}>
+      <div className="sessions-timeline__heading">
+        <div>
+          <strong>{t('sessions.memory')}</strong>
+          <span>{t('sessions.memoryCount', { count: records.length })}</span>
+        </div>
+      </div>
+      <div className="sessions-memory__composer">
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          placeholder={t('sessions.memoryPlaceholder')}
+          rows={2}
+        />
+        <button type="button" onClick={onAdd} disabled={busyId === 'new' || draft.trim().length === 0}>
+          <Save size={13} aria-hidden />
+          {t('sessions.addMemory')}
+        </button>
+      </div>
+      {error && <p className="sessions-detail__error">{error}</p>}
+      {records.length === 0 ? (
+        <div className="sessions-timeline__empty">
+          <MessageSquareText size={16} aria-hidden />
+          <span>{t('sessions.memoryEmpty')}</span>
+        </div>
+      ) : (
+        <ol className="sessions-memory__list">
+          {records.map((record) => (
+            <li key={record.id} className="sessions-memory__item">
+              {editingId === record.id ? (
+                <>
+                  <textarea value={editDraft} onChange={(event) => onEditDraftChange(event.target.value)} rows={2} />
+                  <div className="sessions-memory__actions">
+                    <button type="button" onClick={() => onSave(record)} disabled={busyId === record.id || editDraft.trim().length === 0}>
+                      <Save size={13} aria-hidden />
+                      {t('common.save')}
+                    </button>
+                    <button type="button" onClick={onCancelEdit}>{t('common.cancel')}</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <header>
+                    <strong>{record.kind}</strong>
+                    <span>{record.source}{record.evidenceRef ? ` · ${record.evidenceRef}` : ''}</span>
+                  </header>
+                  <p>{record.content}</p>
+                  <div className="sessions-memory__actions">
+                    <button type="button" onClick={() => onEdit(record)}>
+                      <Pencil size={13} aria-hidden />
+                      {t('common.edit')}
+                    </button>
+                    <button type="button" onClick={() => onDelete(record)} disabled={busyId === record.id}>
+                      <Trash2 size={13} aria-hidden />
+                      {t('common.delete')}
+                    </button>
+                  </div>
+                </>
+              )}
             </li>
           ))}
         </ol>
@@ -1168,6 +1431,12 @@ function scheduleInternalTabPrewarm(
 }
 
 function noopSessionAction(_session: Session) {}
+
+function sessionControlState(session: Session): SessionControlFilter {
+  return session.controlState === 'hidden' || session.controlState === 'archived'
+    ? session.controlState
+    : 'active'
+}
 
 function isWorkingSession(session: Session): boolean {
   return !['completed', 'done', 'idle'].includes(session.status)

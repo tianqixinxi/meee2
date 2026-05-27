@@ -2264,6 +2264,18 @@ export interface InjectResult {
   delivery: 'queued_until_next_turn' | null
 }
 
+export interface SessionMemoryRecord {
+  id: string
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind: string
+  content: string
+  source: string
+  evidenceRef: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export async function injectToSession(
   id: string,
   content: string,
@@ -2342,6 +2354,70 @@ export async function pushToDesktopNow(
     error: r.error ?? null,
     errorCode,
   }
+}
+
+export async function updateSessionControl(
+  id: string,
+  action: 'hide' | 'archive' | 'restore',
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/control`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  })
+}
+
+export async function respondToSessionPermission(
+  id: string,
+  decision: 'allow' | 'deny',
+  reason?: string,
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/permission`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  })
+}
+
+export async function fetchMemoryRecords(
+  scope: 'session' | 'canvas' | 'node' | string,
+  subjectId: string,
+): Promise<SessionMemoryRecord[]> {
+  const params = new URLSearchParams({ scope, subjectId })
+  const response = await jsonRequest<{ records: SessionMemoryRecord[] }>(`/api/memory?${params.toString()}`)
+  return response.records
+}
+
+export async function createMemoryRecord(input: {
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind?: string
+  content: string
+  source?: string
+  evidenceRef?: string | null
+}): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>('/api/memory', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function updateMemoryRecord(
+  id: string,
+  input: { content: string; kind?: string },
+): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>(`/api/memory/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function deleteMemoryRecord(id: string): Promise<void> {
+  await jsonRequest(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function exportDebugBundle(): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>('/api/system/debug-export', { method: 'POST' })
 }
 
 /// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，

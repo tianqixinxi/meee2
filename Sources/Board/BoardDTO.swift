@@ -55,6 +55,8 @@ struct SessionDTO: Encodable {
     let surfaceId: String?
     let surfaceStatus: String?
     let canOpenExternal: Bool
+    /// "active" | "hidden" | "archived" — local operator visibility state.
+    let controlState: String
 
     /// 当前后台在跑的 Claude Code 子 agent / task（Agent run_in_background / Monitor / Bash run_in_background）。
     /// 主 agent status 和这个字段是正交维度：主可以是 idle 而后台同时有 N 条在跑。
@@ -783,6 +785,7 @@ enum BoardDTOBuilder {
         }()
 
         let sync = syncInfo(forSessionId: session.id)
+        let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
 
         return SessionDTO(
             id: session.id,
@@ -809,6 +812,7 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            controlState: controlState.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
             clientKind: clientKind,
@@ -845,6 +849,7 @@ enum BoardDTOBuilder {
         }
 
         let sync = syncInfo(forSessionId: m.cliSessionId)
+        let controlState = SessionControlStore.shared.state(for: [m.cliSessionId])
 
         return SessionDTO(
             id: m.cliSessionId,
@@ -871,6 +876,7 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "desktop",
@@ -898,6 +904,13 @@ enum BoardDTOBuilder {
             }
         }()
         let sync = syncInfo(forSessionId: surface.sessionId)
+        let providerResumeId = SessionTerminalStore.shared.get(sessionId: surface.sessionId)?
+            .providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        let controlState = SessionControlStore.shared.state(for: controlIds)
         return SessionDTO(
             id: surface.sessionId,
             title: surface.title,
@@ -923,6 +936,7 @@ enum BoardDTOBuilder {
             surfaceId: surface.surfaceId,
             surfaceStatus: surface.status,
             canOpenExternal: false,
+            controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "cli",

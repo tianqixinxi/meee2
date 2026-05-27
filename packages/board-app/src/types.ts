@@ -165,6 +165,7 @@ export interface Session {
   surfaceId?: string | null
   surfaceStatus?: 'starting' | 'running' | 'exited' | 'failed' | string | null
   canOpenExternal?: boolean
+  controlState?: 'active' | 'hidden' | 'archived' | string
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
