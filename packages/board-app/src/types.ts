@@ -75,6 +75,43 @@ export interface Meee2AgentRuntimeInstallResult {
   status: Meee2AgentRuntimeStatus
 }
 
+export type ReadinessStatus = 'pass' | 'fail' | 'warn' | 'info'
+export type ReadinessSeverity = 'required' | 'recommended' | 'informational'
+export type ReadinessOverallStatus = 'ready' | 'needsSetup' | 'broken'
+
+export interface ReadinessAction {
+  id: string
+  label: string
+  kind: string
+  command: string | null
+}
+
+export interface ReadinessCheck {
+  id: string
+  title: string
+  status: ReadinessStatus
+  severity: ReadinessSeverity
+  detail: string
+  recoveryAction: ReadinessAction | null
+  metadata: Record<string, string>
+}
+
+export interface ReadinessReport {
+  overall: ReadinessOverallStatus
+  ready: boolean
+  requiredFailed: number
+  checks: ReadinessCheck[]
+  checkedAt: string
+}
+
+export interface ReadinessRepairResult {
+  ok: boolean
+  actionId: string
+  messages: string[]
+  logs: string[]
+  report: ReadinessReport
+}
+
 export interface Session {
   id: string
   title: string

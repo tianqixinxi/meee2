@@ -148,7 +148,7 @@ Template 不应该只是“预设一组节点”。它应该定义：
 - 一键配置 Claude hook。
 - 检查 hook socket、BoardServer、planner sidecar、权限和存储路径。
 - 出问题时给清晰的修复动作。
-- 没有真实会话时提供 demo mode。
+- 没有真实会话时显示空状态，引导用户启动第一个真实 Claude Code/Codex session，不用 demo session 代替真实接入。
 
 Release 风险：
 

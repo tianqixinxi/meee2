@@ -343,9 +343,28 @@ enum Meee2AgentRuntimeInstaller {
     }
 
     private static func claudePluginInstalledFor(_ marketplace: String) -> Bool {
-        let result = runCommand("claude", ["plugin", "list", "--json"])
-        guard result.exitCode == 0 else { return false }
-        return claudePluginList(result.stdout, containsPlugin: pluginName, marketplace: marketplace)
+        let result = runCommand("claude", ["plugin", "list", "--json"], timeoutSeconds: 3)
+        if result.exitCode == 0,
+           claudePluginList(result.stdout, containsPlugin: pluginName, marketplace: marketplace) {
+            return true
+        }
+        return claudePluginCacheExists(marketplace: marketplace)
+    }
+
+    private static func claudePluginCacheExists(marketplace: String) -> Bool {
+        let cacheRoot = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude", isDirectory: true)
+            .appendingPathComponent("plugins", isDirectory: true)
+            .appendingPathComponent("cache", isDirectory: true)
+            .appendingPathComponent(marketplace, isDirectory: true)
+            .appendingPathComponent(pluginName, isDirectory: true)
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: cacheRoot.path) else {
+            return false
+        }
+        return versions.contains { version in
+            let pluginDir = cacheRoot.appendingPathComponent(version, isDirectory: true)
+            return FileManager.default.fileExists(atPath: pluginDir.path)
+        }
     }
 
     private static func claudeMarketplaceConfigured() -> Bool {
@@ -353,7 +372,7 @@ enum Meee2AgentRuntimeInstaller {
     }
 
     private static func claudeMarketplaceConfigured(_ marketplace: String) -> Bool {
-        let result = runCommand("claude", ["plugin", "marketplace", "list", "--json"])
+        let result = runCommand("claude", ["plugin", "marketplace", "list", "--json"], timeoutSeconds: 3)
         guard result.exitCode == 0 else { return false }
         return result.stdout.contains("\"name\":\"\(marketplace)\"")
             || result.stdout.contains("\"name\": \"\(marketplace)\"")
@@ -405,9 +424,26 @@ enum Meee2AgentRuntimeInstaller {
 
     private static func commandPath(_ command: String) -> String? {
         let result = runCommand("/usr/bin/env", ["which", command], timeoutSeconds: 3)
-        guard result.exitCode == 0 else { return nil }
-        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.isEmpty ? nil : path
+        if result.exitCode == 0 {
+            let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                return path
+            }
+        }
+        return fallbackCommandPath(command)
+    }
+
+    private static func fallbackCommandPath(_ command: String) -> String? {
+        let candidates = [
+            URL(fileURLWithPath: NSHomeDirectory())
+                .appendingPathComponent(".local/bin")
+                .appendingPathComponent(command)
+                .path,
+            "/opt/homebrew/bin/\(command)",
+            "/usr/local/bin/\(command)",
+            "/usr/bin/\(command)"
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private static func fallbackCodexPath() -> String? {

@@ -25,6 +25,7 @@ import type {
   CanvasList,
   CanvasScope,
   Meee2AgentRuntimeStatus,
+  ReadinessReport,
   SpawnProvider,
 } from './types'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
@@ -40,8 +41,10 @@ import {
   deleteCanvas,
   fetchCanvases,
   fetchMeee2AgentRuntimeStatus,
+  fetchReadiness,
   fetchUserProfile,
   installMeee2AgentRuntime,
+  repairReadiness,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -342,6 +345,7 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const [degradedEntry, setDegradedEntry] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
@@ -349,6 +353,10 @@ export default function App() {
   const [agentRuntimeInstallTarget, setAgentRuntimeInstallTarget] = useState<'claude' | 'codex' | 'all' | null>(null)
   const [agentRuntimeInstallError, setAgentRuntimeInstallError] = useState<string | null>(null)
   const [agentRuntimeInstallLogs, setAgentRuntimeInstallLogs] = useState<string[]>([])
+  const [readinessReport, setReadinessReport] = useState<ReadinessReport | null>(null)
+  const [readinessRepairAction, setReadinessRepairAction] = useState<string | null>(null)
+  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
+  const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
@@ -435,9 +443,45 @@ export default function App() {
       })
   }, [])
 
+  const refreshReadiness = useCallback(() => {
+    fetchReadiness()
+      .then((report) => {
+        setReadinessReport(report)
+        setReadinessRepairError(null)
+      })
+      .catch((err) => {
+        console.warn('[App] fetchReadiness failed:', (err as Error).message)
+        setReadinessReport(null)
+        setReadinessRepairError((err as Error).message || 'Failed to check local session readiness')
+      })
+  }, [])
+
+  const handleRepairReadiness = useCallback((actionId: string) => {
+    setReadinessRepairAction(actionId)
+    setReadinessRepairError(null)
+    setReadinessRepairLogs([`Starting recovery action: ${actionId}`])
+    repairReadiness(actionId)
+      .then((result) => {
+        setReadinessReport(result.report)
+        setReadinessRepairLogs(result.logs?.length ? result.logs : result.messages)
+        refreshAgentRuntimeStatus(false)
+        if (result.ok && result.report.ready) {
+          pushToast('success', 'Local session readiness is complete')
+        } else if (!result.ok) {
+          setReadinessRepairError(result.messages[result.messages.length - 1] ?? 'Readiness repair failed')
+        }
+      })
+      .catch((err) => {
+        setReadinessRepairError((err as Error).message || 'Readiness repair failed')
+        setReadinessRepairLogs((current) => [...current, (err as Error).message || 'Readiness repair failed'])
+      })
+      .finally(() => setReadinessRepairAction(null))
+  }, [pushToast, refreshAgentRuntimeStatus])
+
   useEffect(() => {
     refreshAgentRuntimeStatus(firstRunOnboardingCompletedAtMountRef.current)
-  }, [refreshAgentRuntimeStatus])
+    refreshReadiness()
+  }, [refreshAgentRuntimeStatus, refreshReadiness])
 
   useEffect(() => {
     const openSettings = () => setWorkspaceMode('settings')
@@ -459,12 +503,17 @@ export default function App() {
   }, [boardState.refresh])
 
   const completeFirstRunOnboarding = useCallback(() => {
+    if (readinessReport?.ready !== true) return
     setFirstRunOnboardingCompleted(true)
     try {
       window.localStorage.setItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY, '1')
     } catch {
       // Persistence is best-effort; entering the app should still work.
     }
+  }, [readinessReport])
+
+  const enterDegradedWorkspace = useCallback(() => {
+    setDegradedEntry(true)
   }, [])
 
   const restartFirstRunOnboarding = useCallback(() => {
@@ -476,9 +525,14 @@ export default function App() {
     setAgentRuntimeInstallError(null)
     setAgentRuntimeInstallLogs([])
     setAgentRuntimeInstallTarget(null)
+    setReadinessRepairError(null)
+    setReadinessRepairLogs([])
+    setReadinessRepairAction(null)
+    setDegradedEntry(false)
     setFirstRunOnboardingCompleted(false)
     refreshAgentRuntimeStatus(false)
-  }, [refreshAgentRuntimeStatus])
+    refreshReadiness()
+  }, [refreshAgentRuntimeStatus, refreshReadiness])
 
   const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
     setAgentRuntimeInstallTarget(target)
@@ -662,18 +716,18 @@ export default function App() {
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
 
-  if (!firstRunOnboardingCompleted) {
+  if (!firstRunOnboardingCompleted && !degradedEntry) {
     return (
       <ToastContext.Provider value={toastCtx}>
         <FirstRunOnboarding
-          status={agentRuntimeStatus}
-          installingTarget={agentRuntimeInstallTarget}
-          installError={agentRuntimeInstallError}
-          installLogs={agentRuntimeInstallLogs}
-          onInstall={handleInstallAgentRuntime}
-          onRefresh={() => refreshAgentRuntimeStatus(false)}
+          report={readinessReport}
+          repairingAction={readinessRepairAction}
+          repairError={readinessRepairError}
+          repairLogs={readinessRepairLogs}
+          onRepair={handleRepairReadiness}
+          onRefresh={refreshReadiness}
           onComplete={completeFirstRunOnboarding}
-          onSkip={completeFirstRunOnboarding}
+          onDegradedEntry={enterDegradedWorkspace}
         />
         <div className="toasts">
           {toasts.map((t) => (
@@ -717,6 +771,17 @@ export default function App() {
           onModeChange={handleWorkspaceModeChange}
         />
         <div className="board-area">
+          {readinessReport && !readinessReport.ready && (
+            <div className="readiness-banner" role="status">
+              <div>
+                <strong>Local session readiness needs setup</strong>
+                <span>{readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.</span>
+              </div>
+              <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
+                Open Settings
+              </button>
+            </div>
+          )}
           {workspaceMode === 'planner' ? (
             <PlannerGraph
               canvasId={activeWorkspaceCanvasId}
@@ -769,11 +834,18 @@ export default function App() {
               onSaved={() => {
                 refreshUserProfile()
                 refreshAgentRuntimeStatus(false)
+                refreshReadiness()
               }}
               onToast={pushToast}
               agentRuntimeStatus={agentRuntimeStatus}
               onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
               onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+              readinessReport={readinessReport}
+              readinessRepairAction={readinessRepairAction}
+              readinessRepairError={readinessRepairError}
+              readinessRepairLogs={readinessRepairLogs}
+              onRepairReadiness={handleRepairReadiness}
+              onRefreshReadiness={refreshReadiness}
               devMode={BOARD_DEV_MODE}
               onRestartOnboarding={restartFirstRunOnboarding}
             />

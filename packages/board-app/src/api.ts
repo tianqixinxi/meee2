@@ -7,6 +7,8 @@ import type {
   Meee2MCPStatus,
   Meee2AgentRuntimeInstallResult,
   Meee2AgentRuntimeStatus,
+  ReadinessRepairResult,
+  ReadinessReport,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -445,6 +447,17 @@ export function installMeee2AgentRuntime(target: 'claude' | 'codex' | 'all'): Pr
   return jsonRequest<Meee2AgentRuntimeInstallResult>('/api/system/meee2-agent-runtime-install', {
     method: 'POST',
     body: JSON.stringify({ target }),
+  })
+}
+
+export function fetchReadiness(): Promise<ReadinessReport> {
+  return jsonRequest<ReadinessReport>('/api/system/readiness')
+}
+
+export function repairReadiness(actionId: string): Promise<ReadinessRepairResult> {
+  return jsonRequest<ReadinessRepairResult>('/api/system/readiness/repair', {
+    method: 'POST',
+    body: JSON.stringify({ actionId }),
   })
 }
 

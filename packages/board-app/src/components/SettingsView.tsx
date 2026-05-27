@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { ReadinessChecklist } from './ReadinessChecklist'
 import {
   DEFAULT_SPAWN_PROVIDER,
   loadBoardGridEnabled,
@@ -12,7 +13,7 @@ import {
   saveSpawnProvider,
   spawnProviderLabel,
 } from '../preferences'
-import type { Meee2AgentRuntimeStatus, SpawnProvider } from '../types'
+import type { Meee2AgentRuntimeStatus, ReadinessReport, SpawnProvider } from '../types'
 import {
   DEFAULT_BASE_URL,
   DEFAULT_MODEL,
@@ -42,6 +43,12 @@ interface Props {
   agentRuntimeStatus?: Meee2AgentRuntimeStatus | null
   onOpenAgentRuntime?: (target: SpawnProvider) => void
   onRefreshAgentRuntime?: () => void
+  readinessReport?: ReadinessReport | null
+  readinessRepairAction?: string | null
+  readinessRepairError?: string | null
+  readinessRepairLogs?: string[]
+  onRepairReadiness?: (actionId: string) => void
+  onRefreshReadiness?: () => void
   devMode?: boolean
   onRestartOnboarding?: () => void
 }
@@ -65,6 +72,12 @@ export function SettingsView({
   agentRuntimeStatus = null,
   onOpenAgentRuntime,
   onRefreshAgentRuntime,
+  readinessReport = null,
+  readinessRepairAction = null,
+  readinessRepairError = null,
+  readinessRepairLogs = [],
+  onRepairReadiness,
+  onRefreshReadiness,
   devMode = false,
   onRestartOnboarding,
 }: Props) {
@@ -440,6 +453,35 @@ export function SettingsView({
               <small>{t('settings.minutes')}</small>
             </span>
           </label>
+        </section>
+
+        <section className="settings-section">
+          <div className="settings-section-header">
+            <div>
+              <div className="settings-section-title">Local session readiness</div>
+              <div className="settings-section-caption">Provider hooks, socket, BoardServer, runtime, and local state.</div>
+            </div>
+            <button type="button" className="ghost" onClick={onRefreshReadiness}>
+              {t('common.check')}
+            </button>
+          </div>
+          <div className="settings-panel settings-readiness-panel">
+            <ReadinessChecklist
+              report={readinessReport}
+              repairingAction={readinessRepairAction}
+              onRepair={(actionId) => onRepairReadiness?.(actionId)}
+              compact
+            />
+            {readinessRepairError && (
+              <div className="first-run__error" role="alert">{readinessRepairError}</div>
+            )}
+            {readinessRepairLogs.length > 0 && (
+              <details className="first-run__logs">
+                <summary>Repair log</summary>
+                <pre>{readinessRepairLogs.join('\n')}</pre>
+              </details>
+            )}
+          </div>
         </section>
 
         <section className="settings-section">

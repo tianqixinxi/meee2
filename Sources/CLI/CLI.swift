@@ -55,6 +55,10 @@ public struct CLI {
             WhoAmICommand.run()
             return false
 
+        case "doctor":
+            DoctorCommand.run(args: Array(args.dropFirst()))
+            return false
+
         case "channel":
             ChannelCommand.run(args: Array(args.dropFirst()))
             return false
@@ -94,6 +98,8 @@ public struct CLI {
           meee2 channel <sub>    Manage A2A channels (ls, create, join, leave, mode, info)
           meee2 msg <sub>        A2A messaging (send, ls, get, hold, deliver, drop, edit)
           meee2 whoami           Show this session's A2A identity + memberships
+          meee2 doctor           Check local session readiness
+          meee2 doctor --json    Check local session readiness as JSON
           meee2 --help           Show this help
           meee2 --version        Show version
 
@@ -109,7 +115,7 @@ public struct CLI {
 
     private static func printUsage() {
         print("Usage: meee2 <command> [args]")
-        print("Commands: gui, board, list, send, jump, note, channel, msg, whoami, help, version")
+        print("Commands: gui, board, list, send, jump, note, channel, msg, whoami, doctor, help, version")
         print("Run 'meee2 --help' for more information")
     }
 

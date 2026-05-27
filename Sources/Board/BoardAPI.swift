@@ -131,6 +131,25 @@ enum BoardAPI {
         return jsonResponse(Meee2AgentRuntimeInstaller.install(target: target))
     }
 
+    // MARK: - Local session readiness
+
+    static func getReadiness(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(ReadinessDoctor.diagnose())
+    }
+
+    static func repairReadiness(_ req: HttpRequest) -> HttpResponse {
+        struct RepairRequest: Decodable {
+            let actionId: String?
+        }
+        let body = decodeJSONBody(req, as: RepairRequest.self)
+        guard let actionId = body?.actionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !actionId.isEmpty else {
+            return errorResponse("bad_request", "actionId is required", status: 400)
+        }
+        let result = ReadinessDoctor.repair(actionId: actionId)
+        return jsonResponse(result, status: result.ok ? 200 : 400, reason: result.ok ? "OK" : "Bad Request")
+    }
+
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {

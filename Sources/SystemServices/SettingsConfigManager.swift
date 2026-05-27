@@ -53,6 +53,82 @@ public class SettingsConfigManager {
 
     // MARK: - Public
 
+    public struct HookConfigurationStatus: Encodable {
+        public let configured: Bool
+        public let settingsPath: String
+        public let expectedBridgePath: String
+        public let missingEvents: [String]
+        public let outdatedEvents: [String]
+        public let unreadable: Bool
+        public let error: String?
+    }
+
+    public func diagnoseHooks() -> HookConfigurationStatus {
+        let bridgePath = getBridgeScriptPath()
+        guard FileManager.default.fileExists(atPath: settingsPath.path) else {
+            return HookConfigurationStatus(
+                configured: false,
+                settingsPath: settingsPath.path,
+                expectedBridgePath: bridgePath,
+                missingEvents: hookEventTypes,
+                outdatedEvents: [],
+                unreadable: false,
+                error: "Claude Code settings.json was not found."
+            )
+        }
+
+        guard let data = try? Data(contentsOf: settingsPath),
+              let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return HookConfigurationStatus(
+                configured: false,
+                settingsPath: settingsPath.path,
+                expectedBridgePath: bridgePath,
+                missingEvents: hookEventTypes,
+                outdatedEvents: [],
+                unreadable: true,
+                error: "Claude Code settings.json could not be read as JSON."
+            )
+        }
+
+        let hooks = settings["hooks"] as? [String: Any] ?? [:]
+        var missing: [String] = []
+        var outdated: [String] = []
+
+        for eventType in hookEventTypes {
+            let eventHooks = hooks[eventType] as? [[String: Any]] ?? []
+            var foundMeee2Hook = false
+            var foundCurrentPath = false
+
+            for hookConfig in eventHooks {
+                guard let innerHooks = hookConfig["hooks"] as? [[String: Any]] else { continue }
+                for hook in innerHooks {
+                    guard let command = hook["command"] as? String,
+                          command.contains(bridgeScriptName) else { continue }
+                    foundMeee2Hook = true
+                    if command == bridgePath {
+                        foundCurrentPath = true
+                    }
+                }
+            }
+
+            if !foundMeee2Hook {
+                missing.append(eventType)
+            } else if !foundCurrentPath {
+                outdated.append(eventType)
+            }
+        }
+
+        return HookConfigurationStatus(
+            configured: missing.isEmpty && outdated.isEmpty,
+            settingsPath: settingsPath.path,
+            expectedBridgePath: bridgePath,
+            missingEvents: missing,
+            outdatedEvents: outdated,
+            unreadable: false,
+            error: nil
+        )
+    }
+
     /// 确保 hooks 配置存在，如果不存在则添加，路径不对则更新
     public func ensureHooksConfigured() {
         NSLog("[SettingsConfigManager] Checking hooks configuration at: \(settingsPath.path)")
