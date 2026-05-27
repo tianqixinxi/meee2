@@ -3505,19 +3505,33 @@ textarea {
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 10px 14px 14px;
+  gap: 6px;
+  padding: 8px 12px 12px;
 }
 
 .sessions-workspace__header {
   align-items: center;
   gap: 12px;
   margin-bottom: 0;
+  min-height: 30px;
+}
+
+.sessions-workspace__title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .sessions-workspace__header h1 {
   font-family: var(--sans, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
-  font-size: 16px;
+  font-size: 14px;
+}
+
+.sessions-workspace__title span {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .sessions-workspace__header p {
@@ -3525,17 +3539,17 @@ textarea {
 }
 
 .sessions-workspace__tools {
-  flex: 1 1 auto;
+  flex: none;
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 7px;
 }
 
 .sessions-search {
-  width: clamp(260px, 32vw, 520px);
-  min-width: 220px;
+  width: 100%;
+  min-width: 0;
   height: 30px;
 }
 
@@ -3545,7 +3559,7 @@ textarea {
 }
 
 .session-intake-status {
-  max-width: 230px;
+  max-width: 240px;
   height: 28px;
   display: inline-flex;
   align-items: center;
@@ -3610,7 +3624,7 @@ textarea {
 
 .sessions-console {
   display: grid;
-  grid-template-columns: clamp(260px, 22vw, 340px) minmax(0, 1fr);
+  grid-template-columns: clamp(270px, 22vw, 340px) minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -3622,8 +3636,25 @@ textarea {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 7px;
+}
+
+.sessions-list-tools {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.sessions-list-tools .sessions-filters {
+  min-width: 0;
+  width: 100%;
+  overflow: auto hidden;
+  flex-wrap: nowrap;
+}
+
+.sessions-list-tools .sessions-filter {
+  flex: 1 0 auto;
 }
 
 .session-intake {
@@ -3642,7 +3673,7 @@ textarea {
 }
 
 .sessions-kind-tabs {
-  min-height: 36px;
+  min-height: 32px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 2px;
@@ -3654,7 +3685,7 @@ textarea {
 
 .sessions-kind-tab {
   min-width: 0;
-  height: 28px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3710,12 +3741,12 @@ textarea {
   overflow: hidden;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 8px;
+  gap: 6px;
 }
 
 .sessions-section__heading {
   align-items: center;
-  min-height: 26px;
+  min-height: 22px;
 }
 
 .sessions-section__heading h2 {
@@ -3838,13 +3869,14 @@ textarea {
 
 .sessions-detail__header {
   align-items: center;
-  padding: 8px 10px;
+  min-height: 38px;
+  padding: 5px 8px 5px 10px;
   border-bottom: 1px solid rgba(168, 165, 155, 0.14);
 }
 
 .sessions-detail__header h2 {
   margin: 1px 0 0;
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .sessions-detail__identity {
@@ -3855,8 +3887,8 @@ textarea {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 9px;
-  margin: 3px 0 0;
+  gap: 8px;
+  margin: 2px 0 0;
   color: var(--text-faint);
   font-size: 10px;
 }
@@ -3881,12 +3913,21 @@ textarea {
 }
 
 .sessions-detail__actions button {
-  max-width: 112px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   min-width: 0;
-  padding: 0 8px;
+  padding: 0;
   border-radius: 7px;
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.sessions-detail__actions button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 
@@ -4119,10 +4160,14 @@ textarea {
 }
 
 .sessions-detail__drawers {
-  max-height: min(22vh, 180px);
+  max-height: 34px;
   overflow: auto;
   border-top: 1px solid rgba(168, 165, 155, 0.14);
   background: color-mix(in srgb, var(--panel-bg) 82%, #0d0d0c);
+}
+
+.sessions-detail__drawers:has(.sessions-drawer[open]) {
+  max-height: min(34vh, 300px);
 }
 
 .sessions-detail__alerts {
@@ -4135,8 +4180,20 @@ textarea {
   border-bottom: 1px solid rgba(168, 165, 155, 0.12);
 }
 
+.sessions-detail__drawers:not(:has(.sessions-drawer[open])) {
+  display: flex;
+  overflow: hidden;
+}
+
+.sessions-detail__drawers:not(:has(.sessions-drawer[open])) .sessions-drawer {
+  min-width: 0;
+  flex: 1 1 0;
+  border-right: 1px solid rgba(168, 165, 155, 0.1);
+  border-bottom: 0;
+}
+
 .sessions-drawer summary {
-  min-height: 30px;
+  min-height: 32px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -4175,7 +4232,7 @@ textarea {
 }
 
 .sessions-drawer__body {
-  max-height: min(18vh, 138px);
+  max-height: min(28vh, 240px);
   overflow: auto;
   padding: 0 12px 12px;
 }

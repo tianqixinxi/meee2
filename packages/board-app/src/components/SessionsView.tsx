@@ -257,29 +257,11 @@ export function SessionsView({
     <section className="sessions-workspace" aria-label={t('sessions.title')}>
       <div className="sessions-workspace__inner">
         <div className="sessions-workspace__header">
-          <div>
+          <div className="sessions-workspace__title">
             <h1>{t('sessions.title')}</h1>
-            <p>{t('sessions.subtitle')}</p>
+            <span>{t('sessions.sessionCount', { visible: visibleSessions.length, total: sessions.length })}</span>
           </div>
           <div className="sessions-workspace__tools">
-            <label className="sessions-search">
-              <Search size={14} aria-hidden />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('sessions.searchPlaceholder')}
-              />
-            </label>
-            <div className="sessions-filters" aria-label={t('sessions.filters')}>
-              <FilterButton label={t('sessions.filterAll')} count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
-              <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
-              <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
-            </div>
-            <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
-              <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
-              <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
-              <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
-            </div>
             <SessionIntakeStatus
               diagnostics={diagnostics}
               error={diagnosticsError}
@@ -304,6 +286,26 @@ export function SessionsView({
             ) : (
               <div className={`sessions-console sessions-console--${activeKindTab}`}>
                 <aside className="sessions-console__sidebar">
+                  <div className="sessions-list-tools">
+                    <label className="sessions-search">
+                      <Search size={14} aria-hidden />
+                      <input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder={t('sessions.searchPlaceholder')}
+                      />
+                    </label>
+                    <div className="sessions-filters" aria-label={t('sessions.filters')}>
+                      <FilterButton label={t('sessions.filterAll')} count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
+                      <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
+                      <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
+                    </div>
+                    <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
+                      <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
+                      <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
+                      <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
+                    </div>
+                  </div>
                   <div className="sessions-kind-tabs" role="tablist" aria-label={t('sessions.kindTabs')}>
                     <KindTabButton
                       label={t('sessions.internalSessions')}
@@ -626,9 +628,11 @@ function SessionDetail({
   const [controlStatus, setControlStatus] = useState<string | null>(null)
   const [controlError, setControlError] = useState<string | null>(null)
   const [timeline, setTimeline] = useState<TranscriptEntryFull[]>([])
+  const [timelineLoaded, setTimelineLoaded] = useState(false)
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [timelineError, setTimelineError] = useState<string | null>(null)
   const [memoryRecords, setMemoryRecords] = useState<SessionMemoryRecord[]>([])
+  const [memoryLoaded, setMemoryLoaded] = useState(false)
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null)
   const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
@@ -644,8 +648,10 @@ function SessionDetail({
     try {
       const response = await fetchTranscript(session.id, { limit: 48 })
       setTimeline(response.entries)
+      setTimelineLoaded(true)
     } catch (err) {
       setTimeline([])
+      setTimelineLoaded(true)
       setTimelineError((err as Error).message || t('sessions.timelineLoadFailed'))
     } finally {
       setTimelineLoading(false)
@@ -659,7 +665,9 @@ function SessionDetail({
     setMemoryError(null)
     try {
       setMemoryRecords(await fetchMemoryRecords('session', session.id))
+      setMemoryLoaded(true)
     } catch (err) {
+      setMemoryLoaded(true)
       setMemoryError((err as Error).message || t('sessions.memoryLoadFailed'))
     }
   }, [session, t])
@@ -672,9 +680,13 @@ function SessionDetail({
     setControlError(null)
     setStopError(null)
     setStopConfirming(false)
-    void refreshTimeline()
-    void refreshMemory()
-  }, [refreshMemory, refreshTimeline])
+    setTimeline([])
+    setTimelineLoaded(false)
+    setTimelineError(null)
+    setMemoryRecords([])
+    setMemoryLoaded(false)
+    setMemoryError(null)
+  }, [session?.id])
   if (!session) {
     return (
       <aside className="sessions-detail sessions-detail--empty">
@@ -690,6 +702,7 @@ function SessionDetail({
   const boundCanvasId = surface?.canvasId?.trim() || ''
   const boundNodeId = surface?.nodeId?.trim() || ''
   const boundNodeTitle = surface?.title?.trim() || session.title || boundNodeId
+  const timelineItemCount = buildTimelineItems(timeline, session, t).length
   const runControlAction = async (action: 'hide' | 'archive' | 'restore') => {
     setControlError(null)
     setControlStatus(null)
@@ -835,34 +848,36 @@ function SessionDetail({
           </p>
         </div>
         <div className="sessions-detail__actions">
-          <button type="button" onClick={onOpen} disabled={opening}>
+          <button type="button" onClick={onOpen} disabled={opening} title={t('sessions.openSession')} aria-label={t('sessions.openSession')}>
             {internal ? <TerminalIcon size={14} aria-hidden /> : <ExternalLink size={14} aria-hidden />}
-            {opening ? t('common.opening') : t('sessions.openSession')}
+            <span>{opening ? t('common.opening') : t('sessions.openSession')}</span>
           </button>
           <button
             type="button"
             className={stopConfirming ? 'sessions-detail__danger' : undefined}
             onClick={stopSession}
             disabled={stopping || (internal && (session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'))}
+            title={stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+            aria-label={stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
           >
             <CircleStop size={14} aria-hidden />
-            {stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+            <span>{stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}</span>
           </button>
           {controlState === 'active' ? (
             <>
-              <button type="button" onClick={() => void runControlAction('hide')}>
+              <button type="button" onClick={() => void runControlAction('hide')} title={t('sessions.hide')} aria-label={t('sessions.hide')}>
                 <EyeOff size={14} aria-hidden />
-                {t('sessions.hide')}
+                <span>{t('sessions.hide')}</span>
               </button>
-              <button type="button" onClick={() => void runControlAction('archive')}>
+              <button type="button" onClick={() => void runControlAction('archive')} title={t('sessions.archive')} aria-label={t('sessions.archive')}>
                 <Archive size={14} aria-hidden />
-                {t('sessions.archive')}
+                <span>{t('sessions.archive')}</span>
               </button>
             </>
           ) : (
-            <button type="button" onClick={() => void runControlAction('restore')}>
+            <button type="button" onClick={() => void runControlAction('restore')} title={t('sessions.restore')} aria-label={t('sessions.restore')}>
               <RotateCcw size={14} aria-hidden />
-              {t('sessions.restore')}
+              <span>{t('sessions.restore')}</span>
             </button>
           )}
         </div>
@@ -967,7 +982,14 @@ function SessionDetail({
         </SessionDrawer>
         <SessionDrawer
           title={t('sessions.timeline')}
-          meta={timelineLoading ? t('sessions.timelineLoading') : t('sessions.timelineCount', { count: timeline.length })}
+          meta={timelineLoading
+            ? t('sessions.timelineLoading')
+            : timelineLoaded
+              ? t('sessions.timelineCount', { count: timelineItemCount })
+              : t('sessions.openToLoad')}
+          onOpen={() => {
+            if (!timelineLoaded && !timelineLoading) void refreshTimeline()
+          }}
         >
           <SessionTimeline
             entries={timeline}
@@ -980,7 +1002,10 @@ function SessionDetail({
         </SessionDrawer>
         <SessionDrawer
           title={t('sessions.memory')}
-          meta={t('sessions.memoryCount', { count: memoryRecords.length })}
+          meta={memoryLoaded ? t('sessions.memoryCount', { count: memoryRecords.length }) : t('sessions.openToLoad')}
+          onOpen={() => {
+            if (!memoryLoaded) void refreshMemory()
+          }}
         >
           <SessionMemoryPanel
             records={memoryRecords}
@@ -1014,19 +1039,29 @@ function SessionDrawer({
   title,
   meta,
   defaultOpen = false,
+  onOpen,
   children,
 }: {
   title: string
   meta?: string
   defaultOpen?: boolean
+  onOpen?: () => void
   children: ReactNode
 }) {
   const detailsRef = useRef<HTMLDetailsElement | null>(null)
   useEffect(() => {
-    if (defaultOpen && detailsRef.current) detailsRef.current.open = true
-  }, [defaultOpen])
+    if (!defaultOpen || !detailsRef.current) return
+    detailsRef.current.open = true
+    onOpen?.()
+  }, [defaultOpen, onOpen])
   return (
-    <details ref={detailsRef} className="sessions-drawer">
+    <details
+      ref={detailsRef}
+      className="sessions-drawer"
+      onToggle={(event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) onOpen?.()
+      }}
+    >
       <summary>
         <strong>{title}</strong>
         {meta && <span>{meta}</span>}
