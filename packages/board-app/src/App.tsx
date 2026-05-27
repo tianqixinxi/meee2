@@ -355,6 +355,7 @@ export default function App() {
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
+  const [plannerFocusTarget, setPlannerFocusTarget] = useState<{ canvasId: string; nodeId: string; requestId: number } | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -582,6 +583,18 @@ export default function App() {
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
+
+  const handleOpenMonitorItem = useCallback((canvasId: string, nodeId?: string | null) => {
+    handleSetActiveCanvas(canvasId)
+    setWorkspaceMode('planner')
+    if (nodeId?.trim()) {
+      setPlannerFocusTarget({
+        canvasId,
+        nodeId: nodeId.trim(),
+        requestId: Date.now(),
+      })
+    }
+  }, [handleSetActiveCanvas])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
@@ -816,7 +829,7 @@ export default function App() {
               <WorkspaceMonitor
                 activeCanvasId={activeWorkspaceCanvasId}
                 canvases={workspaceCanvases}
-                onOpenCanvas={handleSetActiveCanvas}
+                onOpenItem={handleOpenMonitorItem}
                 onOpenAllSessions={() => setWorkspaceMode('sessions')}
               />
             ) : (
@@ -828,6 +841,11 @@ export default function App() {
                 boardState={boardState.state}
                 clearRevision={plannerClearRevision}
                 refreshTick={activeCanvasRefreshTick}
+                focusNodeId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.nodeId : null}
+                focusRequestId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.requestId : 0}
+                onFocusNodeHandled={(requestId) => {
+                  setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
+                }}
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onNotify={pushToast}
               />

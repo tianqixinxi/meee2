@@ -94,6 +94,9 @@ interface Props {
    * changes within ~1s, without forcing the user to manually switch canvas.
    */
   refreshTick?: number
+  focusNodeId?: string | null
+  focusRequestId?: number
+  onFocusNodeHandled?: (requestId: number) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
 }
@@ -130,6 +133,9 @@ function PlannerGraphInner({
   boardState = null,
   clearRevision = 0,
   refreshTick = 0,
+  focusNodeId = null,
+  focusRequestId = 0,
+  onFocusNodeHandled,
   onOpenSubCanvas,
   onNotify,
 }: Props) {
@@ -146,6 +152,7 @@ function PlannerGraphInner({
   )
   const ioArtifactVisibilityCanvasRef = useRef(canvasId)
   const handledClearRevisionRef = useRef(0)
+  const handledFocusRequestRef = useRef(0)
   const fitViewCanvasRef = useRef<string | null>(null)
   // UI-5.2 — viewport opt-out. Track the user preference reactively so flipping
   // it in PreferencesDialog affects the *next* canvas switch without reload.
@@ -821,6 +828,26 @@ function PlannerGraphInner({
     handleOpenAssignedSubCanvas,
     plannerState?.canEditInternals,
   ])
+
+  useEffect(() => {
+    if (!focusNodeId || !focusRequestId || handledFocusRequestRef.current === focusRequestId) return
+    const node = plannerState?.nodes.find((item) => item.id === focusNodeId)
+    if (!node) return
+    handledFocusRequestRef.current = focusRequestId
+    setSelectedNodeId(focusNodeId)
+    setNodeModalOpen(true)
+    const graphNode = graph.nodes.find((item) => item.id === focusNodeId)
+    if (graphNode) {
+      window.requestAnimationFrame(() => {
+        reactFlow.setCenter(
+          graphNode.position.x + (typeof graphNode.width === 'number' ? graphNode.width / 2 : 140),
+          graphNode.position.y + (typeof graphNode.height === 'number' ? graphNode.height / 2 : 90),
+          { zoom: 0.96, duration: 220 },
+        )
+      })
+    }
+    onFocusNodeHandled?.(focusRequestId)
+  }, [focusNodeId, focusRequestId, graph.nodes, onFocusNodeHandled, plannerState?.nodes, reactFlow])
 
   const reviewGraph = useMemo(() => {
     if (!plannerState || !proposal) return { nodes: [], edges: [] }

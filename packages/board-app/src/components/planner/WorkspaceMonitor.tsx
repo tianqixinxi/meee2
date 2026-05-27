@@ -44,14 +44,14 @@ interface MonitorLane {
 interface WorkspaceMonitorProps {
   activeCanvasId: string
   canvases: CanvasInfo[]
-  onOpenCanvas: (canvasId: string) => void
+  onOpenItem: (canvasId: string, nodeId?: string | null) => void
   onOpenAllSessions: () => void
 }
 
 export function WorkspaceMonitor({
   activeCanvasId,
   canvases,
-  onOpenCanvas,
+  onOpenItem,
   onOpenAllSessions,
 }: WorkspaceMonitorProps) {
   const { t } = useI18n()
@@ -243,7 +243,7 @@ export function WorkspaceMonitor({
                           key={item.id}
                           item={item}
                           generatedAt={monitor?.generatedAt}
-                          onOpenCanvas={onOpenCanvas}
+                          onOpenItem={onOpenItem}
                           t={t}
                         />
                       ))}
@@ -265,12 +265,12 @@ export function WorkspaceMonitor({
 function MonitorCard({
   item,
   generatedAt,
-  onOpenCanvas,
+  onOpenItem,
   t,
 }: {
   item: PlannerMonitorItem
   generatedAt?: string
-  onOpenCanvas: (canvasId: string) => void
+  onOpenItem: (canvasId: string, nodeId?: string | null) => void
   t: Translator
 }) {
   const Icon = item.kind === 'proposal'
@@ -281,9 +281,9 @@ function MonitorCard({
     <button
       type="button"
       className={`planner-monitor-card planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
-      onClick={() => onOpenCanvas(item.canvasId)}
-      aria-label={`${t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
-      title={`${t('monitor.openCanvas')}: ${item.canvasTitle}`}
+      onClick={() => onOpenItem(item.canvasId, item.nodeId)}
+      aria-label={`${item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
+      title={`${item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.canvasTitle}`}
     >
       <div className="planner-monitor-card__top">
         <span className="planner-monitor-card__source">
