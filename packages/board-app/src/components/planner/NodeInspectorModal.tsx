@@ -285,7 +285,7 @@ export function NodeInspectorModal({
                 onClick={openArtifactsForNode}
                 title={`Open this node in the artifact view to inspect missing output: ${compactMissingArtifactRefs(missingArtifactRefs)}`}
               >
-                <ExternalLink size={12} aria-hidden /> Check artifacts
+                <ExternalLink size={12} aria-hidden /> {missingArtifactActionLabel(missingArtifactRefs)}
               </button>
             )}
           </div>
@@ -669,6 +669,11 @@ function compactMissingArtifactRefs(values: string[]): string {
   const visible = values.slice(0, 2).map(compactLabel)
   const extra = values.length - visible.length
   return `${visible.join(', ')}${extra > 0 ? ` +${extra}` : ''}`
+}
+
+function missingArtifactActionLabel(values: string[]): string {
+  const count = values.length
+  return `Check artifacts · ${count} missing`
 }
 
 function artifactReferenceMatches(produced: string, expected: string): boolean {
