@@ -124,8 +124,19 @@ export function NodeInspectorModal({
   const runtimeArtifactRefs = dedupeStrings(state?.artifactRefs ?? [])
     .filter((reference) => !persistedArtifactRefs.has(reference))
   const deliveryEvidenceCount = nodeArtifacts.length + runtimeArtifactRefs.length
-  const hasArtifactExpectation = outputItems.length > 0
-    || dedupeStrings(node.gate?.requiredArtifactRefs ?? []).length > 0
+  const expectedArtifactRefs = dedupeStrings([
+    ...(node.schema?.outputs ?? []),
+    ...(node.gate?.requiredArtifactRefs ?? []),
+  ])
+  const producedArtifactRefs = dedupeStrings([
+    ...nodeArtifacts.map((artifact) => artifact.reference),
+    ...nodeArtifacts.map((artifact) => artifact.title),
+    ...runtimeArtifactRefs,
+  ])
+  const missingArtifactRefs = expectedArtifactRefs.filter((expected) => (
+    !producedArtifactRefs.some((produced) => artifactReferenceMatches(produced, expected))
+  ))
+  const hasMissingArtifactExpectation = missingArtifactRefs.length > 0
   const nextAction = node.nextAction?.trim() || null
   const responsibleId = node.doerId?.trim() ?? ''
   const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)
@@ -268,11 +279,11 @@ export function NodeInspectorModal({
         <div className="planner-node-modal__section">
           <div className="planner-node-modal__section-heading">
             <h3><Route size={13} aria-hidden /> Output</h3>
-            {onOpenArtifacts && deliveryEvidenceCount === 0 && hasArtifactExpectation && (
+            {onOpenArtifacts && hasMissingArtifactExpectation && (
               <button
                 type="button"
                 onClick={openArtifactsForNode}
-                title="Open this node in the artifact view to inspect missing expected outputs."
+                title={`Open this node in the artifact view to inspect missing output: ${compactMissingArtifactRefs(missingArtifactRefs)}`}
               >
                 <ExternalLink size={12} aria-hidden /> Check artifacts
               </button>
@@ -652,6 +663,29 @@ function compactLabel(value: string): string {
   const withoutQuery = value.trim().split('?')[0]
   const parts = withoutQuery.split(/[/:#]/).filter(Boolean)
   return parts[parts.length - 1]?.trim() || value
+}
+
+function compactMissingArtifactRefs(values: string[]): string {
+  const visible = values.slice(0, 2).map(compactLabel)
+  const extra = values.length - visible.length
+  return `${visible.join(', ')}${extra > 0 ? ` +${extra}` : ''}`
+}
+
+function artifactReferenceMatches(produced: string, expected: string): boolean {
+  const normalizedProduced = normalizeArtifactRef(produced)
+  const normalizedExpected = normalizeArtifactRef(expected)
+  if (!normalizedProduced || !normalizedExpected) return false
+  return normalizedProduced === normalizedExpected
+    || normalizedProduced.includes(normalizedExpected)
+    || normalizedExpected.includes(normalizedProduced)
+}
+
+function normalizeArtifactRef(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[{}<>]/g, '')
+    .replace(/[\s_/.-]+/g, '')
 }
 
 function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact): number {
