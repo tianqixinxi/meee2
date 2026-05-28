@@ -64,7 +64,7 @@ interface ArtifactSlot {
   reference: string
   latest: PlannerArtifact | null
   artifacts: PlannerArtifact[]
-  expectedKind?: 'schema-output' | 'gate-ref'
+  expectedKinds?: ArtifactExpectedKind[]
 }
 
 interface ArtifactRequirementSummary {
@@ -78,6 +78,8 @@ interface ArtifactRequirementSummary {
   matchedRequiredRefs: string[]
   missingRequiredRefs: string[]
 }
+
+type ArtifactExpectedKind = 'schema-output' | 'gate-ref'
 
 const KIND_FILTERS: ArtifactFilter[] = [
   'all',
@@ -215,7 +217,11 @@ export function ArtifactsView({
               : nodeArtifacts.some((artifact) => artifactSatisfiesExpectation(artifact, expected.reference))
             if (satisfied) continue
             const key = expectedSlotKey(item.canvas.id, node.id, expected.reference)
-            if (slots.has(key)) continue
+            const existing = slots.get(key)
+            if (existing) {
+              existing.expectedKinds = mergeExpectedKinds(existing.expectedKinds, expected.expectedKind)
+              continue
+            }
             const haystack = [
               expected.reference,
               expected.expectedKind,
@@ -232,7 +238,7 @@ export function ArtifactsView({
               reference: expected.reference,
               latest: null,
               artifacts: [],
-              expectedKind: expected.expectedKind,
+              expectedKinds: [expected.expectedKind],
             })
           }
         }
@@ -867,22 +873,32 @@ function buildSlotRequirementSummary(
   slot: ArtifactSlot,
   nodeArtifacts: PlannerArtifact[],
 ): ArtifactRequirementSummary | null {
-  if (slot.latest || !slot.expectedKind) return buildRequirementSummary(slot.node, nodeArtifacts)
+  if (slot.latest || !slot.expectedKinds?.length) return buildRequirementSummary(slot.node, nodeArtifacts)
   const producedKinds = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.kind))
   const producedRefs = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.reference))
   const reference = slot.reference.trim()
   if (!reference) return buildRequirementSummary(slot.node, nodeArtifacts)
+  const isSchemaOutput = slot.expectedKinds.includes('schema-output')
+  const isGateRef = slot.expectedKinds.includes('gate-ref')
   return {
     fitStatus: 'missing',
-    expectedOutputs: slot.expectedKind === 'schema-output' ? [reference] : [],
-    requiredRefs: slot.expectedKind === 'gate-ref' ? [reference] : [],
+    expectedOutputs: isSchemaOutput ? [reference] : [],
+    requiredRefs: isGateRef ? [reference] : [],
     producedKinds,
     producedRefs,
     matchedExpectedOutputs: [],
-    missingExpectedOutputs: slot.expectedKind === 'schema-output' ? [reference] : [],
+    missingExpectedOutputs: isSchemaOutput ? [reference] : [],
     matchedRequiredRefs: [],
-    missingRequiredRefs: slot.expectedKind === 'gate-ref' ? [reference] : [],
+    missingRequiredRefs: isGateRef ? [reference] : [],
   }
+}
+
+function mergeExpectedKinds(
+  current: ArtifactExpectedKind[] | undefined,
+  nextKind: ArtifactExpectedKind,
+): ArtifactExpectedKind[] {
+  if (!current?.length) return [nextKind]
+  return current.includes(nextKind) ? current : [...current, nextKind]
 }
 
 function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
