@@ -1727,6 +1727,11 @@ textarea {
   box-shadow: 0 0 0 1px rgba(204, 120, 92, 0.18), 0 18px 44px rgba(0, 0, 0, 0.18);
 }
 
+.artifacts-card.is-missing-slot {
+  border-color: rgba(226, 109, 92, 0.28);
+  background: linear-gradient(180deg, rgba(226, 109, 92, 0.08), rgba(34, 34, 31, 0.68));
+}
+
 .artifacts-card__top {
   display: flex;
   align-items: flex-start;
@@ -1892,7 +1897,8 @@ textarea {
 .artifacts-card__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
 }
 

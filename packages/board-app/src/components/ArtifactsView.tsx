@@ -60,8 +60,10 @@ interface ArtifactSlot {
   key: string
   canvas: CanvasInfo
   node?: PlanningNode
-  latest: PlannerArtifact
+  reference: string
+  latest: PlannerArtifact | null
   artifacts: PlannerArtifact[]
+  expectedKind?: 'schema-output' | 'gate-ref'
 }
 
 interface ArtifactRequirementSummary {
@@ -159,6 +161,12 @@ export function ArtifactsView({
     const normalizedQuery = query.trim().toLowerCase()
     return canvasArtifacts.map((item) => {
       const nodesById = new Map(item.nodes.map((node) => [node.id, node]))
+      const artifactsByNodeId = new Map<string, PlannerArtifact[]>()
+      for (const artifact of item.artifacts) {
+        const list = artifactsByNodeId.get(artifact.nodeId) ?? []
+        list.push(artifact)
+        artifactsByNodeId.set(artifact.nodeId, list)
+      }
       const slots = new Map<string, ArtifactSlot>()
       for (const artifact of item.artifacts) {
         if (kindFilter !== 'all' && artifact.kind !== kindFilter) continue
@@ -185,14 +193,50 @@ export function ArtifactsView({
             key,
             canvas: item.canvas,
             node,
+            reference: artifact.reference,
             latest: artifact,
             artifacts: [artifact],
           })
         }
       }
+      if (kindFilter === 'all') {
+        for (const node of item.nodes) {
+          const nodeArtifacts = artifactsByNodeId.get(node.id) ?? []
+          const expectedSlots = [
+            ...uniqueNonEmpty(node.schema?.outputs ?? []).map((reference) => ({ reference, expectedKind: 'schema-output' as const })),
+            ...uniqueNonEmpty(node.gate?.requiredArtifactRefs ?? []).map((reference) => ({ reference, expectedKind: 'gate-ref' as const })),
+          ]
+          for (const expected of expectedSlots) {
+            const satisfied = expected.expectedKind === 'gate-ref'
+              ? nodeArtifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, expected.reference))
+              : nodeArtifacts.some((artifact) => artifactSatisfiesExpectation(artifact, expected.reference))
+            if (satisfied) continue
+            const key = expectedSlotKey(item.canvas.id, node.id, expected.reference)
+            if (slots.has(key)) continue
+            const haystack = [
+              expected.reference,
+              expected.expectedKind,
+              item.canvas.name,
+              item.canvas.id,
+              node.title,
+              node.id,
+            ].filter(Boolean).join(' ').toLowerCase()
+            if (normalizedQuery && !haystack.includes(normalizedQuery)) continue
+            slots.set(key, {
+              key,
+              canvas: item.canvas,
+              node,
+              reference: expected.reference,
+              latest: null,
+              artifacts: [],
+              expectedKind: expected.expectedKind,
+            })
+          }
+        }
+      }
       return {
         ...item,
-        slots: Array.from(slots.values()).sort((a, b) => sortArtifactsNewestFirst(a.latest, b.latest)),
+        slots: Array.from(slots.values()).sort(sortSlotsForDisplay),
       }
     }).filter((item) => item.slots.length > 0 || item.error)
   }, [canvasArtifacts, kindFilter, query])
@@ -258,6 +302,7 @@ export function ArtifactsView({
   }
 
   const loadVersions = (slot: ArtifactSlot) => {
+    if (!slot.latest) return
     if (versionsBySlot[slot.key] || versionsLoading.has(slot.key)) return
     setVersionsLoading((current) => new Set(current).add(slot.key))
     listArtifactVersions(slot.canvas.id, slot.latest.nodeId, slot.latest.reference)
@@ -313,7 +358,9 @@ export function ArtifactsView({
       matchingSlots.forEach((slot) => next.add(slot.key))
       return next
     })
-    matchingSlots.slice(0, 3).forEach((slot) => loadContent(slot.latest))
+    matchingSlots.slice(0, 3).forEach((slot) => {
+      if (slot.latest) loadContent(slot.latest)
+    })
     window.requestAnimationFrame(() => {
       document.getElementById(artifactSlotDomId(matchingSlots[0].key))?.scrollIntoView({
         block: 'center',
@@ -432,87 +479,103 @@ export function ArtifactsView({
               <div className="artifacts-grid">
                 {group.slots.map((slot) => {
                   const mode = displayModes[slot.key] ?? 'latest'
-                  const content = contentByArtifactId[slot.latest.id]
+                  const content = slot.latest ? contentByArtifactId[slot.latest.id] : undefined
                   const versions = versionsBySlot[slot.key]
                   const selectedVersionId = selectedVersionBySlot[slot.key]
                   const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
                   const isExpanded = expandedSlots.has(slot.key)
                   const isFocused = focusTarget ? slotMatchesFocus(slot, focusTarget) : false
                   const nodeArtifacts = group.slots
-                    .filter((candidate) => candidate.latest.nodeId === slot.latest.nodeId)
+                    .filter((candidate) => candidate.node?.id === slot.node?.id)
                     .flatMap((candidate) => candidate.artifacts)
                   const requirement = buildRequirementSummary(slot.node, nodeArtifacts)
+                  const hasArtifact = Boolean(slot.latest)
                   return (
                     <article
-                      className={`artifacts-card${isFocused ? ' is-focused' : ''}`}
+                      className={`artifacts-card${isFocused ? ' is-focused' : ''}${hasArtifact ? '' : ' is-missing-slot'}`}
                       id={artifactSlotDomId(slot.key)}
                       key={slot.key}
                     >
                       <div className="artifacts-card__top">
                         <div>
                           <div className="artifacts-card__eyebrow">
-                            <span>{slot.latest.kind}</span>
-                            <span>{slot.latest.status}</span>
+                            <span>{slot.latest?.kind ?? t('artifacts.expectedSlot')}</span>
+                            <span>{slot.latest?.status ?? t('artifacts.fit.missing')}</span>
                           </div>
-                          <h3>{slot.latest.title}</h3>
-                          <p>{slot.latest.reference}</p>
+                          <h3>{slot.latest?.title ?? slot.reference}</h3>
+                          <p>{slot.reference}</p>
                         </div>
                         <span className="artifacts-card__count">{slot.artifacts.length}</span>
                       </div>
                       <dl className="artifacts-meta">
                         <div>
                           <dt>{t('artifacts.node')}</dt>
-                          <dd>{slot.node?.title ?? slot.latest.nodeId}</dd>
+                          <dd>{slot.node?.title ?? slot.latest?.nodeId ?? t('artifacts.focusFallback')}</dd>
                         </div>
                         <div>
                           <dt>{t('artifacts.latest')}</dt>
-                          <dd>{formatDate(slot.latest.createdAt)}</dd>
+                          <dd>{slot.latest ? formatDate(slot.latest.createdAt) : t('artifacts.notProduced')}</dd>
                         </div>
                       </dl>
                       <ArtifactRequirementPanel summary={requirement} t={t} />
-                      <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
-                        <button
-                          type="button"
-                          className={mode === 'latest' ? 'is-active' : ''}
-                          onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
-                        >
-                          <FileText size={13} aria-hidden />
-                          <span>{t('artifacts.showLatest')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={mode === 'merged' ? 'is-active' : ''}
-                          onClick={() => {
-                            setDisplayModes((current) => ({ ...current, [slot.key]: 'merged' }))
-                            loadVersions(slot)
-                          }}
-                        >
-                          <Layers size={13} aria-hidden />
-                          <span>{t('artifacts.showMerged')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={mode === 'compare' ? 'is-active' : ''}
-                          onClick={() => {
-                            setDisplayModes((current) => ({ ...current, [slot.key]: 'compare' }))
-                            loadVersions(slot)
-                          }}
-                        >
-                          <GitCompare size={13} aria-hidden />
-                          <span>{t('artifacts.compareVersions')}</span>
-                        </button>
-                      </div>
+                      {slot.latest && (
+                        <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
+                          <button
+                            type="button"
+                            className={mode === 'latest' ? 'is-active' : ''}
+                            onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
+                          >
+                            <FileText size={13} aria-hidden />
+                            <span>{t('artifacts.showLatest')}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={mode === 'merged' ? 'is-active' : ''}
+                            onClick={() => {
+                              setDisplayModes((current) => ({ ...current, [slot.key]: 'merged' }))
+                              loadVersions(slot)
+                            }}
+                          >
+                            <Layers size={13} aria-hidden />
+                            <span>{t('artifacts.showMerged')}</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={mode === 'compare' ? 'is-active' : ''}
+                            onClick={() => {
+                              setDisplayModes((current) => ({ ...current, [slot.key]: 'compare' }))
+                              loadVersions(slot)
+                            }}
+                          >
+                            <GitCompare size={13} aria-hidden />
+                            <span>{t('artifacts.compareVersions')}</span>
+                          </button>
+                        </div>
+                      )}
                       <div className="artifacts-card__footer">
-                        <button
-                          type="button"
-                          className="artifacts-link-button"
-                          onClick={() => {
-                            toggleSlot(slot.key)
-                            loadContent(slot.latest)
-                          }}
-                        >
-                          {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
-                        </button>
+                        {slot.latest && (
+                          <button
+                            type="button"
+                            className="artifacts-link-button"
+                            onClick={() => {
+                              toggleSlot(slot.key)
+                              if (slot.latest) loadContent(slot.latest)
+                            }}
+                          >
+                            {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
+                          </button>
+                        )}
+                        {slot.node && (
+                          <button
+                            type="button"
+                            className="artifacts-link-button"
+                            onClick={() => onOpenPlannerNode?.(slot.canvas.id, slot.node?.id ?? '')}
+                            disabled={!onOpenPlannerNode}
+                          >
+                            <ExternalLink size={13} aria-hidden />
+                            {t('artifacts.openNode')}
+                          </button>
+                        )}
                         {slot.node?.sessionId?.trim() && (
                           <button
                             type="button"
@@ -524,15 +587,17 @@ export function ArtifactsView({
                             {t('sessions.openSession')}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          className="artifacts-link-button"
-                          onClick={() => loadVersions(slot)}
-                        >
-                          {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
-                        </button>
+                        {slot.latest && (
+                          <button
+                            type="button"
+                            className="artifacts-link-button"
+                            onClick={() => loadVersions(slot)}
+                          >
+                            {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
+                          </button>
+                        )}
                       </div>
-                      {isExpanded && (
+                      {isExpanded && slot.latest && (
                         <div className="artifacts-details">
                           {contentLoading.has(slot.latest.id) ? (
                             <div className="artifacts-preview artifacts-preview--loading">
@@ -907,13 +972,24 @@ function slotKey(artifact: PlannerArtifact): string {
   return `${artifact.canvasId}:${artifact.nodeId}:${artifact.reference.trim().toLowerCase()}`
 }
 
+function expectedSlotKey(canvasId: string, nodeId: string, reference: string): string {
+  return `${canvasId}:${nodeId}:expected:${normalizeRequirementToken(reference)}`
+}
+
+function sortSlotsForDisplay(left: ArtifactSlot, right: ArtifactSlot): number {
+  if (left.latest && right.latest) return sortArtifactsNewestFirst(left.latest, right.latest)
+  if (left.latest) return -1
+  if (right.latest) return 1
+  return left.reference.localeCompare(right.reference)
+}
+
 function slotMatchesFocus(slot: ArtifactSlot, focus: ArtifactFocusTarget): boolean {
   if (slot.canvas.id !== focus.canvasId) return false
   const nodeId = focus.nodeId?.trim()
   const reference = focus.reference?.trim().toLowerCase()
-  if (reference && slot.latest.reference.trim().toLowerCase() === reference) return true
+  if (reference && slot.reference.trim().toLowerCase() === reference) return true
   if (reference) return false
-  if (nodeId && slot.latest.nodeId === nodeId) return true
+  if (nodeId && (slot.latest?.nodeId === nodeId || slot.node?.id === nodeId)) return true
   return false
 }
 
