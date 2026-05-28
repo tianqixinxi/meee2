@@ -264,7 +264,10 @@ export function ArtifactsView({
     const matchingSlots = canvasGroups
       .flatMap((group) => group.slots)
       .filter((slot) => slotMatchesFocus(slot, focusTarget))
-    const matchingArtifacts = matchingSlots.flatMap((slot) => slot.artifacts)
+    const canvasArtifactGroup = canvasArtifacts.find((item) => item.canvas.id === focusTarget.canvasId)
+    const matchingArtifacts = node
+      ? (canvasArtifactGroup?.artifacts ?? []).filter((artifact) => artifact.nodeId === node.id)
+      : matchingSlots.flatMap((slot) => slot.artifacts)
     return {
       canvasId: focusTarget.canvasId,
       nodeId: focusTarget.nodeId?.trim() || null,
@@ -510,9 +513,9 @@ export function ArtifactsView({
                   const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
                   const isExpanded = expandedSlots.has(slot.key)
                   const isFocused = focusTarget ? slotMatchesFocus(slot, focusTarget) : false
-                  const nodeArtifacts = group.slots
-                    .filter((candidate) => candidate.node?.id === slot.node?.id)
-                    .flatMap((candidate) => candidate.artifacts)
+                  const nodeArtifacts = slot.node
+                    ? group.artifacts.filter((artifact) => artifact.nodeId === slot.node?.id)
+                    : slot.artifacts
                   const requirement = buildSlotRequirementSummary(slot, nodeArtifacts)
                   const hasArtifact = Boolean(slot.latest)
                   return (
