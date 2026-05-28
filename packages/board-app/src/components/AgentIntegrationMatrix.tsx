@@ -6,9 +6,8 @@ import {
   fetchCanvases,
   generateIntegrationRunbook,
   installIntegration,
-  recommendIntegrationWorkflow,
 } from '../api'
-import { useI18n } from '../lib/i18n'
+import { useI18n, type TranslationKey } from '../lib/i18n'
 import type {
   AgentIntegrationStatus,
   AgentScanResult,
@@ -17,22 +16,41 @@ import type {
   IntegrationInstall,
   IntegrationInstallResult,
   IntegrationRunbookResult,
-  PlanProposal,
 } from '../types'
 import { IntegrationArtifactPicker } from './IntegrationArtifactPicker'
+import { ALL_INTEGRATION_VIEW_SCHEMAS } from '../integrations/viewSchemas'
 
 /** Integrations whose backend exposes a browse endpoint (PRs / docs / …). */
 const BROWSABLE: ReadonlySet<string> = new Set(['github', 'lark'])
 
-const STATE_GLYPH: Record<IntegrationConnState, string> = {
-  connected: '✓',
-  partial: '◐',
-  needs_auth: '◔',
-  missing: '✗',
-}
+/** PRD §1 — the 8 "Featured" integrations meee2 catalog知道 + 给一等公民待遇。
+ *  其余 ~500 个来自 Claude plugin marketplace 全量扫描,折到「Other」抽屉。 */
+const FEATURED_INTEGRATION_IDS: ReadonlySet<string> = new Set([
+  'github', 'linear', 'slack', 'notion',
+  'figma', 'supabase', 'sentry', 'postgres',
+])
+
+/** 哪些 integrationId 已经有 canvas view-schema(可拖进 canvas 用),
+ *  动态读自 chunk I 的 registry,确保跟视图层一致。 */
+const HAS_VIEW_SCHEMA: ReadonlySet<string> = new Set(
+  ALL_INTEGRATION_VIEW_SCHEMAS.map((s) => s.integrationId),
+)
+
 const AGENT_LABEL: Record<string, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+}
+
+/** Server categories are raw English tokens (devtools / communication / …).
+ *  Map known buckets to localized labels; unknown categories fall back to the
+ *  raw key so new connectors aren't blocked on translation. */
+const CATEGORY_LABEL_KEY: Record<string, TranslationKey> = {
+  devtools: 'integrations.category.devtools',
+  communication: 'integrations.category.communication',
+  data: 'integrations.category.data',
+  design: 'integrations.category.design',
+  observability: 'integrations.category.observability',
+  productivity: 'integrations.category.productivity',
 }
 
 interface IntegrationRow {
@@ -65,16 +83,14 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
   const [canvasList, setCanvasList] = useState<CanvasList | null>(null)
-  const [recommendCanvasId, setRecommendCanvasId] = useState<string | null>(null)
-  const [recommendBusy, setRecommendBusy] = useState(false)
-  const [recommended, setRecommended] = useState<PlanProposal | null>(null)
-  const [recommendError, setRecommendError] = useState<string | null>(null)
   /** Transient toast for the one-click "Complete auth" flow — shows
    *  "Browser opening…" + fallback link, auto-clears once a re-scan flips
    *  the row to `connected`. */
   const [authToast, setAuthToast] = useState<
     { id: string; message: string; authUrl?: string | null } | null
   >(null)
+  /** PRD §1 Featured/Other 分组:Other 默认折叠(514 个 connector 视觉太重)。 */
+  const [otherCollapsed, setOtherCollapsed] = useState(true)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -88,54 +104,23 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
     load()
   }, [load])
 
-  // Canvas list for the post-install "recommend a workflow" picker.
+  /** Canvas list for the post-install "try in canvas" CTA — we only need
+   *  `activeCanvasId` to know where to drop the user. ui-simplification removed
+   *  the per-canvas picker + planner-proposal sub-flow from this modal. */
   useEffect(() => {
     let cancelled = false
     fetchCanvases()
       .then((list) => {
         if (cancelled) return
         setCanvasList(list)
-        setRecommendCanvasId(list.activeCanvasId || list.canvases[0]?.id || null)
       })
       .catch(() => {
-        /* canvas list is best-effort — recommend button just hides if missing */
+        /* canvas list is best-effort — the CTA just hides if missing */
       })
     return () => {
       cancelled = true
     }
   }, [])
-
-  // Reset recommend state whenever a fresh install lands.
-  useEffect(() => {
-    if (installResult) {
-      setRecommended(null)
-      setRecommendError(null)
-    }
-  }, [installResult])
-
-  /** Ask the planner agent to propose a workflow that uses this integration
-   *  in the selected canvas. Closes the install modal on success — the user
-   *  flips over to the planner to review the new pending proposal. */
-  const handleRecommendWorkflow = (integrationId: string) => {
-    if (!recommendCanvasId) {
-      setRecommendError(t('integrations.pickCanvasFirst'))
-      return
-    }
-    setRecommendBusy(true)
-    setRecommendError(null)
-    recommendIntegrationWorkflow(integrationId, recommendCanvasId)
-      .then((proposal) => {
-        if (!proposal) {
-          setRecommendError(t('integrations.noProposal'))
-          return
-        }
-        setRecommended(proposal)
-      })
-      .catch((err: unknown) => {
-        setRecommendError(err instanceof Error ? err.message : t('integrations.recommendFailed'))
-      })
-      .finally(() => setRecommendBusy(false))
-  }
 
   const agents = scan?.agents ?? []
 
@@ -176,6 +161,17 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
       return true
     })
   }, [rows, searchQuery, categoryFilter])
+
+  /** PRD §1 split: 8 个 meee2-catalog 主 integration 进 Featured,
+   *  其余 ~500 个 plugin-marketplace 自动扫到的进 Other。 */
+  const { featuredRows, otherRows } = useMemo(() => {
+    const featured = visibleRows.filter((r) => FEATURED_INTEGRATION_IDS.has(r.id))
+    const other = visibleRows.filter((r) => !FEATURED_INTEGRATION_IDS.has(r.id))
+    // Featured 区按 PRD 顺序排,而不是字母序 / category 序
+    const order = ['github', 'linear', 'slack', 'notion', 'figma', 'supabase', 'sentry', 'postgres']
+    featured.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+    return { featuredRows: featured, otherRows: other }
+  }, [visibleRows])
 
   const handleSetup = (id: string) => {
     setBusyId(id)
@@ -254,6 +250,109 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
   const installFor = (row: IntegrationRow): IntegrationInstall | undefined =>
     agents.map((agent) => row.byAgent[agent]?.install).find((spec) => spec !== undefined)
 
+  /** PRD §1 — row JSX 提到一个 helper,Featured 区和 Other 区都用同一份。 */
+  const renderIntegrationRow = (row: IntegrationRow) => {
+    const hasViewSchema = HAS_VIEW_SCHEMA.has(row.id)
+    return (
+      <tr key={row.id}>
+        <td className="agent-matrix__name">
+          {row.name}
+          {hasViewSchema && (
+            <span
+              className="agent-matrix__view-schema-badge"
+              title={t('integrations.canvasReadyTooltip')}
+              aria-label={t('integrations.canvasReadyAria')}
+            >
+              <span className="agent-matrix__view-schema-dot" aria-hidden />
+              {t('integrations.canvasReady')}
+            </span>
+          )}
+          <em>{row.category}</em>
+        </td>
+        {agents.map((agent) => {
+          const cell = row.byAgent[agent]
+          const state: IntegrationConnState = cell?.state ?? 'missing'
+          return (
+            <td key={agent} className={`agent-matrix__cell is-${state}`} title={cell?.evidence}>
+              <span className={`agent-matrix__conn-dot is-${state}`} aria-hidden /> {stateLabel(state, t)}
+            </td>
+          )
+        })}
+        <td className="agent-matrix__action">
+          {rowNeedsAuth(row) ? (
+            <button
+              type="button"
+              className="agent-matrix__setup is-needs-auth"
+              disabled={busyId === row.id}
+              onClick={() => handleCompleteAuth(row.id)}
+              title={t('integrations.finishOauth')}
+            >
+              {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
+            </button>
+          ) : (
+            !rowFullyConnected(row) &&
+            (() => {
+              const install = installFor(row)
+              if (install?.kind === 'claudePlugin') {
+                return (
+                  <button
+                    type="button"
+                    className="agent-matrix__install"
+                    disabled={busyId === row.id}
+                    onClick={() => handleInstall(row.id)}
+                    title={t('integrations.oneClickInstall')}
+                  >
+                    {busyId === row.id ? '...' : t('integrations.install')}
+                  </button>
+                )
+              }
+              if (install?.kind === 'remoteHttp') {
+                return (
+                  <button
+                    type="button"
+                    className="agent-matrix__install"
+                    disabled={busyId === row.id}
+                    onClick={() => handleInstall(row.id)}
+                    title={t('integrations.oneClickInstallRemote')}
+                  >
+                    {busyId === row.id ? '...' : t('integrations.install')}
+                  </button>
+                )
+              }
+              if (install?.kind === 'unsupported') {
+                return (
+                  <button type="button" className="agent-matrix__setup" disabled title={install.reason}>
+                    {t('integrations.unsupported')}
+                  </button>
+                )
+              }
+              return (
+                <button
+                  type="button"
+                  className="agent-matrix__setup"
+                  disabled={busyId === row.id}
+                  onClick={() => handleSetup(row.id)}
+                >
+                  {busyId === row.id ? '...' : t('common.setUp')}
+                </button>
+              )
+            })()
+          )}
+          {rowHasBrowse(row) && (
+            <button
+              type="button"
+              className="agent-matrix__browse"
+              onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
+              title={t('integrations.browseItems', { name: row.name })}
+            >
+              {t('integrations.browse')}
+            </button>
+          )}
+        </td>
+      </tr>
+    )
+  }
+
   return (
     <section className="agent-matrix" aria-label={t('integrations.agentMatrix')}>
       <header className="agent-matrix__header">
@@ -268,144 +367,99 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
 
       {error && <p className="agent-matrix__error">{error}</p>}
 
-      {scan && rows.length > 0 && (
-        <div className="agent-matrix__filters">
-          <input
-            type="search"
-            className="agent-matrix__search"
-            placeholder={t('integrations.searchPlaceholder', { count: rows.length })}
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-          />
-          <div className="agent-matrix__categories" role="group" aria-label={t('integrations.categoryFilter')}>
-            <button
-              type="button"
-              className={categoryFilter === null ? 'is-active' : ''}
-              onClick={() => setCategoryFilter(null)}
-            >
-              {t('artifacts.filterAll')} ({rows.length})
-            </button>
-            {categoryCounts.map(([cat, count]) => (
-              <button
-                key={cat}
-                type="button"
-                className={categoryFilter === cat ? 'is-active' : ''}
-                onClick={() => setCategoryFilter(cat === categoryFilter ? null : cat)}
-              >
-                {cat} ({count})
-              </button>
-            ))}
-          </div>
-          <span className="agent-matrix__visible-count">
-            {t('integrations.showing', { visible: visibleRows.length, total: rows.length })}
-          </span>
-        </div>
-      )}
+      {/* PRD §1 — Featured 区(8 个 meee2 一等公民 integration)+ Other 抽屉。
+       *  visibleRows 仍是搜索/分类后的全集,这里只是按 FEATURED_INTEGRATION_IDS 切两段。
+       *  ui-simplification: 搜索/分类/计数条只在 Other 抽屉里出现 ——
+       *  Featured 固定 8 行一眼能看完,不需要数据库式浏览语言。 */}
+      {scan && (featuredRows.length > 0 || otherRows.length > 0) && (
+        <>
+          {featuredRows.length > 0 && (
+            <section className="agent-matrix__section">
+              <header className="agent-matrix__section-head">
+                <Sparkles size={13} aria-hidden />
+                <strong>{t('integrations.featuredTitle')}</strong>
+                <span className="agent-matrix__section-hint">
+                  {t('integrations.featuredHint')}
+                </span>
+              </header>
+              <table className="agent-matrix__table">
+                <thead>
+                  <tr>
+                    <th>{t('integrations.integration')}</th>
+                    {agents.map((agent) => (
+                      <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
+                    ))}
+                    <th aria-label={t('integrations.actions')} />
+                  </tr>
+                </thead>
+                <tbody>{featuredRows.map((row) => renderIntegrationRow(row))}</tbody>
+              </table>
+            </section>
+          )}
 
-      {scan && visibleRows.length > 0 && (
-        <table className="agent-matrix__table">
-          <thead>
-            <tr>
-              <th>{t('integrations.integration')}</th>
-              {agents.map((agent) => (
-                <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
-              ))}
-              <th aria-label={t('integrations.actions')} />
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row) => (
-              <tr key={row.id}>
-                <td className="agent-matrix__name">
-                  {row.name}
-                  <em>{row.category}</em>
-                </td>
-                {agents.map((agent) => {
-                  const cell = row.byAgent[agent]
-                  const state: IntegrationConnState = cell?.state ?? 'missing'
-                  return (
-                    <td
-                      key={agent}
-                      className={`agent-matrix__cell is-${state}`}
-                      title={cell?.evidence}
-                    >
-                      <span aria-hidden>{STATE_GLYPH[state]}</span> {stateLabel(state, t)}
-                    </td>
-                  )
-                })}
-                <td className="agent-matrix__action">
-                  {rowNeedsAuth(row) ? (
-                    <button
-                      type="button"
-                      className="agent-matrix__setup is-needs-auth"
-                      disabled={busyId === row.id}
-                      onClick={() => handleCompleteAuth(row.id)}
-                      title={t('integrations.finishOauth')}
-                    >
-                      {busyId === row.id ? t('integrations.openingBrowser') : t('integrations.completeAuth')}
-                    </button>
-                  ) : !rowFullyConnected(row) && (() => {
-                    const install = installFor(row)
-                    if (install?.kind === 'claudePlugin') {
-                      return (
-                        <button
-                          type="button"
-                          className="agent-matrix__install"
-                          disabled={busyId === row.id}
-                          onClick={() => handleInstall(row.id)}
-                          title={`One-click install: claude plugin install ${install.name}@${install.marketplace}`}
-                        >
-                          {busyId === row.id ? '...' : t('integrations.install')}
-                        </button>
-                      )
-                    }
-                    if (install?.kind === 'remoteHttp') {
-                      return (
-                        <button
-                          type="button"
-                          className="agent-matrix__install"
-                          disabled={busyId === row.id}
-                          onClick={() => handleInstall(row.id)}
-                          title={`One-click install via ${install.url} (OAuth on first use)`}
-                        >
-                          {busyId === row.id ? '...' : t('integrations.install')}
-                        </button>
-                      )
-                    }
-                    if (install?.kind === 'unsupported') {
-                      return (
-                        <button type="button" className="agent-matrix__setup" disabled title={install.reason}>
-                          {t('integrations.unsupported')}
-                        </button>
-                      )
-                    }
-                    // localStdio (token-based) — fall back to runbook flow.
-                    return (
+          {otherRows.length > 0 && (
+            <section className="agent-matrix__section">
+              <header className="agent-matrix__section-head">
+                <button
+                  type="button"
+                  className="agent-matrix__section-toggle"
+                  onClick={() => setOtherCollapsed((v) => !v)}
+                  aria-expanded={!otherCollapsed}
+                >
+                  <strong>{t('integrations.otherCount', { count: otherRows.length })}</strong>
+                  <span aria-hidden>{otherCollapsed ? '▾' : '▴'}</span>
+                </button>
+                <span className="agent-matrix__section-hint">
+                  {t('integrations.otherHint')}
+                </span>
+              </header>
+              {!otherCollapsed && (
+                <>
+                  <div className="agent-matrix__filters">
+                    <input
+                      type="search"
+                      className="agent-matrix__search"
+                      placeholder={t('integrations.searchPlaceholder')}
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                    />
+                    <div className="agent-matrix__categories" role="group" aria-label={t('integrations.categoryFilter')}>
                       <button
                         type="button"
-                        className="agent-matrix__setup"
-                        disabled={busyId === row.id}
-                        onClick={() => handleSetup(row.id)}
+                        className={categoryFilter === null ? 'is-active' : ''}
+                        onClick={() => setCategoryFilter(null)}
                       >
-                        {busyId === row.id ? '...' : t('common.setUp')}
+                        {t('artifacts.filterAll')} ({rows.length})
                       </button>
-                    )
-                  })()}
-                  {rowHasBrowse(row) && (
-                    <button
-                      type="button"
-                      className="agent-matrix__browse"
-                      onClick={() => setBrowsingId(row.id as 'github' | 'lark')}
-                      title={t('integrations.browseItems', { name: row.name })}
-                    >
-                      {t('integrations.browse')}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                      {categoryCounts.map(([cat, count]) => (
+                        <button
+                          key={cat}
+                          type="button"
+                          className={categoryFilter === cat ? 'is-active' : ''}
+                          onClick={() => setCategoryFilter(cat === categoryFilter ? null : cat)}
+                        >
+                          {CATEGORY_LABEL_KEY[cat] ? t(CATEGORY_LABEL_KEY[cat]) : cat} ({count})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <table className="agent-matrix__table">
+                    <thead>
+                      <tr>
+                        <th>{t('integrations.integration')}</th>
+                        {agents.map((agent) => (
+                          <th key={agent}>{AGENT_LABEL[agent] ?? agent}</th>
+                        ))}
+                        <th aria-label={t('integrations.actions')} />
+                      </tr>
+                    </thead>
+                    <tbody>{otherRows.map((row) => renderIntegrationRow(row))}</tbody>
+                  </table>
+                </>
+              )}
+            </section>
+          )}
+        </>
       )}
 
       {authToast && (
@@ -469,75 +523,76 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
             >
               <X size={15} aria-hidden />
             </button>
-            <h3>
+            {/* ui-simplification: post-install modal carries execution-result only.
+             *  Per-agent status + raw server messages move under <details>; the
+             *  canvas-picker + planner-proposal sub-flow is gone — governance now
+             *  lives at its own entry (PlannerAgentChatPanel in the canvas dock). */}
+            <h3 style={{ marginBottom: 4 }}>
               {t('integrations.installed', { id: installResult.integrationId })}
-              {' '}
-              <em style={{ fontStyle: 'normal', fontSize: 12, color: 'var(--text-faint)' }}>
-                Claude {installResult.claudeOK ? '✓' : '✗'} · Codex {installResult.codexOK ? '✓' : '✗'}
-              </em>
             </h3>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
-              {installResult.messages.map((msg, idx) => (<li key={idx}>{msg}</li>))}
-            </ul>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: 'var(--text-dim)' }}>
+              {t('integrations.installedSubtitle')}
+            </p>
 
-            {canvasList && canvasList.canvases.length > 0 && installResult.claudeOK && (
-              <div className="agent-matrix__recommend">
-                <div className="agent-matrix__recommend-header">
-                  <Sparkles size={13} aria-hidden />
-                  <strong>{t('integrations.useInCanvas')}</strong>
+            <div className="agent-matrix__install-actions" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
+              {canvasList && canvasList.activeCanvasId && installResult.claudeOK && (
+                <button
+                  type="button"
+                  className="agent-matrix__install"
+                  onClick={() => {
+                    if (onJumpToCanvas && canvasList.activeCanvasId) {
+                      onJumpToCanvas(canvasList.activeCanvasId)
+                    }
+                    setInstallResult(null)
+                  }}
+                >
+                  {t('integrations.tryInCanvas')}
+                </button>
+              )}
+              {canvasList && canvasList.activeCanvasId && installResult.claudeOK && (
+                <button
+                  type="button"
+                  className="agent-matrix__governance-link"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    fontSize: 12,
+                    color: 'var(--text-dim)',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                  onClick={() => {
+                    // Demoted entry point: route the user back to the canvas
+                    // where PlannerAgentChatPanel lives, so the "ask governance
+                    // agent" intent is handled by the regular chat dock and not
+                    // by an inline proposal sub-flow inside this modal.
+                    if (onJumpToCanvas && canvasList.activeCanvasId) {
+                      onJumpToCanvas(canvasList.activeCanvasId)
+                    }
+                    setInstallResult(null)
+                  }}
+                >
+                  {t('integrations.askGovernanceAgent')}
+                </button>
+              )}
+            </div>
+
+            <details style={{ marginTop: 16, fontSize: 12, color: 'var(--text-dim)' }}>
+              <summary style={{ cursor: 'pointer', userSelect: 'none' }}>
+                {t('integrations.advancedDetails')}
+              </summary>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ marginBottom: 6, color: 'var(--text-faint)' }}>
+                  {t('integrations.perAgentResult')}: Claude {installResult.claudeOK ? '✓' : '✗'} · Codex {installResult.codexOK ? '✓' : '✗'}
                 </div>
-                {recommended ? (
-                  <div className="agent-matrix__recommend-success">
-                    <button
-                      type="button"
-                      className="agent-matrix__install"
-                      onClick={() => {
-                        if (onJumpToCanvas) onJumpToCanvas(recommended.canvasId)
-                        setInstallResult(null)
-                      }}
-                    >
-                      {t('integrations.openCanvasArrow')}
-                    </button>
-                    <span>
-                      {t('integrations.proposalWaiting', { summary: recommended.summary })}
-                    </span>
-                  </div>
-                ) : (
-                  <>
-                    <p>
-                      {t('integrations.proposePlan', { id: installResult.integrationId })}
-                    </p>
-                    <div className="agent-matrix__recommend-controls">
-                      <label>
-                        {t('integrations.canvas')}:
-                        <select
-                          value={recommendCanvasId ?? ''}
-                          onChange={(event) => setRecommendCanvasId(event.target.value)}
-                          disabled={recommendBusy}
-                        >
-                          {canvasList.canvases.map((canvas) => (
-                            <option key={canvas.id} value={canvas.id}>
-                              {canvas.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button
-                        type="button"
-                        className="agent-matrix__install"
-                        disabled={recommendBusy || !recommendCanvasId}
-                        onClick={() => handleRecommendWorkflow(installResult.integrationId)}
-                      >
-                        {recommendBusy ? t('integrations.thinking') : t('integrations.recommendPlan')}
-                      </button>
-                    </div>
-                    {recommendError && (
-                      <p className="agent-matrix__recommend-error">{recommendError}</p>
-                    )}
-                  </>
+                {installResult.messages.length > 0 && (
+                  <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                    {installResult.messages.map((msg, idx) => (<li key={idx}>{msg}</li>))}
+                  </ul>
                 )}
               </div>
-            )}
+            </details>
           </div>
         </div>
       )}

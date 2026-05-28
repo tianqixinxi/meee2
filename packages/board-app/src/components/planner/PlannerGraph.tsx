@@ -66,6 +66,11 @@ import {
   teamDisplayNameByUserId,
 } from '../../teamDirectory'
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
+import {
+  indexNodes,
+  loadNotificationToggles,
+  runPlannerApprovalNotifications,
+} from '../../notifications'
 import { useI18n } from '../../lib/i18n'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
@@ -135,7 +140,19 @@ function PlannerGraphInner({
 }: Props) {
   const { t } = useI18n()
   const reactFlow = useReactFlow()
-  const [plannerState, setPlannerState] = useState<PlannerCanvasState | null>(null)
+  const [plannerState, setPlannerState] = useState<PlannerGraphState | null>(null)
+  // Chunk D: planner-side approval notifications. Diff node workflowRunState
+  // for gate-wait transitions across PlannerGraph re-fetches.
+  const prevPlannerNodesRef = useRef<Map<string, import('../../types').PlanningNode>>(new Map())
+  useEffect(() => {
+    const nodes = plannerState?.nodes
+    if (!nodes) return
+    const toggles = loadNotificationToggles()
+    queueMicrotask(() => {
+      runPlannerApprovalNotifications(prevPlannerNodesRef.current, nodes, toggles)
+      prevPlannerNodesRef.current = indexNodes(nodes)
+    })
+  }, [plannerState?.nodes])
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
@@ -281,6 +298,21 @@ function PlannerGraphInner({
     setSelectedNodeId(nodeId)
     setNodeModalOpen(true)
   }, [])
+
+  // External hook for the command palette (Cmd+K). When App.tsx routes a node
+  // hit through `meee2:select-node`, it switches the active canvas first; this
+  // listener focuses the inspector once the matching canvas has mounted.
+  useEffect(() => {
+    const onSelectNode = (event: Event) => {
+      const detail = (event as CustomEvent<{ canvasId?: string; nodeId?: string }>).detail
+      if (!detail?.nodeId) return
+      if (detail.canvasId && detail.canvasId !== canvasId) return
+      setSelectedNodeId(detail.nodeId)
+      setNodeModalOpen(true)
+    }
+    window.addEventListener('meee2:select-node', onSelectNode)
+    return () => window.removeEventListener('meee2:select-node', onSelectNode)
+  }, [canvasId])
 
   const notifyError = useCallback((message: string) => {
     onNotify?.('error', message)
@@ -662,6 +694,9 @@ function PlannerGraphInner({
       executionMode: 'auto',
       executorType: 'claude',
       doerId: targetNode.doerId,
+      reviewerIds: [],
+      approverIds: [],
+      handoffPolicy: 'none',
       status: 'draft',
       sessionId: null,
       chatThreadId: null,
@@ -754,6 +789,7 @@ function PlannerGraphInner({
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
       artifacts: plannerState?.artifacts ?? [],
+      integrationEntities: plannerState?.integrationEntities,
       proposal: null,
       ownerId: plannerState?.canvas.ownerId,
       mode: 'design',
@@ -829,6 +865,7 @@ function PlannerGraphInner({
       states: plannerState.states,
       edges: plannerState.edges,
       artifacts: plannerState.artifacts,
+      integrationEntities: plannerState.integrationEntities,
       proposal,
       ownerId: plannerState.canvas.ownerId,
       mode: 'design',
@@ -1627,6 +1664,9 @@ function PlannerGraphInner({
             <PlannerWorkspacePreview
               graph={reviewGraph}
               proposal={activeProposal}
+              onApply={handleApproveAndApply}
+              onReject={handleReject}
+              busy={busy}
             />
           ) : plannerState && plannerState.canvas.id === canvasId ? (
             <ReactFlow
@@ -1679,6 +1719,7 @@ function PlannerGraphInner({
           access={plannerState?.access ?? null}
           teamMembers={teamMembers}
           onReplaceSession={handleReplaceNodeSession}
+          onOpenSession={handleOpenNodeSession}
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
           onSendToAI={handleSendNodeActionToAI}
@@ -1690,6 +1731,9 @@ function PlannerGraphInner({
           onAttachDataSource={handleOpenAttachDataSource}
           onRefreshExternalInput={handleRefreshExternalInput}
           onConfigureDialogue={handleConfigureDialogue}
+          onRerunNode={handleRerunNode}
+          onChangeStatus={handleChangeNodeStatus}
+          canChangeStatus={variant !== 'template' && (plannerState?.canEditInternals ?? true)}
         />
       )}
       {attachDataSourceNodeId && (
@@ -2248,9 +2292,15 @@ function PlannerCanvasSkeleton({ canvasName }: { canvasName?: string }) {
 function PlannerWorkspacePreview({
   graph,
   proposal,
+  onApply,
+  onReject,
+  busy,
 }: {
   graph: { nodes: PlannerGraphNode[]; edges: PlannerGraphEdge[] }
   proposal: PlanProposal
+  onApply?: () => void
+  onReject?: () => void
+  busy?: boolean
 }) {
   return (
     <div className="planner-workspace-preview" aria-label="Proposal preview">
@@ -2259,6 +2309,34 @@ function PlannerWorkspacePreview({
         <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>
         <em>Review and apply from the modal before these nodes become the real canvas.</em>
       </div>
+      {/* UI-simplification — user 反馈:preview 模式 canvas 是只读的(elementsSelectable=false)
+       *  会卡死 —— 没明显的退出入口。把 Apply / Reject 显式放在画板右上角。 */}
+      {(onApply || onReject) && (
+        <div className="planner-workspace-preview__actions" role="group" aria-label="Preview controls">
+          {onReject && (
+            <button
+              type="button"
+              className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
+              onClick={onReject}
+              disabled={busy}
+              title="Reject this proposal — revert to previous canvas"
+            >
+              {busy ? '…' : '✕ Reject'}
+            </button>
+          )}
+          {onApply && (
+            <button
+              type="button"
+              className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
+              onClick={onApply}
+              disabled={busy}
+              title="Approve & apply this proposal — make these changes real"
+            >
+              {busy ? '…' : '✓ Apply'}
+            </button>
+          )}
+        </div>
+      )}
       <ReactFlow
         nodes={graph.nodes}
         edges={graph.edges}

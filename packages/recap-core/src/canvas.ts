@@ -4,6 +4,7 @@ import type {
   CanvasStatusRecap,
   EvidenceRef,
   RecapApproval,
+  RecapAwaiting,
   RecapBlocker,
   RecapInput,
   RecapStatusCount,
@@ -66,6 +67,7 @@ export function buildCanvasRecap(input: RecapInput): CanvasRecap {
   const fingerprint = stableRecapFingerprint(recapFingerprintPayload(input, policy))
   const blockers = policy.surfaceBlocked ? extractBlockers(input, policy) : []
   const approvals = policy.surfaceApprovals ? extractApprovals(input, policy) : []
+  const awaitingItems = extractAwaitings(input)
   const statusCounts = buildStatusCounts(input, { blockers, approvals })
   const evidenceRefs = collectEvidenceRefs(input, policy.maxEvidenceRefs)
   const sessionRefs = unique([
@@ -81,10 +83,11 @@ export function buildCanvasRecap(input: RecapInput): CanvasRecap {
     scope: 'canvas',
     canvasId: input.canvas.id,
     headline: deterministicHeadline(statusCounts, blockers, approvals),
-    details: deterministicDetails(input, blockers, approvals, evidenceRefs),
+    details: deterministicDetails(input, blockers, approvals, awaitingItems, evidenceRefs),
     statusCounts,
     blockers,
     approvals,
+    awaitingItems,
     evidenceRefs,
     sessionRefs,
     subCanvasRefs,
@@ -233,6 +236,98 @@ function extractApprovals(input: RecapInput, policy: RecapTemplatePolicy): Recap
   return [...sessionApprovals, ...gateApprovals, ...proposalApprovals, ...subCanvasApprovals]
 }
 
+/**
+ * 「在等谁/什么」语义抽取。比 extractBlockers 弱一档(还没硬卡住,可能马上就走),
+ * 比 extractApprovals 强一档(approvals 只覆盖 gate 已成立的;awaitings 还覆盖
+ * awaiting-input / awaiting-upstream 两类)。
+ *
+ * 三个桶按顺序拼:approval → input → upstream,UI 按这个顺序展示。
+ * 同一 node 可能同时落进多个桶(例如既 awaiting-input 又有未完成上游),
+ * 这里允许重复落 —— 上层 details 自行 slice 限长。
+ */
+function extractAwaitings(input: RecapInput): RecapAwaiting[] {
+  const nodes = input.nodes
+  const doneNodeIds = new Set(
+    nodes.filter((n) => n.status === 'done' || n.workflowRunState === 'done').map((n) => n.id),
+  )
+  const titlesById = new Map(nodes.map((n) => [n.id, n.title] as const))
+
+  const awaitings: RecapAwaiting[] = []
+
+  for (const node of nodes) {
+    const evidenceRefs = evidenceForSubject(input.artifacts, { nodeId: node.id })
+
+    // 1) approval — node.status === 'awaiting' OR workflowRunState === 'gate-wait'.
+    //    approvers 是 reviewer 推断主源,fallback 到 "needs reviewer"。
+    const isApprovalAwait =
+      node.status === 'awaiting' || node.workflowRunState === 'gate-wait'
+    if (isApprovalAwait) {
+      const reviewers = (node.approvers ?? []).filter((r) => r && r.trim().length > 0)
+      awaitings.push({
+        kind: 'awaiting-approval',
+        subjectId: node.id,
+        subjectKind: 'node',
+        title: node.title,
+        reason: reviewers.length > 0 ? `等待 ${reviewers.length} 位审批人` : '等待 reviewer 指派',
+        reviewers: reviewers.length > 0 ? reviewers : undefined,
+        evidenceRefs,
+      })
+    }
+
+    // 2) input — workflowRunState === 'awaiting-input'.
+    //    "等什么" = node.inputs[0] (人写的 input 描述),fallback 到 nextAction / 字面量。
+    if (node.workflowRunState === 'awaiting-input') {
+      const inputSource = firstNonEmpty(node.inputs) ?? node.nextAction ?? '外部反馈'
+      awaitings.push({
+        kind: 'awaiting-input',
+        subjectId: node.id,
+        subjectKind: 'node',
+        title: node.title,
+        reason: inputSource,
+        inputSource,
+        evidenceRefs,
+      })
+    }
+
+    // 3) upstream — node.dependsOnNodeIds 里至少一个上游还没 done.
+    //    只在节点本身还没 done / 还没 blocked 的时候算(blocked 已经走 blockers 桶)。
+    const isBlocked =
+      node.status === 'blocked' || node.workflowRunState === 'failed' || !!node.blockedReason
+    const isDone = doneNodeIds.has(node.id)
+    if (!isBlocked && !isDone) {
+      const pendingUpstream = (node.dependsOnNodeIds ?? []).filter(
+        (id) => id && !doneNodeIds.has(id),
+      )
+      if (pendingUpstream.length > 0) {
+        const upstreamTitles = pendingUpstream
+          .map((id) => titlesById.get(id) ?? id)
+          .slice(0, 3)
+          .join(', ')
+        const more = pendingUpstream.length > 3 ? ` 等 ${pendingUpstream.length} 项` : ''
+        awaitings.push({
+          kind: 'awaiting-upstream',
+          subjectId: node.id,
+          subjectKind: 'node',
+          title: node.title,
+          reason: `${upstreamTitles}${more} 完成`,
+          upstreamNodeIds: pendingUpstream,
+          evidenceRefs,
+        })
+      }
+    }
+  }
+
+  return awaitings
+}
+
+function firstNonEmpty(values?: string[] | null): string | undefined {
+  if (!values) return undefined
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim()
+  }
+  return undefined
+}
+
 function collectEvidenceRefs(input: RecapInput, maxRefs: number): EvidenceRef[] {
   const refs = [
     ...input.artifacts,
@@ -269,6 +364,7 @@ function deterministicDetails(
   input: RecapInput,
   blockers: RecapBlocker[],
   approvals: RecapApproval[],
+  awaitingItems: RecapAwaiting[],
   evidenceRefs: EvidenceRef[],
 ): string[] {
   const details: string[] = []
@@ -278,14 +374,40 @@ function deterministicDetails(
   for (const blocker of blockers.slice(0, Math.max(0, 3 - details.length))) {
     details.push(`阻塞：${blocker.title} - ${blocker.reason}`)
   }
-  if (details.length < 4 && evidenceRefs.length > 0) {
+  // 把「等谁」桶也铺进 details — 给 reviewer / input / upstream 三类各留位置。
+  // 注意:approvals(已成 gate)和 awaiting-approval 可能重叠,这里允许显示,
+  // 因为 awaiting 提供了 reviewer handle,信息密度比 approval.title 更高。
+  for (const awaiting of awaitingItems.slice(0, Math.max(0, 6 - details.length))) {
+    details.push(formatAwaitingDetail(awaiting))
+  }
+  if (details.length < 6 && evidenceRefs.length > 0) {
     details.push(`最近证据：${evidenceRefs[0].title}`)
   }
-  if (details.length < 4) {
+  if (details.length < 6) {
     const running = input.nodes.find((node) => node.status === 'working' || node.workflowRunState === 'running')
     if (running) details.push(`进行中：${running.title}`)
   }
-  return details.slice(0, 4)
+  return details.slice(0, 6)
+}
+
+function formatAwaitingDetail(awaiting: RecapAwaiting): string {
+  switch (awaiting.kind) {
+    case 'awaiting-approval': {
+      const reviewers = (awaiting.reviewers ?? [])
+        .map((r) => (r.startsWith('@') || r.includes('@') ? r : `@${r}`))
+        .join(', ')
+      return reviewers
+        ? `等审批：${awaiting.title} → ${reviewers}`
+        : `等审批：${awaiting.title} → ${awaiting.reason}`
+    }
+    case 'awaiting-input': {
+      const src = awaiting.inputSource ?? awaiting.reason
+      return `等反馈：${awaiting.title} 需要 ${src}`
+    }
+    case 'awaiting-upstream': {
+      return `等上游：${awaiting.title} 等 ${awaiting.reason}`
+    }
+  }
 }
 
 function evidenceForSubject(

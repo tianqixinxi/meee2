@@ -158,6 +158,34 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Privacy: storage stats + delete local data
+
+    static func getStorageStats(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(SystemStorageAPI.gatherStats())
+    }
+
+    static func issueDeleteLocalDataToken(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(SystemStorageAPI.issueDeleteToken())
+    }
+
+    static func deleteLocalData(_ req: HttpRequest) -> HttpResponse {
+        struct DeleteRequest: Decodable {
+            let token: String?
+        }
+        let body = decodeJSONBody(req, as: DeleteRequest.self)
+        guard let token = body?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return errorResponse("bad_request", "token is required", status: 400)
+        }
+        do {
+            return jsonResponse(try SystemStorageAPI.deleteLocalData(token: token))
+        } catch let e as SystemStorageAPI.APIError {
+            return errorResponse("invalid_token", e.errorDescription ?? "invalid token", status: 400)
+        } catch {
+            return errorResponse("delete_failed", error.localizedDescription, status: 500)
+        }
+    }
+
     // MARK: - GET /api/sessions/intake-diagnostics
 
     private struct SessionIntakeDiagnosticItem: Encodable {
@@ -777,13 +805,48 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// P3.0 — mock integration data for widget demo.
+    ///
+    /// 当画板里至少一个节点带 `widget` 且 `source.inputKind == .external`,后端返回
+    /// 一批样本 IntegrationEntity 让前端 widget 真渲染出数据,而不是显示
+    /// 「暂无 integration 数据」 hint。phase 3 把这块换成对接真实 GitHub /
+    /// Linear / Slack 等 integration 的拉取。
+    private static func mockIntegrationEntitiesFor(nodes: [PlanningNode]) -> [IntegrationEntityDTO]? {
+        let hasExternalWidget = nodes.contains(where: { node in
+            guard let widget = node.widget else { return false }
+            return widget.source?.inputKind == .external
+        })
+        guard hasExternalWidget else { return nil }
+        // 5 个 mock GitHub PR,跨 status 分布
+        return [
+            mockPR(number: 23, title: "refactor: simplify SessionStore persistence", author: "qc", branch: "qc/sessionstore-refactor", state: "draft"),
+            mockPR(number: 42, title: "feat: add Kanban widget on PlannerNodeCard", author: "kai", branch: "kai/widget-kanban", state: "open"),
+            mockPR(number: 51, title: "fix: StateTrace stuck-thinking after PostToolUse Bash", author: "qc", branch: "qc/statetrace-bash-fix", state: "awaiting"),
+            mockPR(number: 47, title: "chore: bump Sparkle to 2.9.1", author: "wjk", branch: "wjk/sparkle-2.9.1", state: "blocked"),
+            mockPR(number: 7, title: "feat: planner sidecar bridge", author: "kai", branch: "main", state: "done")
+        ]
+    }
+
+    private static func mockPR(number: Int, title: String, author: String, branch: String, state: String) -> IntegrationEntityDTO {
+        let payload: [String: BoardJSONValue] = [
+            "number": .number(Double(number)),
+            "title": .string("#\(number) \(title)"),
+            "author": .string(author),
+            "branch": .string(branch),
+            "state": .string(state),
+            "id": .string("pr-\(number)")
+        ]
+        return IntegrationEntityDTO(schemaId: "github:pr", payload: .object(payload))
     }
 
     /// POST /api/planner/canvases/:id/clear
@@ -810,7 +873,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1403,7 +1467,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1638,7 +1703,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1669,7 +1735,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1828,7 +1895,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1880,7 +1948,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1918,7 +1987,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1956,7 +2026,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2008,7 +2079,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2039,7 +2111,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -4944,7 +5017,7 @@ enum BoardAPI {
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
         guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board, monitor, or template", status: 400)
+            return errorResponse("bad_request", "kind must be board, monitor, template, kanban, inbox, or matrix", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
@@ -5035,32 +5108,116 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Canvas templates (Chunk F · Official templates / Demo canvases)
+
+    /// GET /api/templates — returns the static builtin gallery
+    /// (see `CanvasTemplateRegistry.all`). Order matches PRD priority.
+    static func listCanvasTemplates(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        let dtos = CanvasTemplateRegistry.all.map { template -> CanvasTemplateDTO in
+            CanvasTemplateDTO(
+                id: template.id,
+                name: template.name,
+                description: template.description,
+                icon: template.icon,
+                kind: template.kind.rawValue,
+                category: template.category,
+                defaultNodes: template.defaultNodes.map { spec in
+                    CanvasTemplateNodeSpecDTO(
+                        title: spec.title,
+                        description: spec.description,
+                        status: spec.status,
+                        doerId: spec.doerId,
+                        positionHint: spec.positionHint,
+                        widget: spec.widget
+                    )
+                }
+            )
+        }
+        return jsonResponse(CanvasTemplatesEnvelope(templates: dtos))
+    }
+
+    /// POST /api/templates/:id/apply — body `{ name, scope }`.
+    /// Materialize a canvas from the template, seed its default nodes, and
+    /// return the same `CanvasListEnvelope` shape as `createCanvas` so the
+    /// caller can drop the result straight into `applyCanvasList`.
+    static func applyCanvasTemplate(_ req: HttpRequest) -> HttpResponse {
+        guard let templateId = req.params[":id"] else {
+            return errorResponse("bad_request", "missing template id", status: 400)
+        }
+        guard let template = CanvasTemplateRegistry.get(templateId) else {
+            return errorResponse("not_found", "template not found: \(templateId)", status: 404)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let name = (json["name"] as? String).flatMap({ s in
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }) else {
+            return errorResponse("bad_request", "missing canvas name", status: 400)
+        }
+        let rawScope = (json["scope"] as? String) ?? "personal"
+        guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+        do {
+            // 1) Create the canvas itself with the template-declared kind.
+            let snapshot = try BoardLayoutStore.shared.createCanvas(
+                name: name,
+                scope: scope,
+                kind: template.kind
+            )
+            // 2) Resolve the freshly-created canvas (active is set by createCanvas).
+            let canvasId = snapshot.activeCanvasId
+            guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+                return errorResponse("internal", "freshly created canvas missing from snapshot", status: 500)
+            }
+            // 3) Seed nodes. We talk to PlannerStore directly through
+            //    `PlannerBoardBridge.store` — same pattern as the existing
+            //    delivery-pipeline template path in `canvasState(for:)`.
+            let ownerId = boardCanvas.ownerUserId ?? boardCanvas.createdBy ?? "local-owner"
+            let planningCanvas = PlanningCanvas(
+                id: boardCanvas.id,
+                ownerId: ownerId,
+                title: boardCanvas.name,
+                plannerContext: "canvas:\(boardCanvas.id)"
+            )
+            let seedNodes = CanvasTemplateRegistry.materializeNodes(
+                template: template,
+                canvasId: canvasId,
+                ownerId: ownerId
+            )
+            _ = try PlannerBoardBridge.store.record(for: planningCanvas, seedNodes: [])
+            _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
-        let canvases = snapshot.canvases.map {
-            let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: $0.id)) ?? ""
-            return CanvasInfoDTO(
-                id: $0.id,
-                name: $0.name,
-                scope: $0.scope.rawValue,
-                kind: ($0.kind ?? .board).rawValue,
-                isDefault: $0.isDefault,
-                workspacePath: workspacePath,
-                teamId: $0.teamId,
-                ownerUserId: $0.ownerUserId ?? $0.createdBy,
-                remoteId: $0.remoteId,
-                remoteVersion: $0.remoteVersion,
-                syncStatus: $0.syncStatus,
-                dirtySince: $0.dirtySince.map(BoardDTOBuilder.iso),
-                lastSyncedAt: $0.lastSyncedAt.map(BoardDTOBuilder.iso),
-                lastRemoteUpdatedAt: $0.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
+        let workspacePaths = BoardLayoutStore.shared.loadAllWorkspacePaths()
+        let canvases = snapshot.canvases.map { canvas -> CanvasInfoDTO in
+            CanvasInfoDTO(
+                id: canvas.id,
+                name: canvas.name,
+                scope: canvas.scope.rawValue,
+                kind: (canvas.kind ?? .board).rawValue,
+                isDefault: canvas.isDefault,
+                workspacePath: workspacePaths[canvas.id] ?? "",
+                teamId: canvas.teamId,
+                ownerUserId: canvas.ownerUserId ?? canvas.createdBy,
+                remoteId: canvas.remoteId,
+                remoteVersion: canvas.remoteVersion,
+                syncStatus: canvas.syncStatus,
+                dirtySince: canvas.dirtySince.map(BoardDTOBuilder.iso),
+                lastSyncedAt: canvas.lastSyncedAt.map(BoardDTOBuilder.iso),
+                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
             )
         }
         let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }
-        let layouts: [String: BoardLayoutStore.Layout] = Dictionary(
-            uniqueKeysWithValues: snapshot.canvases.map { canvas in
-                (canvas.id, BoardLayoutStore.shared.load(canvasId: canvas.id))
-            }
-        )
+        let layouts: [String: BoardLayoutStore.Layout] = BoardLayoutStore.shared.loadAllLayouts()
         let memberships = snapshot.memberships.map {
             CanvasSessionMembershipDTO(
                 canvasId: $0.canvasId,

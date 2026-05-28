@@ -2,16 +2,19 @@ import {
   AlertTriangle,
   CalendarClock,
   ExternalLink,
+  Eye,
   FileText,
+  Flag,
   Layers,
   RefreshCw,
   Route,
+  Settings2,
   Signpost,
   Sparkles,
   UserRound,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   proposePlannerGraphChange,
   updatePlannerNodeSchedule,
@@ -27,6 +30,10 @@ import type {
   PlannerDispatchRunner,
   PlannerGraphState,
   PlanningNode,
+  PlanningNodeStatus,
+  Widget,
+  WidgetKind,
+  WidgetSourceKind,
 } from '../../types'
 import { InputCardSections } from './InputCardSections'
 import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
@@ -46,6 +53,10 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  /** UI-simplification — open the bound session(replaces the「Open session」 button
+   *  that used to live on the node card). Surfaced as a hover-revealed link on
+   *  the 进展 group label so it's reachable without cluttering canvas. */
+  onOpenSession?: (sessionId: string, nodeId: string) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
   onToggleIOArtifact?: (
@@ -60,6 +71,12 @@ interface Props {
   onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
   /** UI-4: configure dialogue retention. */
   onConfigureDialogue?: (nodeId: string) => void
+  /** UI-simplification §2.6 — re-run / mark-down moved here from card footer.
+   *  Inspector renders them as secondary actions inside「进展」 instead of
+   *  competing with primary action on the card. */
+  onRerunNode?: (nodeId: string, reference?: string) => void
+  onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
+  canChangeStatus?: boolean
 }
 
 export function NodeInspectorModal({
@@ -77,20 +94,48 @@ export function NodeInspectorModal({
   onGraphStateChanged,
   onSendToAI,
   onReplaceSession,
+  onOpenSession,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
   onToggleIOArtifact,
   onAttachDataSource,
   onRefreshExternalInput,
   onConfigureDialogue,
+  onRerunNode,
+  onChangeStatus,
+  canChangeStatus = false,
 }: Props) {
   const [assignOpen, setAssignOpen] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
+  // UI-simplification chunk G — Schedule / Replace session / Assign owner
+  // 都属于 advanced action,默认折叠;首次打开 inspector 只显示「Expand sub-canvas」。
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [scheduleInterval, setScheduleInterval] = useState(() => String(Math.max(1, Math.round((node.schedule?.intervalSeconds ?? 900) / 60))))
   const [schedulePrompt, setSchedulePrompt] = useState(() => node.schedule?.prompt ?? defaultSchedulePrompt(node))
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // P2.6 v2 — 节点视图选择(chip 行,auto-save)。
+  // 简化前的 source/mapping/advanced state 已全删,只剩 draft + saving + error。
+  const [widgetDraft, setWidgetDraft] = useState<Widget | null>(node.widget ?? null)
+  const [widgetSaving, setWidgetSaving] = useState(false)
+  const [widgetError, setWidgetError] = useState<string | null>(null)
+  // UI-simplification §2.9 — 视图选择从 inspector 主线降级为 成果·剪贴板
+  // group-label 旁的 ⚙ inline popover,默认收起。跟 node-widget-concepts.md
+  // 的 v0.1 minimal surface(智能默认 + hint + 不暴露 source/mapping)对齐。
+  const [widgetPopoverOpen, setWidgetPopoverOpen] = useState(false)
+  const widgetPopoverRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!widgetPopoverOpen) return
+    const onMouseDown = (event: MouseEvent) => {
+      const node = widgetPopoverRef.current
+      if (!node) return
+      if (event.target instanceof Node && node.contains(event.target)) return
+      setWidgetPopoverOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [widgetPopoverOpen])
   const isTemplate = variant === 'template'
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
   const runState = state?.runState ?? node.status
@@ -121,9 +166,29 @@ export function NodeInspectorModal({
   const canAssignOwner = role === 'owner'
   const canShowIOArtifactSwitches = nodeKind === 'step'
   const canUseStepActions = nodeKind === 'step'
-  const permissionTooltip = canAssignOwner ? undefined : 'Only the canvas owner can assign this node.'
+  const permissionTooltip = canAssignOwner ? undefined : '只有画板负责人可以指派这个节点。'
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleNextRun = formatScheduleDate(node.schedule?.nextRunAt)
+
+  // UI-simplification §2.6 — 进展 段次级动作。
+  // Re-run / mark-down 从节点卡片 footer 搬过来,不再跟 primary action 抢注意力。
+  // 用最新 artifact 的 reference 喂 /rerun。eligibility 镜像原卡片逻辑。
+  const latestArtifactForVersionSlot = artifacts.length === 0
+    ? undefined
+    : [...artifacts].sort((a, b) => {
+        const ta = Date.parse(String(a.createdAt))
+        const tb = Date.parse(String(b.createdAt))
+        return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+      })[0]
+  const reRunEligible = nodeKind === 'step'
+    && !isTemplate
+    && Boolean(onRerunNode)
+    && node.status === 'done'
+  const markDownEligible = nodeKind === 'step'
+    && !isTemplate
+    && Boolean(onChangeStatus)
+    && node.status !== 'blocked'
+    && canChangeStatus
 
   const runProposalAction = (work: () => Promise<PlanProposal | null>) => {
     setActionBusy(true)
@@ -132,7 +197,7 @@ export function NodeInspectorModal({
       .then((proposal) => {
         setActionBusy(false)
         if (!proposal) {
-          setActionError('No proposal returned for this action.')
+          setActionError('这次操作没生成提议,稍后再试')
           return
         }
         onProposalCreated?.(proposal)
@@ -140,18 +205,102 @@ export function NodeInspectorModal({
       })
       .catch((err) => {
         setActionBusy(false)
-        setActionError((err as Error).message || 'Action failed')
+        setActionError((err as Error).message || '操作失败')
       })
   }
 
-  const sendNodeActionToAI = (operation: 'revise' | 'expand-sub-canvas') => {
+  const sendNodeActionToAI = (operation: 'expand-sub-canvas') => {
     onSendToAI?.(buildNodeActionPrompt(node, operation), {
-      visibleText: operation === 'revise'
-        ? 'Revise this node with me.'
-        : 'Expand this node into a sub-canvas with me.',
+      visibleText: 'Expand this node into a sub-canvas with me.',
       contextLabel: `Node: ${node.title}`,
     })
     onClose()
+  }
+
+  // P2.6 v2 — 用户面板的 chip 标签全用中文。standard = 无 widget 标准节点。
+  const widgetKindOptions: ReadonlyArray<{ kind: WidgetKind | 'standard'; label: string }> = [
+    { kind: 'standard', label: '标准' },
+    { kind: 'kanban', label: '看板' },
+    { kind: 'inbox', label: '收件箱' },
+    { kind: 'matrix', label: '矩阵' },
+    { kind: 'badge', label: '徽章' },
+    { kind: 'artifact-preview', label: '产物预览' },
+  ]
+  const WIDGET_CHIP_TOOLTIPS: Record<WidgetKind | 'standard', string> = {
+    standard: '不渲染 widget,显示节点本身(标题 / 负责人 / 状态)',
+    kanban: '把上游数据 / 子画板 / integration 列表按 status 分成 5 列',
+    inbox: '把数据扁平展开,按最近活动倒序',
+    matrix: '二维网格(默认 owner × status),适合团队总览',
+    badge: '紧凑徽章,一行显示单一状态(适合 gate / health-check 节点)',
+    'artifact-preview': '内嵌预览(markdown / diff / 文件),适合 PRD / PR / 报告',
+  }
+  // P2.12 — chip 可用性判断:节点要有「可聚合的数据前提」才允许选对应 widget。
+  //   standard / badge:永远可用
+  //   kanban / inbox / matrix:需要 subCanvas / upstream / artifact-kind 三者之一
+  //   artifact-preview:需要 upstream / artifact-kind 之一
+  // disabled chip 鼠标移上去会显示「怎么解锁」的提示。
+  const hasSubcanvas = Boolean(node.subCanvasId)
+  const hasUpstream = (node.dependsOnNodeIds?.length ?? 0) > 0
+  const isArtifactKind = node.nodeKind === 'artifact'
+  const collectionUnlockHint = '这个节点还没有可聚合的数据 — 先挂一个子画板,或给它加一个上游节点,看板/收件箱/矩阵就能用了'
+  const previewUnlockHint = '这个节点还没有可预览的内容 — 给它加一个上游节点(产物会被预览出来)'
+  const widgetChipAvailable = (kind: WidgetKind | 'standard'): { ok: boolean; reason?: string } => {
+    if (kind === 'standard' || kind === 'badge') return { ok: true }
+    if (kind === 'artifact-preview') {
+      if (hasUpstream || isArtifactKind) return { ok: true }
+      return { ok: false, reason: previewUnlockHint }
+    }
+    // kanban / inbox / matrix
+    if (hasSubcanvas || hasUpstream || isArtifactKind) return { ok: true }
+    return { ok: false, reason: collectionUnlockHint }
+  }
+  const handlePickWidgetKind = (kind: WidgetKind | 'standard') => {
+    setWidgetError(null)
+    const avail = widgetChipAvailable(kind)
+    if (!avail.ok) {
+      // Defensive — UI 也会 disable 这个 chip,这里再兜一层。
+      setWidgetError(avail.reason ?? '该 widget 不可用')
+      return
+    }
+    let next: Widget | null
+    if (kind === 'standard') {
+      next = null
+    } else {
+      next = {
+        kind,
+        // 智能默认 source:按 (nodeKind, widget.kind) + 节点上下文(subCanvasId /
+        // dependsOnNodeIds)选最有用的来源。用户已有 source 时保留(切 widget
+        // 类型时不重置),否则按 inferDefaultWidgetSource 推。
+        source: widgetDraft?.source ?? inferDefaultWidgetSource(kind, node),
+        mapping: widgetDraft?.mapping,
+      }
+    }
+    setWidgetDraft(next)
+    // Auto-save: 用户点 chip 就立即 commit,不需要 save 按钮。
+    saveWidgetWith(next)
+  }
+  const saveWidgetWith = (target: Widget | null) => {
+    setWidgetSaving(true)
+    setWidgetError(null)
+    proposePlannerGraphChange(canvasId, {
+      summary: target
+        ? `Set widget to ${target.kind} on ${node.title}`
+        : `Clear widget on ${node.title}`,
+      changes: [{ kind: 'updateNode', nodeId: node.id, widget: target }],
+    })
+      .then((proposal) => {
+        setWidgetSaving(false)
+        if (!proposal) {
+          setWidgetError('服务端没返回提议')
+          return
+        }
+        // Auto-save 不关 modal —— 用户继续 inspector 内别的操作。
+        onProposalCreated?.(proposal)
+      })
+      .catch((err) => {
+        setWidgetSaving(false)
+        setWidgetError((err as Error).message || '保存失败')
+      })
   }
 
   const saveSchedule = (enabled: boolean) => {
@@ -170,7 +319,7 @@ export function NodeInspectorModal({
       })
       .catch((err) => {
         setActionBusy(false)
-        setActionError((err as Error).message || 'Schedule was not saved')
+        setActionError((err as Error).message || '定时没保存成功')
       })
   }
 
@@ -188,12 +337,49 @@ export function NodeInspectorModal({
 
         <div className="planner-node-modal__header">
           <div className="planner-node-modal__header-tags">
-            {!isTemplate && <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>{runState}</span>}
-            <span className="planner-node-modal__kind">{nodeKind}</span>
+            {!isTemplate && <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>{runStateToBadge(String(runState))}</span>}
           </div>
           <h2>{node.title}</h2>
         </div>
 
+        {/* UI-simplification §2.9 — three-section reorg: 进展 / 成果 / 足迹.
+         *  Each section gets a semantic group label so the inspector reads as
+         *  one progressive story (where am I / what came out / how did I get
+         *  here).
+         *
+         *  Group 1 · 进展(progress): blockers + status + next-action +
+         *    secondary 重跑/标记 actions.
+         *  Group 2 · 成果·剪贴板(output): inputs + output schema. 视图选择
+         *    降级为 group-label 右侧 ⚙ inline popover(默认收起,跟
+         *    node-widget-concepts.md「v0.1 minimal surface」对齐)。
+         *  Group 3 · 足迹(footprint): version timeline + activity log
+         *    placeholder + 子画板入口(phase B 灌真实数据)。 */}
+
+        <div className="planner-node-modal__group-label planner-node-modal__group-label--progress">
+          <span>进展</span>
+          {/* UI-simplification — 「Open session」 hover-revealed shortcut here,
+           *  replaces the canvas card button per user spec. Only shown when a
+           *  session is bound;按钮在 group label hover 时淡入。 */}
+          {node.sessionId && onOpenSession && (
+            <button
+              type="button"
+              className="planner-node-modal__open-session"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenSession(node.sessionId!, node.id)
+              }}
+            >
+              → 打开进展
+            </button>
+          )}
+        </div>
+
+        {/* UI-simplification — 进展 段精简:
+         *  - blockers 保留(stuck 提醒优先级最高)
+         *  - 原 5-tile info grid(Status/Owner/Gate/Schedule/Type)→ 单 Status tile,
+         *    其他维度都在节点卡片 header / mode badge / owner chip 已展示
+         *  - next-action 从下面独立块移上来,跟 status 一起在 进展 段
+         *  - AI callout 保留(是个核心动作,但 padding 收紧)*/}
         {blockers.length > 0 && (
           <div className="planner-node-modal__blockers">
             {blockers.map((blocker) => (
@@ -202,32 +388,107 @@ export function NodeInspectorModal({
           </div>
         )}
 
-        <div className="planner-node-modal__info-grid">
-          {!isTemplate && (
-            <InfoTile label="Status" value={displayRunState(String(runState))} />
-          )}
-          {showOwnerInfo && <InfoTile label="Owner" value={responsibleLabel} />}
-          <InfoTile label="Gate" value={gateModeLabel(node)} />
-          <InfoTile label="Schedule" value={scheduleEnabled ? `Every ${Math.round((node.schedule?.intervalSeconds ?? 60) / 60)}m` : 'Off'} />
-          <InfoTile label="Type" value={nodeKind} />
-        </div>
-
-        {canUseStepActions && (
-          <div className="planner-node-modal__ai-callout">
-            <div>
-              <span><Sparkles size={12} aria-hidden /> meee2 AI</span>
-              <strong>Revise this node with AI</strong>
-            </div>
-            <button
-              type="button"
-              className="primary"
-              disabled={actionBusy}
-              onClick={() => sendNodeActionToAI('revise')}
-            >
-              <Sparkles size={13} aria-hidden /> Revise
-            </button>
+        {!isTemplate && (
+          <div className="planner-node-modal__progress-line">
+            <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>
+              {runStateToBadge(String(runState))}
+            </span>
+            {nextAction && (
+              <span className="planner-node-modal__progress-next">
+                <Signpost size={11} aria-hidden /> {nextAction}
+              </span>
+            )}
           </div>
         )}
+
+        {/* UI-simplification §2.6 — 进展 段次级动作:重跑 / 标记需要关注。
+         *  从节点卡片 footer 搬过来,inspector 才是这些动作的归宿。 */}
+        {(reRunEligible || markDownEligible) && (
+          <div className="planner-node-modal__progress-actions">
+            {reRunEligible && (
+              <button
+                type="button"
+                className="planner-node-modal__progress-action"
+                title="为该节点新建一个版本(走 desktop /rerun)"
+                onClick={() => {
+                  onRerunNode?.(node.id, latestArtifactForVersionSlot?.reference)
+                }}
+              >
+                <RefreshCw size={12} aria-hidden /> 重跑此节点
+              </button>
+            )}
+            {markDownEligible && (
+              <button
+                type="button"
+                className="planner-node-modal__progress-action"
+                title="把节点状态置为 blocked,等人来处理"
+                onClick={() => {
+                  onChangeStatus?.(node.id, 'blocked')
+                }}
+              >
+                <Flag size={12} aria-hidden /> 标记需要关注
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="planner-node-modal__group-label" ref={widgetPopoverRef}>
+          <span>成果 · 剪贴板</span>
+          <small>artifacts · inputs / outputs / 版本</small>
+          {/* UI-simplification §2.9 — 视图当前摘要(read-only,无需展开 popover
+           *  就能看到当前视图是什么)+ ⚙ 展开 inline popover 调视图。 */}
+          <span className="planner-node-modal__widget-summary">
+            {describeWidget(widgetDraft, node)}
+          </span>
+          <button
+            type="button"
+            className={`planner-node-modal__widget-toggle${widgetPopoverOpen ? ' is-open' : ''}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              setWidgetPopoverOpen((open) => !open)
+            }}
+            aria-expanded={widgetPopoverOpen}
+            aria-label="调整视图"
+            title="调整视图"
+          >
+            <Settings2 size={12} aria-hidden />
+          </button>
+          {widgetPopoverOpen && (
+            <div className="planner-node-modal__widget-popover" role="dialog" aria-label="视图设置">
+              <div className="planner-node-modal__widget-popover-header">
+                <Eye size={12} aria-hidden /> 视图
+                {widgetSaving && <em className="planner-node-modal__view-saving">保存中…</em>}
+                {widgetError && <em className="planner-node-modal__view-error" title={widgetError}>!</em>}
+              </div>
+              <div className="planner-node-modal__widget-kind-chips">
+                {widgetKindOptions.map((option) => {
+                  const selected = option.kind === 'standard'
+                    ? widgetDraft == null
+                    : widgetDraft?.kind === option.kind
+                  const avail = widgetChipAvailable(option.kind)
+                  const tooltip = avail.ok
+                    ? WIDGET_CHIP_TOOLTIPS[option.kind]
+                    : `${WIDGET_CHIP_TOOLTIPS[option.kind]}\n\n— 当前不可用 —\n${avail.reason ?? ''}`
+                  return (
+                    <button
+                      key={option.kind}
+                      type="button"
+                      className={`planner-node-modal__widget-kind-chip${selected ? ' is-selected' : ''}${avail.ok ? '' : ' is-disabled'}`}
+                      disabled={widgetSaving || !avail.ok}
+                      onClick={() => handlePickWidgetKind(option.kind)}
+                      title={tooltip}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="planner-node-modal__view-hint">
+                {describeWidget(widgetDraft, node)}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="planner-node-modal__section">
           <h3><Route size={13} aria-hidden /> Inputs</h3>
@@ -246,37 +507,42 @@ export function NodeInspectorModal({
             <SchemaList
               title="Outputs"
               items={outputItems}
-              empty="No expected output"
+              empty="这个节点暂时没有产出"
               visibleItems={visibleIOArtifacts.outputs}
               switchesEnabled={canShowIOArtifactSwitches}
               onToggle={(item, visible) => onToggleIOArtifact?.(node.id, 'outputs', item, visible)}
             />
-            <div className="planner-node-modal__schema-row planner-node-modal__schema-row--wide">
-              <span>Do what</span>
-              <strong>{node.schema?.goal || nextAction || 'Discuss with meee2 AI to define this step.'}</strong>
-            </div>
+            {/* UI-simplification — 「Do what」 wide row 移除,信息已在节点 title/desc 体现;
+             *  next-action 也不再独立块,已并入 进展 段(.planner-node-modal__progress-line)。 */}
           </div>
         </div>
 
-        {nextAction && !isTemplate && (
-          <div className="planner-node-modal__next-action">
-            <Signpost size={13} aria-hidden />
-            <div><em>Next step</em><strong>{nextAction}</strong></div>
-          </div>
-        )}
+        {/* P2.6 v3 (2026-05-28 P2.11) — 节点视图选择 已降级为 成果·剪贴板
+         *  group-label 旁的 ⚙ inline popover(见上方),默认收起,跟
+         *  node-widget-concepts.md 的「v0.1 minimal surface」对齐。 */}
 
         {canUseStepActions && (
           <div className="planner-node-modal__section">
-            <h3><Sparkles size={13} aria-hidden /> Actions</h3>
+            <h3><Sparkles size={13} aria-hidden /> 动作</h3>
             <div className="planner-node-actions__buttons">
               <button
                 type="button"
                 disabled={actionBusy}
                 onClick={() => sendNodeActionToAI('expand-sub-canvas')}
               >
-                <Layers size={12} aria-hidden /> Expand sub-canvas
+                <Layers size={12} aria-hidden /> 展开成子画板
               </button>
-              {showOwnerInfo && (
+              {/* UI-simplification chunk G — 高级折叠触发,默认收起 Schedule /
+               *  Replace session / Assign owner(advanced & 高危 action)。 */}
+              <button
+                type="button"
+                className="planner-node-actions__advanced-toggle"
+                onClick={() => setAdvancedOpen((v) => !v)}
+                aria-expanded={advancedOpen}
+              >
+                高级 {advancedOpen ? '▴' : '▾'}
+              </button>
+              {advancedOpen && showOwnerInfo && (
                 <button
                   type="button"
                   disabled={actionBusy || !canAssignOwner}
@@ -286,21 +552,23 @@ export function NodeInspectorModal({
                     setAssignOpen((value) => !value)
                   }}
                 >
-                  <UserRound size={12} aria-hidden /> Assign owner
+                  <UserRound size={12} aria-hidden /> 指派负责人
                 </button>
               )}
-              <button
-                type="button"
-                disabled={actionBusy || !node.sessionId}
-                title={node.sessionId ? undefined : 'Create or bind a session before scheduling this node.'}
-                onClick={() => {
-                  setActionError(null)
-                  setScheduleOpen((value) => !value)
-                }}
-              >
-                <CalendarClock size={12} aria-hidden /> Schedule session
-              </button>
-              {node.sessionId && onReplaceSession && (
+              {advancedOpen && (
+                <button
+                  type="button"
+                  disabled={actionBusy || !node.sessionId}
+                  title={node.sessionId ? undefined : '要先给节点接一个进展,才能设定定时'}
+                  onClick={() => {
+                    setActionError(null)
+                    setScheduleOpen((value) => !value)
+                  }}
+                >
+                  <CalendarClock size={12} aria-hidden /> 设定定时
+                </button>
+              )}
+              {advancedOpen && node.sessionId && onReplaceSession && (
                 <button
                   type="button"
                   className="planner-node-actions__danger"
@@ -310,22 +578,22 @@ export function NodeInspectorModal({
                     setReplaceConfirmOpen((value) => !value)
                   }}
                 >
-                  <RefreshCw size={12} aria-hidden /> Replace session
+                  <RefreshCw size={12} aria-hidden /> 换一次进展
                 </button>
               )}
             </div>
-            {replaceConfirmOpen && node.sessionId && (
+            {advancedOpen && replaceConfirmOpen && node.sessionId && (
               <div className="planner-node-actions__panel planner-node-actions__panel--danger">
                 <div className="planner-node-actions__warning">
                   <AlertTriangle size={14} aria-hidden />
                   <div>
-                    <strong>Replace the bound session?</strong>
-                    <p>This detaches the current session and starts a new one for this node. Keep the old session only if you still need its context.</p>
+                    <strong>换一次进展?</strong>
+                    <p>换了之后当前的进展会断开,节点会重新开一次。如果还要回看旧进展,先别换。</p>
                   </div>
                 </div>
                 <div className="planner-node-modal__input-editor-actions">
                   <button type="button" disabled={actionBusy} onClick={() => setReplaceConfirmOpen(false)}>
-                    Cancel
+                    取消
                   </button>
                   <button
                     type="button"
@@ -336,15 +604,15 @@ export function NodeInspectorModal({
                       onClose()
                     }}
                   >
-                    Replace session
+                    换一次进展
                   </button>
                 </div>
               </div>
             )}
-            {scheduleOpen && (
+            {advancedOpen && scheduleOpen && (
               <div className="planner-node-actions__panel planner-node-actions__panel--schedule">
                 <label>
-                  <span>Every</span>
+                  <span>每</span>
                   <input
                     type="number"
                     min={1}
@@ -353,7 +621,7 @@ export function NodeInspectorModal({
                     disabled={actionBusy}
                     onChange={(event) => setScheduleInterval(event.target.value)}
                   />
-                  <em>minutes</em>
+                  <em>分钟</em>
                 </label>
                 <textarea
                   value={schedulePrompt}
@@ -362,12 +630,12 @@ export function NodeInspectorModal({
                   onChange={(event) => setSchedulePrompt(event.target.value)}
                 />
                 {scheduleEnabled && scheduleNextRun && (
-                  <p className="planner-node-actions__schedule-note">Next tick: {scheduleNextRun}</p>
+                  <p className="planner-node-actions__schedule-note">下次触发:{scheduleNextRun}</p>
                 )}
                 <div className="planner-node-modal__input-editor-actions">
                   {scheduleEnabled && (
                     <button type="button" disabled={actionBusy} onClick={() => saveSchedule(false)}>
-                      Turn off
+                      关掉定时
                     </button>
                   )}
                   <button
@@ -376,15 +644,15 @@ export function NodeInspectorModal({
                     disabled={actionBusy || schedulePrompt.trim().length === 0}
                     onClick={() => saveSchedule(true)}
                   >
-                    {scheduleEnabled ? 'Save schedule' : 'Turn on schedule'}
+                    {scheduleEnabled ? '保存定时' : '打开定时'}
                   </button>
                 </div>
               </div>
             )}
-            {showOwnerInfo && assignOpen && (
+            {advancedOpen && showOwnerInfo && assignOpen && (
               <div className="planner-node-actions__panel">
                 {teamMembers.length === 0 ? (
-                  <p className="planner-node-modal__empty">No team members available to assign.</p>
+                  <p className="planner-node-modal__empty">团队里还没人可以指派</p>
                 ) : (
                   <div className="planner-node-actions__members">
                     {teamMembers.map((member) => {
@@ -408,7 +676,7 @@ export function NodeInspectorModal({
                             {member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <UserRound size={12} />}
                           </span>
                           <span>{member.displayName}</span>
-                          {current && <em>current</em>}
+                          {current && <em>当前</em>}
                         </button>
                       )
                     })}
@@ -420,18 +688,30 @@ export function NodeInspectorModal({
           </div>
         )}
 
-        {node.subCanvasId && (
-          <button
-            type="button"
-            className="planner-node-modal__subcanvas"
-            onClick={() => {
-              onOpenSubCanvas?.(node.subCanvasId as string)
-              onClose()
-            }}
-          >
-            <ExternalLink size={13} aria-hidden /> Open sub-flow
-          </button>
-        )}
+        {/* UI-simplification §2.9 — 足迹段:三段心智(进展/成果/足迹)落地,
+         *  即便先放占位。phase B 灌 artifact version chain + session activity。 */}
+        <div className="planner-node-modal__group-label planner-node-modal__group-label--footprint">
+          <span>足迹</span>
+          <small>footprint · 怎么过来的</small>
+        </div>
+        <div className="planner-node-modal__section planner-node-modal__footprint">
+          {/* TODO §2.9 phase B — version timeline + activity log.
+           *  Placeholder so the three-section mental model lands now,
+           *  proper timeline ships next iteration. */}
+          <p className="planner-node-modal__empty">(暂无足迹 — 版本与活动时间线规划中)</p>
+          {node.subCanvasId && (
+            <button
+              type="button"
+              className="planner-node-modal__subcanvas"
+              onClick={() => {
+                onOpenSubCanvas?.(node.subCanvasId as string)
+                onClose()
+              }}
+            >
+              <ExternalLink size={13} aria-hidden /> 打开子画板
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -513,9 +793,9 @@ function dedupeStrings(values: Array<string | null | undefined>): string[] {
   return result
 }
 
-function buildNodeActionPrompt(node: PlanningNode, operation: 'revise' | 'expand-sub-canvas'): string {
+function buildNodeActionPrompt(node: PlanningNode, operation: 'expand-sub-canvas'): string {
   const tag = `@node:${node.id}`
-  const opTag = operation === 'revise' ? '#revise' : '#expand-sub-canvas'
+  const opTag = `#${operation}`
   const input = (node.schema?.inputs ?? []).join(', ') || 'none'
   const output = (node.schema?.outputs ?? []).join(', ') || 'none'
   const doWhat = node.schema?.goal || node.nextAction || node.title
@@ -526,9 +806,7 @@ function buildNodeActionPrompt(node: PlanningNode, operation: 'revise' | 'expand
     `Outputs: ${output}`,
     `Do what: ${doWhat}`,
     '',
-    operation === 'revise'
-      ? 'Revise this node with me.'
-      : 'Expand this node into a sub-canvas with me.',
+    'Expand this node into a sub-canvas with me.',
   ].join('\n')
 }
 
@@ -567,17 +845,112 @@ function gateModeLabel(node: PlanningNode): 'Human' | 'Auto' {
   return 'Auto'
 }
 
-function displayRunState(runState: string): string {
-  switch (runState) {
-    case 'dispatched':
-      return 'starting'
-    case 'ready_to_start':
-      return 'ready to start'
-    case 'gate-wait':
-      return 'review output'
-    case 'awaiting-input':
-      return 'awaiting your reply'
+/**
+ * 智能默认 source(P2.11 设计文档 doc/goals/node-widget-concepts.md 中的「组合默认表」)。
+ *
+ * 推理规则:
+ *   - subCanvas 节点 → 优先 subcanvas-aggregate(把子画板拉成 kanban / inbox / matrix)
+ *   - step / session 节点带 subCanvasId → 同上,自然把「子流程展开成 kanban」
+ *   - artifact 节点 → 优先 upstream(payload 即数据;artifact-preview 时也是 upstream)
+ *   - badge / artifact-preview → 优先 upstream(单状态 / 单文档)
+ *   - 都没有 → external,留 integration entity 接入位
+ */
+function inferDefaultWidgetSource(
+  kind: WidgetKind,
+  node: PlanningNode,
+): { inputKind: 'external' | 'upstream' | 'subcanvas-aggregate'; inputIndex: number; subcanvasIds?: string[] } {
+  const hasSubcanvas = Boolean(node.subCanvasId)
+  const hasUpstream = (node.dependsOnNodeIds?.length ?? 0) > 0
+  const isArtifactKind = node.nodeKind === 'artifact'
+  const isCollectionWidget = kind === 'kanban' || kind === 'inbox' || kind === 'matrix'
+
+  if (isCollectionWidget) {
+    // 收集型 widget:优先聚合子画板,其次 upstream artifact payload,最后 external
+    if (hasSubcanvas) {
+      return { inputKind: 'subcanvas-aggregate', inputIndex: 0, subcanvasIds: [node.subCanvasId!] }
+    }
+    if (isArtifactKind && hasUpstream) {
+      return { inputKind: 'upstream', inputIndex: 0 }
+    }
+    if (isArtifactKind) {
+      // artifact 节点本身的 payload 算「upstream」(它产了自己的 artifact)
+      return { inputKind: 'upstream', inputIndex: 0 }
+    }
+    if (hasUpstream) {
+      return { inputKind: 'upstream', inputIndex: 0 }
+    }
+    return { inputKind: 'external', inputIndex: 0 }
+  }
+
+  // badge / artifact-preview 是单一目标
+  if (hasUpstream) {
+    return { inputKind: 'upstream', inputIndex: 0 }
+  }
+  if (isArtifactKind) {
+    return { inputKind: 'upstream', inputIndex: 0 }
+  }
+  return { inputKind: 'external', inputIndex: 0 }
+}
+
+/**
+ * 一行中文描述「当前 widget 在呈现什么」(P2.11 hint line)。
+ */
+function describeWidget(widget: Widget | null, node: PlanningNode): string {
+  if (!widget) return '标准 · 显示节点本身(标题 / 负责人 / 状态)'
+  const kindLabel: Record<WidgetKind, string> = {
+    kanban: '看板',
+    inbox: '收件箱',
+    matrix: '矩阵',
+    badge: '徽章',
+    'artifact-preview': '产物预览',
+  }
+  const label = kindLabel[widget.kind] ?? widget.kind
+  const source = widget.source
+  if (!source) return `${label} · 还没绑数据源`
+  switch (source.inputKind) {
+    case 'subcanvas-aggregate': {
+      const ids = source.subcanvasIds ?? []
+      if (ids.length === 0) return `${label} ← 子画板聚合(未指定 subcanvasIds)`
+      return `${label} ← 聚合 ${ids.length} 个子画板`
+    }
+    case 'upstream': {
+      const upstreamId = node.dependsOnNodeIds?.[source.inputIndex ?? 0]
+      if (!upstreamId) {
+        return `${label} ← 上游节点 #${source.inputIndex ?? 0}(还没声明依赖)`
+      }
+      return `${label} ← 上游节点 ${upstreamId.slice(0, 8)} 的 artifact`
+    }
+    case 'external':
+      return `${label} ← input.external[${source.inputIndex ?? 0}](integration entity)`
     default:
-      return runState.replace(/_/g, ' ')
+      return label
+  }
+}
+
+type BadgeState = '待办' | '运行中' | '等反馈' | '卡住' | '完成'
+function runStateToBadge(runState: string): BadgeState {
+  switch (runState) {
+    case 'completed':
+    case 'done':
+      return '完成'
+    case 'blocked':
+    case 'failed':
+    case 'error':
+      return '卡住'
+    case 'gate-wait':
+    case 'awaiting-input':
+    case 'awaiting-review':
+      return '等反馈'
+    case 'dispatched':
+    case 'running':
+    case 'in-progress':
+    case 'thinking':
+    case 'tooling':
+      return '运行中'
+    case 'ready_to_start':
+    case 'todo':
+    case 'pending':
+    default:
+      return '待办'
   }
 }

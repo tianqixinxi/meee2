@@ -1,5 +1,6 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
+  IntegrationEntity,
   NodeAssignment,
   NodeContractExternalInput,
   NodeStateSnapshot,
@@ -24,10 +25,43 @@ export interface IOArtifactVisibility {
 }
 type PlannerGraphMode = 'design' | 'run'
 
+// Singleton empty artifacts array — stable reference so PlannerNodeCard's
+// memoization sees props as unchanged when a node has no artifacts. Without
+// this, `?? []` minted a fresh `[]` per adapter call and every poll/state
+// update re-rendered all artifact-less nodes, which caused continuous edge
+// flicker after Push 5(成果 row referenced data.artifacts).
+const EMPTY_ARTIFACTS: PlannerArtifact[] = Object.freeze([]) as unknown as PlannerArtifact[]
+
+/**
+ * Default node size by widget kind (P2.5).
+ *
+ * Standard nodes (no widget) stay at 320×238 — the pre-widget default.
+ * Widget kinds get larger canvas real estate per their typical layout.
+ * `node.layout.width/height` (user / template overrides) always wins.
+ */
+function widgetDefaultSize(kind: string | undefined | null): { width: number; height: number } {
+  switch (kind) {
+    case 'kanban': return { width: 480, height: 320 }
+    case 'matrix': return { width: 520, height: 280 }
+    case 'inbox':  return { width: 400, height: 280 }
+    case 'badge':  return { width: 220, height: 80 }
+    case 'artifact-preview': return { width: 360, height: 240 }
+    default: return { width: 320, height: 238 }
+  }
+}
+
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
+  /** P2 fix · 完整 graph 节点列表,供 widget resolver 解析 upstream /
+   *  subcanvas-aggregate widgets。card 把它原样传给 resolveWidgetData,
+   *  让 source.inputKind === 'upstream' 或 'subcanvas-aggregate' 的 widget
+   *  能按 dependsOnNodeIds[inputIndex] 找到目标节点,而不是只看到自己。 */
+  allNodes: PlanningNode[]
   state: NodeStateSnapshot | null
   artifacts: PlannerArtifact[]
+  /** P3.0 — canvas-level pool of integration entities, shared across all
+   *  widget-bearing nodes. Resolver filters per-node via widget.source. */
+  integrationEntities?: IntegrationEntity[]
   previewKind: PlannerPreviewKind
   perception: PlannerNodePerception
   /** Design vs Run mode — the card collapses execution fields in Design. */
@@ -101,6 +135,8 @@ interface PlannerGraphInput {
   states: NodeStateSnapshot[]
   edges?: PlannerGraphStateEdge[]
   artifacts?: PlannerArtifact[]
+  /** P3.0 — canvas-level integration entity pool. */
+  integrationEntities?: IntegrationEntity[]
   proposal?: PlanProposal | null
   ownerId?: string
   mode: PlannerGraphMode
@@ -160,6 +196,11 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
   const titleByNodeId = new Map(previewNodes.map(({ node }) => [node.id, node.title]))
   const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
+  // P2 fix · widget resolver needs the full canvas node list (upstream /
+  // subcanvas-aggregate widgets follow dependsOnNodeIds → other nodes). Build
+  // a stable, shared array once and hand it to every card; previously each
+  // card only saw `[node]` and resolvers failed with 找不到指定的上游节点.
+  const allCanvasNodes = previewNodes.map(({ node }) => node)
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
     const position = node.layout
       ? { x: node.layout.x, y: node.layout.y }
@@ -167,16 +208,19 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       x: (index % 3) * 340,
       y: Math.floor(index / 3) * 190,
     }
+    const widgetSize = widgetDefaultSize(node.widget?.kind)
     return {
       id: node.id,
       type: 'plannerNode' as const,
       position,
-      initialWidth: node.layout?.width ?? 320,
-      initialHeight: node.layout?.height ?? 238,
+      initialWidth: node.layout?.width ?? widgetSize.width,
+      initialHeight: node.layout?.height ?? widgetSize.height,
       data: {
         node,
+        allNodes: allCanvasNodes,
         state: stateByNodeId.get(node.id) ?? null,
-        artifacts: artifactsByNodeId.get(node.id) ?? [],
+        artifacts: artifactsByNodeId.get(node.id) ?? EMPTY_ARTIFACTS,
+        integrationEntities: input.integrationEntities,
         previewKind,
         perception: perceptionForNode(
           node,
@@ -310,6 +354,9 @@ function buildVisibleIOArtifactNodes(input: {
         executionMode: 'auto',
         executorType: 'mock',
         doerId: '',
+        reviewerIds: [],
+        approverIds: [],
+        handoffPolicy: 'none',
         status: 'ready',
         dependsOnNodeIds: [],
         nodeKind: 'artifact',
@@ -329,6 +376,9 @@ function buildVisibleIOArtifactNodes(input: {
           initialHeight: height,
           data: {
             node: artifactNode,
+            // Virtual IO-artifact nodes don't render widgets — the field is
+            // type-required for PlannerNodeData, so seed with the singleton.
+            allNodes: [artifactNode],
             state: null,
             previewKind: 'none',
             perception: 'neutral',

@@ -19,6 +19,7 @@ import { SettingsView } from './components/SettingsView'
 import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
+import { CommandPalette } from './components/CommandPalette'
 import { useI18n } from './lib/i18n'
 import { useBoardState } from './useBoardState'
 import type {
@@ -27,9 +28,17 @@ import type {
   CanvasScope,
   Meee2AgentRuntimeStatus,
   ReadinessReport,
+  Session,
   SpawnProvider,
 } from './types'
-import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
+import {
+  WORKING_STATUSES,
+  RESTING_STATUSES,
+  ensureNotificationPermission,
+  indexSessions,
+  loadNotificationToggles,
+  runSessionTransitionNotifications,
+} from './notifications'
 import type {
   CanvasPersistence,
   LayoutMap,
@@ -37,6 +46,7 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
+  applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
   deleteCanvas,
@@ -426,6 +436,26 @@ export default function App() {
     })
   }, [boardState.state])
 
+  // Chunk D: OS-level notifications. Diff session snapshots, fire system
+  // notifications for permission-request / session-blocked / session-done /
+  // recap-updated. Approval (planner gate-wait) is dispatched separately from
+  // PlannerGraph since planner state isn't part of BoardState.
+  const prevSessionsRef = useRef<Map<string, Session>>(new Map())
+  useEffect(() => {
+    // Request permission on first BoardState arrival (lazy — only once).
+    void ensureNotificationPermission()
+  }, [])
+  useEffect(() => {
+    const st = boardState.state
+    if (!st) return
+    const toggles = loadNotificationToggles()
+    // Defer to a microtask so the diff never blocks render.
+    queueMicrotask(() => {
+      runSessionTransitionNotifications(prevSessionsRef.current, st.sessions, toggles)
+      prevSessionsRef.current = indexSessions(st.sessions)
+    })
+  }, [boardState.state])
+
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, kind, text }])
@@ -494,6 +524,15 @@ export default function App() {
     const openSettings = () => setWorkspaceMode('settings')
     window.addEventListener('meee2:open-settings', openSettings)
     return () => window.removeEventListener('meee2:open-settings', openSettings)
+  }, [])
+
+  // UI-simplification chunk G — CanvasToolbar 「+ New canvas」 modal 顶部
+  // 「从模板新建」CTA 通过 window event 切到 Templates view。沿用上面 open-settings
+  // 同款 isolated listener,不动 routing 主链。
+  useEffect(() => {
+    const navTemplates = () => setWorkspaceMode('templates')
+    window.addEventListener('meee2:nav-templates', navTemplates)
+    return () => window.removeEventListener('meee2:nav-templates', navTemplates)
   }, [])
 
   useEffect(() => {
@@ -582,6 +621,36 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
+  // Command palette handlers. Switching canvases is async (RTT against the
+  // local API), so for node selection we first ensure planner mode + the
+  // right active canvas, then dispatch a `meee2:select-node` event which
+  // PlannerGraph subscribes to (it opens its inspector for the matching node).
+  const handlePaletteOpenCanvas = useCallback((canvasId: string) => {
+    setWorkspaceMode('planner')
+    handleSetActiveCanvas(canvasId)
+  }, [handleSetActiveCanvas])
+
+  const handlePaletteOpenNode = useCallback((canvasId: string, nodeId: string) => {
+    setWorkspaceMode('planner')
+    if (canvasId !== activeCanvasId) {
+      handleSetActiveCanvas(canvasId)
+    }
+    // Give PlannerGraph one tick to remount on the new canvas before asking it
+    // to focus the node. PlannerGraph also re-applies the latest pending
+    // selection after its planner state finishes hydrating.
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('meee2:select-node', {
+        detail: { canvasId, nodeId },
+      }))
+    }, 50)
+  }, [activeCanvasId, handleSetActiveCanvas])
+
+  const handlePaletteOpenSession = useCallback((sessionId: string) => {
+    window.dispatchEvent(new CustomEvent('meee2:open-session', {
+      detail: { sessionId },
+    }))
+  }, [])
+
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
     if (initialMonitorCanvasSelectedRef.current || !canvasList || workspaceMode !== 'planner') return
@@ -648,8 +717,8 @@ export default function App() {
     }, 2000)
   }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
 
-  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
-    return createCanvas({ name, scope })
+  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope, kind?: CanvasKind) => {
+    return createCanvas({ name, scope, kind })
       .then((list) => {
         applyCanvasList(list)
       })
@@ -662,6 +731,19 @@ export default function App() {
         return list.activeCanvasId
       })
   }, [applyCanvasList])
+
+  // Chunk F: spawn a canvas from a builtin gallery template, then jump to it.
+  const handleApplyTemplate = useCallback(
+    (templateId: string, name: string, scope: CanvasScope) => {
+      return applyCanvasTemplate(templateId, { name, scope }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
 
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
@@ -830,6 +912,7 @@ export default function App() {
               boardState={boardState.state}
               onOpenCanvas={handleSetActiveCanvas}
               onCreateTemplate={handleCreateTemplate}
+              onApplyTemplate={handleApplyTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
             <SessionsView
@@ -918,6 +1001,13 @@ export default function App() {
             onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
+        <CommandPalette
+          canvases={canvasList.canvases}
+          boardState={boardState.state}
+          onOpenCanvas={handlePaletteOpenCanvas}
+          onOpenNodeInspector={handlePaletteOpenNode}
+          onOpenSession={handlePaletteOpenSession}
+        />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

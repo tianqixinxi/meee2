@@ -119,6 +119,102 @@ enum PlanningNodeKind: String, Codable, Equatable {
     case external
 }
 
+/// Twin · meee2-online/src/planner-runtime/contract/proposal.ts (HandoffPolicy).
+/// Governs how reviewer / approver signals gate the node's hand-off.
+///
+///  - `none`                  无审批 / 直接通过
+///  - `reviewerMustApprove`   任一 reviewer 拒绝即阻塞
+///  - `anyApprover`           任一 approver 同意即放行
+///  - `allApprovers`          所有 approver 同意才放行
+enum HandoffPolicy: String, Codable, Equatable, CaseIterable {
+    case none
+    case reviewerMustApprove = "reviewer-must-approve"
+    case anyApprover = "any-approver"
+    case allApprovers = "all-approvers"
+}
+
+// MARK: - Widget (twin · meee2-online/.../contract/widget.ts)
+//
+// Node-level widget kicks in when a PlanningNode wants to render as something
+// other than the default "standard" view (title + assignee + run state). The
+// presence of a `widget` field on PlanningNode means the canvas renderer
+// should consume the declared data `source` and draw the matching view.
+
+enum WidgetKind: String, Codable, Equatable, CaseIterable {
+    case kanban
+    case inbox
+    case matrix
+    case badge
+    case artifactPreview = "artifact-preview"
+}
+
+enum WidgetSourceKind: String, Codable, Equatable, CaseIterable {
+    case external                                    // node.input.external[i]
+    case upstream                                    // upstream node output
+    case subcanvasAggregate = "subcanvas-aggregate"  // sibling canvases runtime
+}
+
+struct WidgetSource: Codable, Equatable {
+    var inputKind: WidgetSourceKind
+    var inputIndex: Int
+    /// Only for `subcanvas-aggregate`.
+    var subcanvasIds: [String]?
+
+    init(inputKind: WidgetSourceKind, inputIndex: Int = 0, subcanvasIds: [String]? = nil) {
+        self.inputKind = inputKind
+        self.inputIndex = inputIndex
+        self.subcanvasIds = subcanvasIds
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case inputKind, inputIndex, subcanvasIds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        inputKind = try c.decode(WidgetSourceKind.self, forKey: .inputKind)
+        inputIndex = (try c.decodeIfPresent(Int.self, forKey: .inputIndex)) ?? 0
+        subcanvasIds = try c.decodeIfPresent([String].self, forKey: .subcanvasIds)
+    }
+}
+
+struct WidgetMapping: Codable, Equatable {
+    var statusField: String?
+    var titleField: String?
+    var subtitleField: String?
+    var sortField: String?
+    var rowGroupField: String?
+    var colGroupField: String?
+
+    init(
+        statusField: String? = nil,
+        titleField: String? = nil,
+        subtitleField: String? = nil,
+        sortField: String? = nil,
+        rowGroupField: String? = nil,
+        colGroupField: String? = nil
+    ) {
+        self.statusField = statusField
+        self.titleField = titleField
+        self.subtitleField = subtitleField
+        self.sortField = sortField
+        self.rowGroupField = rowGroupField
+        self.colGroupField = colGroupField
+    }
+}
+
+struct Widget: Codable, Equatable {
+    var kind: WidgetKind
+    var source: WidgetSource?
+    var mapping: WidgetMapping?
+
+    init(kind: WidgetKind, source: WidgetSource? = nil, mapping: WidgetMapping? = nil) {
+        self.kind = kind
+        self.source = source
+        self.mapping = mapping
+    }
+}
+
 struct PlannerNodeLayout: Codable, Equatable {
     var x: Double
     var y: Double
@@ -505,6 +601,15 @@ struct PlanningNode: Codable, Equatable {
     var executionMode: ExecutionMode
     var executorType: ExecutorType
     var doerId: String
+    /// Team-ready (#5): reviewer user ids — see `handoffPolicy`. Zod twin: `reviewerIds`.
+    /// Defaults to `[]` on decode so legacy fixtures without the key still load.
+    var reviewerIds: [String]
+    /// Team-ready (#5): approver user ids — see `handoffPolicy`. Zod twin: `approverIds`.
+    /// Defaults to `[]` on decode so legacy fixtures without the key still load.
+    var approverIds: [String]
+    /// Team-ready (#5): governs how reviewer / approver signals gate hand-off.
+    /// Zod twin: `handoffPolicy`. Defaults to `.none` on decode.
+    var handoffPolicy: HandoffPolicy
     var status: PlanningNodeStatus
     var sessionId: String?
     var chatThreadId: String?
@@ -517,6 +622,8 @@ struct PlanningNode: Codable, Equatable {
     var schedule: PlannerNodeSchedule?
     var gate: PlannerNodeGate?
     var dispatch: PlannerNodeDispatch?
+    /// Legacy approval-target list. Predates the Team-ready (`approverIds`)
+    /// field; keep around for back-compat with existing fixtures / gate code.
     var approvers: [String]?
     var artifactRefs: [String]?
     var eventRefs: [String]?
@@ -530,6 +637,10 @@ struct PlanningNode: Codable, Equatable {
     /// returning to idle right after `submit_node_output blocked`). Cleared
     /// on re-dispatch / abandon so a fresh session can take over.
     var outputSubmittedAt: Date?
+    /// Node-level view widget (2026-05-28). nil = standard view (title +
+    /// assignee + run state). non-nil = render as the declared widget kind,
+    /// backed by `widget.source`. See Widget struct above.
+    var widget: Widget?
 
     init(
         id: String,
@@ -541,6 +652,9 @@ struct PlanningNode: Codable, Equatable {
         executorType: ExecutorType,
         doerId: String,
         status: PlanningNodeStatus,
+        reviewerIds: [String] = [],
+        approverIds: [String] = [],
+        handoffPolicy: HandoffPolicy = .none,
         sessionId: String? = nil,
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = .planner,
@@ -557,7 +671,8 @@ struct PlanningNode: Codable, Equatable {
         eventRefs: [String]? = nil,
         workflowRunState: PlannerWorkflowRunState? = nil,
         blockedReason: String? = nil,
-        outputSubmittedAt: Date? = nil
+        outputSubmittedAt: Date? = nil,
+        widget: Widget? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -567,6 +682,9 @@ struct PlanningNode: Codable, Equatable {
         self.executionMode = executionMode
         self.executorType = executorType
         self.doerId = doerId
+        self.reviewerIds = reviewerIds
+        self.approverIds = approverIds
+        self.handoffPolicy = handoffPolicy
         self.status = status
         self.sessionId = sessionId
         self.chatThreadId = chatThreadId
@@ -585,6 +703,7 @@ struct PlanningNode: Codable, Equatable {
         self.workflowRunState = workflowRunState
         self.blockedReason = blockedReason
         self.outputSubmittedAt = outputSubmittedAt
+        self.widget = widget
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -599,6 +718,10 @@ struct PlanningNode: Codable, Equatable {
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, gate
         case schedule, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case blockedReason, outputSubmittedAt
+        // Team-ready (#5) — Zod twin defaults `[]` / `'none'`.
+        case reviewerIds, approverIds, handoffPolicy
+        // Node-widget (2026-05-28) — absent = standard view.
+        case widget
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -616,6 +739,11 @@ struct PlanningNode: Codable, Equatable {
         executionMode = try container.decode(ExecutionMode.self, forKey: .executionMode)
         executorType = try container.decode(ExecutorType.self, forKey: .executorType)
         doerId = try container.decode(String.self, forKey: .doerId)
+        // Team-ready (#5): default to empty / `none` so legacy fixtures
+        // without these keys still decode cleanly.
+        reviewerIds = (try container.decodeIfPresent([String].self, forKey: .reviewerIds)) ?? []
+        approverIds = (try container.decodeIfPresent([String].self, forKey: .approverIds)) ?? []
+        handoffPolicy = (try container.decodeIfPresent(HandoffPolicy.self, forKey: .handoffPolicy)) ?? .none
         status = try container.decode(PlanningNodeStatus.self, forKey: .status)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
@@ -634,6 +762,7 @@ struct PlanningNode: Codable, Equatable {
         workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
         outputSubmittedAt = try container.decodeIfPresent(Date.self, forKey: .outputSubmittedAt)
+        widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -646,6 +775,10 @@ struct PlanningNode: Codable, Equatable {
         try container.encode(executionMode, forKey: .executionMode)
         try container.encode(executorType, forKey: .executorType)
         try container.encode(doerId, forKey: .doerId)
+        // Team-ready (#5) — always encode so consumers see the canonical shape.
+        try container.encode(reviewerIds, forKey: .reviewerIds)
+        try container.encode(approverIds, forKey: .approverIds)
+        try container.encode(handoffPolicy, forKey: .handoffPolicy)
         try container.encode(status, forKey: .status)
         try container.encodeIfPresent(sessionId, forKey: .sessionId)
         try container.encodeIfPresent(chatThreadId, forKey: .chatThreadId)
@@ -664,6 +797,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(workflowRunState, forKey: .workflowRunState)
         try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
         try container.encodeIfPresent(outputSubmittedAt, forKey: .outputSubmittedAt)
+        try container.encodeIfPresent(widget, forKey: .widget)
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
@@ -787,6 +921,15 @@ struct PlanChange: Codable, Equatable {
     var chatThreadId: String?
     var source: PlanningNodeSource?
     var doerId: String?
+    /// Team-ready (#5): proposal-driven update of `PlanningNode.reviewerIds`.
+    /// `nil` ⇒ no change; `[]` ⇒ explicit clear.
+    var reviewerIds: [String]?
+    /// Team-ready (#5): proposal-driven update of `PlanningNode.approverIds`.
+    var approverIds: [String]?
+    /// Team-ready (#5): proposal-driven update of `PlanningNode.handoffPolicy`.
+    var handoffPolicy: HandoffPolicy?
+    /// Node-widget (2026-05-28): proposal-driven update of `PlanningNode.widget`.
+    var widget: Widget?
     var artifact: PlanArtifactDraft?
 
     private enum CodingKeys: String, CodingKey {
@@ -794,6 +937,7 @@ struct PlanChange: Codable, Equatable {
         case dependsOnNodeIds, subCanvasId, nodeKind, layout, trigger, schedule, gate
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
+        case reviewerIds, approverIds, handoffPolicy, widget
     }
 
     init(
@@ -822,6 +966,10 @@ struct PlanChange: Codable, Equatable {
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = nil,
         doerId: String? = nil,
+        reviewerIds: [String]? = nil,
+        approverIds: [String]? = nil,
+        handoffPolicy: HandoffPolicy? = nil,
+        widget: Widget? = nil,
         artifact: PlanArtifactDraft? = nil
     ) {
         self.kind = kind
@@ -849,6 +997,10 @@ struct PlanChange: Codable, Equatable {
         self.chatThreadId = chatThreadId
         self.source = source
         self.doerId = doerId
+        self.reviewerIds = reviewerIds
+        self.approverIds = approverIds
+        self.handoffPolicy = handoffPolicy
+        self.widget = widget
         self.artifact = artifact
     }
 
@@ -879,6 +1031,10 @@ struct PlanChange: Codable, Equatable {
         chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
         source = try container.decodeIfPresent(PlanningNodeSource.self, forKey: .source)
         doerId = try container.decodeIfPresent(String.self, forKey: .doerId)
+        reviewerIds = try container.decodeIfPresent([String].self, forKey: .reviewerIds)
+        approverIds = try container.decodeIfPresent([String].self, forKey: .approverIds)
+        handoffPolicy = try container.decodeIfPresent(HandoffPolicy.self, forKey: .handoffPolicy)
+        widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
     }
 
@@ -909,6 +1065,10 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(chatThreadId, forKey: .chatThreadId)
         try container.encodeIfPresent(source, forKey: .source)
         try container.encodeIfPresent(doerId, forKey: .doerId)
+        try container.encodeIfPresent(reviewerIds, forKey: .reviewerIds)
+        try container.encodeIfPresent(approverIds, forKey: .approverIds)
+        try container.encodeIfPresent(handoffPolicy, forKey: .handoffPolicy)
+        try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifact, forKey: .artifact)
     }
 
@@ -976,7 +1136,10 @@ struct PlanChange: Codable, Equatable {
         sessionId: String? = nil,
         chatThreadId: String? = nil,
         source: PlanningNodeSource? = nil,
-        doerId: String? = nil
+        doerId: String? = nil,
+        reviewerIds: [String]? = nil,
+        approverIds: [String]? = nil,
+        handoffPolicy: HandoffPolicy? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .updateNode,
@@ -1002,7 +1165,10 @@ struct PlanChange: Codable, Equatable {
             sessionId: sessionId,
             chatThreadId: chatThreadId,
             source: source,
-            doerId: doerId
+            doerId: doerId,
+            reviewerIds: reviewerIds,
+            approverIds: approverIds,
+            handoffPolicy: handoffPolicy
         )
     }
 }
@@ -1289,6 +1455,139 @@ struct NodeContractV2: Codable, Equatable {
         self.input = input
         self.output = output
     }
+}
+
+// MARK: - Node Contract v2 · external input source (chunk I)
+//
+// Twin · meee2-online/src/planner-runtime/contract/proposal.ts
+//        (`NodeContractExternalInput` discriminatedUnion). Distinct from
+// `NodeContractExternalInput` above which is the post-fetch *snapshot* shape
+// stored on a node version. This `NodeContractExternalInputSource` is the
+// *proposal-level* declaration of what the node wants to consume as an
+// external input — its `kind` discriminator selects between a plain URL and
+// a typed Meee2 integration entity (PRD `integration.md` §5).
+
+enum NodeContractExternalInputSyncPolicy: String, Codable, Equatable, CaseIterable {
+    case poll
+    case webhook
+    case manual
+}
+
+enum NodeContractExternalInputSource: Codable, Equatable {
+    case url(URLSource)
+    case integration(IntegrationSource)
+
+    struct URLSource: Codable, Equatable {
+        var url: String
+        var refreshSeconds: Int?
+    }
+
+    struct IntegrationSource: Codable, Equatable {
+        /// Stable integration id — see IntegrationViewSchema.integrationId.
+        var integrationId: String
+        /// Per-integration entity kind (`pr` / `issue` / `thread` / …).
+        var entityKind: String
+        /// Integration-specific stable reference (e.g. `owner/repo#123`).
+        var entityRef: String
+        var syncPolicy: NodeContractExternalInputSyncPolicy
+        var pollSeconds: Int
+
+        init(
+            integrationId: String,
+            entityKind: String,
+            entityRef: String,
+            syncPolicy: NodeContractExternalInputSyncPolicy = .poll,
+            pollSeconds: Int = 60
+        ) {
+            self.integrationId = integrationId
+            self.entityKind = entityKind
+            self.entityRef = entityRef
+            self.syncPolicy = syncPolicy
+            self.pollSeconds = pollSeconds
+        }
+    }
+
+    private enum DiscriminatorKey: String, CodingKey { case kind }
+    private enum Discriminator: String, Codable { case url, integration }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DiscriminatorKey.self)
+        let kind = try container.decode(Discriminator.self, forKey: .kind)
+        switch kind {
+        case .url:
+            self = .url(try URLSource(from: decoder))
+        case .integration:
+            self = .integration(try IntegrationSource(from: decoder))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DiscriminatorKey.self)
+        switch self {
+        case .url(let s):
+            try container.encode(Discriminator.url, forKey: .kind)
+            try s.encode(to: encoder)
+        case .integration(let s):
+            try container.encode(Discriminator.integration, forKey: .kind)
+            try s.encode(to: encoder)
+        }
+    }
+}
+
+// MARK: - Integration view-schema (chunk I)
+//
+// Twin · meee2-online/src/planner-runtime/contract/integration-view.ts.
+// PRD: doc/prd/integration.md §3.1. Per-(integration, entityKind) literals
+// live in the TS layer (packages/board-app/src/integrations/viewSchemas/);
+// Swift just needs the shape for type-safe round-tripping over BoardServer.
+
+enum IntegrationBadgeStatus: String, Codable, Equatable, CaseIterable {
+    case todo, running, awaiting, blocked, done
+}
+
+enum IntegrationPreviewDetailKind: String, Codable, Equatable, CaseIterable {
+    case text, link, code, diff, image
+}
+
+enum IntegrationAffordanceKind: String, Codable, Equatable, CaseIterable {
+    case link, mcp_call, shell, copy
+}
+
+struct IntegrationBadge: Codable, Equatable {
+    var title: String
+    var secondary: String?
+    var status: IntegrationBadgeStatus
+    var icon: String
+    var accentColor: String?
+}
+
+struct IntegrationPreviewDetail: Codable, Equatable {
+    var label: String
+    var value: String
+    var kind: IntegrationPreviewDetailKind
+}
+
+struct IntegrationPreview: Codable, Equatable {
+    var summary: String
+    var details: [IntegrationPreviewDetail]
+    var sourceUrl: String?
+    var lastSyncedAt: String?
+}
+
+struct IntegrationAffordance: Codable, Equatable {
+    var id: String
+    var label: String
+    var kind: IntegrationAffordanceKind
+    // payload is integration-specific; kept as opaque JSON on Swift side.
+    var payload: BoardJSONValue?
+}
+
+struct IntegrationViewSchema: Codable, Equatable {
+    var integrationId: String
+    var entityKind: String
+    var badge: IntegrationBadge
+    var preview: IntegrationPreview
+    var affordances: [IntegrationAffordance]
 }
 
 /// Validation errors for v2 contract / output payloads. The validator is
@@ -1881,7 +2180,13 @@ enum PlannerProposalValidator {
                     change.sessionId != nil ||
                     change.chatThreadId != nil ||
                     change.source != nil ||
-                    change.doerId != nil else {
+                    change.doerId != nil ||
+                    // Team-ready (#5 / chunk B) — proposal-driven update path:
+                    change.reviewerIds != nil ||
+                    change.approverIds != nil ||
+                    change.handoffPolicy != nil ||
+                    // Node-widget (P2 / 2026-05-28) — view config update:
+                    change.widget != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             case .attachArtifact:
@@ -2121,6 +2426,20 @@ final class PlannerCoreService {
                 }
                 if let doerId = change.doerId {
                     updatedNodes[index].doerId = doerId
+                }
+                // Team-ready (#5 / chunk B) — proposal-driven update path.
+                if let reviewerIds = change.reviewerIds {
+                    updatedNodes[index].reviewerIds = reviewerIds
+                }
+                if let approverIds = change.approverIds {
+                    updatedNodes[index].approverIds = approverIds
+                }
+                if let handoffPolicy = change.handoffPolicy {
+                    updatedNodes[index].handoffPolicy = handoffPolicy
+                }
+                // Node-widget (P2 / 2026-05-28) — view config update.
+                if let widget = change.widget {
+                    updatedNodes[index].widget = widget
                 }
                 if let status = change.status {
                     updatedNodes[index].status = status

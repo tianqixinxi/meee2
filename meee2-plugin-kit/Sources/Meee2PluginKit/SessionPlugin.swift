@@ -111,4 +111,12 @@ open class SessionPlugin: NSObject, ObservableObject {
 
     /// 配置视图 (显示在设置中)
     open var settingsView: AnyView? { nil }
+
+    // MARK: - Island Widgets
+
+    /// 灵动岛 UI widget 列表。默认空——plugin 想在岛上贴速率条 / 汇总块就 override 这个，
+    /// PluginManager 在 register/start 之后会拉取一次并 publish 给 IslandView。
+    /// 注意：每次 `widgets` 应返回稳定的实例（同一个 ObservableObject），不要每次新建
+    /// 否则 SwiftUI 内部 @ObservedObject 绑定会断。
+    open var widgets: [IslandWidget] { [] }
 }

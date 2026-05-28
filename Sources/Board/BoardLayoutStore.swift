@@ -82,9 +82,12 @@ public final class BoardLayoutStore {
     }
 
     public enum CanvasKind: String, Codable, Equatable {
-        case board
-        case monitor
-        case template
+        case board     // ReactFlow dep-graph (default workflow editor)
+        case monitor   // Workspace monitor (aggregated session / canvas health)
+        case template  // Template gallery entry, not a working canvas
+        // Note (2026-05-28): kanban/inbox/matrix were briefly modeled as canvas
+        // kinds and reverted. Correct model is node-level `widget` (see widget
+        // schema added in this same wave). DO NOT add view modes here.
     }
 
     public struct Point: Codable, Equatable {
@@ -408,6 +411,32 @@ public final class BoardLayoutStore {
         }
     }
 
+    /// Bulk variant of `load(canvasId:)` that returns all layouts in a single
+    /// `queue.sync` call. Use when building a payload that needs the layout
+    /// for every canvas (e.g. `canvasEnvelope`), to avoid N round-trips
+    /// through `ensureDefaultCanvasesLocked` (each ~120ms with a large store).
+    public func loadAllLayouts() -> [String: Layout] {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            cached = store
+            return store.layouts
+        }
+    }
+
+    /// 清空内存缓存。仅在 Settings → Privacy 的"删除本地数据"流程里调用——
+    /// 磁盘上的 `board-canvases.json` 已被 SystemStorageAPI 抹掉，这里把
+    /// in-process 缓存 drop 掉，让下一次 `load()` 走 disk 路径（disk 也没了，
+    /// 会自动 fall back 到 `StoreData.empty` → 重建默认 canvas）。
+    ///
+    /// 注意：不直接持久化空 store，避免在删盘失败的边界情况下回写一份新文件。
+    public func clearInMemoryCache() {
+        queue.sync {
+            cached = nil
+        }
+        SessionEventBus.shared.publish(.boardLayoutChanged)
+    }
+
     /// 整体替换 active canvas 的 layout；保留给旧调用点。
     @discardableResult
     public func save(_ layout: Layout) throws -> Layout {
@@ -516,12 +545,46 @@ public final class BoardLayoutStore {
                   visibleCanvasesLocked(store).contains(where: { $0.id == canvasId }) else {
                 throw storeError("canvas not found: \(canvasId)")
             }
+            let foldersBefore = store.canvases.map { $0.workspaceFolderName }
             ensureWorkspaceFolderNamesLocked(&store)
+            let foldersAfter = store.canvases.map { $0.workspaceFolderName }
             let folder = store.canvases.first(where: { $0.id == canvasId })?.workspaceFolderName
                 ?? workspaceFolderName(forName: "canvas", id: canvasId, existing: Set<String>())
-            try writeToDiskLocked(store)
+            // Only persist if ensureWorkspaceFolderNamesLocked actually mutated
+            // a folder name. Otherwise we re-write the full 1.9 MB JSON on a
+            // read-style call — a hot loop (e.g. canvasEnvelope) used to fan
+            // this out and rack up 23+ writes per HTTP response.
+            if foldersBefore != foldersAfter {
+                try writeToDiskLocked(store)
+            }
             cached = store
             return workspaceRootURL().appendingPathComponent(folder, isDirectory: true).path
+        }
+    }
+
+    /// Bulk variant of `workspacePath(canvasId:)` for use by code that needs
+    /// the path for every canvas (e.g. `canvasEnvelope`). One `queue.sync`,
+    /// one (conditional) disk write, instead of N.
+    public func loadAllWorkspacePaths() -> [String: String] {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let foldersBefore = store.canvases.map { $0.workspaceFolderName }
+            ensureWorkspaceFolderNamesLocked(&store)
+            let foldersAfter = store.canvases.map { $0.workspaceFolderName }
+            if foldersBefore != foldersAfter {
+                try? writeToDiskLocked(store)
+            }
+            cached = store
+            let root = workspaceRootURL()
+            var out: [String: String] = [:]
+            out.reserveCapacity(store.canvases.count)
+            for canvas in store.canvases {
+                let folder = canvas.workspaceFolderName
+                    ?? workspaceFolderName(forName: "canvas", id: canvas.id, existing: Set<String>())
+                out[canvas.id] = root.appendingPathComponent(folder, isDirectory: true).path
+            }
+            return out
         }
     }
 
