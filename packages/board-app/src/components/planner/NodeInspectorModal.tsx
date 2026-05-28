@@ -264,7 +264,17 @@ export function NodeInspectorModal({
         </div>
 
         <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> Output</h3>
+          <div className="planner-node-modal__section-heading">
+            <h3><Route size={13} aria-hidden /> Output</h3>
+            {onOpenArtifacts && deliveryEvidenceCount === 0 && (
+              <button
+                type="button"
+                onClick={openArtifactsForNode}
+              >
+                <ExternalLink size={12} aria-hidden /> Check artifacts
+              </button>
+            )}
+          </div>
           <div className="planner-node-modal__schema">
             <SchemaList
               title="Outputs"
