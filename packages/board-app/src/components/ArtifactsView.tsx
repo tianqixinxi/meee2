@@ -795,12 +795,7 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
 function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: string): boolean {
   const expected = normalizeRequirementToken(expectation)
   if (!expected) return false
-  return [
-    artifact.kind,
-    artifact.reference,
-    artifact.title,
-    artifact.status,
-  ].some((candidate) => {
+  return artifactRequirementCandidates(artifact).some((candidate) => {
     const normalized = normalizeRequirementToken(candidate)
     if (!normalized) return false
     return normalized === expected
@@ -812,6 +807,34 @@ function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: st
 function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
   return sameRequirement(artifact.reference, requiredRef)
     || sameRequirement(artifact.title, requiredRef)
+}
+
+function artifactRequirementCandidates(artifact: PlannerArtifact): string[] {
+  return uniqueNonEmpty([
+    artifact.kind,
+    artifact.reference,
+    artifact.title,
+    artifact.status,
+    ...artifactPayloadTextCandidates(artifact.payload),
+  ])
+}
+
+function artifactPayloadTextCandidates(payload: unknown): string[] {
+  if (typeof payload === 'string') return [payload]
+  if (!payload || typeof payload !== 'object') return []
+  const item = payload as Record<string, unknown>
+  const direct = [
+    item.summary,
+    item.description,
+    item.content,
+    item.text,
+    item.markdown,
+    item.html,
+    item.json,
+  ].filter((value): value is string => typeof value === 'string')
+  const nested = ['result', 'output', 'evidence', 'payload']
+    .flatMap((key) => artifactPayloadTextCandidates(item[key]))
+  return [...direct, ...nested]
 }
 
 function sameRequirement(left: string, right: string): boolean {
