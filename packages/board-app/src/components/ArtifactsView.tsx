@@ -181,6 +181,7 @@ export function ArtifactsView({
           artifact.reference,
           artifact.kind,
           artifact.status,
+          ...artifactPayloadTextCandidates(artifact.payload),
           item.canvas.name,
           item.canvas.id,
           node?.title,
