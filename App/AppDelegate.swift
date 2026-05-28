@@ -89,6 +89,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 因此 A2AIdentity 在测试里默认无 resolver,cwd 路径返回 nil(测试本来
         // 也不依赖 cwd 解析,符合现状)。
         A2AIdentity.resolver = SessionStoreIdentityResolver()
+        TerminalSessionBackendRegistry.shared.register(GhosttySurfaceBackend.shared)
 
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
@@ -499,11 +500,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func isInternalTerminalTarget(sessionId: String?, surfaceId: String?) -> Bool {
         if let surfaceId, !surfaceId.isEmpty,
-           InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: surfaceId) != nil {
+           TerminalSessionBackendRegistry.shared.snapshot(id: surfaceId) != nil {
             return true
         }
         if let sessionId, !sessionId.isEmpty,
-           InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId) != nil {
+           TerminalSessionBackendRegistry.shared.snapshot(id: sessionId) != nil {
             return true
         }
         return false

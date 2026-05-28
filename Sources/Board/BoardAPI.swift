@@ -380,7 +380,7 @@ enum BoardAPI {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing surface id", status: 400)
         }
-        guard InternalTerminalRuntime.shared.close(surfaceOrSessionId: id) else {
+        guard TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: id) else {
             return errorResponse("not_found", "surface not found: \(id)", status: 404)
         }
         BoardServer.shared.broadcastStateChanged()
@@ -396,7 +396,7 @@ enum BoardAPI {
         nodeId: String?,
         initialPrompt: String?,
         preferredSessionId: String? = nil
-    ) throws -> InternalTerminalSurfaceSnapshot {
+    ) throws -> TerminalSessionSnapshot {
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
             if createIfMissing {
@@ -405,7 +405,7 @@ enum BoardAPI {
                 throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
             }
         }
-        let handle = try LegacyInternalTerminalBackend.shared.createSession(
+        let handle = try TerminalSessionBackendRegistry.shared.createSession(
             request: TerminalSessionRequest(
                 provider: provider,
                 cwd: cwd,
@@ -416,11 +416,8 @@ enum BoardAPI {
                 preferredSessionId: preferredSessionId
             )
         )
-        guard let snapshot = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: handle.snapshot.surfaceId) else {
-            throw NSError(domain: "BoardAPI", code: 500, userInfo: [NSLocalizedDescriptionKey: "internal terminal surface disappeared after create"])
-        }
         BoardServer.shared.broadcastStateChanged()
-        return snapshot
+        return handle.snapshot
     }
 
     private static func graphEnvelope(_ state: PlannerGraphState) -> PlannerGraphStateEnvelope {
@@ -1732,13 +1729,13 @@ enum BoardAPI {
                 return errorResponse("not_found", "node not found: \(nodeId)", status: 404)
             }
 
-            let surface: InternalTerminalSurfaceSnapshot
+            let surface: TerminalSessionSnapshot
             var action = "reuse"
             if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !sessionId.isEmpty {
                 if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
                    isReusableInternalSurface(existingSurface) {
-                    surface = existingSurface
+                    surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
@@ -3169,7 +3166,7 @@ enum BoardAPI {
             }
             return set
         }()
-        let internalSessions = InternalTerminalRuntime.shared
+        let internalSessions = TerminalSessionBackendRegistry.shared
             .listSnapshots()
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
@@ -3809,7 +3806,7 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+        if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sid) {
             struct ActivateInternalResponse: Encodable {
                 let ok: Bool
                 let terminalKind: String
@@ -3862,7 +3859,7 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        if InternalTerminalRuntime.shared.close(surfaceOrSessionId: sid) {
+        if TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: sid) {
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
         }
@@ -4150,7 +4147,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing or empty 'content'", status: 400)
         }
 
-        if InternalTerminalRuntime.shared.writeInput(sessionId: sid, text: content + "\n") {
+        if TerminalSessionBackendRegistry.shared.writeInput(id: sid, data: Data((content + "\n").utf8)) {
             struct InternalInjectEnvelope: Encodable {
                 let message: MessageDTO?
                 let delivery: String?

@@ -1303,9 +1303,9 @@ enum AssistantTools {
             }
         }
 
-        let surface: InternalTerminalSurfaceSnapshot
+        let surface: TerminalSessionSnapshot
         do {
-            let handle = try LegacyInternalTerminalBackend.shared.createSession(
+            let handle = try TerminalSessionBackendRegistry.shared.createSession(
                 request: TerminalSessionRequest(
                     provider: provider,
                     cwd: cwd,
@@ -1315,10 +1315,7 @@ enum AssistantTools {
                     initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
                 )
             )
-            guard let created = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: handle.snapshot.surfaceId) else {
-                return .failure("failed to create internal terminal session: surface disappeared after create")
-            }
-            surface = created
+            surface = handle.snapshot
             BoardServer.shared.broadcastStateChanged()
         } catch {
             return .failure("failed to create internal terminal session: \(error.localizedDescription)")

@@ -71,4 +71,29 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertEqual(snapshot.surfaceId, "surface-a")
         XCTAssertNil(snapshot.fallbackReason)
     }
+
+    func testTerminalSessionSnapshotCodableKeepsFallbackReason() throws {
+        let now = Date(timeIntervalSince1970: 10)
+        let snapshot = TerminalSessionSnapshot(
+            sessionId: "session-a",
+            surfaceId: "surface-a",
+            backend: .ghosttySurface,
+            status: "running",
+            pid: nil,
+            cwd: "/tmp/project",
+            command: "claude",
+            provider: "claude",
+            canvasId: "canvas-a",
+            nodeId: "node-a",
+            createdAt: now,
+            updatedAt: now,
+            fallbackReason: "legacy fallback"
+        )
+
+        let data = try JSONEncoder().encode(snapshot)
+        let decoded = try JSONDecoder().decode(TerminalSessionSnapshot.self, from: data)
+
+        XCTAssertEqual(decoded.backend, .ghosttySurface)
+        XCTAssertEqual(decoded.fallbackReason, "legacy fallback")
+    }
 }

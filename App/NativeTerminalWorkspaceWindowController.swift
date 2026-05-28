@@ -3,12 +3,13 @@ import GhosttyTerminal
 import meee2Kit
 
 @MainActor
-final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceClient {
+final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceClient, NativeTerminalPaneControlling {
     private static let maxPendingOutputBytes = 64_000
 
     let surfaceId: String
     let sessionId: String?
     let view: TerminalView
+    var paneView: NSView { view }
 
     private let terminalSession: InMemoryTerminalSession
     private let terminalController: GhosttyTerminal.TerminalController

@@ -57,7 +57,7 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
         if let target = resolveTarget(sessionId: sessionId, surfaceId: surfaceId) {
             focus(target)
         } else if selectedSessionId == nil,
-                  let first = liveInternalSurfaces().first {
+                  let first = liveInternalSessions().first {
             focus(first)
         }
     }
@@ -191,9 +191,9 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
     }
 
     private func reloadRows() {
-        let surfaces = liveInternalSurfaces()
-        countLabel.stringValue = "\(surfaces.count)"
-        let existingIds = Set(surfaces.map(\.sessionId))
+        let sessions = liveInternalSessions()
+        countLabel.stringValue = "\(sessions.count)"
+        let existingIds = Set(sessions.map(\.sessionId))
         for sessionId in rowButtons.keys.filter({ !existingIds.contains($0) }) {
             if let button = rowButtons[sessionId] {
                 rowStack.removeArrangedSubview(button)
@@ -201,23 +201,23 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
             }
             rowButtons.removeValue(forKey: sessionId)
         }
-        for surface in surfaces {
-            let button = rowButtons[surface.sessionId] ?? NativeSessionRowButton(surface: surface)
-            button.surface = surface
+        for session in sessions {
+            let button = rowButtons[session.sessionId] ?? NativeSessionRowButton(session: session)
+            button.session = session
             button.target = self
             button.action = #selector(selectSessionRow(_:))
-            button.isSelected = surface.sessionId == selectedSessionId
+            button.isSelected = session.sessionId == selectedSessionId
             button.refresh()
-            if rowButtons[surface.sessionId] == nil {
-                rowButtons[surface.sessionId] = button
+            if rowButtons[session.sessionId] == nil {
+                rowButtons[session.sessionId] = button
                 rowStack.addArrangedSubview(button)
                 button.heightAnchor.constraint(equalToConstant: 58).isActive = true
             }
         }
         if let selectedSessionId,
-           let selected = surfaces.first(where: { $0.sessionId == selectedSessionId }) {
+           let selected = sessions.first(where: { $0.sessionId == selectedSessionId }) {
             updateInspector(surface: selected)
-        } else if surfaces.isEmpty {
+        } else if sessions.isEmpty {
             selectedSessionId = nil
             registry.hideActive()
             emptyTerminalLabel.isHidden = false
@@ -226,10 +226,10 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
     }
 
     @objc private func selectSessionRow(_ sender: NativeSessionRowButton) {
-        focus(sender.surface)
+        focus(sender.session)
     }
 
-    private func focus(_ surface: InternalTerminalSurfaceSnapshot) {
+    private func focus(_ surface: TerminalSessionSnapshot) {
         selectedSessionId = surface.sessionId
         for (sessionId, button) in rowButtons {
             button.isSelected = sessionId == surface.sessionId
@@ -243,7 +243,7 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
         updateInspector(surface: surface)
     }
 
-    private func updateInspector(surface: InternalTerminalSurfaceSnapshot?) {
+    private func updateInspector(surface: TerminalSessionSnapshot?) {
         inspectorView.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let header = inspectorLabel("Inspector", size: 13, weight: .semibold, color: .labelColor)
         inspectorView.addArrangedSubview(header)
@@ -251,9 +251,12 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
             inspectorView.addArrangedSubview(inspectorLabel("No internal session selected", color: .secondaryLabelColor))
             return
         }
-        inspectorView.addArrangedSubview(inspectorLabel(surface.title, size: 16, weight: .semibold, color: .labelColor))
+        inspectorView.addArrangedSubview(inspectorLabel(displayTitle(for: surface), size: 16, weight: .semibold, color: .labelColor))
         inspectorView.addArrangedSubview(inspectorLabel("status  \(surface.status)", color: .secondaryLabelColor))
-        inspectorView.addArrangedSubview(inspectorLabel("backend  \(terminalBackend(for: surface).rawValue)", color: .secondaryLabelColor))
+        inspectorView.addArrangedSubview(inspectorLabel("backend  \(surface.backend.rawValue)", color: .secondaryLabelColor))
+        if let fallbackReason = TerminalSessionBackendMetadata.fallbackReason(forSessionId: surface.sessionId) {
+            inspectorView.addArrangedSubview(inspectorLabel("fallback  \(fallbackReason)", color: .systemOrange))
+        }
         inspectorView.addArrangedSubview(inspectorLabel("session  \(short(surface.sessionId))", color: .secondaryLabelColor))
         inspectorView.addArrangedSubview(inspectorLabel("surface  \(short(surface.surfaceId))", color: .secondaryLabelColor))
         inspectorView.addArrangedSubview(inspectorLabel("cwd", size: 11, weight: .semibold, color: .secondaryLabelColor))
@@ -264,10 +267,6 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
         if let nodeId = surface.nodeId {
             inspectorView.addArrangedSubview(inspectorLabel("node  \(short(nodeId))", color: .secondaryLabelColor))
         }
-    }
-
-    private func terminalBackend(for surface: InternalTerminalSurfaceSnapshot) -> TerminalSessionBackendKind {
-        TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? .legacyInternal
     }
 
     private func inspectorLabel(
@@ -284,22 +283,26 @@ final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindo
         return label
     }
 
-    private func resolveTarget(sessionId: String?, surfaceId: String?) -> InternalTerminalSurfaceSnapshot? {
+    private func resolveTarget(sessionId: String?, surfaceId: String?) -> TerminalSessionSnapshot? {
         if let surfaceId, !surfaceId.isEmpty,
-           let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: surfaceId) {
+           let surface = TerminalSessionBackendRegistry.shared.snapshot(id: surfaceId) {
             return surface
         }
         if let sessionId, !sessionId.isEmpty,
-           let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId) {
+           let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId) {
             return surface
         }
         return nil
     }
 
-    private func liveInternalSurfaces() -> [InternalTerminalSurfaceSnapshot] {
-        InternalTerminalRuntime.shared.listSnapshots()
+    private func liveInternalSessions() -> [TerminalSessionSnapshot] {
+        TerminalSessionBackendRegistry.shared.listSnapshots()
             .filter { $0.status != InternalTerminalLifecycle.exited.rawValue && $0.status != InternalTerminalLifecycle.failed.rawValue }
             .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func displayTitle(for session: TerminalSessionSnapshot) -> String {
+        "\(session.provider.capitalized) - \(URL(fileURLWithPath: session.cwd).lastPathComponent)"
     }
 
     private func short(_ value: String) -> String {
@@ -312,7 +315,7 @@ private final class TerminalPaneRegistry {
     private static let maxCachedPanes = 8
 
     private weak var hostView: NativeTerminalPaneHostView?
-    private var controllers: [String: EmbeddedNativeTerminalController] = [:]
+    private var controllers: [String: NativeTerminalPaneControlling] = [:]
     private var lru: [String] = []
     private var activeKey: String?
 
@@ -320,24 +323,32 @@ private final class TerminalPaneRegistry {
         self.hostView = hostView
     }
 
-    func focus(surface: InternalTerminalSurfaceSnapshot) -> Bool {
+    func focus(surface: TerminalSessionSnapshot) -> Bool {
         let key = surface.surfaceId
         if activeKey != key {
             activeController?.hide()
         }
-        let controller: EmbeddedNativeTerminalController
+        let controller: NativeTerminalPaneControlling
         if let cached = controllers[key] {
             controller = cached
         } else {
-            guard let created = EmbeddedNativeTerminalController(
-                surfaceId: surface.surfaceId,
-                sessionId: surface.sessionId,
-                onExit: { [weak self] exitedSurfaceId, _ in
-                    Task { @MainActor in
-                        self?.remove(surfaceId: exitedSurfaceId)
+            let created: NativeTerminalPaneControlling?
+            switch surface.backend {
+            case .ghosttySurface:
+                created = GhosttySurfaceBackend.shared.paneController(id: surface.surfaceId)
+                    ?? GhosttySurfaceBackend.shared.paneController(id: surface.sessionId)
+            case .legacyInternal, .external:
+                created = EmbeddedNativeTerminalController(
+                    surfaceId: surface.surfaceId,
+                    sessionId: surface.sessionId,
+                    onExit: { [weak self] exitedSurfaceId, _ in
+                        Task { @MainActor in
+                            self?.remove(surfaceId: exitedSurfaceId)
+                        }
                     }
-                }
-            ) else {
+                )
+            }
+            guard let created else {
                 return false
             }
             controller = created
@@ -360,17 +371,17 @@ private final class TerminalPaneRegistry {
         activeKey = nil
     }
 
-    private var activeController: EmbeddedNativeTerminalController? {
+    private var activeController: NativeTerminalPaneControlling? {
         guard let activeKey else { return nil }
         return controllers[activeKey]
     }
 
-    private func attach(_ controller: EmbeddedNativeTerminalController) {
+    private func attach(_ controller: NativeTerminalPaneControlling) {
         guard let hostView else { return }
-        if controller.view.superview !== hostView {
-            controller.view.removeFromSuperview()
-            controller.view.autoresizingMask = [.width, .height]
-            hostView.addSubview(controller.view)
+        if controller.paneView.superview !== hostView {
+            controller.paneView.removeFromSuperview()
+            controller.paneView.autoresizingMask = [.width, .height]
+            hostView.addSubview(controller.paneView)
         }
         controller.layout(in: hostView.bounds, hidden: false)
     }
@@ -398,6 +409,15 @@ private final class TerminalPaneRegistry {
     }
 }
 
+@MainActor
+protocol NativeTerminalPaneControlling: AnyObject {
+    var paneView: NSView { get }
+    func layout(in frame: NSRect, hidden: Bool)
+    func focus()
+    func hide()
+    func detach()
+}
+
 private final class NativeTerminalPaneHostView: NSView {
     var onLayout: (() -> Void)?
 
@@ -410,11 +430,11 @@ private final class NativeTerminalPaneHostView: NSView {
 }
 
 private final class NativeSessionRowButton: NSButton {
-    var surface: InternalTerminalSurfaceSnapshot
+    var session: TerminalSessionSnapshot
     var isSelected = false
 
-    init(surface: InternalTerminalSurfaceSnapshot) {
-        self.surface = surface
+    init(session: TerminalSessionSnapshot) {
+        self.session = session
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isBordered = false
@@ -438,14 +458,14 @@ private final class NativeSessionRowButton: NSButton {
 
         let title = NSMutableAttributedString()
         title.append(NSAttributedString(
-            string: "\(surface.provider.capitalized) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)\n",
+            string: "\(session.provider.capitalized) - \(URL(fileURLWithPath: session.cwd).lastPathComponent)\n",
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
                 .foregroundColor: NSColor.labelColor
             ]
         ))
         title.append(NSAttributedString(
-            string: "\(surface.status)  \(short(surface.sessionId))",
+            string: "\(session.status)  \(short(session.sessionId))",
             attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
                 .foregroundColor: NSColor.secondaryLabelColor

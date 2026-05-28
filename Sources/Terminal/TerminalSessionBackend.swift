@@ -1,4 +1,5 @@
 import Foundation
+import Meee2PluginKit
 
 public enum TerminalSessionBackendKind: String, Codable {
     case legacyInternal = "legacy-internal"
@@ -40,7 +41,7 @@ public struct TerminalSessionRequest: Equatable {
     }
 }
 
-public struct TerminalSessionSnapshot: Equatable {
+public struct TerminalSessionSnapshot: Codable, Equatable {
     public let sessionId: String
     public let surfaceId: String
     public let backend: TerminalSessionBackendKind
@@ -103,12 +104,90 @@ public protocol TerminalSessionBackend {
     func focusSession(id: String)
     func writeInput(id: String, data: Data)
     func snapshot(id: String) -> TerminalSessionSnapshot?
+    func listSnapshots() -> [TerminalSessionSnapshot]
 }
 
 public enum TerminalSessionBackendMetadata {
     public static func kind(forSessionId sessionId: String) -> TerminalSessionBackendKind? {
         guard let raw = SessionTerminalStore.shared.get(sessionId: sessionId)?.backend else { return nil }
         return TerminalSessionBackendKind(rawValue: raw)
+    }
+
+    public static func fallbackReason(forSessionId sessionId: String) -> String? {
+        SessionTerminalStore.shared.get(sessionId: sessionId)?.fallbackReason
+    }
+
+    public static func recordManagedSession(
+        snapshot: TerminalSessionSnapshot,
+        termProgram: String,
+        termBundleId: String,
+        lastMessage: String
+    ) {
+        let terminalInfo = PluginTerminalInfo(
+            tty: nil,
+            termProgram: termProgram,
+            termBundleId: termBundleId,
+            cmuxSocketPath: nil,
+            cmuxSurfaceId: snapshot.surfaceId,
+            jumpHandlerId: termProgram
+        )
+        SessionStore.shared.create(SessionData(
+            sessionId: snapshot.sessionId,
+            project: URL(fileURLWithPath: snapshot.cwd).lastPathComponent,
+            cwd: snapshot.cwd,
+            startedAt: snapshot.createdAt,
+            lastActivity: snapshot.updatedAt,
+            status: snapshot.status == InternalTerminalLifecycle.exited.rawValue ? .dead : .active,
+            currentTool: "terminal",
+            currentTask: snapshot.nodeId.map { "Node \($0)" },
+            terminalInfo: terminalInfo,
+            lastMessage: lastMessage
+        ))
+        SessionTerminalStore.shared.update(
+            sessionId: snapshot.sessionId,
+            tty: nil,
+            termProgram: termProgram,
+            termBundleId: termBundleId,
+            cmuxSocketPath: nil,
+            cmuxSurfaceId: snapshot.surfaceId,
+            cwd: snapshot.cwd,
+            status: snapshot.status,
+            command: snapshot.command,
+            provider: snapshot.provider,
+            canvasId: snapshot.canvasId,
+            nodeId: snapshot.nodeId,
+            backend: snapshot.backend.rawValue,
+            fallbackReason: snapshot.fallbackReason
+        )
+    }
+
+    public static func updateManagedSessionStatus(
+        snapshot: TerminalSessionSnapshot,
+        termProgram: String,
+        termBundleId: String
+    ) {
+        SessionTerminalStore.shared.update(
+            sessionId: snapshot.sessionId,
+            tty: nil,
+            termProgram: termProgram,
+            termBundleId: termBundleId,
+            cmuxSocketPath: nil,
+            cmuxSurfaceId: snapshot.surfaceId,
+            cwd: snapshot.cwd,
+            status: snapshot.status,
+            command: snapshot.command,
+            provider: snapshot.provider,
+            canvasId: snapshot.canvasId,
+            nodeId: snapshot.nodeId,
+            backend: snapshot.backend.rawValue,
+            fallbackReason: snapshot.fallbackReason
+        )
+        if var data = SessionStore.shared.get(snapshot.sessionId) {
+            data.status = snapshot.status == InternalTerminalLifecycle.exited.rawValue ? .dead : .active
+            data.lastActivity = snapshot.updatedAt
+            data.currentTool = snapshot.status == InternalTerminalLifecycle.exited.rawValue ? nil : "terminal"
+            SessionStore.shared.create(data)
+        }
     }
 }
 
@@ -123,6 +202,140 @@ public enum TerminalSessionBackendError: LocalizedError, Equatable {
         case .backendUnavailable(let reason):
             return reason
         }
+    }
+}
+
+public final class TerminalSessionBackendRegistry {
+    public static let shared = TerminalSessionBackendRegistry()
+
+    private let lock = NSLock()
+    private var backends: [TerminalSessionBackendKind: TerminalSessionBackend] = [:]
+    private var preferredOverride: TerminalSessionBackendKind?
+
+    private init() {
+        backends[LegacyInternalTerminalBackend.shared.kind] = LegacyInternalTerminalBackend.shared
+    }
+
+    public func register(_ backend: TerminalSessionBackend) {
+        lock.lock()
+        backends[backend.kind] = backend
+        lock.unlock()
+    }
+
+    public func setPreferredKind(_ kind: TerminalSessionBackendKind?) {
+        lock.lock()
+        preferredOverride = kind
+        lock.unlock()
+    }
+
+    public func preferredKind() -> TerminalSessionBackendKind {
+        if let envKind = environmentPreferredKind() {
+            return envKind
+        }
+        lock.lock()
+        let preferred = preferredOverride ?? .legacyInternal
+        lock.unlock()
+        return preferred
+    }
+
+    public func createSession(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
+        let kind = preferredKind()
+        let selectedBackend = backend(for: kind)
+        do {
+            return try selectedBackend.createSession(request: request)
+        } catch {
+            guard kind != .legacyInternal else { throw error }
+            let legacy = backend(for: TerminalSessionBackendKind.legacyInternal)
+            let fallback = try legacy.createSession(request: request)
+            SessionTerminalStore.shared.updateBackend(
+                sessionId: fallback.snapshot.sessionId,
+                backend: TerminalSessionBackendKind.legacyInternal.rawValue,
+                fallbackReason: "\(kind.rawValue): \(error.localizedDescription)"
+            )
+            return fallback
+        }
+    }
+
+    public func closeSession(id: String) throws {
+        guard let backend = backendForExistingSession(id: id) else {
+            throw TerminalSessionBackendError.sessionNotFound(id)
+        }
+        try backend.closeSession(id: id)
+    }
+
+    @discardableResult
+    public func closeSessionIfExists(id: String) -> Bool {
+        guard let backend = backendForExistingSession(id: id) else { return false }
+        do {
+            try backend.closeSession(id: id)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    public func resizeSession(id: String, cols: UInt16, rows: UInt16) {
+        backendForExistingSession(id: id)?.resizeSession(id: id, cols: cols, rows: rows)
+    }
+
+    public func focusSession(id: String) {
+        backendForExistingSession(id: id)?.focusSession(id: id)
+    }
+
+    @discardableResult
+    public func writeInput(id: String, data: Data) -> Bool {
+        guard let backend = backendForExistingSession(id: id) else { return false }
+        backend.writeInput(id: id, data: data)
+        return true
+    }
+
+    public func snapshot(id: String) -> TerminalSessionSnapshot? {
+        backendForExistingSession(id: id)?.snapshot(id: id)
+    }
+
+    public func listSnapshots() -> [TerminalSessionSnapshot] {
+        lock.lock()
+        let values = Array(backends.values)
+        lock.unlock()
+        return values
+            .flatMap { $0.listSnapshots() }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    public func isManagedSession(_ id: String) -> Bool {
+        snapshot(id: id) != nil
+    }
+
+    private func backend(for kind: TerminalSessionBackendKind) -> TerminalSessionBackend {
+        lock.lock()
+        let backend = backends[kind] ?? backends[.legacyInternal] ?? LegacyInternalTerminalBackend.shared
+        lock.unlock()
+        return backend
+    }
+
+    private func backendForExistingSession(id: String) -> TerminalSessionBackend? {
+        let explicitKind: TerminalSessionBackendKind? = {
+            guard let raw = SessionTerminalStore.shared.get(sessionId: id)?.backend else { return nil }
+            return TerminalSessionBackendKind(rawValue: raw)
+        }()
+        lock.lock()
+        let values = Array(backends.values)
+        let explicitBackend = explicitKind.flatMap { backends[$0] }
+        lock.unlock()
+        if let explicitBackend,
+           explicitBackend.snapshot(id: id) != nil {
+            return explicitBackend
+        }
+        return values.first { $0.snapshot(id: id) != nil }
+    }
+
+    private func environmentPreferredKind() -> TerminalSessionBackendKind? {
+        guard let raw = ProcessInfo.processInfo.environment["MEEE2_TERMINAL_BACKEND"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        return TerminalSessionBackendKind(rawValue: raw)
     }
 }
 
@@ -169,6 +382,11 @@ public final class LegacyInternalTerminalBackend: TerminalSessionBackend {
 
     public func snapshot(id: String) -> TerminalSessionSnapshot? {
         InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: id)
+            .map { Self.snapshot(from: $0, backend: kind) }
+    }
+
+    public func listSnapshots() -> [TerminalSessionSnapshot] {
+        InternalTerminalRuntime.shared.listSnapshots()
             .map { Self.snapshot(from: $0, backend: kind) }
     }
 
