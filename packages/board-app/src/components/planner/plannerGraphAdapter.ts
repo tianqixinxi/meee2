@@ -52,6 +52,11 @@ function widgetDefaultSize(kind: string | undefined | null): { width: number; he
 
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
+  /** P2 fix · 完整 graph 节点列表,供 widget resolver 解析 upstream /
+   *  subcanvas-aggregate widgets。card 把它原样传给 resolveWidgetData,
+   *  让 source.inputKind === 'upstream' 或 'subcanvas-aggregate' 的 widget
+   *  能按 dependsOnNodeIds[inputIndex] 找到目标节点,而不是只看到自己。 */
+  allNodes: PlanningNode[]
   state: NodeStateSnapshot | null
   artifacts: PlannerArtifact[]
   /** P3.0 — canvas-level pool of integration entities, shared across all
@@ -191,6 +196,11 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
   const previewNodes = applyPendingProposalOverlay(input.nodes, input.proposal)
   const titleByNodeId = new Map(previewNodes.map(({ node }) => [node.id, node.title]))
   const positionByNodeId = buildNodePositions(previewNodes.map((item) => item.node))
+  // P2 fix · widget resolver needs the full canvas node list (upstream /
+  // subcanvas-aggregate widgets follow dependsOnNodeIds → other nodes). Build
+  // a stable, shared array once and hand it to every card; previously each
+  // card only saw `[node]` and resolvers failed with 找不到指定的上游节点.
+  const allCanvasNodes = previewNodes.map(({ node }) => node)
   const graphNodes = previewNodes.map(({ node, previewKind }, index) => {
     const position = node.layout
       ? { x: node.layout.x, y: node.layout.y }
@@ -207,6 +217,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       initialHeight: node.layout?.height ?? widgetSize.height,
       data: {
         node,
+        allNodes: allCanvasNodes,
         state: stateByNodeId.get(node.id) ?? null,
         artifacts: artifactsByNodeId.get(node.id) ?? EMPTY_ARTIFACTS,
         integrationEntities: input.integrationEntities,
@@ -365,6 +376,9 @@ function buildVisibleIOArtifactNodes(input: {
           initialHeight: height,
           data: {
             node: artifactNode,
+            // Virtual IO-artifact nodes don't render widgets — the field is
+            // type-required for PlannerNodeData, so seed with the singleton.
+            allNodes: [artifactNode],
             state: null,
             previewKind: 'none',
             perception: 'neutral',

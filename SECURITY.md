@@ -1,5 +1,20 @@
 # Security Policy
 
+## Local data wipe endpoints (same-origin only)
+
+`POST /api/system/delete-local-data/token` and `POST /api/system/delete-local-data`
+on `BoardServer` are destructive (they erase `~/.meee2/` state) and are
+**not** exposed under wildcard CORS. Both routes go through
+`BoardServer.requireLocalUIOrigin`, which rejects any request whose
+`Origin` / `Referer` is outside the local meee2 UI allow list
+(`http://localhost:9876`, `http://127.0.0.1:9876`, dev server
+`http://localhost:5002` + `127.0.0.1:5002`) with `403 forbidden_origin`.
+The pre-existing in-app confirmation token remains as a second line of
+defense against accidental clicks inside the trusted UI itself. If you
+add another destructive `/api/system/*` route, add it to
+`BoardServer.localUIOnlyPaths` and wrap it with `requireLocalUIOrigin`
+instead of `cors`.
+
 ## Reporting a Vulnerability
 
 If you believe you've found a security issue in meee2 — especially anything in these areas — **please do not file a public GitHub issue**:

@@ -833,7 +833,7 @@ enum BoardAPI {
             mockPR(number: 42, title: "feat: add Kanban widget on PlannerNodeCard", author: "kai", branch: "kai/widget-kanban", state: "open"),
             mockPR(number: 51, title: "fix: StateTrace stuck-thinking after PostToolUse Bash", author: "qc", branch: "qc/statetrace-bash-fix", state: "awaiting"),
             mockPR(number: 47, title: "chore: bump Sparkle to 2.9.1", author: "wjk", branch: "wjk/sparkle-2.9.1", state: "blocked"),
-            mockPR(number: 7, title: "feat: planner sidecar bridge", author: "kai", branch: "main", state: "done"),
+            mockPR(number: 7, title: "feat: planner sidecar bridge", author: "kai", branch: "main", state: "done")
         ]
     }
 
@@ -844,7 +844,7 @@ enum BoardAPI {
             "author": .string(author),
             "branch": .string(branch),
             "state": .string(state),
-            "id": .string("pr-\(number)"),
+            "id": .string("pr-\(number)")
         ]
         return IntegrationEntityDTO(schemaId: "github:pr", payload: .object(payload))
     }

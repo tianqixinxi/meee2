@@ -172,6 +172,14 @@ enum SystemStorageAPI {
 
     /// 执行删除。只删 canvases/sessions/runbooks 三类,
     /// 不动 ~/.meee2/plugins、settings.json、hooks 之类的配置。
+    ///
+    /// 顺序：**先删磁盘 → 后清内存 store → 广播 state.changed**。
+    /// 理由：万一磁盘删除部分失败，至少 in-memory store 还反映"真实
+    /// 残留在 disk 上的数据"，不会出现 UI 显示为空但 ~/.meee2 还
+    /// 留着孤儿文件的不一致；下一次启动 reloadFromDisk 也能恢复。
+    /// 我们对单个 url 删除失败不抛错（保持原行为，部分成功也算成功），
+    /// 但只要至少删了一项就清内存 + 广播；如果一项都没删（不太可能），
+    /// 则保持内存原状。
     static func deleteLocalData(token: String) throws -> DeleteResult {
         try consumeToken(token)
 
@@ -193,6 +201,27 @@ enum SystemStorageAPI {
                 NSLog("[SystemStorageAPI] failed to remove \(url.path): \(error)")
             }
         }
+
+        // 删盘后同步内存 store —— 否则 SessionStore.shared.sessions 和
+        // BoardLayoutStore 的 cached snapshot 还会持有已删的 session/canvas，
+        // UI 继续展示并可能在下次 update 时把它们再写回 ~/.meee2。
+        // 用 DispatchQueue.main.sync 保证 SwiftUI `@Published` 在主线程 mutate。
+        if !removed.isEmpty {
+            let clearMemory: () -> Void = {
+                SessionStore.shared.clearAllInMemory()
+                BoardLayoutStore.shared.clearInMemoryCache()
+            }
+            if Thread.isMainThread {
+                clearMemory()
+            } else {
+                DispatchQueue.main.sync(execute: clearMemory)
+            }
+
+            // 立刻广播 state.changed，让 React UI / TUI / Island 翻成空态，
+            // 不用等下一个 hook 触发去抖刷新。
+            BoardServer.shared.broadcastStateChanged()
+        }
+
         return DeleteResult(ok: true, removedBytes: removedBytes, removedPaths: removed)
     }
 }

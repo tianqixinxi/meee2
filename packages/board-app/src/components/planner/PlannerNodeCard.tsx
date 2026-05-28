@@ -432,7 +432,11 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         const widgetData = resolveWidgetData({
           node,
           widget: node.widget,
-          allNodes: [node],
+          // P2 fix · upstream / subcanvas-aggregate widgets resolve
+          // dependsOnNodeIds[inputIndex] against the full canvas node list,
+          // so hand the resolver every node we know about. Fallback to
+          // `[node]` keeps virtual / standalone callers safe.
+          allNodes: data.allNodes ?? [node],
           artifacts: data.artifacts,
           integrationEntities: data.integrationEntities,
         })

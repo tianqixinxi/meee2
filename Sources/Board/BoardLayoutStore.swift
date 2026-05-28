@@ -424,6 +424,19 @@ public final class BoardLayoutStore {
         }
     }
 
+    /// 清空内存缓存。仅在 Settings → Privacy 的"删除本地数据"流程里调用——
+    /// 磁盘上的 `board-canvases.json` 已被 SystemStorageAPI 抹掉，这里把
+    /// in-process 缓存 drop 掉，让下一次 `load()` 走 disk 路径（disk 也没了，
+    /// 会自动 fall back 到 `StoreData.empty` → 重建默认 canvas）。
+    ///
+    /// 注意：不直接持久化空 store，避免在删盘失败的边界情况下回写一份新文件。
+    public func clearInMemoryCache() {
+        queue.sync {
+            cached = nil
+        }
+        SessionEventBus.shared.publish(.boardLayoutChanged)
+    }
+
     /// 整体替换 active canvas 的 layout；保留给旧调用点。
     @discardableResult
     public func save(_ layout: Layout) throws -> Layout {
