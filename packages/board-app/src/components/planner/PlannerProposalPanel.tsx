@@ -156,10 +156,13 @@ export function PlannerProposalPanel({
   useEffect(() => {
     abortEmptyIntakeRequest()
     setHistory(readChatHistory(canvasId))
-    if (isEmptyOmniIntake) setEmptyIntakeError(null)
     setHistoryOpen(false)
     autoExpandedRef.current = false
-  }, [canvasId, isEmptyOmniIntake])
+  }, [canvasId])
+
+  useEffect(() => {
+    if (isEmptyOmniIntake) setEmptyIntakeError(null)
+  }, [isEmptyOmniIntake])
 
   useEffect(() => {
     return () => abortEmptyIntakeRequest()
@@ -199,6 +202,7 @@ export function PlannerProposalPanel({
   }, [busy, canvasId, isEmptyOmniIntake])
 
   useEffect(() => {
+    if (history.length === 0 && emptyIntakeAbortRef.current) return
     writeChatHistory(canvasId, history)
   }, [canvasId, history])
 
@@ -334,16 +338,25 @@ export function PlannerProposalPanel({
     setDraftContext(null)
   }
 
-  const submitEmptyIntakeTurn = (displayMessage: string) => {
+  const submitEmptyIntakeTurn = (
+    displayMessage: string,
+    baseHistory = history,
+    lifecycle?: { onAbort?: () => void; onSettled?: () => void },
+  ) => {
     if (!displayMessage.trim()) return
+    const trimmedMessage = displayMessage.trim()
     const userMessage: PlannerChatMessage = {
       id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       role: 'user',
-      markdown: displayMessage,
+      markdown: trimmedMessage,
       meta: draftContext ? [draftContext.label] : undefined,
     }
-    const nextHistory = [...history, userMessage]
+    const lastMessage = baseHistory[baseHistory.length - 1]
+    const nextHistory = lastMessage?.role === 'user' && lastMessage.markdown.trim() === trimmedMessage
+      ? baseHistory
+      : [...baseHistory, userMessage]
     setHistory(nextHistory)
+    writeChatHistory(canvasId, nextHistory)
     setEmptyIntakeError(null)
     setThinking(true)
     abortEmptyIntakeRequest()
@@ -361,14 +374,20 @@ export function PlannerProposalPanel({
         setHistory((current) => [...current, reply])
       })
       .catch((err) => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted) {
+          lifecycle?.onAbort?.()
+          return
+        }
         setEmptyIntakeError((err as Error).message || t('planner.continueError'))
       })
       .finally(() => {
         if (emptyIntakeAbortRef.current === controller) {
           emptyIntakeAbortRef.current = null
         }
-        if (!controller.signal.aborted) setThinking(false)
+        if (!controller.signal.aborted) {
+          setThinking(false)
+          lifecycle?.onSettled?.()
+        }
       })
   }
 
@@ -379,9 +398,13 @@ export function PlannerProposalPanel({
     if (!seed || !isEmptyOmniIntake || proposal || thinking || busy) return
     if (handledInitialIntakeRef.current === intake.id) return
     handledInitialIntakeRef.current = intake.id
-    submitEmptyIntakeTurn(seed)
-    onInitialIntakeHandled?.(intake.id)
-  }, [busy, initialIntakeMessage, isEmptyOmniIntake, onInitialIntakeHandled, proposal, thinking])
+    submitEmptyIntakeTurn(seed, readChatHistory(canvasId), {
+      onAbort: () => {
+        if (handledInitialIntakeRef.current === intake.id) handledInitialIntakeRef.current = 0
+      },
+      onSettled: () => onInitialIntakeHandled?.(intake.id),
+    })
+  }, [busy, canvasId, initialIntakeMessage, isEmptyOmniIntake, onInitialIntakeHandled, proposal, thinking])
 
   const buildConfirmedPlan = (prompt: string) => {
     if (!prompt.trim() || busy || thinking || !canCreateProposal) return
