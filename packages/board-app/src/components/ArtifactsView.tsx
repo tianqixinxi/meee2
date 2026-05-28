@@ -8,6 +8,7 @@ import {
   Layers,
   Loader2,
   Search,
+  Terminal as TerminalIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -45,6 +46,7 @@ interface ArtifactsViewProps {
   focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
   onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenSession?: (sessionId: string) => void
   onClearFocus?: () => void
 }
 
@@ -97,6 +99,7 @@ export function ArtifactsView({
   focusTarget = null,
   onOpenCanvas,
   onOpenPlannerNode,
+  onOpenSession,
   onClearFocus,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
@@ -451,6 +454,16 @@ export function ArtifactsView({
               >
                 <ExternalLink size={13} aria-hidden />
                 <span>{artifactNodeActionLabel(focusSummary.requirement, true, t)}</span>
+              </button>
+            )}
+            {focusSummary.node?.sessionId?.trim() && (
+              <button
+                type="button"
+                onClick={() => onOpenSession?.(focusSummary.node?.sessionId?.trim() ?? '')}
+                disabled={!onOpenSession}
+              >
+                <TerminalIcon size={13} aria-hidden />
+                <span>{t('artifacts.openSession')}</span>
               </button>
             )}
             <button type="button" onClick={showAllArtifacts}>
