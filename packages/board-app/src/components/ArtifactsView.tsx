@@ -360,6 +360,7 @@ export function ArtifactsView({
     if (!focusTarget || handledFocusRef.current === focusTarget.id) return
     handledFocusRef.current = focusTarget.id
     setKindFilter('all')
+    setFitFilter('all')
     setQuery(focusTarget.reference?.trim() || focusTarget.nodeTitle?.trim() || focusTarget.nodeId?.trim() || '')
   }, [focusTarget])
 
