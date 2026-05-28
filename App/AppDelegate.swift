@@ -95,6 +95,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 先建好主菜单栏——.accessory 时不显示，Board 窗口切 .regular 后自动出现
         setupMainMenu()
+        SessionPaletteManager.shared.registerHotKey()
 
         // 创建状态栏图标
         setupStatusBar()
@@ -347,6 +348,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
+        let paletteItem = NSMenuItem(title: "Session Palette", action: #selector(openSessionPalette), keyEquivalent: "p")
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        paletteItem.target = self
+        menu.addItem(paletteItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -461,6 +466,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         boardWindowController?.openSettings()
     }
 
+    @MainActor
+    @objc private func openSessionPalette() {
+        SessionPaletteManager.shared.toggle()
+    }
+
     @objc private func openBoardSession(_ notification: Notification) {
         let sessionId = notification.userInfo?["sessionId"] as? String
         let surfaceId = notification.userInfo?["surfaceId"] as? String
@@ -570,6 +580,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                                          action: #selector(openBoardMenu),
                                          keyEquivalent: "b")
         boardItem.target = self
+        let paletteItem = fileMenu.addItem(withTitle: "Session Palette",
+                                           action: #selector(openSessionPalette),
+                                           keyEquivalent: "p")
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        paletteItem.target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window",
                          action: #selector(NSWindow.performClose(_:)),
