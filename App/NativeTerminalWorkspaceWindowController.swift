@@ -19,6 +19,7 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     private var pendingOutput = Data()
     private var outputFlushScheduled = false
     private var surfaceVisible = false
+    private var pausedOutputPosition: Int64?
     private var refitScheduled = false
     private var followUpRefitScheduled = false
     private var terminalSurfaceAttached = false
@@ -186,9 +187,27 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     }
 
     private func setTerminalSurfaceVisible(_ visible: Bool) {
+        if visible {
+            resumeOutputIfNeeded()
+        } else {
+            pauseOutputIfNeeded()
+        }
         guard surfaceVisible != visible else { return }
         surfaceVisible = visible
         view.setSurfaceVisible(visible)
+    }
+
+    private func pauseOutputIfNeeded() {
+        guard pausedOutputPosition == nil else { return }
+        pausedOutputPosition = InternalTerminalRuntime.shared.pauseClientOutput(self, surfaceOrSessionId: surfaceId)
+    }
+
+    private func resumeOutputIfNeeded() {
+        guard let position = pausedOutputPosition else { return }
+        pausedOutputPosition = nil
+        if let replay = InternalTerminalRuntime.shared.resumeClientOutput(self, surfaceOrSessionId: surfaceId, since: position) {
+            enqueueOutput(replay, includeFollowUpRefit: true)
+        }
     }
 
     private func enqueueOutput(_ data: Data, includeFollowUpRefit: Bool = false) {

@@ -428,7 +428,7 @@ public final class InternalTerminalRuntime {
 }
 
 final class InternalTerminalSurface {
-    private static let maxScrollbackBytes = 96_000
+    private static let maxScrollbackBytes = 2 * 1024 * 1024
     private static let maxPendingClientOutputBytes = 64_000
     private static let scrollbackTrimSearchBytes = 8_192
     private static let replayResetPrefix = Data("\u{001B}[0m\u{001B}[?25h\r\n".utf8)
