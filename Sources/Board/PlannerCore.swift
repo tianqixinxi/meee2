@@ -5189,14 +5189,103 @@ enum PlannerBoardBridge {
             }
         }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let requirementHint = graph.nodes
+            .first(where: { $0.id == nodeId })
+            .flatMap { node in
+                artifactRequirementHint(
+                    for: node,
+                    artifacts: graph.artifacts.filter { $0.nodeId == nodeId }
+                )
+            }
         return PlannerNodeOutputResult(
             graph: graph,
             routes: submitted.routes,
-            hint: nil,
+            hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
             autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
         )
+    }
+
+    private static func artifactRequirementHint(for node: PlanningNode, artifacts: [PlannerArtifact]) -> String? {
+        let expectedOutputs = uniqueRequirementTokens(node.schema.outputs)
+        let requiredRefs = uniqueRequirementTokens(node.gate?.requiredArtifactRefs ?? [])
+        let missingOutputs = expectedOutputs.filter { expected in
+            !artifacts.contains { artifactSatisfiesExpectation($0, expected) }
+        }
+        let missingRefs = requiredRefs.filter { required in
+            !artifacts.contains { artifactSatisfiesRequiredRef($0, required) }
+        }
+        let missing = missingOutputs + missingRefs
+        guard !missing.isEmpty else { return nil }
+        return "Artifact requirements still missing for \(node.title): \(missing.prefix(6).joined(separator: ", "))\(missing.count > 6 ? " and \(missing.count - 6) more" : "")."
+    }
+
+    private static func artifactSatisfiesExpectation(_ artifact: PlannerArtifact, _ expectation: String) -> Bool {
+        let expected = normalizeRequirementToken(expectation)
+        guard !expected.isEmpty else { return false }
+        return artifactRequirementCandidates(artifact).contains { candidate in
+            let normalized = normalizeRequirementToken(candidate)
+            guard !normalized.isEmpty else { return false }
+            return normalized == expected || normalized.contains(expected) || expected.contains(normalized)
+        }
+    }
+
+    private static func artifactSatisfiesRequiredRef(_ artifact: PlannerArtifact, _ requiredRef: String) -> Bool {
+        sameRequirement(artifact.reference, requiredRef)
+            || sameRequirement(artifact.title, requiredRef)
+            || artifactSatisfiesExpectation(artifact, requiredRef)
+    }
+
+    private static func artifactRequirementCandidates(_ artifact: PlannerArtifact) -> [String] {
+        uniqueRequirementTokens([
+            artifact.kind.rawValue,
+            artifact.reference,
+            artifact.title,
+            artifact.status
+        ] + artifactPayloadTextCandidates(artifact.payload))
+    }
+
+    private static func artifactPayloadTextCandidates(_ payload: BoardJSONValue?) -> [String] {
+        guard let payload else { return [] }
+        switch payload {
+        case .string(let value):
+            return [value]
+        case .array(let values):
+            return values.flatMap { artifactPayloadTextCandidates($0) }
+        case .object(let object):
+            let directKeys = ["summary", "description", "content", "text", "markdown", "html", "json"]
+            let nestedKeys = ["result", "output", "evidence", "payload"]
+            let direct = directKeys.compactMap { object[$0]?.stringValue }
+            let nested = nestedKeys.flatMap { artifactPayloadTextCandidates(object[$0]) }
+            return direct + nested
+        case .null, .bool, .number:
+            return []
+        }
+    }
+
+    private static func sameRequirement(_ left: String, _ right: String) -> Bool {
+        normalizeRequirementToken(left) == normalizeRequirementToken(right)
+    }
+
+    private static func normalizeRequirementToken(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"[\s_-]+"#, with: "-", options: .regularExpression)
+    }
+
+    private static func uniqueRequirementTokens(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizeRequirementToken(trimmed)
+            guard !trimmed.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        return result
     }
 
     /// ENG-3 · List the append-only version chain for one artifact slot,

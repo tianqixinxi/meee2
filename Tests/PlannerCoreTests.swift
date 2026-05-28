@@ -2459,6 +2459,61 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(artifacts.first?.payload, kanbanPayload(subCanvasId: nil))
     }
 
+    func testSubmitNodeOutputHintsWhenArtifactsDoNotSatisfyContract() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-fit-hint", ownerId: "owner-a")
+        let canvas = PlanningCanvas(
+            id: "canvas-fit-hint",
+            ownerId: "owner-a",
+            title: "Fit Hint Canvas",
+            plannerContext: "canvas:canvas-fit-hint"
+        )
+        let node = PlanningNode(
+            id: "fit-node",
+            canvasId: "canvas-fit-hint",
+            title: "ship result",
+            schema: NodeSchema(inputs: [], outputs: ["prd", "launch-check"], goal: "Ship with evidence"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step,
+            gate: PlannerNodeGate(
+                type: "artifact-exists",
+                label: "PR gate",
+                requiredArtifactRefs: ["git://repo/pull/1"],
+                approvers: ["owner-a"],
+                onFailGotoNodeId: nil
+            )
+        )
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "prd done", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .prd,
+                        title: "PRD",
+                        reference: "prd",
+                        payload: nil,
+                        routeTo: []
+                    )
+                ],
+                next: .complete
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertTrue(result.hint?.contains("launch-check") == true)
+        XCTAssertTrue(result.hint?.contains("git://repo/pull/1") == true)
+    }
+
     // MARK: - ENG-3 · Artifact Version Chain
 
     func testSubmitNodeOutputAppendsVersionChainAndKeepsLatestForSlot() throws {

@@ -486,7 +486,12 @@ enum BoardAPI {
         if !autoSpawnFailed.isEmpty {
             parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
         }
-        result.hint = parts.joined(separator: " ")
+        result.hint = [result.hint, parts.joined(separator: " ")]
+            .compactMap { value in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: " ")
         NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
     }
 
