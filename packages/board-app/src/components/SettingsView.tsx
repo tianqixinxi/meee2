@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { NotificationSettings } from './NotificationSettings'
 import { ReadinessChecklist } from './ReadinessChecklist'
 import {
   DEFAULT_SPAWN_PROVIDER,
+  loadAllowCloud,
   loadBoardGridEnabled,
   loadCanvasRecapIntervalMinutes,
   loadLockViewportOnSwitch,
   loadSpawnProvider,
+  saveAllowCloud,
   saveBoardGridEnabled,
   saveCanvasRecapIntervalMinutes,
   saveLockViewportOnSwitch,
@@ -23,18 +26,22 @@ import {
   type LlmProvider,
   type LlmSettings,
 } from '../lib/llmSettings'
-import { useI18n, type Locale } from '../lib/i18n'
+import { useI18n, type Locale, type TranslationKey } from '../lib/i18n'
 import { useTheme, type ThemeMode } from '../lib/theme'
 import {
+  deleteLocalData,
   disconnectMeee2Online,
   exportDebugBundle,
   fetchAppSettings,
+  fetchStorageStats,
   fetchUserProfile,
   openMeee2OnlineConnect,
   openMeee2OnlineDashboard,
+  requestDeleteLocalDataToken,
   updateAppSettings,
   updateUserProfile,
   type AppSettings,
+  type StorageStats,
   type UserProfile,
 } from '../api'
 
@@ -94,6 +101,14 @@ export function SettingsView({
   const [saving, setSaving] = useState(false)
   const [debugExporting, setDebugExporting] = useState(false)
   const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
+  // Chunk E (Privacy UI)
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [storageStatsError, setStorageStatsError] = useState<string | null>(null)
+  const [storageStatsLoading, setStorageStatsLoading] = useState(false)
+  const [allowCloud, setAllowCloud] = useState(loadAllowCloud)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmAcknowledged, setDeleteConfirmAcknowledged] = useState(false)
+  const [deletingLocalData, setDeletingLocalData] = useState(false)
   const effectiveAppSettings = normalizeAppSettings(appSettings)
 
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
@@ -112,16 +127,26 @@ export function SettingsView({
       .catch(() => setAppSettings(DEFAULT_APP_SETTINGS))
   }, [])
 
+  const loadStorageStats = useCallback(() => {
+    setStorageStatsLoading(true)
+    setStorageStatsError(null)
+    fetchStorageStats()
+      .then((stats) => setStorageStats(stats))
+      .catch((err: Error) => setStorageStatsError(err.message || 'storage stats unavailable'))
+      .finally(() => setStorageStatsLoading(false))
+  }, [])
+
   useEffect(() => {
     loadProfile()
     loadAppSettings()
+    loadStorageStats()
     window.addEventListener('focus', loadProfile)
     window.addEventListener('focus', loadAppSettings)
     return () => {
       window.removeEventListener('focus', loadProfile)
       window.removeEventListener('focus', loadAppSettings)
     }
-  }, [loadAppSettings, loadProfile])
+  }, [loadAppSettings, loadProfile, loadStorageStats])
 
   const save = async () => {
     setSaving(true)
@@ -163,6 +188,45 @@ export function SettingsView({
       notify('error', (err as Error).message || t('settings.debugExportFailed'))
     } finally {
       setDebugExporting(false)
+    }
+  }
+
+  const toggleAllowCloud = (next: boolean) => {
+    setAllowCloud(next)
+    saveAllowCloud(next)
+  }
+
+  const openDeleteConfirm = () => {
+    setDeleteConfirmAcknowledged(false)
+    setDeleteConfirmOpen(true)
+  }
+
+  const closeDeleteConfirm = () => {
+    if (deletingLocalData) return // 删除进行中不允许 dismiss
+    setDeleteConfirmOpen(false)
+    setDeleteConfirmAcknowledged(false)
+  }
+
+  const confirmDeleteLocalData = async () => {
+    if (!deleteConfirmAcknowledged) return
+    setDeletingLocalData(true)
+    try {
+      // 二次确认 = 这里先 GET token,再立刻 POST。token 服务端是一次性的,
+      // backdrop-click 走不到这里(closeDeleteConfirm 在 deletingLocalData 时
+      // 也不会触发关闭),所以只有按下确认按钮才会真的 fire。
+      const tokenResult = await requestDeleteLocalDataToken()
+      const result = await deleteLocalData(tokenResult.token)
+      notify(
+        'success',
+        t('settings.privacyDeleteSuccess', { bytes: formatBytes(result.removedBytes) }),
+      )
+      setDeleteConfirmOpen(false)
+      setDeleteConfirmAcknowledged(false)
+      loadStorageStats()
+    } catch (err) {
+      notify('error', (err as Error).message || t('settings.privacyDeleteFailed'))
+    } finally {
+      setDeletingLocalData(false)
     }
   }
 
@@ -447,6 +511,137 @@ export function SettingsView({
           )}
         </section>
 
+        <section className="settings-section" data-testid="settings-privacy">
+          <div className="settings-section-header">
+            <div>
+              <div className="settings-section-title">{t('settings.privacy')}</div>
+              <div className="settings-section-caption">{t('settings.privacyCaption')}</div>
+            </div>
+            <button
+              type="button"
+              className="ghost"
+              onClick={loadStorageStats}
+              disabled={storageStatsLoading}
+            >
+              {storageStatsLoading ? t('common.loading') : t('common.refresh')}
+            </button>
+          </div>
+
+          {/* 1. 本地存储路径 + size 统计 */}
+          <div className="settings-panel">
+            <div className="col" style={{ gap: 6 }}>
+              <strong>{t('settings.privacyStorageRoot')}</strong>
+              <code style={{ fontSize: 11, wordBreak: 'break-all' }}>
+                {storageStats?.root ?? '~/.meee2'}
+              </code>
+              <small className="muted">{t('settings.privacyStorageHelp')}</small>
+              {storageStatsError && (
+                <small className="muted" style={{ color: 'var(--accent-warn, #e07b5e)' }}>
+                  {storageStatsError}
+                </small>
+              )}
+              <div className="col" style={{ gap: 4, marginTop: 6 }}>
+                <div className="settings-meta-row">
+                  <span>{t('settings.privacyCanvases')}</span>
+                  <strong>{formatBytes(storageStats?.canvases)}</strong>
+                </div>
+                <div className="settings-meta-row">
+                  <span>{t('settings.privacySessions')}</span>
+                  <strong>{formatBytes(storageStats?.sessions)}</strong>
+                </div>
+                <div className="settings-meta-row">
+                  <span>{t('settings.privacyRunbooks')}</span>
+                  <strong>{formatBytes(storageStats?.runbooks)}</strong>
+                </div>
+                <div className="settings-meta-row">
+                  <span>{t('settings.privacyTotal')}</span>
+                  <strong>{formatBytes(storageStats?.total)}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. 导出全部数据 */}
+          <div className="settings-panel">
+            <div className="settings-section-header" style={{ alignItems: 'center', gap: 12 }}>
+              <div>
+                <strong>{t('settings.privacyExportAll')}</strong>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {t('settings.privacyExportAllHelp')}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void runDebugExport()}
+                disabled={debugExporting}
+              >
+                {debugExporting ? t('settings.privacyExportRunning') : t('settings.privacyExportAll')}
+              </button>
+            </div>
+          </div>
+
+          {/* 3. 删除本地数据 */}
+          <div className="settings-panel">
+            <div className="settings-section-header" style={{ alignItems: 'center', gap: 12 }}>
+              <div>
+                <strong>{t('settings.privacyDeleteAll')}</strong>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  {t('settings.privacyDeleteAllHelp')}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ghost"
+                onClick={openDeleteConfirm}
+                disabled={deletingLocalData}
+                style={{ color: 'var(--danger, #b94c45)' }}
+              >
+                {t('settings.privacyDeleteAll')}
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Summarizer 数据流向说明 */}
+          <div className="settings-panel">
+            <div className="col" style={{ gap: 6 }}>
+              <strong>{t('settings.privacySummarizer')}</strong>
+              <small className="muted" style={{ lineHeight: 1.5 }}>
+                {t('settings.privacySummarizerBody')}
+              </small>
+            </div>
+          </div>
+
+          {/* 5. 允许 cloud / model 调用 toggle */}
+          <label className="settings-toggle-row settings-panel">
+            <span>
+              <strong>{t('settings.privacyAllowCloud')}</strong>
+              <small>{t('settings.privacyAllowCloudHelp')}</small>
+              {!allowCloud && (
+                <small style={{ color: 'var(--accent-warn, #e07b5e)', display: 'block', marginTop: 4 }}>
+                  {t('settings.privacyAllowCloudOffNote')}
+                </small>
+              )}
+            </span>
+            <input
+              type="checkbox"
+              checked={allowCloud}
+              onChange={(event) => toggleAllowCloud(event.target.checked)}
+            />
+          </label>
+        </section>
+
+        {deleteConfirmOpen && (
+          <PrivacyDeleteConfirmModal
+            t={t}
+            acknowledged={deleteConfirmAcknowledged}
+            onToggleAck={setDeleteConfirmAcknowledged}
+            onCancel={closeDeleteConfirm}
+            onConfirm={() => void confirmDeleteLocalData()}
+            deleting={deletingLocalData}
+          />
+        )}
+
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -489,6 +684,8 @@ export function SettingsView({
             </span>
           </label>
         </section>
+
+        <NotificationSettings onToast={onToast} />
 
         <section className="settings-section">
           <div className="settings-section-header">
@@ -716,6 +913,110 @@ function RuntimeStatusPanel({
         <button type="button" className="primary" disabled={!available} onClick={onSetUp}>
           {ready ? t('common.manage') : t('common.setUp')}
         </button>
+      </div>
+    </div>
+  )
+}
+
+// Chunk E (Privacy UI) helpers --------------------------------------------
+
+function formatBytes(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = value
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i += 1
+  }
+  // < 10 → 显示一位小数,>= 10 → 整数
+  const formatted = v < 10 && i > 0 ? v.toFixed(1) : Math.round(v).toString()
+  return `${formatted} ${units[i]}`
+}
+
+function PrivacyDeleteConfirmModal({
+  t,
+  acknowledged,
+  onToggleAck,
+  onCancel,
+  onConfirm,
+  deleting,
+}: {
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string
+  acknowledged: boolean
+  onToggleAck: (value: boolean) => void
+  onCancel: () => void
+  onConfirm: () => void
+  deleting: boolean
+}) {
+  // 二次确认 modal:
+  //   - 点 backdrop 不算确认(我们在 backdrop 上只触发 cancel,不触发 delete)
+  //   - 删除按钮 disabled 直到用户主动勾选 acknowledged
+  //   - 删除中不可关闭(防止 token 已签发但 UI 进入未知状态)
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="privacy-delete-confirm-title"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        background: 'rgba(0, 0, 0, 0.45)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      onClick={(event) => {
+        // backdrop click → 只 cancel,不视为确认
+        if (event.target === event.currentTarget) onCancel()
+      }}
+    >
+      <div
+        className="settings-panel"
+        style={{
+          maxWidth: 460,
+          width: 'min(92vw, 460px)',
+          padding: 20,
+          background: 'var(--surface, #1c1c1f)',
+          border: '1px solid var(--border, #2a2a2e)',
+          borderRadius: 12,
+          boxShadow: '0 14px 40px rgba(0,0,0,0.5)',
+        }}
+      >
+        <h2
+          id="privacy-delete-confirm-title"
+          style={{ fontSize: 16, fontWeight: 600, margin: 0, marginBottom: 10 }}
+        >
+          {t('settings.privacyDeleteConfirmTitle')}
+        </h2>
+        <p style={{ fontSize: 12, lineHeight: 1.5, margin: 0, marginBottom: 14 }}>
+          {t('settings.privacyDeleteConfirmBody')}
+        </p>
+        <label className="settings-toggle-row" style={{ padding: '6px 0', marginBottom: 12 }}>
+          <span>
+            <strong style={{ fontSize: 12 }}>{t('settings.privacyDeleteConfirmAck')}</strong>
+          </span>
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            onChange={(event) => onToggleAck(event.target.checked)}
+          />
+        </label>
+        <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+          <button type="button" className="ghost" onClick={onCancel} disabled={deleting}>
+            {t('common.cancel')}
+          </button>
+          <button
+            type="button"
+            className="primary"
+            onClick={onConfirm}
+            disabled={!acknowledged || deleting}
+            style={{ background: 'var(--danger, #b94c45)' }}
+          >
+            {deleting ? t('common.loading') : t('settings.privacyDeleteConfirmAction')}
+          </button>
+        </div>
       </div>
     </div>
   )

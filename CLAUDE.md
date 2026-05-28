@@ -77,13 +77,38 @@ PRD only by `slug`, never by path or content.
 
 Most debug loops follow one pattern: **tail the log + trigger the action + grep the trace**.
 
-### Log file
+### Log files — **TWO disjoint sinks, not fd-mirrored**
 
-meee2 writes all `NSLog` / `[StateTrace]` events to `/tmp/meee2.log` (plus `~/Library/Logs/meee2.log` as fd 3). Watch in real time:
+meee2 has two log files. They contain **different** events; if you only tail one you will miss the other half. The "plus fd 3" wording in earlier docs was misleading — these are independent streams.
+
+| File | What writes to it |
+|---|---|
+| `/tmp/meee2.log` | `NSLog()` direct calls (system services, hook ingestion, PluginManager, `[StateTrace]`) + stdout/stderr of `nohup`-launched debug binary |
+| `~/Library/Logs/meee2.log` | `MLog / MDebug / MInfo / MWarn / MError` family (`Sources/Core/LogManager.swift`). **WKWebView JS console.warn/error from React UI lands here** via JSConsoleBridge → MWarn → `~/Library/Logs/meee2.log` |
+
+Rule of thumb when debugging:
+
+- **Hook / socket / status-resolver bugs** → tail `/tmp/meee2.log` (StateTrace tags live there)
+- **React UI / front-end bugs / `console.warn` instrumentation** → tail `~/Library/Logs/meee2.log` (look for `[BoardWebWindow.js]` prefix)
+- **Not sure which** → tail both:
+  ```bash
+  tail -F /tmp/meee2.log ~/Library/Logs/meee2.log
+  ```
+
+Watch in real time:
 
 ```bash
+# system / hook side
 tail -F /tmp/meee2.log | grep -a -E "StateTrace|TerminalJumper|MessageRouter"
+
+# UI / React / your console.warn instrumentation
+tail -F ~/Library/Logs/meee2.log | grep -aE "BoardWebWindow|^.*\] \[WARN\]|^.*\] \[ERROR\]"
 ```
+
+Instrumenting React/TS for log harness:
+- `console.log` → **dropped** (bridge ignores `.log`)
+- `console.warn` / `console.error` → forwarded to `~/Library/Logs/meee2.log` with `[BoardWebWindow.js]` prefix (see `App/BoardWebWindowController.swift` `JSConsoleBridge.captureScript`)
+- For perf timing harness in React, use `console.warn(\`[my-trace] step=foo t=\${(performance.now() - t0).toFixed(0)}ms\`)`
 
 Common trace tags:
 
@@ -93,6 +118,7 @@ Common trace tags:
 | `[StateTrace][hook]` | After ClaudePlugin processed it, with before/after hookStatus |
 | `[StateTrace][resolver]` | `TranscriptStatusResolver` decision (+ tail reason) |
 | `[StateTrace][boardDTO]` | What `/api/state` reports to Web |
+| `[BoardWebWindow.js]` | React UI `console.warn/error` forwarded from WKWebView |
 | `[TerminalJumper]` | Open-terminal flow (marker → AppleScript focus) |
 | `[MessageRouter]` | A2A send / deliver / drain / direct-push |
 

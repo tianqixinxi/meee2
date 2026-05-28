@@ -1,5 +1,6 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
+  IntegrationEntity,
   NodeAssignment,
   NodeContractExternalInput,
   NodeStateSnapshot,
@@ -31,10 +32,31 @@ type PlannerGraphMode = 'design' | 'run'
 // flicker after Push 5(成果 row referenced data.artifacts).
 const EMPTY_ARTIFACTS: PlannerArtifact[] = Object.freeze([]) as unknown as PlannerArtifact[]
 
+/**
+ * Default node size by widget kind (P2.5).
+ *
+ * Standard nodes (no widget) stay at 320×238 — the pre-widget default.
+ * Widget kinds get larger canvas real estate per their typical layout.
+ * `node.layout.width/height` (user / template overrides) always wins.
+ */
+function widgetDefaultSize(kind: string | undefined | null): { width: number; height: number } {
+  switch (kind) {
+    case 'kanban': return { width: 480, height: 320 }
+    case 'matrix': return { width: 520, height: 280 }
+    case 'inbox':  return { width: 400, height: 280 }
+    case 'badge':  return { width: 220, height: 80 }
+    case 'artifact-preview': return { width: 360, height: 240 }
+    default: return { width: 320, height: 238 }
+  }
+}
+
 export interface PlannerNodeData extends Record<string, unknown> {
   node: PlanningNode
   state: NodeStateSnapshot | null
   artifacts: PlannerArtifact[]
+  /** P3.0 — canvas-level pool of integration entities, shared across all
+   *  widget-bearing nodes. Resolver filters per-node via widget.source. */
+  integrationEntities?: IntegrationEntity[]
   previewKind: PlannerPreviewKind
   perception: PlannerNodePerception
   /** Design vs Run mode — the card collapses execution fields in Design. */
@@ -108,6 +130,8 @@ interface PlannerGraphInput {
   states: NodeStateSnapshot[]
   edges?: PlannerGraphStateEdge[]
   artifacts?: PlannerArtifact[]
+  /** P3.0 — canvas-level integration entity pool. */
+  integrationEntities?: IntegrationEntity[]
   proposal?: PlanProposal | null
   ownerId?: string
   mode: PlannerGraphMode
@@ -174,16 +198,18 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       x: (index % 3) * 340,
       y: Math.floor(index / 3) * 190,
     }
+    const widgetSize = widgetDefaultSize(node.widget?.kind)
     return {
       id: node.id,
       type: 'plannerNode' as const,
       position,
-      initialWidth: node.layout?.width ?? 320,
-      initialHeight: node.layout?.height ?? 238,
+      initialWidth: node.layout?.width ?? widgetSize.width,
+      initialHeight: node.layout?.height ?? widgetSize.height,
       data: {
         node,
         state: stateByNodeId.get(node.id) ?? null,
         artifacts: artifactsByNodeId.get(node.id) ?? EMPTY_ARTIFACTS,
+        integrationEntities: input.integrationEntities,
         previewKind,
         perception: perceptionForNode(
           node,
@@ -317,6 +343,9 @@ function buildVisibleIOArtifactNodes(input: {
         executionMode: 'auto',
         executorType: 'mock',
         doerId: '',
+        reviewerIds: [],
+        approverIds: [],
+        handoffPolicy: 'none',
         status: 'ready',
         dependsOnNodeIds: [],
         nodeKind: 'artifact',

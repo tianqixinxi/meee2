@@ -200,6 +200,9 @@ function demoNode(input: {
     executionMode: input.executionMode,
     executorType: input.executorType,
     doerId: input.executorType === 'human' ? DEMO_OWNER_ID : `agent-${input.executorType}`,
+    reviewerIds: [],
+    approverIds: [],
+    handoffPolicy: 'none',
     status: input.status,
     sessionId: input.sessionId ?? null,
     chatThreadId: input.sessionId ? `${input.sessionId}-thread` : null,
@@ -604,6 +607,48 @@ export function resolveCanvasConflict(
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(canvasId)}/conflict`, {
     method: 'POST',
     body: JSON.stringify({ choice }),
+  })
+}
+
+// ─── Canvas templates (Chunk F · Official templates / Demo canvases) ───
+
+export interface CanvasTemplateNodeSpec {
+  title: string
+  description?: string | null
+  status: string
+  doerId?: string | null
+  positionHint?: Record<string, number> | null
+}
+
+export interface CanvasTemplate {
+  id: string
+  name: string
+  description: string
+  icon: string
+  /**
+   * Mirrors `BoardLayoutStore.CanvasKind` raw values. Always present in the
+   * server response (unlike `CanvasInfo.kind` which can be missing on legacy
+   * canvases), so we declare it non-optional here.
+   */
+  kind: NonNullable<CanvasList['canvases'][number]['kind']>
+  /** 'engineering' / 'team' / 'demo' (free-form for future categories). */
+  category: string
+  defaultNodes: CanvasTemplateNodeSpec[]
+}
+
+export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
+  return jsonRequest<{ templates: CanvasTemplate[] }>('/api/templates').then(
+    (envelope) => envelope.templates,
+  )
+}
+
+export function applyCanvasTemplate(
+  id: string,
+  input: { name: string; scope: CanvasScope },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 
@@ -2418,6 +2463,43 @@ export async function deleteMemoryRecord(id: string): Promise<void> {
 
 export async function exportDebugBundle(): Promise<{ ok: boolean; path: string }> {
   return jsonRequest<{ ok: boolean; path: string }>('/api/system/debug-export', { method: 'POST' })
+}
+
+// ---- Privacy: storage stats + delete local data --------------------------
+
+export interface StorageStats {
+  root: string
+  canvases: number
+  sessions: number
+  runbooks: number
+  total: number
+}
+
+export interface DeleteConfirmToken {
+  token: string
+  issuedAt: string
+  expiresAt: string
+}
+
+export interface DeleteLocalDataResult {
+  ok: boolean
+  removedBytes: number
+  removedPaths: string[]
+}
+
+export async function fetchStorageStats(): Promise<StorageStats> {
+  return jsonRequest<StorageStats>('/api/system/storage-stats')
+}
+
+export async function requestDeleteLocalDataToken(): Promise<DeleteConfirmToken> {
+  return jsonRequest<DeleteConfirmToken>('/api/system/delete-local-data/token', { method: 'POST' })
+}
+
+export async function deleteLocalData(token: string): Promise<DeleteLocalDataResult> {
+  return jsonRequest<DeleteLocalDataResult>('/api/system/delete-local-data', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
 }
 
 /// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，

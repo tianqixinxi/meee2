@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
+import { CanvasKindHint } from './CanvasKindHint'
 import './planner.css'
 
 const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
@@ -114,6 +115,7 @@ export function WorkspaceMonitor({
 
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
+      <CanvasKindHint kind="monitor" />
       <div className="planner-monitor__body">
         <div className="planner-monitor__tools">
           <div className="planner-monitor__search">
