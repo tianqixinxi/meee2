@@ -199,6 +199,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var embeddedTerminals: [String: EmbeddedNativeTerminalController] = [:]
     private var embeddedTerminalLRU: [String] = []
     private var activeEmbeddedTerminalKey: String?
+    private var terminalScrollMonitor: Any?
     private var embeddedTerminal: EmbeddedNativeTerminalController? {
         guard let activeEmbeddedTerminalKey else { return nil }
         return embeddedTerminals[activeEmbeddedTerminalKey]
@@ -316,11 +317,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
         // 入口（或菜单栏 / 上下文菜单），title bar 干净一片。
+        installTerminalScrollMonitor()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let terminalScrollMonitor {
+            NSEvent.removeMonitor(terminalScrollMonitor)
+        }
     }
 
     private static func defaultContentRect() -> NSRect {
@@ -387,6 +395,24 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
+    }
+
+    private func installTerminalScrollMonitor() {
+        guard terminalScrollMonitor == nil else { return }
+        terminalScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self else { return event }
+            return self.forwardScrollWheelToEmbeddedTerminal(event) ? nil : event
+        }
+    }
+
+    private func forwardScrollWheelToEmbeddedTerminal(_ event: NSEvent) -> Bool {
+        guard let window else { return false }
+        guard event.window === window else { return false }
+        guard let terminal = embeddedTerminal, !terminal.view.isHidden else { return false }
+        let pointInHost = terminalHostView.convert(event.locationInWindow, from: nil)
+        guard terminal.view.frame.contains(pointInHost) else { return false }
+        terminal.scrollWheel(with: event)
+        return true
     }
 
     func handleNativeTerminalMessage(_ payload: [String: Any]) {

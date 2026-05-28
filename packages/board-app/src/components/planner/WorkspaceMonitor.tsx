@@ -284,8 +284,8 @@ function MonitorCard({
       type="button"
       className={`planner-monitor-card planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
       onClick={() => onOpenItem(item)}
-      aria-label={`${item.sessionId ? t('monitor.openSession') : item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
-      title={`${item.sessionId ? t('monitor.openSession') : item.nodeId ? t('monitor.openItem') : t('monitor.openCanvas')}: ${item.canvasTitle}`}
+      aria-label={`${monitorOpenLabel(item, t)}: ${item.nodeTitle ?? item.summary}`}
+      title={`${monitorOpenLabel(item, t)}: ${item.canvasTitle}`}
     >
       <div className="planner-monitor-card__top">
         <span className="planner-monitor-card__source">
@@ -318,6 +318,12 @@ function MonitorCard({
       </div>
     </button>
   )
+}
+
+function monitorOpenLabel(item: PlannerMonitorItem, t: Translator): string {
+  if (item.nodeId?.trim()) return t('monitor.openItem')
+  if (item.deliveryId?.trim() || item.proposalId?.trim()) return t('monitor.openCanvas')
+  return item.sessionId ? t('monitor.openSession') : t('monitor.openCanvas')
 }
 
 function matchesSearch(item: PlannerMonitorItem, term: string): boolean {

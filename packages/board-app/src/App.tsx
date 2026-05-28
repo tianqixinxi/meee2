@@ -41,6 +41,7 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
+  activateSession,
   createCanvas,
   clearPlannerCanvasContent,
   deleteCanvas,
@@ -665,11 +666,18 @@ export default function App() {
 
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
     const sessionId = item.sessionId?.trim()
-    if (sessionId) {
-      setSelectedSessionId(sessionId)
-      setWorkspaceMode('sessions')
-      boardState.refresh()
-      return
+    if (sessionId && !isCanvasScopedMonitorItem(item)) {
+      const session = boardState.state?.sessions.find((candidate) => (
+        candidate.id === sessionId || candidate.surfaceId === sessionId
+      ))
+      if (session && isExternalMonitorSession(session)) {
+        activateSession(session.id)
+          .then((ok) => {
+            if (!ok) pushToast('error', 'Failed to open external session')
+          })
+          .finally(() => boardState.refresh())
+        return
+      }
     }
     handleSetActiveCanvas(item.canvasId)
     setWorkspaceMode('planner')
@@ -680,7 +688,7 @@ export default function App() {
         requestId: Date.now(),
       })
     }
-  }, [boardState.refresh, handleSetActiveCanvas])
+  }, [boardState, handleSetActiveCanvas, pushToast])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
@@ -1124,6 +1132,18 @@ function readFirstRunOnboardingCompleted(): boolean {
   } catch {
     return true
   }
+}
+
+function isExternalMonitorSession(session: { terminalKind?: string | null; surfaceId?: string | null }): boolean {
+  return session.terminalKind !== 'internal' && !session.surfaceId?.trim()
+}
+
+function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
+  return Boolean(
+    item.nodeId?.trim()
+      || item.deliveryId?.trim()
+      || item.proposalId?.trim(),
+  )
 }
 
 function readBoardDevMode(): boolean {

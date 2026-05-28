@@ -102,6 +102,13 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
         setTerminalSurfaceVisible(true)
     }
 
+    func scrollWheel(with event: NSEvent) {
+        guard !detached, !view.isHidden else { return }
+        view.window?.makeFirstResponder(view)
+        setTerminalSurfaceVisible(true)
+        view.scrollWheel(with: event)
+    }
+
     func layout(in frame: NSRect, hidden: Bool) {
         let frameChanged = frame != lastLayoutFrame
         let visibilityChanged = view.isHidden != hidden

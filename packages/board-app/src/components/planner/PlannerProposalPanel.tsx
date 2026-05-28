@@ -924,14 +924,17 @@ function PlannerPlanCardView({
           type="button"
           className="primary"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => onBuild(plan.prompt)}
         >
-          <span className="planner-thinking-dots" aria-hidden>
-            <i />
-            <i />
-            <i />
-          </span>
-          {t('planner.buildIt')}
+          {busy && (
+            <span className="planner-thinking-dots" aria-hidden>
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
+          {busy ? t('planner.buildingPlan') : t('planner.buildIt')}
         </button>
         <span>{t('planner.buildPlanHelp')}</span>
       </div>

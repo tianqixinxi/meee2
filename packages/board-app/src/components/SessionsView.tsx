@@ -266,6 +266,26 @@ export function SessionsView({
             <h1>{t('sessions.title')}</h1>
             <span>{t('sessions.sessionCount', { visible: visibleSessions.length, total: sessions.length })}</span>
           </div>
+          <div className="sessions-workspace__filters">
+            <label className="sessions-search">
+              <Search size={14} aria-hidden />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('sessions.searchPlaceholder')}
+              />
+            </label>
+            <div className="sessions-filters" aria-label={t('sessions.filters')}>
+              <FilterButton label={t('sessions.filterAll')} count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
+              <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
+              <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
+            </div>
+            <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
+              <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
+              <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
+              <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
+            </div>
+          </div>
           <div className="sessions-workspace__tools">
             <SessionIntakeStatus
               diagnostics={diagnostics}
@@ -302,26 +322,6 @@ export function SessionsView({
             ) : (
               <div className={`sessions-console sessions-console--${activeKindTab}`}>
                 <aside className="sessions-console__sidebar">
-                  <div className="sessions-list-tools">
-                    <label className="sessions-search">
-                      <Search size={14} aria-hidden />
-                      <input
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder={t('sessions.searchPlaceholder')}
-                      />
-                    </label>
-                    <div className="sessions-filters" aria-label={t('sessions.filters')}>
-                      <FilterButton label={t('sessions.filterAll')} count={sessions.length} active={filter === 'all'} onClick={() => setFilter('all')} />
-                      <FilterButton label={t('sessions.filterAttention')} count={attentionCount} active={filter === 'attention'} onClick={() => setFilter('attention')} />
-                      <FilterButton label={t('sessions.filterUnread')} count={unreadCount} active={filter === 'unread'} onClick={() => setFilter('unread')} />
-                    </div>
-                    <div className="sessions-filters" aria-label={t('sessions.visibilityFilters')}>
-                      <FilterButton label={t('sessions.controlActive')} count={controlCounts.active} active={controlFilter === 'active'} onClick={() => setControlFilter('active')} />
-                      <FilterButton label={t('sessions.controlHidden')} count={controlCounts.hidden} active={controlFilter === 'hidden'} onClick={() => setControlFilter('hidden')} />
-                      <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
-                    </div>
-                  </div>
                   <div className="sessions-kind-tabs" role="tablist" aria-label={t('sessions.kindTabs')}>
                     <KindTabButton
                       label={t('sessions.internalSessions')}
@@ -727,6 +727,8 @@ function SessionDetail({
   const liveInternal = internal && isLiveInternalSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
   const controlState = sessionControlState(session)
+  const hasPermissionAction = Boolean(session.pendingPermissionTool || session.pendingPermissionMessage)
+  const showActionDrawer = hasPermissionAction || desktopSession || Boolean(controlStatus || controlError)
   const boundCanvasId = surface?.canvasId?.trim() || ''
   const boundNodeId = surface?.nodeId?.trim() || ''
   const boundNodeTitle = surface?.title?.trim() || session.title || boundNodeId
@@ -961,53 +963,59 @@ function SessionDetail({
             {stopError && <p className="sessions-detail__error">{stopError}</p>}
           </div>
         )}
-        <SessionDrawer
-          title={t('sessions.actions')}
-          meta={session.pendingPermissionTool
-            ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
-            : session.inboxPending > 0
-              ? t('sessions.pendingMessages', { count: session.inboxPending })
-              : t('sessions.actionsReady')}
-          defaultOpen={Boolean(session.pendingPermissionTool || controlStatus || controlError)}
-        >
-          <section className="sessions-control" aria-label={t('sessions.control')}>
-            {session.pendingPermissionTool && (
-              <div className="sessions-control__permission-actions">
-                <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
-                <button type="button" onClick={() => void answerPermission('allow')}>
-                  <ShieldCheck size={13} aria-hidden />
-                  {t('sessions.allowPermission')}
-                </button>
-                <button type="button" onClick={() => void answerPermission('deny')}>
-                  <ShieldX size={13} aria-hidden />
-                  {t('sessions.denyPermission')}
-                </button>
-              </div>
-            )}
-            <div className="sessions-composer">
-              <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={t('sessions.messagePlaceholder')}
-                rows={2}
-              />
-              <div className="sessions-composer__actions">
-                <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
-                  <Send size={13} aria-hidden />
-                  {sending ? t('sessions.sending') : t('sessions.sendMessage')}
-                </button>
-                {desktopSession && (
-                  <button type="button" onClick={pushNow} disabled={pushing}>
-                    <Zap size={13} aria-hidden />
-                    {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+        {showActionDrawer && (
+          <SessionDrawer
+            title={hasPermissionAction ? t('sessions.permissionRequired') : t('sessions.fallbackInput')}
+            meta={session.pendingPermissionTool
+              ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+              : desktopSession
+                ? t('sessions.fallbackInputMeta')
+                : t('sessions.actionsReady')}
+            defaultOpen={Boolean(hasPermissionAction || controlStatus || controlError)}
+          >
+            <section className="sessions-control" aria-label={t('sessions.control')}>
+              {hasPermissionAction && (
+                <div className="sessions-control__permission-actions">
+                  <span className="sessions-control__permission">
+                    {session.pendingPermissionTool
+                      ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+                      : t('sessions.permissionRequired')}
+                  </span>
+                  <button type="button" onClick={() => void answerPermission('allow')}>
+                    <ShieldCheck size={13} aria-hidden />
+                    {t('sessions.allowPermission')}
                   </button>
-                )}
-              </div>
-            </div>
-            {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
-            {controlError && <p className="sessions-detail__error">{controlError}</p>}
-          </section>
-        </SessionDrawer>
+                  <button type="button" onClick={() => void answerPermission('deny')}>
+                    <ShieldX size={13} aria-hidden />
+                    {t('sessions.denyPermission')}
+                  </button>
+                </div>
+              )}
+              {desktopSession && (
+                <div className="sessions-composer">
+                  <textarea
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    placeholder={t('sessions.messagePlaceholder')}
+                    rows={2}
+                  />
+                  <div className="sessions-composer__actions">
+                    <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
+                      <Send size={13} aria-hidden />
+                      {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+                    </button>
+                    <button type="button" onClick={pushNow} disabled={pushing}>
+                      <Zap size={13} aria-hidden />
+                      {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
+              {controlError && <p className="sessions-detail__error">{controlError}</p>}
+            </section>
+          </SessionDrawer>
+        )}
         <SessionDrawer
           title={t('sessions.timeline')}
           meta={timelineLoading
