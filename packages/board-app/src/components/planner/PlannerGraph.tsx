@@ -1519,6 +1519,9 @@ function PlannerGraphInner({
   const closedBoundSessionButtonLabel = closedBoundSessions.some((item) => item.action === 'resume')
     ? 'Recover missing'
     : 'Recreate missing'
+  const sessionActionBannerHelp = readySessionPlan.total > 0 && closedBoundSessions.length === 0
+    ? 'Starts ready nodes and opens the first session; the rest keep running in the background.'
+    : 'Recreates missing internal sessions; resumes only when a real provider resume id exists.'
 
   return (
     <section className="planner-workspace" aria-label="meee2 AI graph">
@@ -1629,7 +1632,7 @@ function PlannerGraphInner({
                     <strong>{sessionActionBannerTitle}</strong>
                     {readySessionActionSummary && <span>Ready: {readySessionActionSummary}</span>}
                     {closedBoundSessionSummary && <span>Closed: {closedBoundSessionSummary}</span>}
-                    <em>Recreates missing internal sessions; resumes only when a real provider resume id exists.</em>
+                    <em>{sessionActionBannerHelp}</em>
                   </div>
                   <div className="planner-session-action-banner__actions">
                     {readySessionPlan.total > 0 && (
