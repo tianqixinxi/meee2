@@ -1017,6 +1017,7 @@ export default function App() {
                 onOpenSession={(sessionId) => {
                   setSelectedSessionId(sessionId)
                   setWorkspaceMode('sessions')
+                  boardState.refresh()
                 }}
                 onClearFocus={() => setArtifactFocusTarget(null)}
               />
