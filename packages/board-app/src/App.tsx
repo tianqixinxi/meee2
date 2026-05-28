@@ -23,6 +23,7 @@ import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { useI18n } from './lib/i18n'
+import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import type {
   CanvasList,
@@ -665,26 +666,21 @@ export default function App() {
   }, [applyCanvasList, pushToast])
 
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
-    const sessionId = item.sessionId?.trim()
-    if (sessionId && !isCanvasScopedMonitorItem(item)) {
-      const session = boardState.state?.sessions.find((candidate) => (
-        candidate.id === sessionId || candidate.surfaceId === sessionId
-      ))
-      if (session && isExternalMonitorSession(session)) {
-        activateSession(session.id)
-          .then((ok) => {
-            if (!ok) pushToast('error', 'Failed to open external session')
-          })
-          .finally(() => boardState.refresh())
-        return
-      }
+    const target = resolveMonitorItemOpenTarget(item, boardState.state?.sessions)
+    if (target.kind === 'external-session') {
+      activateSession(target.sessionId)
+        .then((ok) => {
+          if (!ok) pushToast('error', 'Failed to open external session')
+        })
+        .finally(() => boardState.refresh())
+      return
     }
-    handleSetActiveCanvas(item.canvasId)
+    handleSetActiveCanvas(target.canvasId)
     setWorkspaceMode('planner')
-    if (item.nodeId?.trim()) {
+    if (target.nodeId) {
       setPlannerFocusTarget({
-        canvasId: item.canvasId,
-        nodeId: item.nodeId.trim(),
+        canvasId: target.canvasId,
+        nodeId: target.nodeId,
         requestId: Date.now(),
       })
     }
@@ -1127,18 +1123,6 @@ function readFirstRunOnboardingCompleted(): boolean {
   } catch {
     return true
   }
-}
-
-function isExternalMonitorSession(session: { terminalKind?: string | null; surfaceId?: string | null }): boolean {
-  return session.terminalKind !== 'internal' && !session.surfaceId?.trim()
-}
-
-function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
-  return Boolean(
-    item.nodeId?.trim()
-      || item.deliveryId?.trim()
-      || item.proposalId?.trim(),
-  )
 }
 
 function readBoardDevMode(): boolean {

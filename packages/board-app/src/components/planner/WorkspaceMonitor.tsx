@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
+import { monitorItemOpenLabel } from '../../lib/workspaceNavigation'
 import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
 import './planner.css'
 
@@ -321,9 +322,14 @@ function MonitorCard({
 }
 
 function monitorOpenLabel(item: PlannerMonitorItem, t: Translator): string {
-  if (item.nodeId?.trim()) return t('monitor.openItem')
-  if (item.deliveryId?.trim() || item.proposalId?.trim()) return t('monitor.openCanvas')
-  return item.sessionId ? t('monitor.openSession') : t('monitor.openCanvas')
+  switch (monitorItemOpenLabel(item)) {
+    case 'item':
+      return t('monitor.openItem')
+    case 'session':
+      return t('monitor.openSession')
+    case 'canvas':
+      return t('monitor.openCanvas')
+  }
 }
 
 function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
