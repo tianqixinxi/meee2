@@ -99,6 +99,9 @@ export function SessionsView({
       session.id === selectedSessionId || session.surfaceId === selectedSessionId
     )) ?? null
   }, [selectedSessionId, sessions])
+  const pendingSelectedSessionId = selectedSessionId?.trim() && !selectedSession
+    ? selectedSessionId.trim()
+    : null
   const internalSessions = useMemo(() => {
     const list = visibleSessions.filter(isInternalSession)
     if (selectedSession && isInternalSession(selectedSession) && !list.some((session) => session.id === selectedSession.id)) {
@@ -193,18 +196,20 @@ export function SessionsView({
   }, [])
 
   useEffect(() => {
+    if (pendingSelectedSessionId) return
     if (activeKindTab !== 'internal' || selectedSessionOnActiveTab || internalSessions.length === 0) return
     const next = internalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next?.id ?? null)
-  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
+  }, [activeKindTab, internalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
+    if (pendingSelectedSessionId) return
     if (activeKindTab !== 'external' || selectedSessionOnActiveTab || externalSessions.length === 0) return
     const next = externalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next.id)
-  }, [activeKindTab, externalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
+  }, [activeKindTab, externalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
     if (activeKindTab !== 'internal') return
@@ -271,14 +276,25 @@ export function SessionsView({
             />
           </div>
         </div>
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && !pendingSelectedSessionId ? (
           <div className="sessions-empty">
             <TerminalIcon size={18} aria-hidden />
             <span>{t('sessions.empty')}</span>
           </div>
         ) : (
           <div className="sessions-board">
-            {visibleSessions.length === 0 ? (
+            {pendingSelectedSessionId && sessions.length === 0 ? (
+              <SessionDetail
+                session={null}
+                pendingSessionId={pendingSelectedSessionId}
+                opening={false}
+                openError={false}
+                onOpen={noopVoid}
+                onOpenPlannerNode={onOpenPlannerNode}
+                onOpenArtifacts={onOpenArtifacts}
+                t={t}
+              />
+            ) : visibleSessions.length === 0 ? (
               <div className="sessions-empty sessions-empty--compact">
                 <Search size={18} aria-hidden />
                 <span>{t('sessions.noMatch')}</span>
@@ -376,6 +392,7 @@ export function SessionsView({
                 </aside>
                 <SessionDetail
                   session={selectedSessionOnActiveTab}
+                  pendingSessionId={pendingSelectedSessionId}
                   opening={openingId === selectedSessionOnActiveTab?.id}
                   openError={openErrorId === selectedSessionOnActiveTab?.id}
                   switchStartedAt={selectedSessionOnActiveTab ? switchStartedAtRef.current[selectedSessionOnActiveTab.id] : undefined}
@@ -596,6 +613,7 @@ const SessionRow = memo(function SessionRow({
 
 function SessionDetail({
   session,
+  pendingSessionId,
   opening,
   openError,
   switchStartedAt,
@@ -608,6 +626,7 @@ function SessionDetail({
   t,
 }: {
   session: Session | null
+  pendingSessionId?: string | null
   opening: boolean
   openError: boolean
   switchStartedAt?: number
@@ -688,6 +707,15 @@ function SessionDetail({
     setMemoryError(null)
   }, [session?.id])
   if (!session) {
+    if (pendingSessionId) {
+      return (
+        <aside className="sessions-detail sessions-detail--empty sessions-detail--pending">
+          <RefreshCw size={18} className="spin" aria-hidden />
+          <strong>{t('sessions.pendingSelectedSession', { id: shortId(pendingSessionId) })}</strong>
+          <span>{t('sessions.pendingSelectedSessionHint')}</span>
+        </aside>
+      )
+    }
     return (
       <aside className="sessions-detail sessions-detail--empty">
         <TerminalIcon size={18} aria-hidden />
@@ -1601,6 +1629,7 @@ function scheduleInternalTabPrewarm(
 }
 
 function noopSessionAction(_session: Session) {}
+function noopVoid() {}
 
 function sessionControlState(session: Session): SessionControlFilter {
   return session.controlState === 'hidden' || session.controlState === 'archived'
