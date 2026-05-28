@@ -98,6 +98,7 @@ const SESSION_SYNC_LIMIT = 12
 const VISIBLE_HISTORY_LIMIT = 12
 const COLLAPSE_LINE_LIMIT = 8
 const COLLAPSE_CHAR_LIMIT = 900
+const INITIAL_INTAKE_SUBMIT_DELAY_MS = 24
 
 export function PlannerProposalPanel({
   canvasId,
@@ -129,6 +130,7 @@ export function PlannerProposalPanel({
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const emptyIntakeAbortRef = useRef<AbortController | null>(null)
+  const emptyIntakeTimerRef = useRef<number | null>(null)
   const handledClearRevisionRef = useRef(0)
   const handledAnswerOnlyIdRef = useRef(0)
   // ENG-5: first-Q&A auto-expand. We flip historyOpen=true the first time a
@@ -153,7 +155,16 @@ export function PlannerProposalPanel({
     emptyIntakeAbortRef.current = null
   }
 
+  function clearInitialIntakeTimer() {
+    if (emptyIntakeTimerRef.current === null) return false
+    window.clearTimeout(emptyIntakeTimerRef.current)
+    emptyIntakeTimerRef.current = null
+    return true
+  }
+
   useEffect(() => {
+    clearInitialIntakeTimer()
+    handledInitialIntakeRef.current = 0
     abortEmptyIntakeRequest()
     setHistory(readChatHistory(canvasId))
     setHistoryOpen(false)
@@ -165,7 +176,10 @@ export function PlannerProposalPanel({
   }, [isEmptyOmniIntake])
 
   useEffect(() => {
-    return () => abortEmptyIntakeRequest()
+    return () => {
+      clearInitialIntakeTimer()
+      abortEmptyIntakeRequest()
+    }
   }, [])
 
   useEffect(() => {
@@ -215,6 +229,7 @@ export function PlannerProposalPanel({
     setReviewOpen(false)
     setThinking(false)
     setEmptyIntakeError(null)
+    clearInitialIntakeTimer()
     abortEmptyIntakeRequest()
   }, [canvasId, clearRevision])
 
@@ -398,12 +413,20 @@ export function PlannerProposalPanel({
     if (!seed || !isEmptyOmniIntake || proposal || thinking || busy) return
     if (handledInitialIntakeRef.current === intake.id) return
     handledInitialIntakeRef.current = intake.id
-    submitEmptyIntakeTurn(seed, readChatHistory(canvasId), {
-      onAbort: () => {
-        if (handledInitialIntakeRef.current === intake.id) handledInitialIntakeRef.current = 0
-      },
-      onSettled: () => onInitialIntakeHandled?.(intake.id),
-    })
+    emptyIntakeTimerRef.current = window.setTimeout(() => {
+      emptyIntakeTimerRef.current = null
+      submitEmptyIntakeTurn(seed, readChatHistory(canvasId), {
+        onAbort: () => {
+          if (handledInitialIntakeRef.current === intake.id) handledInitialIntakeRef.current = 0
+        },
+        onSettled: () => onInitialIntakeHandled?.(intake.id),
+      })
+    }, INITIAL_INTAKE_SUBMIT_DELAY_MS)
+    return () => {
+      if (clearInitialIntakeTimer() && handledInitialIntakeRef.current === intake.id) {
+        handledInitialIntakeRef.current = 0
+      }
+    }
   }, [busy, canvasId, initialIntakeMessage, isEmptyOmniIntake, onInitialIntakeHandled, proposal, thinking])
 
   const buildConfirmedPlan = (prompt: string) => {
