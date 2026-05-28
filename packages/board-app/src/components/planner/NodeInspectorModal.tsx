@@ -124,6 +124,8 @@ export function NodeInspectorModal({
   const runtimeArtifactRefs = dedupeStrings(state?.artifactRefs ?? [])
     .filter((reference) => !persistedArtifactRefs.has(reference))
   const deliveryEvidenceCount = nodeArtifacts.length + runtimeArtifactRefs.length
+  const hasArtifactExpectation = outputItems.length > 0
+    || dedupeStrings(node.gate?.requiredArtifactRefs ?? []).length > 0
   const nextAction = node.nextAction?.trim() || null
   const responsibleId = node.doerId?.trim() ?? ''
   const responsibleMember = teamMembers.find((member) => member.userId === responsibleId)
@@ -266,10 +268,11 @@ export function NodeInspectorModal({
         <div className="planner-node-modal__section">
           <div className="planner-node-modal__section-heading">
             <h3><Route size={13} aria-hidden /> Output</h3>
-            {onOpenArtifacts && deliveryEvidenceCount === 0 && (
+            {onOpenArtifacts && deliveryEvidenceCount === 0 && hasArtifactExpectation && (
               <button
                 type="button"
                 onClick={openArtifactsForNode}
+                title="Open this node in the artifact view to inspect missing expected outputs."
               >
                 <ExternalLink size={12} aria-hidden /> Check artifacts
               </button>
