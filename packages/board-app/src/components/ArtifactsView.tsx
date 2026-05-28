@@ -928,6 +928,7 @@ function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: st
 function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
   return sameRequirement(artifact.reference, requiredRef)
     || sameRequirement(artifact.title, requiredRef)
+    || artifactSatisfiesExpectation(artifact, requiredRef)
 }
 
 function artifactRequirementCandidates(artifact: PlannerArtifact): string[] {
