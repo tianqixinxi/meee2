@@ -29,6 +29,7 @@ import type {
 
 type ArtifactFilter = 'all' | PlannerArtifactKind
 type SlotDisplayMode = 'latest' | 'merged' | 'compare'
+type RequirementFitFilter = 'all' | ArtifactRequirementSummary['fitStatus']
 
 export interface ArtifactFocusTarget {
   id: number
@@ -87,6 +88,7 @@ const KIND_FILTERS: ArtifactFilter[] = [
   'lark-doc',
   'generic',
 ]
+const FIT_FILTERS: RequirementFitFilter[] = ['all', 'missing', 'partial', 'complete']
 
 export function ArtifactsView({
   canvases,
@@ -102,6 +104,7 @@ export function ArtifactsView({
   const handledFocusRef = useRef(0)
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<ArtifactFilter>('all')
+  const [fitFilter, setFitFilter] = useState<RequirementFitFilter>('all')
   const [canvasArtifacts, setCanvasArtifacts] = useState<CanvasArtifacts[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -236,10 +239,12 @@ export function ArtifactsView({
       }
       return {
         ...item,
-        slots: Array.from(slots.values()).sort(sortSlotsForDisplay),
+        slots: Array.from(slots.values())
+          .sort(sortSlotsForDisplay)
+          .filter((slot) => slotMatchesFitFilter(slot, artifactsByNodeId, fitFilter)),
       }
     }).filter((item) => item.slots.length > 0 || item.error)
-  }, [canvasArtifacts, kindFilter, query])
+  }, [canvasArtifacts, fitFilter, kindFilter, query])
 
   const totalSlots = canvasGroups.reduce((count, group) => count + group.slots.length, 0)
   const focusSummary = useMemo(() => {
@@ -336,6 +341,7 @@ export function ArtifactsView({
 
   const showAllArtifacts = () => {
     setKindFilter('all')
+    setFitFilter('all')
     setQuery('')
     onClearFocus?.()
   }
@@ -396,6 +402,18 @@ export function ArtifactsView({
                   onClick={() => setKindFilter(filter)}
                 >
                   {filter === 'all' ? t('artifacts.filterAll') : filter}
+                </button>
+              ))}
+            </div>
+            <div className="artifacts-filters" aria-label={t('artifacts.fitFilterLabel')}>
+              {FIT_FILTERS.map((filter) => (
+                <button
+                  type="button"
+                  key={filter}
+                  className={`artifacts-filter${fitFilter === filter ? ' is-active' : ''}`}
+                  onClick={() => setFitFilter(filter)}
+                >
+                  {filter === 'all' ? t('artifacts.fitFilterAll') : t(`artifacts.fit.${filter}` as TranslationKey)}
                 </button>
               ))}
             </div>
@@ -981,6 +999,18 @@ function sortSlotsForDisplay(left: ArtifactSlot, right: ArtifactSlot): number {
   if (left.latest) return -1
   if (right.latest) return 1
   return left.reference.localeCompare(right.reference)
+}
+
+function slotMatchesFitFilter(
+  slot: ArtifactSlot,
+  artifactsByNodeId: Map<string, PlannerArtifact[]>,
+  fitFilter: RequirementFitFilter,
+): boolean {
+  if (fitFilter === 'all') return true
+  const nodeArtifacts = slot.node ? artifactsByNodeId.get(slot.node.id) ?? [] : slot.artifacts
+  const summary = buildRequirementSummary(slot.node, nodeArtifacts)
+  const fitStatus = summary?.fitStatus ?? (slot.latest ? 'complete' : 'missing')
+  return fitStatus === fitFilter
 }
 
 function slotMatchesFocus(slot: ArtifactSlot, focus: ArtifactFocusTarget): boolean {
