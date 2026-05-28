@@ -48,6 +48,7 @@ interface Props {
   onProposalCreated?: (proposal: PlanProposal) => void
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
+  onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => Promise<unknown> | unknown
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onOpenSession?: (sessionId: string, nodeId: string) => Promise<unknown> | unknown
   onOpenArtifacts?: (focus?: Omit<ArtifactFocusTarget, 'id'>) => void
@@ -81,6 +82,7 @@ export function NodeInspectorModal({
   onProposalCreated,
   onGraphStateChanged,
   onSendToAI,
+  onCreateSession,
   onReplaceSession,
   onOpenSession,
   onOpenArtifacts,
@@ -308,6 +310,25 @@ export function NodeInspectorModal({
                   title="Open the bound session to produce or revise this node's output."
                 >
                   <ExternalLink size={12} aria-hidden /> Open session
+                </button>
+              )}
+              {!node.sessionId?.trim() && hasMissingArtifactExpectation && canUseStepActions && onCreateSession && (
+                <button
+                  type="button"
+                  disabled={actionBusy}
+                  onClick={() => {
+                    setActionError(null)
+                    setActionBusy(true)
+                    Promise.resolve(onCreateSession(node.id, dispatchRunnerForNode(node.executorType)))
+                      .then((ok) => {
+                        if (ok !== false) onClose()
+                      })
+                      .catch((err) => setActionError((err as Error).message || 'Failed to create session'))
+                      .finally(() => setActionBusy(false))
+                  }}
+                  title="Create an execution session to produce this node's missing output."
+                >
+                  <Signpost size={12} aria-hidden /> Create session
                 </button>
               )}
             </div>

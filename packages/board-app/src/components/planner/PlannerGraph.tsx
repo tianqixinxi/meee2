@@ -435,12 +435,12 @@ function PlannerGraphInner({
     const cwd = workspacePath.trim()
     if (!cwd) {
       notifyError('Current canvas workspace is not ready yet.')
-      return
+      return Promise.resolve(false)
     }
     warnMCPWritebackIfNeeded()
     setBusy(true)
     setError(null)
-    fetchState()
+    return fetchState()
       .catch(() => null)
       .then((beforeState) => {
         const existingSessionIds = new Set((beforeState?.sessions ?? []).map((session) => session.id))
@@ -458,9 +458,13 @@ function PlannerGraphInner({
               void sessionId
               void openInternalSessionForNode(nodeId, runner)
             })
+            return true
           })
       })
-      .catch((err) => notifyError((err as Error).message || 'Failed to create node session'))
+      .catch((err) => {
+        notifyError((err as Error).message || 'Failed to create node session')
+        return false
+      })
       .finally(() => setBusy(false))
   }, [canvasId, handleGraphStateChanged, notifyError, openInternalSessionForNode, warnMCPWritebackIfNeeded, workspacePath])
 
@@ -1738,6 +1742,7 @@ function PlannerGraphInner({
           }
           access={plannerState?.access ?? null}
           teamMembers={teamMembers}
+          onCreateSession={handleCreateNodeSession}
           onReplaceSession={handleReplaceNodeSession}
           onProposalCreated={handleNodeActionProposal}
           onGraphStateChanged={handleGraphStateChanged}
