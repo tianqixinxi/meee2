@@ -579,20 +579,52 @@ enum BoardAPI {
         sessionId: String,
         existingArtifacts: [PlannerArtifact]
     ) {
-        guard let outputRef = node.schema.outputs.first(where: { $0.localizedCaseInsensitiveContains("kanban") })
-                ?? node.schema.outputs.first else { return }
-        guard !existingArtifacts.contains(where: {
-            $0.nodeId == node.id && (
-                $0.reference == outputRef ||
-                $0.reference.caseInsensitiveCompare(outputRef) == .orderedSame
-            )
-        }) else { return }
+        let outputRefs = node.schema.outputs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !outputRefs.isEmpty else { return }
         guard let transcriptPath = SessionStore.shared.get(sessionId)?.transcriptPath else { return }
         let entries = FullTranscriptReader.readTail(transcriptPath: transcriptPath, limit: 12)
-        guard let latestText = latestVisibleAssistantText(entries),
-              let payload = kanbanPayloadFromMarkdownTable(latestText) else { return }
+        guard let latestText = latestVisibleAssistantText(entries) else { return }
+
+        if let kanbanRef = outputRefs.first(where: { $0.localizedCaseInsensitiveContains("kanban") }),
+           !hasExistingFallbackArtifact(nodeId: node.id, outputRef: kanbanRef, artifacts: existingArtifacts),
+           let payload = kanbanPayloadFromMarkdownTable(latestText) {
+            submitFallbackSessionArtifact(
+                canvasId: canvasId,
+                node: node,
+                outputRef: kanbanRef,
+                kind: .kanban,
+                payload: payload,
+                summary: "Extracted \(kanbanItemCount(payload)) item(s) into \(kanbanRef)."
+            )
+            return
+        }
+
+        guard let outputRef = outputRefs.first(where: { !$0.localizedCaseInsensitiveContains("kanban") })
+                ?? outputRefs.first,
+              !hasExistingFallbackArtifact(nodeId: node.id, outputRef: outputRef, artifacts: existingArtifacts),
+              let payload = genericSessionArtifactPayload(from: latestText, outputRef: outputRef) else { return }
+        submitFallbackSessionArtifact(
+            canvasId: canvasId,
+            node: node,
+            outputRef: outputRef,
+            kind: .generic,
+            payload: payload,
+            summary: "Captured terminal completion text into \(outputRef)."
+        )
+    }
+
+    private static func submitFallbackSessionArtifact(
+        canvasId: String,
+        node: PlanningNode,
+        outputRef: String,
+        kind: PlannerArtifactKind,
+        payload: BoardJSONValue,
+        summary: String
+    ) {
         let artifact = PlannerNodeOutputArtifact(
-            kind: .kanban,
+            kind: kind,
             title: outputRef.replacingOccurrences(of: "_", with: " ").capitalized,
             reference: outputRef,
             payload: payload,
@@ -601,7 +633,7 @@ enum BoardAPI {
         let output = PlannerNodeOutput(
             nodeId: node.id,
             status: .done,
-            message: PlannerNodeOutputMessage(summary: "Extracted \(kanbanItemCount(payload)) item(s) into \(outputRef).", routeTo: []),
+            message: PlannerNodeOutputMessage(summary: summary, routeTo: []),
             artifacts: [artifact],
             next: .complete
         )
@@ -616,7 +648,20 @@ enum BoardAPI {
             routePlannerOutputMessages(result.routes)
             BoardServer.shared.broadcastStateChanged()
         } catch {
-            MWarn("[PlannerArtifactSync] fallback sync failed canvas=\(canvasId) node=\(node.id) sid=\(sessionId.prefix(8)): \(error.localizedDescription)")
+            MWarn("[PlannerArtifactSync] fallback sync failed canvas=\(canvasId) node=\(node.id): \(error.localizedDescription)")
+        }
+    }
+
+    private static func hasExistingFallbackArtifact(
+        nodeId: String,
+        outputRef: String,
+        artifacts: [PlannerArtifact]
+    ) -> Bool {
+        artifacts.contains { artifact in
+            guard artifact.nodeId == nodeId else { return false }
+            return artifact.reference == outputRef
+                || artifact.reference.caseInsensitiveCompare(outputRef) == .orderedSame
+                || artifact.title.caseInsensitiveCompare(outputRef) == .orderedSame
         }
     }
 
@@ -705,6 +750,119 @@ enum BoardAPI {
         guard let items = payload.objectValue?["items"],
               case .array(let values) = items else { return 0 }
         return values.count
+    }
+
+    static func genericSessionArtifactPayload(from text: String, outputRef: String) -> BoardJSONValue? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 40 else { return nil }
+        let html = fencedCodeBlock(in: trimmed, languageHints: ["html", "htm"]) ?? (looksLikeHTML(trimmed) ? trimmed : nil)
+        let json = fencedCodeBlock(in: trimmed, languageHints: ["json"]) ?? (looksLikeJSONObject(trimmed) ? trimmed : nil)
+        let outputHint = outputRef.lowercased()
+        let final = looksLikeFinalSessionOutput(trimmed, outputRef: outputRef)
+        if outputHint.contains("html") || html != nil {
+            guard let html = html ?? extractHTMLFragment(from: trimmed), final || looksLikeHTML(html) else { return nil }
+            return .object([
+                "type": .string(PlannerArtifactPayloadType.html.rawValue),
+                "html": .string(html)
+            ])
+        }
+        if outputHint.contains("json") || json != nil {
+            guard let json = json, final || looksLikeJSONObject(json) else { return nil }
+            return .object([
+                "type": .string(PlannerArtifactPayloadType.json.rawValue),
+                "json": .string(json)
+            ])
+        }
+        guard final else { return nil }
+        return .object([
+            "type": .string(PlannerArtifactPayloadType.text.rawValue),
+            "text": .string(trimmed)
+        ])
+    }
+
+    private static func looksLikeFinalSessionOutput(_ text: String, outputRef: String) -> Bool {
+        let lower = text.lowercased()
+        let ref = outputRef.lowercased()
+        let finalMarkers = [
+            "final", "deliverable", "artifact", "output", "result", "completed",
+            "ready", "here is", "below is", "summary", "report", "prd", "brief",
+            "最终", "产物", "交付", "输出", "结果", "完成", "已完成", "验收", "总结", "如下"
+        ]
+        let outputHints = [
+            "text", "markdown", "doc", "prd", "brief", "summary", "report",
+            "copy", "content", "page", "html", "json", "check", "result", "verdict"
+        ]
+        if finalMarkers.contains(where: { lower.contains($0) }) { return true }
+        if outputHints.contains(where: { ref.contains($0) }) && !looksLikeFollowupQuestion(text) { return true }
+        return false
+    }
+
+    private static func looksLikeFollowupQuestion(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let hasQuestionTone = trimmed.hasSuffix("?")
+            || trimmed.hasSuffix("？")
+            || lower.contains("which ")
+            || lower.contains("what ")
+            || lower.contains("should i")
+            || lower.contains("need ")
+            || lower.contains("需要")
+            || lower.contains("哪个")
+            || lower.contains("是否")
+            || lower.contains("吗")
+        let hasDeliveryMarker = ["final", "deliverable", "artifact", "产物", "交付", "最终"].contains { lower.contains($0) }
+        return hasQuestionTone && !hasDeliveryMarker
+    }
+
+    private static func fencedCodeBlock(in text: String, languageHints: [String]) -> String? {
+        let lines = text.components(separatedBy: .newlines)
+        var capturing = false
+        var captured: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !capturing {
+                guard trimmed.hasPrefix("```") else { continue }
+                let language = trimmed.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if languageHints.contains(where: { language.contains($0) }) {
+                    capturing = true
+                    captured.removeAll()
+                }
+                continue
+            }
+            if trimmed.hasPrefix("```") {
+                let body = captured.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                return body.isEmpty ? nil : body
+            }
+            captured.append(line)
+        }
+        return nil
+    }
+
+    private static func looksLikeHTML(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("<!doctype html")
+            || lower.contains("<html")
+            || lower.contains("<body")
+            || lower.contains("<section")
+            || lower.contains("<main")
+    }
+
+    private static func extractHTMLFragment(from text: String) -> String? {
+        guard looksLikeHTML(text) else { return nil }
+        if let start = text.range(of: "<!doctype", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<html", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<body", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<main", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<section", options: [.caseInsensitive])?.lowerBound {
+            return String(text[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    private static func looksLikeJSONObject(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return false }
+        return (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) != nil
     }
 
     private static func slug(_ raw: String) -> String {
