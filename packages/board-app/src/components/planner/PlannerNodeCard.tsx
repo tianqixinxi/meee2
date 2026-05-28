@@ -59,6 +59,16 @@ interface CanvasIOItem {
   pending?: boolean
 }
 
+type ArtifactFitStatus = 'complete' | 'partial' | 'missing'
+
+interface NodeArtifactFit {
+  hasRequirements: boolean
+  status: ArtifactFitStatus
+  expectedCount: number
+  producedCount: number
+  missing: string[]
+}
+
 const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   pending: Clock3,
   ready_to_start: PlayCircle,
@@ -255,6 +265,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     ? nextWorkAction(runNodeState, data.hasSelectedDelivery)
     : nextPlanAction(node, data.responsibleLabel)
   const io = buildCanvasIOItems(data)
+  const artifactFit = buildNodeArtifactFit(node, data.artifacts)
   const primaryAction = primaryActionLabel({
     mode: data.mode,
     hasSelectedDelivery: data.hasSelectedDelivery,
@@ -277,6 +288,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     && Boolean(data.onOpenArtifacts && data.canvasId)
     && hasReviewableOutput({
       artifacts: data.artifacts,
+      artifactFit,
       ioOutputs: io.outputs,
       node,
       runStatus,
@@ -317,6 +329,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--perception-${data.perception}`,
         selected ? 'is-selected' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
+        artifactFit.hasRequirements && artifactFit.status !== 'complete' ? 'planner-node--artifact-gap' : '',
       ].filter(Boolean).join(' ')}
     >
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
@@ -458,6 +471,10 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         <div className="planner-node__io planner-node__io--output-only" aria-label="Node output">
           <IOColumn title="Output" items={io.outputs} emptyLabel="No output" />
         </div>
+      )}
+
+      {artifactFit.hasRequirements && (
+        <ArtifactRequirementStrip fit={artifactFit} onOpenArtifacts={reviewableOutput ? openArtifacts : undefined} />
       )}
 
       {blockers.length > 0 && (
@@ -630,6 +647,43 @@ function IOColumn({
         )}
       </div>
     </div>
+  )
+}
+
+function ArtifactRequirementStrip({
+  fit,
+  onOpenArtifacts,
+}: {
+  fit: NodeArtifactFit
+  onOpenArtifacts?: () => void
+}) {
+  const missingPreview = fit.missing.slice(0, 2)
+  const label = fit.status === 'complete'
+    ? 'Artifacts complete'
+    : fit.status === 'partial'
+      ? `Missing ${fit.missing.length}`
+      : `Need ${fit.missing.length}`
+  const detail = fit.status === 'complete'
+    ? `${fit.producedCount}/${fit.expectedCount} matched`
+    : missingPreview.join(', ')
+  return (
+    <button
+      type="button"
+      className={`planner-node__artifact-fit planner-node__artifact-fit--${fit.status} nodrag`}
+      onClick={(event) => {
+        event.stopPropagation()
+        onOpenArtifacts?.()
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      disabled={!onOpenArtifacts}
+      title={fit.status === 'complete' ? 'Artifact requirements are satisfied' : `Missing artifact requirements: ${fit.missing.join(', ')}`}
+      aria-label={fit.status === 'complete' ? 'Artifact requirements complete' : `Missing artifact requirements: ${fit.missing.join(', ')}`}
+    >
+      {fit.status === 'complete' ? <CheckCircle2 size={12} aria-hidden /> : <AlertTriangle size={12} aria-hidden />}
+      <span>{label}</span>
+      <em>{detail}</em>
+      {fit.missing.length > missingPreview.length && <strong>+{fit.missing.length - missingPreview.length}</strong>}
+    </button>
   )
 }
 
@@ -1064,17 +1118,107 @@ function artifactMatchesExpectation(reference: string, expected: string): boolea
 
 function hasReviewableOutput(input: {
   artifacts: PlannerArtifact[]
+  artifactFit: NodeArtifactFit
   ioOutputs: CanvasIOItem[]
   node: PlanningNode
   runStatus: PlannerWorkflowRunState
   designStatus: PlanningNodeStatus
 }): boolean {
   return input.artifacts.length > 0
+    || input.artifactFit.hasRequirements
     || input.ioOutputs.some((item) => !item.pending)
     || (input.node.artifactRefs?.length ?? 0) > 0
     || input.runStatus === 'done'
     || input.runStatus === 'gate-wait'
     || input.designStatus === 'done'
+}
+
+function buildNodeArtifactFit(node: PlanningNode, artifacts: PlannerArtifact[]): NodeArtifactFit {
+  const expectedOutputs = uniqueRequirementTokens(node.schema?.outputs ?? [])
+  const requiredRefs = uniqueRequirementTokens(node.gate?.requiredArtifactRefs ?? [])
+  const missingExpected = expectedOutputs.filter((expected) => (
+    !artifacts.some((artifact) => artifactSatisfiesExpectation(artifact, expected))
+  ))
+  const missingRefs = requiredRefs.filter((requiredRef) => (
+    !artifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, requiredRef))
+  ))
+  const missing = [...missingExpected, ...missingRefs]
+  const expectedCount = expectedOutputs.length + requiredRefs.length
+  const producedCount = artifacts.length
+  const hasRequirements = expectedCount > 0
+  const status: ArtifactFitStatus = !hasRequirements || missing.length === 0
+    ? 'complete'
+    : producedCount > 0
+      ? 'partial'
+      : 'missing'
+  return {
+    hasRequirements,
+    status,
+    expectedCount,
+    producedCount,
+    missing,
+  }
+}
+
+function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: string): boolean {
+  const expected = normalizeRequirementToken(expectation)
+  if (!expected) return false
+  return artifactRequirementCandidates(artifact).some((candidate) => {
+    const normalized = normalizeRequirementToken(candidate)
+    return Boolean(normalized)
+      && (normalized === expected || normalized.includes(expected) || expected.includes(normalized))
+  })
+}
+
+function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
+  return sameRequirement(artifact.reference, requiredRef)
+    || sameRequirement(artifact.title, requiredRef)
+    || artifactSatisfiesExpectation(artifact, requiredRef)
+}
+
+function artifactRequirementCandidates(artifact: PlannerArtifact): string[] {
+  return uniqueRequirementTokens([
+    artifact.kind,
+    artifact.reference,
+    artifact.title,
+    artifact.status,
+    ...artifactPayloadTextCandidates(artifact.payload),
+  ])
+}
+
+function artifactPayloadTextCandidates(payload: unknown): string[] {
+  if (typeof payload === 'string') return [payload]
+  if (Array.isArray(payload)) return payload.flatMap(artifactPayloadTextCandidates)
+  const object = objectPayload(payload)
+  if (!object) return []
+  const direct = ['summary', 'description', 'content', 'text', 'markdown', 'html', 'json']
+    .map((key) => object[key])
+    .filter((value): value is string => typeof value === 'string')
+  const nested = ['result', 'output', 'evidence', 'payload']
+    .flatMap((key) => artifactPayloadTextCandidates(object[key]))
+  return [...direct, ...nested]
+}
+
+function sameRequirement(left: string, right: string): boolean {
+  return normalizeRequirementToken(left) === normalizeRequirementToken(right)
+}
+
+function normalizeRequirementToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, '-')
+}
+
+function uniqueRequirementTokens(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (!trimmed) continue
+    const key = normalizeRequirementToken(trimmed)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    result.push(trimmed)
+  }
+  return result
 }
 
 function planStatusLabel(status: string): string {

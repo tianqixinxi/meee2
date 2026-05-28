@@ -902,6 +902,10 @@
   box-shadow: 0 0 0 1px rgba(194, 106, 106, 0.12), 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 
+.planner-node--artifact-gap {
+  border-color: rgba(214, 155, 92, 0.34);
+}
+
 .planner-node--perception-active {
   border-color: rgba(139, 169, 194, 0.36);
   border-left-color: var(--info);
@@ -1738,6 +1742,84 @@
 .planner-node__io-empty {
   border-style: dashed;
   color: rgba(168, 165, 155, 0.48);
+}
+
+.planner-node__artifact-fit {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 5px 7px;
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.045);
+  color: var(--text-dim);
+  font-size: 10px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+.planner-node__artifact-fit:disabled {
+  cursor: default;
+}
+
+.planner-node__artifact-fit svg {
+  flex: none;
+}
+
+.planner-node__artifact-fit span {
+  flex: none;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.planner-node__artifact-fit em {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-node__artifact-fit strong {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.planner-node__artifact-fit--complete {
+  border-color: rgba(127, 169, 130, 0.22);
+  background: rgba(127, 169, 130, 0.08);
+}
+
+.planner-node__artifact-fit--complete svg,
+.planner-node__artifact-fit--complete span {
+  color: #bfe4cb;
+}
+
+.planner-node__artifact-fit--partial,
+.planner-node__artifact-fit--missing {
+  border-color: rgba(214, 155, 92, 0.28);
+  background: rgba(214, 155, 92, 0.09);
+}
+
+.planner-node__artifact-fit--partial svg,
+.planner-node__artifact-fit--partial span,
+.planner-node__artifact-fit--missing svg,
+.planner-node__artifact-fit--missing span {
+  color: #e5c199;
+}
+
+.planner-node__artifact-fit--partial:hover,
+.planner-node__artifact-fit--missing:hover {
+  border-color: rgba(214, 155, 92, 0.46);
+  background: rgba(214, 155, 92, 0.14);
 }
 
 .planner-node__subcanvas {
