@@ -25,13 +25,12 @@ public final class SessionPaletteManager: ObservableObject {
 
     /// 显示 palette 窗口
     public func show() {
-        if isVisible {
-            hide()
-            return
-        }
-
         if paletteWindow == nil {
-            paletteWindow = SessionPaletteWindow()
+            let window = SessionPaletteWindow()
+            window.onDidHide = { [weak self] in
+                self?.isVisible = false
+            }
+            paletteWindow = window
         }
 
         guard let window = paletteWindow else { return }

@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Session Palette 窗口 —— 轻量无边框窗口，包含搜索框和结果列表
 public class SessionPaletteWindow: NSWindow {
+    public var onDidHide: (() -> Void)?
 
     init() {
         super.init(
@@ -43,6 +44,11 @@ public class SessionPaletteWindow: NSWindow {
     public override func cancelOperation(_ sender: Any?) {
         SessionPaletteManager.shared.hide()
     }
+
+    public override func orderOut(_ sender: Any?) {
+        super.orderOut(sender)
+        onDidHide?()
+    }
 }
 
 private struct SessionPaletteRootView: View {
@@ -54,12 +60,14 @@ private struct SessionPaletteRootView: View {
     @State private var selectedIndex = 0
     @State private var statusFilter: SessionPaletteSearchEngine.StatusFilter = .all
     @State private var pluginFilter: String?
+    @State private var sortBy: SessionPaletteSearchEngine.SortBy = .lastActivity
     @State private var refreshTick = 0
     private let refreshTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         let entries = currentEntries()
         let plugins = currentPlugins()
+        let safeSelectedIndex = clampedSelectedIndex(for: entries)
         VStack(spacing: 0) {
             header
             filterBar(plugins: plugins)
@@ -73,7 +81,7 @@ private struct SessionPaletteRootView: View {
                             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                                 SessionPaletteRow(
                                     entry: entry,
-                                    selected: index == selectedIndex,
+                                    selected: index == safeSelectedIndex,
                                     onOpen: { select(entry) }
                                 )
                                 .id(entry.id)
@@ -82,9 +90,10 @@ private struct SessionPaletteRootView: View {
                         .padding(10)
                     }
                     .onChange(of: selectedIndex) { next in
-                        guard entries.indices.contains(next) else { return }
+                        let target = min(max(next, 0), max(entries.count - 1, 0))
+                        guard entries.indices.contains(target) else { return }
                         withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(entries[next].id, anchor: .center)
+                            proxy.scrollTo(entries[target].id, anchor: .center)
                         }
                     }
                 }
@@ -102,6 +111,7 @@ private struct SessionPaletteRootView: View {
         .onChange(of: query) { _ in selectedIndex = 0 }
         .onChange(of: statusFilter) { _ in selectedIndex = 0 }
         .onChange(of: pluginFilter ?? "") { _ in selectedIndex = 0 }
+        .onChange(of: sortBy) { _ in selectedIndex = 0 }
         .onMoveCommand { direction in
             guard !entries.isEmpty else { return }
             switch direction {
@@ -118,8 +128,8 @@ private struct SessionPaletteRootView: View {
         }
         .toolbar {
             Button("Open") {
-                if entries.indices.contains(selectedIndex) {
-                    select(entries[selectedIndex])
+                if entries.indices.contains(safeSelectedIndex) {
+                    select(entries[safeSelectedIndex])
                 }
             }
             .keyboardShortcut(.return, modifiers: [])
@@ -136,6 +146,13 @@ private struct SessionPaletteRootView: View {
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .font(.system(size: 17, weight: .medium))
+                    .onSubmit {
+                        let entries = currentEntries()
+                        let index = clampedSelectedIndex(for: entries)
+                        if entries.indices.contains(index) {
+                            select(entries[index])
+                        }
+                    }
                 if !query.isEmpty {
                     Button {
                         query = ""
@@ -155,7 +172,7 @@ private struct SessionPaletteRootView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Session Palette")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Jump to live Claude, Codex, internal terminal, or Board session")
+                    Text("Search live sessions, then open the right terminal or Board detail")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -193,6 +210,18 @@ private struct SessionPaletteRootView: View {
                         pluginFilter = plugin.id
                     }
                 }
+                Divider()
+                    .frame(height: 18)
+                    .opacity(0.35)
+                SortChip(title: "Recent", active: sortBy == .lastActivity) {
+                    sortBy = .lastActivity
+                }
+                SortChip(title: "Started", active: sortBy == .startedAt) {
+                    sortBy = .startedAt
+                }
+                SortChip(title: "Project", active: sortBy == .project) {
+                    sortBy = .project
+                }
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
@@ -206,9 +235,17 @@ private struct SessionPaletteRootView: View {
                 .foregroundStyle(.secondary)
             Text("No matching live sessions")
                 .font(.system(size: 14, weight: .semibold))
-            Text("Start Claude or Codex, or clear the filters.")
+            Text(hasActiveFilters ? "Clear filters or search another project." : "Start Claude or Codex and it will appear here.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
+            if hasActiveFilters {
+                Button("Clear filters") {
+                    clearFilters()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -232,6 +269,7 @@ private struct SessionPaletteRootView: View {
         engine.query = query
         engine.statusFilter = statusFilter
         engine.pluginFilter = pluginFilter
+        engine.sortBy = sortBy
         let entries = engine.search(
             sessions: pluginManager.sessions,
             storeSessions: sessionStore.sessions,
@@ -251,6 +289,25 @@ private struct SessionPaletteRootView: View {
             sessions: pluginManager.sessions,
             internalSurfaces: InternalTerminalRuntime.shared.listSnapshots()
         )
+    }
+
+    private var hasActiveFilters: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || statusFilter != .all
+            || pluginFilter != nil
+    }
+
+    private func clearFilters() {
+        query = ""
+        statusFilter = .all
+        pluginFilter = nil
+        selectedIndex = 0
+        searchFocused = true
+    }
+
+    private func clampedSelectedIndex(for entries: [SessionPaletteEntry]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        return min(max(selectedIndex, 0), entries.count - 1)
     }
 
     private func select(_ entry: SessionPaletteEntry) {
@@ -387,6 +444,29 @@ private struct FilterChip: View {
             .frame(height: 24)
             .background(active ? Color.white.opacity(0.82) : Color.white.opacity(0.06))
             .foregroundStyle(active ? Color.black : Color.white.opacity(0.84))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SortChip: View {
+    let title: String
+    let active: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: active ? "arrow.down.circle.fill" : "arrow.up.arrow.down")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(title)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(active ? Color.white.opacity(0.16) : Color.white.opacity(0.06))
+            .foregroundStyle(active ? Color.white : Color.white.opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)

@@ -72,4 +72,67 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
         XCTAssertEqual(results.first?.terminalKind, "internal")
         XCTAssertFalse(results.first?.isTerminalJumpable ?? true)
     }
+
+    func testSearchDeduplicatesPluginSessionsByRealSessionId() {
+        let engine = SessionPaletteSearchEngine()
+
+        let older = PluginSession(
+            id: "com.meee2.plugin.claude-session-a",
+            pluginId: "com.meee2.plugin.claude",
+            title: "Older duplicate",
+            status: .active,
+            startedAt: Date(timeIntervalSince1970: 10),
+            lastUpdated: Date(timeIntervalSince1970: 20),
+            cwd: "/tmp/shop/checkout"
+        )
+        let duplicate = PluginSession(
+            id: "session-a",
+            pluginId: "com.meee2.plugin.claude",
+            title: "Duplicate raw id",
+            status: .active,
+            startedAt: Date(timeIntervalSince1970: 11),
+            lastUpdated: Date(timeIntervalSince1970: 30),
+            cwd: "/tmp/shop/checkout"
+        )
+
+        let results = engine.search(sessions: [older, duplicate], storeSessions: [])
+
+        XCTAssertEqual(results.map(\.sessionId), ["session-a"])
+    }
+
+    func testDistinctPluginsDoesNotDoubleCountInternalSurfaceMirror() {
+        let engine = SessionPaletteSearchEngine()
+        let pluginSession = PluginSession(
+            id: "com.meee2.plugin.codex-internal-session-1",
+            pluginId: "com.meee2.plugin.codex",
+            title: "Internal mirror",
+            status: .active,
+            startedAt: Date(timeIntervalSince1970: 10),
+            cwd: "/tmp/meee2"
+        )
+        let surface = InternalTerminalSurfaceSnapshot(
+            surfaceId: "surface-1",
+            sessionId: "internal-session-1",
+            provider: "codex",
+            title: "Internal mirror",
+            cwd: "/tmp/meee2",
+            command: "codex",
+            canvasId: nil,
+            nodeId: nil,
+            status: "running",
+            pid: 123,
+            exitCode: nil,
+            error: nil,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 30)
+        )
+
+        let plugins = engine.distinctPlugins(
+            sessions: [pluginSession],
+            internalSurfaces: [surface]
+        )
+
+        XCTAssertEqual(plugins.first?.id, "com.meee2.plugin.codex")
+        XCTAssertEqual(plugins.first?.count, 1)
+    }
 }

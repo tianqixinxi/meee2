@@ -62,6 +62,8 @@ public final class SessionPaletteSearchEngine {
         case project
     }
 
+    public init() {}
+
     // MARK: - Search
 
     /// 执行搜索，返回匹配的 entries
@@ -71,21 +73,24 @@ public final class SessionPaletteSearchEngine {
         internalSurfaces: [InternalTerminalSurfaceSnapshot] = []
     ) -> [SessionPaletteEntry] {
         var results: [SessionPaletteEntry] = []
-        let queryLower = query.lowercased()
+        let queryLower = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var storeBySessionId: [String: SessionData] = [:]
+        for storeSession in storeSessions {
+            storeBySessionId[storeSession.sessionId] = storeSession
+        }
         let internalSessionIds = Set(
             internalSurfaces
                 .filter { $0.status != "exited" && $0.status != "failed" }
                 .map(\.sessionId)
         )
+        var seenSessionIds = Set<String>()
 
         for s in sessions where !s.status.isHistorical {
-            let realSid: String = {
-                let prefix = "\(s.pluginId)-"
-                return s.id.hasPrefix(prefix) ? String(s.id.dropFirst(prefix.count)) : s.id
-            }()
+            let realSid = Self.realSessionId(for: s)
             if internalSessionIds.contains(realSid) {
                 continue
             }
+            guard seenSessionIds.insert(realSid).inserted else { continue }
 
             // Status filter
             if statusFilter != .all {
@@ -100,7 +105,7 @@ public final class SessionPaletteSearchEngine {
                 continue
             }
 
-            let storeSession = storeSessions.first { $0.sessionId == realSid }
+            let storeSession = storeBySessionId[realSid]
             let cwd = storeSession?.cwd ?? s.cwd ?? s.title
             let project = cwd.split(separator: "/").last.map(String.init) ?? cwd
             let currentTool = storeSession?.currentTool
@@ -154,7 +159,8 @@ public final class SessionPaletteSearchEngine {
         }
 
         for surface in internalSurfaces where surface.status != "exited" && surface.status != "failed" {
-            let storeSession = storeSessions.first { $0.sessionId == surface.sessionId }
+            guard seenSessionIds.insert(surface.sessionId).inserted else { continue }
+            let storeSession = storeBySessionId[surface.sessionId]
             let status = storeSession?.status ?? .active
             let pluginId = surface.provider.lowercased() == "codex"
                 ? "com.meee2.plugin.codex"
@@ -223,7 +229,16 @@ public final class SessionPaletteSearchEngine {
         internalSurfaces: [InternalTerminalSurfaceSnapshot] = []
     ) -> [(id: String, displayName: String, count: Int)] {
         var counts: [String: (displayName: String, count: Int)] = [:]
+        let internalSessionIds = Set(
+            internalSurfaces
+                .filter { $0.status != "exited" && $0.status != "failed" }
+                .map(\.sessionId)
+        )
+        var countedSessionIds = Set<String>()
         for s in sessions where !s.status.isHistorical {
+            let realSid = Self.realSessionId(for: s)
+            if internalSessionIds.contains(realSid) { continue }
+            guard countedSessionIds.insert(realSid).inserted else { continue }
             if let existing = counts[s.pluginId] {
                 counts[s.pluginId] = (existing.displayName, existing.count + 1)
             } else {
@@ -231,6 +246,7 @@ public final class SessionPaletteSearchEngine {
             }
         }
         for surface in internalSurfaces where surface.status != "exited" && surface.status != "failed" {
+            guard countedSessionIds.insert(surface.sessionId).inserted else { continue }
             let pluginId = surface.provider.lowercased() == "codex"
                 ? "com.meee2.plugin.codex"
                 : "com.meee2.plugin.claude"
@@ -244,6 +260,11 @@ public final class SessionPaletteSearchEngine {
         }
         return counts.sorted { $0.value.count > $1.value.count }
             .map { (id: $0.key, displayName: $0.value.displayName, count: $0.value.count) }
+    }
+
+    private static func realSessionId(for session: PluginSession) -> String {
+        let prefix = "\(session.pluginId)-"
+        return session.id.hasPrefix(prefix) ? String(session.id.dropFirst(prefix.count)) : session.id
     }
 
     private func statusName(for status: SessionStatus) -> String {
