@@ -432,6 +432,64 @@ enum BoardAPI {
         )
     }
 
+    static func materializeAutoDispatchedSessions(canvasId: String, result: inout PlannerNodeOutputResult) {
+        // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched downstream
+        // nodes in the background so the user's focused app stays put. The
+        // dispatch state is already persisted by the store (see
+        // PlannerBoardBridge.submitNodeOutput), this just materializes the
+        // terminal so the session actually runs.
+        guard let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty else { return }
+        var autoSpawnStarted = 0
+        var autoSpawnSkipped: [String] = []
+        var autoSpawnFailed: [String] = []
+        for autoNodeId in autoIds {
+            guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
+                autoSpawnSkipped.append("\(autoNodeId): missing node")
+                continue
+            }
+            do {
+                let spawnRequest = try recordPlannerDispatchIntent(
+                    canvasId: canvasId,
+                    node: node,
+                    cwdOverride: nil,
+                    includeInitialPromptInIntent: false
+                )
+                guard let spawnReq = spawnRequest else {
+                    autoSpawnSkipped.append("\(autoNodeId): no spawn request")
+                    continue
+                }
+                let surface = try createInternalSessionSurface(
+                    provider: spawnReq.provider,
+                    cwd: spawnReq.cwd,
+                    command: spawnReq.command,
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    nodeId: autoNodeId,
+                    initialPrompt: spawnReq.initialPrompt
+                )
+                _ = PlannerSessionRunStateBridge.observe(
+                    sessionId: surface.sessionId,
+                    purpose: spawnReq.purpose,
+                    status: .active
+                )
+                autoSpawnStarted += 1
+                NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
+            } catch {
+                autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
+                NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
+            }
+        }
+        var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
+        if !autoSpawnSkipped.isEmpty {
+            parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
+        }
+        if !autoSpawnFailed.isEmpty {
+            parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
+        }
+        result.hint = parts.joined(separator: " ")
+        NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
+    }
+
     private static func parseISODate(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
         let formatter = ISO8601DateFormatter()
@@ -2098,62 +2156,7 @@ enum BoardAPI {
                 actorUserId: PlannerPermission.currentActorId()
             )
             routePlannerOutputMessages(result.routes)
-            // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched
-            // downstream nodes in the background so the user's focused app
-            // stays put. The dispatch state is already persisted by the
-            // store (see PlannerBoardBridge.submitNodeOutput), this just
-            // materializes the terminal so the session actually runs.
-            var autoSpawnStarted = 0
-            var autoSpawnSkipped: [String] = []
-            var autoSpawnFailed: [String] = []
-            for autoNodeId in result.autoDispatchedNodeIds ?? [] {
-                guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
-                    autoSpawnSkipped.append("\(autoNodeId): missing node")
-                    continue
-                }
-                do {
-                    let spawnRequest = try recordPlannerDispatchIntent(
-                        canvasId: canvasId,
-                        node: node,
-                        cwdOverride: nil,
-                        includeInitialPromptInIntent: false
-                    )
-                    guard let spawnReq = spawnRequest else {
-                        autoSpawnSkipped.append("\(autoNodeId): no spawn request")
-                        continue
-                    }
-                    let surface = try createInternalSessionSurface(
-                        provider: spawnReq.provider,
-                        cwd: spawnReq.cwd,
-                        command: spawnReq.command,
-                        createIfMissing: true,
-                        canvasId: canvasId,
-                        nodeId: autoNodeId,
-                        initialPrompt: spawnReq.initialPrompt
-                    )
-                    _ = PlannerSessionRunStateBridge.observe(
-                        sessionId: surface.sessionId,
-                        purpose: spawnReq.purpose,
-                        status: .active
-                    )
-                    autoSpawnStarted += 1
-                    NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
-                } catch {
-                    autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
-                    NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
-                }
-            }
-            if let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty {
-                var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
-                if !autoSpawnSkipped.isEmpty {
-                    parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
-                }
-                if !autoSpawnFailed.isEmpty {
-                    parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
-                }
-                result.hint = parts.joined(separator: " ")
-                NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
-            }
+            materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
