@@ -61,6 +61,8 @@ interface Props {
 type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
 }
+type CreateCanvasStep = 'goal' | 'details'
+
 export function CanvasToolbar({
   canvases,
   activeCanvasId,
@@ -90,6 +92,7 @@ export function CanvasToolbar({
   const [canvasQuery, setCanvasQuery] = useState('')
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasGoalDraft, setCanvasGoalDraft] = useState('')
+  const [createStep, setCreateStep] = useState<CreateCanvasStep>('goal')
   const [canvasDescriptionDraft, setCanvasDescriptionDraft] = useState('')
   const [canvasDescriptionSaving, setCanvasDescriptionSaving] = useState(false)
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
@@ -200,11 +203,13 @@ export function CanvasToolbar({
 
   const submitCreate = () => {
     const goal = canvasGoalDraft.trim()
+    if (!goal) return
     const name = canvasNameDraft.trim() || deriveCanvasNameFromGoal(goal, t('canvas.untitled'))
     if (!name) return
     Promise.resolve(onCreateCanvas(name, canvasScopeDraft, goal)).then(() => {
       setCanvasNameDraft('')
       setCanvasGoalDraft('')
+      setCreateStep('goal')
       setCanvasScopeDraft('personal')
       setCanvasQuery('')
       setCreating(false)
@@ -314,6 +319,7 @@ export function CanvasToolbar({
                 onClick={() => {
                   setCanvasNameDraft('')
                   setCanvasGoalDraft('')
+                  setCreateStep('goal')
                   setCanvasScopeDraft('personal')
                   setDeleteConfirming(false)
                   setCreating(true)
@@ -586,59 +592,98 @@ export function CanvasToolbar({
           <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label={t('canvas.createTitle')}>
             <div className="modal-header">
               <div className="modal-title">{t('canvas.createTitle')}</div>
-              <div className="modal-subtitle">{t('canvas.createSubtitle')}</div>
+              <div className="modal-subtitle">{createStep === 'goal' ? t('canvas.createGoalSubtitle') : t('canvas.createDetailsSubtitle')}</div>
+            </div>
+            <div className="canvas-create-steps" aria-label={t('canvas.createSteps')}>
+              <span className={createStep === 'goal' ? 'is-active' : 'is-done'}>
+                <strong>1</strong>
+                {t('canvas.createStepGoal')}
+              </span>
+              <span className={createStep === 'details' ? 'is-active' : ''}>
+                <strong>2</strong>
+                {t('canvas.createStepDetails')}
+              </span>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
-              <label className="canvas-create-field">
-                <span>{t('canvas.goal')}</span>
-                <textarea
-                  value={canvasGoalDraft}
-                  onChange={(event) => setCanvasGoalDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape') setCreating(false)
-                    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                      event.preventDefault()
-                      submitCreate()
-                    }
-                  }}
-                  placeholder={t('canvas.goalPlaceholder')}
-                  rows={4}
-                  autoFocus
-                />
-              </label>
-              <input
-                value={canvasNameDraft}
-                onChange={(event) => setCanvasNameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submitCreate()
-                  if (event.key === 'Escape') setCreating(false)
-                }}
-                placeholder={t('canvas.nameOptionalPlaceholder')}
-              />
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('canvas.visibilityLabel')}>
-                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={canvasScopeDraft === scope ? 'is-selected' : ''}
-                    aria-pressed={canvasScopeDraft === scope}
-                    onClick={() => setCanvasScopeDraft(scope)}
-                  >
-                    {scope === 'team' ? t('templates.public') : t('templates.private')}
-                  </button>
-                ))}
-              </div>
+              {createStep === 'goal' ? (
+                <label className="canvas-create-field">
+                  <span>{t('canvas.goal')}</span>
+                  <textarea
+                    value={canvasGoalDraft}
+                    onChange={(event) => setCanvasGoalDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setCreating(false)
+                      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault()
+                        if (canvasGoalDraft.trim()) setCreateStep('details')
+                      }
+                    }}
+                    placeholder={t('canvas.goalPlaceholder')}
+                    rows={5}
+                    autoFocus
+                  />
+                </label>
+              ) : (
+                <>
+                  <label className="canvas-create-field">
+                    <span>{t('canvas.name')}</span>
+                    <input
+                      value={canvasNameDraft}
+                      onChange={(event) => setCanvasNameDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') submitCreate()
+                        if (event.key === 'Escape') setCreateStep('goal')
+                      }}
+                      placeholder={deriveCanvasNameFromGoal(canvasGoalDraft, t('canvas.nameOptionalPlaceholder'))}
+                      autoFocus
+                    />
+                  </label>
+                  <div className="canvas-create-summary">
+                    <span>{t('canvas.goal')}</span>
+                    <p>{canvasGoalDraft.trim()}</p>
+                  </div>
+                  <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('canvas.visibilityLabel')}>
+                    {(['personal', 'team'] as CanvasScope[]).map((scope) => (
+                      <button
+                        key={scope}
+                        type="button"
+                        className={canvasScopeDraft === scope ? 'is-selected' : ''}
+                        aria-pressed={canvasScopeDraft === scope}
+                        onClick={() => setCanvasScopeDraft(scope)}
+                      >
+                        {scope === 'team' ? t('templates.public') : t('templates.private')}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
             <div className="modal-footer">
-              <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
-              <button
-                className="primary"
-                type="button"
-                onClick={submitCreate}
-                disabled={!canvasNameDraft.trim() && !canvasGoalDraft.trim()}
-              >
-                {t('common.create')}
-              </button>
+              {createStep === 'goal' ? (
+                <>
+                  <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={() => setCreateStep('details')}
+                    disabled={!canvasGoalDraft.trim()}
+                  >
+                    {t('common.next')}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="ghost" type="button" onClick={() => setCreateStep('goal')}>{t('common.back')}</button>
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={submitCreate}
+                    disabled={!canvasGoalDraft.trim()}
+                  >
+                    {t('common.create')}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
