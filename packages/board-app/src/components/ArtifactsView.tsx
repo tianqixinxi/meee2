@@ -450,7 +450,7 @@ export function ArtifactsView({
                 disabled={!onOpenPlannerNode}
               >
                 <ExternalLink size={13} aria-hidden />
-                <span>{t('artifacts.openNode')}</span>
+                <span>{artifactNodeActionLabel(focusSummary.requirement, true, t)}</span>
               </button>
             )}
             <button type="button" onClick={showAllArtifacts}>
@@ -588,7 +588,7 @@ export function ArtifactsView({
                             disabled={!onOpenPlannerNode}
                           >
                             <ExternalLink size={13} aria-hidden />
-                            {t('artifacts.openNode')}
+                            {artifactNodeActionLabel(requirement, hasArtifact, t)}
                           </button>
                         )}
                         {slot.latest && (
@@ -769,6 +769,16 @@ function ArtifactRequirementPanel({
       )}
     </section>
   )
+}
+
+function artifactNodeActionLabel(
+  summary: ArtifactRequirementSummary | null,
+  hasArtifact: boolean,
+  t: ReturnType<typeof useI18n>['t'],
+): string {
+  if (!hasArtifact || summary?.fitStatus === 'missing') return t('artifacts.openNodeToProduce')
+  if (summary?.fitStatus === 'partial') return t('artifacts.openNodeToFinish')
+  return t('artifacts.openNode')
 }
 
 function RequirementChipRow({
