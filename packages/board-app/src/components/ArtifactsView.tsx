@@ -506,7 +506,7 @@ export function ArtifactsView({
                   const nodeArtifacts = group.slots
                     .filter((candidate) => candidate.node?.id === slot.node?.id)
                     .flatMap((candidate) => candidate.artifacts)
-                  const requirement = buildRequirementSummary(slot.node, nodeArtifacts)
+                  const requirement = buildSlotRequirementSummary(slot, nodeArtifacts)
                   const hasArtifact = Boolean(slot.latest)
                   return (
                     <article
@@ -863,6 +863,28 @@ function buildRequirementSummary(
   }
 }
 
+function buildSlotRequirementSummary(
+  slot: ArtifactSlot,
+  nodeArtifacts: PlannerArtifact[],
+): ArtifactRequirementSummary | null {
+  if (slot.latest || !slot.expectedKind) return buildRequirementSummary(slot.node, nodeArtifacts)
+  const producedKinds = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.kind))
+  const producedRefs = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.reference))
+  const reference = slot.reference.trim()
+  if (!reference) return buildRequirementSummary(slot.node, nodeArtifacts)
+  return {
+    fitStatus: 'missing',
+    expectedOutputs: slot.expectedKind === 'schema-output' ? [reference] : [],
+    requiredRefs: slot.expectedKind === 'gate-ref' ? [reference] : [],
+    producedKinds,
+    producedRefs,
+    matchedExpectedOutputs: [],
+    missingExpectedOutputs: slot.expectedKind === 'schema-output' ? [reference] : [],
+    matchedRequiredRefs: [],
+    missingRequiredRefs: slot.expectedKind === 'gate-ref' ? [reference] : [],
+  }
+}
+
 function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>()
   const result: string[] = []
@@ -1008,7 +1030,7 @@ function slotMatchesFitFilter(
 ): boolean {
   if (fitFilter === 'all') return true
   const nodeArtifacts = slot.node ? artifactsByNodeId.get(slot.node.id) ?? [] : slot.artifacts
-  const summary = buildRequirementSummary(slot.node, nodeArtifacts)
+  const summary = buildSlotRequirementSummary(slot, nodeArtifacts)
   const fitStatus = summary?.fitStatus ?? (slot.latest ? 'complete' : 'missing')
   return fitStatus === fitFilter
 }
