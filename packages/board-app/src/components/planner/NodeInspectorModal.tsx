@@ -49,7 +49,7 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
-  onOpenSession?: (sessionId: string, nodeId: string) => void
+  onOpenSession?: (sessionId: string, nodeId: string) => Promise<unknown> | unknown
   onOpenArtifacts?: (focus?: Omit<ArtifactFocusTarget, 'id'>) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
@@ -294,7 +294,17 @@ export function NodeInspectorModal({
               {node.sessionId?.trim() && onOpenSession && (
                 <button
                   type="button"
-                  onClick={() => onOpenSession(node.sessionId?.trim() ?? '', node.id)}
+                  disabled={actionBusy}
+                  onClick={() => {
+                    setActionError(null)
+                    setActionBusy(true)
+                    Promise.resolve(onOpenSession(node.sessionId?.trim() ?? '', node.id))
+                      .then((ok) => {
+                        if (ok !== false) onClose()
+                      })
+                      .catch((err) => setActionError((err as Error).message || 'Failed to open session'))
+                      .finally(() => setActionBusy(false))
+                  }}
                   title="Open the bound session to produce or revise this node's output."
                 >
                   <ExternalLink size={12} aria-hidden /> Open session

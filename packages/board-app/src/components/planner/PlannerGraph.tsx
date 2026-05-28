@@ -501,10 +501,10 @@ function PlannerGraphInner({
 
   const handleOpenNodeSession = useCallback((sessionId: string, nodeId: string) => {
     const trimmed = sessionId.trim()
-    if (!trimmed) return
+    if (!trimmed) return Promise.resolve(false)
     setBusy(true)
     setError(null)
-    openInternalSessionForNode(nodeId)
+    return openInternalSessionForNode(nodeId)
       .then((ok) => {
         if (ok) {
           const sessionStillVisible = (boardState?.sessions ?? []).some((session) => (
