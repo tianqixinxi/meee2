@@ -1099,6 +1099,7 @@ function PlannerGraphInner({
     if (!plannerState || plannerState.nodes.every((node) => !node.sessionId?.trim())) return
     let cancelled = false
     const probe = () => {
+      if (isDocumentHidden()) return
       fetchState()
         .then((state) => {
           if (!cancelled) setSessionHealthBoardState(state)
@@ -1107,11 +1108,16 @@ function PlannerGraphInner({
           // Health probe is advisory; keep the last known state.
         })
     }
+    const handleVisible = () => {
+      if (!isDocumentHidden()) probe()
+    }
     probe()
     const timer = window.setInterval(probe, 20_000)
+    document.addEventListener('visibilitychange', handleVisible)
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', handleVisible)
     }
   }, [canvasId, plannerState])
 
@@ -1235,6 +1241,7 @@ function PlannerGraphInner({
   useEffect(() => {
     let cancelled = false
     const heartbeat = () => {
+      if (isDocumentHidden()) return
       sendPlannerActivity({
         canvasId,
         selectedNodeId,
@@ -1252,11 +1259,16 @@ function PlannerGraphInner({
           // Presence is best-effort; graph state should keep working offline.
         })
     }
+    const handleVisible = () => {
+      if (!isDocumentHidden()) heartbeat()
+    }
     heartbeat()
     const timer = window.setInterval(heartbeat, 20_000)
+    document.addEventListener('visibilitychange', handleVisible)
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', handleVisible)
     }
   }, [canvasId, selectedNode?.sessionId, selectedNodeId])
 
@@ -2417,4 +2429,8 @@ function readableCanvasStarterTarget(
   if (context && !context.startsWith('canvas:')) return context
   if (title && !/^(untitled|new canvas|default canvas|my|personal canvas)$/i.test(title)) return title
   return t('planner.thisCanvas')
+}
+
+function isDocumentHidden(): boolean {
+  return typeof document !== 'undefined' && document.visibilityState === 'hidden'
 }
