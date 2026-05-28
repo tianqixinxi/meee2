@@ -653,7 +653,16 @@
   min-width: 0;
 }
 
-.planner-node-modal__section-heading button {
+.planner-node-modal__section-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.planner-node-modal__section-heading button,
+.planner-node-modal__section-actions button {
   flex: none;
   min-height: 26px;
   padding: 0 8px;

@@ -1745,6 +1745,7 @@ function PlannerGraphInner({
           showOwnerInfo={plannerState?.canvas.visibility !== 'private'}
           visibleIOArtifacts={ioArtifactVisibility[selectedNode.id] ?? { inputs: [], outputs: [] }}
           onToggleIOArtifact={handleToggleIOArtifact}
+          onOpenSession={handleOpenNodeSession}
           onOpenArtifacts={onOpenArtifacts}
           onClose={() => setNodeModalOpen(false)}
           onOpenSubCanvas={onOpenSubCanvas}

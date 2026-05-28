@@ -49,6 +49,7 @@ interface Props {
   onGraphStateChanged?: (state: PlannerGraphState) => void
   onSendToAI?: (message: string, display?: { visibleText?: string; contextLabel?: string }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
+  onOpenSession?: (sessionId: string, nodeId: string) => void
   onOpenArtifacts?: (focus?: Omit<ArtifactFocusTarget, 'id'>) => void
   showOwnerInfo?: boolean
   visibleIOArtifacts?: IOArtifactVisibility
@@ -81,6 +82,7 @@ export function NodeInspectorModal({
   onGraphStateChanged,
   onSendToAI,
   onReplaceSession,
+  onOpenSession,
   onOpenArtifacts,
   showOwnerInfo = true,
   visibleIOArtifacts = { inputs: [], outputs: [] },
@@ -279,15 +281,26 @@ export function NodeInspectorModal({
         <div className="planner-node-modal__section">
           <div className="planner-node-modal__section-heading">
             <h3><Route size={13} aria-hidden /> Output</h3>
-            {onOpenArtifacts && hasMissingArtifactExpectation && (
-              <button
-                type="button"
-                onClick={openArtifactsForNode}
-                title={`Open this node in the artifact view to inspect missing output: ${compactMissingArtifactRefs(missingArtifactRefs)}`}
-              >
-                <ExternalLink size={12} aria-hidden /> {missingArtifactActionLabel(missingArtifactRefs)}
-              </button>
-            )}
+            <div className="planner-node-modal__section-actions">
+              {onOpenArtifacts && hasMissingArtifactExpectation && (
+                <button
+                  type="button"
+                  onClick={openArtifactsForNode}
+                  title={`Open this node in the artifact view to inspect missing output: ${compactMissingArtifactRefs(missingArtifactRefs)}`}
+                >
+                  <ExternalLink size={12} aria-hidden /> {missingArtifactActionLabel(missingArtifactRefs)}
+                </button>
+              )}
+              {node.sessionId?.trim() && onOpenSession && (
+                <button
+                  type="button"
+                  onClick={() => onOpenSession(node.sessionId?.trim() ?? '', node.id)}
+                  title="Open the bound session to produce or revise this node's output."
+                >
+                  <ExternalLink size={12} aria-hidden /> Open session
+                </button>
+              )}
+            </div>
           </div>
           <div className="planner-node-modal__schema">
             <SchemaList
