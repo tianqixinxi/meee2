@@ -17,7 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
-import { monitorItemOpenLabel } from '../../lib/workspaceNavigation'
+import { monitorItemOpenLabel, monitorItemSourceKind } from '../../lib/workspaceNavigation'
 import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
 import './planner.css'
 
@@ -348,15 +348,16 @@ function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
 }
 
 function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): boolean {
+  const sourceKind = monitorItemSourceKind(item)
   switch (source) {
     case 'all':
       return true
     case 'live':
-      return item.kind === 'delivery' || Boolean(item.sessionId?.trim())
+      return sourceKind === 'live'
     case 'node':
-      return item.kind === 'node'
+      return sourceKind === 'node' || sourceKind === 'canvas'
     case 'approval':
-      return item.kind === 'proposal' || item.needsOwnerReview
+      return sourceKind === 'approval' || item.needsOwnerReview
     case 'artifact':
       return evidenceCount(item) > 0
   }
@@ -385,9 +386,16 @@ function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode
 }
 
 function sourceLabel(item: PlannerMonitorItem, t: Translator): string {
-  if (item.sessionId || item.kind === 'delivery') return t('monitor.sourceLive')
-  if (item.kind === 'proposal' || item.needsOwnerReview) return t('monitor.sourceApproval')
-  return t('monitor.sourceNode')
+  switch (monitorItemSourceKind(item)) {
+    case 'live':
+      return t('monitor.sourceLive')
+    case 'canvas':
+      return t('monitor.sourceCanvas')
+    case 'approval':
+      return t('monitor.sourceApproval')
+    case 'node':
+      return t('monitor.sourceNode')
+  }
 }
 
 function statusLabel(item: PlannerMonitorItem, t: Translator): string {

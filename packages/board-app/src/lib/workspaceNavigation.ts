@@ -5,6 +5,7 @@ export type MonitorItemOpenTarget =
   | { kind: 'external-session'; sessionId: string }
 
 export type MonitorItemOpenLabel = 'item' | 'canvas' | 'session'
+export type MonitorItemSourceKind = 'canvas' | 'node' | 'approval' | 'live'
 
 export function resolveMonitorItemOpenTarget(
   item: PlannerMonitorItem,
@@ -30,6 +31,22 @@ export function monitorItemOpenLabel(item: PlannerMonitorItem): MonitorItemOpenL
   if (item.nodeId?.trim()) return 'item'
   if (item.deliveryId?.trim() || item.proposalId?.trim()) return 'canvas'
   return item.sessionId?.trim() ? 'session' : 'canvas'
+}
+
+export function monitorItemSourceKind(item: PlannerMonitorItem): MonitorItemSourceKind {
+  if (item.kind === 'proposal' || item.proposalId?.trim()) {
+    return 'approval'
+  }
+  if (item.kind === 'delivery' || item.deliveryId?.trim()) {
+    return 'canvas'
+  }
+  if (item.kind === 'node' || item.nodeId?.trim()) {
+    return 'node'
+  }
+  if (item.needsOwnerReview) {
+    return 'approval'
+  }
+  return item.sessionId?.trim() ? 'live' : 'canvas'
 }
 
 export function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
