@@ -500,7 +500,7 @@ export function PlannerProposalPanel({
                   onReview={() => setReviewOpen(true)}
                   onBuildPlan={buildConfirmedPlan}
                   onChoice={(value) => {
-                    if (!value.trim() || thinking) return
+                    if (!value.trim() || busy || thinking) return
                     submitEmptyIntakeTurn(value)
                   }}
                 />
@@ -861,6 +861,7 @@ function PlannerChatMessageRow({
                   <button
                     key={choice.id}
                     type="button"
+                    disabled={busy}
                     onClick={() => onChoice(choice.value)}
                     title={choice.description}
                   >
