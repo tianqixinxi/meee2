@@ -348,6 +348,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
+        let sessionsItem = NSMenuItem(title: "Open Sessions", action: #selector(openNativeSessionsWorkspaceMenu), keyEquivalent: "s")
+        sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+        sessionsItem.target = self
+        menu.addItem(sessionsItem)
         let paletteItem = NSMenuItem(title: "Session Palette", action: #selector(openSessionPalette), keyEquivalent: "p")
         paletteItem.keyEquivalentModifierMask = [.command, .shift]
         paletteItem.target = self
@@ -471,11 +475,38 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         SessionPaletteManager.shared.toggle()
     }
 
+    @MainActor
     @objc private func openBoardSession(_ notification: Notification) {
         let sessionId = notification.userInfo?["sessionId"] as? String
         let surfaceId = notification.userInfo?["surfaceId"] as? String
+        if isInternalTerminalTarget(sessionId: sessionId, surfaceId: surfaceId) {
+            showNativeSessionsWorkspace(sessionId: sessionId, surfaceId: surfaceId)
+            return
+        }
         openBoardMenu()
         boardWindowController?.openSession(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    @MainActor
+    @objc private func openNativeSessionsWorkspaceMenu() {
+        showNativeSessionsWorkspace(sessionId: nil, surfaceId: nil)
+    }
+
+    @MainActor
+    private func showNativeSessionsWorkspace(sessionId: String?, surfaceId: String?) {
+        NativeSessionsWorkspaceWindowController.shared.show(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    private func isInternalTerminalTarget(sessionId: String?, surfaceId: String?) -> Bool {
+        if let surfaceId, !surfaceId.isEmpty,
+           InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: surfaceId) != nil {
+            return true
+        }
+        if let sessionId, !sessionId.isEmpty,
+           InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId) != nil {
+            return true
+        }
+        return false
     }
 
     @objc private func openBoardMenu() {
@@ -580,6 +611,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                                          action: #selector(openBoardMenu),
                                          keyEquivalent: "b")
         boardItem.target = self
+        let sessionsItem = fileMenu.addItem(withTitle: "Open Sessions",
+                                            action: #selector(openNativeSessionsWorkspaceMenu),
+                                            keyEquivalent: "s")
+        sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+        sessionsItem.target = self
         let paletteItem = fileMenu.addItem(withTitle: "Session Palette",
                                            action: #selector(openSessionPalette),
                                            keyEquivalent: "p")

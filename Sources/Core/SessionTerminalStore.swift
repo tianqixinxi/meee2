@@ -14,6 +14,7 @@ struct SessionTerminalInfo: Codable {
     var providerResumeSessionId: String?
     var canvasId: String?
     var nodeId: String?
+    var backend: String?
 
     // cmux 专用
     var cmuxSocketPath: String?
@@ -62,7 +63,8 @@ class SessionTerminalStore {
         provider: String? = nil,
         providerResumeSessionId: String? = nil,
         canvasId: String? = nil,
-        nodeId: String? = nil
+        nodeId: String? = nil,
+        backend: String? = nil
     ) {
         performSync {
             var info = store[sessionId] ?? SessionTerminalInfo(
@@ -78,6 +80,7 @@ class SessionTerminalStore {
                 providerResumeSessionId: providerResumeSessionId,
                 canvasId: canvasId,
                 nodeId: nodeId,
+                backend: backend,
                 cmuxSocketPath: cmuxSocketPath,
                 cmuxSurfaceId: cmuxSurfaceId
             )
@@ -96,6 +99,7 @@ class SessionTerminalStore {
             }
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
+            info.backend = backend ?? info.backend ?? Self.inferBackend(termProgram: info.termProgram)
             info.cwd = cwd
             info.lastActivityAt = Date()
             info.status = status
@@ -240,6 +244,17 @@ class SessionTerminalStore {
             return freshCommand(provider: provider, command: command)
         }
         return command
+    }
+
+    private static func inferBackend(termProgram: String?) -> String? {
+        switch termProgram?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "meee2-internal":
+            return TerminalSessionBackendKind.legacyInternal.rawValue
+        case .some:
+            return TerminalSessionBackendKind.external.rawValue
+        case .none:
+            return nil
+        }
     }
 
     private static func freshCommand(provider: String?, command: String?) -> String {

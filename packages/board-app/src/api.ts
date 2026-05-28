@@ -2570,11 +2570,17 @@ function fileToBase64(file: File): Promise<string> {
 export async function activateSession(id: string): Promise<boolean> {
   // console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
   try {
-    const response = await jsonRequest<{ ok: boolean; terminalKind?: string; surfaceId?: string; sessionId?: string }>(
+    const response = await jsonRequest<{
+      ok: boolean
+      terminalKind?: string
+      surfaceId?: string
+      sessionId?: string
+      openTarget?: string
+    }>(
       `/api/sessions/${encodeURIComponent(id)}/activate`,
       { method: 'POST' },
     )
-    if (response.terminalKind === 'internal' && response.surfaceId) {
+    if (response.terminalKind === 'internal' && response.surfaceId && response.openTarget !== 'native-workspace') {
       window.dispatchEvent(new CustomEvent('meee2:open-session', {
         detail: {
           sessionId: response.sessionId ?? id,

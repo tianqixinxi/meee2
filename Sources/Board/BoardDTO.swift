@@ -55,6 +55,9 @@ struct SessionDTO: Encodable {
     let surfaceId: String?
     let surfaceStatus: String?
     let canOpenExternal: Bool
+    let terminalBackend: String
+    let nativeWorkspaceAvailable: Bool
+    let openTarget: String
     /// "active" | "hidden" | "archived" — local operator visibility state.
     let controlState: String
 
@@ -814,6 +817,9 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            terminalBackend: TerminalSessionBackendKind.external.rawValue,
+            nativeWorkspaceAvailable: false,
+            openTarget: "external",
             controlState: controlState.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
@@ -878,6 +884,9 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            terminalBackend: TerminalSessionBackendKind.external.rawValue,
+            nativeWorkspaceAvailable: false,
+            openTarget: "external",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
@@ -913,6 +922,7 @@ enum BoardDTOBuilder {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         let controlState = SessionControlStore.shared.state(for: controlIds)
+        let backend = TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? .legacyInternal
         return SessionDTO(
             id: surface.sessionId,
             title: surface.title,
@@ -938,6 +948,9 @@ enum BoardDTOBuilder {
             surfaceId: surface.surfaceId,
             surfaceStatus: surface.status,
             canOpenExternal: false,
+            terminalBackend: backend.rawValue,
+            nativeWorkspaceAvailable: true,
+            openTarget: "native-workspace",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,

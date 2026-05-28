@@ -14,6 +14,7 @@ import {
   applyPlannerProposal,
   approvePlannerProposal,
   abandonPlannerNodeSession,
+  activateSession,
   assignPlannerNode,
   bindPlannerSessionToNode,
   bindPlannerNodeInput,
@@ -416,12 +417,7 @@ function PlannerGraphInner({
     })
       .then((result) => {
         handleGraphStateChanged(result.graph)
-        window.dispatchEvent(new CustomEvent('meee2:open-session', {
-          detail: {
-            sessionId: result.sessionId,
-            surfaceId: result.surfaceId,
-          },
-        }))
+        void activateSession(result.sessionId)
         void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         return true
       })
@@ -1135,12 +1131,7 @@ function PlannerGraphInner({
         if (result.resumed.length > 0) {
           onNotify?.('success', formatRecoveredSessionToast(result.resumed))
           const first = result.resumed[0]
-          window.dispatchEvent(new CustomEvent('meee2:open-session', {
-            detail: {
-              sessionId: first.sessionId,
-              surfaceId: first.surfaceId,
-            },
-          }))
+          void activateSession(first.sessionId)
           loadState()
           void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         }
@@ -1174,12 +1165,7 @@ function PlannerGraphInner({
           work.push(resumeClosedPlannerSessions(canvasId, missingBoundSessionIds).then((result) => {
             if (result.resumed.length > 0 && createNodeIds.length === 0) {
               const first = result.resumed[0]
-              window.dispatchEvent(new CustomEvent('meee2:open-session', {
-                detail: {
-                  sessionId: first.sessionId,
-                  surfaceId: first.surfaceId,
-                },
-              }))
+              void activateSession(first.sessionId)
             }
             if (result.skipped.length > 0) {
               notifyError(result.skipped.map((item) => item.reason).join('; '))
@@ -1213,13 +1199,9 @@ function PlannerGraphInner({
           })
           void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         }, ({ nodeId, sessionId, surfaceId }) => {
+          void surfaceId
           const title = readySessionPlan.create.find((node) => node.id === nodeId)?.title ?? 'ready node'
-          window.dispatchEvent(new CustomEvent('meee2:open-session', {
-            detail: {
-              sessionId,
-              surfaceId: surfaceId ?? sessionId,
-            },
-          }))
+          void activateSession(sessionId)
           onNotify?.('success', `Opened ${title} in Sessions.`)
         })
       })

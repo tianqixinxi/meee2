@@ -1305,14 +1305,20 @@ enum AssistantTools {
 
         let surface: InternalTerminalSurfaceSnapshot
         do {
-            surface = try InternalTerminalRuntime.shared.createSurface(
-                provider: provider,
-                cwd: cwd,
-                command: command,
-                canvasId: context?.canvas.id,
-                nodeId: nil,
-                initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
+            let handle = try LegacyInternalTerminalBackend.shared.createSession(
+                request: TerminalSessionRequest(
+                    provider: provider,
+                    cwd: cwd,
+                    command: command,
+                    canvasId: context?.canvas.id,
+                    nodeId: nil,
+                    initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
+                )
             )
+            guard let created = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: handle.snapshot.surfaceId) else {
+                return .failure("failed to create internal terminal session: surface disappeared after create")
+            }
+            surface = created
             BoardServer.shared.broadcastStateChanged()
         } catch {
             return .failure("failed to create internal terminal session: \(error.localizedDescription)")

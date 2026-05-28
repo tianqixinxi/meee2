@@ -405,15 +405,20 @@ enum BoardAPI {
                 throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
             }
         }
-        let snapshot = try InternalTerminalRuntime.shared.createSurface(
-            provider: provider,
-            cwd: cwd,
-            command: command,
-            canvasId: canvasId,
-            nodeId: nodeId,
-            initialPrompt: initialPrompt,
-            preferredSessionId: preferredSessionId
+        let handle = try LegacyInternalTerminalBackend.shared.createSession(
+            request: TerminalSessionRequest(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                canvasId: canvasId,
+                nodeId: nodeId,
+                initialPrompt: initialPrompt,
+                preferredSessionId: preferredSessionId
+            )
         )
+        guard let snapshot = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: handle.snapshot.surfaceId) else {
+            throw NSError(domain: "BoardAPI", code: 500, userInfo: [NSLocalizedDescriptionKey: "internal terminal surface disappeared after create"])
+        }
         BoardServer.shared.broadcastStateChanged()
         return snapshot
     }
@@ -3810,6 +3815,9 @@ enum BoardAPI {
                 let terminalKind: String
                 let surfaceId: String
                 let sessionId: String
+                let terminalBackend: String
+                let nativeWorkspaceAvailable: Bool
+                let openTarget: String
             }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
@@ -3825,7 +3833,10 @@ enum BoardAPI {
                 ok: true,
                 terminalKind: "internal",
                 surfaceId: surface.surfaceId,
-                sessionId: surface.sessionId
+                sessionId: surface.sessionId,
+                terminalBackend: (TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? .legacyInternal).rawValue,
+                nativeWorkspaceAvailable: true,
+                openTarget: "native-workspace"
             ))
         }
         if let metadataSid = resolveDesktopMetadataSid(sid) {

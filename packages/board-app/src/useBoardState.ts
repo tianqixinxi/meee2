@@ -136,6 +136,8 @@ function signatureFor(s: BoardState): string {
       project: x.project,
       status: x.status,
       terminalKind: x.terminalKind,
+      terminalBackend: x.terminalBackend,
+      openTarget: x.openTarget,
       surfaceId: x.surfaceId,
       surfaceStatus: x.surfaceStatus,
       canOpenExternal: x.canOpenExternal,
