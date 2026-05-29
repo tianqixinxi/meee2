@@ -306,8 +306,9 @@ struct PlannerCanvasStateEnvelope: Encodable {
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
 }
-/// Minimal integration entity DTO (P3.0). Backend mocks for widget data-flow
-/// demo; phase 3 swaps this for a real integration-data fetcher.
+/// Minimal integration entity DTO (P3.0). Represents schema + payload for integration
+/// entities derived from artifacts. See integrationEntitiesFor(nodes:) which returns nil
+/// — real data flows through artifacts attached by AI sessions.
 struct IntegrationEntityDTO: Encodable {
     let schemaId: String     // e.g. "github:pr"
     let payload: BoardJSONValue
