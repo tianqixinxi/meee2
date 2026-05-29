@@ -83,15 +83,17 @@ struct BYOAPlannerAdapter: PlannerAdapter {
 
         NSLog("[PlannerAdapter] raw model output (%d chars):\n%@",
               output.count, String(output.prefix(4000)))
-        let proposal: PlanProposal
+        var proposal: PlanProposal
         do {
             proposal = try PlannerProposalValidator.decodeProposal(from: output)
         } catch {
             NSLog("[PlannerAdapter] decodeProposal failed: %@", String(describing: error))
             throw error
         }
+        // State-machine PR-A · validate takes inout so it can fold
+        // deprecated-status warnings into proposal.warnings.
         try PlannerProposalValidator.validate(
-            proposal,
+            &proposal,
             canvas: state.canvas,
             nodes: state.nodes
         )

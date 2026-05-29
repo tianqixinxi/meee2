@@ -386,10 +386,17 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <ChevronDown size={12} aria-hidden />
           </label>
         ) : (
-          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
-            <Icon size={13} aria-hidden />
-            {statusLabel}
-          </span>
+          // State-machine PR-A (2026-05-28): artifact 节点 status=draft 时不渲染
+          // status badge。理由:artifact 是数据节点,'草稿'这个 step lifecycle
+          // 词对它是错配,会让 owner 误以为 artifact 自己要被「推进」到 ready,
+          // 实际上 artifact 的进度由它的 payload 是否成形决定。其他 nodeKind
+          // 渲染逻辑不变;artifact 非 draft 状态(如 blocked / done)仍正常渲染。
+          !(nodeKind === 'artifact' && designStatus === 'draft') && (
+            <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
+              <Icon size={13} aria-hidden />
+              {statusLabel}
+            </span>
+          )
         )}
         {/* UI-1 · auto / gate / human badge — placed in the top-left cluster
             so it sits beside the status pill. Top-right is reserved for UI-2.
