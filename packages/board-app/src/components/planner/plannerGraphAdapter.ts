@@ -82,7 +82,13 @@ export interface PlannerNodeData extends Record<string, unknown> {
   /** UI-1 · Canvas id surfaced to the card so the version dropdown can call
    *  the artifact-versions endpoints without bubbling up. */
   canvasId?: string
-  onOpenDetails?: (nodeId: string) => void
+    onOpenDetails?: (nodeId: string) => void
+  /**
+   * 2026-05-29 (PR #91 codex P2 fix): open inspector pre-selecting a specific
+   * artifact id. Used by the artifact card version chip strip so non-latest
+   * chips don't all degrade to 'open inspector with latest' via onOpenDetails.
+   */
+  onOpenArtifact?: (nodeId: string, artifactId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
@@ -151,7 +157,13 @@ interface PlannerGraphInput {
   ioArtifactVisibility?: Record<string, IOArtifactVisibility>
   displayNameByUserId?: Record<string, string>
   avatarUrlByUserId?: Record<string, string>
-  onOpenDetails?: (nodeId: string) => void
+    onOpenDetails?: (nodeId: string) => void
+  /**
+   * 2026-05-29 (PR #91 codex P2 fix): open inspector pre-selecting a specific
+   * artifact id. Used by the artifact card version chip strip so non-latest
+   * chips don't all degrade to 'open inspector with latest' via onOpenDetails.
+   */
+  onOpenArtifact?: (nodeId: string, artifactId: string) => void
   onOpenSubCanvas?: (canvasId: string) => void
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
@@ -257,6 +269,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         virtual: false,
         canvasId: input.canvasId,
         onOpenDetails: input.onOpenDetails,
+        onOpenArtifact: input.onOpenArtifact,
         onOpenSubCanvas: input.onOpenSubCanvas,
         onOpenKanbanItem: input.onOpenKanbanItem,
         onChangeStatus: input.onChangeStatus,
@@ -290,6 +303,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
     graphNodes,
     visibility: input.ioArtifactVisibility ?? {},
     onOpenDetails: input.onOpenDetails,
+    onOpenArtifact: input.onOpenArtifact,
     onOpenKanbanItem: input.onOpenKanbanItem,
     onBindInput: input.onBindInput,
     onHideIOArtifact: input.onHideIOArtifact,
@@ -308,6 +322,7 @@ function buildVisibleIOArtifactNodes(input: {
   graphNodes: PlannerGraphNode[]
   visibility: Record<string, IOArtifactVisibility>
   onOpenDetails?: (nodeId: string) => void
+  onOpenArtifact?: (nodeId: string, artifactId: string) => void
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
   onBindInput?: (nodeId: string, input: string, reference: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
@@ -404,6 +419,7 @@ function buildVisibleIOArtifactNodes(input: {
             ioItem: entry.item,
             inputReference: entry.direction === 'input' && 'inputReference' in entry ? entry.inputReference : null,
             onOpenDetails: input.onOpenDetails,
+            onOpenArtifact: input.onOpenArtifact,
             onOpenKanbanItem: input.onOpenKanbanItem,
             onBindInput: input.onBindInput,
             canChangeStatus: false,

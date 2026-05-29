@@ -48,6 +48,8 @@ interface Props {
   node: PlanningNode
   canvasId: string
   variant: 'board' | 'template'
+  /** PR #91 codex P2: artifact id to preselect when opening at a non-latest version. */
+  initialSelectedArtifactId?: string | null
   state: NodeStateSnapshot | null
   artifacts: PlannerArtifact[]
   onClose: () => void
@@ -155,6 +157,7 @@ export function InspectorArtifactBody({
   variant,
   state,
   artifacts,
+  initialSelectedArtifactId = null,
   onClose,
   onProposalCreated,
   onOpenSession,
@@ -188,7 +191,12 @@ export function InspectorArtifactBody({
   const latestArtifact = nodeArtifacts[0] ?? null
 
   // 用户点版本 chip → 主预览切换到那个版本;默认显示 latest。
-  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(null)
+  // PR #91 codex P2: initialize from prop when caller (card chip) requested a specific
+  // version. Re-sync when prop changes (modal reopens at a different artifact).
+  const [selectedArtifactId, setSelectedArtifactId] = useState<string | null>(initialSelectedArtifactId)
+  useEffect(() => {
+    setSelectedArtifactId(initialSelectedArtifactId)
+  }, [initialSelectedArtifactId])
   const activeArtifact =
     nodeArtifacts.find((a) => a.id === selectedArtifactId) ?? latestArtifact
 

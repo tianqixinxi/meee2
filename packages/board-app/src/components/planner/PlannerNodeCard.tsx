@@ -575,23 +575,41 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         const overflow = nodeArtifacts.length - visible.length
         return (
           <div className="planner-node__artifact-versions">
-            <span className="planner-node__artifact-versions-label">版本</span>
+            <span className="planner-node__artifact-versions-label">成果</span>
             <div className="planner-node__artifact-versions-strip">
-              {visible.map((a, idx) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={'planner-node__artifact-version-chip nodrag' + (idx === 0 ? ' is-latest' : '')}
-                  title={`v${nodeArtifacts.length - idx} · ${a.createdAt}`}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    data.onOpenDetails?.(node.id)
-                  }}
-                  onPointerDown={(event) => event.stopPropagation()}
-                >
-                  v{nodeArtifacts.length - idx}
-                </button>
-              ))}
+              {/* 2026-05-29 codex P2 fix: `data.artifacts` is the latest-per-slot
+                  mirror, not the append-only version history (see CanvasRecord
+                  docs). Rendering "v{n}" was misleading — each chip is one
+                  artifact SLOT, with possibly more versions underneath. Label
+                  by slot identifier; hover shows createdAt; click opens
+                  inspector with that artifact preselected (via onOpenArtifact
+                  prop). Full version chain renders in artifact-mode
+                  VersionTimeline after click. */}
+              {visible.map((a, idx) => {
+                const slotLabel = (a.title?.trim() || a.reference.split(/[:/]/).pop() || 'artifact').slice(0, 14)
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    className={'planner-node__artifact-version-chip nodrag' + (idx === 0 ? ' is-latest' : '')}
+                    title={`${a.title || a.reference} · ${a.createdAt}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      // codex P2 fix: pass artifactId so inspector opens at
+                      // the clicked artifact (not always latest). Fallback to
+                      // onOpenDetails when parent didn't wire onOpenArtifact.
+                      if (data.onOpenArtifact) {
+                        data.onOpenArtifact(node.id, a.id)
+                      } else {
+                        data.onOpenDetails?.(node.id)
+                      }
+                    }}
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
+                    {slotLabel}
+                  </button>
+                )
+              })}
               {overflow > 0 && (
                 <span className="planner-node__artifact-versions-more">+{overflow}</span>
               )}
