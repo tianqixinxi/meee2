@@ -717,7 +717,8 @@ function PlannerGraphInner({
       reviewerIds: [],
       approverIds: [],
       handoffPolicy: 'none',
-      status: 'draft',
+      // 3-tai cut (2026-05-29): `draft` 被移除,ready 是初始态。
+      status: 'ready',
       sessionId: null,
       chatThreadId: null,
       source: 'planner',
@@ -1963,14 +1964,16 @@ function shouldInspectDrift(
 
 function validateStatusChange(node: PlanningNode, status: PlanningNodeStatus): string | null {
   if ((node.nodeKind ?? 'step') !== 'step') return null
-  if (status !== 'ready' && status !== 'working' && status !== 'done') return null
+  // 3-tai cut (2026-05-29): `working` 已从 PlanningNodeStatus 移除;运行中
+  // 状态走 NodeAttempt。这里只验 ready / done。
+  if (status !== 'ready' && status !== 'done') return null
 
   const missingInputs = missingRequiredInputs(node)
   if (missingInputs.length > 0) {
     return `Cannot mark "${node.title}" as ${status}: missing required input ${missingInputs.join(', ')}.`
   }
 
-  const needsSession = status === 'working' || status === 'done'
+  const needsSession = status === 'done'
   const humanStep = node.executionMode === 'human' || node.executorType === 'human'
   const hasSession = Boolean(node.sessionId?.trim())
   if (needsSession && !humanStep && !hasSession) {

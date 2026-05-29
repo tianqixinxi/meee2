@@ -32,21 +32,20 @@ export function workStatusLabel(
   }
 }
 
-// === 设计态徽章 (与 §1 平行,4 状态 + working 兜底) ===
+// === 设计态徽章 (3-tai cut 2026-05-29 — 3 状态: ready / blocked / done) ===
+// `draft` / `working` 是 legacy raw value,后端 normalizer 会翻译成 `ready`,
+// 这里也兜底成「就绪」,避免老数据在前端渲染时露出已删词。
 export function planStatusLabel(status: string): string {
   switch (status) {
-    case 'draft':
-      return '草稿'
     case 'ready':
       return '就绪'
     case 'blocked':
       return '卡住'
     case 'done':
       return '完成'
-    case 'working':
-      return '进行中'
     default:
-      return '草稿'
+      // legacy 'draft' / 'working' 都走这里,兜底成「就绪」
+      return '就绪'
   }
 }
 

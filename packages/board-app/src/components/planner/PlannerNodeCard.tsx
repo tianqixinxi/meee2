@@ -60,7 +60,10 @@ import {
 } from './labels'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
-const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
+// 3-tai cut (2026-05-29): collapsed to 3 lifecycle states. `draft` removed —
+// `ready` is now the initial state. Legacy `draft` data is mapped to `ready`
+// at render time below.
+const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['ready', 'blocked', 'done']
 
 // UI-1 · "auto / gate / human" mode badge — derived from execution mode +
 // gate approver count. `human` wins when the node is an explicit human step;
@@ -150,7 +153,12 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const isRunMode = data.mode === 'run'
   const runNodeState = data.runNodeState
   const nodeKind = designKind(node)
-  const designStatus = data.state?.runState ?? node.status
+  // 3-tai cut (2026-05-29): legacy `draft` data still lives in old canvases —
+  // map it to `ready` at render so the UI never surfaces the removed state.
+  // Backend normalizer takes care of the wire-level translation; this is the
+  // belt-and-braces step for any in-memory state that hasn't been re-saved.
+  const rawDesignStatus = data.state?.runState ?? node.status
+  const designStatus: PlanningNodeStatus = (rawDesignStatus === 'draft' ? 'ready' : rawDesignStatus) as PlanningNodeStatus
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
   // UI-simplification — artifact node 默认收起,仅显示 title + kind + 展开按钮。
@@ -403,17 +411,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <ChevronDown size={12} aria-hidden />
           </label>
         ) : (
-          // State-machine PR-A (2026-05-28): artifact 节点 status=draft 时不渲染
-          // status badge。理由:artifact 是数据节点,'草稿'这个 step lifecycle
-          // 词对它是错配,会让 owner 误以为 artifact 自己要被「推进」到 ready,
-          // 实际上 artifact 的进度由它的 payload 是否成形决定。其他 nodeKind
-          // 渲染逻辑不变;artifact 非 draft 状态(如 blocked / done)仍正常渲染。
-          !(nodeKind === 'artifact' && designStatus === 'draft') && (
-            <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
-              <Icon size={13} aria-hidden />
-              {statusLabel}
-            </span>
-          )
+          // 3-tai cut (2026-05-29): the PR-A artifact+`draft` hide-badge branch
+          // is dead code — `draft` no longer exists in the public enum and
+          // legacy `draft` is mapped to `ready` above. Artifact nodes now
+          // always render the status badge like other kinds (artifact 的初始
+          // 「就绪」语义跟 step 一致:节点一存在就 ready,推进与否由 payload
+          // / done 流程决定,没有独立的「草稿」状态需要藏)。
+          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
+            <Icon size={13} aria-hidden />
+            {statusLabel}
+          </span>
         )}
         {/* UI-1 · auto / gate / human badge — placed in the top-left cluster
             so it sits beside the status pill. Top-right is reserved for UI-2.
