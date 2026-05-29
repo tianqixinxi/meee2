@@ -1246,7 +1246,7 @@ struct PlanProposal: Codable, Equatable {
     /// existing JSON without the field decodes cleanly and existing memberwise
     /// initialization (`PlanProposal(id:canvasId:summary:changes:status:)`)
     /// still type-checks.
-    var warnings: [String]? = nil
+    var warnings: [String]?
 }
 
 enum NodeRunState: String, Codable, Equatable {
