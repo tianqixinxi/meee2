@@ -2,8 +2,8 @@
  * Integration view-schema registry (chunk I).
  *
  * Static catalog of `(integrationId, entityKind)` → `IntegrationViewSchema`
- * derived from PRD `integration.md` §4. v0.1 covers the 4 dogfood
- * integrations (GitHub / Linear / Slack / Notion); third-party additions go
+ * derived from PRD `integration.md` §4. v0.1 covers the dogfood
+ * integrations (GitHub / Linear / Slack / Notion / Lark); third-party additions go
  * through the `~/.meee2/integrations/<id>/manifest.json` path described in
  * PRD §6 and merge into this registry at runtime.
  *
@@ -17,6 +17,7 @@ import { githubViewSchemas } from './github'
 import { linearViewSchemas } from './linear'
 import { slackViewSchemas } from './slack'
 import { notionViewSchemas } from './notion'
+import { larkViewSchemas } from './lark'
 
 /** Flat list of every view-schema literal known to v0.1. */
 export const ALL_INTEGRATION_VIEW_SCHEMAS: IntegrationViewSchema[] = [
@@ -24,6 +25,7 @@ export const ALL_INTEGRATION_VIEW_SCHEMAS: IntegrationViewSchema[] = [
   ...linearViewSchemas,
   ...slackViewSchemas,
   ...notionViewSchemas,
+  ...larkViewSchemas,
 ]
 
 /** Indexed by `<integrationId>:<entityKind>` for O(1) lookup. */
@@ -50,4 +52,5 @@ export {
   linearViewSchemas,
   slackViewSchemas,
   notionViewSchemas,
+  larkViewSchemas,
 }

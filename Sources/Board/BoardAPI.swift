@@ -806,7 +806,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -815,38 +815,15 @@ enum BoardAPI {
         }
     }
 
-    /// P3.0 — mock integration data for widget demo.
+    /// Integration-entity pool for `external` widgets.
     ///
-    /// 当画板里至少一个节点带 `widget` 且 `source.inputKind == .external`,后端返回
-    /// 一批样本 IntegrationEntity 让前端 widget 真渲染出数据,而不是显示
-    /// 「暂无 integration 数据」 hint。phase 3 把这块换成对接真实 GitHub /
-    /// Linear / Slack 等 integration 的拉取。
-    private static func mockIntegrationEntitiesFor(nodes: [PlanningNode]) -> [IntegrationEntityDTO]? {
-        let hasExternalWidget = nodes.contains(where: { node in
-            guard let widget = node.widget else { return false }
-            return widget.source?.inputKind == .external
-        })
-        guard hasExternalWidget else { return nil }
-        // 5 个 mock GitHub PR,跨 status 分布
-        return [
-            mockPR(number: 23, title: "refactor: simplify SessionStore persistence", author: "qc", branch: "qc/sessionstore-refactor", state: "draft"),
-            mockPR(number: 42, title: "feat: add Kanban widget on PlannerNodeCard", author: "kai", branch: "kai/widget-kanban", state: "open"),
-            mockPR(number: 51, title: "fix: StateTrace stuck-thinking after PostToolUse Bash", author: "qc", branch: "qc/statetrace-bash-fix", state: "awaiting"),
-            mockPR(number: 47, title: "chore: bump Sparkle to 2.9.1", author: "wjk", branch: "wjk/sparkle-2.9.1", state: "blocked"),
-            mockPR(number: 7, title: "feat: planner sidecar bridge", author: "kai", branch: "main", state: "done")
-        ]
-    }
-
-    private static func mockPR(number: Int, title: String, author: String, branch: String, state: String) -> IntegrationEntityDTO {
-        let payload: [String: BoardJSONValue] = [
-            "number": .number(Double(number)),
-            "title": .string("#\(number) \(title)"),
-            "author": .string(author),
-            "branch": .string(branch),
-            "state": .string(state),
-            "id": .string("pr-\(number)")
-        ]
-        return IntegrationEntityDTO(schemaId: "github:pr", payload: .object(payload))
+    /// 设计原则(2026-05-29):integration 层只做 schema 定义 + view 渲染,真实数据由
+    /// AI session(GitHub / Lark 等 MCP 工具)产出并 attach 成 artifact。前端 view 层
+    /// 直接从已 attach 的 artifact 派生 IntegrationEntity(见
+    /// `integrations/artifactEntity.ts` + `plannerGraphAdapter`),后端不再伪造样本
+    /// 数据。`artifacts` 字段已随 envelope 下发,故此处返回 nil。
+    private static func integrationEntitiesFor(nodes: [PlanningNode]) -> [IntegrationEntityDTO]? {
+        nil
     }
 
     /// POST /api/planner/canvases/:id/clear
@@ -874,7 +851,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1468,7 +1445,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1704,7 +1681,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1736,7 +1713,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1896,7 +1873,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1949,7 +1926,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1988,7 +1965,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2027,7 +2004,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2080,7 +2057,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -2112,7 +2089,7 @@ enum BoardAPI {
                 events: state.events,
                 artifacts: state.artifacts,
                 edges: state.edges,
-                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
+                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
