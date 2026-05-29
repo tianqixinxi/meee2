@@ -118,12 +118,20 @@ const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
 // Inspector 读取当前模式 — 与 widgetDataResolver 共享 loose lookup 路径
 // (PlanningNode.artifactConfig 尚未落到 types.ts,旧节点缺省 → 'authored')。
 // 'aggregated' / 'upstream' 旧值 → fallback authored (兼容老数据,实际不再出现)。
+//
+// **读取优先级**(canonical → legacy):
+//   1. node.artifactDataSource (top-level string) — Swift 后端写的字段
+//   2. node.artifact.dataSource / node.artifactConfig.dataSource (loose) — 旧 wave-3 试探
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
   const cfg = node as unknown as {
+    artifactDataSource?: string
     artifact?: { dataSource?: string | { mode?: string } }
     artifactConfig?: { dataSource?: string | { mode?: string } }
   }
-  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  const raw =
+    cfg.artifactDataSource ??
+    cfg.artifact?.dataSource ??
+    cfg.artifactConfig?.dataSource
   const value = typeof raw === 'string' ? raw : raw?.mode
   switch (value) {
     case 'self':

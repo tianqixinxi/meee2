@@ -29,6 +29,7 @@ import type {
 } from '../../types'
 import type { IntegrationEntity, IntegrationViewSchema } from '../../types'
 import { getViewSchema } from '../../integrations/viewSchemas'
+import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
 import type { WidgetData, WidgetEntity } from './widgets/types'
 
 const STATUS_FROM_PLANNER: Record<PlanningNodeStatus, WidgetEntity['status']> = {
@@ -92,8 +93,10 @@ interface ArtifactConfigShape {
 }
 
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
-  const cfg = (node as unknown as { artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
-  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  // 优先读 canonical top-level `artifactDataSource` (Swift 后端写的字段),
+  // 退回 loose `artifact.dataSource` / `artifactConfig.dataSource` (旧 wave-3 兼容)。
+  const cfg = (node as unknown as { artifactDataSource?: string; artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
+  const raw = cfg.artifactDataSource ?? cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
   const value = typeof raw === 'string' ? raw : raw?.mode
   switch (value) {
     case 'self':
@@ -163,7 +166,7 @@ function resolveArtifactExternal(ctx: ResolverContext): WidgetData {
       const entityRef = readField(e.payload, 'ref') ?? readField(e.payload, 'id')
       if (entityRef && entityRef !== binding.ref) continue
     }
-    entities.push(entityFromSchema(e, schema, ctx.widget))
+    entities.push(entityFromSchema(e, schema, ctx.widget.mapping))
   }
   if (entities.length === 0) {
     return emptyWithHint('外部数据源还没同步到内容')
@@ -190,7 +193,7 @@ function resolveFromIntegration(ctx: ResolverContext): WidgetData {
     const entityKind = e.schemaId.slice(sep + 1)
     const schema = getViewSchema(integrationId, entityKind)
     if (!schema) continue
-    entities.push(entityFromSchema(e, schema, ctx.widget))
+    entities.push(entityFromSchema(e, schema, ctx.widget.mapping))
   }
   if (entities.length === 0) {
     return emptyWithHint('还没接到外部数据 — 到节点详情里连一个外部服务')
@@ -201,19 +204,24 @@ function resolveFromIntegration(ctx: ResolverContext): WidgetData {
 function entityFromSchema(
   entity: IntegrationEntity,
   schema: IntegrationViewSchema,
-  widget: Widget,
+  mapping?: Widget['mapping'],
 ): WidgetEntity {
-  // mapping override > schema badge defaults
-  const mapping = widget.mapping
+  // Field resolution order: explicit widget mapping > standard payload fields
+  // (title / secondary / status / url, as produced by artifactToIntegrationEntity)
+  // > schema badge defaults (the literal template).
   const title = mapping?.titleField
     ? readField(entity.payload, mapping.titleField, schema.badge.title)
-    : schema.badge.title
+    : readField(entity.payload, 'title') ?? schema.badge.title
   const subtitle = mapping?.subtitleField
     ? readField(entity.payload, mapping.subtitleField)
-    : schema.badge.secondary
+    : readField(entity.payload, 'secondary') ?? schema.badge.secondary
   const status = mapping?.statusField
     ? coerceStatus(readField(entity.payload, mapping.statusField)) ?? schema.badge.status
-    : schema.badge.status
+    : coerceStatus(readField(entity.payload, 'status')) ?? schema.badge.status
+  const url = readField(entity.payload, 'url')
+  const details = schema.preview.details
+    .slice(0, 4)
+    .map((d) => (d.kind === 'link' && !d.value && url ? { ...d, value: url } : d))
   return {
     id: `${entity.schemaId}:${readField(entity.payload, 'id') ?? schema.badge.title}`,
     title: title ?? schema.badge.title,
@@ -221,7 +229,7 @@ function entityFromSchema(
     status,
     icon: schema.badge.icon,
     schema,
-    details: schema.preview.details.slice(0, 4),
+    details,
   }
 }
 
@@ -265,6 +273,23 @@ function projectArtifactToEntities(
   artifact: PlannerArtifact,
   upstream: PlanningNode,
 ): WidgetData {
+  // Integration artifact (GitHub PR / Lark doc / …): render through the
+  // matching view-schema so the node shows a real badge + preview, not a
+  // generic `type` chip. This is the artifact ↔ view connection.
+  const integrationEntity = artifactToIntegrationEntity(artifact)
+  if (integrationEntity) {
+    const sep = integrationEntity.schemaId.indexOf(':')
+    const schema =
+      sep > 0
+        ? getViewSchema(
+            integrationEntity.schemaId.slice(0, sep),
+            integrationEntity.schemaId.slice(sep + 1),
+          )
+        : undefined
+    if (schema) {
+      return { entities: [entityFromSchema(integrationEntity, schema)] }
+    }
+  }
   const payload = artifact.typedPayload
   if (!payload) {
     return {
