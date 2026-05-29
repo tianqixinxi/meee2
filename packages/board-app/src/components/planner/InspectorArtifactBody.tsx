@@ -16,11 +16,13 @@ import {
   AlertTriangle,
   Archive,
   ArrowUpRight,
+  Database,
   Eye,
   FileText,
   GitCompare,
   Layers,
   Pencil,
+  Plug,
   RefreshCw,
   Route,
   Settings2,
@@ -29,8 +31,11 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { proposePlannerGraphChange } from '../../api'
+import { useToast } from '../../App'
 import type {
   ArtifactPayload,
+  ContextSource,
+  NodeContractExternalInput,
   NodeStateSnapshot,
   PlanProposal,
   PlannerArtifact,
@@ -49,6 +54,12 @@ interface Props {
   onProposalCreated?: (proposal: PlanProposal) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
   onRerunNode?: (nodeId: string, reference?: string) => void
+  /** UI-4 — open the parent-managed AttachDataSourcePopover (same instance as
+   *  step nodes use). The wire shape persisted server-side is the canonical
+   *  `input.external[]` array (connector + ref + sync_session). */
+  onAttachDataSource?: (nodeId: string) => void
+  /** UI-4 — refresh-now per bound external row. */
+  onRefreshExternalInput?: (nodeId: string, external: NodeContractExternalInput) => void
 }
 
 // artifact 节点上,卡片样式 popover 收窄到三个有意义的 widget(design 约定)。
@@ -79,6 +90,57 @@ const ARTIFACT_WIDGET_OPTIONS: ReadonlyArray<{
   },
 ]
 
+// design spec ui_surface §dataSource — artifact 三模 enum.
+// 与 widget.source 正交并行: artifact.dataSource 决定 payload 权威来源 (data 层),
+// widget.source 决定渲染来源 (view 层)。
+type ArtifactDataSourceMode = 'authored' | 'aggregated' | 'mirrored'
+
+const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
+  mode: ArtifactDataSourceMode
+  label: string
+  tooltip: string
+}> = [
+  {
+    mode: 'authored',
+    label: '自撰',
+    tooltip: '节点自己撰写 payload (可编辑, version 链正常)',
+  },
+  {
+    mode: 'aggregated',
+    label: '聚合',
+    tooltip: '镜像上游节点产物聚合 (只读, 编辑触发 fork)',
+  },
+  {
+    mode: 'mirrored',
+    label: '外部',
+    tooltip: '镜像外部 integration (只读, syncPolicy 周期拉)',
+  },
+]
+
+// Inspector 读取当前模式 — 与 widgetDataResolver 共享 loose lookup 路径
+// (PlanningNode.artifactConfig 尚未落到 types.ts,旧节点缺省 → 'authored')。
+function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
+  const cfg = node as unknown as {
+    artifact?: { dataSource?: string | { mode?: string } }
+    artifactConfig?: { dataSource?: string | { mode?: string } }
+  }
+  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  const value = typeof raw === 'string' ? raw : raw?.mode
+  switch (value) {
+    case 'self':
+    case 'authored':
+      return 'authored'
+    case 'upstream':
+    case 'aggregated':
+      return 'aggregated'
+    case 'external':
+    case 'mirrored':
+      return 'mirrored'
+    default:
+      return 'authored'
+  }
+}
+
 export function InspectorArtifactBody({
   node,
   canvasId,
@@ -89,7 +151,10 @@ export function InspectorArtifactBody({
   onProposalCreated,
   onOpenSession,
   onRerunNode,
+  onAttachDataSource,
+  onRefreshExternalInput,
 }: Props) {
+  const toast = useToast()
   const isTemplate = variant === 'template'
   const runState = state?.runState ?? node.status
   const blockers = isTemplate
@@ -145,6 +210,50 @@ export function InspectorArtifactBody({
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [widgetPopoverOpen])
+
+  // dataSource picker — design spec ui_surface.inspector_picker (chip 3-option, auto-save).
+  // 默认值: 旧节点缺省 → 'authored' (rollout 兼容)。
+  const currentDataSource = useMemo(() => readArtifactDataSourceMode(node), [node])
+  const [dataSourceDraft, setDataSourceDraft] = useState<ArtifactDataSourceMode>(currentDataSource)
+  const [dataSourceSaving, setDataSourceSaving] = useState(false)
+  const [dataSourceError, setDataSourceError] = useState<string | null>(null)
+  useEffect(() => {
+    setDataSourceDraft(currentDataSource)
+  }, [currentDataSource])
+
+  // 已绑定 external rows — 复用 step 节点的 derive 路径(input.external 形状):
+  // 每行 = { connector, ref, sync_session }, 与 NodeContractExternalInput 严格一致。
+  const externalBindings = useMemo(() => deriveExternalInputs(node), [node])
+
+  const handlePickDataSource = (mode: ArtifactDataSourceMode) => {
+    if (mode === dataSourceDraft) return
+    setDataSourceError(null)
+    setDataSourceDraft(mode)
+    setDataSourceSaving(true)
+    // PlanChange 暂无 setArtifactDataSource 独立 variant — 走 updateNode + loose
+    // payload (后端 zod schema 兼容期), 等 wave-4 后端落 variant 再切。
+    const change = {
+      kind: 'updateNode' as const,
+      nodeId: node.id,
+      artifactConfig: { dataSource: { mode } },
+    }
+    proposePlannerGraphChange(canvasId, {
+      summary: `Set dataSource to ${mode} on ${node.title}`,
+      changes: [change as unknown as Parameters<typeof proposePlannerGraphChange>[1]['changes'][number]],
+    })
+      .then((proposal) => {
+        setDataSourceSaving(false)
+        if (!proposal) {
+          setDataSourceError('服务端没返回提议')
+          return
+        }
+        onProposalCreated?.(proposal)
+      })
+      .catch((err) => {
+        setDataSourceSaving(false)
+        setDataSourceError((err as Error).message || '保存失败')
+      })
+  }
 
   const handlePickWidgetKind = (kind: WidgetKind | 'standard') => {
     setWidgetError(null)
@@ -235,6 +344,123 @@ export function InspectorArtifactBody({
           ))}
         </div>
       )}
+
+      {/* 数据来源 picker — design spec ui_surface.inspector_picker.
+          chip 3-option (authored / aggregated / mirrored), auto-save. */}
+      <div className="planner-node-modal__section">
+        <h3>
+          <Database size={13} aria-hidden /> 数据来源
+          {dataSourceSaving && <em className="planner-node-modal__view-saving">保存中…</em>}
+          {dataSourceError && (
+            <em className="planner-node-modal__view-error" title={dataSourceError}>
+              !
+            </em>
+          )}
+        </h3>
+        <div className="planner-node-modal__widget-kind-chips">
+          {ARTIFACT_DATA_SOURCE_OPTIONS.map((option) => {
+            const selected = option.mode === dataSourceDraft
+            return (
+              <button
+                key={option.mode}
+                type="button"
+                className={`planner-node-modal__widget-kind-chip${selected ? ' is-selected' : ''}`}
+                disabled={dataSourceSaving}
+                onClick={() => handlePickDataSource(option.mode)}
+                title={option.tooltip}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="planner-node-modal__view-hint">
+          {describeDataSourceMode(dataSourceDraft)}
+        </div>
+        {dataSourceDraft === 'mirrored' && (
+          <div className="planner-node-modal__attach-data-source">
+            {/* 已绑定 — 列出每行 connector + ref + sync 状态,
+                提供「刷新」+「替换 / 解绑」入口。完全复用 step 节点
+                的 input.external[] 形状 (NodeContractExternalInput)。 */}
+            {externalBindings.length > 0 ? (
+              <ul className="planner-input-card__external-list">
+                {externalBindings.map((row, index) => (
+                  <li
+                    key={`${row.connector}:${row.ref}:${index}`}
+                    className="planner-input-card__external-row"
+                  >
+                    <span
+                      className="planner-input-card__external-ref"
+                      title={`${row.connector}:${row.ref}`}
+                    >
+                      <strong>{row.connector}</strong>
+                      <em>{row.ref}</em>
+                    </span>
+                    {onRefreshExternalInput && (
+                      <button
+                        type="button"
+                        className="planner-node-modal__attach-data-source-button"
+                        title={`Refresh ${row.connector} ${row.ref}`}
+                        aria-label={`Refresh ${row.connector} ${row.ref}`}
+                        onClick={() => onRefreshExternalInput(node.id, row)}
+                      >
+                        <RefreshCw size={11} aria-hidden /> 刷新
+                      </button>
+                    )}
+                    {onAttachDataSource && (
+                      <button
+                        type="button"
+                        className="planner-node-modal__attach-data-source-button"
+                        title="替换 / 重新绑定外部来源"
+                        onClick={() => onAttachDataSource(node.id)}
+                      >
+                        <Plug size={11} aria-hidden /> 替换
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {onAttachDataSource ? (
+              <button
+                type="button"
+                className="planner-node-modal__attach-data-source-button"
+                onClick={() => onAttachDataSource(node.id)}
+                title="绑定外部 integration 作为镜像来源 — 复用 step 节点的 AttachDataSourcePopover"
+              >
+                <Plug size={12} aria-hidden />
+                {externalBindings.length > 0 ? ' 追加来源' : ' Attach data source'}
+              </button>
+            ) : (
+              <p className="planner-node-modal__empty">
+                Attach data source 入口未挂载(parent 没传 onAttachDataSource)。
+              </p>
+            )}
+            {/* 立即同步 — section-bottom secondary CTA。
+                TODO(refresh-strategy): 真正的 batch refresh IO 由 design spec
+                §refresh 段定义的策略 agent / sync orchestrator 负责落地
+                (cf. doc/simplified-mental-model-spec.md §4.2 + design spec
+                ui_surface §dataSource.refresh)。当前 workflow 只埋 UI 入口,
+                后端排队 / 节流 / 冲突合并都还没接。 */}
+            {externalBindings.length > 0 && (
+              <button
+                type="button"
+                className="planner-node-modal__attach-data-source-button planner-node-modal__attach-data-source-button--secondary"
+                onClick={() => {
+                  console.log('[InspectorArtifactBody] manual refresh stub', {
+                    nodeId: node.id,
+                    bindings: externalBindings.length,
+                  })
+                  toast.push('info', '同步任务已排队')
+                }}
+                title="立即把所有已绑定外部来源排进同步队列(stub — 真正的 IO 见 design spec §refresh)"
+              >
+                <RefreshCw size={12} aria-hidden /> 立即同步
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* 产物预览 / 编辑区 — artifact 节点核心 */}
       <div className="planner-node-modal__section planner-node-modal__artifact-body">
@@ -831,6 +1057,17 @@ function FootprintTimeline({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+function describeDataSourceMode(mode: ArtifactDataSourceMode): string {
+  switch (mode) {
+    case 'authored':
+      return '自撰 · 节点自己撰写 payload (可编辑)'
+    case 'aggregated':
+      return '聚合 · 镜像上游节点产物 (只读, 编辑触发 fork)'
+    case 'mirrored':
+      return '外部 · 镜像外部 integration (只读, 周期同步)'
+  }
+}
+
 function describeArtifactWidget(widget: Widget | null): string {
   if (!widget) return '标准 · 显示节点本身(标题 / 状态)'
   switch (widget.kind) {
@@ -877,6 +1114,48 @@ function formatBytesPlain(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ---------------------------------------------------------------------------
+// deriveExternalInputs — 复用 InputCardSections 的同名 helper 的语义,生成与
+// step 节点 input.external[] 形状一致的行(NodeContractExternalInput)。在
+// integration view-schema 落地前,bind 结果回显走 contextSources 的派生。
+// 一旦 INT-2 把 NodeContractInput.external 直接写到 PlanningNode 上,这里就
+// 直接 map node.input.external,无需 derive。
+// ---------------------------------------------------------------------------
+function deriveExternalInputs(node: PlanningNode): NodeContractExternalInput[] {
+  // 1) 优先读已挂载的 input.external(后端真正存档的形状)
+  const loose = node as unknown as {
+    input?: { external?: Array<{ connector?: string; ref?: string; sync_session?: string | null }> }
+  }
+  const direct = loose.input?.external
+  if (Array.isArray(direct) && direct.length > 0) {
+    return direct
+      .map((row): NodeContractExternalInput | null => {
+        const connector = String(row?.connector ?? '').trim()
+        const ref = String(row?.ref ?? '').trim()
+        if (!connector || !ref) return null
+        return { connector, ref, sync_session: row.sync_session ?? null }
+      })
+      .filter((row): row is NodeContractExternalInput => Boolean(row))
+  }
+  // 2) 兜底:与 InputCardSections.deriveExternalInputs 同语义 —— 从
+  //    contextSources 取非 chatHistory 的项,scheme 推 connector slug。
+  const sources = node.contextSources ?? []
+  return sources
+    .filter((source) => source.kind !== 'chatHistory')
+    .map((source) => ({
+      connector: connectorFromSource(source),
+      ref: source.reference || source.title || 'unknown',
+      sync_session: null,
+    }))
+}
+
+function connectorFromSource(source: ContextSource): string {
+  const ref = source.reference || ''
+  const schemeMatch = ref.match(/^([a-z][a-z0-9+.-]*):/i)
+  if (schemeMatch) return schemeMatch[1].toLowerCase()
+  return source.kind
 }
 
 type BadgeState = '待办' | '运行中' | '等反馈' | '卡住' | '完成'

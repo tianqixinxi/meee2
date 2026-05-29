@@ -2161,13 +2161,47 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
         }
         do {
+            // Capture the pre-submit node.status so we can detect the
+            // ready → terminal-attempt transition below. The store keeps
+            // node.status in sync with explicit output.status, but agents
+            // sometimes leave a ready node behind when their attempt has
+            // already reached a done terminal — this is the auto-done rule.
+            let preSnapshot = BoardLayoutStore.shared.snapshot()
+            let preStatus: PlanningNodeStatus? = (try? PlannerBoardBridge.canvasState(
+                for: canvasId,
+                snapshot: preSnapshot,
+                actorUserId: PlannerPermission.currentActorId()
+            ))?.nodes.first(where: { $0.id == nodeId })?.status
             var result = try PlannerBoardBridge.submitNodeOutput(
                 nodeId: nodeId,
                 output: output,
                 for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
+                snapshot: preSnapshot,
                 actorUserId: PlannerPermission.currentActorId()
             )
+            // Auto-done rule (decision locked 2026-05-28): if the node was
+            // `ready` before this submit and the resulting attempt landed in
+            // the `done` terminal state, force node.status = .done in place.
+            // Other pre-states (draft / blocked / already done) are left
+            // alone — only `ready` is the "agent finishing its turn" entry
+            // point. We update directly through the bridge's static path
+            // (no proposal flow) to mirror the existing attempt-commit code
+            // path that already runs inside `submitNodeOutput`.
+            if preStatus == .ready,
+               let postNode = result.graph.nodes.first(where: { $0.id == nodeId }),
+               postNode.workflowRunState == .done,
+               postNode.status != .done {
+                if let regraphed = try? PlannerBoardBridge.updateNodeStatus(
+                    nodeId: nodeId,
+                    status: .done,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                ) {
+                    result.graph = regraphed
+                    NSLog("[planner][auto-done] node=\(nodeId) canvas=\(canvasId) preStatus=ready attempt=done → status=done")
+                }
+            }
             routePlannerOutputMessages(result.routes)
             // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched
             // downstream nodes in the background so the user's focused app

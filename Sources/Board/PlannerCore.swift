@@ -641,6 +641,15 @@ struct PlanningNode: Codable, Equatable {
     /// assignee + run state). non-nil = render as the declared widget kind,
     /// backed by `widget.source`. See Widget struct above.
     var widget: Widget?
+    /// Artifact-node data-source mode (2026-05-28). Three-mode enum stored as
+    /// String for forward-compat:
+    /// - `authored` (default, also implied when nil): node owns its payload.
+    /// - `aggregated`: payload mirrors N upstream node artifacts.
+    /// - `mirrored`: payload mirrors an external integration source.
+    /// Orthogonal to `widget.source` (which controls *view-layer* origin).
+    /// nil on non-artifact nodes; nil on legacy artifact nodes is treated as
+    /// `authored` per the rollout spec.
+    var artifactDataSource: String?
 
     init(
         id: String,
@@ -672,7 +681,8 @@ struct PlanningNode: Codable, Equatable {
         workflowRunState: PlannerWorkflowRunState? = nil,
         blockedReason: String? = nil,
         outputSubmittedAt: Date? = nil,
-        widget: Widget? = nil
+        widget: Widget? = nil,
+        artifactDataSource: String? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -704,6 +714,7 @@ struct PlanningNode: Codable, Equatable {
         self.blockedReason = blockedReason
         self.outputSubmittedAt = outputSubmittedAt
         self.widget = widget
+        self.artifactDataSource = artifactDataSource
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -722,6 +733,9 @@ struct PlanningNode: Codable, Equatable {
         case reviewerIds, approverIds, handoffPolicy
         // Node-widget (2026-05-28) — absent = standard view.
         case widget
+        // Artifact-node data-source mode (2026-05-28). nil ⇒ `authored` per
+        // rollout default. Stored as String for forward-compat with new modes.
+        case artifactDataSource
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -763,6 +777,7 @@ struct PlanningNode: Codable, Equatable {
         blockedReason = try container.decodeIfPresent(String.self, forKey: .blockedReason)
         outputSubmittedAt = try container.decodeIfPresent(Date.self, forKey: .outputSubmittedAt)
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
+        artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -798,6 +813,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(blockedReason, forKey: .blockedReason)
         try container.encodeIfPresent(outputSubmittedAt, forKey: .outputSubmittedAt)
         try container.encodeIfPresent(widget, forKey: .widget)
+        try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
@@ -882,6 +898,11 @@ struct PlanArtifactDraft: Codable, Equatable {
     var reference: String
     var status: String?
     var payload: BoardJSONValue?
+    /// Artifact-node three-mode data-source picker (authored / aggregated /
+    /// mirrored). nil ⇒ no proposal-level change. When non-nil on an
+    /// `attachArtifact` change, apply-path writes it through to the target
+    /// PlanningNode's `artifactDataSource`.
+    var dataSource: String?
 }
 
 struct PlanChange: Codable, Equatable {
@@ -931,6 +952,12 @@ struct PlanChange: Codable, Equatable {
     /// Node-widget (2026-05-28): proposal-driven update of `PlanningNode.widget`.
     var widget: Widget?
     var artifact: PlanArtifactDraft?
+    /// Artifact data-source mode (2026-05-28): proposal-driven update of
+    /// `PlanningNode.artifactDataSource`. nil ⇒ no change. Carries the same
+    /// three-mode enum (authored / aggregated / mirrored) as the inline
+    /// artifact draft; whichever lane (attachArtifact or updateNode) carries
+    /// it, apply-path writes it onto the target node.
+    var artifactDataSource: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind, node, nodeId, title, status, schema, contextSources
@@ -938,6 +965,7 @@ struct PlanChange: Codable, Equatable {
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
         case reviewerIds, approverIds, handoffPolicy, widget
+        case artifactDataSource
     }
 
     init(
@@ -970,7 +998,8 @@ struct PlanChange: Codable, Equatable {
         approverIds: [String]? = nil,
         handoffPolicy: HandoffPolicy? = nil,
         widget: Widget? = nil,
-        artifact: PlanArtifactDraft? = nil
+        artifact: PlanArtifactDraft? = nil,
+        artifactDataSource: String? = nil
     ) {
         self.kind = kind
         self.node = node
@@ -1002,6 +1031,7 @@ struct PlanChange: Codable, Equatable {
         self.handoffPolicy = handoffPolicy
         self.widget = widget
         self.artifact = artifact
+        self.artifactDataSource = artifactDataSource
     }
 
     init(from decoder: Decoder) throws {
@@ -1036,6 +1066,7 @@ struct PlanChange: Codable, Equatable {
         handoffPolicy = try container.decodeIfPresent(HandoffPolicy.self, forKey: .handoffPolicy)
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
+        artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1070,6 +1101,7 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(handoffPolicy, forKey: .handoffPolicy)
         try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifact, forKey: .artifact)
+        try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
@@ -1095,7 +1127,8 @@ struct PlanChange: Codable, Equatable {
         title: String,
         reference: String,
         status: String = "attached",
-        payload: BoardJSONValue? = nil
+        payload: BoardJSONValue? = nil,
+        dataSource: String? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .attachArtifact,
@@ -1109,7 +1142,8 @@ struct PlanChange: Codable, Equatable {
                 title: title,
                 reference: reference,
                 status: status,
-                payload: payload
+                payload: payload,
+                dataSource: dataSource
             )
         )
     }
@@ -1139,7 +1173,8 @@ struct PlanChange: Codable, Equatable {
         doerId: String? = nil,
         reviewerIds: [String]? = nil,
         approverIds: [String]? = nil,
-        handoffPolicy: HandoffPolicy? = nil
+        handoffPolicy: HandoffPolicy? = nil,
+        artifactDataSource: String? = nil
     ) -> PlanChange {
         PlanChange(
             kind: .updateNode,
@@ -1168,7 +1203,8 @@ struct PlanChange: Codable, Equatable {
             doerId: doerId,
             reviewerIds: reviewerIds,
             approverIds: approverIds,
-            handoffPolicy: handoffPolicy
+            handoffPolicy: handoffPolicy,
+            artifactDataSource: artifactDataSource
         )
     }
 }
@@ -2186,7 +2222,13 @@ enum PlannerProposalValidator {
                     change.approverIds != nil ||
                     change.handoffPolicy != nil ||
                     // Node-widget (P2 / 2026-05-28) — view config update:
-                    change.widget != nil else {
+                    change.widget != nil ||
+                    // Artifact-node data-source mode (2026-05-28) — accepts
+                    // dataSource via the direct change field OR nested under
+                    // an inline artifact draft (e.g. setArtifactDataSource
+                    // riding shotgun on an attach).
+                    change.artifactDataSource != nil ||
+                    change.artifact?.dataSource != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
             case .attachArtifact:
@@ -2441,10 +2483,26 @@ final class PlannerCoreService {
                 if let widget = change.widget {
                     updatedNodes[index].widget = widget
                 }
+                // Artifact-node data-source mode (2026-05-28). Direct field
+                // takes precedence; nested artifact-draft.dataSource is the
+                // fallback lane (e.g. dataSource riding on an attach).
+                if let dataSource = change.artifactDataSource ?? change.artifact?.dataSource {
+                    updatedNodes[index].artifactDataSource = dataSource
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
             case .attachArtifact:
+                // Artifact-node data-source mode (2026-05-28). attachArtifact
+                // doesn't mutate node schema otherwise, but if the proposal
+                // carries a dataSource hint on the inline draft, propagate it
+                // to the target PlanningNode.
+                if let draft = change.artifact,
+                   let dataSource = draft.dataSource,
+                   let targetNodeId = draft.nodeId ?? change.nodeId,
+                   let index = updatedNodes.firstIndex(where: { $0.id == targetNodeId }) {
+                    updatedNodes[index].artifactDataSource = dataSource
+                }
                 continue
             case .refineSessionPrompt:
                 // ENG-2 bonus: schema-level no-op at preview/apply time.

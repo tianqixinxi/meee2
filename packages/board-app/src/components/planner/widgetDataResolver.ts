@@ -50,6 +50,12 @@ interface ResolverContext {
 }
 
 export function resolveWidgetData(ctx: ResolverContext): WidgetData {
+  // UI-simplification (2026-05-28): artifact 节点 payload 权威来源由
+  // node.artifact.dataSource 决定 (默认 'self'/'authored'). widget.source 仅作为
+  // 渲染来源 hint; artifact 节点先走这一支, step/session/widget 路径不变。
+  if (ctx.node.nodeKind === 'artifact') {
+    return resolveFromArtifactNode(ctx)
+  }
   const source = ctx.widget.source
   if (!source) {
     return emptyWithHint('还没指定要展示什么 — 到节点详情里挑一种数据来源')
@@ -64,6 +70,130 @@ export function resolveWidgetData(ctx: ResolverContext): WidgetData {
     default:
       return emptyWithHint('数据来源类型异常，请联系管理员')
   }
+}
+
+// ── artifact-node data branch ─────────────────────────────────────────────
+//
+// design spec (artifactConfig.dataSource discriminated union):
+//   - authored  ≡ 'self'      → 节点自己撰写 payload (user-editable, version 链)
+//   - aggregated ≡ 'upstream' → 镜像 N 个上游节点产物聚合 (read-only mirror)
+//   - mirrored ≡ 'external'   → 镜像外部 integration (read-only, syncPolicy)
+//
+// 类型层 PlanningNode.artifactConfig 尚未落到 types.ts (设计阶段),所以这里走
+// loose lookup; 旧节点缺省字段 → 'self'/'authored',零改动。
+
+type ArtifactDataSourceMode = 'self' | 'upstream' | 'external'
+
+interface ArtifactConfigShape {
+  dataSource?: string | { mode?: string }
+  // aggregated 模式可附 sourceNodeIds / pickStrategy; mirrored 模式可附 source 等
+  sourceNodeIds?: string[]
+  source?: unknown
+}
+
+function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
+  const cfg = (node as unknown as { artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
+  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  const value = typeof raw === 'string' ? raw : raw?.mode
+  switch (value) {
+    case 'self':
+    case 'authored':
+      return 'self'
+    case 'upstream':
+    case 'aggregated':
+      return 'upstream'
+    case 'external':
+    case 'mirrored':
+      return 'external'
+    default:
+      return 'self'
+  }
+}
+
+function resolveFromArtifactNode(ctx: ResolverContext): WidgetData {
+  const mode = readArtifactDataSourceMode(ctx.node)
+  switch (mode) {
+    case 'self':
+      return resolveArtifactSelf(ctx)
+    case 'upstream':
+      return resolveArtifactUpstream(ctx)
+    case 'external':
+      return resolveArtifactExternal(ctx)
+    default:
+      return emptyWithHint('数据来源类型异常，请联系管理员')
+  }
+}
+
+/** authored / self: 用 artifact 自身 payload —— pick latest artifact attached to this node. */
+function resolveArtifactSelf(ctx: ResolverContext): WidgetData {
+  const artifact = pickLatestArtifact(ctx.artifacts ?? [], ctx.node.id)
+  if (!artifact) {
+    return emptyWithHint('这个节点还没产生成果')
+  }
+  return projectArtifactToEntities(artifact, ctx.node)
+}
+
+/**
+ * aggregated / upstream: 找上游 artifact 节点产物。
+ * 优先 artifactConfig.sourceNodeIds, fallback dependsOnNodeIds (允许治理 vs 数据背离)。
+ */
+function resolveArtifactUpstream(ctx: ResolverContext): WidgetData {
+  const cfg = (ctx.node as unknown as { artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
+  const sourceNodeIds =
+    cfg.artifact?.sourceNodeIds ??
+    cfg.artifactConfig?.sourceNodeIds ??
+    ctx.node.dependsOnNodeIds ??
+    []
+  if (sourceNodeIds.length === 0) {
+    return emptyWithHint('aggregated 模式还没指定上游节点')
+  }
+  const entities: WidgetEntity[] = []
+  for (const upstreamId of sourceNodeIds) {
+    const upstream = ctx.allNodes.find((n) => n.id === upstreamId)
+    if (!upstream) continue
+    const artifact = pickLatestArtifact(ctx.artifacts ?? [], upstream.id)
+    if (!artifact) continue
+    const projected = projectArtifactToEntities(artifact, upstream)
+    entities.push(...projected.entities)
+  }
+  if (entities.length === 0) {
+    return emptyWithHint('上游 artifact 节点还没产生成果')
+  }
+  return { entities }
+}
+
+/**
+ * mirrored / external: 读 node.input.external[0] 的绑定结果, 匹配 integrationEntities。
+ * 复用 NodeContractExternalInput.connector + ref 作为绑定 key。
+ */
+function resolveArtifactExternal(ctx: ResolverContext): WidgetData {
+  const nodeAny = ctx.node as unknown as {
+    input?: { external?: Array<{ connector?: string; ref?: string }> }
+  }
+  const binding = nodeAny.input?.external?.[0]
+  if (!binding || !binding.connector) {
+    return emptyWithHint('mirrored 模式还没绑定外部数据源')
+  }
+  const entities: WidgetEntity[] = []
+  for (const e of ctx.integrationEntities ?? []) {
+    const sep = e.schemaId.indexOf(':')
+    if (sep < 0) continue
+    const integrationId = e.schemaId.slice(0, sep)
+    if (integrationId !== binding.connector) continue
+    const entityKind = e.schemaId.slice(sep + 1)
+    const schema = getViewSchema(integrationId, entityKind)
+    if (!schema) continue
+    // ref 匹配: 优先按 payload.id / payload.ref 过滤 (loose match)
+    if (binding.ref) {
+      const entityRef = readField(e.payload, 'ref') ?? readField(e.payload, 'id')
+      if (entityRef && entityRef !== binding.ref) continue
+    }
+    entities.push(entityFromSchema(e, schema, ctx.widget))
+  }
+  if (entities.length === 0) {
+    return emptyWithHint('外部数据源还没同步到内容')
+  }
+  return { entities }
 }
 
 /**
