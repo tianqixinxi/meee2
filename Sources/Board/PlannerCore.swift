@@ -1982,6 +1982,11 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case crossCanvasNodeReference(nodeId: String, expectedCanvas: String)
     /// A change carries a node `kind` outside the known PlanningNodeKind set.
     case unknownNodeKind(String)
+    /// epsilon (session-hide): `addNode` proposed a new `session`-kind node.
+    /// `session` is preserved on the type for legacy decode / updateNode
+    /// compatibility, but is no longer a creatable kind — callers should
+    /// instead create a `step` node with `dispatch.runner = .claude`.
+    case sessionKindNoLongerCreatable(nodeId: String)
     /// A change carries a change `kind` outside the known PlanChange.Kind set.
     case unknownChangeKind(String)
     case invalidNodeOutput(String)
@@ -2019,6 +2024,8 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return "meee2 AI proposal references node \(nodeId) outside canvas \(expectedCanvas)"
         case .unknownNodeKind(let kind):
             return "meee2 AI proposal uses unknown node kind: \(kind)"
+        case .sessionKindNoLongerCreatable(let nodeId):
+            return "node \(nodeId) uses nodeKind='session', which is deprecated for new nodes; create a 'step' node with dispatch.runner='claude' instead"
         case .unknownChangeKind(let kind):
             return "meee2 AI proposal uses unknown change kind: \(kind)"
         case .invalidNodeOutput(let hint):
@@ -2291,6 +2298,13 @@ enum PlannerProposalValidator {
                 }
                 if let kind = node.nodeKind, !knownNodeKinds.contains(kind.rawValue) {
                     throw PlannerCoreError.unknownNodeKind(kind.rawValue)
+                }
+                // epsilon (session-hide): reject `addNode` for nodeKind=session.
+                // The enum case stays for legacy decode + updateNode compat
+                // (existing canvases still load), but new nodes must go
+                // through `step` + `dispatch.runner = .claude`.
+                if node.nodeKind == .session {
+                    throw PlannerCoreError.sessionKindNoLongerCreatable(nodeId: node.id)
                 }
                 try assertSameCanvasReferences(
                     nodeId: node.id,

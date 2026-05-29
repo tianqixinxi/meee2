@@ -2831,6 +2831,12 @@ enum BoardAPI {
             return errorResponse("planner_error", err.localizedDescription, status: 400)
         case .activeSessionExists:
             return errorResponse("active_session_exists", err.localizedDescription, status: 409)
+        case .sessionKindNoLongerCreatable:
+            // epsilon (session-hide): addNode validator rejects new
+            // session-kind nodes. Surface a distinct error code so the
+            // UI / agent can suggest the step + dispatch.runner=claude
+            // migration rather than treating it as a generic 400.
+            return errorResponse("session_kind_no_longer_creatable", err.localizedDescription, status: 400)
         }
     }
 
