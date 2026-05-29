@@ -3310,11 +3310,51 @@ final class PlannerStore {
             record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
             record.nodes = nodes
             record.proposals[index].status = .applied
+            let newArtifactsFromProposal = proposalArtifacts(from: proposal, nodes: nodes, canvasId: canvasId)
             record.artifacts = mergeArtifacts(
                 record.artifacts,
-                proposalArtifacts(from: proposal, nodes: nodes, canvasId: canvasId)
-                    + derivedArtifacts(from: nodes, canvasId: canvasId)
+                newArtifactsFromProposal + derivedArtifacts(from: nodes, canvasId: canvasId)
             )
+            // 2026-05-29 codex P2 (PR #92): attachArtifact-only proposals were
+            // folding into mergeArtifacts (replaces latest-per-slot mirror) but
+            // never appending to artifactVersions, so repeat authored saves on
+            // the same reference silently overwrote prior content. Mirror the
+            // submit_node_output path: append a PlannerArtifactVersion row per
+            // proposal-created artifact so the visible version chain preserves
+            // history (same shape as line 4338-4358 in submit_node_output).
+            for artifact in newArtifactsFromProposal {
+                let slotKey = artifactSlotKey(
+                    canvasId: artifact.canvasId,
+                    nodeId: artifact.nodeId,
+                    reference: artifact.reference
+                )
+                let parent = latestVersion(in: record.artifactVersions, slotKey: slotKey)?.versionId
+                let payloadRef = (artifact.payload?.objectValue?["blobRef"]?.stringValue).flatMap {
+                    $0.isEmpty ? nil : $0
+                } ?? artifact.reference
+                record.artifactVersions.append(PlannerArtifactVersion(
+                    versionId: "ver-\(artifact.canvasId)-\(artifact.nodeId)-\(stableSuffix("\(artifact.reference)-\(artifact.id)-\(artifact.createdAt.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: artifact.canvasId,
+                    nodeId: artifact.nodeId,
+                    artifactId: artifact.id,
+                    artifactSlotKey: slotKey,
+                    payloadRef: payloadRef,
+                    payloadInline: artifact.payload,
+                    inputSnapshot: nil,
+                    displayStrategy: .latest,
+                    forceNewVersion: false,
+                    submittedBy: nil,
+                    submittedByKind: .agent,
+                    metadata: .object([
+                        "title": .string(artifact.title),
+                        "kind": .string(artifact.kind.rawValue),
+                        "status": .string(artifact.status),
+                        "source": .string("attachArtifact")
+                    ]),
+                    createdAt: artifact.createdAt
+                ))
+            }
             record.events.append(event(
                 canvasId: canvasId,
                 type: .proposalApplied,
