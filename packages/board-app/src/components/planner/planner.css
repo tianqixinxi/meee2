@@ -135,7 +135,7 @@
   justify-items: center;
   overflow: auto;
   padding: clamp(112px, 14vh, 148px) clamp(24px, 6vw, 96px) clamp(32px, 6vh, 72px);
-  background: #252522;
+  background: var(--bg);
 }
 
 .planner-flow {
@@ -303,7 +303,7 @@
 }
 
 .planner-flow .react-flow {
-  background: #252522;
+  background: var(--bg);
 }
 
 .planner-workspace-preview {
@@ -311,7 +311,7 @@
   inset: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  background: #252522;
+  background: var(--bg);
 }
 
 /* UI-simplification — Apply / Reject 显式悬浮在画板右上角,避免预览态卡死 */
@@ -7322,6 +7322,330 @@
 :root[data-theme="light"] .planner-session-health-banner {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+}
+
+/* ---------------------------------------------------------------
+ * Light-theme wave: canvas surfaces, node cards, minimap, inspector,
+ * composer, side panel. These all carry bespoke dark navy / gradient
+ * backgrounds in the base rules that don't map cleanly to a single
+ * token, so they get explicit light overrides here.
+ * ------------------------------------------------------------- */
+
+/* Side chat panel + dialog toggle handle */
+:root[data-theme="light"] .planner-side {
+  background: var(--panel-bg);
+  border-right-color: var(--border);
+}
+:root[data-theme="light"] .planner-dialog-toggle {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .planner-dialog-toggle:hover {
+  background: var(--panel-bg-hover);
+  color: var(--text);
+}
+
+/* Proposal panel / dialog containers (dark navy in base) */
+:root[data-theme="light"] .planner-proposal-panel,
+:root[data-theme="light"] .planner-proposal-panel--left-rail,
+:root[data-theme="light"] .planner-dialog__composer,
+:root[data-theme="light"] .planner-proposal-panel--omni .planner-dialog__composer,
+:root[data-theme="light"] .planner-dialog__empty,
+:root[data-theme="light"] .planner-dialog__message,
+:root[data-theme="light"] .planner-states-list,
+:root[data-theme="light"] .planner-states-summary,
+:root[data-theme="light"] .planner-plan-card {
+  background: var(--panel-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-dialog__composer {
+  border-top-color: var(--border);
+}
+
+/* Onboarding card / starter suggestions / history toggles use white-tint
+ * fills that vanish on a light bg — give them a paper surface. */
+:root[data-theme="light"] .planner-dialog__onboarding,
+:root[data-theme="light"] .planner-dialog__starter-suggestions button,
+:root[data-theme="light"] .planner-proposal-panel--omni .planner-dialog__starter-suggestions button,
+:root[data-theme="light"] .planner-dialog__history-toggle,
+:root[data-theme="light"] .planner-dialog__history-trimmed,
+:root[data-theme="light"] .planner-markdown__expand,
+:root[data-theme="light"] .planner-proposal-change,
+:root[data-theme="light"] .planner-states-row {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Markdown code blocks / inline code (dark fills) */
+:root[data-theme="light"] .planner-markdown pre {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-markdown code {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-markdown.is-collapsed::after {
+  background: linear-gradient(to bottom, transparent, var(--panel-bg));
+}
+
+/* Composer textarea + selection chip */
+:root[data-theme="light"] .planner-dialog__composer textarea {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ---- Node card shell + perception / kind variants ---- */
+:root[data-theme="light"] .planner-node {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: 0 12px 32px rgba(62, 52, 40, 0.12);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 14px 36px rgba(62, 52, 40, 0.14);
+}
+:root[data-theme="light"] .planner-node--perception-done {
+  background: color-mix(in srgb, var(--success) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-attention {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-active,
+:root[data-theme="light"] .planner-node--kind-session {
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--info) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-not-reached {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-node--kind-artifact,
+:root[data-theme="light"] .planner-node--artifact-node {
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--warning) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--subcanvas-ref {
+  background: var(--bg-paper);
+}
+
+/* Node handle dot */
+:root[data-theme="light"] .planner-node__handle {
+  border-color: color-mix(in srgb, var(--text) 40%, transparent);
+  background: var(--bg-paper);
+}
+
+/* Node inner surfaces: textarea, artifact/io/kanban/output blocks (dark
+ * rgba(18,18,16,…) fills + white-tint fills) */
+:root[data-theme="light"] .planner-node__artifact-input textarea,
+:root[data-theme="light"] .planner-node__artifact-empty,
+:root[data-theme="light"] .planner-node__artifact-meta,
+:root[data-theme="light"] .planner-node__integration-preview,
+:root[data-theme="light"] .planner-node__artifact-pre,
+:root[data-theme="light"] .planner-node__kanban-column,
+:root[data-theme="light"] .planner-node__output-row,
+:root[data-theme="light"] .planner-node__io-item,
+:root[data-theme="light"] .planner-input-card {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .planner-node__details {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- Node inspector drawer ---- */
+:root[data-theme="light"] .planner-node-modal {
+  background: var(--modal-bg);
+  border-left-color: var(--border);
+  box-shadow: -24px 0 60px rgba(62, 52, 40, 0.18);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node-modal__widget-popover,
+:root[data-theme="light"] .planner-node-modal__tabs,
+:root[data-theme="light"] .planner-node-modal__action-summary > div,
+:root[data-theme="light"] .planner-node-modal__info-tile,
+:root[data-theme="light"] .planner-node-modal__schema-row,
+:root[data-theme="light"] .planner-node-modal__input-editor,
+:root[data-theme="light"] .planner-node-modal__list li,
+:root[data-theme="light"] .planner-node-actions__panel,
+:root[data-theme="light"] .planner-node-actions__member,
+:root[data-theme="light"] .planner-node-actions__buttons button,
+:root[data-theme="light"] .planner-node-modal__assign-doer {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node-modal__input-editor textarea,
+:root[data-theme="light"] .planner-node-modal__view-row--inline > input,
+:root[data-theme="light"] .planner-node-actions__panel--schedule input,
+:root[data-theme="light"] .planner-node-actions__panel--schedule textarea,
+:root[data-theme="light"] .planner-node-actions__field select,
+:root[data-theme="light"] .planner-node-actions__field input,
+:root[data-theme="light"] .planner-node-actions__field textarea,
+:root[data-theme="light"] .planner-node-modal__attach-link input {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ---- Proposal / node detail modals ---- */
+:root[data-theme="light"] .planner-proposal-modal,
+:root[data-theme="light"] .planner-proposal-modal__advanced div,
+:root[data-theme="light"] .planner-visibility-confirm,
+:root[data-theme="light"] .planner-session-picker,
+:root[data-theme="light"] .planner-run-history,
+:root[data-theme="light"] .planner-run-selector__menu,
+:root[data-theme="light"] .planner-delivery-start,
+:root[data-theme="light"] .planner-onboarding-card,
+:root[data-theme="light"] .planner-attach-popover,
+:root[data-theme="light"] .planner-assign-dialog {
+  background: var(--modal-bg);
+  border-color: var(--border);
+  box-shadow: 0 24px 64px rgba(62, 52, 40, 0.2);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-proposal-modal__changes,
+:root[data-theme="light"] .planner-proposal-modal__flow,
+:root[data-theme="light"] .planner-run-history__list button,
+:root[data-theme="light"] .planner-session-picker__row,
+:root[data-theme="light"] .planner-session-picker__search,
+:root[data-theme="light"] .planner-run-selector__current,
+:root[data-theme="light"] .planner-run-selector__start,
+:root[data-theme="light"] .planner-run-selector__mode,
+:root[data-theme="light"] .planner-delivery-start input,
+:root[data-theme="light"] .planner-delivery-start textarea,
+:root[data-theme="light"] .planner-attach-popover__field select,
+:root[data-theme="light"] .planner-attach-popover__field input,
+:root[data-theme="light"] .planner-attach-popover__actions button,
+:root[data-theme="light"] .planner-assign-dialog__search,
+:root[data-theme="light"] .planner-monitor__search,
+:root[data-theme="light"] .planner-monitor__filters select {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-proposal-modal__preview-canvas {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-proposal-modal__preview-viewport .react-flow {
+  background: var(--bg);
+}
+
+/* ---- Minimap (bottom-right overview) ---- */
+:root[data-theme="light"] .planner-overview-map {
+  background: color-mix(in srgb, var(--bg-paper) 96%, transparent);
+  border-color: var(--border);
+  box-shadow: 0 14px 36px rgba(62, 52, 40, 0.16);
+}
+:root[data-theme="light"] .planner-overview-map__frame {
+  fill: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  stroke: var(--border);
+}
+:root[data-theme="light"] .planner-overview-map__node {
+  fill: #ece7dd;
+  stroke: var(--text-faint);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-done {
+  fill: color-mix(in srgb, var(--success) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-attention {
+  fill: color-mix(in srgb, var(--danger) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-active {
+  fill: color-mix(in srgb, var(--info) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-neutral,
+:root[data-theme="light"] .planner-overview-map__node.is-not-reached {
+  fill: #e4ded2;
+}
+
+/* ---- Flow controls + visibility toggle ---- */
+:root[data-theme="light"] .planner-flow__controls button {
+  background: var(--bg-paper);
+  border-bottom-color: var(--border);
+}
+:root[data-theme="light"] .planner-flow__controls button svg {
+  fill: var(--text);
+}
+:root[data-theme="light"] .planner-flow__state-badge,
+:root[data-theme="light"] .planner-flow__visibility,
+:root[data-theme="light"] .planner-flow__visibility-badge {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- Monitor lanes / cards (dark olive in base) ---- */
+:root[data-theme="light"] .planner-monitor-lane {
+  background: var(--panel-bg);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-monitor-lane__header,
+:root[data-theme="light"] .planner-monitor-card {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-monitor-card:hover,
+:root[data-theme="light"] .planner-monitor-card:focus-visible,
+:root[data-theme="light"] .planner-monitor-lane__header:hover,
+:root[data-theme="light"] .planner-monitor-lane__header:focus-visible {
+  background: var(--panel-bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+}
+
+/* ---- Notification banners: keep semantic tint but lift the dark fill ---- */
+:root[data-theme="light"] .planner-session-action-banner.is-warning,
+:root[data-theme="light"] .planner-session-health-banner {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-session-action-banner.is-ready,
+:root[data-theme="light"] .planner-ready-session-banner {
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-mcp-banner {
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-workspace-preview__notice {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+:root[data-theme="light"] .planner-workspace-preview__btn--reject {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- AI recap drawer body + tabs ---- */
+:root[data-theme="light"] .planner-monitor {
+  background: var(--bg);
+}
+:root[data-theme="light"] .ai-recap-drawer__group-tabs {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+:root[data-theme="light"] .planner-dialog__message--user {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+/* Floating "+ Transform" edge button (dark navy chip in base) */
+:root[data-theme="light"] .planner-edge-insert__button {
+  background: var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  color: color-mix(in srgb, var(--info) 70%, var(--text));
+  box-shadow: 0 2px 6px rgba(62, 52, 40, 0.14);
 }
 
 /* ---------------------------------------------------------------

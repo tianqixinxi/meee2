@@ -8,17 +8,12 @@
    via CSS custom properties if you want a different palette. */
 
 .meee2-session-inspector {
-  /* Default palette — Claude warm dark. Apps can override via
-     style={{'--bg': '#fff', '--text': '#222', ...}}. */
-  --bg: #262624;
-  --bg-paper: #2C2B29;
-  --text: #F5F4EF;
-  --accent: #CC785C;
-  --accent-hover: #D6896E;
-  --border: #3A3A38;
-  --success: #7FA982;
-  --warning: #D4A373;
-  --danger: #C26A6A;
+  /* 颜色 token 不再在这里硬编码 —— 让 inspector 继承 styles.css 里随
+     data-theme 翻转的全局 token（--bg/--text/--border/...），light/dark
+     自动跟随。这里只保留字体 / 圆角等与主题无关的本地 token。
+     Apps 仍可通过 style={{'--bg': '#fff', ...}} 在根上覆盖。
+     注意：不要在这里重新声明 --bg/--text 等颜色 token，否则会 shadow 掉
+     全局翻转值、把 inspector 永久锁死成深色。 */
   --serif: ui-serif, 'Iowan Old Style', 'Palatino', 'Charter', Georgia, serif;
   --mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
   --radius-sm: 6px;
@@ -27,7 +22,7 @@
   font-family: var(--serif);
 }
 
-.meee2-session-inspector .muted { color: rgba(245, 244, 239, 0.5); }
+.meee2-session-inspector .muted { color: var(--text-dim); }
 .meee2-session-inspector .mono { font-family: var(--mono); }
 
 .color-dot {
@@ -124,21 +119,22 @@
 }
 
 .sd__sid {
-  font-size: 10px; color: #5b6478; letter-spacing: 0.4px;
+  font-size: 10px; color: var(--text-faint); letter-spacing: 0.4px;
 }
 
 .sd__cwd {
-  margin-top: 3px; font-size: 11px; color: #6B7280; font-family: var(--mono);
+  margin-top: 3px; font-size: 11px; color: var(--text-dim); font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .sd__open-btn {
   font-size: 11px; font-weight: 500; padding: 3px 10px; border-radius: 5px;
-  background: transparent; color: #C7CBD6; border: 1px solid var(--border);
+  background: transparent; color: var(--text); border: 1px solid var(--border);
   cursor: pointer; white-space: nowrap; transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.sd__open-btn:hover:not(:disabled) { background: #1E2330; border-color: #3A4150; }
+/* hover：原暗色用深蓝灰，改用主题 token，light 下自动变浅纸底 */
+.sd__open-btn:hover:not(:disabled) { background: var(--panel-bg-hover, var(--bg-paper)); border-color: var(--border-strong); }
 
 .sd__open-btn:disabled { opacity: 0.55; cursor: wait; }
 
@@ -161,18 +157,18 @@
 .sd__status--dead { color: #EF4444; background: rgba(239,68,68,0.12); }
 
 .sd__chip {
-  font-size: 10.5px; color: #94A3B8; padding: 2px 8px; border-radius: 10px;
-  background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+  font-size: 10.5px; color: var(--text-dim); padding: 2px 8px; border-radius: 10px;
+  background: var(--bg-paper); border: 1px solid var(--border);
   white-space: nowrap;
 }
 
-.sd__chip--tokens { color: #94A3B8; font-family: var(--mono); }
+.sd__chip--tokens { color: var(--text-dim); font-family: var(--mono); }
 
-.sd__chip--bg     { color: #A78BFA; }
+.sd__chip--bg     { color: #A78BFA; }   /* 紫：bg-task 语义色，明暗皆可读 */
 
-.sd__chip--inbox  { color: #FB923C; }
+.sd__chip--inbox  { color: #FB923C; }   /* 橙：inbox 语义色，明暗皆可读 */
 
-.sd__chip--subtle { color: #6B7280; }
+.sd__chip--subtle { color: var(--text-faint); }
 
 .sd__chip--popover { position: relative; cursor: default; }
 
@@ -189,17 +185,18 @@
   display: none;
   flex-direction: column;
   gap: 8px;
-  /* 暖褐纸底 + 赤陶内光晕 */
-  background: #2C2B29;             /* --bg-paper */
-  border: 1px solid #3A3A38;       /* --border */
+  /* 暖褐纸底 + 赤陶内光晕；底/边/字走主题 token，light 下自动翻成浅纸。
+     dark 下 --bg-paper = #2C2B29，与原硬编码值一致，不改暗色观感 */
+  background: var(--bg-paper);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md, 10px);
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.3),
     0 8px 24px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(204, 120, 92, 0.08) inset;
+    0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent) inset;
   font-size: 11.5px;
   font-weight: 400;
-  color: #E8E5DC;
+  color: var(--text);
   text-align: left;
   white-space: normal;
 }
@@ -213,31 +210,36 @@
   font-weight: 500;
   text-transform: none;
   letter-spacing: 0;
-  color: #BDB9AD;
+  color: var(--text-dim);
   padding-bottom: 5px;
-  border-bottom: 1px solid #3A3A38;
+  border-bottom: 1px solid var(--border);
 }
 
 .sd__chip-popover__row {
   display: flex; flex-direction: column; gap: 3px;
   padding: 6px 0;
-  border-top: 1px dashed rgba(168, 165, 155, 0.14);
+  border-top: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .sd__chip-popover__row:first-of-type { border-top: none; padding-top: 2px; }
 
 .sd__chip-popover__meta {
-  display: flex; gap: 8px; font-size: 10px; color: #7A7670;
+  display: flex; gap: 8px; font-size: 10px; color: var(--text-faint);
 }
 
 .sd__chip-popover__meta .mono {
-  color: #F0D5C7;                  /* from-alias 用 user chip 同色（暖米） */
+  /* from-alias：暖米/赤陶色。dark 用原 #F0D5C7，light 下太浅看不清，用 accent */
+  color: #F0D5C7;
   font-weight: 500;
+}
+
+:root[data-theme="light"] .sd__chip-popover__meta .mono {
+  color: var(--accent);
 }
 
 .sd__chip-popover__body {
   font-size: 12px;
-  color: #F5F4EF;
+  color: var(--text);
   line-height: 1.4;
   word-break: break-word;
   display: -webkit-box;
@@ -266,29 +268,31 @@
 }
 
 .sd__tokens-label {
-  color: #A8A59B;
+  color: var(--text-dim);
 }
 
 .sd__tokens-value {
-  color: #F5F4EF;
+  color: var(--text);
   text-align: right;
 }
 
 .sd__tokens-value--cache {
-  color: #BDB9AD;                                      /* cache 降一档亮度，视觉上不抢主数据 */
+  color: var(--text-dim);                             /* cache 降一档亮度，视觉上不抢主数据 */
 }
 
 .sd__tokens-footer {
   font-size: 10.5px;
-  color: #7A7670;
+  color: var(--text-faint);
   padding-top: 5px;
-  border-top: 1px solid #3A3A38;
+  border-top: 1px solid var(--border);
   margin-top: 2px;
 }
 
 .sd__block {
   display: flex; flex-direction: column; gap: 6px;
   padding: 8px 10px;
+  /* 微抬升的卡面：dark 保持原来的极淡白叠加（不改暗色观感），
+     light 下白叠加几乎不可见，改用 --surface（浅纸）翻转 —— 见下方 light override */
   background: rgba(255,255,255,0.02);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -299,18 +303,27 @@
   border-color: rgba(255,255,255,0.08);
 }
 
+:root[data-theme="light"] .sd__block {
+  background: var(--surface);
+}
+
+:root[data-theme="light"] .sd__block--recap {
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg-paper));
+  border-color: var(--border);
+}
+
 .sd__block-head {
   display: flex; align-items: center; gap: 8px;
   font-size: 10.5px; font-weight: 600; letter-spacing: 0.5px;
-  text-transform: uppercase; color: #7F8698;
+  text-transform: uppercase; color: var(--text-dim);
 }
 
 .sd__block-count {
-  font-size: 10px; color: #94A3B8; font-family: var(--mono); font-weight: 500;
+  font-size: 10px; color: var(--text-dim); font-family: var(--mono); font-weight: 500;
 }
 
 .sd__block-age {
-  font-size: 10px; color: #6B7280; margin-left: auto;
+  font-size: 10px; color: var(--text-faint); margin-left: auto;
 }
 
 .sd__block-toggle {
@@ -318,13 +331,13 @@
   font-size: 12px; line-height: 1; width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--border); border-radius: 4px;
-  background: transparent; color: #94A3B8; cursor: pointer;
+  background: transparent; color: var(--text-dim); cursor: pointer;
 }
 
-.sd__block-toggle:hover { background: #1E2330; }
+.sd__block-toggle:hover { background: var(--panel-bg-hover, var(--bg-paper)); }
 
 .sd__recap-body {
-  font-size: 12.5px; line-height: 1.55; color: #C7CBD6;
+  font-size: 12.5px; line-height: 1.55; color: var(--text);
   white-space: pre-wrap; word-break: break-word;
 }
 
@@ -333,33 +346,33 @@
 .sd__list-row {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 0; font-size: 12px;
-  border-top: 1px dashed rgba(255,255,255,0.04);
+  border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .sd__list-row:first-child { border-top: none; padding-top: 2px; }
 
 .sd__bg-kind {
   font-size: 9.5px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase;
-  color: #A78BFA; min-width: 48px; font-family: var(--mono);
+  color: #A78BFA; min-width: 48px; font-family: var(--mono);   /* 紫：bg-task 语义色，明暗皆可读 */
 }
 
-.sd__list-main { flex: 1; min-width: 0; word-break: break-word; color: #C7CBD6; }
+.sd__list-main { flex: 1; min-width: 0; word-break: break-word; color: var(--text); }
 
-.sd__list-age { font-size: 10px; color: #6B7280; }
+.sd__list-age { font-size: 10px; color: var(--text-faint); }
 
 .sd__inbox-row {
-  padding: 6px 0; border-top: 1px dashed rgba(255,255,255,0.04);
+  padding: 6px 0; border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .sd__inbox-row:first-child { border-top: none; padding-top: 2px; }
 
 .sd__inbox-meta {
-  display: flex; gap: 8px; font-size: 10px; color: #6B7280;
+  display: flex; gap: 8px; font-size: 10px; color: var(--text-faint);
   margin-bottom: 3px;
 }
 
 .sd__inbox-body {
-  font-size: 12px; color: #D4D8E1; word-break: break-word;
+  font-size: 12px; color: var(--text); word-break: break-word;
 }
 
 .sd__channels {
