@@ -54,6 +54,7 @@ public extension InternalTerminalSurfaceClient {
 final class WeakInternalTerminalSurfaceClient {
     weak var value: InternalTerminalSurfaceClient?
     var wantsOutput: Bool
+    var pausedSince: Int64?
 
     init(_ value: InternalTerminalSurfaceClient, wantsOutput: Bool = true) {
         self.value = value
@@ -586,6 +587,7 @@ final class InternalTerminalSurface {
         lock.lock()
         if let box = nativeClients[key] {
             box.wantsOutput = false
+            box.pausedSince = totalOutputBytes
         }
         let position = totalOutputBytes
         lock.unlock()
@@ -597,6 +599,7 @@ final class InternalTerminalSurface {
         lock.lock()
         if let box = nativeClients[key] {
             box.wantsOutput = true
+            box.pausedSince = nil
         } else {
             nativeClients[key] = WeakInternalTerminalSurfaceClient(client, wantsOutput: true)
         }
@@ -650,9 +653,11 @@ final class InternalTerminalSurface {
         status = .exited
         exitCode = code
         updatedAt = Date()
+        let pausedReplays = pausedClientReplaysLocked()
         lock.unlock()
 
         flushNativeClientOutput()
+        notifyNativeClientsReplay(pausedReplays)
         let snapshot = snapshot()
         notifyNativeClientsStatus(snapshot)
         notifyNativeClientsExit(code)
@@ -785,6 +790,14 @@ final class InternalTerminalSurface {
         }
     }
 
+    private func notifyNativeClientsReplay(_ replays: [(InternalTerminalSurfaceClient, Data)]) {
+        for (client, data) in replays where !data.isEmpty {
+            Task { @MainActor in
+                client.internalTerminalSurface(self.surfaceId, didReplayOutput: data)
+            }
+        }
+    }
+
     private func appendScrollbackLocked(_ data: Data) {
         scrollback.append(data)
         totalOutputBytes += Int64(data.count)
@@ -809,7 +822,6 @@ final class InternalTerminalSurface {
     }
 
     private func outputDataLocked(since position: Int64) -> Data {
-        guard status == .running else { return Data() }
         if position < scrollbackBaseOffset {
             return replayDataLocked()
         }
@@ -817,6 +829,23 @@ final class InternalTerminalSurface {
         let start = max(0, min(scrollback.count, Int(position - scrollbackBaseOffset)))
         let startIndex = scrollback.index(scrollback.startIndex, offsetBy: start)
         return Data(scrollback[startIndex...])
+    }
+
+    private func pausedClientReplaysLocked() -> [(InternalTerminalSurfaceClient, Data)] {
+        var replays: [(InternalTerminalSurfaceClient, Data)] = []
+        for (key, box) in nativeClients {
+            guard let client = box.value else {
+                nativeClients.removeValue(forKey: key)
+                continue
+            }
+            guard !box.wantsOutput, let pausedSince = box.pausedSince else { continue }
+            let replay = outputDataLocked(since: pausedSince)
+            if !replay.isEmpty {
+                replays.append((client, replay))
+            }
+            box.pausedSince = totalOutputBytes
+        }
+        return replays
     }
 
     private static func safeScrollbackTrimIndex(in data: Data, preferredIndex: Int) -> Int {
