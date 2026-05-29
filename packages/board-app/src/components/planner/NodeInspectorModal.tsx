@@ -434,7 +434,7 @@ export function NodeInspectorModal({
 
         <div className="planner-node-modal__group-label" ref={widgetPopoverRef}>
           <span>成果 · 剪贴板</span>
-          <small>artifacts · inputs / outputs / 版本</small>
+          <small>成果 · 入参 / 出参 / 版本</small>
           {/* UI-simplification §2.9 — 视图当前摘要(read-only,无需展开 popover
            *  就能看到当前视图是什么)+ ⚙ 展开 inline popover 调视图。 */}
           <span className="planner-node-modal__widget-summary">
@@ -491,7 +491,7 @@ export function NodeInspectorModal({
         </div>
 
         <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> Inputs</h3>
+          <h3><Route size={13} aria-hidden /> 入参</h3>
           <InputCardSections
             node={node}
             variant="modal"
@@ -502,10 +502,10 @@ export function NodeInspectorModal({
         </div>
 
         <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> Output</h3>
+          <h3><Route size={13} aria-hidden /> 出参</h3>
           <div className="planner-node-modal__schema">
             <SchemaList
-              title="Outputs"
+              title="出参"
               items={outputItems}
               empty="这个节点暂时没有产出"
               visibleItems={visibleIOArtifacts.outputs}
@@ -524,25 +524,18 @@ export function NodeInspectorModal({
         {canUseStepActions && (
           <div className="planner-node-modal__section">
             <h3><Sparkles size={13} aria-hidden /> 动作</h3>
+            {/* UI-simplification inspector-actions-4-buttons — 4 个平铺动作:
+             *  展开为子画板 / 指派 / 定时 / 重新发起。advancedOpen 状态保留给
+             *  「换一次进展」(replace-session,语义不同 — 会断开当前进展,留高级折叠区)。 */}
             <div className="planner-node-actions__buttons">
               <button
                 type="button"
                 disabled={actionBusy}
                 onClick={() => sendNodeActionToAI('expand-sub-canvas')}
               >
-                <Layers size={12} aria-hidden /> 展开成子画板
+                <Layers size={12} aria-hidden /> 展开为子画板
               </button>
-              {/* UI-simplification chunk G — 高级折叠触发,默认收起 Schedule /
-               *  Replace session / Assign owner(advanced & 高危 action)。 */}
-              <button
-                type="button"
-                className="planner-node-actions__advanced-toggle"
-                onClick={() => setAdvancedOpen((v) => !v)}
-                aria-expanded={advancedOpen}
-              >
-                高级 {advancedOpen ? '▴' : '▾'}
-              </button>
-              {advancedOpen && showOwnerInfo && (
+              {showOwnerInfo && (
                 <button
                   type="button"
                   disabled={actionBusy || !canAssignOwner}
@@ -552,34 +545,55 @@ export function NodeInspectorModal({
                     setAssignOpen((value) => !value)
                   }}
                 >
-                  <UserRound size={12} aria-hidden /> 指派负责人
+                  <UserRound size={12} aria-hidden /> 指派
                 </button>
               )}
-              {advancedOpen && (
-                <button
-                  type="button"
-                  disabled={actionBusy || !node.sessionId}
-                  title={node.sessionId ? undefined : '要先给节点接一个进展,才能设定定时'}
-                  onClick={() => {
-                    setActionError(null)
-                    setScheduleOpen((value) => !value)
-                  }}
-                >
-                  <CalendarClock size={12} aria-hidden /> 设定定时
-                </button>
-              )}
-              {advancedOpen && node.sessionId && onReplaceSession && (
-                <button
-                  type="button"
-                  className="planner-node-actions__danger"
-                  disabled={actionBusy}
-                  onClick={() => {
-                    setActionError(null)
-                    setReplaceConfirmOpen((value) => !value)
-                  }}
-                >
-                  <RefreshCw size={12} aria-hidden /> 换一次进展
-                </button>
+              <button
+                type="button"
+                disabled={actionBusy || !node.sessionId}
+                title={node.sessionId ? undefined : '要先给节点接一个进展,才能设定定时'}
+                onClick={() => {
+                  setActionError(null)
+                  setScheduleOpen((value) => !value)
+                }}
+              >
+                <CalendarClock size={12} aria-hidden /> 定时
+              </button>
+              <button
+                type="button"
+                disabled={actionBusy || !onRerunNode}
+                title="为该节点新建一个版本(走 desktop /rerun)"
+                onClick={() => {
+                  onRerunNode?.(node.id, latestArtifactForVersionSlot?.reference)
+                }}
+              >
+                <RefreshCw size={12} aria-hidden /> 重新发起
+              </button>
+              {/* 「换一次进展」 留在高级折叠区(replace-session 会断开当前进展)。 */}
+              {node.sessionId && onReplaceSession && (
+                <>
+                  <button
+                    type="button"
+                    className="planner-node-actions__advanced-toggle"
+                    onClick={() => setAdvancedOpen((v) => !v)}
+                    aria-expanded={advancedOpen}
+                  >
+                    高级 {advancedOpen ? '▴' : '▾'}
+                  </button>
+                  {advancedOpen && (
+                    <button
+                      type="button"
+                      className="planner-node-actions__danger"
+                      disabled={actionBusy}
+                      onClick={() => {
+                        setActionError(null)
+                        setReplaceConfirmOpen((value) => !value)
+                      }}
+                    >
+                      <RefreshCw size={12} aria-hidden /> 换一次进展
+                    </button>
+                  )}
+                </>
               )}
             </div>
             {advancedOpen && replaceConfirmOpen && node.sessionId && (
@@ -609,7 +623,7 @@ export function NodeInspectorModal({
                 </div>
               </div>
             )}
-            {advancedOpen && scheduleOpen && (
+            {scheduleOpen && (
               <div className="planner-node-actions__panel planner-node-actions__panel--schedule">
                 <label>
                   <span>每</span>
@@ -649,7 +663,7 @@ export function NodeInspectorModal({
                 </div>
               </div>
             )}
-            {advancedOpen && showOwnerInfo && assignOpen && (
+            {showOwnerInfo && assignOpen && (
               <div className="planner-node-actions__panel">
                 {teamMembers.length === 0 ? (
                   <p className="planner-node-modal__empty">团队里还没人可以指派</p>
@@ -910,7 +924,7 @@ function describeWidget(widget: Widget | null, node: PlanningNode): string {
   switch (source.inputKind) {
     case 'subcanvas-aggregate': {
       const ids = source.subcanvasIds ?? []
-      if (ids.length === 0) return `${label} ← 子画板聚合(未指定 subcanvasIds)`
+      if (ids.length === 0) return `${label} ← 子画板聚合(子画板待配置)`
       return `${label} ← 聚合 ${ids.length} 个子画板`
     }
     case 'upstream': {
@@ -921,7 +935,7 @@ function describeWidget(widget: Widget | null, node: PlanningNode): string {
       return `${label} ← 上游节点 ${upstreamId.slice(0, 8)} 的 artifact`
     }
     case 'external':
-      return `${label} ← input.external[${source.inputIndex ?? 0}](integration entity)`
+      return `${label} ← 外部数据源 #${source.inputIndex ?? 0}`
     default:
       return label
   }

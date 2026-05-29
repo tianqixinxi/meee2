@@ -1042,12 +1042,37 @@
 
 /* UI-simplification §2.9 — three-section group labels inside inspector. */
 .planner-node-modal__group-label {
+  position: relative;
   display: flex;
   align-items: baseline;
   gap: 10px;
   margin: 18px 0 4px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(168, 165, 155, 0.16);
+}
+/* UI-simplification inspector-three-section — widget settings toggle + popover
+ *  on 成果·剪贴板 group-label. Popover anchors top-right under the gear icon. */
+.planner-node-modal__widget-toggle {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.planner-node-modal__widget-toggle:hover {
+  opacity: 1;
+}
+.planner-node-modal__widget-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 .planner-node-modal__group-label > span {
   font-family: var(--serif);

@@ -88,7 +88,7 @@ function resolveFromIntegration(ctx: ResolverContext): WidgetData {
     entities.push(entityFromSchema(e, schema, ctx.widget))
   }
   if (entities.length === 0) {
-    return emptyWithHint('还没接外部数据 — 到节点详情里挑一个集成实体')
+    return emptyWithHint('还没接到外部数据 — 到节点详情里连一个外部服务')
   }
   return { entities }
 }
