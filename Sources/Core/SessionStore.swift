@@ -284,9 +284,8 @@ public class SessionStore: ObservableObject {
     // MARK: - 初始化
 
     private init() {
-        let home = NSHomeDirectory()
-        baseDir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        sessionsDir = baseDir.appendingPathComponent("sessions")
+        baseDir = MEEE2Env.home
+        sessionsDir = MEEE2Env.sessionsDir
         queuesDir = baseDir.appendingPathComponent("queues")
         unreadDir = baseDir.appendingPathComponent("unread")
 

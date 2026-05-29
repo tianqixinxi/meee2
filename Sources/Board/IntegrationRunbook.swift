@@ -45,8 +45,7 @@ enum IntegrationRunbookGenerator {
     }
 
     private static func writeRunbook(integrationId: String, content: String) throws -> String {
-        let dir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let dir = MEEE2Env.home
             .appendingPathComponent("runbooks", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("connect-\(integrationId).md")

@@ -57,12 +57,27 @@ Plugin SDK: `meee2-plugin-kit/` (shared dylib, defines `SessionPlugin` open clas
 
 Most debug loops follow one pattern: **tail the log + trigger the action + grep the trace**.
 
-### Log file
+### Log files — **TWO disjoint sinks**
 
-meee2 writes all `NSLog` / `[StateTrace]` events to `/tmp/meee2.log` (plus `~/Library/Logs/meee2.log` as fd 3). Watch in real time:
+meee2 has two independent log files; tail both if you don't know which one your bug lives in.
+
+| File | What writes to it |
+|---|---|
+| state-trace log (default `/tmp/meee2.log`; overridable — see below) | `NSLog()` direct calls + nohup stdout/stderr of the debug binary. `[StateTrace]` lives here. |
+| `~/Library/Logs/meee2.log` (default; overridable via `MEEE2_HOME` / `MEEE2_LOG_DIR`) | `MLog / MDebug / MInfo / MWarn / MError` family. WKWebView JS `console.warn/error` from React UI lands here via JSConsoleBridge → MWarn (`[BoardWebWindow.js]` prefix). |
+
+Path resolution (single source of truth: `MEEE2Env.logDir` for Swift, `scripts/dev-restart.sh` for the shell redirect):
+
+| Env vars | MLog log file | state-trace log file |
+|---|---|---|
+| none | `~/Library/Logs/meee2.log` | `/tmp/meee2-<sha8(pwd)>.log` (script) or `/tmp/meee2.log` (bare run) |
+| `MEEE2_HOME=/path` | `/path/logs/meee2.log` | `/path/logs/state-trace.log` |
+| `MEEE2_LOG_DIR=/dir` | `/dir/meee2.log` | `/dir/state-trace.log` |
+
+Watch in real time:
 
 ```bash
-tail -F /tmp/meee2.log | grep -a -E "StateTrace|TerminalJumper|MessageRouter"
+tail -F /tmp/meee2.log ~/Library/Logs/meee2.log | grep -a -E "StateTrace|TerminalJumper|MessageRouter"
 ```
 
 Common trace tags:

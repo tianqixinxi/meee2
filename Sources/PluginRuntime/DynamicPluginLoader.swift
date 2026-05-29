@@ -98,10 +98,7 @@ public class DynamicPluginLoader {
     // MARK: - Init
 
     init() {
-        let home = NSHomeDirectory()
-        pluginDirectory = URL(fileURLWithPath: home)
-            .appendingPathComponent(".meee2")
-            .appendingPathComponent("plugins")
+        pluginDirectory = MEEE2Env.pluginsDir
     }
 
     // MARK: - Public
@@ -246,10 +243,7 @@ public class DynamicPluginLoader {
         // 清除之前的 dlerror
         dlerror()
 
-        let home = NSHomeDirectory()
-        let libDir = URL(fileURLWithPath: home)
-            .appendingPathComponent(".meee2")
-            .appendingPathComponent("lib")
+        let libDir = MEEE2Env.home.appendingPathComponent("lib", isDirectory: true)
         let libPath = libDir.appendingPathComponent("libMeee2PluginKit.dylib")
 
         // 尝试从 app bundle 复制 dylib

@@ -32,9 +32,8 @@ class SessionTerminalStore {
     private let queueKey = DispatchSpecificKey<Void>()
 
     private init() {
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        storeURL = dir.appendingPathComponent("session-terminals.json")
+        let dir = MEEE2Env.home
+        storeURL = MEEE2Env.sessionTerminalsURL
         queue.setSpecific(key: queueKey, value: ())
 
         // 确保目录存在

@@ -2812,9 +2812,7 @@ final class PlannerStore {
     }
 
     static let shared = PlannerStore(
-        fileURL: URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
-            .appendingPathComponent("planner", isDirectory: true)
+        fileURL: MEEE2Env.plannerDir
     )
 
     private let rootURL: URL

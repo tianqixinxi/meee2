@@ -79,23 +79,27 @@ Most debug loops follow one pattern: **tail the log + trigger the action + grep 
 
 ### Log files — **TWO disjoint sinks, not fd-mirrored**
 
-meee2 has two log files. They contain **different** events; if you only tail one you will miss the other half. The "plus fd 3" wording in earlier docs was misleading — these are independent streams.
+meee2 has two log files. They contain **different** events; if you only tail one you will miss the other half. These are independent streams (the old "plus fd 3" wording was misleading).
 
-| File | What writes to it |
-|---|---|
-| `/tmp/meee2.log` | `NSLog()` direct calls (system services, hook ingestion, PluginManager, `[StateTrace]`) + stdout/stderr of `nohup`-launched debug binary |
-| `~/Library/Logs/meee2.log` | `MLog / MDebug / MInfo / MWarn / MError` family (`Sources/Core/LogManager.swift`). **WKWebView JS console.warn/error from React UI lands here** via JSConsoleBridge → MWarn → `~/Library/Logs/meee2.log` |
+Both files now resolve through `MEEE2Env` (Swift) / `scripts/dev-restart.sh` (shell) — set `MEEE2_HOME` or `MEEE2_LOG_DIR` and **both files move together**, so multiple workspaces don't trash each other.
 
-Rule of thumb when debugging:
+| File | What writes to it | Default location | With `MEEE2_HOME=/x` | With `MEEE2_LOG_DIR=/y` |
+|---|---|---|---|---|
+| MLog log (`Sources/Core/LogManager.swift`) | `MLog / MDebug / MInfo / MWarn / MError`. **WKWebView JS `console.warn/error` from React UI lands here** via JSConsoleBridge → MWarn (`[BoardWebWindow.js]` prefix). | `~/Library/Logs/meee2.log` | `/x/logs/meee2.log` | `/y/meee2.log` |
+| state-trace log (nohup stdout/stderr in `scripts/dev-restart.sh`) | `NSLog()` direct calls (system services, hook ingestion, PluginManager, `[StateTrace]`) + early stdout/stderr of the debug binary | `/tmp/meee2-<sha8(pwd)>.log` from `dev-restart.sh`; bare-run/legacy default `/tmp/meee2.log` | `/x/logs/state-trace.log` | `/y/state-trace.log` |
 
-- **Hook / socket / status-resolver bugs** → tail `/tmp/meee2.log` (StateTrace tags live there)
-- **React UI / front-end bugs / `console.warn` instrumentation** → tail `~/Library/Logs/meee2.log` (look for `[BoardWebWindow.js]` prefix)
+Rule of thumb when debugging (substitute your actual paths if `MEEE2_HOME`/`MEEE2_LOG_DIR` is set):
+
+- **Hook / socket / status-resolver bugs** → tail the state-trace log (StateTrace tags live there)
+- **React UI / front-end bugs / `console.warn` instrumentation** → tail the MLog log (look for `[BoardWebWindow.js]` prefix)
 - **Not sure which** → tail both:
   ```bash
-  tail -F /tmp/meee2.log ~/Library/Logs/meee2.log
+  tail -F "${MEEE2_LOG_DIR:-${MEEE2_HOME:+$MEEE2_HOME/logs}}/state-trace.log" 2>/dev/null \
+         "${MEEE2_LOG_DIR:-${MEEE2_HOME:+$MEEE2_HOME/logs}}/meee2.log" 2>/dev/null \
+         /tmp/meee2.log ~/Library/Logs/meee2.log
   ```
 
-Watch in real time:
+Watch in real time (defaults shown — substitute your env-overridden paths if set):
 
 ```bash
 # system / hook side
@@ -107,7 +111,7 @@ tail -F ~/Library/Logs/meee2.log | grep -aE "BoardWebWindow|^.*\] \[WARN\]|^.*\]
 
 Instrumenting React/TS for log harness:
 - `console.log` → **dropped** (bridge ignores `.log`)
-- `console.warn` / `console.error` → forwarded to `~/Library/Logs/meee2.log` with `[BoardWebWindow.js]` prefix (see `App/BoardWebWindowController.swift` `JSConsoleBridge.captureScript`)
+- `console.warn` / `console.error` → forwarded to the MLog log with `[BoardWebWindow.js]` prefix (see `App/BoardWebWindowController.swift` `JSConsoleBridge.captureScript`)
 - For perf timing harness in React, use `console.warn(\`[my-trace] step=foo t=\${(performance.now() - t0).toFixed(0)}ms\`)`
 
 Common trace tags:
@@ -150,8 +154,14 @@ pnpm run build:dev          # web → WebDist, then swift build (one shot)
 pnpm run restart:dev        # then restart the dev binary in background
 
 # manual equivalent if you need custom env:
+# 注意：state-trace log 路径要跟 scripts/dev-restart.sh 对齐 ——
+#   有 MEEE2_HOME 用 $MEEE2_HOME/logs/state-trace.log；
+#   多 workspace 共存时用 /tmp/meee2-<sha8(pwd)>.log 防互覆。
 kill $(pgrep -f '\.build/.*meee2$') 2>/dev/null; sleep 1
-nohup .build/arm64-apple-macosx/debug/meee2 >/tmp/meee2.log 2>&1 &
+STATE_TRACE_LOG="${MEEE2_LOG_DIR:+$MEEE2_LOG_DIR/state-trace.log}"
+STATE_TRACE_LOG="${STATE_TRACE_LOG:-${MEEE2_HOME:+$MEEE2_HOME/logs/state-trace.log}}"
+STATE_TRACE_LOG="${STATE_TRACE_LOG:-/tmp/meee2.log}"
+nohup .build/arm64-apple-macosx/debug/meee2 >"$STATE_TRACE_LOG" 2>&1 &
 ```
 
 Common trap: editing React, running bare `swift build`, then wondering why the UI didn't
@@ -199,7 +209,9 @@ swift test --filter StateTraceFixtureTests
 捕获的内容 = `SessionData`（已脱敏：pid / ghosttyTerminalId / terminalInfo 都被
 置 nil 让 fixture 跨机器可跑；`/Users/<user>` 全替换成 `~`）+ transcript 文件
 tail（最后 N 行，再 cap 到 16KB —— resolver 实际只读 4KB，4× 余量足够）+
-`/tmp/meee2.log` 里跟该 sid 有关的 `[StateTrace]` 行（人读用，不进 assertion）+
+state-trace log（默认 `/tmp/meee2.log`，或 `$MEEE2_HOME/logs/state-trace.log` /
+`$MEEE2_LOG_DIR/state-trace.log`，路径由 `TestCommand.resolveStateTraceLogPath()` 决定）
+里跟该 sid 有关的 `[StateTrace]` 行（人读用，不进 assertion）+
 当时 resolver 输出的 status（作为 expected）。
 
 约定：

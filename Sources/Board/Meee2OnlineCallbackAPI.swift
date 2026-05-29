@@ -134,9 +134,8 @@ public struct Meee2OnlineCallbackAPI {
             ]
         ]
 
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
+        let dir = MEEE2Env.home
+        let file = MEEE2Env.settingsURL
 
         // 确保目录存在
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

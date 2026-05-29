@@ -3441,8 +3441,7 @@ enum BoardAPI {
     }
 
     private static func readMeee2OnlineSettings() -> [String: Any] {
-        let file = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2/settings.json")
+        let file = MEEE2Env.settingsURL
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let meee2 = root["meee2"] as? [String: Any] else {
@@ -3511,8 +3510,8 @@ enum BoardAPI {
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
         ]
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
+        let dir = MEEE2Env.home
+        let file = MEEE2Env.settingsURL
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: file, options: .atomic)
@@ -3603,8 +3602,8 @@ enum BoardAPI {
         ]
         let settings: [String: Any] = ["meee2": meee2Settings]
 
-        let dir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
+        let dir = MEEE2Env.home
+        let file = MEEE2Env.settingsURL
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: file, options: .atomic)

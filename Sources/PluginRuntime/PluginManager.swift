@@ -51,10 +51,7 @@ public class PluginManager: ObservableObject {
             MLog(message)
         }
 
-        let home = NSHomeDirectory()
-        pluginDirectory = URL(fileURLWithPath: home)
-            .appendingPathComponent(".meee2")
-            .appendingPathComponent("plugins")
+        pluginDirectory = MEEE2Env.pluginsDir
 
         try? FileManager.default.createDirectory(at: pluginDirectory, withIntermediateDirectories: true)
     }

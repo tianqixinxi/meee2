@@ -20,9 +20,7 @@ public final class SessionMemoryStore {
     private var records: [SessionMemoryRecord] = []
 
     private init() {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
-            .appendingPathComponent("memory", isDirectory: true)
+        let base = MEEE2Env.home.appendingPathComponent("memory", isDirectory: true)
         self.fileURL = base.appendingPathComponent("records.json")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         load()

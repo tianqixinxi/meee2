@@ -76,8 +76,7 @@ final class CoordinationStore {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2", isDirectory: true)
+            self.fileURL = MEEE2Env.home
                 .appendingPathComponent("coordination-groups.json", isDirectory: false)
         }
     }

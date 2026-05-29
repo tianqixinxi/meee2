@@ -406,7 +406,8 @@ export function AgentIntegrationMatrix({ onJumpToCanvas }: Props = {}) {
                   onClick={() => setOtherCollapsed((v) => !v)}
                   aria-expanded={!otherCollapsed}
                 >
-                  <strong>{t('integrations.otherCount', { count: otherRows.length })}</strong>
+                  <strong>{t('integrations.otherTitle')}</strong>
+                  <span className="muted">({otherRows.length})</span>
                   <span aria-hidden>{otherCollapsed ? '▾' : '▴'}</span>
                 </button>
                 <span className="agent-matrix__section-hint">

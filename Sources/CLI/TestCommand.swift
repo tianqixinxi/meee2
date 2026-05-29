@@ -88,9 +88,14 @@ public struct TestCommand {
             return Date().timeIntervalSince(mtime)
         }()
 
-        // ── 抓 /tmp/meee2.log 里跟该 sid 有关的 [StateTrace] 行
+        // ── 抓 state-trace 日志里跟该 sid 有关的 [StateTrace] 行。
+        // 路径优先级跟 scripts/dev-restart.sh 对齐：
+        //   1. MEEE2_LOG_DIR/state-trace.log
+        //   2. MEEE2_HOME/logs/state-trace.log
+        //   3. /tmp/meee2.log（老默认，向后兼容）
         let sid8 = String(session.sessionId.prefix(8))
-        let logExcerpts = grepLog(path: "/tmp/meee2.log", needle: sid8, max: 100).map(redactHome)
+        let stateTraceLogPath = Self.resolveStateTraceLogPath()
+        let logExcerpts = grepLog(path: stateTraceLogPath, needle: sid8, max: 100).map(redactHome)
 
         // ── 跑一次 resolver 当作"权威"答案。注意：这是当前现场的解析结果，
         //    所以 fixture 命名 / 描述里务必写清楚"我认为这个时刻的 status 应当是 X"，
@@ -318,6 +323,22 @@ public struct TestCommand {
         return tail.joined(separator: "\n")
     }
 
+    /// 解析当前进程的 state-trace 日志位置。
+    /// 跟 `scripts/dev-restart.sh` 里的 stdout/stderr 落盘规则对齐：
+    /// 1. `MEEE2_LOG_DIR/state-trace.log`
+    /// 2. `MEEE2_HOME/logs/state-trace.log`
+    /// 3. `/tmp/meee2.log`（旧默认，向后兼容）
+    static func resolveStateTraceLogPath() -> String {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["MEEE2_LOG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            return MEEE2Env.expandTilde(raw) + "/state-trace.log"
+        }
+        if let raw = env["MEEE2_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            return MEEE2Env.expandTilde(raw) + "/logs/state-trace.log"
+        }
+        return "/tmp/meee2.log"
+    }
+
     /// 简单 grep：读整个 log 文件，按 needle substring 过滤，返回最后 max 条。
     /// log 文件大时只看 tail 1MB 避免炸内存。
     private static func grepLog(path: String, needle: String, max: Int) -> [String] {
@@ -465,7 +486,8 @@ public struct TraceFixture: Codable {
     /// 的 "transcript-mtime-stale" 兜底规则依赖此字段。老 fixture 没这字段
     /// → nil → replay 时不动 mtime（保持文件刚写完的 fresh mtime）。
     public let transcriptFileAgeAtCaptureSeconds: Double?
-    /// /tmp/meee2.log 里跟此 sid 相关的 [StateTrace] 等日志片段，纯供人读
+    /// state-trace log（默认 `/tmp/meee2.log`；若 `MEEE2_HOME` / `MEEE2_LOG_DIR`
+    /// 被指定则跟随）里跟此 sid 相关的 [StateTrace] 等日志片段，纯供人读
     public let logExcerpts: [String]?
     /// 抓 fixture 时跑 `TranscriptStatusResolver.resolve(for:)` 得到的结果。
     /// test runner replay 时拿这个当 expected 比对。

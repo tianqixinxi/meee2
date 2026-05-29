@@ -219,7 +219,7 @@ public enum ReadinessDoctor {
             title: "Hook socket",
             status: result.ok ? .pass : .fail,
             severity: .required,
-            detail: result.ok ? "Synthetic probe reached /tmp/meee2.sock." : result.message,
+            detail: result.ok ? "Synthetic probe reached \(HookSocketServer.socketPath)." : result.message,
             recoveryAction: result.ok ? nil : ReadinessAction(
                 id: "restart-meee2",
                 label: "Restart meee2",
@@ -296,10 +296,9 @@ public enum ReadinessDoctor {
     }
 
     private static func storageChecks(stagedMCPServerPath: String?, expectedMCPServerPath: String) -> [ReadinessCheck] {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let meee2 = home.appendingPathComponent(".meee2", isDirectory: true)
-        let sessions = meee2.appendingPathComponent("sessions", isDirectory: true)
-        let board = meee2.appendingPathComponent("board-canvases.json", isDirectory: false)
+        let meee2 = MEEE2Env.home
+        let sessions = MEEE2Env.sessionsDir
+        let board = MEEE2Env.boardCanvasesURL
         let runtime = (stagedMCPServerPath.map { URL(fileURLWithPath: $0).deletingLastPathComponent() })
             ?? meee2.appendingPathComponent("mcp-meee2", isDirectory: true)
 

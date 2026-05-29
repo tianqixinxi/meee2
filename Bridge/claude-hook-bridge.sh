@@ -4,7 +4,13 @@
 # 将 Claude CLI hooks 数据转发到 meee2 Unix Socket Server
 
 # meee2 Unix Socket 路径
-PEER_ISLAND_SOCKET="/tmp/meee2.sock"
+# 与 Swift 端 MEEE2Env.socketPath 保持同一 contract：
+#   - 默认 `/tmp/meee2.sock`
+#   - 可通过 `MEEE2_SOCK` env 覆盖（隔离实例 / 多 meee2 并存场景）
+# 注意：claude-hook-bridge.sh 通常由 Claude CLI 子进程触发，
+# 需要在 Claude CLI 启动环境（shell / launchd plist / claude desktop config）
+# 里导出 `MEEE2_SOCK`，hook 进程才能继承到。
+PEER_ISLAND_SOCKET="${MEEE2_SOCK:-/tmp/meee2.sock}"
 
 # 获取事件类型 (从环境变量或 stdin)
 HOOK_EVENT="${CLAUDE_HOOK_EVENT_NAME:-}"

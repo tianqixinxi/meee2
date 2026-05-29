@@ -20,8 +20,7 @@ public final class SessionControlStore {
     private var records: [String: SessionControlRecord] = [:]
 
     private init() {
-        let base = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let base = MEEE2Env.home
         self.fileURL = base.appendingPathComponent("session-controls.json")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         load()

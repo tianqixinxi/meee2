@@ -205,8 +205,7 @@ public final class TokenRateMonitor: ObservableObject {
     }
 
     private static var stateURL: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2")
+        MEEE2Env.home
             .appendingPathComponent("token-rate-history.json")
     }
 

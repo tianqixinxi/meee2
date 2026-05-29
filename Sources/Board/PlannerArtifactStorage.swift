@@ -182,8 +182,7 @@ enum PlannerArtifactStorage {
     }
 
     private static func artifactDirectory(canvasId: String, artifactId: String) -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        MEEE2Env.home
             .appendingPathComponent("artifacts", isDirectory: true)
             .appendingPathComponent(safePathComponent(canvasId), isDirectory: true)
             .appendingPathComponent(safePathComponent(artifactId), isDirectory: true)

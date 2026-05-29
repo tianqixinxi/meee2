@@ -29,8 +29,9 @@ final class AssistantLocalSessionStore {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2/assistant/claude-sessions.json")
+            self.fileURL = MEEE2Env.home
+                .appendingPathComponent("assistant", isDirectory: true)
+                .appendingPathComponent("claude-sessions.json", isDirectory: false)
         }
     }
 

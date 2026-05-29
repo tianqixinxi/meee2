@@ -31,7 +31,9 @@ public typealias PermissionFailureHandler = @Sendable (_ sessionId: String, _ to
 /// Uses GCD DispatchSource for non-blocking I/O
 public class HookSocketServer {
     public static let shared = HookSocketServer()
-    public static let socketPath = "/tmp/meee2.sock"
+    /// 实际监听路径。委托给 `MEEE2Env.socketPath`，可被 `MEEE2_SOCK` env 覆盖；
+    /// 默认值 `/tmp/meee2.sock` 与历史硬编码一致，零回归。
+    public static var socketPath: String { MEEE2Env.socketPath }
 
     // MARK: - Permission-timeout policy
 

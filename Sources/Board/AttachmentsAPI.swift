@@ -90,8 +90,10 @@ enum AttachmentsAPI {
         }
 
         // 保存目录：~/.meee2/attachments/<sid>/
-        let baseDir = (NSHomeDirectory() as NSString)
-            .appendingPathComponent(".meee2/attachments/\(realSessionId)")
+        let baseDir = MEEE2Env.home
+            .appendingPathComponent("attachments", isDirectory: true)
+            .appendingPathComponent(realSessionId, isDirectory: true)
+            .path
         do {
             try FileManager.default.createDirectory(
                 atPath: baseDir,

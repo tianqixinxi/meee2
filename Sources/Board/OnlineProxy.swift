@@ -40,8 +40,7 @@ enum OnlineProxy {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if supabaseUrl.isEmpty || supabaseKey.isEmpty || teamId.isEmpty || userId.isEmpty {
-            let file = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2/settings.json")
+            let file = MEEE2Env.settingsURL
             if let data = try? Data(contentsOf: file),
                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let meee2 = root["meee2"] as? [String: Any] {

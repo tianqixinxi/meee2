@@ -133,10 +133,10 @@ export function formatRecapAge(updatedAt: string, nowMs: number): string {
   const elapsedSeconds = Math.max(0, Math.floor((nowMs - updatedMs) / 1000))
   if (elapsedSeconds < 60) return '刚刚'
   const elapsedMinutes = Math.floor(elapsedSeconds / 60)
-  if (elapsedMinutes < 60) return `${elapsedMinutes}m前`
+  if (elapsedMinutes < 60) return `${elapsedMinutes} 分钟前`
   const elapsedHours = Math.floor(elapsedMinutes / 60)
-  if (elapsedHours < 24) return `${elapsedHours}h前`
-  return `${Math.floor(elapsedHours / 24)}d前`
+  if (elapsedHours < 24) return `${elapsedHours} 小时前`
+  return `${Math.floor(elapsedHours / 24)} 天前`
 }
 
 function buildStatusCounts(

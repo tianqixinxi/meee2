@@ -581,9 +581,8 @@ public struct SettingsView: View {
             ]
         ]
 
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
-        let file = dir.appendingPathComponent("settings.json")
+        let dir = MEEE2Env.home
+        let file = MEEE2Env.settingsURL
 
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

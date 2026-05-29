@@ -40,8 +40,7 @@ enum Meee2AgentRuntimeInstaller {
         let marketplacePath = resolveMarketplacePath()
         let pluginPath = marketplacePath.appendingPathComponent(pluginName, isDirectory: true)
         let mcpServerPath = MCPConfigManager.shared.currentServerScriptPath()
-        let stagedPath = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let stagedPath = MEEE2Env.home
             .appendingPathComponent("mcp-meee2", isDirectory: true)
             .appendingPathComponent("server.js")
             .path

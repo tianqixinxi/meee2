@@ -49,14 +49,14 @@ public class LogManager {
     public var minLevel: LogLevel = .info
 
     private init() {
-        let logsDir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library")
-            .appendingPathComponent("Logs")
+        // 走 MEEE2Env：默认 `~/Library/Logs/meee2.log`；若 `MEEE2_HOME` / `MEEE2_LOG_DIR`
+        // 被指定，自动改成 `<home>/logs/meee2.log` 或显式路径——避免多实例互相覆盖。
+        let logsDir = MEEE2Env.logDir
 
         // 确保目录存在
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
 
-        logFileURL = logsDir.appendingPathComponent("meee2.log")
+        logFileURL = MEEE2Env.logFileURL
 
         // 创建或打开日志文件
         if !FileManager.default.fileExists(atPath: logFileURL.path) {

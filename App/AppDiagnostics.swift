@@ -2,7 +2,8 @@ import AppKit
 import Foundation
 import meee2Kit
 
-/// Per-app diagnostics — boot header for `~/Library/Logs/meee2.log` + the
+/// Per-app diagnostics — boot header for the MLog log file (path resolved by
+/// `MEEE2Env.logFileURL`; default `~/Library/Logs/meee2.log`) + the
 /// "Copy Diagnostic Info" clipboard payload. Goal: when a user opens the
 /// status-bar menu and clicks "Copy Diagnostic Info", they paste a
 /// 10-line block that tells us "what version, where installed, is

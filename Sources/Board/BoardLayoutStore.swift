@@ -384,14 +384,13 @@ public final class BoardLayoutStore {
     private var cached: StoreData?
 
     private init() {
-        let home = NSHomeDirectory()
-        let dir = URL(fileURLWithPath: home).appendingPathComponent(".meee2")
+        let dir = MEEE2Env.home
         do {
             try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch {
             MWarn("[BoardLayoutStore] failed to create dir \(dir.path): \(error)")
         }
-        self.fileURL = dir.appendingPathComponent("board-canvases.json")
+        self.fileURL = MEEE2Env.boardCanvasesURL
     }
 
     // MARK: - Public API
@@ -1344,8 +1343,7 @@ public final class BoardLayoutStore {
     }
 
     private func workspaceRootURL() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        MEEE2Env.home
             .appendingPathComponent("workspaces", isDirectory: true)
             .appendingPathComponent("global", isDirectory: true)
     }

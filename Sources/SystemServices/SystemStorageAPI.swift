@@ -53,15 +53,14 @@ enum SystemStorageAPI {
     /// 返回所有需要统计 / 删除的 meee2 本地数据路径。
     /// 不包含 hooks / settings.json,只包含 meee2 自己产出的画布、会话、runbook。
     static func meee2DataRoots() -> (canvases: [URL], sessions: [URL], runbooks: [URL]) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let meee2 = home.appendingPathComponent(".meee2", isDirectory: true)
+        let meee2 = MEEE2Env.home
 
         let canvases: [URL] = [
-            meee2.appendingPathComponent("board-canvases.json", isDirectory: false),
-            meee2.appendingPathComponent("planner", isDirectory: true)
+            MEEE2Env.boardCanvasesURL,
+            MEEE2Env.plannerDir
         ]
         let sessions: [URL] = [
-            meee2.appendingPathComponent("sessions", isDirectory: true),
+            MEEE2Env.sessionsDir,
             meee2.appendingPathComponent("inbox", isDirectory: true),
             meee2.appendingPathComponent("attachments", isDirectory: true)
         ]
@@ -72,8 +71,7 @@ enum SystemStorageAPI {
     }
 
     static func meee2Root() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        MEEE2Env.home
     }
 
     // MARK: - 统计

@@ -16,8 +16,7 @@ enum MCPRegistryClient {
     private static let maxPages = 6
     private static let cacheTTL: TimeInterval = 24 * 3600
 
-    private static let cacheURL = URL(fileURLWithPath: NSHomeDirectory())
-        .appendingPathComponent(".meee2", isDirectory: true)
+    private static let cacheURL = MEEE2Env.home
         .appendingPathComponent("mcp-registry-cache.json")
 
     /// Read cached descriptors. Returns [] when cache is missing / malformed.

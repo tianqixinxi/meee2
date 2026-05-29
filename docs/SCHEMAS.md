@@ -652,7 +652,7 @@ output:
 | _no v1 equivalent_ | `output.payload_kind = artifact_ref` | Default; explicit `inline` requires v2-native declaration |
 | _no v1 equivalent_ | `output.external_write_target = null` | Opt-in via v2-native declaration |
 
-Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every read — operators can grep `/tmp/meee2.log` for `NodeContractV2` to find lossy fixtures.
+Migration warnings surface via `MLog("[NodeContractV2][migrate] ...")` for every read — these go to the MLog log (default `~/Library/Logs/meee2.log`, or `$MEEE2_HOME/logs/meee2.log` when `MEEE2_HOME` is set); grep there for `NodeContractV2` to find lossy fixtures.
 
 **TypeScript mirror** lives at `packages/board-app/src/types.ts` (`NodeContractV2`, `NodeContractInput`, etc.). The board-app `fetchPlannerNodeContract` always returns the embedded `v2` field for new contracts.
 

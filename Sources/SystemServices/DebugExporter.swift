@@ -9,8 +9,7 @@ class DebugExporter {
     }
 
     static func exportToDefaultLocation() throws -> ExportResult {
-        let dir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let dir = MEEE2Env.home
             .appendingPathComponent("debug-exports", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("meee2-Debug-\(timestampString()).zip")
@@ -79,7 +78,7 @@ class DebugExporter {
         }
 
         // 3. 复制 Plugin 配置
-        let pluginsDir = NSHomeDirectory().appending("/.meee2/plugins")
+        let pluginsDir = MEEE2Env.pluginsDir.path
         let pluginsDest = tempDir.appendingPathComponent("plugins")
         if FileManager.default.fileExists(atPath: pluginsDir) {
             try? FileManager.default.copyItem(atPath: pluginsDir, toPath: pluginsDest.path)
@@ -91,7 +90,9 @@ class DebugExporter {
         try systemInfo.write(to: systemInfoUrl, atomically: true, encoding: .utf8)
 
         // 5. 复制日志文件
-        let logFile = NSHomeDirectory().appending("/Library/Logs/meee2.log")
+        // 走 MEEE2Env.logFileURL —— 默认 `~/Library/Logs/meee2.log`，
+        // 但 `MEEE2_HOME` / `MEEE2_LOG_DIR` 覆盖时跟随。
+        let logFile = MEEE2Env.logFileURL.path
         if FileManager.default.fileExists(atPath: logFile) {
             try? FileManager.default.copyItem(atPath: logFile, toPath: tempDir.appendingPathComponent("meee2.log").path)
         }

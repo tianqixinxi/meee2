@@ -237,8 +237,7 @@ public final class MCPConfigManager {
             )
         }
         let sourceDir = source.deletingLastPathComponent()
-        let targetDir = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
+        let targetDir = MEEE2Env.home
             .appendingPathComponent(subdir, isDirectory: true)
         try FileManager.default.createDirectory(at: targetDir, withIntermediateDirectories: true)
 

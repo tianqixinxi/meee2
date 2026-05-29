@@ -259,9 +259,7 @@ final class AutomationStore {
     }
 
     private func fileURL() -> URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent(".meee2", isDirectory: true)
-            .appendingPathComponent("automations.json", isDirectory: false)
+        MEEE2Env.home.appendingPathComponent("automations.json", isDirectory: false)
     }
 }
 

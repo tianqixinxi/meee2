@@ -13,9 +13,13 @@ import Meee2CommKit
 /// 设 env `MEEE2_BOARD_BIND=0.0.0.0` 可暴露到局域网（无 auth，自担风险）。
 public final class BoardServer {
     public static let shared = BoardServer()
-    public static let defaultPort: UInt16 = 9876
+    /// 偏好端口 —— 默认 9876，可被 `MEEE2_PORT` / `MEEE2_BOARD_PORT` 覆盖。
+    /// 真实 source of truth 在 `MEEE2Env.boardPort`；这里只是给老调用点
+    /// （App/AppDiagnostics 等）保留一个稳定符号。**不要 fork 出独立值。**
+    public static var defaultPort: UInt16 { MEEE2Env.boardPort }
     public static let defaultBindAddress: String = "127.0.0.1"
     public static let maxAutoPortOffset: UInt16 = 100
+    /// 旧名，保留兼容；新逻辑直接走 `MEEE2Env.boardPort` 解析（同时识别 `MEEE2_PORT`）。
     public static let portEnvVar = "MEEE2_BOARD_PORT"
     public static let bindEnvVar = "MEEE2_BOARD_BIND"
 
@@ -27,7 +31,7 @@ public final class BoardServer {
     private let bindAddress: String
 
     public private(set) var isRunning: Bool = false
-    public private(set) var port: UInt16 = BoardServer.defaultPort
+    public private(set) var port: UInt16 = MEEE2Env.boardPort
 
     /// Loopback URL —— 内部回调（meee2 OAuth callback / CLI 提示）始终用这个，
     /// 即使 server 暴露到 0.0.0.0，浏览器在本机访问 `127.0.0.1` 一样能命中。
@@ -48,14 +52,12 @@ public final class BoardServer {
     private var busSubscription: AnyCancellable?
 
     private init() {
-        if let raw = ProcessInfo.processInfo.environment[Self.portEnvVar],
-           let p = UInt16(raw),
-           p > 0 {
-            self.preferredPort = p
-            self.port = p
-        } else {
-            self.preferredPort = Self.defaultPort
-        }
+        // `MEEE2Env.boardPort` 已经把"env override (MEEE2_PORT / MEEE2_BOARD_PORT) /
+        // 默认 9876 / 非法值回落"逻辑收进一个地方，这里直接信任它，
+        // 不再各自重读 ProcessInfo（避免和 MEEE2Env 解析行为飘忽不一致）。
+        let p = MEEE2Env.boardPort
+        self.preferredPort = p
+        self.port = p
         // bind 地址也可通过环境变量覆盖。空串 / 非法值 → 回落 loopback。
         let envBind = ProcessInfo.processInfo.environment[Self.bindEnvVar]?
             .trimmingCharacters(in: .whitespaces) ?? ""
@@ -356,12 +358,24 @@ public final class BoardServer {
 
     /// Origins allowed to call the destructive local-data routes. Same
     /// list is used for OPTIONS preflight and the actual POST.
-    private static let localUIAllowedOrigins: Set<String> = [
-        "http://localhost:9876",
-        "http://127.0.0.1:9876",
-        "http://localhost:5002",
-        "http://127.0.0.1:5002"
-    ]
+    ///
+    /// 必须用 `shared.port`（运行时真实 bind 端口）而不是 `Env.port`（配置
+    /// 意图） —— 当 9876 被占用、BoardServer 退化到 9877 时，浏览器看到的
+    /// `window.location.origin` 是 9877，origin allow-list 也必须跟上。
+    /// Vite dev server 端口走 build-time env `MEEE2_BOARD_DEV_PORT`，默认
+    /// 5002（和 vite.config.ts 保持一致；改的时候记得同步那边）。
+    private static var localUIAllowedOrigins: Set<String> {
+        let boardPort = BoardServer.shared.port
+        let devPortRaw = ProcessInfo.processInfo.environment["MEEE2_BOARD_DEV_PORT"]?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        let devPort = UInt16(devPortRaw) ?? 5002
+        return [
+            "http://localhost:\(boardPort)",
+            "http://127.0.0.1:\(boardPort)",
+            "http://localhost:\(devPort)",
+            "http://127.0.0.1:\(devPort)"
+        ]
+    }
 
     /// Inspect Origin / Referer and decide whether the request came from
     /// the trusted local meee2 UI. Same-origin fetches from the bundled

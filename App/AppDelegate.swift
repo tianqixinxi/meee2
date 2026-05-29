@@ -90,6 +90,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 也不依赖 cwd 解析,符合现状)。
         A2AIdentity.resolver = SessionStoreIdentityResolver()
 
+        // MEEE2_HEADLESS — 后端全跑,GUI 全跳过。用于 CI / 远程 sidecar /
+        // 自动化:BoardServer + HookSocketServer + plugins + SessionStore 都
+        // 起来,但不设 activation policy、不装 menubar、不开 Island。用户
+        // (如果有 GUI session)看不到 Dock / menubar 任何变化。
+        if MEEE2Env.isHeadless {
+            MInfo("[AppDelegate] MEEE2_HEADLESS=1 — skipping GUI surfaces (no menubar status item, no Island, .prohibited activation).")
+            // 不走 .accessory(那条还会拿一个隐形的 LSUIElement 槽位 + 主菜单栏挂载点);
+            // 改 .prohibited 把进程从 Dock / 菜单栏 / app switcher 里彻底摘出去,只剩
+            // BoardServer + HookSocketServer 这条后端 IO 线。
+            NSApp.setActivationPolicy(.prohibited)
+            registerAppObservers()
+            schedulePostLaunchStartup(launchStartedAt: launchStartedAt)
+            return
+        }
+
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 

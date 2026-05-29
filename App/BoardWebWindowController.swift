@@ -93,7 +93,9 @@ final class DragRegionWebView: WKWebView {
 
 /// 把 WKWebView 内 JS 的 `console.error / console.warn / window.onerror /
 /// unhandledrejection` 转回 native log。注入脚本在 documentStart 跑一次，
-/// 把上述事件 postMessage 到 `meee2Diag` handler，本类落到 `~/Library/Logs/meee2.log`。
+/// 把上述事件 postMessage 到 `meee2Diag` handler，本类调 MWarn / MError 直接走
+/// LogManager —— 落盘点跟 MLog 家族同一份文件，路径由 `MEEE2Env.logFileURL` 决定
+/// （默认 `~/Library/Logs/meee2.log`；`MEEE2_HOME` / `MEEE2_LOG_DIR` 设了就跟着走）。
 ///
 /// 拆成独立的 NSObject 是为了规避 WKUserContentController → handler →
 /// controller 的循环引用：BoardWebWindowController 强引用 controller，

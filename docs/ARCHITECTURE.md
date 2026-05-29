@@ -199,7 +199,7 @@ One ESC-adjacent case that does NOT flow through Stage 3:
 
 ### Debugging a wrong card state
 
-Grep `/tmp/meee2.log` by log tag to see which stage decided:
+Grep the state-trace log (default `/tmp/meee2.log`; `$MEEE2_HOME/logs/state-trace.log` or `$MEEE2_LOG_DIR/state-trace.log` when set) by log tag to see which stage decided:
 
 | Tag | Stage | Example |
 |---|---|---|
