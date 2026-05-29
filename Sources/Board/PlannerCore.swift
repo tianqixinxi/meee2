@@ -2213,7 +2213,7 @@ enum PlannerProposalValidator {
         // Raw value → (replacement, human-readable rationale).
         let legacyMap: [String: (replacement: PlanningNodeStatus, rationale: String)] = [
             "working": (.ready, "use NodeAttempt for in-flight state"),
-            "draft": (.ready, "ready is the initial state; draft removed in 3-tai cut"),
+            "draft": (.ready, "ready is the initial state; draft removed in 3-tai cut")
         ]
         for i in proposal.changes.indices {
             let change = proposal.changes[i]
