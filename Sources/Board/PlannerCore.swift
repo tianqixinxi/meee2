@@ -1932,6 +1932,11 @@ struct PlannerMonitorItem: Codable, Equatable {
     /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
     /// for proposal items or nodes with no actionable workflow state.
     var nextAction: String?
+    /// Wall-clock timestamp of the live attempt's entry into
+    /// `awaitingInput` / `gateWait`. Surfaced from the active run's last
+    /// attempt so the monitor can sort/boost stale-awaiting items and the
+    /// card can render "等了 X 小时". Nil for non-awaiting nodes.
+    var awaitingInputSince: Date?
 
     init(
         id: String,
@@ -1950,7 +1955,8 @@ struct PlannerMonitorItem: Codable, Equatable {
         doerId: String?,
         riskRank: Int,
         evidenceCount: Int = 0,
-        nextAction: String? = nil
+        nextAction: String? = nil,
+        awaitingInputSince: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -1969,6 +1975,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.riskRank = riskRank
         self.evidenceCount = evidenceCount
         self.nextAction = nextAction
+        self.awaitingInputSince = awaitingInputSince
     }
 }
 
@@ -3444,6 +3451,22 @@ final class PlannerStore {
                     state.runState = stepRunState
                     if stepRunState == .done || stepRunState == .failed {
                         state.finishedAt = state.finishedAt ?? Date()
+                    }
+                    // awaitingInputSince clock — stamp on entering
+                    // awaitingInput/gateWait, clear on leaving. Only the live
+                    // (last) attempt carries the clock; older attempts are
+                    // historical and immutable.
+                    if !state.attempts.isEmpty {
+                        let last = state.attempts.count - 1
+                        let isAwaiting = stepRunState == .awaitingInput || stepRunState == .gateWait
+                        if isAwaiting {
+                            if state.attempts[last].awaitingInputSince == nil {
+                                state.attempts[last].awaitingInputSince = Date()
+                            }
+                        } else {
+                            state.attempts[last].awaitingInputSince = nil
+                        }
+                        state.attempts[last].runState = stepRunState
                     }
                 }
             }
@@ -6138,10 +6161,17 @@ enum PlannerBoardBridge {
                 ))
             }
 
+            // Pluck the live attempt's awaitingInputSince from the active run
+            // (if any) so the monitor can boost stale-awaiting items and the
+            // UI can render "等了 X 小时". Only the last attempt of the
+            // active run's per-node state carries the clock; older attempts
+            // are immutable.
+            let activeRun = runs.first(where: { $0.status == .active })
             for node in visibleNodes {
                 guard let snapshot = statesByNodeId[node.id],
                       snapshot.runState != .done else { continue }
                 let rank = monitorRank(for: snapshot)
+                let awaitingSince = activeRun?.nodeStates[node.id]?.attempts.last?.awaitingInputSince
                 items.append(PlannerMonitorItem(
                     id: "node-\(node.id)",
                     kind: .node,
@@ -6161,7 +6191,8 @@ enum PlannerBoardBridge {
                     nextAction: PlannerWorkflowGuidance.nextAction(
                         for: node,
                         blockers: snapshot.blockers
-                    )
+                    ),
+                    awaitingInputSince: awaitingSince
                 ))
             }
 

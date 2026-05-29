@@ -1088,6 +1088,13 @@ export interface PlannerMonitorItem {
    * for proposal items or nodes with no actionable workflow state.
    */
   nextAction?: string | null
+  /**
+   * Wall-clock timestamp of the active run's live attempt entry into
+   * `awaiting-input` / `gate-wait`. Surfaced by the monitor so the sort
+   * function can boost stale-awaiting items (24h+ +100, 72h+ +500) and the
+   * UI can render duration labels. Absent on non-awaiting items.
+   */
+  awaitingInputSince?: string | null
 }
 
 export interface PlannerMonitorState {
@@ -1153,6 +1160,13 @@ export interface NodeAttempt {
   startedAt: string
   finishedAt?: string | null
   outcome?: string | null
+  /**
+   * Wall-clock timestamp of the most recent transition into `awaiting-input`
+   * / `gate-wait`. Nil while running / dispatched / done. UI uses this to
+   * render "等了 X 小时" durations and the monitor uses it to boost stale
+   * awaiting items in the sort lane.
+   */
+  awaitingInputSince?: string | null
 }
 
 export interface RunNodeState {

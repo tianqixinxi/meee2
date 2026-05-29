@@ -31,6 +31,16 @@ enum WorkflowRunStatus: String, Codable, Equatable {
 /// One attempt at executing a node within a run. A node that fails a gate and
 /// is retried accumulates multiple attempts; the last one is the live attempt.
 struct NodeAttempt: Codable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case sessionId
+        case runState
+        case startedAt
+        case finishedAt
+        case outcome
+        case awaitingInputSince
+    }
+
     /// 0-based attempt index within the node's `attempts` list.
     var index: Int
     /// Session bound to this attempt (a spawning runner) — `nil` for human/CI.
@@ -41,6 +51,16 @@ struct NodeAttempt: Codable, Equatable {
     var finishedAt: Date?
     /// `done` / `failed` / a free-text rollback reason — `nil` while live.
     var outcome: String?
+    /// Wall-clock timestamp of the most recent transition into
+    /// `awaitingInput` / `gateWait`. Nil while the attempt is in any other
+    /// state. Used by the UI to render "等了 X 小时" and by the monitor to
+    /// boost stale-awaiting items in the sort lane.
+    ///
+    /// The `syncSessionRunState` path (`applySessionRunStateLocked`) is the
+    /// sole writer — entering the awaiting bucket stamps `Date()` when the
+    /// field is nil; leaving it clears the field. Re-entering after a
+    /// resumed running state restarts the clock.
+    var awaitingInputSince: Date?
 
     init(
         index: Int,
@@ -48,7 +68,8 @@ struct NodeAttempt: Codable, Equatable {
         runState: PlannerWorkflowRunState,
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
-        outcome: String? = nil
+        outcome: String? = nil,
+        awaitingInputSince: Date? = nil
     ) {
         self.index = index
         self.sessionId = sessionId
@@ -56,6 +77,18 @@ struct NodeAttempt: Codable, Equatable {
         self.startedAt = startedAt
         self.finishedAt = finishedAt
         self.outcome = outcome
+        self.awaitingInputSince = awaitingInputSince
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.index = try container.decode(Int.self, forKey: .index)
+        self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        self.runState = try container.decode(PlannerWorkflowRunState.self, forKey: .runState)
+        self.startedAt = try container.decode(Date.self, forKey: .startedAt)
+        self.finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        self.outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
+        self.awaitingInputSince = try container.decodeIfPresent(Date.self, forKey: .awaitingInputSince)
     }
 }
 

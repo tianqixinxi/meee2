@@ -362,8 +362,32 @@ function evidenceCount(item: PlannerMonitorItem): number {
   return Math.max(0, item.evidenceCount ?? 0)
 }
 
+/**
+ * Priority boost based on how long an item has been parked in
+ * `awaitingInput` / `gateWait`. Items that need a human reply for >1 day are
+ * promoted aggressively so they don't rot at the bottom of the lane:
+ *   ≥ 72h → +500 (effectively jumps to the top)
+ *   ≥ 24h → +100
+ * "Boost" 在这里表示 sort key 的有效降权 —— 等得越久 effectiveRank 越小,
+ * 排得越靠前(riskRank 是 1=highest 5=lowest 的 1-based 量)。
+ */
+function awaitingBoost(item: PlannerMonitorItem, now: number): number {
+  if (!item.awaitingInputSince) return 0
+  const since = Date.parse(item.awaitingInputSince)
+  if (!Number.isFinite(since)) return 0
+  const hours = Math.max(0, (now - since) / (1000 * 60 * 60))
+  if (hours >= 72) return 500
+  if (hours >= 24) return 100
+  return 0
+}
+
 function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode: MonitorSort): number {
-  if (sortMode === 'severity' && a.riskRank !== b.riskRank) return a.riskRank - b.riskRank
+  if (sortMode === 'severity') {
+    const now = Date.now()
+    const ra = a.riskRank - awaitingBoost(a, now)
+    const rb = b.riskRank - awaitingBoost(b, now)
+    if (ra !== rb) return ra - rb
+  }
   if (a.canvasTitle !== b.canvasTitle) return a.canvasTitle.localeCompare(b.canvasTitle)
   return a.summary.localeCompare(b.summary)
 }
