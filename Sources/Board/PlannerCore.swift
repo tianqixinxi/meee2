@@ -98,12 +98,36 @@ enum ExecutorType: String, Codable, Equatable, CaseIterable {
 }
 
 /// Twin · meee2-online/src/planner-runtime/contract/enums.ts (NodeStatus)
+///
+/// State-machine PR-A · Public PlanningNodeStatus is being narrowed to the
+/// four-state lifecycle `draft / ready / blocked / done`. `working` is kept
+/// as a raw value for wire-level back-compat (so old JSON still decodes), but
+/// it is deprecated and the proposal validator auto-translates it to `.ready`
+/// with a warning. New code MUST NOT introduce `.working`; use `.ready` plus
+/// a NodeAttempt for in-flight execution state.
 enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     case draft
     case ready
+    @available(*, deprecated, message: "Use .ready + NodeAttempt instead. Will be removed in next major.")
     case working
     case blocked
     case done
+
+    /// State-machine PR-A · Manual `allCases` so deprecating `.working`
+    /// doesn't break CaseIterable synthesis (Swift refuses to auto-synthesize
+    /// `allCases` once any case is `@available(*, deprecated)`). Wire-level
+    /// back-compat is still preserved — `allCases` continues to surface
+    /// `.working` so the planner-adapter context lists every legacy value an
+    /// agent might send. The validator is what translates it away.
+    ///
+    /// The legacy `.working` reference is reconstructed from its raw value to
+    /// avoid emitting a deprecation diagnostic at the single intentional
+    /// use-site inside this type. `PlanningNodeStatus(rawValue: "working")`
+    /// is guaranteed to succeed by construction.
+    static var allCases: [PlanningNodeStatus] {
+        let legacyWorking = PlanningNodeStatus(rawValue: "working")!
+        return [.draft, .ready, legacyWorking, .blocked, .done]
+    }
 }
 
 enum PlanningNodeSource: String, Codable, Equatable {
@@ -1216,6 +1240,13 @@ struct PlanProposal: Codable, Equatable {
     var summary: String
     var changes: [PlanChange]
     var status: PlanProposalStatus
+    /// State-machine PR-A · Warnings emitted by the validator/normalizer when a
+    /// proposal references a deprecated planner contract surface (e.g. legacy
+    /// `working` PlanningNodeStatus auto-translated to `ready`). Optional so
+    /// existing JSON without the field decodes cleanly and existing memberwise
+    /// initialization (`PlanProposal(id:canvasId:summary:changes:status:)`)
+    /// still type-checks.
+    var warnings: [String]?
 }
 
 enum NodeRunState: String, Codable, Equatable {
@@ -2148,11 +2179,73 @@ enum PlannerProposalValidator {
         }
     }
 
+    /// State-machine PR-A · Normalize deprecated planner contract surfaces
+    /// before validation. Currently translates the deprecated
+    /// `PlanningNodeStatus.working` value (on `addNode` / `updateNode` changes)
+    /// to `.ready` and appends a `deprecated_status_used` warning to
+    /// `proposal.warnings`. The warning carries enough context for the caller
+    /// to surface it as an `X-Planner-Contract-Warning` header or log entry
+    /// without breaking the agent (no throw — the agent's intent is preserved
+    /// by mapping to the new four-state lifecycle).
+    ///
+    /// Returns the list of warnings appended in this call so the validator
+    /// can fold them into the proposal record.
+    @discardableResult
+    static func normalizeDeprecatedStatuses(_ proposal: inout PlanProposal) -> [String] {
+        var warnings: [String] = []
+        for i in proposal.changes.indices {
+            let change = proposal.changes[i]
+            guard change.kind == .addNode || change.kind == .updateNode else { continue }
+            // updateNode: status lives directly on the change
+            if let status = change.status, status.rawValue == "working" {
+                proposal.changes[i].status = .ready
+                let id = change.nodeId ?? change.node?.id ?? "<unknown>"
+                warnings.append(
+                    "deprecated_status_used: change for node \(id) set status='working'; auto-translated to 'ready' (use NodeAttempt for in-flight state)"
+                )
+            }
+            // addNode: status lives on the embedded PlanningNode
+            if change.kind == .addNode,
+               let node = change.node,
+               node.status.rawValue == "working" {
+                proposal.changes[i].node?.status = .ready
+                warnings.append(
+                    "deprecated_status_used: addNode for node \(node.id) used status='working'; auto-translated to 'ready' (use NodeAttempt for in-flight state)"
+                )
+            }
+        }
+        if !warnings.isEmpty {
+            var existing = proposal.warnings ?? []
+            existing.append(contentsOf: warnings)
+            proposal.warnings = existing
+        }
+        return warnings
+    }
+
+    /// State-machine PR-A · Back-compat overload. Existing tests and callers
+    /// that hold an immutable `PlanProposal` keep working: we copy into a
+    /// local mutable, run the inout validator (which may translate deprecated
+    /// statuses), and discard the warnings. New code paths that want to
+    /// surface or persist warnings should call the `inout` overload directly.
     static func validate(
         _ proposal: PlanProposal,
         canvas: PlanningCanvas,
         nodes: [PlanningNode]
     ) throws {
+        var copy = proposal
+        try validate(&copy, canvas: canvas, nodes: nodes)
+    }
+
+    static func validate(
+        _ proposal: inout PlanProposal,
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode]
+    ) throws {
+        // State-machine PR-A · Normalize deprecated status values before any
+        // structural checks. The translation is idempotent and additive — it
+        // never widens what the proposal can do, only narrows `working` to
+        // the canonical `ready` and records a warning.
+        _ = normalizeDeprecatedStatuses(&proposal)
         guard proposal.canvasId == canvas.id else {
             throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: proposal.canvasId)
         }
@@ -3048,25 +3141,28 @@ final class PlannerStore {
     ) throws -> PlanProposal {
         try withLock {
             var record = try record(for: canvas, seedNodes: seedNodes)
+            // State-machine PR-A · validate takes inout to fold deprecated
+            // status warnings into proposal.warnings before persisting.
+            var normalized = proposal
             try PlannerProposalValidator.validate(
-                proposal,
+                &normalized,
                 canvas: canvas,
                 nodes: validationNodes ?? record.nodes
             )
-            if let index = record.proposals.firstIndex(where: { $0.id == proposal.id }) {
-                record.proposals[index] = proposal
+            if let index = record.proposals.firstIndex(where: { $0.id == normalized.id }) {
+                record.proposals[index] = normalized
             } else {
-                record.proposals.append(proposal)
+                record.proposals.append(normalized)
                 record.events.append(event(
                     canvasId: canvas.id,
                     type: .proposalCreated,
-                    proposalId: proposal.id,
-                    summary: proposal.summary
+                    proposalId: normalized.id,
+                    summary: normalized.summary
                 ))
             }
             document.canvases[canvas.id] = record
             try save(canvasId: canvas.id)
-            return proposal
+            return normalized
         }
     }
 
@@ -3130,8 +3226,12 @@ final class PlannerStore {
             guard let index = record.proposals.firstIndex(where: { $0.id == proposalId }) else {
                 throw PlannerCoreError.proposalNotFound(proposalId)
             }
-            let proposal = record.proposals[index]
-            try PlannerProposalValidator.validate(proposal, canvas: record.canvas, nodes: record.nodes)
+            var proposal = record.proposals[index]
+            // State-machine PR-A · normalize-on-apply too, in case the stored
+            // proposal predates the normalizer (defense-in-depth; the
+            // saveProposal path already normalizes).
+            try PlannerProposalValidator.validate(&proposal, canvas: record.canvas, nodes: record.nodes)
+            record.proposals[index] = proposal
             let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
             record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
             record.nodes = nodes
@@ -3161,8 +3261,9 @@ final class PlannerStore {
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
         try withLock {
             let record = try record(for: canvas, seedNodes: seedNodes)
-            try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: record.nodes)
-            let approved = service.approve(proposal)
+            var normalized = proposal
+            try PlannerProposalValidator.validate(&normalized, canvas: canvas, nodes: record.nodes)
+            let approved = service.approve(normalized)
             let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
             return (approved, nodes)
         }
@@ -6735,8 +6836,8 @@ final class LLMPlannerAgent: PlannerAgent {
             systemPrompt: PlannerPromptFactory.systemPrompt,
             userPrompt: PlannerPromptFactory.generatePrompt(goal: goal, canvas: canvas)
         )
-        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
-        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: [])
+        var proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(&proposal, canvas: canvas, nodes: [])
         return proposal
     }
 
@@ -6751,8 +6852,8 @@ final class LLMPlannerAgent: PlannerAgent {
             systemPrompt: PlannerPromptFactory.systemPrompt,
             userPrompt: PlannerPromptFactory.refinePrompt(node: node, reason: reason)
         )
-        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
-        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: [node])
+        var proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(&proposal, canvas: canvas, nodes: [node])
         return proposal
     }
 
@@ -6769,8 +6870,8 @@ final class LLMPlannerAgent: PlannerAgent {
             userPrompt: PlannerPromptFactory.driftPrompt(nodes: nodes, states: states)
         ).trimmingCharacters(in: .whitespacesAndNewlines)
         if output.isEmpty || output == "null" { return nil }
-        let proposal = try PlannerProposalValidator.decodeProposal(from: output)
-        try PlannerProposalValidator.validate(proposal, canvas: canvas, nodes: nodes)
+        var proposal = try PlannerProposalValidator.decodeProposal(from: output)
+        try PlannerProposalValidator.validate(&proposal, canvas: canvas, nodes: nodes)
         return proposal
     }
 }
