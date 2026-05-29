@@ -118,12 +118,20 @@ const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
 // Inspector 读取当前模式 — 与 widgetDataResolver 共享 loose lookup 路径
 // (PlanningNode.artifactConfig 尚未落到 types.ts,旧节点缺省 → 'authored')。
 // 'aggregated' / 'upstream' 旧值 → fallback authored (兼容老数据,实际不再出现)。
+//
+// **读取优先级**(canonical → legacy):
+//   1. node.artifactDataSource (top-level string) — Swift 后端写的字段
+//   2. node.artifact.dataSource / node.artifactConfig.dataSource (loose) — 旧 wave-3 试探
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
   const cfg = node as unknown as {
+    artifactDataSource?: string
     artifact?: { dataSource?: string | { mode?: string } }
     artifactConfig?: { dataSource?: string | { mode?: string } }
   }
-  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  const raw =
+    cfg.artifactDataSource ??
+    cfg.artifact?.dataSource ??
+    cfg.artifactConfig?.dataSource
   const value = typeof raw === 'string' ? raw : raw?.mode
   switch (value) {
     case 'self':
@@ -230,13 +238,12 @@ export function InspectorArtifactBody({
     setDataSourceError(null)
     setDataSourceDraft(mode)
     setDataSourceSaving(true)
-    // Swift backend field is `artifactDataSource: String?` (top-level on
-    // PlanChange + PlanningNode). The setArtifactDataSource variant lands
-    // in wave-4; for now we use updateNode with the loose string field.
+    // PlanChange 暂无 setArtifactDataSource 独立 variant — 走 updateNode + loose
+    // payload (后端 zod schema 兼容期), 等 wave-4 后端落 variant 再切。
     const change = {
       kind: 'updateNode' as const,
       nodeId: node.id,
-      artifactDataSource: mode,
+      artifactConfig: { dataSource: { mode } },
     }
     proposePlannerGraphChange(canvasId, {
       summary: `Set dataSource to ${mode} on ${node.title}`,
@@ -465,43 +472,10 @@ export function InspectorArtifactBody({
             </button>
           )}
         </h3>
-        {activeArtifact ? (
-          <PayloadBodySwitch
-            artifact={activeArtifact}
-            editMode={editMode && canEditPayload}
-          />
-        ) : (
-          /* 数据源 mode 感知的空态(2026-05-29):提示用户怎么填,而不是干瘪的「还没有产出」。
-             - authored: 告诉用户怎么开始填(直接 spawn 一个 AI session 写,或将来手填编辑器接入)
-             - mirrored: 告诉用户去 Attach data source
-          */
-          <div className="planner-node-modal__empty">
-            {dataSourceDraft === 'authored' ? (
-              <>
-                <p>这是个手填 artifact 节点,还没产出。</p>
-                <p style={{ marginTop: 6, opacity: 0.85 }}>
-                  填法二选一:
-                  <br />
-                  · 上游 session 跑完会把产物自动落到这里
-                  <br />
-                  · 或在节点对话里让 meee2 AI 帮你写一份(<code>submit_node_output</code>)
-                </p>
-                <p style={{ marginTop: 6, opacity: 0.65, fontSize: 11 }}>
-                  TODO: 在内嵌 payload editor(markdown / inbox-items / kanban)落地前,
-                  手动新建第一份产物暂时走 AI session 路径。
-                </p>
-              </>
-            ) : (
-              <>
-                <p>这是个镜像外部数据源的 artifact 节点,还没绑定来源。</p>
-                <p style={{ marginTop: 6, opacity: 0.85 }}>
-                  下面 <strong>Attach data source</strong> 按钮选一个 integration(Notion / Linear / GitHub 等),
-                  下游节点消费时会自动拉最新数据 + 冻一份快照。
-                </p>
-              </>
-            )}
-          </div>
-        )}
+        <PayloadBodySwitch
+          artifact={activeArtifact}
+          editMode={editMode && canEditPayload}
+        />
       </div>
 
       {/* 版本 (VersionTimeline) */}
