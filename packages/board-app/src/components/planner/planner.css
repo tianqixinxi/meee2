@@ -2045,6 +2045,41 @@
   overflow: hidden;
 }
 
+.planner-node__monitor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 20px;
+  margin-top: 6px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 720;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.planner-node__monitor-badge span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner-node__monitor-badge--reply {
+  color: color-mix(in srgb, var(--danger) 72%, #ffffff);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
+}
+
+.planner-node__monitor-badge--attention {
+  color: color-mix(in srgb, var(--warning) 84%, var(--text));
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--border-strong));
+}
+
 /* P2.4 widget dispatcher · 2026-05-28
  * 节点 widget body — 当 node.widget 存在时显示。
  * 给 widget 组件腾出空间;widget 内部自管布局。 */
@@ -2056,6 +2091,7 @@
   border-top: 1px solid rgba(168, 165, 155, 0.14);
   padding-top: 8px;
 }
+
 .planner-node__widget-body > * {
   flex: 1 1 auto;
   min-height: 0;
@@ -7005,6 +7041,16 @@
 .ai-recap-drawer__row-meta {
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.ai-recap-drawer__row-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--accent-hover) 86%, var(--text));
 }
 
 .ai-recap-drawer__empty {

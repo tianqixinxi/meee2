@@ -53,6 +53,7 @@ import type {
 } from '../../types'
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
+import type { CanvasMonitor } from '@meee1/recap-core'
 import {
   LOCK_VIEWPORT_PREFERENCES_CHANGED,
   loadLockViewportOnSwitch,
@@ -101,6 +102,8 @@ interface Props {
   refreshTick?: number
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
+  onPlannerStateChange?: (state: PlannerGraphState | null) => void
+  canvasMonitor?: CanvasMonitor | null
 }
 
 const nodeTypes = {
@@ -137,6 +140,8 @@ function PlannerGraphInner({
   refreshTick = 0,
   onOpenSubCanvas,
   onNotify,
+  onPlannerStateChange,
+  canvasMonitor = null,
 }: Props) {
   const { t } = useI18n()
   const reactFlow = useReactFlow()
@@ -198,6 +203,18 @@ function PlannerGraphInner({
   const [assignDialogNodeId, setAssignDialogNodeId] = useState<string | null>(null)
   const [assignBusy, setAssignBusy] = useState(false)
   const [assignError, setAssignError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!plannerState) {
+      onPlannerStateChange?.(null)
+      return
+    }
+    onPlannerStateChange?.({
+      ...plannerState,
+      artifacts: plannerState.artifacts ?? [],
+      edges: plannerState.edges ?? [],
+    })
+  }, [onPlannerStateChange, plannerState])
 
   const loadState = useCallback(() => {
     setBusy(true)
@@ -338,6 +355,9 @@ function PlannerGraphInner({
       avatarUrlByUserId: teamAvatarUrlByUserId(members),
     }
   }, [boardState, plannerState?.canvas.ownerId, plannerState?.nodes, userProfile, teamMembers])
+  const monitorItemsByNodeId = useMemo(() => {
+    return Object.fromEntries((canvasMonitor?.items ?? []).map((item) => [item.nodeId, item]))
+  }, [canvasMonitor?.items])
 
   const handleGraphStateChanged = useCallback((state: PlannerGraphState) => {
     setPlannerState(state)
@@ -822,6 +842,7 @@ function PlannerGraphInner({
       onRequestAssign: handleRequestAssign,
       onOpenAssignedSubCanvas: handleOpenAssignedSubCanvas,
       canEditInternals: plannerState?.canEditInternals ?? true,
+      monitorItemsByNodeId,
     })
   }, [
     plannerState?.nodes,
@@ -856,6 +877,7 @@ function PlannerGraphInner({
     handleRequestAssign,
     handleOpenAssignedSubCanvas,
     plannerState?.canEditInternals,
+    monitorItemsByNodeId,
   ])
 
   const reviewGraph = useMemo(() => {

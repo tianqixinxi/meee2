@@ -313,6 +313,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const nextAction = isRunMode
     ? nextWorkActionCN(data.hasSelectedDelivery, runNodeState?.nextAction)
     : nextPlanActionCN(Boolean(data.responsibleLabel), Boolean(node.subCanvasId), node.nextAction)
+  const monitorItem = data.monitorItem ?? null
+  const monitorBadge = monitorItem && monitorItem.reasonKind !== 'normal'
+    ? {
+      tone: monitorItem.needsHumanReply ? 'reply' : 'attention',
+      label: monitorItem.needsHumanReply ? 'Needs reply' : 'Attention',
+      title: monitorBadgeTitle(monitorItem),
+    }
+    : null
   const io = buildCanvasIOItems(data)
   // UI-simplification §1 — primaryAction 现在是结构化枚举(PrimaryAction),
   // dispatch 走 switch(primaryAction);显示文本走 PRIMARY_ACTION_TEXT[primaryAction]。
@@ -423,6 +431,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
 
       <div className="planner-node__title">{node.title}</div>
       {node.desc && <div className="planner-node__desc">{node.desc}</div>}
+
+      {monitorBadge && (
+        <div
+          className={`planner-node__monitor-badge planner-node__monitor-badge--${monitorBadge.tone}`}
+          title={monitorBadge.title}
+        >
+          {monitorBadge.tone === 'reply' ? <MessageCircle size={11} aria-hidden /> : <AlertTriangle size={11} aria-hidden />}
+          <span>{monitorBadge.label}</span>
+        </div>
+      )}
 
       {node.widget && (() => {
         // P2.4 widget dispatcher · P3.0 接通 integration entities
@@ -894,6 +912,34 @@ function emptyKanbanPayload(title: string): KanbanArtifactPayload {
       },
     ],
     items: [],
+  }
+}
+
+function monitorBadgeTitle(item: NonNullable<PlannerGraphNode['data']['monitorItem']>): string {
+  return item.replyPrompt
+    || item.nextAction
+    || item.blockers[0]
+    || monitorReasonLabel(item.reasonKind)
+}
+
+function monitorReasonLabel(reason: string): string {
+  switch (reason) {
+  case 'permission_required':
+    return 'Permission required'
+  case 'waiting_for_user':
+    return 'Waiting for user response'
+  case 'inbox_pending':
+    return 'Pending message'
+  case 'gate_wait':
+    return 'Waiting for gate review'
+  case 'awaiting_input':
+    return 'Awaiting input'
+  case 'blocked':
+    return 'Blocked'
+  case 'failed':
+    return 'Failed'
+  default:
+    return 'Attention'
   }
 }
 
