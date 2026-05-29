@@ -641,11 +641,12 @@ struct PlanningNode: Codable, Equatable {
     /// assignee + run state). non-nil = render as the declared widget kind,
     /// backed by `widget.source`. See Widget struct above.
     var widget: Widget?
-    /// Artifact-node data-source mode (2026-05-28). Three-mode enum stored as
+    /// Artifact-node data-source mode (2026-05-28). Two-mode enum stored as
     /// String for forward-compat:
     /// - `authored` (default, also implied when nil): node owns its payload.
-    /// - `aggregated`: payload mirrors N upstream node artifacts.
-    /// - `mirrored`: payload mirrors an external integration source.
+    /// - `mirrored`: payload bound to an external integration entity;
+    ///   lazy pull-on-consume snapshot semantics. Matches step/session
+    ///   `input.external[].sync_session` pattern.
     /// Orthogonal to `widget.source` (which controls *view-layer* origin).
     /// nil on non-artifact nodes; nil on legacy artifact nodes is treated as
     /// `authored` per the rollout spec.

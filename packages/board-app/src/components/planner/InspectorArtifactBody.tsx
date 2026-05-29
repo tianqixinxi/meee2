@@ -90,10 +90,13 @@ const ARTIFACT_WIDGET_OPTIONS: ReadonlyArray<{
   },
 ]
 
-// design spec ui_surface §dataSource — artifact 三模 enum.
+// design spec ui_surface §dataSource — artifact 二模 enum (2026-05-28 简化).
 // 与 widget.source 正交并行: artifact.dataSource 决定 payload 权威来源 (data 层),
 // widget.source 决定渲染来源 (view 层)。
-type ArtifactDataSourceMode = 'authored' | 'aggregated' | 'mirrored'
+//
+// 已删 'aggregated' (widget.source=upstream 已覆盖 view 层聚合)。
+// 已删 mirrorPolicy / refreshSeconds (pull-on-consume snapshot 模型让两者无意义)。
+type ArtifactDataSourceMode = 'authored' | 'mirrored'
 
 const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
   mode: ArtifactDataSourceMode
@@ -102,23 +105,19 @@ const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
 }> = [
   {
     mode: 'authored',
-    label: '自撰',
-    tooltip: '节点自己撰写 payload (可编辑, version 链正常)',
-  },
-  {
-    mode: 'aggregated',
-    label: '聚合',
-    tooltip: '镜像上游节点产物聚合 (只读, 编辑触发 fork)',
+    label: '手填',
+    tooltip: '这里直接写 — 节点自带 payload,可编辑',
   },
   {
     mode: 'mirrored',
-    label: '外部',
-    tooltip: '镜像外部 integration (只读, syncPolicy 周期拉)',
+    label: '接外部',
+    tooltip: '绑一个 integration (Notion / Linear / GitHub 等),下游消费时拉最新数据 + 冻一份快照',
   },
 ]
 
 // Inspector 读取当前模式 — 与 widgetDataResolver 共享 loose lookup 路径
 // (PlanningNode.artifactConfig 尚未落到 types.ts,旧节点缺省 → 'authored')。
+// 'aggregated' / 'upstream' 旧值 → fallback authored (兼容老数据,实际不再出现)。
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
   const cfg = node as unknown as {
     artifact?: { dataSource?: string | { mode?: string } }
@@ -130,12 +129,13 @@ function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode 
     case 'self':
     case 'authored':
       return 'authored'
-    case 'upstream':
-    case 'aggregated':
-      return 'aggregated'
     case 'external':
     case 'mirrored':
       return 'mirrored'
+    case 'upstream':
+    case 'aggregated':
+      // 已删模式,fallback 到 authored
+      return 'authored'
     default:
       return 'authored'
   }
@@ -436,28 +436,15 @@ export function InspectorArtifactBody({
                 Attach data source 入口未挂载(parent 没传 onAttachDataSource)。
               </p>
             )}
-            {/* 立即同步 — section-bottom secondary CTA。
-                TODO(refresh-strategy): 真正的 batch refresh IO 由 design spec
-                §refresh 段定义的策略 agent / sync orchestrator 负责落地
-                (cf. doc/simplified-mental-model-spec.md §4.2 + design spec
-                ui_surface §dataSource.refresh)。当前 workflow 只埋 UI 入口,
-                后端排队 / 节流 / 冲突合并都还没接。 */}
-            {externalBindings.length > 0 && (
-              <button
-                type="button"
-                className="planner-node-modal__attach-data-source-button planner-node-modal__attach-data-source-button--secondary"
-                onClick={() => {
-                  console.log('[InspectorArtifactBody] manual refresh stub', {
-                    nodeId: node.id,
-                    bindings: externalBindings.length,
-                  })
-                  toast.push('info', '同步任务已排队')
-                }}
-                title="立即把所有已绑定外部来源排进同步队列(stub — 真正的 IO 见 design spec §refresh)"
-              >
-                <RefreshCw size={12} aria-hidden /> 立即同步
-              </button>
-            )}
+            {/* 「立即同步」按钮已删 (2026-05-28):
+                mirrored 改用 pull-on-consume snapshot 模型 — 下游 session/step
+                消费此 artifact 时,server 即时拉 + 冻 version。无需手动 / 周期
+                refresh。这跟 step/session 的 input.external[].sync_session
+                snapshot pattern 是同一抽象。 */}
+            <p className="planner-node-modal__view-hint">
+              💡 也可以让 meee2 AI 帮你配 — 在节点对话里说"接 Notion 的 X 文档"之类,
+              AI 会 propose <code>setArtifactDataSource</code> 把绑定写好。
+            </p>
           </div>
         )}
       </div>
@@ -1060,11 +1047,9 @@ function FootprintTimeline({
 function describeDataSourceMode(mode: ArtifactDataSourceMode): string {
   switch (mode) {
     case 'authored':
-      return '自撰 · 节点自己撰写 payload (可编辑)'
-    case 'aggregated':
-      return '聚合 · 镜像上游节点产物 (只读, 编辑触发 fork)'
+      return '手填 · 这里直接写,节点自带 payload'
     case 'mirrored':
-      return '外部 · 镜像外部 integration (只读, 周期同步)'
+      return '接外部 · 绑 integration,下游消费时拉最新数据 + 冻一份快照'
   }
 }
 

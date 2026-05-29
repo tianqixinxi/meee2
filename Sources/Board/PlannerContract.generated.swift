@@ -13,5 +13,5 @@ enum PlannerContract {
     static let proposalStatuses: Set<String> = ["pending", "approved", "applied", "rejected"]
     static let artifactPositionTags: Set<String> = ["latest", "candidate", "discarded", "promoted", "proposed"]
     static let artifactPayloadTypes: Set<String> = ["prd", "kanban", "impl-pr", "check-result", "file", "markdown", "integration"]
-    static let artifactDataSourceModes: Set<String> = ["authored", "aggregated", "mirrored"]
+    static let artifactDataSourceModes: Set<String> = ["authored", "mirrored"]
 }
