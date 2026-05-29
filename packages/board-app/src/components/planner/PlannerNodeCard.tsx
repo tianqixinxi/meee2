@@ -254,6 +254,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const nextAction = isRunMode
     ? nextWorkAction(runNodeState, data.hasSelectedDelivery)
     : nextPlanAction(node, data.responsibleLabel)
+  const monitorItem = data.monitorItem ?? null
+  const monitorBadge = monitorItem && monitorItem.reasonKind !== 'normal'
+    ? {
+      tone: monitorItem.needsHumanReply ? 'reply' : 'attention',
+      label: monitorItem.needsHumanReply ? 'Needs reply' : 'Attention',
+      title: monitorBadgeTitle(monitorItem),
+    }
+    : null
   const io = buildCanvasIOItems(data)
   const primaryAction = primaryActionLabel({
     mode: data.mode,
@@ -376,6 +384,16 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       </div>
 
       <div className="planner-node__title">{node.title}</div>
+
+      {monitorBadge && (
+        <div
+          className={`planner-node__monitor-badge planner-node__monitor-badge--${monitorBadge.tone}`}
+          title={monitorBadge.title}
+        >
+          {monitorBadge.tone === 'reply' ? <MessageCircle size={11} aria-hidden /> : <AlertTriangle size={11} aria-hidden />}
+          <span>{monitorBadge.label}</span>
+        </div>
+      )}
 
       {nodeKind === 'step' && (
         <div className="planner-node__meta" aria-label="Runtime">
@@ -896,6 +914,34 @@ function emptyKanbanPayload(title: string): KanbanArtifactPayload {
       },
     ],
     items: [],
+  }
+}
+
+function monitorBadgeTitle(item: NonNullable<PlannerGraphNode['data']['monitorItem']>): string {
+  return item.replyPrompt
+    || item.nextAction
+    || item.blockers[0]
+    || monitorReasonLabel(item.reasonKind)
+}
+
+function monitorReasonLabel(reason: string): string {
+  switch (reason) {
+  case 'permission_required':
+    return 'Permission required'
+  case 'waiting_for_user':
+    return 'Waiting for user response'
+  case 'inbox_pending':
+    return 'Pending message'
+  case 'gate_wait':
+    return 'Waiting for gate review'
+  case 'awaiting_input':
+    return 'Awaiting input'
+  case 'blocked':
+    return 'Blocked'
+  case 'failed':
+    return 'Failed'
+  default:
+    return 'Attention'
   }
 }
 

@@ -4265,8 +4265,10 @@ enum BoardAPI {
     }
 
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
+        let parentRefs = PlannerStore.shared.canvasParentRefs()
         let canvases = snapshot.canvases.map {
             let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: $0.id)) ?? ""
+            let parentRef = parentRefs[$0.id]
             return CanvasInfoDTO(
                 id: $0.id,
                 name: $0.name,
@@ -4274,6 +4276,8 @@ enum BoardAPI {
                 kind: ($0.kind ?? .board).rawValue,
                 isDefault: $0.isDefault,
                 workspacePath: workspacePath,
+                parentCanvasId: parentRef?.parentCanvasId,
+                parentNodeId: parentRef?.parentNodeId,
                 teamId: $0.teamId,
                 ownerUserId: $0.ownerUserId ?? $0.createdBy,
                 remoteId: $0.remoteId,

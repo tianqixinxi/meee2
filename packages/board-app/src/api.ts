@@ -68,6 +68,8 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
+    parentCanvasId: null,
+    parentNodeId: null,
   },
   [DEMO_SUB_CANVAS_ID]: {
     id: DEMO_SUB_CANVAS_ID,
@@ -77,6 +79,8 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     isDefault: false,
     workspacePath: '/demo/release-readiness',
     ownerUserId: DEMO_OWNER_ID,
+    parentCanvasId: DEMO_CANVAS_ID,
+    parentNodeId: 'release-readiness',
   },
 }
 let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
@@ -501,6 +505,8 @@ export function createCanvas(input: { name: string; scope: CanvasScope; kind?: C
         isDefault: false,
         workspacePath: `/demo/${id}`,
         ownerUserId: DEMO_OWNER_ID,
+        parentCanvasId: null,
+        parentNodeId: null,
       },
     }
     demoNodesByCanvasId = {

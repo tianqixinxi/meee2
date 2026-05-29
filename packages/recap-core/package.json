@@ -33,6 +33,10 @@
     "./fingerprint": {
       "types": "./dist/fingerprint.d.ts",
       "default": "./dist/fingerprint.js"
+    },
+    "./monitor": {
+      "types": "./dist/monitor.d.ts",
+      "default": "./dist/monitor.js"
     }
   },
   "files": [
@@ -43,6 +47,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
+    "test": "pnpm run build && node test/monitor.test.mjs",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "publishConfig": {

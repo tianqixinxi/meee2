@@ -2415,6 +2415,11 @@ final class PlannerStore {
         let intervalSeconds: Int
     }
 
+    struct CanvasParentRef {
+        let parentCanvasId: String
+        let parentNodeId: String?
+    }
+
     struct CanvasRecord: Codable, Equatable {
         var canvas: PlanningCanvas
         var nodes: [PlanningNode]
@@ -2507,6 +2512,37 @@ final class PlannerStore {
         self.encoder = JSONEncoder()
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         self.document = Self.loadDocument(rootURL: rootURL, fileManager: fileManager, decoder: decoder)
+    }
+
+    func canvasParentRefs() -> [String: CanvasParentRef] {
+        withLock {
+            var refs: [String: CanvasParentRef] = [:]
+            let records = document.canvases.values.sorted { $0.canvas.id < $1.canvas.id }
+
+            for record in records {
+                guard let parentCanvasId = Self.normalizedCanvasId(record.canvas.parentCanvasId) else { continue }
+                refs[record.canvas.id] = CanvasParentRef(
+                    parentCanvasId: parentCanvasId,
+                    parentNodeId: Self.normalizedCanvasId(record.canvas.parentNodeId)
+                )
+            }
+
+            for record in records {
+                let parentCanvasId = record.canvas.id
+                for node in record.nodes.sorted(by: { $0.id < $1.id }) {
+                    guard let subCanvasId = Self.normalizedCanvasId(node.subCanvasId),
+                          refs[subCanvasId] == nil else { continue }
+                    refs[subCanvasId] = CanvasParentRef(parentCanvasId: parentCanvasId, parentNodeId: node.id)
+                }
+                for artifact in record.artifacts.sorted(by: { $0.id < $1.id }) {
+                    for subCanvasId in Self.subCanvasIds(in: artifact.payload) where refs[subCanvasId] == nil {
+                        refs[subCanvasId] = CanvasParentRef(parentCanvasId: parentCanvasId, parentNodeId: artifact.nodeId)
+                    }
+                }
+            }
+
+            return refs
+        }
     }
 
     func record(
@@ -2967,6 +3003,44 @@ final class PlannerStore {
         lock.lock()
         defer { lock.unlock() }
         return try body()
+    }
+
+    private static func normalizedCanvasId(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func subCanvasIds(in value: BoardJSONValue?) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        collectSubCanvasIds(in: value, seen: &seen, result: &result)
+        return result
+    }
+
+    private static func collectSubCanvasIds(
+        in value: BoardJSONValue?,
+        seen: inout Set<String>,
+        result: inout [String]
+    ) {
+        guard let value else { return }
+        switch value {
+        case .object(let object):
+            if case .string(let raw)? = object["subCanvasId"],
+               let subCanvasId = normalizedCanvasId(raw),
+               !seen.contains(subCanvasId) {
+                seen.insert(subCanvasId)
+                result.append(subCanvasId)
+            }
+            for child in object.values {
+                collectSubCanvasIds(in: child, seen: &seen, result: &result)
+            }
+        case .array(let values):
+            for child in values {
+                collectSubCanvasIds(in: child, seen: &seen, result: &result)
+            }
+        case .null, .bool, .number, .string:
+            return
+        }
     }
 
     private func requireRecord(canvasId: String) throws -> CanvasRecord {

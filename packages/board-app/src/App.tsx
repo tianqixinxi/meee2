@@ -21,10 +21,12 @@ import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { useI18n } from './lib/i18n'
 import { useBoardState } from './useBoardState'
+import { useCanvasMonitor } from './lib/canvasMonitor'
 import type {
   CanvasList,
   CanvasScope,
   Meee2AgentRuntimeStatus,
+  PlannerGraphState,
   SpawnProvider,
 } from './types'
 import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
@@ -143,6 +145,8 @@ function canvasListSignature(list: CanvasList): string {
         kind: canvas.kind === 'template' ? 'template' : 'board',
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
+        parentCanvasId: canvas.parentCanvasId ?? null,
+        parentNodeId: canvas.parentNodeId ?? null,
         ownerUserId: canvas.ownerUserId ?? null,
         teamId: canvas.teamId ?? null,
         remoteId: canvas.remoteId ?? null,
@@ -339,6 +343,20 @@ export default function App() {
   }, [activeCanvasId, canvasList])
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
+  const workspaceCanvases = useMemo(() => (canvasList?.canvases ?? []).filter((canvas) => canvasKind(canvas) === 'board'), [canvasList])
+  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvases[0]?.id ?? activeCanvasId
+  const activeWorkspaceCanvas = canvasList?.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
+  const [activePlannerState, setActivePlannerState] = useState<PlannerGraphState | null>(null)
+  useEffect(() => {
+    setActivePlannerState(null)
+  }, [activeWorkspaceCanvasId])
+  const currentPlannerState = activePlannerState?.canvas.id === activeWorkspaceCanvasId ? activePlannerState : null
+  const activeCanvasMonitor = useCanvasMonitor({
+    plannerState: currentPlannerState,
+    boardState: boardState.state,
+  })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
@@ -680,11 +698,6 @@ export default function App() {
     )
   }
 
-  const workspaceCanvases = canvasList.canvases.filter((canvas) => canvasKind(canvas) === 'board')
-  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
-    ? activeCanvasId
-    : workspaceCanvases[0]?.id ?? activeCanvasId
-  const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
 
   return (
@@ -711,8 +724,10 @@ export default function App() {
               boardState={boardState.state}
               clearRevision={plannerClearRevision}
               refreshTick={activeCanvasRefreshTick}
+              onPlannerStateChange={setActivePlannerState}
               onOpenSubCanvas={handleSetActiveCanvas}
               onNotify={pushToast}
+              canvasMonitor={activeCanvasMonitor}
             />
           ) : workspaceMode === 'templates' ? (
             <TemplatesView
@@ -775,6 +790,8 @@ export default function App() {
               onDeleteCanvas={handleDeleteCanvas}
               userProfile={userProfile}
               boardState={boardState.state}
+              plannerState={currentPlannerState}
+              canvasMonitor={activeCanvasMonitor}
               onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}

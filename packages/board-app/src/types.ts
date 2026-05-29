@@ -221,6 +221,8 @@ export interface CanvasInfo {
   kind?: CanvasKind
   isDefault: boolean
   workspacePath: string
+  parentCanvasId?: string | null
+  parentNodeId?: string | null
   teamId?: string | null
   ownerUserId?: string | null
   remoteId?: string | null

@@ -12,6 +12,7 @@ import type {
   PlanningNodeStatus,
   RunNodeState,
 } from '../../types'
+import type { CanvasNodeMonitorItem } from '@meee1/recap-core'
 
 export type PlannerPreviewKind = 'none' | 'added' | 'updated'
 export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active' | 'neutral'
@@ -82,6 +83,7 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onOpenAssignedSubCanvas?: (subCanvasId: string) => void
   /** UI-2: false when ENG-4 RLS would refuse internal edits. */
   canEditInternals?: boolean
+  monitorItem?: CanvasNodeMonitorItem | null
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>
@@ -142,6 +144,7 @@ interface PlannerGraphInput {
   onOpenAssignedSubCanvas?: (subCanvasId: string) => void
   /** UI-2: whether the parent canvas owner can still edit node internals. */
   canEditInternals?: boolean
+  monitorItemsByNodeId?: Record<string, CanvasNodeMonitorItem>
 }
 
 export function buildPlannerGraph(input: PlannerGraphInput): {
@@ -226,6 +229,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         onRequestAssign: input.onRequestAssign,
         onOpenAssignedSubCanvas: input.onOpenAssignedSubCanvas,
         canEditInternals: input.canEditInternals ?? true,
+        monitorItem: input.monitorItemsByNodeId?.[node.id] ?? null,
       },
     }
   })
@@ -347,6 +351,7 @@ function buildVisibleIOArtifactNodes(input: {
             canChangeStatus: false,
             artifacts: entry.artifacts,
             onHideIOArtifact: input.onHideIOArtifact,
+            monitorItem: null,
           },
         },
       })

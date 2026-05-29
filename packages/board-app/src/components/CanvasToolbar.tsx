@@ -15,7 +15,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react'
-import { fetchPlannerGraphState, setPlannerCanvasDescription, streamAssistantChat } from '../api'
+import { setPlannerCanvasDescription, streamAssistantChat } from '../api'
 import {
   CANVAS_RECAP_PREFERENCES_CHANGED,
   loadCanvasRecapIntervalMinutes,
@@ -32,6 +32,7 @@ import {
   editableCanvasDescription,
   formatRecapAge,
   parseAIRecap,
+  type CanvasMonitor,
   type CanvasStatusRecap as CoreCanvasStatusRecap,
 } from '@meee1/recap-core'
 
@@ -47,11 +48,12 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
-  // UI-6 · AI Recap Drawer needs richer context. All optional so callers
-  // that don't yet pipe them through keep working (drawer still renders local
-  // planner-state aggregates and shows ENG-2 stub copy).
+  // AI Recap Drawer needs richer context. Optional so narrower callers can
+  // still render the toolbar without canvas monitor wiring.
   userProfile?: UserProfile | null
   boardState?: BoardState | null
+  plannerState?: PlannerGraphState | null
+  canvasMonitor?: CanvasMonitor | null
   /** Switch the workspace rail to `SessionsView`. Forwarded to the drawer's
    *  "View all sessions" CTA so it can hand off instead of duplicating the
    *  global session list. */
@@ -75,12 +77,16 @@ export function CanvasToolbar({
   onDeleteCanvas,
   userProfile = null,
   boardState = null,
+  plannerState = null,
+  canvasMonitor = null,
   onOpenAllSessions,
 }: Props) {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
   const recapCacheRef = useRef<Record<string, CanvasRecap>>({})
+  const plannerStateRef = useRef<PlannerGraphState | null>(plannerState)
+  const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [clearConfirming, setClearConfirming] = useState(false)
@@ -97,25 +103,27 @@ export function CanvasToolbar({
   const [recapLoading, setRecapLoading] = useState(false)
   const [recapError, setRecapError] = useState<string | null>(null)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
-  // UI-6 · drawer-open state and a cached PlannerGraphState (the same one
-  // `refreshRecap` already fetches) so the drawer can render local
-  // aggregates without re-fetching.
   const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
-  const [recapPlannerState, setRecapPlannerState] = useState<PlannerGraphState | null>(null)
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
-  const filteredCanvases = useMemo(() => canvases.filter((canvas) => {
-    const query = canvasQuery.trim().toLowerCase()
-    if (!query) return true
-    return [canvas.name, canvas.id, visibilityLabel(canvas, t)]
-      .some((value) => value.toLowerCase().includes(query))
-  }), [canvasQuery, canvases, t])
+  const filteredCanvasEntries = useMemo(
+    () => buildCanvasListEntries(canvases, canvasQuery, t),
+    [canvasQuery, canvases, t],
+  )
 
   const closePanels = () => {
     setCreating(false)
     setClearConfirming(false)
     setDeleteConfirming(false)
   }
+
+  useEffect(() => {
+    plannerStateRef.current = plannerState
+  }, [plannerState])
+
+  useEffect(() => {
+    canvasMonitorRef.current = canvasMonitor
+  }, [canvasMonitor])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -146,9 +154,12 @@ export function CanvasToolbar({
     setRecapLoading(true)
     setRecapError(null)
     try {
-      const state = await fetchPlannerGraphState(activeCanvas.id)
+      const state = plannerStateRef.current
+      if (!state || state.canvas.id !== activeCanvas.id) {
+        setRecap(buildEmptyCanvasRecap(t, t('canvas.readingState')))
+        return
+      }
       if (recapRequestRef.current !== requestId) return
-      setRecapPlannerState(state)
       const baseRecap = buildCanvasStatusRecap(state, t)
       setRecap(baseRecap)
       if (isBlankPlannerCanvas(state)) {
@@ -157,7 +168,7 @@ export function CanvasToolbar({
         setRecap(nextRecap)
         return
       }
-      const aiRecap = await generateAIRecap(state, activeCanvas)
+      const aiRecap = await generateAIRecap(state, activeCanvas, canvasMonitorRef.current)
       if (recapRequestRef.current !== requestId) return
       const nextRecap = { ...baseRecap, ...aiRecap, updatedAt: new Date().toISOString() }
       recapCacheRef.current[activeCanvas.id] = nextRecap
@@ -181,8 +192,14 @@ export function CanvasToolbar({
       return
     }
     setRecap(buildEmptyCanvasRecap(t))
+  }, [activeCanvas?.id, t])
+
+  useEffect(() => {
+    if (!activeCanvas) return
+    if (recapCacheRef.current[activeCanvas.id]) return
+    if (plannerState?.canvas.id !== activeCanvas.id) return
     void refreshRecap()
-  }, [activeCanvas?.id, refreshRecap, t])
+  }, [activeCanvas?.id, plannerState?.canvas.id, refreshRecap])
 
   useEffect(() => {
     const timer = window.setInterval(() => setRecapAgeNow(Date.now()), 60 * 1000)
@@ -248,6 +265,7 @@ export function CanvasToolbar({
   }
 
   if (!activeCanvas) return null
+  const monitorBadge = monitorBadgeFor(canvasMonitor, t)
 
   return (
     <div className="canvas-toolbar" ref={rootRef}>
@@ -328,13 +346,18 @@ export function CanvasToolbar({
               </label>
             </div>
             <div className="canvas-toolbar__list">
-              {filteredCanvases.map((canvas) => {
+              {filteredCanvasEntries.map(({ canvas, depth }) => {
                 const selected = canvas.id === activeCanvas.id
                 return (
                   <button
                     key={canvas.id}
                     type="button"
-                    className={'canvas-toolbar__item' + (selected ? ' is-selected' : '')}
+                    className={[
+                      'canvas-toolbar__item',
+                      selected ? 'is-selected' : '',
+                      depth > 0 ? 'is-subcanvas' : '',
+                    ].filter(Boolean).join(' ')}
+                    style={{ paddingLeft: 8 + Math.min(depth, 4) * 16 }}
                     onClick={() => {
                       closePanels()
                       setMenuOpen(false)
@@ -354,7 +377,7 @@ export function CanvasToolbar({
                   </button>
                 )
               })}
-              {filteredCanvases.length === 0 && (
+              {filteredCanvasEntries.length === 0 && (
                 <div className="canvas-toolbar__empty">{t('canvas.noMatch')}</div>
               )}
             </div>
@@ -379,6 +402,9 @@ export function CanvasToolbar({
               ) : recap?.updatedAt ? (
                 <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
               ) : null}
+            </span>
+            <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
+              {monitorBadge.label}
             </span>
           </button>
           <button
@@ -416,7 +442,8 @@ export function CanvasToolbar({
         onClose={() => setRecapDrawerOpen(false)}
         canvasId={activeCanvas.id}
         canvasName={displayCanvasName(activeCanvas)}
-        plannerState={recapPlannerState}
+        plannerState={plannerState}
+        monitor={canvasMonitor}
         boardState={boardState}
         userProfile={userProfile}
         onOpenAllSessions={onOpenAllSessions}
@@ -672,6 +699,57 @@ function displayCanvasName(canvas: CanvasInfo): string {
   return canvas.name === 'Default canvas' ? 'My' : canvas.name
 }
 
+function buildCanvasListEntries(
+  canvases: CanvasInfo[],
+  query: string,
+  t: ReturnType<typeof useI18n>['t'],
+): Array<{ canvas: CanvasInfo; depth: number }> {
+  const originalIndex = new Map(canvases.map((canvas, index) => [canvas.id, index]))
+  const byId = new Map(canvases.map((canvas) => [canvas.id, canvas]))
+  const childrenByParent = new Map<string, CanvasInfo[]>()
+  const roots: CanvasInfo[] = []
+
+  for (const canvas of canvases) {
+    const parentId = canvas.parentCanvasId?.trim() || null
+    if (parentId && parentId !== canvas.id && byId.has(parentId)) {
+      const children = childrenByParent.get(parentId) ?? []
+      children.push(canvas)
+      childrenByParent.set(parentId, children)
+    } else {
+      roots.push(canvas)
+    }
+  }
+
+  const byOriginalOrder = (a: CanvasInfo, b: CanvasInfo) => (originalIndex.get(a.id) ?? 0) - (originalIndex.get(b.id) ?? 0)
+  roots.sort(byOriginalOrder)
+  for (const children of childrenByParent.values()) {
+    children.sort(byOriginalOrder)
+  }
+
+  const normalizedQuery = query.trim().toLowerCase()
+  const matches = (canvas: CanvasInfo) => {
+    if (!normalizedQuery) return true
+    return [canvas.name, canvas.id, visibilityLabel(canvas, t)]
+      .some((value) => value.toLowerCase().includes(normalizedQuery))
+  }
+
+  const result: Array<{ canvas: CanvasInfo; depth: number }> = []
+  const visit = (canvas: CanvasInfo, depth: number, path: Set<string>) => {
+    if (path.has(canvas.id)) return
+    if (matches(canvas)) result.push({ canvas, depth })
+    const nextPath = new Set(path).add(canvas.id)
+    for (const child of childrenByParent.get(canvas.id) ?? []) {
+      visit(child, depth + 1, nextPath)
+    }
+  }
+
+  for (const canvas of roots) {
+    visit(canvas, 0, new Set())
+  }
+
+  return result
+}
+
 function buildCanvasStatusRecap(state: PlannerGraphState, t: ReturnType<typeof useI18n>['t']): CanvasRecap {
   const recap = buildCoreCanvasStatusRecap(state)
   return {
@@ -737,14 +815,30 @@ function localizeStatusLabel(label: string, t: ReturnType<typeof useI18n>['t']):
   }
 }
 
+function monitorBadgeFor(monitor: CanvasMonitor | null | undefined, t: ReturnType<typeof useI18n>['t']): {
+  label: string
+  tone: 'clear' | 'reply' | 'blocked'
+} {
+  const needsReply = monitor?.counts.needsHumanReply ?? 0
+  if (needsReply > 0) {
+    return { label: t('canvas.monitorNeedsReply', { count: needsReply }), tone: 'reply' }
+  }
+  const blocked = (monitor?.counts.blocked ?? 0) + (monitor?.counts.failed ?? 0)
+  if (blocked > 0) {
+    return { label: t('canvas.monitorBlocked', { count: blocked }), tone: 'blocked' }
+  }
+  return { label: t('canvas.monitorAllClear'), tone: 'clear' }
+}
+
 async function generateAIRecap(
   state: PlannerGraphState,
   canvas: CanvasInfo,
+  monitor: CanvasMonitor | null,
 ): Promise<Pick<CanvasRecap, 'headline' | 'details'>> {
   const llm = readLlmSettings()
   let text = ''
   for await (const ev of streamAssistantChat({
-    messages: [{ role: 'user', content: buildAIRecapPrompt(state) }],
+    messages: [{ role: 'user', content: buildAIRecapPrompt({ plannerState: state, monitor }) }],
     settings: {
       provider: llm.provider,
       apiKey: llm.apiKey,

@@ -3089,6 +3089,39 @@ html.board-empty-omni .canvas-toolbar__panel {
   font-weight: 520 !important;
 }
 
+.canvas-toolbar__monitor-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 118px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.15;
+}
+
+.canvas-toolbar__monitor-badge.is-clear {
+  color: color-mix(in srgb, var(--success) 84%, var(--text));
+  background: color-mix(in srgb, var(--success) 13%, transparent);
+  border-color: color-mix(in srgb, var(--success) 34%, var(--border-strong));
+}
+
+.canvas-toolbar__monitor-badge.is-reply {
+  color: color-mix(in srgb, var(--danger) 72%, #ffffff);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
+}
+
+.canvas-toolbar__monitor-badge.is-blocked {
+  color: color-mix(in srgb, var(--warning) 84%, var(--text));
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border-strong));
+}
+
 .canvas-toolbar__status-strip {
   position: fixed;
   left: calc(var(--sidebar-width, 208px) + var(--planner-chat-width, 0px) + (100vw - var(--sidebar-width, 208px) - var(--planner-chat-width, 0px)) / 2);
@@ -3278,6 +3311,20 @@ html.board-empty-omni .canvas-toolbar__panel {
 .canvas-toolbar__item.is-selected {
   background: rgba(255, 255, 255, 0.045);
   color: var(--text);
+}
+
+.canvas-toolbar__item.is-subcanvas .canvas-toolbar__check {
+  position: relative;
+}
+
+.canvas-toolbar__item.is-subcanvas .canvas-toolbar__check::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 8px;
+  height: 1px;
+  background: color-mix(in srgb, var(--border-strong) 62%, transparent);
 }
 
 .canvas-toolbar__check {

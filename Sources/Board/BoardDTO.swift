@@ -350,6 +350,8 @@ struct CanvasInfoDTO: Encodable {
     let kind: String
     let isDefault: Bool
     let workspacePath: String
+    let parentCanvasId: String?
+    let parentNodeId: String?
     let teamId: String?
     let ownerUserId: String?
     let remoteId: String?
