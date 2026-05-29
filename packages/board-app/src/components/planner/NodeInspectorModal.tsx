@@ -37,6 +37,7 @@ import type {
 } from '../../types'
 import { InputCardSections } from './InputCardSections'
 import { InspectorArtifactBody } from './InspectorArtifactBody'
+import { deriveDisplayStatus } from './labels'
 import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
 
 interface Props {
@@ -139,7 +140,11 @@ export function NodeInspectorModal({
   }, [widgetPopoverOpen])
   const isTemplate = variant === 'template'
   const nodeKind = node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
-  const runState = state?.runState ?? node.status
+  // PR1 (running-session-visual) — inspector 头部 / 进展段徽章统一从 deriveDisplayStatus 派生,
+  // 让 workflowRunState (running / awaiting / failed) 在 inspector 里也显式可见。
+  // 不再走 state.runState → runStateToBadge,这条路径只能反映 design status,
+  // running / awaiting 都会被吃成「待办」。
+  const displayStatus = deriveDisplayStatus(node)
   const blockers = isTemplate
     ? []
     : state?.blockers?.length
@@ -372,37 +377,13 @@ export function NodeInspectorModal({
 
         <div className="planner-node-modal__header">
           <div className="planner-node-modal__header-tags">
-            {!isTemplate && <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>{runStateToBadge(String(runState))}</span>}
+            {!isTemplate && <span className={`planner-node-modal__state planner-node-modal__state--${displayStatus.tone}`}>{displayStatus.label}</span>}
           </div>
           <h2>{node.title}</h2>
-          {/* epsilon (session-hide): `nodeKind === 'session'` is legacy.
-           *  Existing nodes still load (decode + updateNode keep compat),
-           *  but the creation surface now seeds step + dispatch.runner=claude.
-           *  Surface a small hint so users / owners know this node belongs
-           *  to the older shape and can migrate it on their own cadence. */}
-          {nodeKind === 'session' && (
-            <div
-              className="planner-node-modal__deprecation-hint"
-              role="note"
-              style={{
-                marginTop: 6,
-                padding: '6px 8px',
-                borderRadius: 6,
-                background: 'rgba(245, 158, 11, 0.12)',
-                color: 'var(--text-secondary, #92400e)',
-                fontSize: 12,
-                lineHeight: 1.4,
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 6,
-              }}
-            >
-              <AlertTriangle size={12} aria-hidden style={{ marginTop: 2, flexShrink: 0 }} />
-              <span>
-                这是 legacy <code>session</code> 节点。新建请改用 <code>step</code> + <code>dispatch.runner = claude</code>;现有节点仍可正常运行,可按需迁移。
-              </span>
-            </div>
-          )}
+          {/* PR1 (running-session-visual): the「legacy session」 UI nag was removed.
+           *  Deprecation is still enforced inside PlannerCore.addNode validator,
+           *  so the canvas can't seed new session-kind nodes; existing nodes
+           *  remain editable without a permanent banner cluttering the header. */}
         </div>
 
         {/* UI-simplification §2.9 — three-section reorg: 进展 / 成果 / 足迹.
@@ -453,8 +434,8 @@ export function NodeInspectorModal({
 
         {!isTemplate && (
           <div className="planner-node-modal__progress-line">
-            <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>
-              {runStateToBadge(String(runState))}
+            <span className={`planner-node-modal__state planner-node-modal__state--${displayStatus.tone}`}>
+              {displayStatus.label}
             </span>
             {nextAction && (
               <span className="planner-node-modal__progress-next">
@@ -1090,30 +1071,6 @@ function describeWidget(widget: Widget | null, node: PlanningNode): string {
   }
 }
 
-type BadgeState = '待办' | '运行中' | '等反馈' | '卡住' | '完成'
-function runStateToBadge(runState: string): BadgeState {
-  switch (runState) {
-    case 'completed':
-    case 'done':
-      return '完成'
-    case 'blocked':
-    case 'failed':
-    case 'error':
-      return '卡住'
-    case 'gate-wait':
-    case 'awaiting-input':
-    case 'awaiting-review':
-      return '等反馈'
-    case 'dispatched':
-    case 'running':
-    case 'in-progress':
-    case 'thinking':
-    case 'tooling':
-      return '运行中'
-    case 'ready_to_start':
-    case 'todo':
-    case 'pending':
-    default:
-      return '待办'
-  }
-}
+// PR1 (running-session-visual): runStateToBadge moved to deriveDisplayStatus
+// in ./labels.ts so card + inspector share a single source of truth. Kept the
+// removal here so future readers don't reach for a stale local helper.

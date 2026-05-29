@@ -7,7 +7,47 @@
 // 英文字符串字面量(如 'Open sub-flow')比较的代码块在改成中文文案时会全部
 // 走 else 分支 → 用 enum 切开 dispatch 路径。
 
-import type { PlannerWorkflowRunState, PlanningNodeStatus, RunNextAction } from '../../types'
+import type { PlannerWorkflowRunState, PlanningNode, PlanningNodeStatus, RunNextAction } from '../../types'
+
+// === Display status (PR1 running-session-visual) ===
+// 卡片 / inspector 顶端的状态徽章统一从这里派生。
+// 优先看 workflowRunState(运行态最权威),退化到 design status。
+// 返回 { label, tone };tone 用于 .planner-node__status--<tone> CSS 着色。
+export type DisplayStatusTone =
+  | 'ready'
+  | 'running'
+  | 'awaiting'
+  | 'failed'
+  | 'done'
+  | 'blocked'
+
+export interface DisplayStatus {
+  label: string
+  tone: DisplayStatusTone
+}
+
+export function deriveDisplayStatus(node: PlanningNode): DisplayStatus {
+  const wfs = node.workflowRunState ?? null
+  if (wfs === 'running' || wfs === 'dispatched') {
+    return { label: '运行中', tone: 'running' }
+  }
+  if (wfs === 'awaiting-input') {
+    return { label: '等反馈', tone: 'awaiting' }
+  }
+  if (wfs === 'gate-wait') {
+    return { label: '等审核', tone: 'awaiting' }
+  }
+  if (wfs === 'failed') {
+    return { label: '失败', tone: 'failed' }
+  }
+  if (wfs === 'done' || node.status === 'done') {
+    return { label: '完成', tone: 'done' }
+  }
+  if (node.status === 'blocked') {
+    return { label: '卡住', tone: 'blocked' }
+  }
+  return { label: planStatusLabel(node.status), tone: 'ready' }
+}
 
 // === 运行态徽章 (§1 五种统一) ===
 export function workStatusLabel(

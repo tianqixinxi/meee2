@@ -6140,6 +6140,97 @@
   letter-spacing: 0.04em;
 }
 
+/* PR1 (running-session-visual): status pill tones — card-side equivalents
+   of .planner-node-modal__state--*. deriveDisplayStatus() in labels.ts emits
+   one of these as the pill class so cards visibly reflect workflow run state
+   (running / awaiting / failed) instead of staying stuck on design status. */
+.planner-node__status--running {
+  background: rgba(110, 165, 124, 0.18);
+  color: #aed7b6;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--running::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #aed7b6;
+  animation: planner-status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes planner-status-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.planner-node__status--awaiting {
+  background: rgba(212, 138, 70, 0.18);
+  color: #f0b878;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--failed {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--done {
+  background: rgba(127, 169, 130, 0.16);
+  color: #bfe4cb;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--blocked {
+  background: rgba(194, 106, 106, 0.16);
+  color: #edb0b0;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--ready {
+  background: rgba(245, 244, 239, 0.08);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* Inspector modal — matching tones for the badge in the header and 进展 line.
+   Existing --blocked / --ready / --done above stay; add --running / --awaiting /
+   --failed so deriveDisplayStatus emits a valid class for every tone. */
+.planner-node-modal__state--running {
+  background: rgba(110, 165, 124, 0.18);
+  color: #aed7b6;
+}
+
+.planner-node-modal__state--running::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #aed7b6;
+  animation: planner-status-pulse 1.4s ease-in-out infinite;
+}
+
+.planner-node-modal__state--awaiting {
+  background: rgba(212, 138, 70, 0.18);
+  color: #f0b878;
+}
+
+.planner-node-modal__state--failed {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
+}
+
 /* Run history modal */
 .planner-run-history {
   position: relative;
