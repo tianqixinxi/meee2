@@ -2323,6 +2323,60 @@
   color: var(--accent);
 }
 
+/* PR4 — artifact 节点 version chip strip。横向小行，左边一个「版本」标签，
+ *  右边 chips。最多展示 6 个版本号(v{N}, v{N-1}, ...)，超出走 +N。
+ *  最新版本 chip 用 accent 边框 + 加粗，跟历史版本视觉分级，让用户一眼看到
+ *  当前在用哪个版本。点击 chip 打开 inspector(详细 diff / 单 chip 内容)。*/
+.planner-node__artifact-versions {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 6px 9px;
+  background: rgba(168, 165, 155, 0.04);
+  border: 1px solid rgba(168, 165, 155, 0.12);
+  border-radius: 5px;
+  font-size: 11px;
+}
+.planner-node__artifact-versions-label {
+  display: inline-flex; align-items: center;
+  color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: 10px; font-weight: 600;
+  flex-shrink: 0;
+}
+.planner-node__artifact-versions-strip {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1; min-width: 0; flex-wrap: wrap;
+}
+.planner-node__artifact-version-chip {
+  display: inline-flex; align-items: center;
+  padding: 2px 7px; border-radius: 10px;
+  background: rgba(168, 165, 155, 0.10);
+  border: 1px solid rgba(168, 165, 155, 0.20);
+  color: var(--text);
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.planner-node__artifact-version-chip:hover {
+  background: rgba(204, 120, 92, 0.10);
+  border-color: rgba(204, 120, 92, 0.32);
+  color: var(--accent);
+}
+.planner-node__artifact-version-chip.is-latest {
+  background: rgba(204, 120, 92, 0.12);
+  border-color: rgba(204, 120, 92, 0.45);
+  color: var(--accent);
+  font-weight: 600;
+}
+.planner-node__artifact-versions-more {
+  display: inline-flex; align-items: center;
+  padding: 2px 6px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
 .planner-node__responsible {
   display: flex;
   align-items: center;

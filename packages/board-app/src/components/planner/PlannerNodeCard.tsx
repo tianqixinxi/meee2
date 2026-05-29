@@ -555,6 +555,51 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         </div>
       )}
 
+      {/* PR4 · artifact-card version chips — for non-virtual artifact nodes,
+       *  show a horizontal strip of recent version chips (newest first, capped
+       *  at 6 + "+N" overflow). Clicking a chip opens the inspector so the
+       *  user can drill into history. Sits above any widget rendering so the
+       *  kanban / inbox / etc widget body still works underneath. Skipped when
+       *  there are no artifacts yet — the existing empty / next-action UI
+       *  takes that case. */}
+      {nodeKind === 'artifact' && !data.virtual && (() => {
+        const nodeArtifacts = [...data.artifacts]
+          .filter((a) => a.nodeId === node.id)
+          .sort((a, b) => {
+            const ta = Date.parse(String(a.createdAt))
+            const tb = Date.parse(String(b.createdAt))
+            return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+          })
+        if (nodeArtifacts.length === 0) return null
+        const visible = nodeArtifacts.slice(0, 6)
+        const overflow = nodeArtifacts.length - visible.length
+        return (
+          <div className="planner-node__artifact-versions">
+            <span className="planner-node__artifact-versions-label">版本</span>
+            <div className="planner-node__artifact-versions-strip">
+              {visible.map((a, idx) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  className={'planner-node__artifact-version-chip nodrag' + (idx === 0 ? ' is-latest' : '')}
+                  title={`v${nodeArtifacts.length - idx} · ${a.createdAt}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    data.onOpenDetails?.(node.id)
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  v{nodeArtifacts.length - idx}
+                </button>
+              ))}
+              {overflow > 0 && (
+                <span className="planner-node__artifact-versions-more">+{overflow}</span>
+              )}
+            </div>
+          </div>
+        )
+      })()}
+
       {node.widget && (() => {
         // P2.4 widget dispatcher · P3.0 接通 integration entities
         // 数据源:data.integrationEntities(PlannerGraph → adapter → PlannerNodeData)
