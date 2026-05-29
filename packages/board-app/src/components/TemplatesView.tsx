@@ -95,6 +95,15 @@ export function TemplatesView({
   const [applyError, setApplyError] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
 
+  // epsilon (session-hide): `nodeKind === 'session'` is deprecated as a
+  // user-creatable surface — new work seeds `step` nodes with
+  // `dispatch.runner = 'claude'` instead. The templates listing here
+  // operates at canvas granularity (it only renders canvas names; node
+  // kinds aren't materialized in this view), so there's nothing to
+  // filter at the canvas-row level. Any session-kind nodes that exist
+  // inside legacy template canvases are still readable when the user
+  // opens the template into PlannerGraph below (decode/updateNode keep
+  // legacy compat). New template authoring should avoid session-kind.
   const templates = useMemo(
     () => canvases.filter((canvas) => canvas.kind === 'template'),
     [canvases],

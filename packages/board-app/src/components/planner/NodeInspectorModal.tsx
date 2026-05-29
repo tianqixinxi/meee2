@@ -375,6 +375,34 @@ export function NodeInspectorModal({
             {!isTemplate && <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>{runStateToBadge(String(runState))}</span>}
           </div>
           <h2>{node.title}</h2>
+          {/* epsilon (session-hide): `nodeKind === 'session'` is legacy.
+           *  Existing nodes still load (decode + updateNode keep compat),
+           *  but the creation surface now seeds step + dispatch.runner=claude.
+           *  Surface a small hint so users / owners know this node belongs
+           *  to the older shape and can migrate it on their own cadence. */}
+          {nodeKind === 'session' && (
+            <div
+              className="planner-node-modal__deprecation-hint"
+              role="note"
+              style={{
+                marginTop: 6,
+                padding: '6px 8px',
+                borderRadius: 6,
+                background: 'rgba(245, 158, 11, 0.12)',
+                color: 'var(--text-secondary, #92400e)',
+                fontSize: 12,
+                lineHeight: 1.4,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 6,
+              }}
+            >
+              <AlertTriangle size={12} aria-hidden style={{ marginTop: 2, flexShrink: 0 }} />
+              <span>
+                这是 legacy <code>session</code> 节点。新建请改用 <code>step</code> + <code>dispatch.runner = claude</code>;现有节点仍可正常运行,可按需迁移。
+              </span>
+            </div>
+          )}
         </div>
 
         {/* UI-simplification §2.9 — three-section reorg: 进展 / 成果 / 足迹.
