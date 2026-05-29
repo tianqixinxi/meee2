@@ -161,6 +161,13 @@ function PlannerGraphInner({
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
+  /**
+   * 2026-05-29 (PR #91 codex P2 fix): when a non-latest artifact chip on the
+   * card is clicked, we want the inspector to open with that artifact
+   * preselected (not always latest). This state piggybacks on nodeModalOpen
+   * and is read by InspectorArtifactBody as its initial selectedArtifactId.
+   */
+  const [initialInspectorArtifactId, setInitialInspectorArtifactId] = useState<string | null>(null)
   const [plannerPanelCollapsed, setPlannerPanelCollapsed] = useState(() => readStoredPanelCollapsed())
   const [plannerPanelWidth, setPlannerPanelWidth] = useState(() => readStoredPanelWidth())
   const [ioArtifactVisibility, setIOArtifactVisibility] = useState<Record<string, IOArtifactVisibility>>(
@@ -313,6 +320,14 @@ function PlannerGraphInner({
 
   const handleOpenNodeDetails = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId)
+    setInitialInspectorArtifactId(null)
+    setNodeModalOpen(true)
+  }, [])
+
+  /** PR #91 codex P2 — open inspector with a specific artifact preselected. */
+  const handleOpenNodeArtifact = useCallback((nodeId: string, artifactId: string) => {
+    setSelectedNodeId(nodeId)
+    setInitialInspectorArtifactId(artifactId)
     setNodeModalOpen(true)
   }, [])
 
@@ -820,6 +835,7 @@ function PlannerGraphInner({
       displayNameByUserId: teamDirectory.displayNameByUserId,
       avatarUrlByUserId: teamDirectory.avatarUrlByUserId,
       onOpenDetails: handleOpenNodeDetails,
+      onOpenArtifact: handleOpenNodeArtifact,
       onOpenSubCanvas,
       onOpenKanbanItem: handleOpenKanbanItem,
       onBindInput: handleBindNodeInput,
@@ -856,6 +872,7 @@ function PlannerGraphInner({
     ioArtifactVisibility,
     teamDirectory,
     handleOpenNodeDetails,
+    handleOpenNodeArtifact,
     onOpenSubCanvas,
     handleOpenKanbanItem,
     handleBindNodeInput,
@@ -1734,6 +1751,8 @@ function PlannerGraphInner({
           variant={variant}
           state={plannerState?.states.find((item) => item.nodeId === selectedNode.id) ?? null}
           artifacts={plannerState?.artifacts ?? []}
+          /** PR #91 codex P2: open at this artifact id if version chip was clicked. */
+          initialSelectedArtifactId={initialInspectorArtifactId}
           doerLabel={
             selectedNode.doerId
               ? teamDirectory.displayNameByUserId[selectedNode.doerId] ?? selectedNode.doerId

@@ -46,6 +46,8 @@ interface Props {
   variant?: 'board' | 'template'
   state: NodeStateSnapshot | null
   artifacts?: PlannerArtifact[]
+  /** PR #91 codex P2: artifact id to preselect when opening at a non-latest version. */
+  initialSelectedArtifactId?: string | null
   doerLabel?: string
   access?: PlannerAccess | null
   teamMembers?: TeamMember[]
@@ -87,6 +89,7 @@ export function NodeInspectorModal({
   variant = 'board',
   state,
   artifacts = [],
+  initialSelectedArtifactId = null,
   doerLabel,
   access = null,
   teamMembers = [],
@@ -351,6 +354,7 @@ export function NodeInspectorModal({
             variant={variant}
             state={state}
             artifacts={artifacts}
+            initialSelectedArtifactId={initialSelectedArtifactId}
             onClose={onClose}
             onProposalCreated={onProposalCreated}
             onOpenSession={onOpenSession}
