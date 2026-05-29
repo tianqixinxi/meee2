@@ -72,6 +72,7 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
 
     @MainActor
     private func createSessionOnMain(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
+        let startedAt = Date()
         let provider = request.provider == "codex" ? "codex" : "claude"
         let requestedSessionId = request.preferredSessionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let sessionId = requestedSessionId.isEmpty ? "\(provider)-ghostty-\(UUID().uuidString)" : requestedSessionId
@@ -91,11 +92,15 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
             initialPrompt: request.initialPrompt,
             onExit: { [weak self] surfaceId in
                 self?.markExited(surfaceId: surfaceId)
+            },
+            onStatusChange: { [weak self] surfaceId, event in
+                self?.recordStatusChange(surfaceId: surfaceId, event: event)
             }
         )
         sessions[session.surfaceId] = session
         surfaceBySessionId[session.sessionId] = session.surfaceId
         park(session)
+        logPerf("create_surface", session: session, startedAt: startedAt)
         TerminalSessionBackendMetadata.recordManagedSession(
             snapshot: session.snapshot(),
             termProgram: termProgram,
@@ -116,11 +121,19 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
     private func markExited(surfaceId: String) {
         guard let session = sessions[surfaceId] else { return }
         session.markExited()
+        recordStatusChange(surfaceId: surfaceId, event: "process_exit")
+    }
+
+    @MainActor
+    private func recordStatusChange(surfaceId: String, event: String) {
+        guard let session = sessions[surfaceId] else { return }
         TerminalSessionBackendMetadata.updateManagedSessionStatus(
             snapshot: session.snapshot(),
             termProgram: termProgram,
             termBundleId: termProgram
         )
+        BoardServer.shared.broadcastStateChanged()
+        MInfo("[TerminalPerf][ghostty-surface] event=\(event) session=\(session.sessionId.prefix(12)) surface=\(session.surfaceId.prefix(12)) status=\(session.lifecycleStatus)")
     }
 
     @MainActor
@@ -136,7 +149,7 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
         session.paneView.frame = host.bounds
         session.paneView.autoresizingMask = [.width, .height]
         host.addSubview(session.paneView)
-        session.layout(in: host.bounds, hidden: false)
+        session.layout(in: host.bounds, hidden: false, reason: "parking")
     }
 
     @MainActor
@@ -174,6 +187,16 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
         }
         return try result.get()
     }
+
+    @MainActor
+    private func logPerf(_ event: String, session: GhosttySurfaceSession, startedAt: Date) {
+        let elapsedMs = Date().timeIntervalSince(startedAt) * 1_000
+        MInfo(String(format: "[TerminalPerf][ghostty-surface] event=%@ session=%@ surface=%@ elapsed_ms=%.1f",
+                     event,
+                     String(session.sessionId.prefix(12)),
+                     String(session.surfaceId.prefix(12)),
+                     elapsedMs))
+    }
 }
 
 @MainActor
@@ -192,6 +215,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private let terminalController: GhosttyTerminal.TerminalController
     private let initialPrompt: String?
     private let onExit: @MainActor (String) -> Void
+    private let onStatusChange: @MainActor (String, String) -> Void
     private let createdAt = Date()
     private var updatedAt = Date()
     private var status = InternalTerminalLifecycle.starting.rawValue
@@ -203,6 +227,8 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         status != InternalTerminalLifecycle.exited.rawValue && status != InternalTerminalLifecycle.failed.rawValue
     }
 
+    var lifecycleStatus: String { status }
+
     init(
         provider: String,
         sessionId: String,
@@ -211,7 +237,8 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         canvasId: String?,
         nodeId: String?,
         initialPrompt: String?,
-        onExit: @escaping @MainActor (String) -> Void
+        onExit: @escaping @MainActor (String) -> Void,
+        onStatusChange: @escaping @MainActor (String, String) -> Void
     ) throws {
         Self.configureGhosttyResourcesIfNeeded()
         self.surfaceId = "ghostty-surface-\(UUID().uuidString)"
@@ -223,6 +250,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         self.nodeId = nodeId
         self.initialPrompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.onExit = onExit
+        self.onStatusChange = onStatusChange
         self.terminalController = Self.makeTerminalController()
         self.terminalView = TerminalView(frame: .zero)
         self.view = terminalView
@@ -257,19 +285,27 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     }
 
     func layout(in frame: NSRect, hidden: Bool) {
+        layout(in: frame, hidden: hidden, reason: "workspace")
+    }
+
+    func layout(in frame: NSRect, hidden: Bool, reason: String) {
         guard !detached else { return }
+        let startedAt = Date()
         terminalView.frame = frame
         terminalView.isHidden = hidden
         terminalView.setSurfaceVisible(!hidden)
         if !hidden {
             fitToCurrentSize()
         }
+        logPerf("layout", startedAt: startedAt, extra: "reason=\(reason) hidden=\(hidden)")
     }
 
     func focus() {
         guard !detached else { return }
+        let startedAt = Date()
         terminalView.window?.makeFirstResponder(terminalView)
         terminalView.setSurfaceVisible(true)
+        logPerf("focus", startedAt: startedAt)
     }
 
     func hide() {
@@ -296,8 +332,10 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
     func writeInput(_ text: String) {
         guard !detached else { return }
+        let startedAt = Date()
         terminalView.sendText(text)
         touch()
+        logPerf("write_input", startedAt: startedAt, extra: "bytes=\(text.utf8.count)")
     }
 
     func fitToCurrentSize() {
@@ -316,9 +354,12 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         didSendCommand = true
         status = InternalTerminalLifecycle.running.rawValue
         touch()
+        onStatusChange(surfaceId, "running")
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if shouldSendLaunchCommand(trimmedCommand) {
+            let startedAt = Date()
             terminalView.sendText(trimmedCommand + "\n")
+            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
         }
         guard let initialPrompt, !initialPrompt.isEmpty, !didSendInitialPrompt else { return }
         didSendInitialPrompt = true
@@ -337,6 +378,17 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
     private func touch() {
         updatedAt = Date()
+    }
+
+    private func logPerf(_ event: String, startedAt: Date, extra: String = "") {
+        let elapsedMs = Date().timeIntervalSince(startedAt) * 1_000
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        MInfo(String(format: "[TerminalPerf][ghostty-surface] event=%@ session=%@ surface=%@ elapsed_ms=%.1f%@",
+                     event,
+                     String(sessionId.prefix(12)),
+                     String(surfaceId.prefix(12)),
+                     elapsedMs,
+                     suffix))
     }
 
     private static func makeTerminalController() -> GhosttyTerminal.TerminalController {
@@ -379,6 +431,7 @@ extension GhosttySurfaceSession:
     TerminalSurfaceFocusDelegate,
     TerminalSurfaceCommandFinishedDelegate {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
+        logPerf("first_attach", startedAt: createdAt)
         bootstrapIfNeeded()
     }
 
@@ -411,7 +464,11 @@ extension GhosttySurfaceSession:
 
     func terminalDidFinishCommand(exitCode: Int?, durationNanos: UInt64) {
         _ = exitCode
-        _ = durationNanos
         touch()
+        let durationMs = Double(durationNanos) / 1_000_000
+        MInfo(String(format: "[TerminalPerf][ghostty-surface] event=command_finished session=%@ surface=%@ duration_ms=%.1f",
+                     String(sessionId.prefix(12)),
+                     String(surfaceId.prefix(12)),
+                     durationMs))
     }
 }

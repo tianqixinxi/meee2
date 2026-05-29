@@ -273,7 +273,7 @@ private struct SessionPaletteRootView: View {
         let entries = engine.search(
             sessions: pluginManager.sessions,
             storeSessions: sessionStore.sessions,
-            internalSurfaces: InternalTerminalRuntime.shared.listSnapshots()
+            internalSurfaces: TerminalSessionBackendRegistry.shared.listSnapshots()
         )
         if selectedIndex >= entries.count {
             DispatchQueue.main.async {
@@ -287,7 +287,7 @@ private struct SessionPaletteRootView: View {
         _ = refreshTick
         return manager.searchEngine.distinctPlugins(
             sessions: pluginManager.sessions,
-            internalSurfaces: InternalTerminalRuntime.shared.listSnapshots()
+            internalSurfaces: TerminalSessionBackendRegistry.shared.listSnapshots()
         )
     }
 

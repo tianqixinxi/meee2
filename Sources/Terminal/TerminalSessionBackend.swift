@@ -233,26 +233,29 @@ public final class TerminalSessionBackendRegistry {
             return envKind
         }
         lock.lock()
-        let preferred = preferredOverride ?? .legacyInternal
+        let preferred = preferredOverride ?? .ghosttySurface
         lock.unlock()
         return preferred
     }
 
     public func createSession(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
         let kind = preferredKind()
-        let selectedBackend = backend(for: kind)
+        guard let selectedBackend = registeredBackend(for: kind) else {
+            return try createFallbackSession(
+                request: request,
+                attemptedKind: kind,
+                reason: "backend is not registered in this process"
+            )
+        }
         do {
             return try selectedBackend.createSession(request: request)
         } catch {
             guard kind != .legacyInternal else { throw error }
-            let legacy = backend(for: TerminalSessionBackendKind.legacyInternal)
-            let fallback = try legacy.createSession(request: request)
-            SessionTerminalStore.shared.updateBackend(
-                sessionId: fallback.snapshot.sessionId,
-                backend: TerminalSessionBackendKind.legacyInternal.rawValue,
-                fallbackReason: "\(kind.rawValue): \(error.localizedDescription)"
+            return try createFallbackSession(
+                request: request,
+                attemptedKind: kind,
+                reason: error.localizedDescription
             )
-            return fallback
         }
     }
 
@@ -311,6 +314,28 @@ public final class TerminalSessionBackendRegistry {
         let backend = backends[kind] ?? backends[.legacyInternal] ?? LegacyInternalTerminalBackend.shared
         lock.unlock()
         return backend
+    }
+
+    private func registeredBackend(for kind: TerminalSessionBackendKind) -> TerminalSessionBackend? {
+        lock.lock()
+        let backend = backends[kind]
+        lock.unlock()
+        return backend
+    }
+
+    private func createFallbackSession(
+        request: TerminalSessionRequest,
+        attemptedKind: TerminalSessionBackendKind,
+        reason: String
+    ) throws -> TerminalSessionHandle {
+        let legacy = backend(for: TerminalSessionBackendKind.legacyInternal)
+        let fallback = try legacy.createSession(request: request)
+        SessionTerminalStore.shared.updateBackend(
+            sessionId: fallback.snapshot.sessionId,
+            backend: TerminalSessionBackendKind.legacyInternal.rawValue,
+            fallbackReason: "\(attemptedKind.rawValue): \(reason)"
+        )
+        return fallback
     }
 
     private func backendForExistingSession(id: String) -> TerminalSessionBackend? {

@@ -333,19 +333,61 @@ enum BoardAPI {
 
     // MARK: - Internal session terminal surfaces
 
+    private struct BoardSessionSurfaceDTO: Encodable {
+        let surfaceId: String
+        let sessionId: String
+        let provider: String
+        let title: String
+        let cwd: String
+        let command: String
+        let canvasId: String?
+        let nodeId: String?
+        let status: String
+        let pid: Int?
+        let createdAt: Date
+        let updatedAt: Date
+        let terminalBackend: String
+        let nativeWorkspaceAvailable: Bool
+        let openTarget: String
+        let fallbackReason: String?
+
+        init(_ surface: TerminalSessionSnapshot) {
+            let displayName = surface.provider == "codex" ? "Codex" : "Claude Code"
+            self.surfaceId = surface.surfaceId
+            self.sessionId = surface.sessionId
+            self.provider = surface.provider
+            self.title = "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)"
+            self.cwd = surface.cwd
+            self.command = surface.command
+            self.canvasId = surface.canvasId
+            self.nodeId = surface.nodeId
+            self.status = surface.status
+            self.pid = surface.pid
+            self.createdAt = surface.createdAt
+            self.updatedAt = surface.updatedAt
+            self.terminalBackend = surface.backend.rawValue
+            self.nativeWorkspaceAvailable = surface.backend != .external
+            self.openTarget = surface.backend == .external ? "external" : "native-workspace"
+            self.fallbackReason = surface.fallbackReason
+        }
+    }
+
     static func listSessionSurfaces(_ req: HttpRequest) -> HttpResponse {
-        struct Envelope: Encodable { let surfaces: [InternalTerminalSurfaceSnapshot] }
-        return jsonResponse(Envelope(surfaces: InternalTerminalRuntime.shared.listSnapshots()))
+        struct Envelope: Encodable { let surfaces: [BoardSessionSurfaceDTO] }
+        let surfaces = TerminalSessionBackendRegistry.shared
+            .listSnapshots()
+            .map(BoardSessionSurfaceDTO.init)
+        return jsonResponse(Envelope(surfaces: surfaces))
     }
 
     static func getSessionSurface(_ req: HttpRequest) -> HttpResponse {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing surface id", status: 400)
         }
-        guard let snapshot = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: id) else {
+        guard let snapshot = TerminalSessionBackendRegistry.shared.snapshot(id: id) else {
             return errorResponse("not_found", "surface not found: \(id)", status: 404)
         }
-        return jsonResponse(snapshot)
+        return jsonResponse(BoardSessionSurfaceDTO(snapshot))
     }
 
     static func createSessionSurface(_ req: HttpRequest) -> HttpResponse {

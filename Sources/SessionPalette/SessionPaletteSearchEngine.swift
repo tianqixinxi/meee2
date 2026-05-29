@@ -70,7 +70,7 @@ public final class SessionPaletteSearchEngine {
     public func search(
         sessions: [PluginSession],
         storeSessions: [SessionData],
-        internalSurfaces: [InternalTerminalSurfaceSnapshot] = []
+        internalSurfaces: [TerminalSessionSnapshot] = []
     ) -> [SessionPaletteEntry] {
         var results: [SessionPaletteEntry] = []
         let queryLower = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -178,9 +178,12 @@ public final class SessionPaletteSearchEngine {
                 continue
             }
             if !queryLower.isEmpty {
+                let title = internalSurfaceTitle(surface)
                 let searchable = [
-                    surface.title, surface.sessionId, surface.surfaceId,
+                    title, surface.sessionId, surface.surfaceId,
+                    surface.canvasId ?? "", surface.nodeId ?? "",
                     pluginId, pluginDisplayName, project, cwd, statusText,
+                    storeSession?.currentTask ?? "",
                     storeSession?.currentTool ?? "", storeSession?.lastMessage ?? ""
                 ].joined(separator: " ").lowercased()
                 if !searchable.contains(queryLower) {
@@ -191,7 +194,7 @@ public final class SessionPaletteSearchEngine {
             results.append(SessionPaletteEntry(
                 id: surface.sessionId,
                 sessionId: surface.sessionId,
-                title: surface.title,
+                title: internalSurfaceTitle(surface),
                 project: project,
                 cwd: cwd,
                 pluginId: pluginId,
@@ -226,7 +229,7 @@ public final class SessionPaletteSearchEngine {
     /// 获取所有已知 plugin 的列表（用于 filter chip）
     public func distinctPlugins(
         sessions: [PluginSession],
-        internalSurfaces: [InternalTerminalSurfaceSnapshot] = []
+        internalSurfaces: [TerminalSessionSnapshot] = []
     ) -> [(id: String, displayName: String, count: Int)] {
         var counts: [String: (displayName: String, count: Int)] = [:]
         let internalSessionIds = Set(
@@ -265,6 +268,12 @@ public final class SessionPaletteSearchEngine {
     private static func realSessionId(for session: PluginSession) -> String {
         let prefix = "\(session.pluginId)-"
         return session.id.hasPrefix(prefix) ? String(session.id.dropFirst(prefix.count)) : session.id
+    }
+
+    private func internalSurfaceTitle(_ surface: TerminalSessionSnapshot) -> String {
+        let displayName = surface.provider.lowercased() == "codex" ? "Codex" : "Claude"
+        let project = surface.cwd.split(separator: "/").last.map(String.init) ?? surface.cwd
+        return "\(displayName) - \(project)"
     }
 
     private func statusName(for status: SessionStatus) -> String {

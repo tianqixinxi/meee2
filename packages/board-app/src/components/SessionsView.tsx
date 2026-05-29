@@ -155,6 +155,7 @@ export function SessionsView({
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
+    if (isNativeWorkspaceSession(session)) return false
     if (reason === 'react.idleTabPrewarm') return false
     const criticalInteraction = reason.startsWith('react.rowSelect') || reason.startsWith('react.rowOpen')
     if (!criticalInteraction && prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
@@ -725,6 +726,7 @@ function SessionDetail({
   }
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
+  const nativeWorkspaceSession = internal && isNativeWorkspaceSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
   const controlState = sessionControlState(session)
   const hasPermissionAction = Boolean(session.pendingPermissionTool || session.pendingPermissionMessage)
@@ -942,7 +944,16 @@ function SessionDetail({
         </div>
       )}
       <section className="sessions-terminal-stage">
-        {internal && session.surfaceId && liveInternal ? (
+        {nativeWorkspaceSession && liveInternal ? (
+          <div className="sessions-external">
+            <TerminalIcon size={18} aria-hidden />
+            <span>{t('sessions.nativeWorkspaceSummary')}</span>
+            <button type="button" onClick={onOpen} disabled={opening}>
+              <ExternalLink size={13} aria-hidden />
+              {opening ? t('common.opening') : t('sessions.openSession')}
+            </button>
+          </div>
+        ) : internal && session.surfaceId && liveInternal ? (
           <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
         ) : internal ? (
           <div className="sessions-external">
@@ -1531,6 +1542,10 @@ function sameNativeRect(a: NativeTerminalRect | null, b: NativeTerminalRect): bo
 
 function isInternalSession(session: Session): boolean {
   return session.terminalKind === 'internal' || Boolean(session.surfaceId)
+}
+
+function isNativeWorkspaceSession(session: Session): boolean {
+  return session.openTarget === 'native-workspace' || session.nativeWorkspaceAvailable === true
 }
 
 function isLiveInternalSession(session: Session): boolean {

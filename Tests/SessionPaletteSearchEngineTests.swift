@@ -34,7 +34,7 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
 
     func testSearchIncludesInternalSurfacesAndBoardTarget() {
         let engine = SessionPaletteSearchEngine()
-        engine.query = "writer"
+        engine.query = "node-a"
 
         let duplicatePluginSession = PluginSession(
             id: "com.meee2.plugin.claude-internal-session-1",
@@ -44,19 +44,17 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
             startedAt: Date(timeIntervalSince1970: 9),
             cwd: "/tmp/content/site"
         )
-        let surface = InternalTerminalSurfaceSnapshot(
-            surfaceId: "surface-1",
+        let surface = TerminalSessionSnapshot(
             sessionId: "internal-session-1",
-            provider: "claude",
-            title: "Writer node",
-            cwd: "/tmp/content/site",
-            command: "claude",
-            canvasId: "canvas-a",
-            nodeId: "node-a",
+            surfaceId: "surface-1",
+            backend: .ghosttySurface,
             status: "running",
             pid: 123,
-            exitCode: nil,
-            error: nil,
+            cwd: "/tmp/content/site",
+            command: "claude",
+            provider: "claude",
+            canvasId: "canvas-a",
+            nodeId: "node-a",
             createdAt: Date(timeIntervalSince1970: 10),
             updatedAt: Date(timeIntervalSince1970: 30)
         )
@@ -110,19 +108,17 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
             startedAt: Date(timeIntervalSince1970: 10),
             cwd: "/tmp/meee2"
         )
-        let surface = InternalTerminalSurfaceSnapshot(
-            surfaceId: "surface-1",
+        let surface = TerminalSessionSnapshot(
             sessionId: "internal-session-1",
-            provider: "codex",
-            title: "Internal mirror",
-            cwd: "/tmp/meee2",
-            command: "codex",
-            canvasId: nil,
-            nodeId: nil,
+            surfaceId: "surface-1",
+            backend: .ghosttySurface,
             status: "running",
             pid: 123,
-            exitCode: nil,
-            error: nil,
+            cwd: "/tmp/meee2",
+            command: "codex",
+            provider: "codex",
+            canvasId: nil,
+            nodeId: nil,
             createdAt: Date(timeIntervalSince1970: 10),
             updatedAt: Date(timeIntervalSince1970: 30)
         )
