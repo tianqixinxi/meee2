@@ -553,22 +553,26 @@ export function InspectorArtifactBody({
             </button>
           )}
         </h3>
-        {activeArtifact ? (
+        {activeArtifact && (
           <PayloadBodySwitch
             artifact={activeArtifact}
             editMode={editMode && canEditPayload}
           />
-        ) : dataSourceDraft === 'authored' ? (
-          /* authored + no artifact: 真的可写的内嵌编辑器(2026-05-29 补)。
-             保存后调 attachArtifact 创建第一份 markdown 产物;widget=inbox 时
-             placeholder 提示"每行一条想法",将来加专用 inbox-items 编辑器。 */
+        )}
+        {/* authored 模式编辑器:不论是否已有产物,都保留(2026-05-29 fix Q3)。
+            原先只在 !activeArtifact 时渲染 → 用户填完一次就锁死,inbox 类
+            累积型场景完全用不了。现在改成"始终可写",每次保存追加新版本
+            (后端按 reference 做 append-version)。 */}
+        {dataSourceDraft === 'authored' && (
           <AuthoredFirstArtifactEditor
             node={node}
             canvasId={canvasId}
+            hasExisting={Boolean(activeArtifact)}
             onCreated={onProposalCreated}
             toast={toast}
           />
-        ) : (
+        )}
+        {dataSourceDraft === 'mirrored' && !activeArtifact && (
           <div className="planner-node-modal__empty planner-node-modal__empty-state-hint">
             <p style={{ marginBottom: 6 }}>这是个镜像外部数据源的 artifact 节点,还没绑定来源。</p>
             <p style={{ opacity: 0.85 }}>
@@ -796,17 +800,25 @@ export function InspectorArtifactBody({
 function AuthoredFirstArtifactEditor({
   node,
   canvasId,
+  hasExisting = false,
   onCreated,
   toast,
 }: {
   node: PlanningNode
   canvasId: string
+  /** 2026-05-29 Q3 fix:已有产物时占位文案换成「继续加」语义,允许累积编辑。 */
+  hasExisting?: boolean
   onCreated?: (proposal: PlanProposal) => void
   toast: { push: (kind: 'success' | 'error' | 'info', msg: string) => void }
 }) {
   const widgetKind = node.widget?.kind
-  const placeholder =
-    widgetKind === 'inbox'
+  const placeholder = hasExisting
+    ? widgetKind === 'inbox'
+      ? '继续加想法,每行一条,保存后追加一个新版本'
+      : widgetKind === 'kanban'
+        ? '继续写内容,保存后追加一个新版本'
+        : '继续写,保存后追加一个新版本'
+    : widgetKind === 'inbox'
       ? '每行一条想法,保存后会成为收件箱的第一批'
       : widgetKind === 'kanban'
         ? '简单写一段内容,看板列结构后续在节点详情里调整'
@@ -871,7 +883,9 @@ function AuthoredFirstArtifactEditor({
       />
       <div className="planner-node-modal__empty-editor-footer">
         <span className="planner-node-modal__empty-editor-hint">
-          保存后会作为第一份 artifact 落到这个节点的版本链
+          {hasExisting
+            ? '每次保存会在版本链上追加一份新版本(同 reference,append-only)'
+            : '保存后会作为第一份 artifact 落到这个节点的版本链'}
         </span>
         <button
           type="button"
@@ -879,7 +893,7 @@ function AuthoredFirstArtifactEditor({
           onClick={handleSave}
           disabled={!content.trim() || saving}
         >
-          {saving ? '保存中…' : '保存'}
+          {saving ? '保存中…' : hasExisting ? '追加版本' : '保存'}
         </button>
       </div>
     </div>
