@@ -1,13 +1,16 @@
 /**
- * UI-4 · Three-section Input card surface (Upstream / External / Dialogue).
+ * UI-4 · Two-section Input card surface (Upstream / External).
  *
  * Replaces the legacy field-level Mapping/Inputs binding surface. Per ENG-1's
- * `NodeContractV2`, an executable node now consumes three concrete input
+ * `NodeContractV2`, an executable node now consumes two concrete input
  * sources, in declared order:
  *
  *   1. Upstream   — output of one source canvas node (read-only badge here)
  *   2. External   — N attached connector refs (each backed by a sync session)
- *   3. Dialogue   — toggleable rolling chat window
+ *
+ * The Dialogue (rolling chat window) section was removed in the
+ * ui-simplification PR2 pass — dialogue retention is no longer surfaced on
+ * the input card; it remains a node-contract concern handled elsewhere.
  *
  * The component intentionally derives sections from existing `PlanningNode`
  * fields when the `v2` contract envelope is not yet propagated to the
@@ -18,15 +21,12 @@
 
 import {
   ArrowUpRight,
-  MessageCircle,
   Plug,
   Plus,
   RefreshCw,
 } from 'lucide-react'
-import { useState } from 'react'
 import type {
   ContextSource,
-  NodeContractDialogueInput,
   NodeContractExternalInput,
   NodeContractUpstreamInput,
   PlanningNode,
@@ -54,15 +54,7 @@ export interface InputCardSectionsProps {
    * TODO log line. Real implementation will dispatch the bound sync session.
    */
   onRefreshExternal?: (nodeId: string, external: NodeContractExternalInput) => void
-  /**
-   * Open the dialogue retention settings popover (advanced n_turns config).
-   * Wired in a follow-up; for now we render the affordance and call the hook
-   * so the popover route is testable.
-   */
-  onConfigureDialogue?: (nodeId: string) => void
 }
-
-const DEFAULT_DIALOGUE_TURNS = 8
 
 export function InputCardSections({
   node,
@@ -71,12 +63,9 @@ export function InputCardSections({
   interactive = true,
   onAttachDataSource,
   onRefreshExternal,
-  onConfigureDialogue,
 }: InputCardSectionsProps) {
   const upstream = deriveUpstream(node)
   const external = deriveExternalInputs(node)
-  const dialogue = deriveDialogue(node)
-  const [dialoguePopoverOpen, setDialoguePopoverOpen] = useState(false)
 
   return (
     <div
@@ -178,50 +167,6 @@ export function InputCardSections({
         </button>
       </section>
 
-      {/* Dialogue */}
-      <section className="planner-input-card__section planner-input-card__section--dialogue">
-        <div className="planner-input-card__section-head">
-          <span className="planner-input-card__badge planner-input-card__badge--dialogue">
-            Dialogue
-          </span>
-        </div>
-        <div className="planner-input-card__dialogue-row">
-          <MessageCircle size={11} aria-hidden />
-          {dialogue.enabled ? (
-            <span className="planner-input-card__dialogue-summary">
-              Enabled, last <strong>{dialogue.window.n_turns}</strong> turns
-            </span>
-          ) : (
-            <span className="planner-input-card__muted">Disabled</span>
-          )}
-          <button
-            type="button"
-            className="planner-input-card__dialogue-config nodrag"
-            disabled={!interactive}
-            title="Configure dialogue retention"
-            onClick={(event) => {
-              event.stopPropagation()
-              setDialoguePopoverOpen((value) => !value)
-              onConfigureDialogue?.(node.id)
-            }}
-          >
-            Configure
-          </button>
-        </div>
-        {dialoguePopoverOpen && (
-          <div className="planner-input-card__dialogue-popover" role="dialog">
-            <p className="planner-input-card__muted">
-              Retention is governed by the node contract. Toggle and
-              <em> n_turns </em>
-              changes will go through the planner proposal flow.
-            </p>
-            {/* TODO(UI-4 / ENG-2 follow-up): wire to
-                POST /api/planner/canvases/:id/proposals/refine-session-prompt
-                with a dialogue-window patch, or a dedicated
-                update-contract endpoint when ENG-3 lands it. */}
-          </div>
-        )}
-      </section>
     </div>
   )
 }
@@ -245,16 +190,6 @@ function deriveExternalInputs(node: PlanningNode): NodeContractExternalInput[] {
       ref: source.reference || source.title || 'unknown',
       sync_session: null,
     }))
-}
-
-function deriveDialogue(node: PlanningNode): NodeContractDialogueInput {
-  const dialogueSources = (node.contextSources ?? []).filter(
-    (source) => source.kind === 'chatHistory',
-  )
-  return {
-    enabled: dialogueSources.length > 0,
-    window: { kind: 'rolling', n_turns: DEFAULT_DIALOGUE_TURNS },
-  }
 }
 
 function isExternalSource(source: ContextSource): boolean {

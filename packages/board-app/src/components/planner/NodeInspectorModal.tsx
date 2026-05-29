@@ -627,7 +627,6 @@ export function NodeInspectorModal({
             variant="modal"
             onAttachDataSource={onAttachDataSource}
             onRefreshExternal={onRefreshExternalInput}
-            onConfigureDialogue={onConfigureDialogue}
           />
         </div>
 
