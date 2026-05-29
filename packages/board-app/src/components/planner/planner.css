@@ -1346,6 +1346,41 @@
   font-size: 12px;
 }
 
+/* AuthoredFirstArtifactEditor — 内嵌"写第一份产物"编辑器(2026-05-29) */
+.planner-node-modal__empty-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.planner-node-modal__empty-editor-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  background: var(--bg-paper);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.planner-node-modal__empty-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent, #c87a45);
+}
+.planner-node-modal__empty-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.planner-node-modal__empty-editor-hint {
+  font-size: 11px;
+  color: var(--text-faint, rgba(0, 0, 0, 0.5));
+}
+
 .planner-node-modal__blockers {
   display: grid;
   gap: 6px;
