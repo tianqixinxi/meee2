@@ -374,6 +374,12 @@ struct PlannerArtifact: Codable, Equatable {
     var producedBy: PlannerArtifactProducer
     /// The workflow run this artifact belongs to.
     var runId: String?
+    /// theta (2026-05-29) · Review status for the typed payload — drives
+    /// the "pending → owner Promote" surface. Mirrors Zod
+    /// `ArtifactReviewStatus` (`pending` / `approved` / `rejected`).
+    /// `nil` means "absent" (legacy artifacts), which downstream code
+    /// treats as `approved` for back-compat.
+    var reviewStatus: String?
 
     init(
         id: String,
@@ -386,7 +392,8 @@ struct PlannerArtifact: Codable, Equatable {
         createdAt: Date,
         payload: BoardJSONValue? = nil,
         producedBy: PlannerArtifactProducer = .integration,
-        runId: String? = nil
+        runId: String? = nil,
+        reviewStatus: String? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -399,6 +406,7 @@ struct PlannerArtifact: Codable, Equatable {
         self.payload = payload
         self.producedBy = producedBy
         self.runId = runId
+        self.reviewStatus = reviewStatus
     }
 }
 
@@ -938,6 +946,11 @@ struct PlanArtifactDraft: Codable, Equatable {
     /// `attachArtifact` change, apply-path writes it through to the target
     /// PlanningNode's `artifactDataSource`.
     var dataSource: String?
+    /// theta (2026-05-29): when non-nil, apply-path stamps this on the
+    /// resulting PlannerArtifact.reviewStatus. Lets the Promote button flip
+    /// review state without re-shipping a payload (which would clobber the
+    /// original content if typedPayload isn't available to spread).
+    var reviewStatus: String?
 }
 
 struct PlanChange: Codable, Equatable {
@@ -4195,6 +4208,23 @@ final class PlannerStore {
                     nodeId: nodeId,
                     reference: reference
                 ) ?? "artifact-\(canvasId)-\(nodeId)-\(stableSuffix(reference))"
+                // theta (2026-05-29) · Default reviewStatus by payload.type.
+                // Snapshot-style payloads (inbox-items / kanban) auto-approve
+                // because the owner has nothing meaningful to "promote";
+                // narrative-style payloads (markdown / prd / file / html)
+                // park in `pending` so the owner explicitly promotes a draft
+                // before downstream consumers treat it as canonical.
+                let payloadType = item.payload?.objectValue?["type"]?.stringValue
+                let defaultReviewStatus: String
+                switch payloadType {
+                case "inbox-items", "kanban":
+                    defaultReviewStatus = "approved"
+                case "markdown", "prd", "file", "html":
+                    defaultReviewStatus = "pending"
+                default:
+                    defaultReviewStatus = "approved"
+                }
+                let explicitReviewStatus = item.payload?.objectValue?["reviewStatus"]?.stringValue
                 let artifact = PlannerArtifact(
                     id: artifactId,
                     canvasId: canvasId,
@@ -4204,7 +4234,8 @@ final class PlannerStore {
                     reference: reference,
                     status: output.status.rawValue,
                     createdAt: now,
-                    payload: item.payload
+                    payload: item.payload,
+                    reviewStatus: explicitReviewStatus ?? defaultReviewStatus
                 )
                 newArtifacts.append(artifact)
                 if !artifactRefs.contains(reference) {
@@ -5101,7 +5132,10 @@ final class PlannerStore {
                 status: status?.isEmpty == false ? status! : "attached",
                 createdAt: Date(),
                 payload: draft.payload,
-                producedBy: .agent
+                producedBy: .agent,
+                // theta (2026-05-29): carry reviewStatus from the inline draft
+                // so Promote can flip review state without re-shipping payload.
+                reviewStatus: draft.reviewStatus
             )
         }
     }

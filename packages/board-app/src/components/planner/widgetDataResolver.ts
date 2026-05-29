@@ -265,9 +265,19 @@ function pickLatestArtifact(
   // separate `producerNodeId` / `updatedAt`.
   const candidates = artifacts.filter((a) => a.nodeId === nodeId)
   if (candidates.length === 0) return undefined
-  return candidates.reduce((a, b) =>
-    (a.createdAt ?? '') >= (b.createdAt ?? '') ? a : b,
-  )
+  // theta (2026-05-29) — prefer 'approved' artifacts so widgets surface the
+  // last owner-promoted version, not a fresh agent draft still sitting in
+  // 'pending'. Absence ≡ 'approved' for back-compat with legacy artifacts.
+  // Fallback: if no approved candidate exists (e.g. a newly created node
+  // whose agent has only ever submitted pending drafts), pick the most
+  // recent of whatever we have so the widget doesn't go blank.
+  const pickLatest = (xs: PlannerArtifact[]) =>
+    xs.reduce((a, b) => ((a.createdAt ?? '') >= (b.createdAt ?? '') ? a : b))
+  const reviewStatusOf = (a: PlannerArtifact) =>
+    a.reviewStatus ?? a.typedPayload?.reviewStatus ?? 'approved'
+  const approved = candidates.filter((a) => reviewStatusOf(a) === 'approved')
+  if (approved.length > 0) return pickLatest(approved)
+  return pickLatest(candidates)
 }
 
 function projectArtifactToEntities(
