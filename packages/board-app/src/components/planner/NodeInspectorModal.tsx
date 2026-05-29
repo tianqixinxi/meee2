@@ -464,6 +464,87 @@ export function NodeInspectorModal({
           </div>
         )}
 
+        {/* 2026-05-29: Inspector 进展段补 runtime 信息 — workflowRunState 中文 +
+            spawn / 请回复 / 打开会话 入口。用户反馈:卡片 Attention 显示但
+            Inspector 进展段完全空,看不出节点为什么 attention。 */}
+        {!isTemplate && (nodeKind === 'step' || nodeKind === 'session') && (
+          <div className="planner-node-modal__progress-runtime">
+            {(() => {
+              const wfs = node.workflowRunState
+              const hasSession = Boolean(node.sessionId?.trim())
+              const isAwaiting = wfs === 'awaiting-input' || wfs === 'gate-wait'
+              const isRunning = wfs === 'running' || wfs === 'dispatched'
+              const isFailed = wfs === 'failed'
+              const isDone = wfs === 'done'
+              const wfsLabel =
+                wfs === 'awaiting-input' ? '等反馈'
+                : wfs === 'gate-wait' ? '等审核'
+                : wfs === 'running' ? '运行中'
+                : wfs === 'dispatched' ? '排队中'
+                : wfs === 'ready_to_start' ? '已就绪 · 待启动'
+                : wfs === 'pending' ? '等待开始'
+                : wfs === 'done' ? '已完成'
+                : wfs === 'failed' ? '失败,需改方案'
+                : null
+              return (
+                <>
+                  {wfsLabel && (
+                    <div
+                      className={
+                        'planner-node-modal__progress-runtime-state '
+                        + (isAwaiting ? 'is-awaiting' : isRunning ? 'is-running' : isFailed ? 'is-failed' : isDone ? 'is-done' : '')
+                      }
+                    >
+                      <span className="planner-node-modal__progress-runtime-dot" aria-hidden />
+                      <strong>{wfsLabel}</strong>
+                      {hasSession && (
+                        <span className="planner-node-modal__progress-runtime-session">
+                          已绑定会话 <code>{node.sessionId!.slice(0, 8)}…</code>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  {/* 动作按钮 */}
+                  {hasSession && isAwaiting && onOpenSession && (
+                    <button
+                      type="button"
+                      className="planner-node-modal__progress-runtime-action is-primary is-attention"
+                      onClick={() => onOpenSession(node.sessionId!, node.id)}
+                      title="会话在等你的回复 — 点击跳到会话窗口"
+                    >
+                      <AlertTriangle size={12} aria-hidden /> 请回复会话
+                    </button>
+                  )}
+                  {hasSession && isRunning && onOpenSession && (
+                    <button
+                      type="button"
+                      className="planner-node-modal__progress-runtime-action"
+                      onClick={() => onOpenSession(node.sessionId!, node.id)}
+                    >
+                      → 打开会话查看进展
+                    </button>
+                  )}
+                  {!hasSession && node.status === 'ready' && canChangeStatus && onReplaceSession && (
+                    <button
+                      type="button"
+                      className="planner-node-modal__progress-runtime-action is-primary"
+                      onClick={() => onReplaceSession?.(node.id, node.executorType === 'codex' ? 'codex' : 'claude')}
+                      title="给这个节点起一个 AI 会话"
+                    >
+                      <Sparkles size={12} aria-hidden /> 开干 · 起会话
+                    </button>
+                  )}
+                  {isFailed && (
+                    <p className="planner-node-modal__progress-runtime-hint">
+                      上一次跑出错了。可以从「换一次进展」重启,或先看一眼会话日志再决定。
+                    </p>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+        )}
+
         {/* UI-simplification §2.6 — 进展 段次级动作:重跑 / 标记需要关注。
          *  从节点卡片 footer 搬过来,inspector 才是这些动作的归宿。 */}
         {(reRunEligible || markDownEligible) && (

@@ -1346,6 +1346,69 @@
   font-size: 12px;
 }
 
+/* Inspector 进展段 runtime info (2026-05-29) — workflowRunState visible
+   + spawn/请回复/打开会话 entrypoints. Was blank even when card showed
+   Attention; users couldn't tell why a session needed attention. */
+.planner-node-modal__progress-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.planner-node-modal__progress-runtime-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.planner-node-modal__progress-runtime-state strong { color: var(--text-primary); font-weight: 600; }
+.planner-node-modal__progress-runtime-state.is-awaiting strong { color: #b85540; }
+.planner-node-modal__progress-runtime-state.is-running strong { color: #3b6e9a; }
+.planner-node-modal__progress-runtime-state.is-failed strong { color: #a3372a; }
+.planner-node-modal__progress-runtime-state.is-done strong { color: #4a7a4a; }
+.planner-node-modal__progress-runtime-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-faint, rgba(0, 0, 0, 0.35));
+  display: inline-block;
+}
+.is-awaiting .planner-node-modal__progress-runtime-dot {
+  background: #c87a45;
+  box-shadow: 0 0 0 3px rgba(200, 122, 69, 0.18);
+  animation: pulse-attention 1.6s ease-in-out infinite;
+}
+.is-running .planner-node-modal__progress-runtime-dot {
+  background: #4682c8;
+  animation: pulse-attention 1.6s ease-in-out infinite;
+}
+.is-failed .planner-node-modal__progress-runtime-dot { background: #a3372a; }
+.is-done .planner-node-modal__progress-runtime-dot { background: #6aa66a; }
+@keyframes pulse-attention {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.planner-node-modal__progress-runtime-session { font-size: 11px; opacity: 0.7; }
+.planner-node-modal__progress-runtime-session code {
+  font-size: 10px; padding: 1px 4px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.05));
+  border-radius: 3px;
+}
+.planner-node-modal__progress-runtime-action {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 13px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  background: var(--bg-paper); color: var(--text-primary);
+  cursor: pointer; width: fit-content;
+}
+.planner-node-modal__progress-runtime-action:hover { background: var(--bg-muted, rgba(0, 0, 0, 0.04)); }
+.planner-node-modal__progress-runtime-action.is-primary {
+  background: var(--accent, #c87a45); color: white; border-color: var(--accent, #c87a45);
+}
+.planner-node-modal__progress-runtime-action.is-primary:hover { background: #b86c3d; border-color: #b86c3d; }
+.planner-node-modal__progress-runtime-action.is-attention { font-weight: 600; }
+.planner-node-modal__progress-runtime-hint { font-size: 12px; color: var(--text-faint); margin: 0; }
+
 /* AuthoredFirstArtifactEditor — 内嵌"写第一份产物"编辑器(2026-05-29) */
 .planner-node-modal__empty-editor {
   display: flex;
