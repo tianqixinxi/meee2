@@ -620,31 +620,39 @@ export function NodeInspectorModal({
           )}
         </div>
 
-        <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> 入参</h3>
-          <InputCardSections
-            node={node}
-            variant="modal"
-            onAttachDataSource={onAttachDataSource}
-            onRefreshExternal={onRefreshExternalInput}
-          />
-        </div>
+        {/* PR3 — step / session 节点的 入参 / 出参 段从 inspector 移除。
+         *  这些节点的「产出」由卡片上 [查看输出] 按钮 + 足迹段处理;
+         *  入参声明属于 schema 内部,不该作为用户主编辑面。
+         *  其他 nodeKind(subCanvas / external)继续渲染,artifact 走早分支不到这里。*/}
+        {nodeKind !== 'step' && nodeKind !== 'session' && (
+          <>
+            <div className="planner-node-modal__section">
+              <h3><Route size={13} aria-hidden /> 入参</h3>
+              <InputCardSections
+                node={node}
+                variant="modal"
+                onAttachDataSource={onAttachDataSource}
+                onRefreshExternal={onRefreshExternalInput}
+              />
+            </div>
 
-        <div className="planner-node-modal__section">
-          <h3><Route size={13} aria-hidden /> 出参</h3>
-          <div className="planner-node-modal__schema">
-            <SchemaList
-              title="出参"
-              items={outputItems}
-              empty="这个节点暂时没有产出"
-              visibleItems={visibleIOArtifacts.outputs}
-              switchesEnabled={canShowIOArtifactSwitches}
-              onToggle={(item, visible) => onToggleIOArtifact?.(node.id, 'outputs', item, visible)}
-            />
-            {/* UI-simplification — 「Do what」 wide row 移除,信息已在节点 title/desc 体现;
-             *  next-action 也不再独立块,已并入 进展 段(.planner-node-modal__progress-line)。 */}
-          </div>
-        </div>
+            <div className="planner-node-modal__section">
+              <h3><Route size={13} aria-hidden /> 出参</h3>
+              <div className="planner-node-modal__schema">
+                <SchemaList
+                  title="出参"
+                  items={outputItems}
+                  empty="这个节点暂时没有产出"
+                  visibleItems={visibleIOArtifacts.outputs}
+                  switchesEnabled={canShowIOArtifactSwitches}
+                  onToggle={(item, visible) => onToggleIOArtifact?.(node.id, 'outputs', item, visible)}
+                />
+                {/* UI-simplification — 「Do what」 wide row 移除,信息已在节点 title/desc 体现;
+                 *  next-action 也不再独立块,已并入 进展 段(.planner-node-modal__progress-line)。 */}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* P2.6 v3 (2026-05-28 P2.11) — 节点视图选择 已降级为 成果·剪贴板
          *  group-label 旁的 ⚙ inline popover(见上方),默认收起,跟
