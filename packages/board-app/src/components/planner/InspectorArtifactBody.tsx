@@ -545,10 +545,43 @@ export function InspectorArtifactBody({
             </button>
           )}
         </h3>
-        <PayloadBodySwitch
-          artifact={activeArtifact}
-          editMode={editMode && canEditPayload}
-        />
+        {activeArtifact ? (
+          <PayloadBodySwitch
+            artifact={activeArtifact}
+            editMode={editMode && canEditPayload}
+          />
+        ) : (
+          /* 数据源 mode 感知的空态(2026-05-29):
+             - authored: 告诉用户怎么开始填(上游 session / AI 帮你写)
+             - mirrored: 告诉用户去 Attach data source
+             这一段曾承诺在 PR #76 落地但因 git 操作意外丢失,这次单独 PR 补回。 */
+          <div className="planner-node-modal__empty planner-node-modal__empty-state-hint">
+            {dataSourceDraft === 'authored' ? (
+              <>
+                <p style={{ marginBottom: 6 }}>这是个手填 artifact 节点,还没产出。</p>
+                <p style={{ opacity: 0.85, marginBottom: 4 }}>
+                  填法二选一:
+                </p>
+                <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.85 }}>
+                  <li>上游 session 跑完会把产物自动落到这里</li>
+                  <li>或在节点对话里让 meee2 AI 帮你写一份(走 <code>submit_node_output</code>)</li>
+                </ul>
+                <p style={{ marginTop: 8, opacity: 0.6, fontSize: 11 }}>
+                  TODO: 内嵌 payload editor(markdown / inbox-items / kanban)落地前,
+                  手动新建第一份产物暂时走 AI session 路径。
+                </p>
+              </>
+            ) : (
+              <>
+                <p style={{ marginBottom: 6 }}>这是个镜像外部数据源的 artifact 节点,还没绑定来源。</p>
+                <p style={{ opacity: 0.85 }}>
+                  下面 <strong>Attach data source</strong> 按钮选一个 integration(Notion / Linear / GitHub 等),
+                  下游节点消费时会自动拉最新数据 + 冻一份快照。
+                </p>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 版本 (VersionTimeline) */}
