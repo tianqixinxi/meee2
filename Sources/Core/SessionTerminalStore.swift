@@ -14,6 +14,8 @@ struct SessionTerminalInfo: Codable {
     var providerResumeSessionId: String?
     var canvasId: String?
     var nodeId: String?
+    var backend: String?
+    var fallbackReason: String?
 
     // cmux 专用
     var cmuxSocketPath: String?
@@ -62,7 +64,9 @@ class SessionTerminalStore {
         provider: String? = nil,
         providerResumeSessionId: String? = nil,
         canvasId: String? = nil,
-        nodeId: String? = nil
+        nodeId: String? = nil,
+        backend: String? = nil,
+        fallbackReason: String? = nil
     ) {
         performSync {
             var info = store[sessionId] ?? SessionTerminalInfo(
@@ -78,6 +82,8 @@ class SessionTerminalStore {
                 providerResumeSessionId: providerResumeSessionId,
                 canvasId: canvasId,
                 nodeId: nodeId,
+                backend: backend,
+                fallbackReason: fallbackReason,
                 cmuxSocketPath: cmuxSocketPath,
                 cmuxSurfaceId: cmuxSurfaceId
             )
@@ -96,6 +102,8 @@ class SessionTerminalStore {
             }
             info.canvasId = canvasId ?? info.canvasId
             info.nodeId = nodeId ?? info.nodeId
+            info.backend = backend ?? info.backend ?? Self.inferBackend(termProgram: info.termProgram)
+            info.fallbackReason = fallbackReason ?? info.fallbackReason
             info.cwd = cwd
             info.lastActivityAt = Date()
             info.status = status
@@ -104,6 +112,17 @@ class SessionTerminalStore {
             save()
 
             NSLog("[SessionTerminalStore] Updated session \(sessionId.prefix(8)): tty=\(tty ?? "nil"), term=\(termProgram ?? "nil"), cmuxSocket=\(cmuxSocketPath ?? "nil")")
+        }
+    }
+
+    func updateBackend(sessionId: String, backend: String?, fallbackReason: String? = nil) {
+        performSync {
+            guard var info = store[sessionId] else { return }
+            info.backend = backend ?? info.backend
+            info.fallbackReason = fallbackReason
+            info.lastActivityAt = Date()
+            store[sessionId] = info
+            save()
         }
     }
 
@@ -240,6 +259,19 @@ class SessionTerminalStore {
             return freshCommand(provider: provider, command: command)
         }
         return command
+    }
+
+    private static func inferBackend(termProgram: String?) -> String? {
+        switch termProgram?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "meee2-internal":
+            return TerminalSessionBackendKind.legacyInternal.rawValue
+        case "meee2-ghostty-surface":
+            return TerminalSessionBackendKind.ghosttySurface.rawValue
+        case .some:
+            return TerminalSessionBackendKind.external.rawValue
+        case .none:
+            return nil
+        }
     }
 
     private static func freshCommand(provider: String?, command: String?) -> String {

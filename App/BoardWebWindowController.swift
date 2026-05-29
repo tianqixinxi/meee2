@@ -172,6 +172,19 @@ private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class NativeWorkspaceBridge: NSObject, WKScriptMessageHandler {
+    static let messageName = "meee2Workspace"
+    weak var owner: BoardWebWindowController?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any] else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.handleNativeWorkspaceMessage(payload)
+        }
+    }
+}
+
 private final class NativeTerminalHostView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         for subview in subviews.reversed() where !subview.isHidden && subview.alphaValue > 0.01 {
@@ -196,9 +209,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var isShowingLoadError = false
     private let jsConsoleBridge = JSConsoleBridge()
     private let nativeTerminalBridge = NativeTerminalBridge()
+    private let nativeWorkspaceBridge = NativeWorkspaceBridge()
+    private let nativeSessionsController = NativeSessionsWorkspaceViewController()
     private var embeddedTerminals: [String: EmbeddedNativeTerminalController] = [:]
     private var embeddedTerminalLRU: [String] = []
     private var activeEmbeddedTerminalKey: String?
+    private var terminalScrollMonitor: Any?
     private var embeddedTerminal: EmbeddedNativeTerminalController? {
         guard let activeEmbeddedTerminalKey else { return nil }
         return embeddedTerminals[activeEmbeddedTerminalKey]
@@ -209,6 +225,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     }
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
+    private var pendingOpenSessionsWorkspace: (sessionId: String?, surfaceId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -250,6 +267,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         ))
         userContentController.add(jsConsoleBridge, name: JSConsoleBridge.messageName)
         userContentController.add(nativeTerminalBridge, name: NativeTerminalBridge.messageName)
+        userContentController.add(nativeWorkspaceBridge, name: NativeWorkspaceBridge.messageName)
         configuration.userContentController = userContentController
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
@@ -294,6 +312,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         super.init(window: window)
 
         nativeTerminalBridge.owner = self
+        nativeWorkspaceBridge.owner = self
         window.delegate = self
         rootView.wantsLayer = true
         rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
@@ -301,6 +320,10 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         rootView.addSubview(webView)
         terminalHostView.translatesAutoresizingMaskIntoConstraints = false
         rootView.addSubview(terminalHostView)
+        nativeSessionsController.view.isHidden = true
+        nativeSessionsController.view.translatesAutoresizingMaskIntoConstraints = true
+        nativeSessionsController.view.autoresizingMask = []
+        rootView.addSubview(nativeSessionsController.view)
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             webView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
@@ -316,11 +339,18 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
         // 入口（或菜单栏 / 上下文菜单），title bar 干净一片。
+        installTerminalScrollMonitor()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let terminalScrollMonitor {
+            NSEvent.removeMonitor(terminalScrollMonitor)
+        }
     }
 
     private static func defaultContentRect() -> NSRect {
@@ -354,6 +384,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSessionIfPossible()
     }
 
+    func openSessionsWorkspace(sessionId: String?, surfaceId: String?) {
+        pendingOpenSessionsWorkspace = (sessionId, surfaceId)
+        show()
+        dispatchOpenSessionsWorkspaceIfPossible()
+    }
+
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
@@ -383,10 +419,68 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowWillClose(_ notification: Notification) {
         MInfo("[BoardWebWindow] windowWillClose")
+        hideNativeSessionsWorkspace()
         detachAllEmbeddedTerminals()
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
+    }
+
+    private func installTerminalScrollMonitor() {
+        guard terminalScrollMonitor == nil else { return }
+        terminalScrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self else { return event }
+            return self.forwardScrollWheelToEmbeddedTerminal(event) ? nil : event
+        }
+    }
+
+    private func forwardScrollWheelToEmbeddedTerminal(_ event: NSEvent) -> Bool {
+        guard let window else { return false }
+        guard event.window === window else { return false }
+        guard let terminal = embeddedTerminal, !terminal.view.isHidden else { return false }
+        let pointInHost = terminalHostView.convert(event.locationInWindow, from: nil)
+        guard terminal.view.frame.contains(pointInHost) else { return false }
+        terminal.scrollWheel(with: event)
+        return true
+    }
+
+    func handleNativeWorkspaceMessage(_ payload: [String: Any]) {
+        let type = payload["type"] as? String ?? ""
+        guard type == "sessionsWorkspace" else { return }
+        let phase = payload["phase"] as? String ?? "layout"
+        let sessionId = (payload["sessionId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let surfaceId = (payload["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch phase {
+        case "hide":
+            hideNativeSessionsWorkspace()
+            MInfo("[BoardWebWindow] native sessions workspace hidden")
+        case "show", "layout", "focus":
+            if let rectPayload = payload["rect"] as? [String: Any],
+               let layout = embeddedTerminalLayout(from: rectPayload) {
+                layoutNativeSessionsWorkspace(frame: layout.frame, hidden: layout.hidden)
+            }
+            if phase == "show" || phase == "focus" {
+                nativeSessionsController.activate(sessionId: sessionId, surfaceId: surfaceId)
+                MInfo("[BoardWebWindow] native sessions workspace \(phase) session=\(sessionId ?? "-") surface=\(surfaceId ?? "-")")
+            }
+        default:
+            break
+        }
+    }
+
+    private func layoutNativeSessionsWorkspace(frame: NSRect, hidden: Bool) {
+        let view = nativeSessionsController.view
+        view.frame = frame
+        view.isHidden = hidden
+        if !hidden {
+            rootView.addSubview(view, positioned: .above, relativeTo: nil)
+        }
+    }
+
+    private func hideNativeSessionsWorkspace() {
+        nativeSessionsController.suspend()
+        nativeSessionsController.view.isHidden = true
     }
 
     func handleNativeTerminalMessage(_ payload: [String: Any]) {
@@ -828,6 +922,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // 切换时也要更新（NSWindow.didResize 通知触发）。
         injectTitlebarMetrics()
         dispatchOpenSettingsIfPossible()
+        dispatchOpenSessionsWorkspaceIfPossible()
         dispatchOpenSessionIfPossible()
     }
 
@@ -866,6 +961,42 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             if let error {
                 MWarn("[BoardWebWindow] open session event failed: \(error.localizedDescription)")
                 self?.pendingOpenSession = pendingOpenSession
+            }
+        }
+    }
+
+    private func dispatchOpenSessionsWorkspaceIfPossible() {
+        guard let pendingOpenSessionsWorkspace, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        var detail: [String: String] = [:]
+        if let sessionId = pendingOpenSessionsWorkspace.sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let surfaceId = pendingOpenSessionsWorkspace.surfaceId, !surfaceId.isEmpty {
+            detail["surfaceId"] = surfaceId
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else {
+            self.pendingOpenSessionsWorkspace = nil
+            return
+        }
+        self.pendingOpenSessionsWorkspace = nil
+        MInfo("[BoardWebWindow] dispatch open sessions workspace detail=\(json)")
+        webView.evaluateJavaScript("""
+        window.__meee2PendingSessionsWorkspace = \(json);
+        window.dispatchEvent(new CustomEvent('meee2:open-sessions-workspace', { detail: \(json) }));
+        window.setTimeout(function() {
+            if (window.__meee2PendingSessionsWorkspace) {
+                window.dispatchEvent(new CustomEvent('meee2:open-sessions-workspace', {
+                    detail: window.__meee2PendingSessionsWorkspace
+                }));
+            }
+        }, 250);
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open sessions workspace event failed: \(error.localizedDescription)")
+                self?.pendingOpenSessionsWorkspace = pendingOpenSessionsWorkspace
+            } else {
+                MInfo("[BoardWebWindow] dispatched open sessions workspace")
             }
         }
     }

@@ -55,6 +55,9 @@ struct SessionDTO: Encodable {
     let surfaceId: String?
     let surfaceStatus: String?
     let canOpenExternal: Bool
+    let terminalBackend: String
+    let nativeWorkspaceAvailable: Bool
+    let openTarget: String
     /// "active" | "hidden" | "archived" — local operator visibility state.
     let controlState: String
 
@@ -359,6 +362,8 @@ struct PlannerApplyPreviewEnvelope: Encodable {
     let proposal: PlanProposal
     let nodes: [PlanningNode]
     let states: [NodeStateSnapshot]
+    let edges: [PlannerGraphEdge]
+    let artifacts: [PlannerArtifact]
 }
 struct PlannerMonitorEnvelope: Encodable {
     let generatedAt: Date
@@ -877,6 +882,9 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            terminalBackend: TerminalSessionBackendKind.external.rawValue,
+            nativeWorkspaceAvailable: false,
+            openTarget: "external",
             controlState: controlState.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
@@ -941,6 +949,9 @@ enum BoardDTOBuilder {
             surfaceId: nil,
             surfaceStatus: nil,
             canOpenExternal: true,
+            terminalBackend: TerminalSessionBackendKind.external.rawValue,
+            nativeWorkspaceAvailable: false,
+            openTarget: "external",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
@@ -951,7 +962,7 @@ enum BoardDTOBuilder {
         )
     }
 
-    static func internalSessionDTO(_ surface: InternalTerminalSurfaceSnapshot) -> SessionDTO {
+    static func internalSessionDTO(_ surface: TerminalSessionSnapshot) -> SessionDTO {
         let isCodex = surface.provider == "codex"
         let pluginId = isCodex ? "com.meee2.plugin.codex" : "com.meee2.plugin.claude"
         let info = PluginManager.shared.getPluginInfo(for: pluginId)
@@ -976,9 +987,11 @@ enum BoardDTOBuilder {
             .compactMap { $0 }
             .filter { !$0.isEmpty }
         let controlState = SessionControlStore.shared.state(for: controlIds)
+        let backend = TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? surface.backend
+        let termProgram = backend == .ghosttySurface ? "meee2-ghostty-surface" : "meee2-internal"
         return SessionDTO(
             id: surface.sessionId,
-            title: surface.title,
+            title: "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
             project: surface.cwd,
             pluginId: pluginId,
             pluginDisplayName: displayName,
@@ -996,11 +1009,14 @@ enum BoardDTOBuilder {
             pendingPermissionMessage: sessionData?.pendingPermissionMessage,
             ghosttyTerminalId: nil,
             tty: nil,
-            termProgram: "meee2-internal",
+            termProgram: termProgram,
             terminalKind: "internal",
             surfaceId: surface.surfaceId,
             surfaceStatus: surface.status,
             canOpenExternal: false,
+            terminalBackend: backend.rawValue,
+            nativeWorkspaceAvailable: true,
+            openTarget: "native-workspace",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,

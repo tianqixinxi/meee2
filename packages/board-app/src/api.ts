@@ -17,7 +17,10 @@ import type {
   CoordinationGroup,
   PlanProposal,
   PlannerActivity,
+  PlannerArtifact,
+  PlannerArtifactKind,
   PlannerCanvasState,
+  PlannerGraphEdge,
   PlannerGraphState,
   WorkflowRun,
   PlannerMonitorState,
@@ -30,7 +33,6 @@ import type {
   PlanningNodeStatus,
   PlannerNodeLayout,
   PlanChange,
-  PlannerArtifactKind,
   PlannerDispatchRunner,
   PlannerCanvasVisibility,
   PlanningCanvas,
@@ -388,8 +390,44 @@ function applyDemoChanges(nodes: PlanningNode[], proposal: PlanProposal): Planni
         approvers: change.clearGate ? null : (change.approvers ?? node.approvers),
       } : node)
     }
+    if (change.kind === 'attachArtifact' && change.artifact) {
+      const nodeId = change.artifact.nodeId?.trim() || change.nodeId?.trim()
+      const reference = change.artifact.reference.trim()
+      if (nodeId && reference) {
+        next = next.map((node) => {
+          if (node.id !== nodeId) return node
+          const refs = node.artifactRefs ?? []
+          return refs.includes(reference)
+            ? node
+            : { ...node, artifactRefs: [...refs, reference] }
+        })
+      }
+    }
   }
   return next
+}
+
+function demoArtifactsForProposal(canvasId: string, proposal: PlanProposal): PlannerArtifact[] {
+  const createdAt = new Date().toISOString()
+  return proposal.changes
+    .filter((change) => change.kind === 'attachArtifact' && change.artifact)
+    .map((change, index) => {
+      const artifact = change.artifact!
+      const reference = artifact.reference.trim()
+      const nodeId = artifact.nodeId?.trim() || change.nodeId?.trim() || ''
+      return {
+        id: `artifact-${canvasId}-${nodeId || 'node'}-proposal-${index}-${reference.replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()}`,
+        canvasId,
+        nodeId,
+        kind: artifact.kind,
+        title: artifact.title.trim() || reference,
+        reference,
+        status: artifact.status?.trim() || 'attached',
+        createdAt,
+        payload: artifact.payload,
+      }
+    })
+    .filter((artifact) => artifact.nodeId && artifact.reference)
 }
 
 async function jsonRequest<T>(
@@ -687,6 +725,10 @@ export interface SessionSurface {
   error?: string | null
   createdAt: string
   updatedAt: string
+  terminalBackend?: 'legacy-internal' | 'ghostty-surface' | 'external' | string
+  nativeWorkspaceAvailable?: boolean
+  openTarget?: 'native-workspace' | 'external' | 'web-fallback' | string
+  fallbackReason?: string | null
 }
 
 export function listSessionSurfaces(): Promise<SessionSurface[]> {
@@ -727,6 +769,24 @@ export function openNativeTerminalSurface(input: {
     clickStartedAtMs: input.clickStartedAtMs,
     sentAtMs: input.sentAtMs,
     webPhase: input.webPhase,
+  })
+  return true
+}
+
+export function syncNativeSessionsWorkspace(input: {
+  rect?: NativeTerminalRect
+  phase?: 'show' | 'layout' | 'hide' | 'focus'
+  sessionId?: string | null
+  surfaceId?: string | null
+}): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2Workspace
+  if (!bridge) return false
+  bridge.postMessage({
+    type: 'sessionsWorkspace',
+    phase: input.phase ?? 'layout',
+    rect: input.rect,
+    sessionId: input.sessionId ?? undefined,
+    surfaceId: input.surfaceId ?? undefined,
   })
   return true
 }
@@ -920,13 +980,26 @@ export function applyPlannerProposalPreview(
   proposal: PlanProposal
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
+  edges: PlannerGraphEdge[]
+  artifacts: PlannerArtifact[]
 }> {
   if (PLANNER_DEMO_MODE) {
     const nodes = applyDemoChanges(demoNodesByCanvasId[canvasId] ?? demoNodesByCanvasId[DEMO_CANVAS_ID], proposal)
+    const artifacts = [
+      ...(demoPlannerState(canvasId).artifacts ?? []),
+      ...demoArtifactsForProposal(canvasId, proposal),
+    ]
     return Promise.resolve({
       proposal: { ...proposal, status: proposal.status === 'pending' ? 'approved' : proposal.status },
       nodes,
       states: nodes.map(demoNodeState),
+      edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+        id: `edge-${dependencyId}-${node.id}`,
+        sourceNodeId: dependencyId,
+        targetNodeId: node.id,
+        kind: 'dependency',
+      }))),
+      artifacts,
     })
   }
   return jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/apply-preview`, {
@@ -960,10 +1033,16 @@ export function applyPlannerProposal(
   proposal: PlanProposal
   nodes: PlannerCanvasState['nodes']
   states: PlannerCanvasState['states']
+  edges: PlannerGraphEdge[]
+  artifacts: PlannerArtifact[]
 }> {
   if (PLANNER_DEMO_MODE && demoProposal?.id === proposalId) {
     const canvasIdToApply = demoProposal.canvasId
     const nodes = applyDemoChanges(demoNodesByCanvasId[canvasIdToApply] ?? [], demoProposal)
+    const artifacts = [
+      ...(demoPlannerState(canvasIdToApply).artifacts ?? []),
+      ...demoArtifactsForProposal(canvasIdToApply, demoProposal),
+    ]
     demoNodesByCanvasId = {
       ...demoNodesByCanvasId,
       [canvasIdToApply]: nodes,
@@ -973,6 +1052,13 @@ export function applyPlannerProposal(
       proposal: demoProposal,
       nodes,
       states: nodes.map(demoNodeState),
+      edges: nodes.flatMap((node) => (node.dependsOnNodeIds ?? []).map((dependencyId) => ({
+        id: `edge-${dependencyId}-${node.id}`,
+        sourceNodeId: dependencyId,
+        targetNodeId: node.id,
+        kind: 'dependency',
+      }))),
+      artifacts,
     })
   }
   return jsonRequest(
@@ -2265,7 +2351,33 @@ export async function fetchLocalAssistantSessionMessages(
   const params = new URLSearchParams()
   if (canvasId) params.set('canvasId', canvasId)
   params.set('limit', String(limit))
-  return jsonRequest(`/api/assistant/local-session/messages?${params.toString()}`)
+  const result = await jsonRequest<unknown>(`/api/assistant/local-session/messages?${params.toString()}`)
+  if (!result || typeof result !== 'object') return { sessionId: '', messages: [] }
+  const item = result as { sessionId?: unknown; messages?: unknown }
+  return {
+    sessionId: typeof item.sessionId === 'string' ? item.sessionId : '',
+    messages: Array.isArray(item.messages)
+      ? item.messages
+        .map(normalizeLocalAssistantSessionMessage)
+        .filter((message): message is LocalAssistantSessionMessage => Boolean(message))
+      : [],
+  }
+}
+
+function normalizeLocalAssistantSessionMessage(raw: unknown): LocalAssistantSessionMessage | null {
+  if (!raw || typeof raw !== 'object') return null
+  const item = raw as Record<string, unknown>
+  const content = typeof item.content === 'string' ? item.content : ''
+  if (!content.trim()) return null
+  const role = item.role === 'assistant' || item.role === 'injected' || item.role === 'user'
+    ? item.role
+    : 'assistant'
+  return {
+    id: typeof item.id === 'string' ? item.id : '',
+    role,
+    content,
+    timestamp: typeof item.timestamp === 'string' ? item.timestamp : null,
+  }
 }
 
 // -- transcript ------------------------------------------------------------
@@ -2568,11 +2680,17 @@ function fileToBase64(file: File): Promise<string> {
 export async function activateSession(id: string): Promise<boolean> {
   // console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
   try {
-    const response = await jsonRequest<{ ok: boolean; terminalKind?: string; surfaceId?: string; sessionId?: string }>(
+    const response = await jsonRequest<{
+      ok: boolean
+      terminalKind?: string
+      surfaceId?: string
+      sessionId?: string
+      openTarget?: string
+    }>(
       `/api/sessions/${encodeURIComponent(id)}/activate`,
       { method: 'POST' },
     )
-    if (response.terminalKind === 'internal' && response.surfaceId) {
+    if (response.terminalKind === 'internal' && response.surfaceId && response.openTarget !== 'native-workspace') {
       window.dispatchEvent(new CustomEvent('meee2:open-session', {
         detail: {
           sessionId: response.sessionId ?? id,

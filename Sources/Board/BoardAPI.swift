@@ -361,19 +361,61 @@ enum BoardAPI {
 
     // MARK: - Internal session terminal surfaces
 
+    private struct BoardSessionSurfaceDTO: Encodable {
+        let surfaceId: String
+        let sessionId: String
+        let provider: String
+        let title: String
+        let cwd: String
+        let command: String
+        let canvasId: String?
+        let nodeId: String?
+        let status: String
+        let pid: Int?
+        let createdAt: Date
+        let updatedAt: Date
+        let terminalBackend: String
+        let nativeWorkspaceAvailable: Bool
+        let openTarget: String
+        let fallbackReason: String?
+
+        init(_ surface: TerminalSessionSnapshot) {
+            let displayName = surface.provider == "codex" ? "Codex" : "Claude Code"
+            self.surfaceId = surface.surfaceId
+            self.sessionId = surface.sessionId
+            self.provider = surface.provider
+            self.title = "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)"
+            self.cwd = surface.cwd
+            self.command = surface.command
+            self.canvasId = surface.canvasId
+            self.nodeId = surface.nodeId
+            self.status = surface.status
+            self.pid = surface.pid
+            self.createdAt = surface.createdAt
+            self.updatedAt = surface.updatedAt
+            self.terminalBackend = surface.backend.rawValue
+            self.nativeWorkspaceAvailable = surface.backend != .external
+            self.openTarget = surface.backend == .external ? "external" : "native-workspace"
+            self.fallbackReason = surface.fallbackReason
+        }
+    }
+
     static func listSessionSurfaces(_ req: HttpRequest) -> HttpResponse {
-        struct Envelope: Encodable { let surfaces: [InternalTerminalSurfaceSnapshot] }
-        return jsonResponse(Envelope(surfaces: InternalTerminalRuntime.shared.listSnapshots()))
+        struct Envelope: Encodable { let surfaces: [BoardSessionSurfaceDTO] }
+        let surfaces = TerminalSessionBackendRegistry.shared
+            .listSnapshots()
+            .map(BoardSessionSurfaceDTO.init)
+        return jsonResponse(Envelope(surfaces: surfaces))
     }
 
     static func getSessionSurface(_ req: HttpRequest) -> HttpResponse {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing surface id", status: 400)
         }
-        guard let snapshot = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: id) else {
+        guard let snapshot = TerminalSessionBackendRegistry.shared.snapshot(id: id) else {
             return errorResponse("not_found", "surface not found: \(id)", status: 404)
         }
-        return jsonResponse(snapshot)
+        return jsonResponse(BoardSessionSurfaceDTO(snapshot))
     }
 
     static func createSessionSurface(_ req: HttpRequest) -> HttpResponse {
@@ -408,7 +450,7 @@ enum BoardAPI {
         guard let id = req.params[":id"], !id.isEmpty else {
             return errorResponse("bad_request", "missing surface id", status: 400)
         }
-        guard InternalTerminalRuntime.shared.close(surfaceOrSessionId: id) else {
+        guard TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: id) else {
             return errorResponse("not_found", "surface not found: \(id)", status: 404)
         }
         BoardServer.shared.broadcastStateChanged()
@@ -424,7 +466,7 @@ enum BoardAPI {
         nodeId: String?,
         initialPrompt: String?,
         preferredSessionId: String? = nil
-    ) throws -> InternalTerminalSurfaceSnapshot {
+    ) throws -> TerminalSessionSnapshot {
         var isDir: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
             if createIfMissing {
@@ -433,17 +475,19 @@ enum BoardAPI {
                 throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
             }
         }
-        let snapshot = try InternalTerminalRuntime.shared.createSurface(
-            provider: provider,
-            cwd: cwd,
-            command: command,
-            canvasId: canvasId,
-            nodeId: nodeId,
-            initialPrompt: initialPrompt,
-            preferredSessionId: preferredSessionId
+        let handle = try TerminalSessionBackendRegistry.shared.createSession(
+            request: TerminalSessionRequest(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                canvasId: canvasId,
+                nodeId: nodeId,
+                initialPrompt: initialPrompt,
+                preferredSessionId: preferredSessionId
+            )
         )
         BoardServer.shared.broadcastStateChanged()
-        return snapshot
+        return handle.snapshot
     }
 
     private static func graphEnvelope(_ state: PlannerGraphState) -> PlannerGraphStateEnvelope {
@@ -458,6 +502,69 @@ enum BoardAPI {
             artifacts: state.artifacts,
             edges: state.edges
         )
+    }
+
+    static func materializeAutoDispatchedSessions(canvasId: String, result: inout PlannerNodeOutputResult) {
+        // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched downstream
+        // nodes in the background so the user's focused app stays put. The
+        // dispatch state is already persisted by the store (see
+        // PlannerBoardBridge.submitNodeOutput), this just materializes the
+        // terminal so the session actually runs.
+        guard let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty else { return }
+        var autoSpawnStarted = 0
+        var autoSpawnSkipped: [String] = []
+        var autoSpawnFailed: [String] = []
+        for autoNodeId in autoIds {
+            guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
+                autoSpawnSkipped.append("\(autoNodeId): missing node")
+                continue
+            }
+            do {
+                let spawnRequest = try recordPlannerDispatchIntent(
+                    canvasId: canvasId,
+                    node: node,
+                    cwdOverride: nil,
+                    includeInitialPromptInIntent: false
+                )
+                guard let spawnReq = spawnRequest else {
+                    autoSpawnSkipped.append("\(autoNodeId): no spawn request")
+                    continue
+                }
+                let surface = try createInternalSessionSurface(
+                    provider: spawnReq.provider,
+                    cwd: spawnReq.cwd,
+                    command: spawnReq.command,
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    nodeId: autoNodeId,
+                    initialPrompt: spawnReq.initialPrompt
+                )
+                _ = PlannerSessionRunStateBridge.observe(
+                    sessionId: surface.sessionId,
+                    purpose: spawnReq.purpose,
+                    status: .active
+                )
+                autoSpawnStarted += 1
+                NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
+            } catch {
+                autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
+                NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
+            }
+        }
+        var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
+        if !autoSpawnSkipped.isEmpty {
+            parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
+        }
+        if !autoSpawnFailed.isEmpty {
+            parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
+        }
+        result.hint = [result.hint, parts.joined(separator: " ")]
+            .compactMap { value in
+                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            .joined(separator: " ")
+        NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
     }
 
     private static func parseISODate(_ raw: String?) -> Date? {
@@ -544,20 +651,52 @@ enum BoardAPI {
         sessionId: String,
         existingArtifacts: [PlannerArtifact]
     ) {
-        guard let outputRef = node.schema.outputs.first(where: { $0.localizedCaseInsensitiveContains("kanban") })
-                ?? node.schema.outputs.first else { return }
-        guard !existingArtifacts.contains(where: {
-            $0.nodeId == node.id && (
-                $0.reference == outputRef ||
-                $0.reference.caseInsensitiveCompare(outputRef) == .orderedSame
-            )
-        }) else { return }
+        let outputRefs = node.schema.outputs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !outputRefs.isEmpty else { return }
         guard let transcriptPath = SessionStore.shared.get(sessionId)?.transcriptPath else { return }
         let entries = FullTranscriptReader.readTail(transcriptPath: transcriptPath, limit: 12)
-        guard let latestText = latestVisibleAssistantText(entries),
-              let payload = kanbanPayloadFromMarkdownTable(latestText) else { return }
+        guard let latestText = latestVisibleAssistantText(entries) else { return }
+
+        if let kanbanRef = outputRefs.first(where: { $0.localizedCaseInsensitiveContains("kanban") }),
+           !hasExistingFallbackArtifact(nodeId: node.id, outputRef: kanbanRef, artifacts: existingArtifacts),
+           let payload = kanbanPayloadFromMarkdownTable(latestText) {
+            submitFallbackSessionArtifact(
+                canvasId: canvasId,
+                node: node,
+                outputRef: kanbanRef,
+                kind: .kanban,
+                payload: payload,
+                summary: "Extracted \(kanbanItemCount(payload)) item(s) into \(kanbanRef)."
+            )
+            return
+        }
+
+        guard let outputRef = outputRefs.first(where: { !$0.localizedCaseInsensitiveContains("kanban") })
+                ?? outputRefs.first,
+              !hasExistingFallbackArtifact(nodeId: node.id, outputRef: outputRef, artifacts: existingArtifacts),
+              let payload = genericSessionArtifactPayload(from: latestText, outputRef: outputRef) else { return }
+        submitFallbackSessionArtifact(
+            canvasId: canvasId,
+            node: node,
+            outputRef: outputRef,
+            kind: .generic,
+            payload: payload,
+            summary: "Captured terminal completion text into \(outputRef)."
+        )
+    }
+
+    private static func submitFallbackSessionArtifact(
+        canvasId: String,
+        node: PlanningNode,
+        outputRef: String,
+        kind: PlannerArtifactKind,
+        payload: BoardJSONValue,
+        summary: String
+    ) {
         let artifact = PlannerNodeOutputArtifact(
-            kind: .kanban,
+            kind: kind,
             title: outputRef.replacingOccurrences(of: "_", with: " ").capitalized,
             reference: outputRef,
             payload: payload,
@@ -566,7 +705,7 @@ enum BoardAPI {
         let output = PlannerNodeOutput(
             nodeId: node.id,
             status: .done,
-            message: PlannerNodeOutputMessage(summary: "Extracted \(kanbanItemCount(payload)) item(s) into \(outputRef).", routeTo: []),
+            message: PlannerNodeOutputMessage(summary: summary, routeTo: []),
             artifacts: [artifact],
             next: .complete
         )
@@ -581,7 +720,20 @@ enum BoardAPI {
             routePlannerOutputMessages(result.routes)
             BoardServer.shared.broadcastStateChanged()
         } catch {
-            MWarn("[PlannerArtifactSync] fallback sync failed canvas=\(canvasId) node=\(node.id) sid=\(sessionId.prefix(8)): \(error.localizedDescription)")
+            MWarn("[PlannerArtifactSync] fallback sync failed canvas=\(canvasId) node=\(node.id): \(error.localizedDescription)")
+        }
+    }
+
+    private static func hasExistingFallbackArtifact(
+        nodeId: String,
+        outputRef: String,
+        artifacts: [PlannerArtifact]
+    ) -> Bool {
+        artifacts.contains { artifact in
+            guard artifact.nodeId == nodeId else { return false }
+            return artifact.reference == outputRef
+                || artifact.reference.caseInsensitiveCompare(outputRef) == .orderedSame
+                || artifact.title.caseInsensitiveCompare(outputRef) == .orderedSame
         }
     }
 
@@ -670,6 +822,119 @@ enum BoardAPI {
         guard let items = payload.objectValue?["items"],
               case .array(let values) = items else { return 0 }
         return values.count
+    }
+
+    static func genericSessionArtifactPayload(from text: String, outputRef: String) -> BoardJSONValue? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 40 else { return nil }
+        let html = fencedCodeBlock(in: trimmed, languageHints: ["html", "htm"]) ?? (looksLikeHTML(trimmed) ? trimmed : nil)
+        let json = fencedCodeBlock(in: trimmed, languageHints: ["json"]) ?? (looksLikeJSONObject(trimmed) ? trimmed : nil)
+        let outputHint = outputRef.lowercased()
+        let final = looksLikeFinalSessionOutput(trimmed, outputRef: outputRef)
+        if outputHint.contains("html") || html != nil {
+            guard let html = html ?? extractHTMLFragment(from: trimmed), final || looksLikeHTML(html) else { return nil }
+            return .object([
+                "type": .string(PlannerArtifactPayloadType.html.rawValue),
+                "html": .string(html)
+            ])
+        }
+        if outputHint.contains("json") || json != nil {
+            guard let json = json, final || looksLikeJSONObject(json) else { return nil }
+            return .object([
+                "type": .string(PlannerArtifactPayloadType.json.rawValue),
+                "json": .string(json)
+            ])
+        }
+        guard final else { return nil }
+        return .object([
+            "type": .string(PlannerArtifactPayloadType.text.rawValue),
+            "text": .string(trimmed)
+        ])
+    }
+
+    private static func looksLikeFinalSessionOutput(_ text: String, outputRef: String) -> Bool {
+        let lower = text.lowercased()
+        let ref = outputRef.lowercased()
+        let finalMarkers = [
+            "final", "deliverable", "artifact", "output", "result", "completed",
+            "ready", "here is", "below is", "summary", "report", "prd", "brief",
+            "最终", "产物", "交付", "输出", "结果", "完成", "已完成", "验收", "总结", "如下"
+        ]
+        let outputHints = [
+            "text", "markdown", "doc", "prd", "brief", "summary", "report",
+            "copy", "content", "page", "html", "json", "check", "result", "verdict"
+        ]
+        if finalMarkers.contains(where: { lower.contains($0) }) { return true }
+        if outputHints.contains(where: { ref.contains($0) }) && !looksLikeFollowupQuestion(text) { return true }
+        return false
+    }
+
+    private static func looksLikeFollowupQuestion(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let hasQuestionTone = trimmed.hasSuffix("?")
+            || trimmed.hasSuffix("？")
+            || lower.contains("which ")
+            || lower.contains("what ")
+            || lower.contains("should i")
+            || lower.contains("need ")
+            || lower.contains("需要")
+            || lower.contains("哪个")
+            || lower.contains("是否")
+            || lower.contains("吗")
+        let hasDeliveryMarker = ["final", "deliverable", "artifact", "产物", "交付", "最终"].contains { lower.contains($0) }
+        return hasQuestionTone && !hasDeliveryMarker
+    }
+
+    private static func fencedCodeBlock(in text: String, languageHints: [String]) -> String? {
+        let lines = text.components(separatedBy: .newlines)
+        var capturing = false
+        var captured: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !capturing {
+                guard trimmed.hasPrefix("```") else { continue }
+                let language = trimmed.dropFirst(3).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if languageHints.contains(where: { language.contains($0) }) {
+                    capturing = true
+                    captured.removeAll()
+                }
+                continue
+            }
+            if trimmed.hasPrefix("```") {
+                let body = captured.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                return body.isEmpty ? nil : body
+            }
+            captured.append(line)
+        }
+        return nil
+    }
+
+    private static func looksLikeHTML(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("<!doctype html")
+            || lower.contains("<html")
+            || lower.contains("<body")
+            || lower.contains("<section")
+            || lower.contains("<main")
+    }
+
+    private static func extractHTMLFragment(from text: String) -> String? {
+        guard looksLikeHTML(text) else { return nil }
+        if let start = text.range(of: "<!doctype", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<html", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<body", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<main", options: [.caseInsensitive])?.lowerBound
+            ?? text.range(of: "<section", options: [.caseInsensitive])?.lowerBound {
+            return String(text[start...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    private static func looksLikeJSONObject(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return false }
+        return (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) != nil
     }
 
     private static func slug(_ raw: String) -> String {
@@ -1357,7 +1622,9 @@ enum BoardAPI {
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: preview.proposal,
                 nodes: preview.nodes,
-                states: preview.states
+                states: preview.states,
+                edges: preview.edges,
+                artifacts: preview.artifacts
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1546,13 +1813,13 @@ enum BoardAPI {
                 return errorResponse("not_found", "node not found: \(nodeId)", status: 404)
             }
 
-            let surface: InternalTerminalSurfaceSnapshot
+            let surface: TerminalSessionSnapshot
             var action = "reuse"
             if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !sessionId.isEmpty {
                 if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
                    isReusableInternalSurface(existingSurface) {
-                    surface = existingSurface
+                    surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
@@ -2180,62 +2447,7 @@ enum BoardAPI {
                 }
             }
             routePlannerOutputMessages(result.routes)
-            // ENG-2 / E2.2 + E2.4: spawn terminals for auto-dispatched
-            // downstream nodes in the background so the user's focused app
-            // stays put. The dispatch state is already persisted by the
-            // store (see PlannerBoardBridge.submitNodeOutput), this just
-            // materializes the terminal so the session actually runs.
-            var autoSpawnStarted = 0
-            var autoSpawnSkipped: [String] = []
-            var autoSpawnFailed: [String] = []
-            for autoNodeId in result.autoDispatchedNodeIds ?? [] {
-                guard let node = result.graph.nodes.first(where: { $0.id == autoNodeId }) else {
-                    autoSpawnSkipped.append("\(autoNodeId): missing node")
-                    continue
-                }
-                do {
-                    let spawnRequest = try recordPlannerDispatchIntent(
-                        canvasId: canvasId,
-                        node: node,
-                        cwdOverride: nil,
-                        includeInitialPromptInIntent: false
-                    )
-                    guard let spawnReq = spawnRequest else {
-                        autoSpawnSkipped.append("\(autoNodeId): no spawn request")
-                        continue
-                    }
-                    let surface = try createInternalSessionSurface(
-                        provider: spawnReq.provider,
-                        cwd: spawnReq.cwd,
-                        command: spawnReq.command,
-                        createIfMissing: true,
-                        canvasId: canvasId,
-                        nodeId: autoNodeId,
-                        initialPrompt: spawnReq.initialPrompt
-                    )
-                    _ = PlannerSessionRunStateBridge.observe(
-                        sessionId: surface.sessionId,
-                        purpose: spawnReq.purpose,
-                        status: .active
-                    )
-                    autoSpawnStarted += 1
-                    NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
-                } catch {
-                    autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
-                    NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
-                }
-            }
-            if let autoIds = result.autoDispatchedNodeIds, !autoIds.isEmpty {
-                var parts = ["Auto-started \(autoSpawnStarted) downstream session\(autoSpawnStarted == 1 ? "" : "s")."]
-                if !autoSpawnSkipped.isEmpty {
-                    parts.append("Skipped \(autoSpawnSkipped.count): \(autoSpawnSkipped.joined(separator: "; ")).")
-                }
-                if !autoSpawnFailed.isEmpty {
-                    parts.append("Failed \(autoSpawnFailed.count): \(autoSpawnFailed.joined(separator: "; ")).")
-                }
-                result.hint = parts.joined(separator: " ")
-                NSLog("[ENG-2][auto-spawn] summary canvas=\(canvasId) candidates=\(autoIds.count) started=\(autoSpawnStarted) skipped=\(autoSpawnSkipped.count) failed=\(autoSpawnFailed.count)")
-            }
+            materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -2755,7 +2967,9 @@ enum BoardAPI {
             return jsonResponse(PlannerApplyPreviewEnvelope(
                 proposal: result.proposal,
                 nodes: result.nodes,
-                states: result.states
+                states: result.states,
+                edges: result.edges,
+                artifacts: result.artifacts
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -3084,7 +3298,7 @@ enum BoardAPI {
             }
             return set
         }()
-        let internalSessions = InternalTerminalRuntime.shared
+        let internalSessions = TerminalSessionBackendRegistry.shared
             .listSnapshots()
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
@@ -3724,12 +3938,15 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+        if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sid) {
             struct ActivateInternalResponse: Encodable {
                 let ok: Bool
                 let terminalKind: String
                 let surfaceId: String
                 let sessionId: String
+                let terminalBackend: String
+                let nativeWorkspaceAvailable: Bool
+                let openTarget: String
             }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
@@ -3745,7 +3962,10 @@ enum BoardAPI {
                 ok: true,
                 terminalKind: "internal",
                 surfaceId: surface.surfaceId,
-                sessionId: surface.sessionId
+                sessionId: surface.sessionId,
+                terminalBackend: (TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? .legacyInternal).rawValue,
+                nativeWorkspaceAvailable: true,
+                openTarget: "native-workspace"
             ))
         }
         if let metadataSid = resolveDesktopMetadataSid(sid) {
@@ -3771,7 +3991,7 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
-        if InternalTerminalRuntime.shared.close(surfaceOrSessionId: sid) {
+        if TerminalSessionBackendRegistry.shared.closeSessionIfExists(id: sid) {
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
         }
@@ -4059,7 +4279,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing or empty 'content'", status: 400)
         }
 
-        if InternalTerminalRuntime.shared.writeInput(sessionId: sid, text: content + "\n") {
+        if TerminalSessionBackendRegistry.shared.writeInput(id: sid, data: Data((content + "\n").utf8)) {
             struct InternalInjectEnvelope: Encodable {
                 let message: MessageDTO?
                 let delivery: String?

@@ -91,6 +91,7 @@ export interface PlannerNodeData extends Record<string, unknown> {
   canChangeStatus?: boolean
   onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId?: string | null; nodeTitle?: string | null }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
@@ -160,6 +161,7 @@ interface PlannerGraphInput {
   canChangeStatus?: boolean
   onCreateSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onOpenSession?: (sessionId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId?: string | null; nodeTitle?: string | null }) => void
   onReplaceSession?: (nodeId: string, runner: PlannerDispatchRunner) => void
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
@@ -264,6 +266,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         canChangeStatus: input.canChangeStatus ?? false,
         onCreateSession: input.onCreateSession,
         onOpenSession: input.onOpenSession,
+        onOpenArtifacts: input.onOpenArtifacts,
         onReplaceSession: input.onReplaceSession,
         onCancelSessionCreation: input.onCancelSessionCreation,
         onDeleteNode: input.onDeleteNode,

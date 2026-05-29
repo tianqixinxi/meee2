@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
+import { monitorItemOpenLabel, monitorItemSourceKind } from '../../lib/workspaceNavigation'
 import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
 import { CanvasKindHint } from './CanvasKindHint'
 import './planner.css'
@@ -45,14 +46,16 @@ interface MonitorLane {
 interface WorkspaceMonitorProps {
   activeCanvasId: string
   canvases: CanvasInfo[]
-  onOpenCanvas: (canvasId: string) => void
+  refreshTick: number
+  onOpenItem: (item: PlannerMonitorItem) => void
   onOpenAllSessions: () => void
 }
 
 export function WorkspaceMonitor({
   activeCanvasId,
   canvases,
-  onOpenCanvas,
+  refreshTick,
+  onOpenItem,
   onOpenAllSessions,
 }: WorkspaceMonitorProps) {
   const { t } = useI18n()
@@ -76,7 +79,7 @@ export function WorkspaceMonitor({
 
   useEffect(() => {
     loadMonitor()
-  }, [loadMonitor])
+  }, [loadMonitor, refreshTick])
 
   const lanes = useMemo<MonitorLane[]>(() => {
     const term = query.trim().toLowerCase()
@@ -245,7 +248,7 @@ export function WorkspaceMonitor({
                           key={item.id}
                           item={item}
                           generatedAt={monitor?.generatedAt}
-                          onOpenCanvas={onOpenCanvas}
+                          onOpenItem={onOpenItem}
                           t={t}
                         />
                       ))}
@@ -267,12 +270,12 @@ export function WorkspaceMonitor({
 function MonitorCard({
   item,
   generatedAt,
-  onOpenCanvas,
+  onOpenItem,
   t,
 }: {
   item: PlannerMonitorItem
   generatedAt?: string
-  onOpenCanvas: (canvasId: string) => void
+  onOpenItem: (item: PlannerMonitorItem) => void
   t: Translator
 }) {
   const Icon = item.kind === 'proposal'
@@ -283,16 +286,16 @@ function MonitorCard({
     <button
       type="button"
       className={`planner-monitor-card planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
-      onClick={() => onOpenCanvas(item.canvasId)}
-      aria-label={`${t('monitor.openCanvas')}: ${item.nodeTitle ?? item.summary}`}
-      title={`${t('monitor.openCanvas')}: ${item.canvasTitle}`}
+      onClick={() => onOpenItem(item)}
+      aria-label={`${monitorOpenLabel(item, t)}: ${item.nodeTitle ?? item.summary}`}
+      title={`${monitorOpenLabel(item, t)}: ${item.canvasTitle}`}
     >
       <div className="planner-monitor-card__top">
         <span className="planner-monitor-card__source">
           <Icon size={12} aria-hidden />
           {sourceLabel(item, t)}
         </span>
-        <span className="planner-monitor-card__time">{formatGeneratedAt(generatedAt)}</span>
+        <span className="planner-monitor-card__time">{formatRelativeTimestamp(item.updatedAt ?? generatedAt)}</span>
       </div>
       <h3>{item.nodeTitle ?? item.summary}</h3>
       <div className="planner-monitor-card__meta">
@@ -320,6 +323,17 @@ function MonitorCard({
   )
 }
 
+function monitorOpenLabel(item: PlannerMonitorItem, t: Translator): string {
+  switch (monitorItemOpenLabel(item)) {
+    case 'item':
+      return t('monitor.openItem')
+    case 'session':
+      return t('monitor.openSession')
+    case 'canvas':
+      return t('monitor.openCanvas')
+  }
+}
+
 function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
   if (!term) return true
   return [
@@ -336,15 +350,16 @@ function matchesSearch(item: PlannerMonitorItem, term: string): boolean {
 }
 
 function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): boolean {
+  const sourceKind = monitorItemSourceKind(item)
   switch (source) {
     case 'all':
       return true
     case 'live':
-      return item.kind === 'delivery'
+      return sourceKind === 'live'
     case 'node':
-      return item.kind === 'node'
+      return sourceKind === 'node' || sourceKind === 'canvas'
     case 'approval':
-      return item.kind === 'proposal' || item.needsOwnerReview
+      return sourceKind === 'approval' || item.needsOwnerReview
     case 'artifact':
       return evidenceCount(item) > 0
   }
@@ -362,15 +377,6 @@ function evidenceCount(item: PlannerMonitorItem): number {
   return Math.max(0, item.evidenceCount ?? 0)
 }
 
-/**
- * Priority boost based on how long an item has been parked in
- * `awaitingInput` / `gateWait`. Items that need a human reply for >1 day are
- * promoted aggressively so they don't rot at the bottom of the lane:
- *   ≥ 72h → +500 (effectively jumps to the top)
- *   ≥ 24h → +100
- * "Boost" 在这里表示 sort key 的有效降权 —— 等得越久 effectiveRank 越小,
- * 排得越靠前(riskRank 是 1=highest 5=lowest 的 1-based 量)。
- */
 function awaitingBoost(item: PlannerMonitorItem, now: number): number {
   if (!item.awaitingInputSince) return 0
   const since = Date.parse(item.awaitingInputSince)
@@ -384,18 +390,29 @@ function awaitingBoost(item: PlannerMonitorItem, now: number): number {
 function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode: MonitorSort): number {
   if (sortMode === 'severity') {
     const now = Date.now()
-    const ra = a.riskRank - awaitingBoost(a, now)
-    const rb = b.riskRank - awaitingBoost(b, now)
-    if (ra !== rb) return ra - rb
+    const leftRank = a.riskRank - awaitingBoost(a, now)
+    const rightRank = b.riskRank - awaitingBoost(b, now)
+    if (leftRank !== rightRank) return leftRank - rightRank
+  }
+  if (sortMode === 'updated') {
+    const delta = timestampForItem(b) - timestampForItem(a)
+    if (delta !== 0) return delta
   }
   if (a.canvasTitle !== b.canvasTitle) return a.canvasTitle.localeCompare(b.canvasTitle)
   return a.summary.localeCompare(b.summary)
 }
 
 function sourceLabel(item: PlannerMonitorItem, t: Translator): string {
-  if (item.kind === 'delivery') return t('monitor.sourceLive')
-  if (item.kind === 'proposal' || item.needsOwnerReview) return t('monitor.sourceApproval')
-  return t('monitor.sourceNode')
+  switch (monitorItemSourceKind(item)) {
+    case 'live':
+      return t('monitor.sourceLive')
+    case 'canvas':
+      return t('monitor.sourceCanvas')
+    case 'approval':
+      return t('monitor.sourceApproval')
+    case 'node':
+      return t('monitor.sourceNode')
+  }
 }
 
 function statusLabel(item: PlannerMonitorItem, t: Translator): string {
@@ -415,7 +432,12 @@ function statusLabel(item: PlannerMonitorItem, t: Translator): string {
   }
 }
 
-function formatGeneratedAt(value?: string): string {
+function timestampForItem(item: PlannerMonitorItem): number {
+  const timestamp = Date.parse(item.updatedAt ?? '')
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function formatRelativeTimestamp(value?: string | null): string {
   if (!value) return ''
   const timestamp = Date.parse(value)
   if (Number.isNaN(timestamp)) return ''

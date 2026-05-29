@@ -127,13 +127,17 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
  * 记录其布尔值，确保 1h 阈值翻越时下游 UI 能拿到 new state 触发重渲。
  */
 function signatureFor(s: BoardState): string {
+  const sessions = Array.isArray(s.sessions) ? s.sessions : []
+  const channels = Array.isArray(s.channels) ? s.channels : []
   const slim = {
-    sessions: s.sessions.map((x) => ({
+    sessions: sessions.map((x) => ({
       id: x.id,
       title: x.title,
       project: x.project,
       status: x.status,
       terminalKind: x.terminalKind,
+      terminalBackend: x.terminalBackend,
+      openTarget: x.openTarget,
       surfaceId: x.surfaceId,
       surfaceStatus: x.surfaceStatus,
       canOpenExternal: x.canOpenExternal,
@@ -144,12 +148,12 @@ function signatureFor(s: BoardState): string {
       // recentMessages 里每条 text 是最后 200 字，内容变了才代表"有新消息"
       recent: x.recentMessages?.map((m) => `${m.role}:${m.text}`).join('|'),
     })),
-    channels: s.channels.map((c) => ({
+    channels: channels.map((c) => ({
       name: c.name,
       mode: c.mode,
       pendingCount: c.pendingCount,
-      memberCount: c.members.length,
-      members: c.members.map((m) => `${m.sessionId}:${m.alias}`).sort(),
+      memberCount: Array.isArray(c.members) ? c.members.length : 0,
+      members: Array.isArray(c.members) ? c.members.map((m) => `${m.sessionId}:${m.alias}`).sort() : [],
     })),
   }
   return JSON.stringify(slim)

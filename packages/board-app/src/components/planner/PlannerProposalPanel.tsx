@@ -32,6 +32,8 @@ interface Props {
   onApproveAndApply: () => void
   onReject: () => void
   draftMessage?: PlannerDraftMessage | null
+  initialIntakeMessage?: { id: number; text: string } | null
+  onInitialIntakeHandled?: (requestId: number) => void
   clearRevision?: number
   /** Incremented when a node action (dispatch/bind/…) creates a proposal —
    *  triggers the review modal so the action has a visible result. */
@@ -96,6 +98,7 @@ const SESSION_SYNC_LIMIT = 12
 const VISIBLE_HISTORY_LIMIT = 12
 const COLLAPSE_LINE_LIMIT = 8
 const COLLAPSE_CHAR_LIMIT = 900
+const INITIAL_INTAKE_SUBMIT_DELAY_MS = 24
 
 export function PlannerProposalPanel({
   canvasId,
@@ -114,6 +117,8 @@ export function PlannerProposalPanel({
   onApproveAndApply,
   onReject,
   draftMessage = null,
+  initialIntakeMessage = null,
+  onInitialIntakeHandled,
   clearRevision = 0,
   reviewRequestTick,
   answerOnlyReply = null,
@@ -125,6 +130,7 @@ export function PlannerProposalPanel({
   const { t } = useI18n()
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const emptyIntakeAbortRef = useRef<AbortController | null>(null)
+  const emptyIntakeTimerRef = useRef<number | null>(null)
   const handledClearRevisionRef = useRef(0)
   const handledAnswerOnlyIdRef = useRef(0)
   // ENG-5: first-Q&A auto-expand. We flip historyOpen=true the first time a
@@ -134,13 +140,14 @@ export function PlannerProposalPanel({
   const autoExpandedRef = useRef(false)
   const [message, setMessage] = useState('')
   const isEmptyOmniIntake = emptyMode && layout === 'omni' && !proposal
-  const [history, setHistory] = useState<PlannerChatMessage[]>(() => isEmptyOmniIntake ? [] : readChatHistory(canvasId))
+  const [history, setHistory] = useState<PlannerChatMessage[]>(() => readChatHistory(canvasId))
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [emptyIntakeError, setEmptyIntakeError] = useState<string | null>(null)
   const [draftContext, setDraftContext] = useState<{ text: string; label: string } | null>(null)
   const isTemplate = variant === 'template'
+  const handledInitialIntakeRef = useRef(0)
 
   function abortEmptyIntakeRequest() {
     if (!emptyIntakeAbortRef.current) return
@@ -148,21 +155,31 @@ export function PlannerProposalPanel({
     emptyIntakeAbortRef.current = null
   }
 
-  useEffect(() => {
-    abortEmptyIntakeRequest()
-    if (isEmptyOmniIntake) {
-      clearChatHistory(canvasId)
-      setHistory([])
-      setEmptyIntakeError(null)
-    } else {
-      setHistory(readChatHistory(canvasId))
-    }
-    setHistoryOpen(false)
-    autoExpandedRef.current = false
-  }, [canvasId, isEmptyOmniIntake])
+  function clearInitialIntakeTimer() {
+    if (emptyIntakeTimerRef.current === null) return false
+    window.clearTimeout(emptyIntakeTimerRef.current)
+    emptyIntakeTimerRef.current = null
+    return true
+  }
 
   useEffect(() => {
-    return () => abortEmptyIntakeRequest()
+    clearInitialIntakeTimer()
+    handledInitialIntakeRef.current = 0
+    abortEmptyIntakeRequest()
+    setHistory(readChatHistory(canvasId))
+    setHistoryOpen(false)
+    autoExpandedRef.current = false
+  }, [canvasId])
+
+  useEffect(() => {
+    if (isEmptyOmniIntake) setEmptyIntakeError(null)
+  }, [isEmptyOmniIntake])
+
+  useEffect(() => {
+    return () => {
+      clearInitialIntakeTimer()
+      abortEmptyIntakeRequest()
+    }
   }, [])
 
   useEffect(() => {
@@ -199,9 +216,9 @@ export function PlannerProposalPanel({
   }, [busy, canvasId, isEmptyOmniIntake])
 
   useEffect(() => {
-    if (emptyMode && layout === 'omni') return
+    if (history.length === 0 && emptyIntakeAbortRef.current) return
     writeChatHistory(canvasId, history)
-  }, [canvasId, emptyMode, history, layout])
+  }, [canvasId, history])
 
   useEffect(() => {
     if (clearRevision <= 0) return
@@ -212,6 +229,7 @@ export function PlannerProposalPanel({
     setReviewOpen(false)
     setThinking(false)
     setEmptyIntakeError(null)
+    clearInitialIntakeTimer()
     abortEmptyIntakeRequest()
   }, [canvasId, clearRevision])
 
@@ -335,16 +353,25 @@ export function PlannerProposalPanel({
     setDraftContext(null)
   }
 
-  const submitEmptyIntakeTurn = (displayMessage: string) => {
+  const submitEmptyIntakeTurn = (
+    displayMessage: string,
+    baseHistory = history,
+    lifecycle?: { onAbort?: () => void; onSettled?: () => void },
+  ) => {
     if (!displayMessage.trim()) return
+    const trimmedMessage = displayMessage.trim()
     const userMessage: PlannerChatMessage = {
       id: `user:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       role: 'user',
-      markdown: displayMessage,
+      markdown: trimmedMessage,
       meta: draftContext ? [draftContext.label] : undefined,
     }
-    const nextHistory = [...history, userMessage]
+    const lastMessage = baseHistory[baseHistory.length - 1]
+    const nextHistory = lastMessage?.role === 'user' && lastMessage.markdown.trim() === trimmedMessage
+      ? baseHistory
+      : [...baseHistory, userMessage]
     setHistory(nextHistory)
+    writeChatHistory(canvasId, nextHistory)
     setEmptyIntakeError(null)
     setThinking(true)
     abortEmptyIntakeRequest()
@@ -362,16 +389,45 @@ export function PlannerProposalPanel({
         setHistory((current) => [...current, reply])
       })
       .catch((err) => {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted) {
+          lifecycle?.onAbort?.()
+          return
+        }
         setEmptyIntakeError((err as Error).message || t('planner.continueError'))
       })
       .finally(() => {
         if (emptyIntakeAbortRef.current === controller) {
           emptyIntakeAbortRef.current = null
         }
-        if (!controller.signal.aborted) setThinking(false)
+        if (!controller.signal.aborted) {
+          setThinking(false)
+          lifecycle?.onSettled?.()
+        }
       })
   }
+
+  useEffect(() => {
+    const intake = initialIntakeMessage
+    if (!intake) return
+    const seed = intake.text.trim()
+    if (!seed || !isEmptyOmniIntake || proposal || thinking || busy) return
+    if (handledInitialIntakeRef.current === intake.id) return
+    handledInitialIntakeRef.current = intake.id
+    emptyIntakeTimerRef.current = window.setTimeout(() => {
+      emptyIntakeTimerRef.current = null
+      submitEmptyIntakeTurn(seed, readChatHistory(canvasId), {
+        onAbort: () => {
+          if (handledInitialIntakeRef.current === intake.id) handledInitialIntakeRef.current = 0
+        },
+        onSettled: () => onInitialIntakeHandled?.(intake.id),
+      })
+    }, INITIAL_INTAKE_SUBMIT_DELAY_MS)
+    return () => {
+      if (clearInitialIntakeTimer() && handledInitialIntakeRef.current === intake.id) {
+        handledInitialIntakeRef.current = 0
+      }
+    }
+  }, [busy, canvasId, initialIntakeMessage, isEmptyOmniIntake, onInitialIntakeHandled, proposal, thinking])
 
   const buildConfirmedPlan = (prompt: string) => {
     if (!prompt.trim() || busy || thinking || !canCreateProposal) return
@@ -444,7 +500,7 @@ export function PlannerProposalPanel({
                   onReview={() => setReviewOpen(true)}
                   onBuildPlan={buildConfirmedPlan}
                   onChoice={(value) => {
-                    if (!value.trim() || thinking) return
+                    if (!value.trim() || busy || thinking) return
                     submitEmptyIntakeTurn(value)
                   }}
                 />
@@ -509,7 +565,7 @@ export function PlannerProposalPanel({
                   onClick={() => setReviewOpen(true)}
                 >
                   <Eye size={14} aria-hidden />
-                  Review changes
+                  {t('planner.reviewChanges')}
                 </button>
               </div>
             </div>
@@ -603,28 +659,29 @@ export function PlannerProposalPanel({
             if (event.target === event.currentTarget) setReviewOpen(false)
           }}
         >
-          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label="Review changes">
+          <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label={t('planner.reviewChanges')}>
             <button
               type="button"
               className="planner-proposal-modal__close"
               onClick={() => setReviewOpen(false)}
-              aria-label="Close proposal review"
+              aria-label={t('planner.closeProposalReview')}
             >
               <X size={15} aria-hidden />
             </button>
             <div className="planner-proposal-modal__header">
               <span>{proposal.status}</span>
               <h2>{proposal.summary}</h2>
-              <p>Preview only. The canvas changes after you apply.</p>
+              <p>{t('planner.previewOnly')}. {t('planner.previewOnlyDetail')}</p>
             </div>
             <div className="planner-proposal-modal__body">
-              <section className="planner-proposal-modal__changes" aria-label="Proposed changes">
+              <section className="planner-proposal-modal__changes" aria-label={t('planner.proposedChanges')}>
+                <h3>{t('planner.proposedChanges')}</h3>
                 <MarkdownMessage markdown={proposalMarkdown(proposal)} />
               </section>
-              <section className="planner-proposal-modal__preview-canvas" aria-label="Preview canvas">
+              <section className="planner-proposal-modal__preview-canvas" aria-label={t('planner.previewCanvas')}>
                 <div className="planner-proposal-modal__preview-head">
-                  <span>Preview</span>
-                  <em>{proposal.changes.length} {proposal.changes.length === 1 ? 'change' : 'changes'}</em>
+                  <span>{t('planner.preview')}</span>
+                  <em>{t('planner.changeCount', { count: String(proposal.changes.length) })}</em>
                 </div>
                 <div className="planner-proposal-modal__preview-viewport">
                   {previewGraph.nodes.length > 0 ? (
@@ -647,7 +704,7 @@ export function PlannerProposalPanel({
                       </ReactFlow>
                     </ReactFlowProvider>
                   ) : (
-                    <div className="planner-proposal-modal__preview-empty">No preview available</div>
+                    <div className="planner-proposal-modal__preview-empty">{t('planner.noPreviewAvailable')}</div>
                   )}
                 </div>
               </section>
@@ -661,10 +718,10 @@ export function PlannerProposalPanel({
                   onApproveAndApply()
                   setReviewOpen(false)
                 }}
-                title={isTemplate ? 'Write the previewed changes into this template.' : 'Apply these changes to the canvas.'}
+                title={isTemplate ? t('planner.applyTemplateTitle') : t('planner.applyCanvasTitle')}
               >
                 <Check size={14} aria-hidden />
-                {isTemplate ? 'Apply to template' : 'Apply to canvas'}
+                {isTemplate ? t('planner.applyToTemplate') : t('planner.applyToCanvas')}
               </button>
               <button
                 type="button"
@@ -674,7 +731,7 @@ export function PlannerProposalPanel({
                   setReviewOpen(false)
                 }}
               >
-                {isTemplate ? 'Discard' : 'Reject'}
+                {isTemplate ? t('planner.discardProposal') : t('planner.rejectProposal')}
               </button>
             </div>
           </div>
@@ -778,6 +835,7 @@ function PlannerChatMessageRow({
   onBuildPlan: (prompt: string) => void
   onChoice: (value: string) => void
 }) {
+  const { t } = useI18n()
   const choiceBlocks = parseChoiceBlocks(item.markdown)
   return (
     <div
@@ -803,6 +861,7 @@ function PlannerChatMessageRow({
                   <button
                     key={choice.id}
                     type="button"
+                    disabled={busy}
                     onClick={() => onChoice(choice.value)}
                     title={choice.description}
                   >
@@ -824,7 +883,7 @@ function PlannerChatMessageRow({
             onClick={onReview}
           >
             <Eye size={14} aria-hidden />
-            Review changes
+            {t('planner.reviewChanges')}
           </button>
         </div>
       )}
@@ -841,8 +900,9 @@ function PlannerPlanCardView({
   busy: boolean
   onBuild: (prompt: string) => void
 }) {
+  const { t } = useI18n()
   return (
-    <div className="planner-plan-card" aria-label="Draft plan">
+    <div className="planner-plan-card" aria-label={t('planner.draftPlan')}>
       <div className="planner-plan-card__header">
         <span className="planner-plan-card__icon" aria-hidden>
           <Check size={16} />
@@ -865,16 +925,19 @@ function PlannerPlanCardView({
           type="button"
           className="primary"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => onBuild(plan.prompt)}
         >
-          <span className="planner-thinking-dots" aria-hidden>
-            <i />
-            <i />
-            <i />
-          </span>
-          Build it
+          {busy && (
+            <span className="planner-thinking-dots" aria-hidden>
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
+          {busy ? t('planner.buildingPlan') : t('planner.buildIt')}
         </button>
-        <span>Tell me what to change, or build this plan.</span>
+        <span>{t('planner.buildPlanHelp')}</span>
       </div>
     </div>
   )
@@ -893,26 +956,31 @@ async function requestEmptyCanvasAIReply({
   history: PlannerChatMessage[]
   signal: AbortSignal
 }): Promise<PlannerChatMessage> {
-  const llm = readLlmSettings()
-  let text = ''
-  for await (const ev of streamAssistantChat({
-    messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
-    settings: {
-      provider: llm.provider,
-      apiKey: llm.apiKey,
-      baseUrl: llm.baseUrl,
-      model: llm.model,
-      enabledTools: [],
-      scope: 'this-mac',
-      canvasId,
-      canvasName,
-    },
-    signal,
-  })) {
-    if (ev.type === 'delta') text += ev.text
-    if (ev.type === 'error') throw new Error(ev.message)
+  try {
+    const llm = readLlmSettings()
+    let text = ''
+    for await (const ev of streamAssistantChat({
+      messages: buildEmptyCanvasAIMessages(canvasName, canvasTask, history),
+      settings: {
+        provider: llm.provider,
+        apiKey: llm.apiKey,
+        baseUrl: llm.baseUrl,
+        model: llm.model,
+        enabledTools: [],
+        scope: 'this-mac',
+        canvasId,
+        canvasName,
+      },
+      signal,
+    })) {
+      if (ev.type === 'delta') text += ev.text
+      if (ev.type === 'error') throw new Error(ev.message)
+    }
+    return emptyCanvasAIReplyToMessage(text, history)
+  } catch (err) {
+    if (signal.aborted) throw err
+    return fallbackEmptyCanvasPlanMessage(canvasName, canvasTask, history, err)
   }
-  return emptyCanvasAIReplyToMessage(text, history)
 }
 
 function buildEmptyCanvasAIMessages(
@@ -996,6 +1064,77 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
     }
   }
   throw new Error('meee2 AI returned an unsupported setup response.')
+}
+
+function fallbackEmptyCanvasPlanMessage(
+  canvasName: string,
+  canvasTask: string,
+  history: PlannerChatMessage[],
+  err: unknown,
+): PlannerChatMessage {
+  const userText = latestUserRequest(history) || canvasTask || canvasName || 'this canvas'
+  const chinese = containsCJK(userText)
+  const title = inferredPlanTitle(canvasName, userText, chinese)
+  const intro = chinese
+    ? '本地 fallback 已经把你的需求整理成一个可确认计划；你可以继续补充，也可以直接生成画布草案。'
+    : 'Local fallback turned your request into a confirmable plan; you can refine it or build the canvas draft now.'
+  const steps: PlannerPlanCardStep[] = chinese
+    ? [
+        { title: '梳理目标和验收信号', body: '把原始需求拆成目标、边界、产物和通过标准。' },
+        { title: '绘制可执行节点', body: '生成可派发给 Claude/Codex 或人工处理的节点，并保留 owner、gate 和 next action。' },
+        { title: '接入 session 执行', body: '为需要执行的节点创建或绑定 session，后续可从节点直接跳转交互。' },
+        { title: '用 artifact 验收结果', body: '要求输出可追溯 artifact，并用 expected output 与 gate refs 检查是否满足需求。' },
+      ]
+    : [
+        { title: 'Clarify the outcome and checks', body: 'Turn the request into goals, boundaries, expected artifacts, and acceptance signals.' },
+        { title: 'Draft executable nodes', body: 'Create nodes that can be assigned to Claude/Codex or a human, with owners, gates, and next actions.' },
+        { title: 'Attach sessions for execution', body: 'Create or bind sessions for runnable nodes so the user can jump in and interact.' },
+        { title: 'Verify through artifacts', body: 'Require traceable artifacts and compare them against expected outputs and gate refs.' },
+      ]
+  const planCard = {
+    title,
+    intro,
+    steps,
+    prompt: buildEmptyCanvasPlanPromptFromHistory(title, intro, steps, history),
+  }
+  const reason = err instanceof Error ? err.message : String(err || 'assistant unavailable')
+  return {
+    id: `planner:local-plan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+    role: 'planner',
+    markdown: intro,
+    meta: chinese ? ['本地计划'] : ['local plan'],
+    planCard: {
+      ...planCard,
+      prompt: [
+        planCard.prompt,
+        '',
+        `Local fallback reason: ${reason.slice(0, 180)}`,
+      ].join('\n'),
+    },
+  }
+}
+
+function latestUserRequest(history: PlannerChatMessage[]): string {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i]
+    if (item.role !== 'user') continue
+    const text = item.markdown.trim()
+    if (text) return text
+  }
+  return ''
+}
+
+function containsCJK(value: string): boolean {
+  return /[\u3400-\u9fff]/.test(value)
+}
+
+function inferredPlanTitle(canvasName: string, userText: string, chinese: boolean): string {
+  const name = canvasName.trim()
+  if (name && !isGenericCanvasTitle(name)) return name
+  const compact = userText.replace(/\s+/g, ' ').trim()
+  if (!compact) return chinese ? '新画布计划' : 'New canvas plan'
+  const limit = chinese ? 18 : 54
+  return compact.length > limit ? `${compact.slice(0, limit).trim()}...` : compact
 }
 
 function parseEmptyCanvasAIReply(rawText: string): Record<string, unknown> | null {
@@ -1198,8 +1337,9 @@ function upsertChatMessage(history: PlannerChatMessage[], next: PlannerChatMessa
 function mergeClaudeSessionMessages(
   history: PlannerChatMessage[],
   sessionId: string,
-  messages: LocalAssistantSessionMessage[],
+  messages: LocalAssistantSessionMessage[] | null | undefined,
 ): PlannerChatMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) return normalizeChatHistoryOrder(history)
   const existingIds = new Set(history.map((item) => item.id))
   const existingContent = new Set(history.map(contentKey))
   const restored: PlannerChatMessage[] = []
