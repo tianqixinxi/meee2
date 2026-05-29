@@ -15,6 +15,7 @@
   --bg-elevated: #30302E;
   --bg-elevated-2: #3A3A38;
   --bg-paper: #2C2B29;          /* 卡片主体底色（比 bg 略亮，带一点"纸"感）*/
+  --surface: #30302E;           /* 抬起的卡片/列底色（widget 列、canvas-kind-hint 等），比 bg 高一档 */
   --bg-app-gradient:
     linear-gradient(145deg, rgba(43, 43, 39, 0.96), rgba(27, 27, 25, 0.98) 52%, rgba(35, 32, 29, 0.98)),
     var(--bg);
@@ -70,6 +71,7 @@
   --bg-elevated: #FFFFFF;
   --bg-elevated-2: #ECE7DD;
   --bg-paper: #FBF8F1;
+  --surface: #FFFFFF;           /* 抬起的卡片/列底色 —— light 下用纯白让它从暖底浮起 */
   --bg-app-gradient:
     linear-gradient(145deg, rgba(255, 252, 244, 0.98), rgba(241, 235, 225, 0.98)),
     var(--bg);
@@ -4860,7 +4862,7 @@ html.board-empty-omni .canvas-toolbar__panel {
   height: 30px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: #242421;
+  background: var(--input-bg);
   color: var(--text);
   font-size: 12px;
   padding: 0 8px;
@@ -4894,7 +4896,7 @@ html.board-empty-omni .canvas-toolbar__panel {
   padding: 3px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-md);
-  background: #242421;
+  background: var(--input-bg);
 }
 
 .canvas-toolbar__scope-toggle button {
@@ -5094,7 +5096,7 @@ html.board-empty-omni .canvas-toolbar__panel {
   height: 34px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #242421;
+  background: var(--input-bg);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -11121,6 +11123,37 @@ html:not(.meee2-board-shell) .sidebar-account-menu-item--desktop-only {
 :root[data-theme="light"] .integration-picker__error,
 :root[data-theme="light"] .agent-matrix__recommend-error {
   color: var(--danger) !important;
+}
+
+/* hover-recap 浮窗 base 用的是暖暗 rgba(28,28,26)，light 下要翻成纸面 */
+:root[data-theme="light"] .canvas-toolbar__hover-recap {
+  background: var(--modal-bg);
+  border-color: var(--border);
+  box-shadow: 0 18px 48px rgba(62, 52, 40, 0.16);
+}
+:root[data-theme="light"] .canvas-toolbar__hover-recap-headline {
+  border-bottom-color: var(--border);
+}
+
+/* agent-matrix__dispatch code base 是 rgba(20,20,18,0.9) 近黑代码块 */
+:root[data-theme="light"] .agent-matrix__dispatch code {
+  background: var(--input-bg);
+  color: var(--text-dim);
+}
+
+/* 注:.session-dock / .cc-* / .sd__* / .tx-* 是一整套自包含的"Claude Code 暗终端"
+ * 表面(海军蓝玻璃 + 代码块/diff 暗板),和 .sessions-native-terminal 一样在 light
+ * 下也刻意保持深色 —— 只翻外壳会让里面几十块 navy 面板显得更突兀,故整组不做 light
+ * 覆盖,保留 base 暗色外观。 */
+
+/* scope-toggle 的 hover / 选中态 base 用 rgba(255,255,255,.0x) 白色微染，
+ * 在 light 底上几乎不可见，翻成 accent 微染 */
+:root[data-theme="light"] .canvas-toolbar__scope-toggle button:hover {
+  background: var(--accent-subtle);
+}
+:root[data-theme="light"] .canvas-toolbar__scope-toggle button:first-child.is-selected {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-paper));
+  color: var(--text);
 }
 
 /* ─── Command palette (QC P1 chunk C) ──────────────────────────────────────
