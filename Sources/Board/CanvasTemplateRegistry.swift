@@ -144,19 +144,19 @@ enum CanvasTemplateRegistry {
             TemplateNodeSpec(
                 title: "Smoke test prod-like env",
                 description: "本地 release build + 真实 session 跑一遍",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 640, "y": 0]
             ),
             TemplateNodeSpec(
                 title: "Tag release",
                 description: "git tag + ./build.sh 签名打包",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 960, "y": 0]
             ),
             TemplateNodeSpec(
                 title: "Notify stakeholders",
                 description: "发 release notes + 同步团队群",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 1280, "y": 0]
             )
         ]
@@ -251,7 +251,7 @@ enum CanvasTemplateRegistry {
             TemplateNodeSpec(
                 title: "Scope: PluginManager dylib reload",
                 description: "支持热重载，避免重启 menubar app",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 320, "y": 0]
             ),
             TemplateNodeSpec(
@@ -263,7 +263,7 @@ enum CanvasTemplateRegistry {
             TemplateNodeSpec(
                 title: "Subcanvas: BoardAPI route split-out",
                 description: "占位 — 点开后会下钻到一张新 canvas",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 960, "y": 0]
             )
         ]
@@ -287,19 +287,19 @@ enum CanvasTemplateRegistry {
             TemplateNodeSpec(
                 title: "Combat NPC: forest wolf",
                 description: "中等难度 mob，drop table TBD",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 320, "y": 0]
             ),
             TemplateNodeSpec(
                 title: "Merchant: roaming trader",
                 description: "动态库存，按 player level 调整",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 640, "y": 0]
             ),
             TemplateNodeSpec(
                 title: "Lore NPC: ancient librarian",
                 description: "只触发剧情，不可交易、不可战斗",
-                status: "draft",
+                status: "ready",
                 positionHint: ["x": 960, "y": 0]
             )
         ]
@@ -316,7 +316,7 @@ enum CanvasTemplateRegistry {
         ownerId: String
     ) -> [PlanningNode] {
         return template.defaultNodes.enumerated().map { index, spec in
-            let status = PlanningNodeStatus(rawValue: spec.status) ?? .draft
+            let status = PlanningNodeStatus(rawValue: spec.status) ?? .ready
             let nodeId = "\(canvasId)-\(template.id)-\(index)"
             let x = spec.positionHint?["x"] ?? Double(index) * 320
             let y = spec.positionHint?["y"] ?? 0
