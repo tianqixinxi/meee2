@@ -476,7 +476,8 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       {node.widget && (() => {
         // P2.4 widget dispatcher · P3.0 接通 integration entities
         // 数据源:data.integrationEntities(PlannerGraph → adapter → PlannerNodeData)
-        // 由 P3.0 backend 在 PlannerGraphStateEnvelope 里 mock 5 个 GitHub PR。
+        // Widget data (integrationEntities) is derived from artifacts attached by AI sessions,
+        // not a backend mock pool. See integrations/artifactEntity.ts for derivation logic.
         const WidgetComp = getWidgetComponent(node.widget.kind)
         const widgetData = resolveWidgetData({
           node,

@@ -1089,7 +1089,8 @@ export type PlannerGraphState = PlannerCanvasState & {
    * Integration entity pool (P3.0). Backend provides entities for nodes that
    * have a widget with `source.inputKind === 'external'`. Widget resolver
    * filters by node-specific binding (v0.1: all nodes share the same pool).
-   * v0.1 backend mocks 5 GitHub PRs; phase 3 swaps to real fetch.
+   * Real integration entities are derived from artifacts attached by AI sessions.
+   * Widget resolver filters by node-specific binding; see integrations/artifactEntity.ts.
    */
   integrationEntities?: IntegrationEntity[]
 }
