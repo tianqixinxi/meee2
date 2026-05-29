@@ -427,7 +427,12 @@ export type ExecutorType =
   | 'devin'
   | 'human'
   | 'mock'
-export type PlanningNodeStatus = 'draft' | 'ready' | 'working' | 'blocked' | 'done'
+// 3-tai cut (2026-05-29): collapsed to `ready / blocked / done`.
+// - `draft` removed — ready is the initial state. Legacy data decodes via the
+//   Swift normalizer; UI maps any in-memory `'draft'` to `'ready'` at render.
+// - `working` removed (state-machine PR-A 2026-05-28) — runtime in-flight
+//   state lives on NodeAttempt, not on the node status.
+export type PlanningNodeStatus = 'ready' | 'blocked' | 'done'
 export type PlanningNodeSource = 'planner' | 'session'
 export type PlanningNodeKind = 'step' | 'session' | 'artifact' | 'subCanvas' | 'external'
 export type PlannerCanvasRole = 'owner' | 'doer' | 'viewer' | 'suggestion'

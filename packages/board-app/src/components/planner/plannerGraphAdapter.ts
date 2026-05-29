@@ -886,11 +886,15 @@ function perceptionForNode(
     }
   }
 
-  if (state?.runState === 'blocked' || state?.runState === 'draft' || node.status === 'blocked' || node.status === 'draft') {
+  // 3-tai cut (2026-05-29): node.status no longer contains 'draft' / 'working'
+  // (collapsed to ready / blocked / done). state.runState still carries the
+  // full NodeRunState union including legacy 'draft' / 'working' for runtime
+  // attention surfacing — leave those branches.
+  if (state?.runState === 'blocked' || state?.runState === 'draft' || node.status === 'blocked') {
     return 'attention'
   }
   if (state?.runState === 'done' || node.status === 'done') return 'done'
-  if (state?.runState === 'working' || node.status === 'working') return 'active'
+  if (state?.runState === 'working') return 'active'
   return 'not-reached'
 }
 

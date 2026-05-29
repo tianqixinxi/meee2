@@ -99,13 +99,21 @@ enum ExecutorType: String, Codable, Equatable, CaseIterable {
 
 /// Twin · meee2-online/src/planner-runtime/contract/enums.ts (NodeStatus)
 ///
-/// State-machine PR-A · Public PlanningNodeStatus is being narrowed to the
+/// State-machine PR-A · Public PlanningNodeStatus was narrowed to the
 /// four-state lifecycle `draft / ready / blocked / done`. `working` is kept
 /// as a raw value for wire-level back-compat (so old JSON still decodes), but
 /// it is deprecated and the proposal validator auto-translates it to `.ready`
 /// with a warning. New code MUST NOT introduce `.working`; use `.ready` plus
 /// a NodeAttempt for in-flight execution state.
+///
+/// 3-tai cut (2026-05-29): the public surface is now `ready / blocked / done`.
+/// `.draft` is deprecated and kept for back-compat decoding only — the
+/// proposal validator auto-translates it to `.ready` with the same
+/// `deprecated_status_used` warning lane used by `.working`. New agents MUST
+/// NOT introduce `.draft`; `.ready` is the initial state — a node is `ready`
+/// the moment it exists.
 enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
+    @available(*, deprecated, message: "ready is the initial state. draft removed in 3-tai cut.")
     case draft
     case ready
     @available(*, deprecated, message: "Use .ready + NodeAttempt instead. Will be removed in next major.")
@@ -120,13 +128,15 @@ enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     /// `.working` so the planner-adapter context lists every legacy value an
     /// agent might send. The validator is what translates it away.
     ///
-    /// The legacy `.working` reference is reconstructed from its raw value to
-    /// avoid emitting a deprecation diagnostic at the single intentional
-    /// use-site inside this type. `PlanningNodeStatus(rawValue: "working")`
-    /// is guaranteed to succeed by construction.
+    /// The legacy `.working` / `.draft` references are reconstructed from
+    /// their raw values to avoid emitting a deprecation diagnostic at the
+    /// single intentional use-site inside this type.
+    /// `PlanningNodeStatus(rawValue:)` for these legacy raw values is
+    /// guaranteed to succeed by construction.
     static var allCases: [PlanningNodeStatus] {
+        let legacyDraft = PlanningNodeStatus(rawValue: "draft")!
         let legacyWorking = PlanningNodeStatus(rawValue: "working")!
-        return [.draft, .ready, legacyWorking, .blocked, .done]
+        return [legacyDraft, .ready, legacyWorking, .blocked, .done]
     }
 }
 
@@ -2180,37 +2190,49 @@ enum PlannerProposalValidator {
     }
 
     /// State-machine PR-A · Normalize deprecated planner contract surfaces
-    /// before validation. Currently translates the deprecated
-    /// `PlanningNodeStatus.working` value (on `addNode` / `updateNode` changes)
-    /// to `.ready` and appends a `deprecated_status_used` warning to
+    /// before validation. Translates deprecated `PlanningNodeStatus` raw
+    /// values (`working`, `draft`) on `addNode` / `updateNode` changes to
+    /// `.ready` and appends a `deprecated_status_used` warning to
     /// `proposal.warnings`. The warning carries enough context for the caller
     /// to surface it as an `X-Planner-Contract-Warning` header or log entry
     /// without breaking the agent (no throw — the agent's intent is preserved
-    /// by mapping to the new four-state lifecycle).
+    /// by mapping to the new lifecycle).
+    ///
+    /// Translations:
+    ///  - `working` → `ready` (state-machine PR-A; use NodeAttempt for
+    ///                          in-flight state)
+    ///  - `draft`   → `ready` (3-tai cut 2026-05-29; ready is the initial
+    ///                          state — `draft` no longer exists in the
+    ///                          public enum)
     ///
     /// Returns the list of warnings appended in this call so the validator
     /// can fold them into the proposal record.
     @discardableResult
     static func normalizeDeprecatedStatuses(_ proposal: inout PlanProposal) -> [String] {
         var warnings: [String] = []
+        // Raw value → (replacement, human-readable rationale).
+        let legacyMap: [String: (replacement: PlanningNodeStatus, rationale: String)] = [
+            "working": (.ready, "use NodeAttempt for in-flight state"),
+            "draft": (.ready, "ready is the initial state; draft removed in 3-tai cut")
+        ]
         for i in proposal.changes.indices {
             let change = proposal.changes[i]
             guard change.kind == .addNode || change.kind == .updateNode else { continue }
             // updateNode: status lives directly on the change
-            if let status = change.status, status.rawValue == "working" {
-                proposal.changes[i].status = .ready
+            if let status = change.status, let mapping = legacyMap[status.rawValue] {
+                proposal.changes[i].status = mapping.replacement
                 let id = change.nodeId ?? change.node?.id ?? "<unknown>"
                 warnings.append(
-                    "deprecated_status_used: change for node \(id) set status='working'; auto-translated to 'ready' (use NodeAttempt for in-flight state)"
+                    "deprecated_status_used: change for node \(id) set status='\(status.rawValue)'; auto-translated to '\(mapping.replacement.rawValue)' (\(mapping.rationale))"
                 )
             }
             // addNode: status lives on the embedded PlanningNode
             if change.kind == .addNode,
                let node = change.node,
-               node.status.rawValue == "working" {
-                proposal.changes[i].node?.status = .ready
+               let mapping = legacyMap[node.status.rawValue] {
+                proposal.changes[i].node?.status = mapping.replacement
                 warnings.append(
-                    "deprecated_status_used: addNode for node \(node.id) used status='working'; auto-translated to 'ready' (use NodeAttempt for in-flight state)"
+                    "deprecated_status_used: addNode for node \(node.id) used status='\(node.status.rawValue)'; auto-translated to '\(mapping.replacement.rawValue)' (\(mapping.rationale))"
                 )
             }
         }

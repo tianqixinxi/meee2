@@ -32,10 +32,11 @@ import { getViewSchema } from '../../integrations/viewSchemas'
 import { artifactToIntegrationEntity } from '../../integrations/artifactEntity'
 import type { WidgetData, WidgetEntity } from './widgets/types'
 
+// 3-tai cut (2026-05-29): PlanningNodeStatus 收成 3 态。legacy `draft` /
+// `working` 数据从后端 normalizer 进来已经被翻译过,这里只覆盖现态;旧 JSON
+// 漏网通过 `??` 兜底成 `todo`。
 const STATUS_FROM_PLANNER: Record<PlanningNodeStatus, WidgetEntity['status']> = {
-  draft: 'todo',
   ready: 'awaiting',
-  working: 'running',
   blocked: 'blocked',
   done: 'done',
 }
@@ -366,7 +367,8 @@ function resolveFromSubcanvasAggregate(ctx: ResolverContext): WidgetData {
 }
 
 function worstStatus(statuses: PlanningNodeStatus[]): WidgetEntity['status'] {
-  const order: PlanningNodeStatus[] = ['blocked', 'working', 'ready', 'draft', 'done']
+  // 3-tai cut (2026-05-29): 3-tai 优先级 — blocked > ready > done。
+  const order: PlanningNodeStatus[] = ['blocked', 'ready', 'done']
   for (const s of order) {
     if (statuses.includes(s)) return STATUS_FROM_PLANNER[s]
   }

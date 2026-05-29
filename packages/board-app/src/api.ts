@@ -107,7 +107,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'state-api',
       title: 'Store-backed meee2 AI State API',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       inputs: ['contract.md'],
@@ -127,7 +127,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'react-flow-graph',
       title: 'React Flow meee2 AI Graph',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       inputs: ['meee2-ai-state'],
@@ -137,7 +137,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'release-readiness',
       title: 'Release Readiness Sub-canvas',
-      status: 'draft',
+      status: 'ready',
       executorType: 'openClaw',
       executionMode: 'human',
       inputs: ['graph-ui', 'proposal-preview'],
@@ -151,7 +151,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       id: 'qa-pass',
       canvasId: DEMO_SUB_CANVAS_ID,
       title: 'Rendered QA Pass',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       outputs: ['screenshot', 'dom-check'],
@@ -287,7 +287,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         userId: 'viewer-demo',
         displayName: 'Teammate viewer',
         currentCanvasId: safeCanvasId,
-        selectedNodeId: nodes.find((node) => node.status === 'working')?.id ?? null,
+        selectedNodeId: nodes.find((node) => node.status === 'ready')?.id ?? null,
         selectedSessionId: null,
         lastActiveAt: now,
       },
@@ -877,7 +877,7 @@ export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposa
         kind: 'updateNode',
         nodeId: blocked.id,
         title: `${blocked.title} - needs attention`,
-        status: 'draft',
+        status: 'ready',
       }],
     }
     return demoProposal
