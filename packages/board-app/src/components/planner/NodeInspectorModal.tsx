@@ -36,6 +36,7 @@ import type {
   WidgetSourceKind,
 } from '../../types'
 import { InputCardSections } from './InputCardSections'
+import { InspectorArtifactBody } from './InspectorArtifactBody'
 import { visibleOutputReferences, type IOArtifactVisibility } from './plannerGraphAdapter'
 
 interface Props {
@@ -321,6 +322,38 @@ export function NodeInspectorModal({
         setActionBusy(false)
         setActionError((err as Error).message || '定时没保存成功')
       })
+  }
+
+  // UI-simplification — artifact-mode Inspector 早分支:
+  //   nodeKind === 'artifact' 时,body 走 InspectorArtifactBody,与 step / session /
+  //   subCanvas 路径完全隔离。Modal shell(backdrop / close 按钮)继续复用。
+  //   step 路径零改动 — 回归风险锁在 artifact 分支内。
+  if (nodeKind === 'artifact') {
+    return (
+      <div
+        className="planner-node-modal-backdrop"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose()
+        }}
+      >
+        <div className="planner-node-modal planner-node-modal--info" role="dialog" aria-modal="true" aria-label="Node info">
+          <button type="button" className="planner-node-modal__close" onClick={onClose} aria-label="Close node details">
+            <X size={15} aria-hidden />
+          </button>
+          <InspectorArtifactBody
+            node={node}
+            canvasId={canvasId}
+            variant={variant}
+            state={state}
+            artifacts={artifacts}
+            onClose={onClose}
+            onProposalCreated={onProposalCreated}
+            onOpenSession={onOpenSession}
+            onRerunNode={onRerunNode}
+          />
+        </div>
+      </div>
+    )
   }
 
   return (
