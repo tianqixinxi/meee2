@@ -18,6 +18,7 @@ import {
   Plug,
   Route,
   Signpost,
+  Sparkles,
   SquareCheckBig,
   Trash2,
   UserPlus,
@@ -464,6 +465,23 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
 
       <div className="planner-node__title">{node.title}</div>
       {node.desc && <div className="planner-node__desc">{node.desc}</div>}
+
+      {/* zeta · prompt-brief — one-line hint at what this node will actually
+       *  prompt the agent with. Only shown for nodes that can dispatch a
+       *  session (session-kind, or step with canCreateSession), so it doesn't
+       *  clutter pure governance / artifact rows. */}
+      {(() => {
+        const canCreateSession = Boolean(data.canChangeStatus && data.onCreateSession)
+        if (!(nodeKind === 'session' || (nodeKind === 'step' && canCreateSession))) return null
+        const brief = derivePromptBrief(node)
+        if (!brief) return null
+        return (
+          <div className="planner-node__prompt-brief" title={brief}>
+            <Sparkles size={11} aria-hidden />
+            <span>{brief}</span>
+          </div>
+        )
+      })()}
 
       {monitorBadge && (
         <div
@@ -1148,6 +1166,21 @@ function artifactMatchesExpectation(reference: string, expected: string): boolea
 //   - primaryActionLabel — 返回 PrimaryAction 枚举,显示文本走
 //     PRIMARY_ACTION_TEXT[action];switch 分发用枚举,不再字符串比较。
 //   - nextPlanAction / nextWorkAction / runNextActionLabel — inspector 行文案。
+
+/**
+ * zeta · prompt-brief — derive a short single-line preview from a node so the
+ * card can hint at the prompt content without expanding the inspector. Takes
+ * the title plus the first line of desc, joined with " — ", and truncated to
+ * 30 chars with an ellipsis. Returns an empty string when neither title nor
+ * desc has any content (caller suppresses the row).
+ */
+function derivePromptBrief(node: PlannerGraphNode['data']['node']): string {
+  const title = (node.title ?? '').trim()
+  const firstDescLine = (node.desc ?? '').split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? ''
+  const combined = [title, firstDescLine].filter(Boolean).join(' — ')
+  if (!combined) return ''
+  return combined.length > 30 ? `${combined.slice(0, 30)}…` : combined
+}
 
 function designKind(node: PlannerGraphNode['data']['node']): PlanningNodeKind {
   return node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
