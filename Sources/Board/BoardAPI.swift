@@ -3021,7 +3021,7 @@ enum BoardAPI {
         if provider == "codex" {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(quotedSessionId)"
         }
-        return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+        return "claude --resume \(quotedSessionId) --dangerously-skip-permissions && printf '\\033[2J\\033[H'"
     }
 
     private static func plannerFreshCommand(for node: PlanningNode?) -> String {

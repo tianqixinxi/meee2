@@ -4,7 +4,7 @@ enum AgentLaunchCommand {
     static func fullAccessCommand(forProvider provider: String) -> String {
         normalizedProvider(provider) == "codex"
             ? "codex --dangerously-bypass-approvals-and-sandbox"
-            : "claude --dangerously-skip-permissions"
+            : "claude --dangerously-skip-permissions && printf '\\033[2J\\033[H'"
     }
 
     static func normalizedProvider(_ raw: String) -> String {
@@ -70,7 +70,7 @@ enum AgentLaunchCommand {
             if lower.contains("--dangerously-skip-permissions") || lower.contains("--permission-mode bypasspermissions") {
                 return ("claude", trimmed)
             }
-            return ("claude", "\(trimmed) --dangerously-skip-permissions")
+            return ("claude", "\(trimmed) --dangerously-skip-permissions && printf '\\033[2J\\033[H'")
         }
         return (normalizedProvider(fallbackProvider), trimmed)
     }

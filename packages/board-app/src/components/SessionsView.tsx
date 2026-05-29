@@ -214,9 +214,24 @@ export function SessionsView({
         <div className="sessions-workspace__header">
           <div>
             <h1>{t('sessions.title')}</h1>
-            <p>{t('sessions.subtitle')}</p>
           </div>
           <div className="sessions-workspace__tools">
+            <div className="sessions-kind-tabs" role="tablist" aria-label={t('sessions.kindTabs')}>
+              <KindTabButton
+                label={t('sessions.internalSessions')}
+                count={internalSessions.length}
+                icon={<TerminalIcon size={13} aria-hidden />}
+                active={activeKindTab === 'internal'}
+                onClick={() => setActiveKindTab('internal')}
+              />
+              <KindTabButton
+                label={t('sessions.externalSessions')}
+                count={externalSessions.length}
+                icon={<ExternalLink size={13} aria-hidden />}
+                active={activeKindTab === 'external'}
+                onClick={() => setActiveKindTab('external')}
+              />
+            </div>
             <label className="sessions-search">
               <Search size={14} aria-hidden />
               <input
@@ -237,18 +252,20 @@ export function SessionsView({
             </div>
           </div>
         </div>
-        <SessionIntakePanel
-          diagnostics={diagnostics}
-          error={diagnosticsError}
-          loading={diagnosticsLoading}
-          onRefresh={refreshDiagnostics}
-          t={t}
-        />
         {sessions.length === 0 ? (
-          <div className="sessions-empty">
-            <TerminalIcon size={18} aria-hidden />
-            <span>{t('sessions.empty')}</span>
-          </div>
+          <>
+            <SessionIntakePanel
+              diagnostics={diagnostics}
+              error={diagnosticsError}
+              loading={diagnosticsLoading}
+              onRefresh={refreshDiagnostics}
+              t={t}
+            />
+            <div className="sessions-empty">
+              <TerminalIcon size={18} aria-hidden />
+              <span>{t('sessions.empty')}</span>
+            </div>
+          </>
         ) : (
           <div className="sessions-board">
             {visibleSessions.length === 0 ? (
@@ -259,22 +276,13 @@ export function SessionsView({
             ) : (
               <div className={`sessions-console sessions-console--${activeKindTab}`}>
                 <aside className="sessions-console__sidebar">
-                  <div className="sessions-kind-tabs" role="tablist" aria-label={t('sessions.kindTabs')}>
-                    <KindTabButton
-                      label={t('sessions.internalSessions')}
-                      count={internalSessions.length}
-                      icon={<TerminalIcon size={13} aria-hidden />}
-                      active={activeKindTab === 'internal'}
-                      onClick={() => setActiveKindTab('internal')}
-                    />
-                    <KindTabButton
-                      label={t('sessions.externalSessions')}
-                      count={externalSessions.length}
-                      icon={<ExternalLink size={13} aria-hidden />}
-                      active={activeKindTab === 'external'}
-                      onClick={() => setActiveKindTab('external')}
-                    />
-                  </div>
+                  <SessionIntakePanel
+                    diagnostics={diagnostics}
+                    error={diagnosticsError}
+                    loading={diagnosticsLoading}
+                    onRefresh={refreshDiagnostics}
+                    t={t}
+                  />
                   {activeKindTab === 'internal' ? (
                     <SessionsSection
                       title={t('sessions.internalSessions')}
@@ -518,10 +526,12 @@ const SessionRow = memo(function SessionRow({
           </div>
         </div>
       </div>
-      <div className="sessions-row__status">
-        <strong>{session.surfaceStatus || session.status}</strong>
-        {session.currentTool && <span>{session.currentTool}</span>}
-      </div>
+      {!selected && (
+        <div className="sessions-row__status">
+          <strong>{session.surfaceStatus || session.status}</strong>
+          {session.currentTool && <span>{session.currentTool}</span>}
+        </div>
+      )}
       <div className="sessions-row__context">
         <strong>{session.project || t('sessions.noProject')}</strong>
         {context && <span>{context}</span>}
@@ -808,7 +818,7 @@ function SessionDetail({
         </div>
         <div>
           <dt>{t('sessions.columnContext')}</dt>
-          <dd>{session.project || t('sessions.noProject')}</dd>
+          <dd title={session.project || undefined}>{session.project || t('sessions.noProject')}</dd>
         </div>
         <div>
           <dt>{t('sessions.id')}</dt>
@@ -930,15 +940,19 @@ function SessionTimeline({
       <div className="sessions-timeline__heading">
         <div>
           <strong>{t('sessions.timeline')}</strong>
-          <span>{loading ? t('sessions.timelineLoading') : t('sessions.timelineCount', { count: timelineItems.length })}</span>
+          <span>{loading ? t('sessions.timelineLoading') : error ? '' : t('sessions.timelineCount', { count: timelineItems.length })}</span>
         </div>
         <button type="button" onClick={onRefresh} disabled={loading}>
           <RotateCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
           {t('sessions.refreshTimeline')}
         </button>
       </div>
-      {error && <p className="sessions-detail__error">{error}</p>}
-      {timelineItems.length === 0 && !loading ? (
+      {error ? (
+        <div className="sessions-timeline__empty">
+          <MessageSquareText size={16} aria-hidden />
+          <span>{/^session not found/i.test(error) ? t('sessions.notFound') : error}</span>
+        </div>
+      ) : timelineItems.length === 0 && !loading ? (
         <div className="sessions-timeline__empty">
           <MessageSquareText size={16} aria-hidden />
           <span>{t('sessions.timelineEmpty')}</span>

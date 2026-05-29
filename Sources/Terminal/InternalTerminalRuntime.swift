@@ -355,7 +355,7 @@ public final class InternalTerminalRuntime {
         if sessionId.lowercased().contains("codex") {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(Self.shellQuote(sessionId))"
         }
-        return "claude --resume \(Self.shellQuote(sessionId)) --dangerously-skip-permissions"
+        return "claude --resume \(Self.shellQuote(sessionId)) --dangerously-skip-permissions && printf '\\033[2J\\033[H'"
     }
 
     private func shouldRestorePersistedSurface(_ info: SessionTerminalInfo, command: String) -> Bool {
@@ -415,7 +415,7 @@ public final class InternalTerminalRuntime {
         if provider == "codex" {
             return "codex --dangerously-bypass-approvals-and-sandbox resume \(shellQuote(resumeSessionId))"
         }
-        return "claude --resume \(shellQuote(resumeSessionId)) --dangerously-skip-permissions"
+        return "claude --resume \(shellQuote(resumeSessionId)) --dangerously-skip-permissions && printf '\\033[2J\\033[H'"
     }
 
     private static func freshCommand(for info: SessionTerminalInfo, command: String?) -> String {
@@ -423,7 +423,7 @@ public final class InternalTerminalRuntime {
         if provider == "codex" {
             return "codex --dangerously-bypass-approvals-and-sandbox"
         }
-        return "claude --dangerously-skip-permissions"
+        return "claude --dangerously-skip-permissions && printf '\\033[2J\\033[H'"
     }
 }
 
