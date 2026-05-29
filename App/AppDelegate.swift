@@ -481,7 +481,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let sessionId = notification.userInfo?["sessionId"] as? String
         let surfaceId = notification.userInfo?["surfaceId"] as? String
         if isInternalTerminalTarget(sessionId: sessionId, surfaceId: surfaceId) {
-            showNativeSessionsWorkspace(sessionId: sessionId, surfaceId: surfaceId)
+            showNativeSessionsWorkspaceInBoard(sessionId: sessionId, surfaceId: surfaceId)
             return
         }
         openBoardMenu()
@@ -490,12 +490,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     @objc private func openNativeSessionsWorkspaceMenu() {
-        showNativeSessionsWorkspace(sessionId: nil, surfaceId: nil)
+        showNativeSessionsWorkspaceInBoard(sessionId: nil, surfaceId: nil)
     }
 
     @MainActor
-    private func showNativeSessionsWorkspace(sessionId: String?, surfaceId: String?) {
-        NativeSessionsWorkspaceWindowController.shared.show(sessionId: sessionId, surfaceId: surfaceId)
+    private func showNativeSessionsWorkspaceInBoard(sessionId: String?, surfaceId: String?) {
+        openBoardMenu()
+        boardWindowController?.openSessionsWorkspace(sessionId: sessionId, surfaceId: surfaceId)
     }
 
     private func isInternalTerminalTarget(sessionId: String?, surfaceId: String?) -> Bool {

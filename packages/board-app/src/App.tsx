@@ -14,7 +14,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView, type ArtifactFocusTarget } from './components/ArtifactsView'
-import { SessionsView } from './components/SessionsView'
+import { NativeSessionsWorkspaceHost } from './components/NativeSessionsWorkspaceHost'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
@@ -56,6 +56,12 @@ import {
   updateCanvas,
   type UserProfile,
 } from './api'
+
+declare global {
+  interface Window {
+    __meee2PendingSessionsWorkspace?: { sessionId?: string; surfaceId?: string } | null
+  }
+}
 
 interface HydratedState {
   canvasId: string
@@ -579,18 +585,35 @@ export default function App() {
     return () => window.removeEventListener('meee2:open-settings', openSettings)
   }, [])
 
+  const openSessionsWorkspaceFromDetail = useCallback((detail?: { sessionId?: string; surfaceId?: string } | null) => {
+    const surfaceId = detail?.surfaceId?.trim()
+    const sessionId = detail?.sessionId?.trim()
+    setDegradedEntry(true)
+    setSelectedSessionId(sessionId || surfaceId || null)
+    setWorkspaceMode('sessions')
+    boardState.refresh()
+  }, [boardState.refresh])
+
   useEffect(() => {
     const openSession = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
-      const surfaceId = detail?.surfaceId?.trim()
-      const sessionId = detail?.sessionId?.trim()
-      setSelectedSessionId(sessionId || surfaceId || null)
-      setWorkspaceMode('sessions')
-      boardState.refresh()
+      openSessionsWorkspaceFromDetail(detail)
     }
     window.addEventListener('meee2:open-session', openSession)
     return () => window.removeEventListener('meee2:open-session', openSession)
-  }, [boardState.refresh])
+  }, [openSessionsWorkspaceFromDetail])
+
+  useEffect(() => {
+    const openSessionsWorkspace = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
+      openSessionsWorkspaceFromDetail(detail)
+    }
+    window.addEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
+    if (window.__meee2PendingSessionsWorkspace) {
+      openSessionsWorkspaceFromDetail(window.__meee2PendingSessionsWorkspace)
+    }
+    return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
+  }, [openSessionsWorkspaceFromDetail])
 
   const completeFirstRunOnboarding = useCallback(() => {
     if (readinessReport?.ready !== true) return
@@ -974,30 +997,9 @@ export default function App() {
                 onCreateTemplate={handleCreateTemplate}
               />
             ) : workspaceMode === 'sessions' ? (
-              <SessionsView
+              <NativeSessionsWorkspaceHost
                 state={boardState.state}
-                canvases={workspaceCanvases}
-                unreadSids={unreadSids}
                 selectedSessionId={selectedSessionId}
-                onSelectedSessionChange={setSelectedSessionId}
-                onOpenPlannerNode={(canvasId, nodeId) => {
-                  handleSetActiveCanvas(canvasId)
-                  setWorkspaceMode('planner')
-                  setPlannerFocusTarget({
-                    canvasId,
-                    nodeId,
-                    requestId: Date.now(),
-                  })
-                }}
-                onOpenArtifacts={(focus) => {
-                  setArtifactFocusTarget({
-                    id: Date.now(),
-                    canvasId: focus.canvasId,
-                    nodeId: focus.nodeId,
-                    nodeTitle: focus.nodeTitle,
-                  })
-                  setWorkspaceMode('artifacts')
-                }}
               />
             ) : workspaceMode === 'artifacts' ? (
               <ArtifactsView

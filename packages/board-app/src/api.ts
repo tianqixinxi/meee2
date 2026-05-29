@@ -722,6 +722,24 @@ export function openNativeTerminalSurface(input: {
   return true
 }
 
+export function syncNativeSessionsWorkspace(input: {
+  rect?: NativeTerminalRect
+  phase?: 'show' | 'layout' | 'hide' | 'focus'
+  sessionId?: string | null
+  surfaceId?: string | null
+}): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2Workspace
+  if (!bridge) return false
+  bridge.postMessage({
+    type: 'sessionsWorkspace',
+    phase: input.phase ?? 'layout',
+    rect: input.rect,
+    sessionId: input.sessionId ?? undefined,
+    surfaceId: input.surfaceId ?? undefined,
+  })
+  return true
+}
+
 export interface NativeTerminalPrewarmAck {
   surfaceId?: string
   sessionId?: string
