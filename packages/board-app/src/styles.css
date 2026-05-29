@@ -1167,18 +1167,20 @@ textarea {
 }
 
 .sessions-workspace__tools {
-  flex: 0 1 420px;
-  display: grid;
-  justify-items: end;
-  gap: 8px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px 10px;
 }
 
 .sessions-search {
-  width: min(100%, 420px);
+  width: 240px;
   display: flex;
   align-items: center;
   gap: 7px;
-  min-width: 260px;
+  min-width: 200px;
   height: 34px;
   padding: 0 9px;
   border: 1px solid rgba(168, 165, 155, 0.16);
@@ -1208,6 +1210,22 @@ textarea {
   border: 1px solid rgba(168, 165, 155, 0.14);
   border-radius: var(--radius-sm);
   background: rgba(36, 36, 33, 0.68);
+}
+
+.sessions-workspace__tools .sessions-filters + .sessions-filters {
+  margin-top: 2px;
+  position: relative;
+}
+
+.sessions-workspace__tools .sessions-filters + .sessions-filters::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: rgba(168, 165, 155, 0.18);
+  pointer-events: none;
 }
 
 .sessions-filter {
@@ -3418,6 +3436,8 @@ textarea {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
+  position: relative;
+  z-index: 1;
 }
 
 .sessions-kind-tabs {
@@ -3751,7 +3771,7 @@ textarea {
 
 .sessions-composer textarea {
   width: 100%;
-  min-height: 72px;
+  min-height: 36px;
   resize: vertical;
   padding: 9px 10px;
   border: 1px solid rgba(168, 165, 155, 0.18);
@@ -3761,6 +3781,11 @@ textarea {
   font: inherit;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.sessions-composer textarea:focus,
+.sessions-composer textarea:not(:placeholder-shown) {
+  min-height: 72px;
 }
 
 .sessions-composer textarea:focus {
@@ -3786,7 +3811,7 @@ textarea {
 .sessions-runtime {
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(150px, 0.82fr) minmax(170px, 0.62fr) minmax(150px, 0.5fr);
+  grid-template-rows: minmax(360px, 2.4fr) minmax(140px, 0.8fr) minmax(120px, 0.6fr);
   gap: 0;
 }
 
@@ -3890,9 +3915,17 @@ textarea {
 .sessions-memory__composer {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   gap: 8px;
-  align-items: end;
+}
+
+.sessions-memory__composer button {
+  justify-self: end;
+  height: 30px;
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
 }
 
 .sessions-memory textarea {
