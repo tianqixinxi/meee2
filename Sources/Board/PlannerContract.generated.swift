@@ -7,10 +7,11 @@ import Foundation
 enum PlannerContract {
     static let executionModes: Set<String> = ["auto", "human"]
     static let executorTypes: Set<String> = ["claude", "codex", "cursor", "openClaw", "devin", "human", "mock"]
-    static let nodeStatuses: Set<String> = ["draft", "ready", "working", "blocked", "done"]
+    static let nodeStatuses: Set<String> = ["draft", "ready", "blocked", "done"]
     static let nodeKinds: Set<String> = ["step", "session", "artifact", "subCanvas", "external"]
     static let changeKinds: Set<String> = ["addNode", "updateNode", "attachArtifact"]
     static let proposalStatuses: Set<String> = ["pending", "approved", "applied", "rejected"]
     static let artifactPositionTags: Set<String> = ["latest", "candidate", "discarded", "promoted", "proposed"]
     static let artifactPayloadTypes: Set<String> = ["prd", "kanban", "impl-pr", "check-result", "file", "markdown", "integration"]
+    static let artifactDataSourceModes: Set<String> = ["authored", "mirrored"]
 }

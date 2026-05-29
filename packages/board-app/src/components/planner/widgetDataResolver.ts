@@ -50,6 +50,12 @@ interface ResolverContext {
 }
 
 export function resolveWidgetData(ctx: ResolverContext): WidgetData {
+  // UI-simplification (2026-05-28): artifact 节点 payload 权威来源由
+  // node.artifact.dataSource 决定 (默认 'self'/'authored'). widget.source 仅作为
+  // 渲染来源 hint; artifact 节点先走这一支, step/session/widget 路径不变。
+  if (ctx.node.nodeKind === 'artifact') {
+    return resolveFromArtifactNode(ctx)
+  }
   const source = ctx.widget.source
   if (!source) {
     return emptyWithHint('还没指定要展示什么 — 到节点详情里挑一种数据来源')
@@ -64,6 +70,105 @@ export function resolveWidgetData(ctx: ResolverContext): WidgetData {
     default:
       return emptyWithHint('数据来源类型异常，请联系管理员')
   }
+}
+
+// ── artifact-node data branch ─────────────────────────────────────────────
+//
+// design spec (artifactConfig.dataSource discriminated union) — 2026-05-28 简化:
+//   - authored ≡ 'self'    → 节点自己撰写 payload (user-editable, version 链)
+//   - mirrored ≡ 'external' → 镜像外部 integration entity (pull-on-consume snapshot)
+//
+// 已删模式:'aggregated' / 'upstream' (widget.source=upstream 已覆盖 view 层聚合;
+// 残留枚举值 fallback 到 'self' 兼容老数据)。
+//
+// 类型层 PlanningNode.artifactConfig 尚未落到 types.ts (设计阶段),所以这里走
+// loose lookup; 旧节点缺省字段 → 'self'/'authored',零改动。
+
+type ArtifactDataSourceMode = 'self' | 'external'
+
+interface ArtifactConfigShape {
+  dataSource?: string | { mode?: string }
+  source?: unknown
+}
+
+function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
+  const cfg = (node as unknown as { artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
+  const raw = cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
+  const value = typeof raw === 'string' ? raw : raw?.mode
+  switch (value) {
+    case 'self':
+    case 'authored':
+      return 'self'
+    case 'external':
+    case 'mirrored':
+      return 'external'
+    case 'upstream':
+    case 'aggregated':
+      // 已删模式 — fallback authored
+      return 'self'
+    default:
+      return 'self'
+  }
+}
+
+function resolveFromArtifactNode(ctx: ResolverContext): WidgetData {
+  const mode = readArtifactDataSourceMode(ctx.node)
+  switch (mode) {
+    case 'self':
+      return resolveArtifactSelf(ctx)
+    case 'external':
+      return resolveArtifactExternal(ctx)
+    default:
+      return emptyWithHint('数据来源类型异常,请联系管理员')
+  }
+}
+
+/** authored / self: 用 artifact 自身 payload —— pick latest artifact attached to this node. */
+function resolveArtifactSelf(ctx: ResolverContext): WidgetData {
+  const artifact = pickLatestArtifact(ctx.artifacts ?? [], ctx.node.id)
+  if (!artifact) {
+    return emptyWithHint('这个节点还没产生成果')
+  }
+  return projectArtifactToEntities(artifact, ctx.node)
+}
+
+// resolveArtifactUpstream 已删 (2026-05-28):
+// 'aggregated' / 'upstream' 模式已从 ArtifactDataSource 移除 —— widget.source=
+// upstream 在 view 层已覆盖,不需要 data 层再来一遍。残留枚举值在
+// readArtifactDataSourceMode() 里 fallback 到 'self',这条函数不再被调到。
+
+/**
+ * mirrored / external: 读 node.input.external[0] 的绑定结果, 匹配 integrationEntities。
+ * 复用 NodeContractExternalInput.connector + ref 作为绑定 key。
+ */
+function resolveArtifactExternal(ctx: ResolverContext): WidgetData {
+  const nodeAny = ctx.node as unknown as {
+    input?: { external?: Array<{ connector?: string; ref?: string }> }
+  }
+  const binding = nodeAny.input?.external?.[0]
+  if (!binding || !binding.connector) {
+    return emptyWithHint('mirrored 模式还没绑定外部数据源')
+  }
+  const entities: WidgetEntity[] = []
+  for (const e of ctx.integrationEntities ?? []) {
+    const sep = e.schemaId.indexOf(':')
+    if (sep < 0) continue
+    const integrationId = e.schemaId.slice(0, sep)
+    if (integrationId !== binding.connector) continue
+    const entityKind = e.schemaId.slice(sep + 1)
+    const schema = getViewSchema(integrationId, entityKind)
+    if (!schema) continue
+    // ref 匹配: 优先按 payload.id / payload.ref 过滤 (loose match)
+    if (binding.ref) {
+      const entityRef = readField(e.payload, 'ref') ?? readField(e.payload, 'id')
+      if (entityRef && entityRef !== binding.ref) continue
+    }
+    entities.push(entityFromSchema(e, schema, ctx.widget))
+  }
+  if (entities.length === 0) {
+    return emptyWithHint('外部数据源还没同步到内容')
+  }
+  return { entities }
 }
 
 /**

@@ -350,6 +350,8 @@ export function NodeInspectorModal({
             onProposalCreated={onProposalCreated}
             onOpenSession={onOpenSession}
             onRerunNode={onRerunNode}
+            onAttachDataSource={onAttachDataSource}
+            onRefreshExternalInput={onRefreshExternalInput}
           />
         </div>
       </div>
