@@ -528,7 +528,12 @@ export function NodeInspectorModal({
                     <button
                       type="button"
                       className="planner-node-modal__progress-runtime-action is-primary"
-                      onClick={() => onReplaceSession?.(node.id, node.executorType === 'codex' ? 'codex' : 'claude')}
+                      // codex review fix: dispatch via dispatchRunnerForNode
+                      // (honors executorType + loadSpawnProvider fallback for
+                      // human/mock/cursor/openClaw), matches the card "开干"
+                      // path. Hard-coding claude/codex broke users who picked
+                      // a non-Anthropic default spawn provider.
+                      onClick={() => onReplaceSession?.(node.id, dispatchRunnerForNode(node.executorType))}
                       title="给这个节点起一个 AI 会话"
                     >
                       <Sparkles size={12} aria-hidden /> 开干 · 起会话
