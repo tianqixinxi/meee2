@@ -1932,6 +1932,11 @@ struct PlannerMonitorItem: Codable, Equatable {
     /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
     /// for proposal items or nodes with no actionable workflow state.
     var nextAction: String?
+    /// Wall-clock timestamp of the live attempt's entry into
+    /// `awaitingInput` / `gateWait`. Surfaced from the active run's last
+    /// attempt so the monitor can sort/boost stale-awaiting items and the
+    /// card can render "等了 X 小时". Nil for non-awaiting nodes.
+    var awaitingInputSince: Date?
 
     init(
         id: String,
@@ -1950,7 +1955,8 @@ struct PlannerMonitorItem: Codable, Equatable {
         doerId: String?,
         riskRank: Int,
         evidenceCount: Int = 0,
-        nextAction: String? = nil
+        nextAction: String? = nil,
+        awaitingInputSince: Date? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -1969,6 +1975,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.riskRank = riskRank
         self.evidenceCount = evidenceCount
         self.nextAction = nextAction
+        self.awaitingInputSince = awaitingInputSince
     }
 }
 
@@ -3445,6 +3452,17 @@ final class PlannerStore {
                     if stepRunState == .done || stepRunState == .failed {
                         state.finishedAt = state.finishedAt ?? Date()
                     }
+                    // awaitingInputSince clock — stamp on entering
+                    // awaitingInput/gateWait, clear on leaving. Only the live
+                    // (last) attempt carries the clock; older attempts are
+                    // historical and immutable. Helper is shared with the
+                    // submit_node_output / routing paths (codex P2 review).
+                    let isAwaiting = stepRunState == .awaitingInput || stepRunState == .gateWait
+                    Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: isAwaiting)
+                    if !state.attempts.isEmpty {
+                        let last = state.attempts.count - 1
+                        state.attempts[last].runState = stepRunState
+                    }
                 }
             }
             recomputeActiveRun(&record)
@@ -3621,6 +3639,27 @@ final class PlannerStore {
         var state = record.runs[runIdx].nodeStates[nodeId] ?? RunNodeState(nodeId: nodeId)
         mutate(&state)
         record.runs[runIdx].nodeStates[nodeId] = state
+    }
+
+    /// delta (codex fix): stamp/clear `awaitingInputSince` on the active
+    /// (last) NodeAttempt. Entering `awaitingInput` / `gateWait` records the
+    /// timestamp once (idempotent — re-entry doesn't reset the clock);
+    /// leaving clears it. Older attempts are historical and immutable.
+    /// Call this from every code path that transitions a node into or out
+    /// of a wait state, not just the session-feedback mirror.
+    static func stampAwaitingClockOnActiveAttempt(
+        _ state: inout RunNodeState,
+        isAwaiting: Bool
+    ) {
+        guard !state.attempts.isEmpty else { return }
+        let last = state.attempts.count - 1
+        if isAwaiting {
+            if state.attempts[last].awaitingInputSince == nil {
+                state.attempts[last].awaitingInputSince = Date()
+            }
+        } else {
+            state.attempts[last].awaitingInputSince = nil
+        }
     }
 
     /// Recompute the active run (status + per-node `nextAction`) after an
@@ -4287,6 +4326,13 @@ final class PlannerStore {
                 if current.workflowRunState == .done || current.workflowRunState == .failed {
                     state.finishedAt = state.finishedAt ?? Date()
                 }
+                // delta-fix (codex): submit_node_output paths that park the
+                // node at gateWait (executionMode=human .done, .needsReview)
+                // must stamp the wait clock too. Without this the monitor
+                // wait-duration stays null for those transitions.
+                let isAwaiting = current.workflowRunState == .gateWait
+                    || current.workflowRunState == .awaitingInput
+                Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: isAwaiting)
                 for artifact in newArtifacts {
                     if !state.artifactIds.contains(artifact.id) {
                         state.artifactIds.append(artifact.id)
@@ -4357,6 +4403,11 @@ final class PlannerStore {
                     record.nodes[targetIndex].workflowRunState = .gateWait
                     mirrorIntoActiveRun(&record, nodeId: record.nodes[targetIndex].id) { state in
                         state.runState = .gateWait
+                        // delta-fix (codex): stamp awaitingInputSince on the
+                        // active attempt when routing parks node at gateWait.
+                        // Without this the monitor wait-clock stays null for
+                        // non-session gate transitions (codex P2 review).
+                        Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: true)
                     }
                 } else if record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                     record.nodes[targetIndex].status = .ready
@@ -6138,10 +6189,17 @@ enum PlannerBoardBridge {
                 ))
             }
 
+            // Pluck the live attempt's awaitingInputSince from the active run
+            // (if any) so the monitor can boost stale-awaiting items and the
+            // UI can render "等了 X 小时". Only the last attempt of the
+            // active run's per-node state carries the clock; older attempts
+            // are immutable.
+            let activeRun = runs.first(where: { $0.status == .active })
             for node in visibleNodes {
                 guard let snapshot = statesByNodeId[node.id],
                       snapshot.runState != .done else { continue }
                 let rank = monitorRank(for: snapshot)
+                let awaitingSince = activeRun?.nodeStates[node.id]?.attempts.last?.awaitingInputSince
                 items.append(PlannerMonitorItem(
                     id: "node-\(node.id)",
                     kind: .node,
@@ -6161,7 +6219,8 @@ enum PlannerBoardBridge {
                     nextAction: PlannerWorkflowGuidance.nextAction(
                         for: node,
                         blockers: snapshot.blockers
-                    )
+                    ),
+                    awaitingInputSince: awaitingSince
                 ))
             }
 

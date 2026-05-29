@@ -2637,6 +2637,30 @@
   border-color: rgba(201, 164, 93, 0.32);
 }
 
+/* Duration chip — running / awaiting 时长。awaiting 用红色高亮促人响应。 */
+.planner-node__duration {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.planner-node__duration--running {
+  background: rgba(110, 165, 124, 0.16);
+  color: #aed7b6;
+  border-color: rgba(110, 165, 124, 0.32);
+}
+
+.planner-node__duration--awaiting {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
+  border-color: rgba(220, 80, 70, 0.45);
+}
+
 /* UI-1 · Re-run / Mark-down action buttons. They sit beside the primary
    action in the footer and use compact pill styling so they never crowd it. */
 .planner-node__rerun-action,

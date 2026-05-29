@@ -92,6 +92,29 @@ const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   failed: AlertTriangle,
 }
 
+/**
+ * 把 ms 时长翻译成中文人话:
+ *   < 60s   → 'X 秒'
+ *   < 60min → 'X 分钟'
+ *   < 24h   → 'X 小时 Y 分钟' (Y 为 0 时省略)
+ *   ≥ 1 天  → 'X 天'
+ * 用于 running 节点的「已跑 X」/ awaiting 节点的「等了 X」。
+ */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 秒'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    const remaining = minutes - hours * 60
+    return remaining > 0 ? `${hours} 小时 ${remaining} 分钟` : `${hours} 小时`
+  }
+  const days = Math.floor(hours / 24)
+  return `${days} 天`
+}
+
 function runStateClass(runState: PlannerWorkflowRunState): string {
   switch (runState) {
     case 'pending':
@@ -315,6 +338,27 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     ? workStatusLabelCN(runStatus, data.hasSelectedDelivery)
     : planStatusLabelCN(designStatus)
   const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
+  // Duration chip — running/awaiting 节点旁边的「已跑 X 分钟」/「等了 X 小时」。
+  //   running     → 从 live attempt.startedAt 计时,绿/中性色。
+  //   awaitingInput/gateWait → 从 attempt.awaitingInputSince 计时,红色高亮提醒。
+  // attempts[last] 是 live attempt;按 Swift 端 syncSessionRunState 约定,
+  // awaitingInputSince 只在停在等待态时有值,跑起来或终结时清空。
+  const liveAttempt = runNodeState?.attempts?.[runNodeState.attempts.length - 1] ?? null
+  const durationChip = (() => {
+    if (!isRunMode || !liveAttempt) return null
+    const now = Date.now()
+    if (runStatus === 'awaiting-input' || runStatus === 'gate-wait') {
+      const since = liveAttempt.awaitingInputSince ? Date.parse(liveAttempt.awaitingInputSince) : NaN
+      if (!Number.isFinite(since)) return null
+      return { label: `等了 ${formatDuration(now - since)}`, tone: 'awaiting' as const }
+    }
+    if (runStatus === 'running' || runStatus === 'dispatched') {
+      const since = liveAttempt.startedAt ? Date.parse(liveAttempt.startedAt) : NaN
+      if (!Number.isFinite(since)) return null
+      return { label: `已跑 ${formatDuration(now - since)}`, tone: 'running' as const }
+    }
+    return null
+  })()
   const blockers = data.state?.blockers?.length
     ? data.state.blockers
     : node.status === 'blocked' && node.blockedReason?.trim()
@@ -431,6 +475,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             不再另起独立 schedule chip。*/}
         {nodeKind === 'step' && !data.virtual && (
           <NodeModeBadge mode={nodeMode} scheduleInterval={scheduleLabel} />
+        )}
+        {durationChip && (
+          <span
+            className={`planner-node__duration planner-node__duration--${durationChip.tone}`}
+            title={durationChip.label}
+          >
+            {durationChip.label}
+          </span>
         )}
         {/* UI-1 · Version chain moved off the card per ui-simplification.md §2.9
             — it now lives in the inspector right-drawer 「足迹」 section. The
