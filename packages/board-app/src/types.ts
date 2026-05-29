@@ -994,6 +994,13 @@ export interface PlanArtifactDraft {
   reference: string
   status?: string | null
   payload?: unknown
+  /**
+   * theta (2026-05-29): optional review-status hint. When set, apply-path
+   * stamps it on the resulting PlannerArtifact.reviewStatus. Lets the Promote
+   * button flip review state without re-shipping payload (which would clobber
+   * original content when typedPayload is absent on the wire envelope).
+   */
+  reviewStatus?: ArtifactReviewStatus | null
 }
 
 export interface PlanChange {

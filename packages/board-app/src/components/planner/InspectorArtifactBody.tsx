@@ -211,13 +211,15 @@ export function InspectorArtifactBody({
   const handlePromoteArtifact = () => {
     if (!activeArtifact || promoting) return
     setPromoting(true)
-    // 构造一个 attachArtifact PlanChange, 把同 reference 的 payload 重新
-    // 提交一遍, 只翻转 reviewStatus → 'approved'。后端 store 走「same slot
-    // = append new version」路径, 自动滚到 latest。
-    const nextPayload =
-      activeArtifact.typedPayload
-        ? { ...activeArtifact.typedPayload, reviewStatus: 'approved' as const }
-        : { type: 'markdown', reviewStatus: 'approved' as const, preview: '' }
+    // theta-fix (2026-05-29): codex P1 — the previous fallback overwrote
+    // payload with `{ type: 'markdown', preview: '' }` when typedPayload
+    // was absent, which is the common case for normal markdown/prd/file
+    // artifacts coming through PlannerGraphStateEnvelope (only `.payload`
+    // is sent on the wire). That clobbered the original content during
+    // Promote. Fix: carry `reviewStatus: 'approved'` on the draft itself
+    // (PlanArtifactDraft.reviewStatus, added to Swift + Zod schema), and
+    // preserve the original `payload` byte-for-byte. Apply-path stamps
+    // PlannerArtifact.reviewStatus from the draft field directly.
     proposePlannerGraphChange(canvasId, {
       summary: `Promote ${activeArtifact.title} to approved`,
       changes: [
@@ -229,7 +231,8 @@ export function InspectorArtifactBody({
             title: activeArtifact.title,
             reference: activeArtifact.reference,
             status: activeArtifact.status,
-            payload: nextPayload,
+            payload: activeArtifact.payload,
+            reviewStatus: 'approved',
           },
         },
       ],

@@ -946,6 +946,11 @@ struct PlanArtifactDraft: Codable, Equatable {
     /// `attachArtifact` change, apply-path writes it through to the target
     /// PlanningNode's `artifactDataSource`.
     var dataSource: String?
+    /// theta (2026-05-29): when non-nil, apply-path stamps this on the
+    /// resulting PlannerArtifact.reviewStatus. Lets the Promote button flip
+    /// review state without re-shipping a payload (which would clobber the
+    /// original content if typedPayload isn't available to spread).
+    var reviewStatus: String?
 }
 
 struct PlanChange: Codable, Equatable {
@@ -5127,7 +5132,10 @@ final class PlannerStore {
                 status: status?.isEmpty == false ? status! : "attached",
                 createdAt: Date(),
                 payload: draft.payload,
-                producedBy: .agent
+                producedBy: .agent,
+                // theta (2026-05-29): carry reviewStatus from the inline draft
+                // so Promote can flip review state without re-shipping payload.
+                reviewStatus: draft.reviewStatus
             )
         }
     }
