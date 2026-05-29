@@ -11,20 +11,34 @@ import Foundation
 // Environment:
 //   MEEE2_PLANNER_RUNTIME_URL  — e.g. http://127.0.0.1:3000  (meee2-online)
 //   MEEE2_BOARD_BASE_URL       — e.g. http://127.0.0.1:9876  (this BoardServer)
+//   MEEE2_PLANNER_HARNESS      — which meee2-online harness to drive; defaults
+//                                to the real `anthropic` (LLM) harness. Set to
+//                                `stub` only for the skeleton / E2E test harness.
 final class HTTPPlannerAgentRuntime: PlannerAgentRuntime {
     static let runtimeUrlEnvVar = "MEEE2_PLANNER_RUNTIME_URL"
     static let boardUrlEnvVar = "MEEE2_BOARD_BASE_URL"
+    static let harnessEnvVar = "MEEE2_PLANNER_HARNESS"
+    /// Default to the real LLM harness — never silently fall back to `stub`.
+    static let defaultHarness = "anthropic"
 
     let runtimeBaseUrl: URL
     let boardBaseUrl: String
+    /// meee2-online harness id forwarded on session creation (`anthropic` / `stub`).
+    let harness: String
     let urlSession: URLSession
 
-    init(runtimeBaseUrl: String, boardBaseUrl: String, urlSession: URLSession = .shared) {
+    init(
+        runtimeBaseUrl: String,
+        boardBaseUrl: String,
+        harness: String = defaultHarness,
+        urlSession: URLSession = .shared
+    ) {
         guard let url = URL(string: runtimeBaseUrl) else {
             fatalError("HTTPPlannerAgentRuntime: invalid runtimeBaseUrl \(runtimeBaseUrl)")
         }
         self.runtimeBaseUrl = url
         self.boardBaseUrl = boardBaseUrl
+        self.harness = harness
         self.urlSession = urlSession
     }
 
@@ -38,11 +52,14 @@ final class HTTPPlannerAgentRuntime: PlannerAgentRuntime {
               !boardUrl.isEmpty else {
             return
         }
+        let trimmedHarness = env[harnessEnvVar]?.trimmingCharacters(in: .whitespaces) ?? ""
+        let harness = trimmedHarness.isEmpty ? defaultHarness : trimmedHarness
         PlannerAgentRuntimeRegistry.shared = HTTPPlannerAgentRuntime(
             runtimeBaseUrl: runtimeUrl,
-            boardBaseUrl: boardUrl
+            boardBaseUrl: boardUrl,
+            harness: harness
         )
-        MInfo("[Planner] HTTPPlannerAgentRuntime installed runtime=\(runtimeUrl) board=\(boardUrl)")
+        MInfo("[Planner] HTTPPlannerAgentRuntime installed runtime=\(runtimeUrl) board=\(boardUrl) harness=\(harness)")
     }
 
     func handle(
@@ -93,7 +110,7 @@ final class HTTPPlannerAgentRuntime: PlannerAgentRuntime {
         var body: [String: Any] = [
             "canvasId": canvasId,
             "boardBaseUrl": boardBaseUrl,
-            "harness": "stub",
+            "harness": harness,
             "seedUserMessage": seedUserMessage
         ]
         if let actorUserId, !actorUserId.isEmpty {
