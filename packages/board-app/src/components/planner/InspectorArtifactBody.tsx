@@ -550,36 +550,23 @@ export function InspectorArtifactBody({
             artifact={activeArtifact}
             editMode={editMode && canEditPayload}
           />
+        ) : dataSourceDraft === 'authored' ? (
+          /* authored + no artifact: 真的可写的内嵌编辑器(2026-05-29 补)。
+             保存后调 attachArtifact 创建第一份 markdown 产物;widget=inbox 时
+             placeholder 提示"每行一条想法",将来加专用 inbox-items 编辑器。 */
+          <AuthoredFirstArtifactEditor
+            node={node}
+            canvasId={canvasId}
+            onCreated={onProposalCreated}
+            toast={toast}
+          />
         ) : (
-          /* 数据源 mode 感知的空态(2026-05-29):
-             - authored: 告诉用户怎么开始填(上游 session / AI 帮你写)
-             - mirrored: 告诉用户去 Attach data source
-             这一段曾承诺在 PR #76 落地但因 git 操作意外丢失,这次单独 PR 补回。 */
           <div className="planner-node-modal__empty planner-node-modal__empty-state-hint">
-            {dataSourceDraft === 'authored' ? (
-              <>
-                <p style={{ marginBottom: 6 }}>这是个手填 artifact 节点,还没产出。</p>
-                <p style={{ opacity: 0.85, marginBottom: 4 }}>
-                  填法二选一:
-                </p>
-                <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.85 }}>
-                  <li>上游 session 跑完会把产物自动落到这里</li>
-                  <li>或在节点对话里让 meee2 AI 帮你写一份(走 <code>submit_node_output</code>)</li>
-                </ul>
-                <p style={{ marginTop: 8, opacity: 0.6, fontSize: 11 }}>
-                  TODO: 内嵌 payload editor(markdown / inbox-items / kanban)落地前,
-                  手动新建第一份产物暂时走 AI session 路径。
-                </p>
-              </>
-            ) : (
-              <>
-                <p style={{ marginBottom: 6 }}>这是个镜像外部数据源的 artifact 节点,还没绑定来源。</p>
-                <p style={{ opacity: 0.85 }}>
-                  下面 <strong>Attach data source</strong> 按钮选一个 integration(Notion / Linear / GitHub 等),
-                  下游节点消费时会自动拉最新数据 + 冻一份快照。
-                </p>
-              </>
-            )}
+            <p style={{ marginBottom: 6 }}>这是个镜像外部数据源的 artifact 节点,还没绑定来源。</p>
+            <p style={{ opacity: 0.85 }}>
+              下面 <strong>Attach data source</strong> 按钮选一个 integration(Notion / Linear / GitHub 等),
+              下游节点消费时会自动拉最新数据 + 冻一份快照。
+            </p>
           </div>
         )}
       </div>
@@ -785,6 +772,109 @@ export function InspectorArtifactBody({
         />
       </div>
     </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AuthoredFirstArtifactEditor (2026-05-29) — 内嵌"写第一份产物"编辑器。
+//
+// 触发条件:nodeKind=artifact + dataSource=authored + 还没产物。
+// 用户在 textarea 写完点保存,走 attachArtifact PlanChange 创建 markdown 产物。
+//
+// widget=inbox 时 placeholder 改成"每行一条想法",但实际还是落 markdown payload
+// (将来加专用 inbox-items 编辑器再 dispatch)。reviewStatus 默认 approved
+// (用户手填的内容不需要再走 pending review)。
+// ---------------------------------------------------------------------------
+function AuthoredFirstArtifactEditor({
+  node,
+  canvasId,
+  onCreated,
+  toast,
+}: {
+  node: PlanningNode
+  canvasId: string
+  onCreated?: (proposal: PlanProposal) => void
+  toast: { push: (kind: 'success' | 'error' | 'info', msg: string) => void }
+}) {
+  const widgetKind = node.widget?.kind
+  const placeholder =
+    widgetKind === 'inbox'
+      ? '每行一条想法,保存后会成为收件箱的第一批'
+      : widgetKind === 'kanban'
+        ? '简单写一段内容,看板列结构后续在节点详情里调整'
+        : '直接在这里写,保存后成为这个节点的第一份产物'
+  const [content, setContent] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = () => {
+    const text = content.trim()
+    if (!text || saving) return
+    setSaving(true)
+    const preview = text.length > 200 ? `${text.slice(0, 200)}…` : text
+    const payload = {
+      type: 'markdown' as const,
+      preview,
+      // legacy 兼容:也写一份 content,backend payload 是 BoardJSONValue,前端读
+      // 回 payload 时可以从这里拿全文。
+      content: text,
+    }
+    proposePlannerGraphChange(canvasId, {
+      summary: `New content for ${node.title}`,
+      changes: [
+        {
+          kind: 'attachArtifact',
+          nodeId: node.id,
+          artifact: {
+            kind: 'generic',
+            title: node.title,
+            reference: `inline:${node.id}`,
+            status: 'attached',
+            payload,
+            reviewStatus: 'approved',
+          },
+        },
+      ],
+    })
+      .then((proposal) => {
+        setSaving(false)
+        if (!proposal) {
+          toast.push('error', '保存失败:服务端没返回提议')
+          return
+        }
+        onCreated?.(proposal)
+        setContent('')
+        toast.push('success', '产物已创建')
+      })
+      .catch((err) => {
+        setSaving(false)
+        toast.push('error', `保存失败:${(err as Error).message || '未知错误'}`)
+      })
+  }
+
+  return (
+    <div className="planner-node-modal__empty-editor">
+      <textarea
+        className="planner-node-modal__empty-editor-textarea"
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        placeholder={placeholder}
+        rows={6}
+        disabled={saving}
+      />
+      <div className="planner-node-modal__empty-editor-footer">
+        <span className="planner-node-modal__empty-editor-hint">
+          保存后会作为第一份 artifact 落到这个节点的版本链
+        </span>
+        <button
+          type="button"
+          className="planner-node-modal__attach-data-source-button"
+          onClick={handleSave}
+          disabled={!content.trim() || saving}
+        >
+          {saving ? '保存中…' : '保存'}
+        </button>
+      </div>
+    </div>
   )
 }
 
