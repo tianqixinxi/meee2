@@ -337,6 +337,136 @@ public final class BoardServer {
         return { request in withCORS(handler(request)) }
     }
 
+    // MARK: - Same-origin / local UI guard
+    //
+    // The board server binds to 127.0.0.1 by default, but because the CORS
+    // policy on `/api/*` is wildcard (`Access-Control-Allow-Origin: *`), any
+    // website the user visits in their browser can fetch our localhost
+    // endpoints cross-origin. Most endpoints only return / mutate canvas
+    // state, but the data-wipe endpoints (issue token + delete local data)
+    // are destructive and must NOT be reachable from arbitrary origins —
+    // the in-app confirmation token alone is not a defense against a
+    // malicious page that simply calls the token route first.
+    //
+    // requireLocalUIOrigin gates a route behind an Origin / Referer
+    // whitelist (loopback meee2 board UI + the React dev server on
+    // localhost:5002). It also echoes the exact request Origin back in
+    // `Access-Control-Allow-Origin` (never `*`) so the browser only allows
+    // the response to be read by the trusted UIs.
+
+    /// Origins allowed to call the destructive local-data routes. Same
+    /// list is used for OPTIONS preflight and the actual POST.
+    private static let localUIAllowedOrigins: Set<String> = [
+        "http://localhost:9876",
+        "http://127.0.0.1:9876",
+        "http://localhost:5002",
+        "http://127.0.0.1:5002"
+    ]
+
+    /// Inspect Origin / Referer and decide whether the request came from
+    /// the trusted local meee2 UI. Same-origin fetches from the bundled
+    /// React app may omit the Origin header entirely — that's allowed
+    /// (the request still hits 127.0.0.1 via the bound socket). A
+    /// foreign Origin (anything outside the whitelist) is rejected.
+    static func isLocalUIRequest(_ request: HttpRequest) -> Bool {
+        let headers = request.headers
+        let origin = headers["origin"] ?? headers["Origin"] ?? ""
+        if origin.isEmpty {
+            // Same-origin fetch (most common): no Origin header. Fall
+            // back to Referer if present — must also be on the allow list.
+            let referer = headers["referer"] ?? headers["Referer"] ?? ""
+            if referer.isEmpty { return true }
+            return Self.localUIAllowedOrigins.contains { allowed in
+                referer.hasPrefix(allowed + "/") || referer == allowed
+            }
+        }
+        return Self.localUIAllowedOrigins.contains(origin)
+    }
+
+    /// Build a CORS header dict that echoes the request Origin (instead of
+    /// `*`) for the routes guarded by `requireLocalUIOrigin`. Empty Origin
+    /// (same-origin) → omit the header; otherwise mirror it exactly.
+    private static func localUICORSHeaders(for request: HttpRequest) -> [String: String] {
+        var headers: [String: String] = [
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Max-Age": "600",
+            "Vary": "Origin"
+        ]
+        let origin = request.headers["origin"] ?? request.headers["Origin"] ?? ""
+        if !origin.isEmpty, Self.localUIAllowedOrigins.contains(origin) {
+            headers["Access-Control-Allow-Origin"] = origin
+        }
+        return headers
+    }
+
+    /// Wrap a route handler so the request is only forwarded when Origin /
+    /// Referer points at the local meee2 UI. Foreign callers get a 403
+    /// `forbidden_origin` instead of the wildcard-CORS response that
+    /// `cors()` would emit.
+    private static func requireLocalUIOrigin(_ handler: @escaping (HttpRequest) -> HttpResponse) -> (HttpRequest) -> HttpResponse {
+        return { request in
+            guard Self.isLocalUIRequest(request) else {
+                let origin = request.headers["origin"] ?? request.headers["Origin"] ?? "<none>"
+                MWarn("[BoardServer] rejected cross-origin call to \(request.path) from origin=\(origin)")
+                let body: [String: Any] = [
+                    "error": "forbidden_origin",
+                    "message": "This endpoint is restricted to the local meee2 UI."
+                ]
+                let bodyData = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+                let headers = [
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Vary": "Origin"
+                ]
+                return .raw(403, "Forbidden", headers) { writer in
+                    try writer.write(bodyData)
+                }
+            }
+            let response = handler(request)
+            return Self.withLocalUICORS(response, request: request)
+        }
+    }
+
+    /// Like `withCORS`, but echoes the specific allowed Origin instead of
+    /// `*`. Used by `requireLocalUIOrigin`.
+    private static func withLocalUICORS(_ response: HttpResponse, request: HttpRequest) -> HttpResponse {
+        var headers = response.headers()
+        for (k, v) in Self.localUICORSHeaders(for: request) { headers[k] = v }
+        let status = response.statusCode
+        let phrase = response.reasonPhrase
+
+        switch response {
+        case .ok(let body):
+            let bodyData = serializeBody(body)
+            return .raw(status, phrase, headers) { writer in
+                try writer.write(bodyData)
+            }
+        case .badRequest(let body):
+            let bodyData = body.map { serializeBody($0) } ?? Data()
+            return .raw(status, phrase, headers) { writer in
+                try writer.write(bodyData)
+            }
+        case .raw(_, _, let originalHeaders, let originalWriter):
+            if let extras = originalHeaders {
+                for (k, v) in extras where headers[k] == nil { headers[k] = v }
+            }
+            return .raw(status, phrase, headers) { writer in
+                if let originalWriter = originalWriter { try originalWriter(writer) }
+            }
+        default:
+            return .raw(status, phrase, headers) { _ in }
+        }
+    }
+
+    /// Paths that must NOT be exposed under wildcard CORS — they map to
+    /// destructive local-data operations and need a same-origin guard.
+    /// Checked by the OPTIONS preflight middleware so the browser doesn't
+    /// even cache a permissive preflight for a foreign origin.
+    private static let localUIOnlyPaths: Set<String> = [
+        "/api/system/delete-local-data",
+        "/api/system/delete-local-data/token"
+    ]
+
     private func registerRoutes(on server: HttpServer) {
         // CORS preflight (OPTIONS) — meee2 browser sends a preflight before
         // POSTs with custom Content-Type / Authorization. Middleware short-
@@ -344,6 +474,15 @@ public final class BoardServer {
         // through. Any non-OPTIONS falls through to the route handlers below.
         server.middleware.append { request in
             guard request.method.uppercased() == "OPTIONS" else { return nil }
+            // Destructive endpoints (local-data wipe) must NOT be advertised
+            // under wildcard CORS — a foreign origin should fail at preflight
+            // already. Echo the request Origin only when it's on the local-UI
+            // allow list; otherwise reply with empty Allow-Origin so the
+            // browser refuses to send the real request.
+            if BoardServer.localUIOnlyPaths.contains(request.path) {
+                let headers = BoardServer.localUICORSHeaders(for: request)
+                return .raw(204, "No Content", headers) { _ in }
+            }
             return .raw(204, "No Content", BoardServer.corsHeaders) { _ in }
         }
 
@@ -381,6 +520,13 @@ public final class BoardServer {
         server.GET["/api/system/readiness"] = BoardServer.cors(BoardAPI.getReadiness)
         server.POST["/api/system/readiness/repair"] = BoardServer.cors(BoardAPI.repairReadiness)
         server.POST["/api/system/debug-export"] = BoardServer.cors(BoardAPI.exportDebug)
+        server.GET["/api/system/storage-stats"] = BoardServer.cors(BoardAPI.getStorageStats)
+        // Destructive: must be same-origin from the local meee2 UI. Any
+        // foreign Origin (e.g. a website the user visits while board is
+        // running) is rejected with 403 before BoardAPI sees the request.
+        // See SECURITY.md → "Local data wipe endpoints" for rationale.
+        server.POST["/api/system/delete-local-data/token"] = BoardServer.requireLocalUIOrigin(BoardAPI.issueDeleteLocalDataToken)
+        server.POST["/api/system/delete-local-data"] = BoardServer.requireLocalUIOrigin(BoardAPI.deleteLocalData)
         server.GET["/api/sessions/intake-diagnostics"] = BoardServer.cors(BoardAPI.getSessionIntakeDiagnostics)
         server.GET["/api/app-settings"] = BoardServer.cors(BoardAPI.getAppSettings)
         server.PATCH["/api/app-settings"] = BoardServer.cors(BoardAPI.updateAppSettings)
@@ -429,6 +575,8 @@ public final class BoardServer {
         server.POST["/api/canvases/:id/sessions/spawn-global"] = BoardServer.cors(BoardAPI.spawnGlobalSession)
         server.DELETE["/api/canvases/:id/sessions/:sessionId"] = BoardServer.cors(BoardAPI.removeSessionFromCanvas)
         server.POST["/api/canvases/:id/conflict"] = BoardServer.cors(BoardAPI.resolveCanvasConflict)
+        server.GET["/api/templates"] = BoardServer.cors(BoardAPI.listCanvasTemplates)
+        server.POST["/api/templates/:id/apply"] = BoardServer.cors(BoardAPI.applyCanvasTemplate)
         server.GET["/api/planner/monitor"] = BoardServer.cors(BoardAPI.getPlannerWorkspaceMonitor)
         server.POST["/api/planner/activity"] = BoardServer.cors(BoardAPI.updatePlannerActivity)
         server.GET["/api/planner/canvases/:id/state"] = BoardServer.cors(BoardAPI.getPlannerCanvasState)

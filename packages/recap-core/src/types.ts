@@ -69,6 +69,32 @@ export interface RecapApproval {
   evidenceRefs: EvidenceRef[]
 }
 
+/**
+ * 「等谁 / 等什么」语义。和 RecapBlocker(已经卡住)区分开:
+ *  - awaiting-approval  : 节点 status==='awaiting' 或 workflowRunState==='gate-wait',
+ *                         需要 reviewer/approver 点头
+ *  - awaiting-input     : workflowRunState==='awaiting-input',
+ *                         缺一段 input(可能是上游产物、用户反馈、外部 PR)
+ *  - awaiting-upstream  : dependsOnNodeIds 里至少一个上游还没 done
+ */
+export type RecapAwaitingKind = 'awaiting-approval' | 'awaiting-input' | 'awaiting-upstream'
+
+export interface RecapAwaiting {
+  kind: RecapAwaitingKind
+  subjectId: string
+  subjectKind: 'node' | 'canvas'
+  title: string
+  /** 自由文本,UI 直接展示,例如 "@alice"、"#123 待 review"、"等 NodeX 完成"。 */
+  reason: string
+  /** awaiting-approval 时的审批人列表(open_id / handle / email,原样保留)。 */
+  reviewers?: string[]
+  /** awaiting-upstream 时:上游 node id 列表,UI 可以跳过去。 */
+  upstreamNodeIds?: string[]
+  /** awaiting-input 时:对应的 input 描述(取自 RecapNodeInput.inputs 第一条)。 */
+  inputSource?: string
+  evidenceRefs: EvidenceRef[]
+}
+
 export interface RecapSource {
   kind: 'deterministic' | 'ai' | 'provider' | 'mixed'
   provider?: string
@@ -98,6 +124,11 @@ export interface CanvasRecap {
   statusCounts: RecapStatusCount[]
   blockers: RecapBlocker[]
   approvals: RecapApproval[]
+  /**
+   * 「在等谁/什么」桶。和 blockers(硬卡住)、approvals(已经成 gate)互补。
+   * 可选 — 旧调用方不会看到 undefined 上游不读这个字段。
+   */
+  awaitingItems?: RecapAwaiting[]
   evidenceRefs: EvidenceRef[]
   sessionRefs: string[]
   subCanvasRefs: string[]
@@ -127,6 +158,8 @@ export interface RecapNodeInput {
   subCanvasId?: string | null
   scheduled?: boolean
   artifactRefs?: string[]
+  /** Reviewers / approvers required to unblock the node (open_id / handle / email). */
+  approvers?: string[]
 }
 
 export interface RecapSessionInput {
@@ -192,6 +225,8 @@ export interface CanvasStatusRecap {
   headline: string
   statuses: RecapStatusCount[]
   details: string[]
+  /** Surfaced 「等谁/等什么」items, parallel to CanvasRecap.awaitingItems. */
+  awaitingItems?: RecapAwaiting[]
   updatedAt: string
 }
 

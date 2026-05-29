@@ -6,9 +6,9 @@
  * `CanvasToolbar` — clicking it opens this drawer.
  *
  * Layout:
- *   - Top: pinned event highlights
- *       · Gate-blocked nodes               (today: planner blocked + ENG-2 stub)
- *       · Failed sessions                  (ENG-2 stub) — attention signal only
+ *   - Top: pinned monitor signals
+ *       · Nodes that need a human reply    (live from recap-core monitor)
+ *       · Blocked / failed nodes           (live from recap-core monitor)
  *       · New artifact versions <1h        (live from ENG-3 once wired)
  *   - Middle: aggregated activity, groupable by owner / node / time
  *   - Bottom: CTA → hand off to the global `SessionsView` rail mode
@@ -39,15 +39,22 @@ import {
   X,
 } from 'lucide-react'
 import type { BoardState, PlannerGraphState } from '../../types'
-import { fetchRecentArtifactVersions, type ArtifactVersionSummary, type UserProfile } from '../../api'
+import type { CanvasMonitor, CanvasNodeMonitorItem } from '@meee1/recap-core'
+import { activateSession, fetchRecentArtifactVersions, type ArtifactVersionSummary, type UserProfile } from '../../api'
 import './planner.css'
 
 interface Props {
+  /**
+   * UI-simplification §4.3: drawer is always-mounted, collapsed/expanded toggled
+   * by clicking the header. `open` retained for back-compat with CanvasToolbar
+   * but now treated as "expanded" — false collapses to a 44px header bar.
+   */
   open: boolean
   onClose: () => void
   canvasId: string
   canvasName: string
   plannerState: PlannerGraphState | null
+  monitor?: CanvasMonitor | null
   boardState: BoardState | null
   userProfile: UserProfile | null
   /**
@@ -75,6 +82,7 @@ export function AIRecapDrawer({
   canvasId,
   canvasName,
   plannerState,
+  monitor = null,
   boardState,
   userProfile,
   onJumpToNode,
@@ -130,99 +138,15 @@ export function AIRecapDrawer({
   //     .subscribe()
   // The polling fallback above keeps the surface live until then.
 
-  // ── ENG-2 lifecycle data ──────────────────────────────────────────────
-  // Now that ENG-2 (session lifecycle) has landed we can derive these from
-  // the existing `PlannerGraphState` / `BoardState` accessors. The full
-  // session-lifecycle event stream (auto-create, force_new_version) will
-  // arrive through Supabase realtime in a follow-up; for now the polling
-  // adapter that already drives the rest of the drawer keeps these fresh.
-  //
-  // Mapping:
-  //  - eng2GateBlocked  ← planner nodes with a gate (approvers required)
-  //                       AND a blocking workflow/status signal. Differs
-  //                       from `localBlockedNodes` (which catches every
-  //                       blocked-status node) by isolating gate-review
-  //                       stuck-points specifically.
-  //  - eng2FailedSessions ← BoardState.sessions whose last surfaced status
-  //                         indicates an error (free-form status string;
-  //                         we match the well-known set the resolver emits)
-  //                         OR whose linked planner node has
-  //                         workflowRunState === 'failed'.
-  //  - eng2ActiveSessions ← BoardState.sessions in an in-flight status
-  //                         (thinking/tooling/running/etc.).
-  //
-  // TODO(ENG-2 follow-up): switch to the realtime
-  //   `meee2_session_runs` channel once supabase-js is bundled here — the
-  //   polling-derived view below is a baseline that works without a new
-  //   transport but won't catch < poll-interval transitions.
-  const eng2GateBlocked: GateBlockedItem[] = useMemo(() => {
-    if (!plannerState) return []
-    return plannerState.nodes
-      .filter((n) => {
-        const hasGate = ((n.gate?.approvers ?? []).length > 0) || n.executionMode === 'human'
-        const isBlocked =
-          n.status === 'blocked' ||
-          n.workflowRunState === 'gate-wait' ||
-          n.workflowRunState === 'awaiting-input'
-        return hasGate && isBlocked
-      })
-      .map((n) => ({
-        nodeId: n.id,
-        nodeTitle: n.title,
-        reason:
-          n.blockedReason
-          ?? n.nextAction
-          ?? (n.workflowRunState === 'gate-wait' ? 'Waiting for gate approval' : 'Awaiting input'),
-      }))
-  }, [plannerState])
+  const needsReplyItems = useMemo(() => {
+    return (monitor?.items ?? []).filter((item) => item.needsHumanReply).slice(0, 12)
+  }, [monitor?.items])
 
-  const eng2FailedSessions: FailedSessionItem[] = useMemo(() => {
-    if (!boardState) return []
-    const failedNodeSessionIds = new Set(
-      (plannerState?.nodes ?? [])
-        .filter((n) => n.workflowRunState === 'failed' && n.sessionId)
-        .map((n) => n.sessionId as string),
-    )
-    const sessionToNodeId = new Map<string, string>()
-    for (const n of plannerState?.nodes ?? []) {
-      if (n.sessionId) sessionToNodeId.set(n.sessionId, n.id)
-    }
-    return boardState.sessions
-      .filter((s) => {
-        const status = (s.status as string).toLowerCase()
-        return (
-          failedNodeSessionIds.has(s.id) ||
-          status === 'error' ||
-          status === 'failed' ||
-          status === 'aborted'
-        )
-      })
-      .map((s) => ({
-        sessionId: s.id,
-        title: s.title,
-        reason: s.pendingPermissionMessage || (s.status as string) || 'failed',
-        nodeId: sessionToNodeId.get(s.id) ?? null,
-      }))
+  const attentionItems = useMemo(() => {
+    return (monitor?.items ?? [])
+      .filter((item) => !item.needsHumanReply && item.severity === 'attention')
       .slice(0, 12)
-  }, [boardState, plannerState?.nodes])
-
-  // Active/recently-completed sessions are intentionally NOT listed here.
-  // They live in the global `SessionsView` rail mode; the bottom CTA hands
-  // off to that surface. We still surface failed sessions above as an
-  // attention signal (different intent: "this needs a human").
-
-  // ── Local-derived data (works today, no backend changes needed) ───────
-  const localBlockedNodes = useMemo(() => {
-    if (!plannerState) return []
-    return plannerState.nodes
-      .filter((n) => n.status === 'blocked' || n.workflowRunState === 'failed' || n.blockedReason)
-      .map((n) => ({
-        nodeId: n.id,
-        nodeTitle: n.title,
-        reason: n.blockedReason ?? n.nextAction ?? n.workflowRunState ?? 'blocked',
-        doerId: n.doerId,
-      }))
-  }, [plannerState])
+  }, [monitor?.items])
 
   const aggregatedActivity = useMemo(() => {
     return buildAggregatedActivity(plannerState, recentVersions, boardState, groupBy)
@@ -248,6 +172,20 @@ export function AIRecapDrawer({
     onClose()
   }
 
+  const handleMonitorJump = (item: CanvasNodeMonitorItem) => {
+    if (item.sessionId) {
+      void activateSession(item.sessionId)
+    }
+    handleJump(item.nodeId)
+  }
+
+  // UI-simplification §4.3 revisit:retain modal-style opt-in mount.
+  // Earlier change(218245b) made the drawer always-mounted but the real
+  // canvas has other absolute-positioned banners(canvas-toolbar /
+  // PreviewOverlay / RecapRefreshing toast)at the same top-left coord with
+  // z-index 260+ — multiple floats overlap and the page becomes unreadable.
+  // Keep open/close behavior; the canvas summary section is still surfaced
+  // here(see below)— users see it the moment they open the drawer.
   if (!open) return null
 
   return (
@@ -267,64 +205,67 @@ export function AIRecapDrawer({
         </button>
       </header>
 
+      {/* Canvas summary 段已移除 —— CanvasToolbar 的 preview recap 卡片(parseRecapJSON
+       *  + headline/details/formatRecapAge,见 CanvasToolbar.tsx ~line 820)已经在被动
+       *  展示同样信息(headline + details + 「刚刚」时间戳)。
+       *  把 summary 也塞进 drawer 顶部等于两套 recap overlay 重叠。
+       *  Spec §4.3 的「每 5min BYOA narrative」是数据源升级,不需要 UI 新位置 —— 等
+       *  /api/v1/canvas/:id/recap-summary endpoint 落地后,直接喂给现有 toolbar banner 即可。
+       *  drawer 里仍提供 Needs attention + Activity 的细节聚合(下方两段)。 */}
+
       {/* ── Top: pinned event highlights ─────────────────────────────── */}
       <section className="ai-recap-drawer__section ai-recap-drawer__highlights">
         <h3>
-          <ShieldAlert size={12} aria-hidden /> Needs attention
+          <ShieldAlert size={12} aria-hidden /> Canvas monitor
         </h3>
 
         <SubSection
-          icon={<AlertTriangle size={11} aria-hidden />}
-          label="Gate-blocked nodes"
-          count={localBlockedNodes.length + eng2GateBlocked.length}
+          icon={<ShieldAlert size={11} aria-hidden />}
+          label="Needs reply"
+          count={needsReplyItems.length}
         >
-          {localBlockedNodes.length === 0 && eng2GateBlocked.length === 0 ? (
-            <EmptyRow note="No blocked nodes right now. Gate-event stream coming with ENG-2." />
+          {needsReplyItems.length === 0 ? (
+            <EmptyRow note="当前没有需要你回复的节点" />
           ) : (
-            <>
-              {localBlockedNodes.map((b) => (
-                <button
-                  key={b.nodeId}
-                  type="button"
-                  className="ai-recap-drawer__row"
-                  onClick={() => handleJump(b.nodeId)}
-                >
-                  <span className="ai-recap-drawer__row-title">{b.nodeTitle}</span>
-                  <span className="ai-recap-drawer__row-meta">{b.reason}</span>
-                </button>
-              ))}
-              {eng2GateBlocked.map((b) => (
-                <button
-                  key={b.nodeId}
-                  type="button"
-                  className="ai-recap-drawer__row"
-                  onClick={() => handleJump(b.nodeId)}
-                >
-                  <span className="ai-recap-drawer__row-title">{b.nodeTitle}</span>
-                  <span className="ai-recap-drawer__row-meta">{b.reason}</span>
-                </button>
-              ))}
-            </>
+            needsReplyItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="ai-recap-drawer__row"
+                onClick={() => handleMonitorJump(item)}
+              >
+                <span className="ai-recap-drawer__row-title">{item.nodeTitle}</span>
+                <span className="ai-recap-drawer__row-meta">{monitorMeta(item)}</span>
+                <span className="ai-recap-drawer__row-action">
+                  {item.sessionId ? 'Open session' : 'Open node'}
+                  <ArrowUpRight size={10} aria-hidden />
+                </span>
+              </button>
+            ))
           )}
         </SubSection>
 
         <SubSection
           icon={<AlertTriangle size={11} aria-hidden />}
-          label="Failed sessions"
-          count={eng2FailedSessions.length}
+          label="Blocked / failed"
+          count={attentionItems.length}
         >
-          {eng2FailedSessions.length === 0 ? (
-            <EmptyRow note="Session events coming in next release. (ENG-2)" />
+          {attentionItems.length === 0 ? (
+            <EmptyRow note="No blocked or failed nodes right now." />
           ) : (
-            eng2FailedSessions.map((f) => (
+            attentionItems.map((item) => (
               <button
-                key={f.sessionId}
+                key={item.id}
                 type="button"
                 className="ai-recap-drawer__row"
-                onClick={() => f.nodeId && handleJump(f.nodeId)}
+                onClick={() => handleMonitorJump(item)}
               >
-                <span className="ai-recap-drawer__row-title">{f.title}</span>
-                <span className="ai-recap-drawer__row-meta">{f.reason}</span>
+                <span className="ai-recap-drawer__row-title">{item.nodeTitle}</span>
+                <span className="ai-recap-drawer__row-meta">{monitorMeta(item)}</span>
+                <span className="ai-recap-drawer__row-action">
+                  {item.sessionId ? 'Open session' : 'Open node'}
+                  <ArrowUpRight size={10} aria-hidden />
+                </span>
               </button>
             ))
           )}
@@ -433,21 +374,6 @@ export function AIRecapDrawer({
   )
 }
 
-// ── Internal types ──────────────────────────────────────────────────────
-
-interface GateBlockedItem {
-  nodeId: string
-  nodeTitle: string
-  reason: string
-}
-
-interface FailedSessionItem {
-  sessionId: string
-  title: string
-  reason: string
-  nodeId?: string | null
-}
-
 interface ActivityGroup {
   key: string
   label: string
@@ -482,6 +408,34 @@ function SubSection(props: {
 
 function EmptyRow({ note }: { note: string }) {
   return <div className="ai-recap-drawer__empty">{note}</div>
+}
+
+function monitorMeta(item: CanvasNodeMonitorItem): string {
+  return item.replyPrompt
+    || item.nextAction
+    || item.blockers[0]
+    || monitorReasonLabel(item.reasonKind)
+}
+
+function monitorReasonLabel(reason: CanvasNodeMonitorItem['reasonKind']): string {
+  switch (reason) {
+  case 'permission_required':
+    return 'Permission required'
+  case 'waiting_for_user':
+    return 'Waiting for user response'
+  case 'inbox_pending':
+    return 'Pending message'
+  case 'gate_wait':
+    return 'Waiting for gate review'
+  case 'awaiting_input':
+    return 'Awaiting input'
+  case 'blocked':
+    return 'Blocked'
+  case 'failed':
+    return 'Failed'
+  default:
+    return 'Normal'
+  }
 }
 
 function buildAggregatedActivity(

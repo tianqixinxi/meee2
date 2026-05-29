@@ -4,21 +4,22 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Bot,
-  CalendarClock,
   ChevronDown,
   CheckCircle2,
   Clock3,
   Code2,
   FileText,
-  Flag,
   History,
+  Layers,
+  Link2,
   Lock,
   MessageCircle,
   PlayCircle,
   Plug,
-  RefreshCw,
   Route,
   Signpost,
+  Sparkles,
+  SquareCheckBig,
   Trash2,
   UserPlus,
   UserRound,
@@ -32,23 +33,45 @@ import type {
   PlannerDispatchRunner,
   PlannerWorkflowRunState,
   PlanningNode,
+  PlanningNodeKind,
   PlanningNodeStatus,
   RunNextAction,
 } from '../../types'
 import { loadSpawnProvider, spawnProviderLabel } from '../../preferences'
 import { getPlannerArtifactContent, listArtifactVersions } from '../../api'
 import type { PlannerGraphNode } from './plannerGraphAdapter'
-import { InputCardSections } from './InputCardSections'
+import { getWidgetComponent } from './widgets'
+import { resolveWidgetData } from './widgetDataResolver'
+import {
+  ARTIFACT_LABELS,
+  CARD_TOOLTIPS,
+  deriveDisplayStatus,
+  FOOTER_LABELS,
+  modeBadgeLabel,
+  modeBadgeTooltip,
+  OWNER_CHIP,
+  PRIMARY_ACTION_TEXT,
+  SUBCANVAS_REF_LABELS,
+  nextPlanAction as nextPlanActionCN,
+  nextWorkAction as nextWorkActionCN,
+  planStatusLabel as planStatusLabelCN,
+  primaryActionLabel as primaryActionLabelCN,
+  workStatusLabel as workStatusLabelCN,
+  type NodeMode,
+  type PrimaryAction,
+} from './labels'
 
 type CanvasArtifactKind = 'text' | 'integration' | 'html' | 'kanban' | 'json' | 'file'
-const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['draft', 'ready', 'blocked', 'done']
+// 3-tai cut (2026-05-29): collapsed to 3 lifecycle states. `draft` removed —
+// `ready` is now the initial state. Legacy `draft` data is mapped to `ready`
+// at render time below.
+const DESIGN_STATUS_OPTIONS: PlanningNodeStatus[] = ['ready', 'blocked', 'done']
 
 // UI-1 · "auto / gate / human" mode badge — derived from execution mode +
 // gate approver count. `human` wins when the node is an explicit human step;
 // `gate` when downstream review is required (approvers present or gate mode
 // human); otherwise `auto`. Colors mirror the existing border palette.
-type NodeMode = 'auto' | 'gate' | 'human'
-const MODE_LABEL: Record<NodeMode, string> = { auto: 'Auto', gate: 'Gate', human: 'Human' }
+// 文案在 labels.ts MODE_LABEL,这里只保留 icon 映射。
 const MODE_ICON: Record<NodeMode, typeof Bot> = { auto: Bot, gate: Signpost, human: UserRound }
 
 interface CanvasIOItem {
@@ -57,16 +80,6 @@ interface CanvasIOItem {
   reference?: string | null
   artifactKind: CanvasArtifactKind
   pending?: boolean
-}
-
-type ArtifactFitStatus = 'complete' | 'partial' | 'missing'
-
-interface NodeArtifactFit {
-  hasRequirements: boolean
-  status: ArtifactFitStatus
-  expectedCount: number
-  producedCount: number
-  missing: string[]
 }
 
 const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
@@ -78,6 +91,29 @@ const runStateIcons: Record<PlannerWorkflowRunState, typeof Clock3> = {
   'gate-wait': Signpost,
   done: CheckCircle2,
   failed: AlertTriangle,
+}
+
+/**
+ * 把 ms 时长翻译成中文人话:
+ *   < 60s   → 'X 秒'
+ *   < 60min → 'X 分钟'
+ *   < 24h   → 'X 小时 Y 分钟' (Y 为 0 时省略)
+ *   ≥ 1 天  → 'X 天'
+ * 用于 running 节点的「已跑 X」/ awaiting 节点的「等了 X」。
+ */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0 秒'
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) {
+    const remaining = minutes - hours * 60
+    return remaining > 0 ? `${hours} 小时 ${remaining} 分钟` : `${hours} 小时`
+  }
+  const days = Math.floor(hours / 24)
+  return `${days} 天`
 }
 
 function runStateClass(runState: PlannerWorkflowRunState): string {
@@ -128,7 +164,12 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         if (!cancelled) setArtifactContent(content)
       })
       .catch((error) => {
-        if (!cancelled) setArtifactContentError(error?.message || 'Failed to load artifact')
+        if (cancelled) return
+        // ui-simplification §1 — axios 原文(e.g. status code 500)是技术 hint,
+        // 不能直接吐给用户。降级到 console.warn → JSConsoleBridge 落到
+        // ~/Library/Logs/meee2.log,state 里只放中文文案。
+        console.warn('[planner-node] artifact load failed:', error?.message)
+        setArtifactContentError(ARTIFACT_LABELS.loadError)
       })
     return () => {
       cancelled = true
@@ -137,9 +178,18 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
   const isRunMode = data.mode === 'run'
   const runNodeState = data.runNodeState
   const nodeKind = designKind(node)
-  const designStatus = data.state?.runState ?? node.status
+  // 3-tai cut (2026-05-29): legacy `draft` data still lives in old canvases —
+  // map it to `ready` at render so the UI never surfaces the removed state.
+  // Backend normalizer takes care of the wire-level translation; this is the
+  // belt-and-braces step for any in-memory state that hasn't been re-saved.
+  const rawDesignStatus = data.state?.runState ?? node.status
+  const designStatus: PlanningNodeStatus = (rawDesignStatus === 'draft' ? 'ready' : rawDesignStatus) as PlanningNodeStatus
   const runStatus: PlannerWorkflowRunState = runNodeState?.runState ?? 'pending'
   const Icon = isRunMode ? runStateIcons[runStatus] : Route
+  // UI-simplification — artifact node 默认收起,仅显示 title + kind + 展开按钮。
+  // 强制展开条件:1) 有 subCanvasId(有下钻子画板)2) 用户点了展开按钮。
+  const hasSubCanvas = Boolean(node.subCanvasId)
+  const [artifactExpanded, setArtifactExpanded] = useState(hasSubCanvas)
   if (data.virtual && nodeKind === 'artifact') {
     const artifact = primaryArtifact
     const inlineKanban = renderKind === 'kanban'
@@ -165,18 +215,18 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         <div className="planner-node__header">
           <span className="planner-node__status planner-node__status--design">
             <ArtifactIcon kind={renderKind} size={13} />
-            Artifact
+            {ARTIFACT_LABELS.artifact}
           </span>
           <div className="planner-node__header-actions">
             <span className="planner-node__badge kind kind-artifact">
-              {data.artifactDirection === 'input' ? 'Input' : 'Output'}
+              {data.artifactDirection === 'input' ? ARTIFACT_LABELS.input : ARTIFACT_LABELS.output}
             </span>
             {data.sourceNodeId && data.ioItem && data.artifactDirection && (
               <button
                 type="button"
                 className="planner-node__delete nodrag"
-                title="Remove from canvas"
-                aria-label={`Remove ${node.title} from canvas`}
+                title={ARTIFACT_LABELS.removeFromCanvas}
+                aria-label={`${ARTIFACT_LABELS.removeFromCanvas} ${node.title}`}
                 onClick={(event) => {
                   event.stopPropagation()
                   data.onHideIOArtifact?.(
@@ -193,6 +243,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           </div>
         </div>
         <div className="planner-node__title">{node.title}</div>
+        {node.desc && <div className="planner-node__desc">{node.desc}</div>}
         {data.artifactDirection !== 'input' && (
           <div className="planner-node__artifact-ref" title={node.schema?.goal || node.title}>
             {node.schema?.goal || node.title}
@@ -207,7 +258,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <textarea
               value={artifactInputDraft}
               onChange={(event) => setArtifactInputDraft(event.target.value)}
-              placeholder="Paste document URL or artifact reference"
+              placeholder={ARTIFACT_LABELS.pastePlaceholder}
               rows={3}
             />
             <button
@@ -216,18 +267,53 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               disabled={artifactInputDraft.trim().length === 0 || artifactInputDraft.trim() === (data.inputReference ?? '').trim()}
               onClick={() => data.onBindInput?.(data.sourceNodeId as string, data.ioItem as string, artifactInputDraft)}
             >
-              Save input
+              {ARTIFACT_LABELS.saveInput}
             </button>
           </div>
         )}
-        <ArtifactPreview
-          artifact={artifact}
-          kind={renderKind}
-          kanban={kanban}
-          content={artifactContent}
-          error={artifactContentError}
-          onOpenKanbanItem={data.onOpenKanbanItem}
-        />
+        {/* UI-simplification — artifact 默认收起,只显示 title。
+         *  展开条件:(a) 有 subCanvasId(下钻成子画板),自动展开
+         *  (b) 用户点 展开 按钮手动展开。
+         *  收起态只露一个 [展开 ▼] 按钮,canvas 上视觉占用极小 → 不挤占节点交互区域。 */}
+        {artifactExpanded ? (
+          <>
+            <ArtifactPreview
+              artifact={artifact}
+              kind={renderKind}
+              kanban={kanban}
+              content={artifactContent}
+              error={artifactContentError}
+              onOpenKanbanItem={data.onOpenKanbanItem}
+            />
+            {!hasSubCanvas && (
+              <button
+                type="button"
+                className="planner-node__artifact-collapse nodrag"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setArtifactExpanded(false)
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                title={CARD_TOOLTIPS.collapseArtifact}
+              >
+                收起 ▴
+              </button>
+            )}
+          </>
+        ) : (
+          <button
+            type="button"
+            className="planner-node__artifact-expand nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              setArtifactExpanded(true)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            title={CARD_TOOLTIPS.expandArtifact}
+          >
+            展开 ▾
+          </button>
+        )}
         <Handle type="source" position={Position.Right} className="planner-node__handle" />
       </div>
     )
@@ -249,10 +335,40 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     )
   }
 
-  const statusLabel = isRunMode
-    ? workStatusLabel(runStatus, data.hasSelectedDelivery)
-    : planStatusLabel(designStatus)
+  // PR1 (running-session-visual) — step / session 卡片统一走 deriveDisplayStatus,
+  // 让运行态(running / awaiting / failed) 在 design 和 run mode 下都可见。
+  // 其他 nodeKind(artifact / subCanvas / external)保留旧逻辑。
+  const displayStatus = (nodeKind === 'step' || nodeKind === 'session')
+    ? deriveDisplayStatus(node)
+    : null
+  const statusLabel = displayStatus
+    ? displayStatus.label
+    : isRunMode
+      ? workStatusLabelCN(runStatus, data.hasSelectedDelivery)
+      : planStatusLabelCN(designStatus)
+  const statusToneClass = displayStatus ? `planner-node__status--${displayStatus.tone}` : ''
   const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
+  // Duration chip — running/awaiting 节点旁边的「已跑 X 分钟」/「等了 X 小时」。
+  //   running     → 从 live attempt.startedAt 计时,绿/中性色。
+  //   awaitingInput/gateWait → 从 attempt.awaitingInputSince 计时,红色高亮提醒。
+  // attempts[last] 是 live attempt;按 Swift 端 syncSessionRunState 约定,
+  // awaitingInputSince 只在停在等待态时有值,跑起来或终结时清空。
+  const liveAttempt = runNodeState?.attempts?.[runNodeState.attempts.length - 1] ?? null
+  const durationChip = (() => {
+    if (!isRunMode || !liveAttempt) return null
+    const now = Date.now()
+    if (runStatus === 'awaiting-input' || runStatus === 'gate-wait') {
+      const since = liveAttempt.awaitingInputSince ? Date.parse(liveAttempt.awaitingInputSince) : NaN
+      if (!Number.isFinite(since)) return null
+      return { label: `等了 ${formatDuration(now - since)}`, tone: 'awaiting' as const }
+    }
+    if (runStatus === 'running' || runStatus === 'dispatched') {
+      const since = liveAttempt.startedAt ? Date.parse(liveAttempt.startedAt) : NaN
+      if (!Number.isFinite(since)) return null
+      return { label: `已跑 ${formatDuration(now - since)}`, tone: 'running' as const }
+    }
+    return null
+  })()
   const blockers = data.state?.blockers?.length
     ? data.state.blockers
     : node.status === 'blocked' && node.blockedReason?.trim()
@@ -262,11 +378,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     ? (runNodeState?.sessionId ?? node.sessionId ?? null)
     : node.sessionId?.trim() || null
   const nextAction = isRunMode
-    ? nextWorkAction(runNodeState, data.hasSelectedDelivery)
-    : nextPlanAction(node, data.responsibleLabel)
+    ? nextWorkActionCN(data.hasSelectedDelivery, runNodeState?.nextAction)
+    : nextPlanActionCN(Boolean(data.responsibleLabel), Boolean(node.subCanvasId), node.nextAction)
+  const monitorItem = data.monitorItem ?? null
+  const monitorBadge = monitorItem && monitorItem.reasonKind !== 'normal'
+    ? {
+      tone: monitorItem.needsHumanReply ? 'reply' : 'attention',
+      label: monitorItem.needsHumanReply ? 'Needs reply' : 'Attention',
+      title: monitorBadgeTitle(monitorItem),
+    }
+    : null
   const io = buildCanvasIOItems(data)
-  const artifactFit = buildNodeArtifactFit(node, data.artifacts)
-  const primaryAction = primaryActionLabel({
+  // UI-simplification §1 — primaryAction 现在是结构化枚举(PrimaryAction),
+  // dispatch 走 switch(primaryAction);显示文本走 PRIMARY_ACTION_TEXT[primaryAction]。
+  // 不再用英文字符串字面量比较,文案改中文后点击不会全掉到 else 分支。
+  const primaryAction: PrimaryAction = primaryActionLabelCN({
     mode: data.mode,
     hasSelectedDelivery: data.hasSelectedDelivery,
     runStatus,
@@ -274,49 +400,23 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     workflowRunState: node.workflowRunState ?? null,
     responsibleLabel: data.responsibleLabel,
     nodeKind,
+    status: designStatus,
     blockers,
+    canChangeStatus: Boolean(data.canChangeStatus),
     canCreateSession: Boolean(data.canChangeStatus && data.onCreateSession),
     creatingSession: Boolean(data.creatingSession),
   })
-  const primaryActionDisabled = primaryAction === 'Creating session...'
+  const primaryActionText = primaryAction === 'none' ? '' : PRIMARY_ACTION_TEXT[primaryAction]
+  const primaryActionDisabled = primaryAction === 'creating-session'
   const showResponsibleInfo = data.showResponsibleInfo ?? true
   const gateLabel = gateModeLabel(node)
   const scheduleEnabled = node.schedule?.enabled === true
   const scheduleLabel = scheduleEnabled ? scheduleIntervalLabel(node.schedule?.intervalSeconds ?? 0) : null
-  const reviewableOutput = nodeKind === 'step'
-    && !data.virtual
-    && Boolean(data.onOpenArtifacts && data.canvasId)
-    && hasReviewableOutput({
-      artifacts: data.artifacts,
-      artifactFit,
-      ioOutputs: io.outputs,
-      node,
-      runStatus,
-      designStatus,
-    })
-  const openArtifacts = () => {
-    if (!data.canvasId) return
-    data.onOpenArtifacts?.({
-      canvasId: data.canvasId,
-      nodeId: node.id,
-      nodeTitle: node.title,
-    })
-  }
-  // UI-1 · mode badge + re-run gating. Re-run is offered on any non-virtual
-  // step whose latest version status is `done` (per spec). Mark-down is a
-  // quick-flag → `blocked` action so reviewers can park the node without
-  // opening the status dropdown.
+  // UI-simplification §2.6 — mode badge stays. Re-run / mark-down eligibility
+  // has moved to NodeInspectorModal「进展」 so the card footer no longer
+  // competes for attention with secondary inspector actions.
   const nodeMode = resolveNodeMode(node)
   const latestArtifactForVersionSlot = pickLatestArtifactForVersions(data.artifacts)
-  const reRunEligible = nodeKind === 'step'
-    && !data.virtual
-    && Boolean(data.onRerunNode)
-    && (designStatus === 'done' || node.status === 'done')
-  const markDownEligible = nodeKind === 'step'
-    && !data.virtual
-    && Boolean(data.onChangeStatus)
-    && designStatus !== 'blocked'
-    && (data.canChangeStatus ?? false)
 
   return (
     <div
@@ -329,16 +429,28 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--perception-${data.perception}`,
         selected ? 'is-selected' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
-        artifactFit.hasRequirements && artifactFit.status !== 'complete' ? 'planner-node--artifact-gap' : '',
       ].filter(Boolean).join(' ')}
     >
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
       <div className="planner-node__header">
+        {/* nodeKind 视觉分辨 (2026-05-28) — 让用户一眼看出 artifact 是数据 /
+            session 是 AI 会话 / step 是动作 / external 是外部引用 / subCanvas
+            是子画板。配 CSS .planner-node--kind-* 的边色调一起做完整视觉。 */}
+        {!data.virtual && (
+          <span
+            className="planner-node__kind-tag"
+            title={NODE_KIND_LABEL[nodeKind]}
+            aria-label={`节点类型 ${NODE_KIND_LABEL[nodeKind]}`}
+          >
+            <NodeKindIcon kind={nodeKind} size={11} />
+            <em>{NODE_KIND_LABEL[nodeKind]}</em>
+          </span>
+        )}
         {!isRunMode && nodeKind === 'step' && data.canChangeStatus ? (
           <label
-            className="planner-node__status-select nodrag"
-            title="Change node status"
+            className={`planner-node__status-select nodrag${statusToneClass ? ` ${statusToneClass}` : ''}`}
+            title={CARD_TOOLTIPS.changeStatus}
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
@@ -346,51 +458,58 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             <span>{statusLabel}</span>
             <select
               value={designStatus}
-              aria-label={`Status for ${node.title}`}
+              aria-label={CARD_TOOLTIPS.statusFor(node.title)}
               onChange={(event) => data.onChangeStatus?.(node.id, event.target.value as PlanningNodeStatus)}
             >
               {DESIGN_STATUS_OPTIONS.map((status) => (
-                <option key={status} value={status}>{planStatusLabel(status)}</option>
+                <option key={status} value={status}>{planStatusLabelCN(status)}</option>
               ))}
             </select>
             <ChevronDown size={12} aria-hidden />
           </label>
         ) : (
-          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
+          // 3-tai cut (2026-05-29): the PR-A artifact+`draft` hide-badge branch
+          // is dead code — `draft` no longer exists in the public enum and
+          // legacy `draft` is mapped to `ready` above. Artifact nodes now
+          // always render the status badge like other kinds (artifact 的初始
+          // 「就绪」语义跟 step 一致:节点一存在就 ready,推进与否由 payload
+          // / done 流程决定,没有独立的「草稿」状态需要藏)。
+          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}${statusToneClass ? ` ${statusToneClass}` : ''}`}>
             <Icon size={13} aria-hidden />
             {statusLabel}
           </span>
         )}
         {/* UI-1 · auto / gate / human badge — placed in the top-left cluster
-            so it sits beside the status pill. Top-right is reserved for UI-2. */}
+            so it sits beside the status pill. Top-right is reserved for UI-2.
+            ui-simplification §2.11 · schedule 信息折入这个 badge(auto · 每 1h),
+            不再另起独立 schedule chip。*/}
         {nodeKind === 'step' && !data.virtual && (
-          <NodeModeBadge mode={nodeMode} />
+          <NodeModeBadge mode={nodeMode} scheduleInterval={scheduleLabel} />
         )}
-        {/* UI-1 · Version dropdown lives in the top-left, defaulting to
-            Latest. Lazy-loads the chain on open; selecting a non-latest
-            entry swaps the card body only (no server-side pointer change). */}
-        {nodeKind === 'step' && !data.virtual && data.canvasId && latestArtifactForVersionSlot && (
-          <NodeVersionDropdown
-            canvasId={data.canvasId}
-            nodeId={node.id}
-            reference={latestArtifactForVersionSlot.reference}
-          />
+        {durationChip && (
+          <span
+            className={`planner-node__duration planner-node__duration--${durationChip.tone}`}
+            title={durationChip.label}
+          >
+            {durationChip.label}
+          </span>
         )}
+        {/* UI-1 · Version chain moved off the card per ui-simplification.md §2.9
+            — it now lives in the inspector right-drawer 「足迹」 section. The
+            old `<select>` exposed raw `submitted_by_kind` and axios errors to
+            users; both are 隐藏词 / debug surface. If a quick-peek "v{N}" pill
+            on the card is wanted later, render N (chain length) and route
+            click → open inspector at 足迹 tab. Do NOT reintroduce a native
+            <select> on the canvas. */}
         {data.previewKind !== 'none' && (
           <span className="planner-node__badge">
             {data.previewKind === 'added' ? 'new' : 'changed'}
           </span>
         )}
         <div className="planner-node__header-actions">
-          {scheduleLabel && (
-            <span
-              className="planner-node__badge planner-node__badge--schedule"
-              title={`Scheduled session tick: ${scheduleLabel}`}
-            >
-              <CalendarClock size={12} aria-hidden />
-              {scheduleLabel}
-            </span>
-          )}
+          {/* ui-simplification §2.11 · schedule chip 已合并进 mode badge,
+              不再独立渲染。原 'Scheduled session tick' tooltip 泄露 'session'
+              这个 §0 隐藏词,一并移除。*/}
           {showResponsibleInfo && (
             <OwnerChip
               nodeId={node.id}
@@ -407,139 +526,99 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       </div>
 
       <div className="planner-node__title">{node.title}</div>
+      {node.desc && <div className="planner-node__desc">{node.desc}</div>}
 
-      {nodeKind === 'step' && (
-        <div className="planner-node__meta" aria-label="Runtime">
-          <span className="planner-node__chip">
-            <Code2 size={10} aria-hidden />
-            Runtime: {runtimeLabelForNode(node.executorType)}
+      {/* zeta · prompt-brief — one-line hint at what this node will actually
+       *  prompt the agent with. Only shown for nodes that can dispatch a
+       *  session (session-kind, or step with canCreateSession), so it doesn't
+       *  clutter pure governance / artifact rows. */}
+      {(() => {
+        const canCreateSession = Boolean(data.canChangeStatus && data.onCreateSession)
+        if (!(nodeKind === 'session' || (nodeKind === 'step' && canCreateSession))) return null
+        const brief = derivePromptBrief(node)
+        if (!brief) return null
+        return (
+          <div className="planner-node__prompt-brief" title={brief}>
+            <Sparkles size={11} aria-hidden />
+            <span>{brief}</span>
+          </div>
+        )
+      })()}
+
+      {monitorBadge && (
+        <div
+          className={`planner-node__monitor-badge planner-node__monitor-badge--${monitorBadge.tone}`}
+          title={monitorBadge.title}
+        >
+          {monitorBadge.tone === 'reply' ? <MessageCircle size={11} aria-hidden /> : <AlertTriangle size={11} aria-hidden />}
+          <span>{monitorBadge.label}</span>
+        </div>
+      )}
+
+      {node.widget && (() => {
+        // P2.4 widget dispatcher · P3.0 接通 integration entities
+        // 数据源:data.integrationEntities(PlannerGraph → adapter → PlannerNodeData)
+        // Widget data (integrationEntities) is derived from artifacts attached by AI sessions,
+        // not a backend mock pool. See integrations/artifactEntity.ts for derivation logic.
+        const WidgetComp = getWidgetComponent(node.widget.kind)
+        const widgetData = resolveWidgetData({
+          node,
+          widget: node.widget,
+          // P2 fix · upstream / subcanvas-aggregate widgets resolve
+          // dependsOnNodeIds[inputIndex] against the full canvas node list,
+          // so hand the resolver every node we know about. Fallback to
+          // `[node]` keeps virtual / standalone callers safe.
+          allNodes: data.allNodes ?? [node],
+          artifacts: data.artifacts,
+          integrationEntities: data.integrationEntities,
+        })
+        const widgetWidth = (data as { widgetWidth?: number }).widgetWidth ?? 360
+        const widgetHeight = (data as { widgetHeight?: number }).widgetHeight ?? 220
+        return (
+          <div className="planner-node__widget-body nodrag" onPointerDown={(e) => e.stopPropagation()}>
+            <WidgetComp data={widgetData} width={widgetWidth} height={widgetHeight} />
+          </div>
+        )
+      })()}
+
+      {/* UI-simplification §2.6 / §3.1 — 卡片只保留 status+mode header / title / desc / footer 四段。
+       *  原 meta chips (Runtime / Schedule / Gate)、nextAction、InputCardSections、IO output、
+       *  blockers 全部下沉到 inspector(进展/成果/足迹三段);schedule/gate 信息已折入 mode badge。
+       *  详情、re-run、mark-down 通过点击节点打开 inspector 操作。 */}
+
+      {/* UI-simplification §3.1 / PR3 — 「成果」行:step / session 节点有 artifact
+       *  时显示主推 artifact + 「查看输出」按钮。点击打开 inspector,artifact 区域
+       *  会渲染完整剪贴板。session 节点也走出口口径,跟 step 路径一致(都属于
+       *  「会产出 artifact 的节点」)。 */}
+      {(nodeKind === 'step' || nodeKind === 'session') && !data.virtual && data.artifacts && data.artifacts.length > 0 && (
+        <div className="planner-node__output-row">
+          <span className="planner-node__output-label">
+            <ArrowUpRight size={11} aria-hidden /> 成果
           </span>
-          {scheduleLabel && (
-            <span className="planner-node__chip planner-node__chip--schedule" title="This node periodically sends a message to its bound session.">
-              <CalendarClock size={10} aria-hidden />
-              Scheduled: {scheduleLabel}
-            </span>
-          )}
-          {!isRunMode && data.canChangeStatus && data.onChangeGateMode ? (
-            <label
-              className="planner-node__chip planner-node__gate-select nodrag nopan"
-              title="Change gate mode"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <Signpost size={10} aria-hidden />
-              Gate: {gateLabel}
-              <select
-                value={gateLabel.toLowerCase()}
-                aria-label={`Gate mode for ${node.title}`}
-                onChange={(event) => data.onChangeGateMode?.(node.id, event.target.value as 'human' | 'auto')}
-                onClick={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-              >
-                <option value="human">Human</option>
-                <option value="auto">Auto</option>
-              </select>
-              <ChevronDown size={10} aria-hidden />
-            </label>
-          ) : (
-            <span className="planner-node__chip">
-              <Signpost size={10} aria-hidden />
-              Gate: {gateLabel}
-            </span>
-          )}
+          <span className="planner-node__output-title">
+            {data.artifacts[0]?.title ?? compactArtifactLabel(data.artifacts[0]?.reference ?? '')}
+          </span>
+          <button
+            type="button"
+            className="planner-node__view-output-btn nodrag"
+            onClick={(event) => {
+              event.stopPropagation()
+              data.onOpenDetails?.(node.id)
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            title="查看输出 — 打开 inspector 看完整产物"
+          >
+            查看输出
+          </button>
         </div>
       )}
 
-      {nextAction && (
-        <div className="planner-node__next-action" title={nextAction}>
-          <Signpost size={11} aria-hidden />
-          <span>{nextAction}</span>
-        </div>
-      )}
-
-      {nodeKind === 'step' && (
-        <InputCardSections
-          node={node}
-          upstreamLabel={data.upstreamSourceLabel}
-          variant="card"
-          onAttachDataSource={data.onAttachDataSource}
-          onRefreshExternal={data.onRefreshExternalInput}
-          onConfigureDialogue={data.onConfigureDialogue}
-        />
-      )}
-
-      {(io.outputs.length > 0 || (node.schema?.outputs?.length ?? 0) > 0) && (
-        <div className="planner-node__io planner-node__io--output-only" aria-label="Node output">
-          <IOColumn title="Output" items={io.outputs} emptyLabel="No output" />
-        </div>
-      )}
-
-      {artifactFit.hasRequirements && (
-        <ArtifactRequirementStrip fit={artifactFit} onOpenArtifacts={reviewableOutput ? openArtifacts : undefined} />
-      )}
-
-      {blockers.length > 0 && (
-        <div className="planner-node__blockers">
-          <AlertTriangle size={12} aria-hidden />
-          <span>{blockers[0]}</span>
-          {blockers.length > 1 && <em>+{blockers.length - 1}</em>}
-        </div>
-      )}
-
-      {(primaryAction || reviewableOutput || reRunEligible || markDownEligible || (!data.virtual && data.onDeleteNode)) && (
+      {(primaryAction || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
-          {/* UI-1 · Re-run / Mark down sit in the same bottom action row as the
-              primary action so the gate-node controls are co-located. Re-run
-              hits the desktop's /rerun endpoint, which calls submit_node_output
-              with force_new_version: true and broadcasts state to all clients. */}
-          {reRunEligible && (
-            <button
-              type="button"
-              className="planner-node__rerun-action nodrag"
-              title="Re-run this node (creates a new version)"
-              aria-label={`Re-run ${node.title}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                data.onRerunNode?.(node.id, latestArtifactForVersionSlot?.reference)
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <RefreshCw size={11} aria-hidden />
-              <span>Re-run</span>
-            </button>
-          )}
-          {markDownEligible && (
-            <button
-              type="button"
-              className="planner-node__markdown-action nodrag"
-              title="Mark this node down for attention"
-              aria-label={`Mark ${node.title} for attention`}
-              onClick={(event) => {
-                event.stopPropagation()
-                data.onChangeStatus?.(node.id, 'blocked')
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <Flag size={11} aria-hidden />
-              <span>Mark down</span>
-            </button>
-          )}
-          {reviewableOutput && primaryAction !== 'View output' && (
-            <button
-              type="button"
-              className="planner-node__artifact-action nodrag"
-              title="Review output artifacts"
-              aria-label={`Review output for ${node.title}`}
-              onClick={(event) => {
-                event.stopPropagation()
-                openArtifacts()
-              }}
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <FileText size={11} aria-hidden />
-              <span>Output</span>
-            </button>
-          )}
-          {primaryAction && (
+          {/* UI-simplification §2.6 — Re-run / Mark down 已下沉到 inspector「进展」段,
+              卡片 footer 只保留 primary action + delete confirm,避免 4 个同权重
+              动作 chip 抢注意力。 */}
+          {primaryAction !== 'none' && (
             <button
               type="button"
               className="planner-node__primary-action nodrag"
@@ -547,25 +626,27 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               onClick={(event) => {
                 event.stopPropagation()
                 if (primaryActionDisabled) return
-                if (primaryAction === 'Open sub-flow' && node.subCanvasId) {
+                // UI-simplification §1 — 用枚举分发,文案改中文不会让分支错位。
+                if (primaryAction === 'open-sub-canvas' && node.subCanvasId) {
                   data.onOpenSubCanvas?.(node.subCanvasId)
-                } else if (primaryAction === 'Create session') {
+                } else if (primaryAction === 'create-session') {
                   data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
-                } else if (primaryAction === 'Open session' && sessionId) {
+                } else if (primaryAction === 'spawn-session') {
+                  // alpha (2026-05-29) — 「开干」按钮:design 态 ready 节点直接 spawn session。
+                  data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
+                } else if (primaryAction === 'open-session' && sessionId) {
                   data.onOpenSession?.(sessionId, node.id)
-                } else if (primaryAction === 'View output' && reviewableOutput) {
-                  openArtifacts()
                 } else {
                   data.onOpenDetails?.(node.id)
                 }
               }}
-              aria-label={`${primaryAction} for ${node.title}`}
-              title={primaryAction}
+              aria-label={`${primaryActionText} · ${node.title}`}
+              title={`${primaryActionText} · ${node.title}`}
             >
-              {primaryAction}
+              {primaryActionText}
             </button>
           )}
-          {primaryAction === 'Creating session...' && data.onCancelSessionCreation && (
+          {primaryAction === 'creating-session' && data.onCancelSessionCreation && (
             <button
               type="button"
               className="planner-node__secondary-action nodrag"
@@ -573,18 +654,18 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
                 event.stopPropagation()
                 data.onCancelSessionCreation?.(node.id)
               }}
-              aria-label={`Cancel session creation for ${node.title}`}
-              title="Cancel session creation"
+              aria-label={CARD_TOOLTIPS.cancelSessionCreation(node.title)}
+              title={FOOTER_LABELS.cancel}
             >
-              Cancel
+              {FOOTER_LABELS.cancel}
             </button>
           )}
           {!data.virtual && data.onDeleteNode && (
             <button
               type="button"
               className={`planner-node__delete planner-node__delete--footer nodrag nopan${deleteArmed ? ' is-confirming' : ''}`}
-              title={deleteArmed ? 'Click again to delete' : 'Delete node'}
-              aria-label={deleteArmed ? `Confirm delete ${node.title}` : `Delete ${node.title}`}
+              title={deleteArmed ? CARD_TOOLTIPS.deleteConfirm : CARD_TOOLTIPS.deleteNode}
+              aria-label={deleteArmed ? CARD_TOOLTIPS.deleteConfirmAria(node.title) : CARD_TOOLTIPS.deleteAria(node.title)}
               onClick={(event) => {
                 event.stopPropagation()
                 event.preventDefault()
@@ -603,7 +684,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
               }}
             >
               <Trash2 size={13} aria-hidden />
-              <span>{deleteArmed ? 'Confirm' : 'Delete'}</span>
+              <span>{deleteArmed ? FOOTER_LABELS.confirmDelete : FOOTER_LABELS.delete}</span>
             </button>
           )}
         </div>
@@ -650,49 +731,48 @@ function IOColumn({
   )
 }
 
-function ArtifactRequirementStrip({
-  fit,
-  onOpenArtifacts,
-}: {
-  fit: NodeArtifactFit
-  onOpenArtifacts?: () => void
-}) {
-  const missingPreview = fit.missing.slice(0, 2)
-  const label = fit.status === 'complete'
-    ? 'Artifacts complete'
-    : fit.status === 'partial'
-      ? `Missing ${fit.missing.length}`
-      : `Need ${fit.missing.length}`
-  const detail = fit.status === 'complete'
-    ? `${fit.producedCount}/${fit.expectedCount} matched`
-    : missingPreview.join(', ')
-  return (
-    <button
-      type="button"
-      className={`planner-node__artifact-fit planner-node__artifact-fit--${fit.status} nodrag`}
-      onClick={(event) => {
-        event.stopPropagation()
-        onOpenArtifacts?.()
-      }}
-      onPointerDown={(event) => event.stopPropagation()}
-      disabled={!onOpenArtifacts}
-      title={fit.status === 'complete' ? 'Artifact requirements are satisfied' : `Missing artifact requirements: ${fit.missing.join(', ')}`}
-      aria-label={fit.status === 'complete' ? 'Artifact requirements complete' : `Missing artifact requirements: ${fit.missing.join(', ')}`}
-    >
-      {fit.status === 'complete' ? <CheckCircle2 size={12} aria-hidden /> : <AlertTriangle size={12} aria-hidden />}
-      <span>{label}</span>
-      <em>{detail}</em>
-      {fit.missing.length > missingPreview.length && <strong>+{fit.missing.length - missingPreview.length}</strong>}
-    </button>
-  )
-}
-
 function ArtifactIcon({ kind, size }: { kind: CanvasArtifactKind; size: number }) {
   if (kind === 'integration') return <Plug size={size} aria-hidden />
   if (kind === 'html') return <Code2 size={size} aria-hidden />
   if (kind === 'kanban') return <Route size={size} aria-hidden />
   if (kind === 'json' || kind === 'file') return <Code2 size={size} aria-hidden />
   return <FileText size={size} aria-hidden />
+}
+
+/**
+ * nodeKind 视觉分辨 icon (2026-05-28) —— 卡片左上角小 icon,让 artifact /
+ * session / step / external / subCanvas 在画板上一眼区分。
+ *
+ * Map:
+ *   step       → SquareCheckBig (动作 / 流程)
+ *   session    → MessageCircle  (AI session / 对话)
+ *   artifact   → FileText       (数据 / 产物)
+ *   subCanvas  → Layers         (下钻 / 嵌套)
+ *   external   → Link2          (外部引用)
+ */
+function NodeKindIcon({ kind, size = 12 }: { kind: PlanningNodeKind; size?: number }) {
+  const props = { size, 'aria-hidden': true } as const
+  switch (kind) {
+    case 'session':
+      return <MessageCircle {...props} />
+    case 'artifact':
+      return <FileText {...props} />
+    case 'subCanvas':
+      return <Layers {...props} />
+    case 'external':
+      return <Link2 {...props} />
+    case 'step':
+    default:
+      return <SquareCheckBig {...props} />
+  }
+}
+
+const NODE_KIND_LABEL: Record<PlanningNodeKind, string> = {
+  step: '流程',
+  session: '会话',
+  artifact: '产物',
+  subCanvas: '子画板',
+  external: '外部引用',
 }
 
 function ArtifactPreview({
@@ -711,7 +791,7 @@ function ArtifactPreview({
   onOpenKanbanItem?: (artifact: PlannerArtifact, itemId: string, title: string, subCanvasId?: string | null) => void
 }) {
   if (!artifact) {
-    return <div className="planner-node__artifact-empty">Waiting for output</div>
+    return <div className="planner-node__artifact-empty">{ARTIFACT_LABELS.empty}</div>
   }
   if (error) {
     return <div className="planner-node__artifact-empty">{error}</div>
@@ -729,7 +809,7 @@ function ArtifactPreview({
         srcDoc={html}
       />
     ) : (
-      <ArtifactMetadata artifact={artifact} content={content} label="HTML artifact" />
+      <ArtifactMetadata artifact={artifact} content={content} label={ARTIFACT_LABELS.htmlLabel} />
     )
   }
   if (kind === 'json') {
@@ -740,10 +820,10 @@ function ArtifactPreview({
     return <IntegrationArtifactPreview artifact={artifact} content={content} />
   }
   if (kind === 'file') {
-    return <ArtifactMetadata artifact={artifact} content={content} label="File artifact" />
+    return <ArtifactMetadata artifact={artifact} content={content} label={ARTIFACT_LABELS.fileLabel} />
   }
   const text = content?.content ?? inlineString(artifact.payload, 'text')
-  return text ? <pre className="planner-node__artifact-pre">{text}</pre> : <ArtifactMetadata artifact={artifact} content={content} label="Text artifact" />
+  return text ? <pre className="planner-node__artifact-pre">{text}</pre> : <ArtifactMetadata artifact={artifact} content={content} label={ARTIFACT_LABELS.textLabel} />
 }
 
 function IntegrationArtifactPreview({ artifact, content }: { artifact: PlannerArtifact; content: PlannerArtifactContent | null }) {
@@ -989,6 +1069,34 @@ function emptyKanbanPayload(title: string): KanbanArtifactPayload {
   }
 }
 
+function monitorBadgeTitle(item: NonNullable<PlannerGraphNode['data']['monitorItem']>): string {
+  return item.replyPrompt
+    || item.nextAction
+    || item.blockers[0]
+    || monitorReasonLabel(item.reasonKind)
+}
+
+function monitorReasonLabel(reason: string): string {
+  switch (reason) {
+  case 'permission_required':
+    return 'Permission required'
+  case 'waiting_for_user':
+    return 'Waiting for user response'
+  case 'inbox_pending':
+    return 'Pending message'
+  case 'gate_wait':
+    return 'Waiting for gate review'
+  case 'awaiting_input':
+    return 'Awaiting input'
+  case 'blocked':
+    return 'Blocked'
+  case 'failed':
+    return 'Failed'
+  default:
+    return 'Attention'
+  }
+}
+
 function buildCanvasIOItems(data: PlannerGraphNode['data']): {
   inputs: CanvasIOItem[]
   outputs: CanvasIOItem[]
@@ -1116,214 +1224,28 @@ function artifactMatchesExpectation(reference: string, expected: string): boolea
   return Boolean(target) && (ref === target || ref.endsWith(target) || ref.includes(target))
 }
 
-function hasReviewableOutput(input: {
-  artifacts: PlannerArtifact[]
-  artifactFit: NodeArtifactFit
-  ioOutputs: CanvasIOItem[]
-  node: PlanningNode
-  runStatus: PlannerWorkflowRunState
-  designStatus: PlanningNodeStatus
-}): boolean {
-  return input.artifacts.length > 0
-    || input.artifactFit.hasRequirements
-    || input.ioOutputs.some((item) => !item.pending)
-    || (input.node.artifactRefs?.length ?? 0) > 0
-    || input.runStatus === 'done'
-    || input.runStatus === 'gate-wait'
-    || input.designStatus === 'done'
+// UI-simplification §1 — 文案/枚举集中到 labels.ts:
+//   - planStatusLabel / workStatusLabel — 状态徽章(已迁移到 labels.ts)
+//   - primaryActionLabel — 返回 PrimaryAction 枚举,显示文本走
+//     PRIMARY_ACTION_TEXT[action];switch 分发用枚举,不再字符串比较。
+//   - nextPlanAction / nextWorkAction / runNextActionLabel — inspector 行文案。
+
+/**
+ * zeta · prompt-brief — derive a short single-line preview from a node so the
+ * card can hint at the prompt content without expanding the inspector. Takes
+ * the title plus the first line of desc, joined with " — ", and truncated to
+ * 30 chars with an ellipsis. Returns an empty string when neither title nor
+ * desc has any content (caller suppresses the row).
+ */
+function derivePromptBrief(node: PlannerGraphNode['data']['node']): string {
+  const title = (node.title ?? '').trim()
+  const firstDescLine = (node.desc ?? '').split('\n').map((line) => line.trim()).find((line) => line.length > 0) ?? ''
+  const combined = [title, firstDescLine].filter(Boolean).join(' — ')
+  if (!combined) return ''
+  return combined.length > 30 ? `${combined.slice(0, 30)}…` : combined
 }
 
-function buildNodeArtifactFit(node: PlanningNode, artifacts: PlannerArtifact[]): NodeArtifactFit {
-  const expectedOutputs = uniqueRequirementTokens(node.schema?.outputs ?? [])
-  const requiredRefs = uniqueRequirementTokens(node.gate?.requiredArtifactRefs ?? [])
-  const missingExpected = expectedOutputs.filter((expected) => (
-    !artifacts.some((artifact) => artifactSatisfiesExpectation(artifact, expected))
-  ))
-  const missingRefs = requiredRefs.filter((requiredRef) => (
-    !artifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, requiredRef))
-  ))
-  const missing = [...missingExpected, ...missingRefs]
-  const expectedCount = expectedOutputs.length + requiredRefs.length
-  const producedCount = artifacts.length
-  const hasRequirements = expectedCount > 0
-  const status: ArtifactFitStatus = !hasRequirements || missing.length === 0
-    ? 'complete'
-    : producedCount > 0
-      ? 'partial'
-      : 'missing'
-  return {
-    hasRequirements,
-    status,
-    expectedCount,
-    producedCount,
-    missing,
-  }
-}
-
-function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: string): boolean {
-  const expected = normalizeRequirementToken(expectation)
-  if (!expected) return false
-  return artifactRequirementCandidates(artifact).some((candidate) => {
-    const normalized = normalizeRequirementToken(candidate)
-    return Boolean(normalized)
-      && (normalized === expected || normalized.includes(expected) || expected.includes(normalized))
-  })
-}
-
-function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
-  return sameRequirement(artifact.reference, requiredRef)
-    || sameRequirement(artifact.title, requiredRef)
-    || artifactSatisfiesExpectation(artifact, requiredRef)
-}
-
-function artifactRequirementCandidates(artifact: PlannerArtifact): string[] {
-  return uniqueRequirementTokens([
-    artifact.kind,
-    artifact.reference,
-    artifact.title,
-    artifact.status,
-    ...artifactPayloadTextCandidates(artifact.payload),
-  ])
-}
-
-function artifactPayloadTextCandidates(payload: unknown): string[] {
-  if (typeof payload === 'string') return [payload]
-  if (Array.isArray(payload)) return payload.flatMap(artifactPayloadTextCandidates)
-  const object = objectPayload(payload)
-  if (!object) return []
-  const direct = ['summary', 'description', 'content', 'text', 'markdown', 'html', 'json']
-    .map((key) => object[key])
-    .filter((value): value is string => typeof value === 'string')
-  const nested = ['result', 'output', 'evidence', 'payload']
-    .flatMap((key) => artifactPayloadTextCandidates(object[key]))
-  return [...direct, ...nested]
-}
-
-function sameRequirement(left: string, right: string): boolean {
-  return normalizeRequirementToken(left) === normalizeRequirementToken(right)
-}
-
-function normalizeRequirementToken(value: string): string {
-  return value.trim().toLowerCase().replace(/[\s_-]+/g, '-')
-}
-
-function uniqueRequirementTokens(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const value of values) {
-    const trimmed = value?.trim()
-    if (!trimmed) continue
-    const key = normalizeRequirementToken(trimmed)
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    result.push(trimmed)
-  }
-  return result
-}
-
-function planStatusLabel(status: string): string {
-  switch (status) {
-    case 'draft':
-      return 'Draft'
-    case 'ready':
-      return 'Ready'
-    case 'blocked':
-      return 'Needs attention'
-    case 'done':
-      return 'Done'
-    case 'working':
-      return 'In progress'
-    default:
-      return 'Draft'
-  }
-}
-
-function workStatusLabel(status: PlannerWorkflowRunState, hasSelectedDelivery: boolean): string {
-  if (!hasSelectedDelivery) return 'Select delivery'
-  switch (status) {
-    case 'pending':
-      return 'Not started'
-    case 'ready_to_start':
-      return 'Ready'
-    case 'dispatched':
-    case 'running':
-      return 'In progress'
-    case 'awaiting-input':
-      return 'Awaiting your reply'
-    case 'gate-wait':
-    case 'failed':
-      return 'Needs attention'
-    case 'done':
-      return 'Done'
-  }
-}
-
-function nextPlanAction(node: PlannerGraphNode['data']['node'], responsibleLabel?: string): string {
-  if (!responsibleLabel) return 'Assign a responsible person'
-  if (node.subCanvasId) return 'Sub-flow available'
-  return node.nextAction?.trim() || 'Review this step'
-}
-
-function nextWorkAction(
-  runNodeState: PlannerGraphNode['data']['runNodeState'],
-  hasSelectedDelivery: boolean,
-): string {
-  if (!hasSelectedDelivery) return 'Choose a Delivery to see execution state'
-  if (!runNodeState?.nextAction) return 'Ready for the next action'
-  return runNextActionLabel(runNodeState.nextAction)
-}
-
-function runNextActionLabel(action: RunNextAction): string {
-  switch (action) {
-    case 'waiting-on-upstream':
-      return 'Waiting on upstream steps'
-    case 'ready-to-dispatch':
-      return 'Ready to start'
-    case 'in-progress':
-      return 'In progress'
-    case 'gate-review':
-      return 'Awaiting review'
-    case 'confirm-artifacts':
-      return 'Done - review output'
-    case 'needs-attention':
-      return 'Needs attention'
-  }
-}
-
-function primaryActionLabel(input: {
-  mode: PlannerGraphNode['data']['mode']
-  hasSelectedDelivery: boolean
-  runStatus: PlannerWorkflowRunState
-  workflowRunState: PlannerWorkflowRunState | null
-  sessionId: string | null
-  responsibleLabel?: string
-  nodeKind: string
-  blockers: string[]
-  canCreateSession: boolean
-  creatingSession: boolean
-}): string {
-  if (input.mode === 'design') {
-    if (input.nodeKind === 'subCanvas') return 'Open sub-flow'
-    if (input.nodeKind === 'step') {
-      if (input.sessionId) return 'Open session'
-      if (input.creatingSession) return 'Creating session...'
-      return input.canCreateSession ? 'Create session' : ''
-    }
-    return ''
-  }
-  if (!input.hasSelectedDelivery) return 'Select delivery'
-  if (!input.responsibleLabel) return 'Assign person'
-  if (input.runStatus === 'done') return 'View output'
-  if (input.runStatus === 'failed' || input.runStatus === 'gate-wait' || input.blockers.length > 0) {
-    return 'Resolve'
-  }
-  if (input.sessionId) return 'Open session'
-  if (input.creatingSession) return 'Creating session...'
-  if (input.runStatus === 'ready_to_start' || input.runStatus === 'pending') return 'Open'
-  return 'Open'
-}
-
-function designKind(node: PlannerGraphNode['data']['node']): string {
+function designKind(node: PlannerGraphNode['data']['node']): PlanningNodeKind {
   return node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
 }
 
@@ -1377,15 +1299,15 @@ function pickLatestArtifactForVersions(artifacts: PlannerArtifact[]): PlannerArt
   })[0]
 }
 
-function NodeModeBadge({ mode }: { mode: NodeMode }) {
+function NodeModeBadge({ mode, scheduleInterval }: { mode: NodeMode; scheduleInterval: string | null }) {
   const Icon = MODE_ICON[mode]
   return (
     <span
       className={`planner-node__mode-badge planner-node__mode-badge--${mode}`}
-      title={`Execution mode: ${MODE_LABEL[mode]}`}
+      title={modeBadgeTooltip(mode, scheduleInterval)}
     >
       <Icon size={11} aria-hidden />
-      <span>{MODE_LABEL[mode]}</span>
+      <span>{modeBadgeLabel(mode, scheduleInterval)}</span>
     </span>
   )
 }
@@ -1433,36 +1355,47 @@ function NodeVersionDropdown({
     return v ? formatVersionLabel(v) : 'Latest'
   }, [selectedVersionId, versions])
 
+  // 注意:axios / network 报错文案不能进 <select> 的 <option>(那条信息会
+  // 变成可"选中"的项,且原文是英文 stack 文案,违反 ui-simplification.md
+  // 隐藏词约定)。改用一行 user-facing 中文文案放在 trigger 的 title +
+  // 旁边的小字行里。
+  const errorTitle = error ? '历史版本暂时读不到,稍后再试' : '查看历史版本'
   return (
-    <label
-      className="planner-node__version-select nodrag"
-      title="View a previous version of this node's output"
-      onClick={(event) => {
-        event.stopPropagation()
-        ensureLoaded()
-      }}
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <History size={11} aria-hidden />
-      <span>{selectedLabel}</span>
-      <select
-        value={selectedVersionId}
-        aria-label="Artifact version"
-        onChange={(event) => setSelectedVersionId(event.target.value)}
-        onFocus={ensureLoaded}
-        onMouseDown={ensureLoaded}
+    <span className="planner-node__version-select-wrap">
+      <label
+        className="planner-node__version-select nodrag"
+        title={errorTitle}
+        onClick={(event) => {
+          event.stopPropagation()
+          ensureLoaded()
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
       >
-        <option value="latest">Latest</option>
-        {loading && <option disabled value="__loading">Loading…</option>}
-        {error && <option disabled value="__error">{error}</option>}
-        {(versions ?? []).map((v) => (
-          <option key={v.version_id} value={v.version_id}>
-            {formatVersionLabel(v)}
-          </option>
-        ))}
-      </select>
-      <ChevronDown size={11} aria-hidden />
-    </label>
+        <History size={11} aria-hidden />
+        <span>{selectedLabel}</span>
+        <select
+          value={selectedVersionId}
+          aria-label="历史版本"
+          onChange={(event) => setSelectedVersionId(event.target.value)}
+          onFocus={ensureLoaded}
+          onMouseDown={ensureLoaded}
+        >
+          <option value="latest">最新</option>
+          {loading && <option disabled value="__loading">载入中…</option>}
+          {(versions ?? []).map((v) => (
+            <option key={v.version_id} value={v.version_id}>
+              {formatVersionLabel(v)}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={11} aria-hidden />
+      </label>
+      {error && (
+        <span className="planner-node__version-select-error">
+          历史版本暂时读不到,稍后再试
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -1471,7 +1404,10 @@ function formatVersionLabel(v: PlannerArtifactVersion): string {
   const stamp = Number.isFinite(ts)
     ? new Date(ts).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : v.created_at
-  const submitter = v.submitted_by || v.submitted_by_kind || 'unknown'
+  // 不要 fallback 到 v.submitted_by_kind —— schema 字段名是 UI 的隐藏词
+  // (ui-simplification.md §1)。team directory 没解出 submitted_by 时,
+  // 用「未知提交者」兜底,绝不暴露 `kind`。
+  const submitter = v.submitted_by || '未知提交者'
   return `${stamp} · ${submitter}`
 }
 
@@ -1482,7 +1418,7 @@ function formatVersionLabel(v: PlannerArtifactVersion): string {
  *  user id but not the display name. Falls back to the responsibleLabel
  *  computed in the adapter via the team directory. */
 function assigneeLabelFromAssignment(data: PlannerGraphNode['data']): string {
-  if (!data.assignment) return 'Unassigned'
+  if (!data.assignment) return OWNER_CHIP.unassigned
   if (data.responsibleLabel) return data.responsibleLabel
   return data.assignment.assigneeUserId.slice(0, 8)
 }
@@ -1498,11 +1434,13 @@ interface OwnerChipProps {
   onRequestAssign?: (nodeId: string) => void
 }
 
-/** UI-2 · F1.1 — clickable owner chip in the node header (top-right).
- *  Click opens the assign dialog. When an assignment already exists, the chip
- *  switches to a "Assigned to X" badge and stops being clickable (revoke is
- *  not in MVP — see spec). The button explicitly carries `nodrag nopan` so
- *  React Flow doesn't intercept the click as a node drag. */
+/** UI-2 · F1.1 — 节点头部右上的负责人 chip。
+ *  点击打开分配对话框。已经分配后,chip 变成只读徽章并停止响应点击 ——
+ *  目前还不支持改派(超出当前范围),所以不暴露这条路径。所有面向用户的
+ *  文案集中在 labels.ts 的 OWNER_CHIP,避免重新引入英文工程词
+ *  (ui-simplification.md §1 隐藏 owner-doer-viewer 这类词,§2.6 footer
+ *  用 @assignee / 未分配 表达)。按钮显式带 `nodrag nopan`,防止 React
+ *  Flow 把点击当成节点拖拽。 */
 function OwnerChip({
   nodeId,
   nodeTitle,
@@ -1514,13 +1452,13 @@ function OwnerChip({
   onRequestAssign,
 }: OwnerChipProps) {
   const label = isAssigned
-    ? assigneeLabel || 'Assigned'
-    : responsibleLabel || 'Unassigned'
+    ? (assigneeLabel ? `${OWNER_CHIP.prefixAssigned}${assigneeLabel}` : OWNER_CHIP.unassigned)
+    : (responsibleLabel ? `${OWNER_CHIP.prefixAssigned}${responsibleLabel}` : OWNER_CHIP.unassigned)
   const title = isAssigned
-    ? `Assigned to ${label} — owner-revoke is not available in MVP`
+    ? OWNER_CHIP.tooltipAssignedRevoke
     : canAssign
-      ? `Assign ${nodeTitle} to a teammate`
-      : `Owner: ${label}`
+      ? OWNER_CHIP.tooltipAssign(nodeTitle)
+      : OWNER_CHIP.tooltipReadonly(label)
   if (isAssigned || !canAssign || !onRequestAssign) {
     return (
       <span
@@ -1578,8 +1516,10 @@ function SubCanvasRefCard({
   onOpenAssignedSubCanvas,
   selected,
 }: SubCanvasRefCardProps) {
-  const inputCardinality = assignment.frozenIOContract?.input?.upstream?.mode ?? 'unspecified'
-  const outputCardinality = assignment.frozenIOContract?.output?.cardinality ?? 'unspecified'
+  const inputCardinalityRaw = assignment.frozenIOContract?.input?.upstream?.mode ?? 'unspecified'
+  const outputCardinalityRaw = assignment.frozenIOContract?.output?.cardinality ?? 'unspecified'
+  const inputCardinalityLabel = SUBCANVAS_REF_LABELS.cardinality[inputCardinalityRaw]
+  const outputCardinalityLabel = SUBCANVAS_REF_LABELS.cardinality[outputCardinalityRaw]
   return (
     <div
       className={[
@@ -1592,12 +1532,12 @@ function SubCanvasRefCard({
       <div className="planner-node__header">
         <span className="planner-node__status planner-node__status--design">
           <Lock size={12} aria-hidden />
-          Assigned
+          {SUBCANVAS_REF_LABELS.assigned}
         </span>
         <div className="planner-node__header-actions">
           <span
             className="planner-node__owner-pill planner-node__owner-pill--assigned"
-            title={`Owned by ${assigneeLabel} — internal edit is locked for you`}
+            title={SUBCANVAS_REF_LABELS.ownedByTooltip(assigneeLabel)}
           >
             <span className={`planner-node__mini-avatar${avatarUrl ? ' has-image' : ''}`} aria-hidden>
               {avatarUrl ? <img src={avatarUrl} alt="" /> : <UserRound size={12} />}
@@ -1607,18 +1547,23 @@ function SubCanvasRefCard({
         </div>
       </div>
       <div className="planner-node__title">{node.title}</div>
+      {node.desc && <div className="planner-node__desc">{node.desc}</div>}
       <div className="planner-node__subcanvas-ref-body">
         <div className="planner-node__subcanvas-ref-meta">
           <span className="planner-node__chip">
             <FileText size={10} aria-hidden />
-            Sub-canvas: {assignment.subCanvasName || assignment.subCanvasId.slice(0, 8)}
+            {SUBCANVAS_REF_LABELS.subCanvas}: {assignment.subCanvasName || assignment.subCanvasId.slice(0, 8)}
           </span>
-          <span className="planner-node__chip" title="Frozen I/O contract — input contract">
-            in: {inputCardinality}
-          </span>
-          <span className="planner-node__chip" title="Frozen I/O contract — output contract">
-            out: {outputCardinality}
-          </span>
+          {inputCardinalityLabel && (
+            <span className="planner-node__chip">
+              {SUBCANVAS_REF_LABELS.in}: {inputCardinalityLabel}
+            </span>
+          )}
+          {outputCardinalityLabel && (
+            <span className="planner-node__chip">
+              {SUBCANVAS_REF_LABELS.out}: {outputCardinalityLabel}
+            </span>
+          )}
         </div>
       </div>
       {onOpenAssignedSubCanvas && (
@@ -1630,9 +1575,9 @@ function SubCanvasRefCard({
               event.stopPropagation()
               onOpenAssignedSubCanvas(assignment.subCanvasId)
             }}
-            title={`Open sub-canvas owned by ${assigneeLabel}`}
+            title={SUBCANVAS_REF_LABELS.openTooltip(assigneeLabel)}
           >
-            Open sub-canvas
+            {SUBCANVAS_REF_LABELS.openSubCanvas}
             <ArrowUpRight size={12} aria-hidden style={{ marginLeft: 4 }} />
           </button>
         </div>

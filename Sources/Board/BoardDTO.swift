@@ -309,6 +309,14 @@ struct PlannerCanvasStateEnvelope: Encodable {
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
 }
+/// Minimal integration entity DTO (P3.0). Represents schema + payload for integration
+/// entities derived from artifacts. See integrationEntitiesFor(nodes:) which returns nil
+/// — real data flows through artifacts attached by AI sessions.
+struct IntegrationEntityDTO: Encodable {
+    let schemaId: String     // e.g. "github:pr"
+    let payload: BoardJSONValue
+}
+
 struct PlannerGraphStateEnvelope: Encodable {
     let canvas: PlanningCanvas
     let nodes: [PlanningNode]
@@ -319,6 +327,33 @@ struct PlannerGraphStateEnvelope: Encodable {
     let events: [PlannerEvent]
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
+    /// P3.0 widget data — present when any node has a kanban/inbox/matrix
+    /// widget with source.inputKind == external. nil otherwise.
+    let integrationEntities: [IntegrationEntityDTO]?
+
+    init(
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        states: [NodeStateSnapshot],
+        proposals: [PlanProposal],
+        access: PlannerAccess,
+        activities: [PlannerActivity],
+        events: [PlannerEvent],
+        artifacts: [PlannerArtifact],
+        edges: [PlannerGraphEdge],
+        integrationEntities: [IntegrationEntityDTO]? = nil
+    ) {
+        self.canvas = canvas
+        self.nodes = nodes
+        self.states = states
+        self.proposals = proposals
+        self.access = access
+        self.activities = activities
+        self.events = events
+        self.artifacts = artifacts
+        self.edges = edges
+        self.integrationEntities = integrationEntities
+    }
 }
 struct PlannerProposalEnvelope: Encodable {
     let proposal: PlanProposal?
@@ -363,6 +398,8 @@ struct CanvasInfoDTO: Encodable {
     let kind: String
     let isDefault: Bool
     let workspacePath: String
+    let parentCanvasId: String?
+    let parentNodeId: String?
     let teamId: String?
     let ownerUserId: String?
     let remoteId: String?
@@ -385,6 +422,34 @@ struct CanvasListEnvelope: Encodable {
     let activeCanvasId: String
     let defaultCanvasIds: [String]
     let memberships: [CanvasSessionMembershipDTO]
+}
+
+// MARK: - Canvas templates (gallery / apply)
+
+struct CanvasTemplateNodeSpecDTO: Encodable {
+    let title: String
+    let description: String?
+    let status: String
+    let doerId: String?
+    let positionHint: [String: Double]?
+    /// chunk P2.8 (2026-05-28): node-level widget declaration. nil ⇒ standard
+    /// view; non-nil ⇒ front-end should render the declared widget kind
+    /// (`Widget` itself is Codable — same shape as PlanningNode.widget).
+    let widget: Widget?
+}
+
+struct CanvasTemplateDTO: Encodable {
+    let id: String
+    let name: String
+    let description: String
+    let icon: String
+    let kind: String
+    let category: String
+    let defaultNodes: [CanvasTemplateNodeSpecDTO]
+}
+
+struct CanvasTemplatesEnvelope: Encodable {
+    let templates: [CanvasTemplateDTO]
 }
 
 // MARK: - 转换工具

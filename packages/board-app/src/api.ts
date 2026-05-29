@@ -81,6 +81,8 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
+    parentCanvasId: null,
+    parentNodeId: null,
   },
   [DEMO_SUB_CANVAS_ID]: {
     id: DEMO_SUB_CANVAS_ID,
@@ -90,6 +92,8 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     isDefault: false,
     workspacePath: '/demo/release-readiness',
     ownerUserId: DEMO_OWNER_ID,
+    parentCanvasId: DEMO_CANVAS_ID,
+    parentNodeId: 'release-readiness',
   },
 }
 let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
@@ -105,7 +109,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'state-api',
       title: 'Store-backed meee2 AI State API',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       inputs: ['contract.md'],
@@ -125,7 +129,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'react-flow-graph',
       title: 'React Flow meee2 AI Graph',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       inputs: ['meee2-ai-state'],
@@ -135,7 +139,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
     demoNode({
       id: 'release-readiness',
       title: 'Release Readiness Sub-canvas',
-      status: 'draft',
+      status: 'ready',
       executorType: 'openClaw',
       executionMode: 'human',
       inputs: ['graph-ui', 'proposal-preview'],
@@ -149,7 +153,7 @@ let demoNodesByCanvasId: Record<string, PlanningNode[]> = {
       id: 'qa-pass',
       canvasId: DEMO_SUB_CANVAS_ID,
       title: 'Rendered QA Pass',
-      status: 'working',
+      status: 'ready',
       executorType: 'codex',
       executionMode: 'auto',
       outputs: ['screenshot', 'dom-check'],
@@ -202,6 +206,9 @@ function demoNode(input: {
     executionMode: input.executionMode,
     executorType: input.executorType,
     doerId: input.executorType === 'human' ? DEMO_OWNER_ID : `agent-${input.executorType}`,
+    reviewerIds: [],
+    approverIds: [],
+    handoffPolicy: 'none',
     status: input.status,
     sessionId: input.sessionId ?? null,
     chatThreadId: input.sessionId ? `${input.sessionId}-thread` : null,
@@ -282,7 +289,7 @@ function demoPlannerState(canvasId: string): PlannerCanvasState {
         userId: 'viewer-demo',
         displayName: 'Teammate viewer',
         currentCanvasId: safeCanvasId,
-        selectedNodeId: nodes.find((node) => node.status === 'working')?.id ?? null,
+        selectedNodeId: nodes.find((node) => node.status === 'ready')?.id ?? null,
         selectedSessionId: null,
         lastActiveAt: now,
       },
@@ -565,6 +572,8 @@ export function createCanvas(input: { name: string; scope: CanvasScope; kind?: C
         isDefault: false,
         workspacePath: `/demo/${id}`,
         ownerUserId: DEMO_OWNER_ID,
+        parentCanvasId: null,
+        parentNodeId: null,
       },
     }
     demoNodesByCanvasId = {
@@ -642,6 +651,48 @@ export function resolveCanvasConflict(
   return jsonRequest<CanvasList>(`/api/canvases/${encodeURIComponent(canvasId)}/conflict`, {
     method: 'POST',
     body: JSON.stringify({ choice }),
+  })
+}
+
+// ─── Canvas templates (Chunk F · Official templates / Demo canvases) ───
+
+export interface CanvasTemplateNodeSpec {
+  title: string
+  description?: string | null
+  status: string
+  doerId?: string | null
+  positionHint?: Record<string, number> | null
+}
+
+export interface CanvasTemplate {
+  id: string
+  name: string
+  description: string
+  icon: string
+  /**
+   * Mirrors `BoardLayoutStore.CanvasKind` raw values. Always present in the
+   * server response (unlike `CanvasInfo.kind` which can be missing on legacy
+   * canvases), so we declare it non-optional here.
+   */
+  kind: NonNullable<CanvasList['canvases'][number]['kind']>
+  /** 'engineering' / 'team' / 'demo' (free-form for future categories). */
+  category: string
+  defaultNodes: CanvasTemplateNodeSpec[]
+}
+
+export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
+  return jsonRequest<{ templates: CanvasTemplate[] }>('/api/templates').then(
+    (envelope) => envelope.templates,
+  )
+}
+
+export function applyCanvasTemplate(
+  id: string,
+  input: { name: string; scope: CanvasScope },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 
@@ -886,7 +937,7 @@ export async function inspectPlannerDrift(canvasId: string): Promise<PlanProposa
         kind: 'updateNode',
         nodeId: blocked.id,
         title: `${blocked.title} - needs attention`,
-        status: 'draft',
+        status: 'ready',
       }],
     }
     return demoProposal
@@ -2530,6 +2581,43 @@ export async function deleteMemoryRecord(id: string): Promise<void> {
 
 export async function exportDebugBundle(): Promise<{ ok: boolean; path: string }> {
   return jsonRequest<{ ok: boolean; path: string }>('/api/system/debug-export', { method: 'POST' })
+}
+
+// ---- Privacy: storage stats + delete local data --------------------------
+
+export interface StorageStats {
+  root: string
+  canvases: number
+  sessions: number
+  runbooks: number
+  total: number
+}
+
+export interface DeleteConfirmToken {
+  token: string
+  issuedAt: string
+  expiresAt: string
+}
+
+export interface DeleteLocalDataResult {
+  ok: boolean
+  removedBytes: number
+  removedPaths: string[]
+}
+
+export async function fetchStorageStats(): Promise<StorageStats> {
+  return jsonRequest<StorageStats>('/api/system/storage-stats')
+}
+
+export async function requestDeleteLocalDataToken(): Promise<DeleteConfirmToken> {
+  return jsonRequest<DeleteConfirmToken>('/api/system/delete-local-data/token', { method: 'POST' })
+}
+
+export async function deleteLocalData(token: string): Promise<DeleteLocalDataResult> {
+  return jsonRequest<DeleteLocalDataResult>('/api/system/delete-local-data', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
 }
 
 /// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，

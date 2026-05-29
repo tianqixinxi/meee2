@@ -19,6 +19,7 @@ import { fetchPlannerWorkspaceMonitor } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import { monitorItemOpenLabel, monitorItemSourceKind } from '../../lib/workspaceNavigation'
 import type { CanvasInfo, NodeRunState, PlannerMonitorItem, PlannerMonitorState } from '../../types'
+import { CanvasKindHint } from './CanvasKindHint'
 import './planner.css'
 
 const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
@@ -117,6 +118,7 @@ export function WorkspaceMonitor({
 
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
+      <CanvasKindHint kind="monitor" />
       <div className="planner-monitor__body">
         <div className="planner-monitor__tools">
           <div className="planner-monitor__search">
@@ -375,8 +377,23 @@ function evidenceCount(item: PlannerMonitorItem): number {
   return Math.max(0, item.evidenceCount ?? 0)
 }
 
+function awaitingBoost(item: PlannerMonitorItem, now: number): number {
+  if (!item.awaitingInputSince) return 0
+  const since = Date.parse(item.awaitingInputSince)
+  if (!Number.isFinite(since)) return 0
+  const hours = Math.max(0, (now - since) / (1000 * 60 * 60))
+  if (hours >= 72) return 500
+  if (hours >= 24) return 100
+  return 0
+}
+
 function sortMonitorItems(a: PlannerMonitorItem, b: PlannerMonitorItem, sortMode: MonitorSort): number {
-  if (sortMode === 'severity' && a.riskRank !== b.riskRank) return a.riskRank - b.riskRank
+  if (sortMode === 'severity') {
+    const now = Date.now()
+    const leftRank = a.riskRank - awaitingBoost(a, now)
+    const rightRank = b.riskRank - awaitingBoost(b, now)
+    if (leftRank !== rightRank) return leftRank - rightRank
+  }
   if (sortMode === 'updated') {
     const delta = timestampForItem(b) - timestampForItem(a)
     if (delta !== 0) return delta

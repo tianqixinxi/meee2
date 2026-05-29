@@ -2,6 +2,19 @@ import Foundation
 import SwiftUI
 import Meee2PluginKit
 
+/// Current Meee2PluginKit ABI version. Bumped whenever the SessionPlugin
+/// open class layout changes in a way that breaks dylibs built against the
+/// previous SDK (e.g. new `open var widgets` added in island widget plugin
+/// commit 48aa4f1 changed the vtable slot count, crashing pre-existing
+/// codex / cursor / openclaw dylibs with EXC_BAD_ACCESS at 0x58).
+///
+/// Plugin authors declare what version they built against in plugin.json:
+///   { "abi_version": 2, ... }
+/// Plugins missing the field or below this version are recorded as
+/// compatibility-failed and SKIPPED at load time — they do NOT progress
+/// to dlopen / instantiation, so the live vtable mismatch never executes.
+public let CURRENT_PLUGIN_KIT_ABI_VERSION: Int = 2
+
 /// 动态 Plugin 加载器 - 使用 dlopen 加载 .dylib 文件
 public class DynamicPluginLoader {
     // MARK: - Types
@@ -292,8 +305,29 @@ public class DynamicPluginLoader {
             return nil
         }
 
-        // 2. 加载动态库
+        // 1.5 ABI 版本硬隔离 —— Plugin 必须声明用什么 ABI 版本 build 的,
+        // 不匹配就拒绝(不走 dlopen,不走 vtable lookup,从根上避免老 dylib 跟新
+        // SessionPlugin 类布局错位导致的 EXC_BAD_ACCESS)。
+        let declaredABI = config.abi_version ?? 0
         let dylibPath = directory.appendingPathComponent(config.dylib).path
+        if declaredABI < CURRENT_PLUGIN_KIT_ABI_VERSION {
+            let msg = "Plugin built for ABI \(declaredABI) but meee2 needs ABI " +
+                      "\(CURRENT_PLUGIN_KIT_ABI_VERSION). Rebuild the plugin against the current SDK " +
+                      "and bump `abi_version` in plugin.json."
+            MWarn("[DynamicPluginLoader] Rejecting \(config.id): \(msg)")
+            failedPlugins.append(FailedPlugin(
+                id: config.id,
+                name: config.name,
+                version: config.version,
+                dylibPath: dylibPath,
+                error: msg,
+                isCompatibilityError: true,
+                helpUrl: config.helpUrl
+            ))
+            return nil
+        }
+
+        // 2. 加载动态库
 
         guard let handle = dlopen(dylibPath, RTLD_NOW | RTLD_LOCAL) else {
             let error = String(cString: dlerror())
@@ -368,8 +402,12 @@ struct PluginMetadata: Codable {
     let dylib: String
     let settings: [PluginSettingDefinition]?
     let helpUrl: String?
-    /// 最低 PluginKit 版本要求 (可选)
+    /// 最低 PluginKit 版本要求 (可选,目前未启用 — 用 abi_version 做硬隔离)
     let minKitVersion: String?
+    /// Plugin 编译时基于的 Meee2PluginKit ABI 版本。
+    /// 缺省 → 视为 0,跟 `CURRENT_PLUGIN_KIT_ABI_VERSION` 比较失败 → reject。
+    /// Plugin 作者必须在重 build 后把这个数字调到当前。
+    let abi_version: Int?
 }
 
 /// Plugin 设置定义

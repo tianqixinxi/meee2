@@ -715,12 +715,15 @@ final class PlannerCoreTests: XCTestCase {
         // validator-level guard rejects an unknown kind too if smuggled in.
         var smuggled = service.nodeMock(canvasId: "canvas-a")[0]
         smuggled.nodeKind = .step
+        // epsilon (session-hide) tightened updateNode: setting nodeKind=.session
+        // on a non-legacy target is rejected. Use .step (still freely settable)
+        // to keep the original "known kind passes" assertion meaningful.
         XCTAssertNoThrow(try PlannerProposalValidator.validate(
             PlanProposal(
                 id: "proposal-known-kind",
                 canvasId: "canvas-a",
                 summary: "Known kind",
-                changes: [.updateNode(id: nodes[0].id, nodeKind: .session)],
+                changes: [.updateNode(id: nodes[0].id, nodeKind: .step)],
                 status: .pending
             ),
             canvas: canvas,

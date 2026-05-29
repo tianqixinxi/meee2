@@ -471,9 +471,9 @@
   margin-top: 4px;
   padding: 3px 6px;
   background: transparent;
-  border: 1px dashed var(--border, #3A3A38);
+  border: 1px dashed var(--border);
   border-radius: 4px;
-  color: var(--text-dim, #A8A59B);
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 10.5px;
   font-family: var(--mono);
@@ -483,9 +483,9 @@
 }
 
 .tx-collapsible__toggle:hover {
-  color: var(--accent, #CC785C);
-  border-color: var(--accent, #CC785C);
-  background: var(--accent-subtle, rgba(204, 120, 92, 0.10));
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-subtle);
 }
 
 .transcript-wrap {
@@ -829,4 +829,297 @@
 .tx-tool-group__summary {
   flex: 1;
   font-weight: 500;
+}
+
+/* ═══ Light-theme overrides ═══════════════════════════════════════════
+ * 这个 transcript 视图基线是硬编码的深色"终端块"（navy #0B0D14 / #0F1320 /
+ * #080A10、边框 #2A3244 / #26303F / #1F2432、文字 #D4D8E1 / #9CA3B3…）。
+ * 暗色态保持原样；这里把面板/代码块/输入/边框/文字重映射到 light token，
+ * 让它在奶油色页面上不再是一块黑板。code/terminal 块用比 paper 略深的暖
+ * 浅色调（#F3EFE7），保留代码块"凹陷"质感而不刺眼。绿色"write/added"
+ * accent 映射到 --success（在浅底上更易读）。 */
+
+:root[data-theme="light"] .transcript-panel {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .transcript-panel.empty {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .transcript-panel.error {
+  color: var(--danger);
+}
+
+/* user 气泡：暖褐底在浅色下用 accent 极淡底 + accent 边 */
+:root[data-theme="light"] .tx-text--user {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-paper));
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  box-shadow: 0 1px 0 rgba(185, 95, 67, 0.08);
+}
+
+/* injected：warning 淡底 */
+:root[data-theme="light"] .tx-text--injected {
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-paper));
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+
+:root[data-theme="light"] .tx-text--injected .tx-text__role {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+
+:root[data-theme="light"] .tx-text--other .tx-text__role {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--text-faint) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text-faint) 28%, var(--border));
+}
+
+/* thinking 竖条 / toggle */
+:root[data-theme="light"] .tx-thinking {
+  border-left-color: var(--border-strong);
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .tx-thinking__toggle {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .tx-thinking__toggle:hover {
+  color: var(--text-dim);
+}
+
+/* tool chip header / chevron / body */
+:root[data-theme="light"] .tx-tool__header,
+:root[data-theme="light"] .tx-tool-group__header {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .tx-tool__header:hover,
+:root[data-theme="light"] .tx-tool-group__header:hover {
+  background: var(--panel-bg-hover);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .tx-tool__header:focus-visible,
+:root[data-theme="light"] .tx-tool-group__header:focus-visible {
+  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+:root[data-theme="light"] .tx-tool--open > .tx-tool__header,
+:root[data-theme="light"] .tx-tool-group--open > .tx-tool-group__header {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .tx-tool__chevron,
+:root[data-theme="light"] .tx-tool-group__chevron {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .tx-tool__header:hover .tx-tool__chevron,
+:root[data-theme="light"] .tx-tool-group__header:hover .tx-tool-group__chevron {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .tx-tool__body,
+:root[data-theme="light"] .tx-tool-group__body {
+  color: var(--text-dim);
+  border-left-color: var(--border);
+}
+
+:root[data-theme="light"] .tx-tool__icon {
+  color: var(--text-dim);
+}
+
+:root[data-theme="light"] .tx-tool__name {
+  color: var(--text);
+}
+
+:root[data-theme="light"] .tx-tool__summary {
+  color: var(--text-faint);
+}
+
+/* code / terminal 块：浅暖底 + token 文字 */
+:root[data-theme="light"] .tx-tool__code,
+:root[data-theme="light"] .tx-tool__agent-prompt pre,
+:root[data-theme="light"] .tx-tool__multiedit-item,
+:root[data-theme="light"] .tx-text--assistant .tx-text__body code,
+:root[data-theme="light"] .tx-text--assistant .tx-text__body pre {
+  background: #F3EFE7;
+  color: var(--text);
+}
+
+:root[data-theme="light"] .tx-tool__code--generic {
+  border-left-color: var(--border-strong);
+}
+:root[data-theme="light"] .tx-tool__code--write {
+  border-left-color: var(--success);
+}
+:root[data-theme="light"] .tx-tool__prompt {
+  color: var(--warning);
+}
+
+/* diff old/new：在浅底上用 danger/success 淡底 + 深一点的文字 */
+:root[data-theme="light"] .tx-tool__diff-old {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-paper));
+  color: color-mix(in srgb, var(--danger) 75%, var(--text));
+  border-left-color: var(--danger);
+}
+
+:root[data-theme="light"] .tx-tool__diff-new {
+  background: color-mix(in srgb, var(--success) 12%, var(--bg-paper));
+  color: color-mix(in srgb, var(--success) 70%, var(--text));
+  border-left-color: var(--success);
+}
+
+:root[data-theme="light"] .tx-tool__meta {
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .tx-tool__meta-flags {
+  color: var(--text-faint);
+}
+:root[data-theme="light"] .tx-tool__pat {
+  color: var(--info);
+}
+
+:root[data-theme="light"] .tx-tool__agent-desc {
+  color: var(--text);
+}
+:root[data-theme="light"] .tx-tool__agent-prompt summary {
+  color: var(--text-faint);
+}
+
+:root[data-theme="light"] .tx-tool__todo {
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .tx-tool__todo--completed {
+  color: var(--text-faint);
+}
+:root[data-theme="light"] .tx-tool__todo--in_progress {
+  color: var(--info);
+}
+
+/* tool result block：深色态是近黑 #080A10，浅色态用 paper-ish 浅底 */
+:root[data-theme="light"] .tx-tool__result {
+  border-top-color: var(--border);
+}
+:root[data-theme="light"] .tx-tool__result-label {
+  color: var(--text-faint);
+}
+:root[data-theme="light"] .tx-tool__result-body {
+  background: #F3EFE7;
+  border-left-color: var(--border-strong);
+  color: var(--text-dim);
+}
+
+/* collapsible fade overlay：底部渐隐遮罩要从透明渐到 code 块的浅底色 */
+:root[data-theme="light"] .tx-collapsible:not(.tx-collapsible--open).tx-collapsible--overflows::before {
+  background: linear-gradient(
+    180deg,
+    rgba(243, 239, 231, 0) 0%,
+    rgba(243, 239, 231, 0.92) 100%
+  );
+}
+
+:root[data-theme="light"] .tx-tool__multiedit-label {
+  color: var(--text-faint);
+}
+
+/* scroll-to-latest 浮动按钮 */
+:root[data-theme="light"] .transcript-scroll-latest {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: 0 2px 8px rgba(37, 33, 29, 0.12);
+}
+:root[data-theme="light"] .transcript-scroll-latest:hover {
+  background: var(--bg-elevated);
+}
+
+/* search input + verbosity pill */
+:root[data-theme="light"] .transcript-search input {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .transcript-search input:focus {
+  border-color: var(--accent);
+}
+:root[data-theme="light"] .transcript-search__count {
+  color: var(--text-faint);
+}
+:root[data-theme="light"] .transcript-search__refreshing {
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .transcript-search__spinner {
+  border-color: color-mix(in srgb, var(--text-dim) 25%, transparent);
+  border-top-color: var(--text-dim);
+}
+
+:root[data-theme="light"] .transcript-search__verbosity {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .transcript-search__verbosity-btn {
+  color: var(--text-dim);
+  border-right-color: var(--border);
+}
+:root[data-theme="light"] .transcript-search__verbosity-btn:hover {
+  color: var(--text);
+  background: var(--panel-bg-hover);
+}
+:root[data-theme="light"] .transcript-search__verbosity-btn--active,
+:root[data-theme="light"] .transcript-search__verbosity-btn--active:hover {
+  color: color-mix(in srgb, var(--success) 70%, var(--text));
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+
+/* assistant markdown：blockquote / pre 边 / 表格 / 链接 */
+:root[data-theme="light"] .tx-text--assistant .tx-text__body pre {
+  border-left-color: var(--border-strong);
+}
+:root[data-theme="light"] .tx-text--assistant .tx-text__body blockquote {
+  border-left-color: var(--border-strong);
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .tx-text--assistant .tx-text__body th,
+:root[data-theme="light"] .tx-text--assistant .tx-text__body td {
+  border-color: var(--border);
+}
+:root[data-theme="light"] .tx-text--assistant .tx-text__body th {
+  background: var(--bg-elevated-2);
+}
+:root[data-theme="light"] .tx-text--assistant .tx-text__body a {
+  color: var(--info);
+}
+:root[data-theme="light"] .tx-text--assistant .tx-text__body a:hover {
+  color: color-mix(in srgb, var(--info) 80%, var(--text));
+}
+
+:root[data-theme="light"] .tx-tool__multiedit-item {
+  border-color: var(--border);
+}
+
+/* in-flight live chip：绿色脉冲在浅底上要用 success（暗绿）保持可读 */
+:root[data-theme="light"] .tx-entry--live {
+  border-left-color: color-mix(in srgb, var(--success) 55%, transparent);
+}
+:root[data-theme="light"] .tx-tool-pending {
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-paper));
+  border-color: color-mix(in srgb, var(--success) 35%, var(--border));
+  color: color-mix(in srgb, var(--success) 65%, var(--text));
+}
+:root[data-theme="light"] .tx-tool-pending__icon {
+  color: color-mix(in srgb, var(--success) 70%, var(--text));
+}
+:root[data-theme="light"] .tx-tool-pending__caption {
+  color: color-mix(in srgb, var(--success) 50%, var(--text-dim));
+}
+:root[data-theme="light"] .tx-tool-pending__spinner {
+  border-color: color-mix(in srgb, var(--success) 25%, transparent);
+  border-top-color: var(--success);
+}
+:root[data-theme="light"] .tx-text--pending .tx-text__body {
+  color: var(--text-dim);
 }

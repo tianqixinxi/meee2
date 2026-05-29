@@ -1,24 +1,22 @@
 import {
-  AlertCircle,
   Archive,
-  CheckCircle2,
   ExternalLink,
   FileText,
   GitCompare,
   Layers,
   Loader2,
   Search,
-  Terminal as TerminalIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   fetchPlannerGraphState,
   getArtifactVersion,
   getPlannerArtifactContent,
   listArtifactVersions,
 } from '../api'
-import { useI18n, type TranslationKey } from '../lib/i18n'
+import { useI18n } from '../lib/i18n'
 import type {
+  ArtifactPayload,
   CanvasInfo,
   PlannerArtifact,
   PlannerArtifactContent,
@@ -29,25 +27,11 @@ import type {
 
 type ArtifactFilter = 'all' | PlannerArtifactKind
 type SlotDisplayMode = 'latest' | 'merged' | 'compare'
-type RequirementFitFilter = 'all' | ArtifactRequirementSummary['fitStatus']
-
-export interface ArtifactFocusTarget {
-  id: number
-  canvasId: string
-  nodeId?: string | null
-  nodeTitle?: string | null
-  reference?: string | null
-}
 
 interface ArtifactsViewProps {
   canvases: CanvasInfo[]
   activeCanvasId: string
-  refreshTick?: number
-  focusTarget?: ArtifactFocusTarget | null
   onOpenCanvas: (canvasId: string) => void
-  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
-  onOpenSession?: (sessionId: string) => void
-  onClearFocus?: () => void
 }
 
 interface CanvasArtifacts {
@@ -61,25 +45,9 @@ interface ArtifactSlot {
   key: string
   canvas: CanvasInfo
   node?: PlanningNode
-  reference: string
-  latest: PlannerArtifact | null
+  latest: PlannerArtifact
   artifacts: PlannerArtifact[]
-  expectedKinds?: ArtifactExpectedKind[]
 }
-
-interface ArtifactRequirementSummary {
-  fitStatus: 'complete' | 'partial' | 'missing'
-  expectedOutputs: string[]
-  requiredRefs: string[]
-  producedKinds: string[]
-  producedRefs: string[]
-  matchedExpectedOutputs: string[]
-  missingExpectedOutputs: string[]
-  matchedRequiredRefs: string[]
-  missingRequiredRefs: string[]
-}
-
-type ArtifactExpectedKind = 'schema-output' | 'gate-ref'
 
 const KIND_FILTERS: ArtifactFilter[] = [
   'all',
@@ -90,23 +58,15 @@ const KIND_FILTERS: ArtifactFilter[] = [
   'lark-doc',
   'generic',
 ]
-const FIT_FILTERS: RequirementFitFilter[] = ['all', 'missing', 'partial', 'complete']
 
 export function ArtifactsView({
   canvases,
   activeCanvasId,
-  refreshTick = 0,
-  focusTarget = null,
   onOpenCanvas,
-  onOpenPlannerNode,
-  onOpenSession,
-  onClearFocus,
 }: ArtifactsViewProps) {
   const { t } = useI18n()
-  const handledFocusRef = useRef(0)
   const [query, setQuery] = useState('')
   const [kindFilter, setKindFilter] = useState<ArtifactFilter>('all')
-  const [fitFilter, setFitFilter] = useState<RequirementFitFilter>('all')
   const [canvasArtifacts, setCanvasArtifacts] = useState<CanvasArtifacts[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -160,18 +120,12 @@ export function ArtifactsView({
     return () => {
       cancelled = true
     }
-  }, [canvasSignature, refreshTick, t])
+  }, [canvasSignature, t])
 
   const canvasGroups = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     return canvasArtifacts.map((item) => {
       const nodesById = new Map(item.nodes.map((node) => [node.id, node]))
-      const artifactsByNodeId = new Map<string, PlannerArtifact[]>()
-      for (const artifact of item.artifacts) {
-        const list = artifactsByNodeId.get(artifact.nodeId) ?? []
-        list.push(artifact)
-        artifactsByNodeId.set(artifact.nodeId, list)
-      }
       const slots = new Map<string, ArtifactSlot>()
       for (const artifact of item.artifacts) {
         if (kindFilter !== 'all' && artifact.kind !== kindFilter) continue
@@ -181,7 +135,6 @@ export function ArtifactsView({
           artifact.reference,
           artifact.kind,
           artifact.status,
-          ...artifactPayloadTextCandidates(artifact.payload),
           item.canvas.name,
           item.canvas.id,
           node?.title,
@@ -199,85 +152,19 @@ export function ArtifactsView({
             key,
             canvas: item.canvas,
             node,
-            reference: artifact.reference,
             latest: artifact,
             artifacts: [artifact],
           })
         }
       }
-      if (kindFilter === 'all') {
-        for (const node of item.nodes) {
-          const nodeArtifacts = artifactsByNodeId.get(node.id) ?? []
-          const expectedSlots = [
-            ...uniqueNonEmpty(node.schema?.outputs ?? []).map((reference) => ({ reference, expectedKind: 'schema-output' as const })),
-            ...uniqueNonEmpty(node.gate?.requiredArtifactRefs ?? []).map((reference) => ({ reference, expectedKind: 'gate-ref' as const })),
-          ]
-          for (const expected of expectedSlots) {
-            const satisfied = expected.expectedKind === 'gate-ref'
-              ? nodeArtifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, expected.reference))
-              : nodeArtifacts.some((artifact) => artifactSatisfiesExpectation(artifact, expected.reference))
-            if (satisfied) continue
-            const key = expectedSlotKey(item.canvas.id, node.id, expected.reference)
-            const existing = slots.get(key)
-            if (existing) {
-              existing.expectedKinds = mergeExpectedKinds(existing.expectedKinds, expected.expectedKind)
-              continue
-            }
-            const haystack = [
-              expected.reference,
-              expected.expectedKind,
-              item.canvas.name,
-              item.canvas.id,
-              node.title,
-              node.id,
-            ].filter(Boolean).join(' ').toLowerCase()
-            if (normalizedQuery && !haystack.includes(normalizedQuery)) continue
-            slots.set(key, {
-              key,
-              canvas: item.canvas,
-              node,
-              reference: expected.reference,
-              latest: null,
-              artifacts: [],
-              expectedKinds: [expected.expectedKind],
-            })
-          }
-        }
-      }
       return {
         ...item,
-        slots: Array.from(slots.values())
-          .sort(sortSlotsForDisplay)
-          .filter((slot) => slotMatchesFitFilter(slot, artifactsByNodeId, fitFilter)),
+        slots: Array.from(slots.values()).sort((a, b) => sortArtifactsNewestFirst(a.latest, b.latest)),
       }
     }).filter((item) => item.slots.length > 0 || item.error)
-  }, [canvasArtifacts, fitFilter, kindFilter, query])
+  }, [canvasArtifacts, kindFilter, query])
 
   const totalSlots = canvasGroups.reduce((count, group) => count + group.slots.length, 0)
-  const focusSummary = useMemo(() => {
-    if (!focusTarget) return null
-    const canvas = canvases.find((item) => item.id === focusTarget.canvasId) ?? null
-    const node = canvasArtifacts
-      .find((item) => item.canvas.id === focusTarget.canvasId)
-      ?.nodes.find((item) => item.id === focusTarget.nodeId) ?? null
-    const nodeLabel = focusTarget.nodeTitle?.trim() || node?.title || focusTarget.nodeId || focusTarget.reference || t('artifacts.focusFallback')
-    const matchingSlots = canvasGroups
-      .flatMap((group) => group.slots)
-      .filter((slot) => slotMatchesFocus(slot, focusTarget))
-    const canvasArtifactGroup = canvasArtifacts.find((item) => item.canvas.id === focusTarget.canvasId)
-    const matchingArtifacts = node
-      ? (canvasArtifactGroup?.artifacts ?? []).filter((artifact) => artifact.nodeId === node.id)
-      : matchingSlots.flatMap((slot) => slot.artifacts)
-    return {
-      canvasId: focusTarget.canvasId,
-      nodeId: focusTarget.nodeId?.trim() || null,
-      canvas,
-      node,
-      nodeLabel,
-      matchingSlots,
-      requirement: buildRequirementSummary(node, matchingArtifacts),
-    }
-  }, [canvasArtifacts, canvasGroups, canvases, focusTarget, t])
 
   const toggleSlot = (key: string) => {
     setExpandedSlots((current) => {
@@ -316,7 +203,6 @@ export function ArtifactsView({
   }
 
   const loadVersions = (slot: ArtifactSlot) => {
-    if (!slot.latest) return
     if (versionsBySlot[slot.key] || versionsLoading.has(slot.key)) return
     setVersionsLoading((current) => new Set(current).add(slot.key))
     listArtifactVersions(slot.canvas.id, slot.latest.nodeId, slot.latest.reference)
@@ -348,43 +234,6 @@ export function ArtifactsView({
       .catch(() => undefined)
   }
 
-  const showAllArtifacts = () => {
-    setKindFilter('all')
-    setFitFilter('all')
-    setQuery('')
-    onClearFocus?.()
-  }
-
-  useEffect(() => {
-    if (!focusTarget || handledFocusRef.current === focusTarget.id) return
-    handledFocusRef.current = focusTarget.id
-    setKindFilter('all')
-    setFitFilter('all')
-    setQuery(focusTarget.reference?.trim() || focusTarget.nodeTitle?.trim() || focusTarget.nodeId?.trim() || '')
-  }, [focusTarget])
-
-  useEffect(() => {
-    if (!focusTarget || loading || canvasGroups.length === 0) return
-    const matchingSlots = canvasGroups
-      .flatMap((group) => group.slots)
-      .filter((slot) => slotMatchesFocus(slot, focusTarget))
-    if (matchingSlots.length === 0) return
-    setExpandedSlots((current) => {
-      const next = new Set(current)
-      matchingSlots.forEach((slot) => next.add(slot.key))
-      return next
-    })
-    matchingSlots.slice(0, 3).forEach((slot) => {
-      if (slot.latest) loadContent(slot.latest)
-    })
-    window.requestAnimationFrame(() => {
-      document.getElementById(artifactSlotDomId(matchingSlots[0].key))?.scrollIntoView({
-        block: 'center',
-        behavior: 'smooth',
-      })
-    })
-  }, [canvasGroups, focusTarget, loading])
-
   return (
     <section className="artifacts-workspace" aria-label={t('artifacts.title')}>
       <div className="artifacts-workspace__inner">
@@ -415,63 +264,10 @@ export function ArtifactsView({
                 </button>
               ))}
             </div>
-            <div className="artifacts-filters" aria-label={t('artifacts.fitFilterLabel')}>
-              {FIT_FILTERS.map((filter) => (
-                <button
-                  type="button"
-                  key={filter}
-                  className={`artifacts-filter${fitFilter === filter ? ' is-active' : ''}`}
-                  onClick={() => setFitFilter(filter)}
-                >
-                  {filter === 'all' ? t('artifacts.fitFilterAll') : t(`artifacts.fit.${filter}` as TranslationKey)}
-                </button>
-              ))}
-            </div>
           </div>
         </header>
 
         {error && <div className="artifacts-banner" role="status">{error}</div>}
-        {focusSummary && (
-          <div className="artifacts-focus" role="status">
-            <div>
-              <span className="artifacts-focus__eyebrow">{t('artifacts.focusLabel')}</span>
-              <strong>{focusSummary.nodeLabel}</strong>
-              <em>
-                {loading
-                  ? t('artifacts.focusLoading', { canvas: focusSummary.canvas?.name ?? shortId(focusSummary.canvasId) })
-                  : t('artifacts.focusMeta', {
-                    canvas: focusSummary.canvas?.name ?? shortId(focusSummary.canvasId),
-                    count: String(focusSummary.matchingSlots.length),
-                  })}
-              </em>
-              <ArtifactRequirementStrip summary={focusSummary.requirement} t={t} />
-            </div>
-            {focusSummary.nodeId && (
-              <button
-                type="button"
-                onClick={() => onOpenPlannerNode?.(focusSummary.canvasId, focusSummary.nodeId ?? '')}
-                disabled={!onOpenPlannerNode}
-              >
-                <ExternalLink size={13} aria-hidden />
-                <span>{artifactNodeActionLabel(focusSummary.requirement, true, t)}</span>
-              </button>
-            )}
-            {focusSummary.node?.sessionId?.trim() && (
-              <button
-                type="button"
-                onClick={() => onOpenSession?.(focusSummary.node?.sessionId?.trim() ?? '')}
-                disabled={!onOpenSession}
-              >
-                <TerminalIcon size={13} aria-hidden />
-                <span>{t('artifacts.openSession')}</span>
-              </button>
-            )}
-            <button type="button" onClick={showAllArtifacts}>
-              <Layers size={13} aria-hidden />
-              <span>{t('artifacts.showAll')}</span>
-            </button>
-          </div>
-        )}
         {loading && (
           <div className="artifacts-empty" role="status">
             <Loader2 size={15} className="spin" aria-hidden />
@@ -481,7 +277,7 @@ export function ArtifactsView({
         {!loading && canvasGroups.length === 0 && (
           <div className="artifacts-empty">
             <Archive size={15} aria-hidden />
-            <span>{focusSummary ? t('artifacts.focusEmpty', { node: focusSummary.nodeLabel }) : t('artifacts.empty')}</span>
+            <span>{t('artifacts.empty')}</span>
           </div>
         )}
 
@@ -507,120 +303,99 @@ export function ArtifactsView({
               <div className="artifacts-grid">
                 {group.slots.map((slot) => {
                   const mode = displayModes[slot.key] ?? 'latest'
-                  const content = slot.latest ? contentByArtifactId[slot.latest.id] : undefined
+                  const content = contentByArtifactId[slot.latest.id]
                   const versions = versionsBySlot[slot.key]
                   const selectedVersionId = selectedVersionBySlot[slot.key]
                   const selectedVersion = selectedVersionId ? versionDetailById[selectedVersionId] : undefined
                   const isExpanded = expandedSlots.has(slot.key)
-                  const isFocused = focusTarget ? slotMatchesFocus(slot, focusTarget) : false
-                  const nodeArtifacts = slot.node
-                    ? group.artifacts.filter((artifact) => artifact.nodeId === slot.node?.id)
-                    : slot.artifacts
-                  const requirement = buildSlotRequirementSummary(slot, nodeArtifacts)
-                  const hasArtifact = Boolean(slot.latest)
                   return (
-                    <article
-                      className={`artifacts-card${isFocused ? ' is-focused' : ''}${hasArtifact ? '' : ' is-missing-slot'}`}
-                      id={artifactSlotDomId(slot.key)}
-                      key={slot.key}
-                    >
+                    <article className="artifacts-card" key={slot.key}>
                       <div className="artifacts-card__top">
                         <div>
                           <div className="artifacts-card__eyebrow">
-                            <span>{slot.latest?.kind ?? t('artifacts.expectedSlot')}</span>
-                            <span>{slot.latest?.status ?? t('artifacts.fit.missing')}</span>
+                            <span>{slot.latest.kind}</span>
+                            <span>{slot.latest.status}</span>
+                            {slot.latest.positionTag && slot.latest.positionTag !== 'latest' && (
+                              <span className={`artifacts-card__position artifacts-card__position--${slot.latest.positionTag}`}>
+                                {slot.latest.positionTag}
+                              </span>
+                            )}
                           </div>
-                          <h3>{slot.latest?.title ?? slot.reference}</h3>
-                          <p>{slot.reference}</p>
+                          <h3>{slot.latest.title}</h3>
+                          <p>{slot.latest.reference}</p>
                         </div>
                         <span className="artifacts-card__count">{slot.artifacts.length}</span>
                       </div>
                       <dl className="artifacts-meta">
                         <div>
                           <dt>{t('artifacts.node')}</dt>
-                          <dd>{slot.node?.title ?? slot.latest?.nodeId ?? t('artifacts.focusFallback')}</dd>
+                          <dd>{slot.node?.title ?? slot.latest.nodeId}</dd>
                         </div>
                         <div>
                           <dt>{t('artifacts.latest')}</dt>
-                          <dd>{slot.latest ? formatDate(slot.latest.createdAt) : t('artifacts.notProduced')}</dd>
+                          <dd>{formatDate(slot.latest.createdAt)}</dd>
                         </div>
                       </dl>
-                      <ArtifactRequirementPanel summary={requirement} t={t} />
-                      {slot.latest && (
-                        <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
-                          <button
-                            type="button"
-                            className={mode === 'latest' ? 'is-active' : ''}
-                            onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
-                          >
-                            <FileText size={13} aria-hidden />
-                            <span>{t('artifacts.showLatest')}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={mode === 'merged' ? 'is-active' : ''}
-                            onClick={() => {
-                              setDisplayModes((current) => ({ ...current, [slot.key]: 'merged' }))
-                              loadVersions(slot)
-                            }}
-                          >
-                            <Layers size={13} aria-hidden />
-                            <span>{t('artifacts.showMerged')}</span>
-                          </button>
-                          <button
-                            type="button"
-                            className={mode === 'compare' ? 'is-active' : ''}
-                            onClick={() => {
-                              setDisplayModes((current) => ({ ...current, [slot.key]: 'compare' }))
-                              loadVersions(slot)
-                            }}
-                          >
-                            <GitCompare size={13} aria-hidden />
-                            <span>{t('artifacts.compareVersions')}</span>
-                          </button>
-                        </div>
-                      )}
-                      <div className="artifacts-card__footer">
-                        {slot.latest && (
-                          <button
-                            type="button"
-                            className="artifacts-link-button"
-                            onClick={() => {
-                              toggleSlot(slot.key)
-                              if (slot.latest) loadContent(slot.latest)
-                            }}
-                          >
-                            {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
-                          </button>
-                        )}
-                        {slot.node && (
-                          <button
-                            type="button"
-                            className="artifacts-link-button"
-                            onClick={() => onOpenPlannerNode?.(slot.canvas.id, slot.node?.id ?? '')}
-                            disabled={!onOpenPlannerNode}
-                          >
-                            <ExternalLink size={13} aria-hidden />
-                            {artifactNodeActionLabel(requirement, hasArtifact, t)}
-                          </button>
-                        )}
-                        {slot.latest && (
-                          <button
-                            type="button"
-                            className="artifacts-link-button"
-                            onClick={() => loadVersions(slot)}
-                          >
-                            {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
-                          </button>
-                        )}
+                      <div className="artifacts-card__actions" aria-label={t('artifacts.controls')}>
+                        <button
+                          type="button"
+                          className={mode === 'latest' ? 'is-active' : ''}
+                          onClick={() => setDisplayModes((current) => ({ ...current, [slot.key]: 'latest' }))}
+                        >
+                          <FileText size={13} aria-hidden />
+                          <span>{t('artifacts.showLatest')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={mode === 'merged' ? 'is-active' : ''}
+                          onClick={() => {
+                            setDisplayModes((current) => ({ ...current, [slot.key]: 'merged' }))
+                            loadVersions(slot)
+                          }}
+                        >
+                          <Layers size={13} aria-hidden />
+                          <span>{t('artifacts.showMerged')}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={mode === 'compare' ? 'is-active' : ''}
+                          onClick={() => {
+                            setDisplayModes((current) => ({ ...current, [slot.key]: 'compare' }))
+                            loadVersions(slot)
+                          }}
+                        >
+                          <GitCompare size={13} aria-hidden />
+                          <span>{t('artifacts.compareVersions')}</span>
+                        </button>
                       </div>
-                      {isExpanded && slot.latest && (
+                      <div className="artifacts-card__footer">
+                        <button
+                          type="button"
+                          className="artifacts-link-button"
+                          onClick={() => {
+                            toggleSlot(slot.key)
+                            loadContent(slot.latest)
+                          }}
+                        >
+                          {isExpanded ? t('artifacts.hideDetails') : t('artifacts.viewDetails')}
+                        </button>
+                        <button
+                          type="button"
+                          className="artifacts-link-button"
+                          onClick={() => loadVersions(slot)}
+                        >
+                          {versionsLoading.has(slot.key) ? t('artifacts.loadingVersions') : t('artifacts.loadVersions')}
+                        </button>
+                      </div>
+                      {isExpanded && (
                         <div className="artifacts-details">
                           {contentLoading.has(slot.latest.id) ? (
                             <div className="artifacts-preview artifacts-preview--loading">
                               <Loader2 size={14} className="spin" aria-hidden />
                               <span>{t('artifacts.loadingLatest')}</span>
                             </div>
+                          ) : slot.latest.typedPayload ? (
+                            <TypedPayloadPreview payload={slot.latest.typedPayload} />
                           ) : (
                             <ArtifactContentPreview content={content} t={t} />
                           )}
@@ -696,287 +471,6 @@ function ArtifactContentPreview({ content, t }: { content?: PlannerArtifactConte
   )
 }
 
-function ArtifactRequirementStrip({
-  summary,
-  t,
-}: {
-  summary: ArtifactRequirementSummary | null
-  t: ReturnType<typeof useI18n>['t']
-}) {
-  if (!summary) return null
-  return (
-    <div
-      className={`artifacts-requirement-strip artifacts-requirement-strip--${summary.fitStatus}`}
-      aria-label={t('artifacts.requirements')}
-    >
-      <span className="artifacts-requirement-strip__fit">
-        {summary.fitStatus === 'complete'
-          ? <CheckCircle2 size={11} aria-hidden />
-          : <AlertCircle size={11} aria-hidden />}
-        {t(`artifacts.fit.${summary.fitStatus}` as TranslationKey)}
-      </span>
-      <span>
-        {t('artifacts.producedCount', { count: String(summary.producedRefs.length) })}
-      </span>
-      {summary.expectedOutputs.length > 0 && (
-        <span>{t('artifacts.expectedCount', { count: String(summary.expectedOutputs.length) })}</span>
-      )}
-      {summary.requiredRefs.length > 0 && (
-        <span>{t('artifacts.requiredMatch', {
-          matched: String(summary.matchedRequiredRefs.length),
-          total: String(summary.requiredRefs.length),
-        })}</span>
-      )}
-    </div>
-  )
-}
-
-function ArtifactRequirementPanel({
-  summary,
-  t,
-}: {
-  summary: ArtifactRequirementSummary | null
-  t: ReturnType<typeof useI18n>['t']
-}) {
-  if (!summary) return null
-  return (
-    <section
-      className={`artifacts-requirements artifacts-requirements--${summary.fitStatus}`}
-      aria-label={t('artifacts.requirements')}
-    >
-      <div className="artifacts-requirements__head">
-        <span>{t('artifacts.requirements')}</span>
-        <strong>{t(`artifacts.fit.${summary.fitStatus}` as TranslationKey)}</strong>
-      </div>
-      {(summary.missingExpectedOutputs.length > 0 || summary.missingRequiredRefs.length > 0) && (
-        <RequirementChipRow
-          label={t('artifacts.missing')}
-          values={[...summary.missingExpectedOutputs, ...summary.missingRequiredRefs]}
-          limit={4}
-          tone="missing"
-        />
-      )}
-      {summary.expectedOutputs.length > 0 && (
-        <RequirementChipRow
-          label={t('artifacts.expected')}
-          values={summary.expectedOutputs.map((output) => requirementMatchLabel(
-            output,
-            summary.matchedExpectedOutputs,
-          ))}
-          limit={3}
-        />
-      )}
-      {summary.producedKinds.length > 0 && (
-        <RequirementChipRow
-          label={t('artifacts.produced')}
-          values={summary.producedKinds}
-          limit={4}
-        />
-      )}
-      {summary.requiredRefs.length > 0 && (
-        <RequirementChipRow
-          label={t('artifacts.gateRefs')}
-          values={summary.requiredRefs.map((ref) => requirementMatchLabel(ref, summary.matchedRequiredRefs))}
-          limit={3}
-        />
-      )}
-    </section>
-  )
-}
-
-function artifactNodeActionLabel(
-  summary: ArtifactRequirementSummary | null,
-  hasArtifact: boolean,
-  t: ReturnType<typeof useI18n>['t'],
-): string {
-  if (!hasArtifact || summary?.fitStatus === 'missing') return t('artifacts.openNodeToProduce')
-  if (summary?.fitStatus === 'partial') return t('artifacts.openNodeToFinish')
-  return t('artifacts.openNode')
-}
-
-function RequirementChipRow({
-  label,
-  values,
-  limit,
-  tone,
-}: {
-  label: string
-  values: string[]
-  limit: number
-  tone?: 'missing'
-}) {
-  const visible = values.slice(0, limit)
-  const hidden = values.length - visible.length
-  return (
-    <div className={`artifacts-requirements__row${tone ? ` artifacts-requirements__row--${tone}` : ''}`}>
-      <span>{label}</span>
-      <div>
-        {visible.map((value) => (
-          <em key={value}>{value}</em>
-        ))}
-        {hidden > 0 && <em>+{hidden}</em>}
-      </div>
-    </div>
-  )
-}
-
-function buildRequirementSummary(
-  node: PlanningNode | null | undefined,
-  artifacts: PlannerArtifact[],
-): ArtifactRequirementSummary | null {
-  const expectedOutputs = uniqueNonEmpty(node?.schema?.outputs ?? [])
-  const requiredRefs = uniqueNonEmpty(node?.gate?.requiredArtifactRefs ?? [])
-  const producedKinds = uniqueNonEmpty(artifacts.map((artifact) => artifact.kind))
-  const producedRefs = uniqueNonEmpty(artifacts.map((artifact) => artifact.reference))
-  const matchedExpectedOutputs = expectedOutputs.filter((output) => (
-    artifacts.some((artifact) => artifactSatisfiesExpectation(artifact, output))
-  ))
-  const missingExpectedOutputs = expectedOutputs.filter((output) => (
-    !matchedExpectedOutputs.some((matched) => sameRequirement(matched, output))
-  ))
-  const matchedRequiredRefs = requiredRefs.filter((ref) => (
-    artifacts.some((artifact) => artifactSatisfiesRequiredRef(artifact, ref))
-  ))
-  const missingRequiredRefs = requiredRefs.filter((ref) => (
-    !matchedRequiredRefs.some((matched) => sameRequirement(matched, ref))
-  ))
-  if (
-    expectedOutputs.length === 0
-    && requiredRefs.length === 0
-    && producedKinds.length === 0
-    && producedRefs.length === 0
-  ) {
-    return null
-  }
-  const hasRequirements = expectedOutputs.length > 0 || requiredRefs.length > 0
-  const missingCount = missingExpectedOutputs.length + missingRequiredRefs.length
-  const matchedCount = matchedExpectedOutputs.length + matchedRequiredRefs.length
-  return {
-    fitStatus: hasRequirements
-      ? missingCount === 0
-        ? 'complete'
-        : matchedCount > 0 || producedRefs.length > 0
-          ? 'partial'
-          : 'missing'
-      : producedRefs.length > 0 || producedKinds.length > 0
-        ? 'complete'
-        : 'missing',
-    expectedOutputs,
-    requiredRefs,
-    producedKinds,
-    producedRefs,
-    matchedExpectedOutputs,
-    missingExpectedOutputs,
-    matchedRequiredRefs,
-    missingRequiredRefs,
-  }
-}
-
-function buildSlotRequirementSummary(
-  slot: ArtifactSlot,
-  nodeArtifacts: PlannerArtifact[],
-): ArtifactRequirementSummary | null {
-  if (slot.latest || !slot.expectedKinds?.length) return buildRequirementSummary(slot.node, nodeArtifacts)
-  const producedKinds = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.kind))
-  const producedRefs = uniqueNonEmpty(nodeArtifacts.map((artifact) => artifact.reference))
-  const reference = slot.reference.trim()
-  if (!reference) return buildRequirementSummary(slot.node, nodeArtifacts)
-  const isSchemaOutput = slot.expectedKinds.includes('schema-output')
-  const isGateRef = slot.expectedKinds.includes('gate-ref')
-  return {
-    fitStatus: 'missing',
-    expectedOutputs: isSchemaOutput ? [reference] : [],
-    requiredRefs: isGateRef ? [reference] : [],
-    producedKinds,
-    producedRefs,
-    matchedExpectedOutputs: [],
-    missingExpectedOutputs: isSchemaOutput ? [reference] : [],
-    matchedRequiredRefs: [],
-    missingRequiredRefs: isGateRef ? [reference] : [],
-  }
-}
-
-function mergeExpectedKinds(
-  current: ArtifactExpectedKind[] | undefined,
-  nextKind: ArtifactExpectedKind,
-): ArtifactExpectedKind[] {
-  if (!current?.length) return [nextKind]
-  return current.includes(nextKind) ? current : [...current, nextKind]
-}
-
-function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const value of values) {
-    const normalized = value?.trim()
-    if (!normalized || seen.has(normalized.toLowerCase())) continue
-    seen.add(normalized.toLowerCase())
-    result.push(normalized)
-  }
-  return result
-}
-
-function artifactSatisfiesExpectation(artifact: PlannerArtifact, expectation: string): boolean {
-  const expected = normalizeRequirementToken(expectation)
-  if (!expected) return false
-  return artifactRequirementCandidates(artifact).some((candidate) => {
-    const normalized = normalizeRequirementToken(candidate)
-    if (!normalized) return false
-    return normalized === expected
-      || normalized.includes(expected)
-      || expected.includes(normalized)
-  })
-}
-
-function artifactSatisfiesRequiredRef(artifact: PlannerArtifact, requiredRef: string): boolean {
-  return sameRequirement(artifact.reference, requiredRef)
-    || sameRequirement(artifact.title, requiredRef)
-    || artifactSatisfiesExpectation(artifact, requiredRef)
-}
-
-function artifactRequirementCandidates(artifact: PlannerArtifact): string[] {
-  return uniqueNonEmpty([
-    artifact.kind,
-    artifact.reference,
-    artifact.title,
-    artifact.status,
-    ...artifactPayloadTextCandidates(artifact.payload),
-  ])
-}
-
-function artifactPayloadTextCandidates(payload: unknown): string[] {
-  if (typeof payload === 'string') return [payload]
-  if (!payload || typeof payload !== 'object') return []
-  const item = payload as Record<string, unknown>
-  const direct = [
-    item.summary,
-    item.description,
-    item.content,
-    item.text,
-    item.markdown,
-    item.html,
-    item.json,
-  ].filter((value): value is string => typeof value === 'string')
-  const nested = ['result', 'output', 'evidence', 'payload']
-    .flatMap((key) => artifactPayloadTextCandidates(item[key]))
-  return [...direct, ...nested]
-}
-
-function sameRequirement(left: string, right: string): boolean {
-  return normalizeRequirementToken(left) === normalizeRequirementToken(right)
-}
-
-function normalizeRequirementToken(value: string | null | undefined): string {
-  return (value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '-')
-}
-
-function requirementMatchLabel(value: string, matchedValues: string[]): string {
-  return matchedValues.some((matched) => sameRequirement(matched, value)) ? `ok ${value}` : value
-}
-
 function VersionSummary({ version, t }: { version?: PlannerArtifactVersion; t: ReturnType<typeof useI18n>['t'] }) {
   if (!version) return null
   return (
@@ -1032,43 +526,6 @@ function slotKey(artifact: PlannerArtifact): string {
   return `${artifact.canvasId}:${artifact.nodeId}:${artifact.reference.trim().toLowerCase()}`
 }
 
-function expectedSlotKey(canvasId: string, nodeId: string, reference: string): string {
-  return `${canvasId}:${nodeId}:expected:${normalizeRequirementToken(reference)}`
-}
-
-function sortSlotsForDisplay(left: ArtifactSlot, right: ArtifactSlot): number {
-  if (left.latest && right.latest) return sortArtifactsNewestFirst(left.latest, right.latest)
-  if (left.latest) return -1
-  if (right.latest) return 1
-  return left.reference.localeCompare(right.reference)
-}
-
-function slotMatchesFitFilter(
-  slot: ArtifactSlot,
-  artifactsByNodeId: Map<string, PlannerArtifact[]>,
-  fitFilter: RequirementFitFilter,
-): boolean {
-  if (fitFilter === 'all') return true
-  const nodeArtifacts = slot.node ? artifactsByNodeId.get(slot.node.id) ?? [] : slot.artifacts
-  const summary = buildSlotRequirementSummary(slot, nodeArtifacts)
-  const fitStatus = summary?.fitStatus ?? (slot.latest ? 'complete' : 'missing')
-  return fitStatus === fitFilter
-}
-
-function slotMatchesFocus(slot: ArtifactSlot, focus: ArtifactFocusTarget): boolean {
-  if (slot.canvas.id !== focus.canvasId) return false
-  const nodeId = focus.nodeId?.trim()
-  const reference = focus.reference?.trim().toLowerCase()
-  if (reference && slot.reference.trim().toLowerCase() === reference) return true
-  if (reference) return false
-  if (nodeId && (slot.latest?.nodeId === nodeId || slot.node?.id === nodeId)) return true
-  return false
-}
-
-function artifactSlotDomId(key: string): string {
-  return `artifact-slot-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`
-}
-
 function sortArtifactsNewestFirst(a: PlannerArtifact, b: PlannerArtifact): number {
   return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
 }
@@ -1091,10 +548,6 @@ function formatBytes(value: number | null | undefined, t: ReturnType<typeof useI
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function shortId(value: string): string {
-  return value.length > 8 ? value.slice(0, 8).toUpperCase() : value.toUpperCase()
-}
-
 function stringifyPreview(value: unknown): string {
   if (value == null) return ''
   if (typeof value === 'string') return value
@@ -1103,4 +556,119 @@ function stringifyPreview(value: unknown): string {
   } catch {
     return String(value)
   }
+}
+
+/**
+ * UI-simplification §3.E — render the artifact according to its
+ * `typedPayload.type`. Each kind gets its own strong-typed view.
+ * Called from the expanded artifact card; if typedPayload is absent,
+ * the caller falls back to the legacy ArtifactContentPreview.
+ *
+ * Same set of variants will also drive the data-node renderer on the
+ * canvas (Push 5 — spawn data node).
+ */
+function TypedPayloadPreview({ payload }: { payload: ArtifactPayload }) {
+  switch (payload.type) {
+    case 'prd':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--prd">
+          <div className="artifacts-typed-payload__tldr">{payload.tldr}</div>
+          <ul className="artifacts-typed-payload__sections">
+            {payload.sections.map((s) => (
+              <li key={s.heading}>
+                <strong>{s.heading}</strong>
+                <em>{s.lines} 行</em>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )
+    case 'kanban':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--kanban">
+          {payload.columns.map((col) => (
+            <div key={col.name} className="artifacts-typed-payload__kanban-col">
+              <header>
+                <span>{col.name}</span>
+                <em>{col.items.length}</em>
+              </header>
+              {col.items.slice(0, 5).map((item) => (
+                <div key={item} className="artifacts-typed-payload__kanban-item">{item}</div>
+              ))}
+              {col.items.length > 5 && (
+                <div className="artifacts-typed-payload__kanban-more">+{col.items.length - 5}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )
+    case 'impl-pr':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--pr">
+          <div className="artifacts-typed-payload__pr-line">
+            <strong>#{payload.number}</strong>
+            <code>{payload.branch}</code>
+            <span>← {payload.baseBranch}</span>
+          </div>
+          <div className="artifacts-typed-payload__pr-stats">
+            <strong>{payload.filesChanged}</strong> files ·
+            <span className="artifacts-typed-payload__pr-add"> +{payload.insertions}</span> ·
+            <span className="artifacts-typed-payload__pr-del"> −{payload.deletions}</span>
+          </div>
+          <div className={`artifacts-typed-payload__ci is-${payload.ciStatus}`}>
+            CI {payload.ciStatus}
+          </div>
+          <div className="artifacts-typed-payload__pr-reviewers">
+            评审 · {payload.reviewers.join(', ') || '(无)'}
+          </div>
+        </div>
+      )
+    case 'check-result':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--check">
+          <div className="artifacts-typed-payload__check-pills">
+            <span className="is-pass">{payload.pass} pass</span>
+            <span className="is-fail">{payload.fail} fail</span>
+            <span className="is-skip">{payload.skip} skip</span>
+          </div>
+          {payload.failing.length > 0 && (
+            <ul className="artifacts-typed-payload__failing">
+              {payload.failing.slice(0, 5).map((f) => <li key={f}>✗ {f}</li>)}
+            </ul>
+          )}
+        </div>
+      )
+    case 'file':
+      return (
+        <dl className="artifacts-typed-payload artifacts-typed-payload--file">
+          <div><dt>filename</dt><dd>{payload.filename}</dd></div>
+          <div><dt>mime</dt><dd>{payload.mime}</dd></div>
+          <div><dt>size</dt><dd>{formatBytesPlain(payload.sizeBytes)}</dd></div>
+          {payload.lines != null && <div><dt>lines</dt><dd>{payload.lines}</dd></div>}
+        </dl>
+      )
+    case 'markdown':
+      return <pre className="artifacts-typed-payload artifacts-typed-payload--markdown">{payload.preview}</pre>
+    case 'integration':
+      return (
+        <div className="artifacts-typed-payload artifacts-typed-payload--integration">
+          <div className="artifacts-typed-payload__integration-line">
+            <strong>{payload.connector}</strong>
+            <code>{payload.externalId}</code>
+          </div>
+          {payload.externalUrl && (
+            <a href={payload.externalUrl} target="_blank" rel="noopener noreferrer">
+              {payload.externalUrl}
+            </a>
+          )}
+          {payload.summary && <div className="artifacts-typed-payload__integration-summary">{payload.summary}</div>}
+        </div>
+      )
+  }
+}
+
+function formatBytesPlain(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }

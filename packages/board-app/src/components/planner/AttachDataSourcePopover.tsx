@@ -6,8 +6,8 @@
  * a ref. On submit, asks the container to bind it to the node — today this
  * is a no-op + TODO; INT-2 wires it to a sync-session bind.
  *
- * When the endpoint returns an empty list (INT-2 not yet landed) we degrade
- * to a single stub row so the popover is still demonstrable end-to-end.
+ * When the endpoint returns an empty list or 404, shows an honest empty state
+ * with a warning message. No fallback stub connector is injected.
  */
 
 import { Plug, X } from 'lucide-react'
@@ -48,14 +48,19 @@ export function AttachDataSourcePopover({
     fetchConnectorsSafe()
       .then((rows) => {
         if (cancelled) return
-        const list = rows.length > 0 ? rows : ECHO_REFERENCE_FALLBACK
-        setConnectors(list)
-        setSelectedSlug((current) => current || list[0]?.slug || '')
+        if (rows.length === 0) {
+          setLoadError('No connectors available. INT-1 connector hub may not be deployed yet.')
+          setConnectors([])
+          setSelectedSlug('')
+        } else {
+          setConnectors(rows)
+          setSelectedSlug((current) => current || rows[0]?.slug || '')
+        }
       })
       .catch((err) => {
         if (cancelled) return
-        setConnectors(ECHO_REFERENCE_FALLBACK)
-        setSelectedSlug(ECHO_REFERENCE_FALLBACK[0].slug)
+        setConnectors([])
+        setSelectedSlug('')
         setLoadError((err as Error).message || 'Failed to load connectors')
       })
       .finally(() => {
@@ -121,10 +126,7 @@ export function AttachDataSourcePopover({
         ) : (
           <>
             {loadError && (
-              <p className="planner-attach-popover__warn">
-                Connector hub unavailable ({loadError}). Showing reference
-                connectors only.
-              </p>
+              <p className="planner-attach-popover__warn">{loadError}</p>
             )}
             <label className="planner-attach-popover__field">
               <span>Connector</span>
@@ -165,7 +167,7 @@ export function AttachDataSourcePopover({
                 type="button"
                 className="primary"
                 onClick={handleSubmit}
-                disabled={submitting || !selectedSlug || refValue.trim().length === 0}
+                disabled={submitting || !selectedSlug || refValue.trim().length === 0 || connectors.length === 0}
               >
                 {submitting ? 'Attaching…' : 'Attach'}
               </button>
@@ -176,11 +178,6 @@ export function AttachDataSourcePopover({
     </div>
   )
 }
-
-/** Echo / reference connector — what INT-1 currently exposes. */
-const ECHO_REFERENCE_FALLBACK: ConnectorRow[] = [
-  { id: 'echo-reference', label: 'Echo (reference)', slug: 'echo' },
-]
 
 /**
  * Wrap the connectors fetch so a 404 (INT-1 not yet deployed) or non-JSON

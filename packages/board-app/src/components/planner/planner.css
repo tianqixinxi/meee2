@@ -135,7 +135,7 @@
   justify-items: center;
   overflow: auto;
   padding: clamp(112px, 14vh, 148px) clamp(24px, 6vw, 96px) clamp(32px, 6vh, 72px);
-  background: #252522;
+  background: var(--bg);
 }
 
 .planner-flow {
@@ -303,7 +303,7 @@
 }
 
 .planner-flow .react-flow {
-  background: #252522;
+  background: var(--bg);
 }
 
 .planner-workspace-preview {
@@ -311,23 +311,66 @@
   inset: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
-  background: #252522;
+  background: var(--bg);
+}
+
+/* UI-simplification — Apply / Reject 显式悬浮在画板右上角,避免预览态卡死 */
+.planner-workspace-preview__actions {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 23;
+  display: flex;
+  gap: 8px;
+}
+.planner-workspace-preview__btn {
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  border: 1px solid transparent;
+  transition: background 140ms ease, border-color 140ms ease, opacity 140ms ease;
+}
+.planner-workspace-preview__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.planner-workspace-preview__btn--apply {
+  background: var(--accent);
+  color: #1A1210;
+  border-color: var(--accent);
+}
+.planner-workspace-preview__btn--apply:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.planner-workspace-preview__btn--reject {
+  background: rgba(35, 35, 32, 0.94);
+  color: var(--text-dim);
+  border-color: rgba(168, 165, 155, 0.28);
+}
+.planner-workspace-preview__btn--reject:hover:not(:disabled) {
+  background: rgba(50, 48, 44, 0.94);
+  color: var(--text);
+  border-color: rgba(168, 165, 155, 0.42);
 }
 
 .planner-workspace-preview__notice {
   position: absolute;
-  top: 76px;
-  left: 16px;
-  z-index: 260;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
   display: grid;
   gap: 4px;
-  width: min(420px, calc(100% - 32px));
+  width: min(420px, calc(100% - 280px));
   padding: 10px 12px;
   border: 1px solid rgba(204, 120, 92, 0.34);
   border-radius: 8px;
   background: rgba(43, 35, 31, 0.94);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 .planner-workspace-preview__notice span {
@@ -356,26 +399,444 @@
   line-height: 1.35;
 }
 
-.planner-workspace-preview__notice button {
-  width: fit-content;
-  height: 28px;
-  margin-top: 4px;
-  padding: 0 10px;
-  border: 1px solid rgba(204, 120, 92, 0.38);
-  border-radius: 7px;
-  background: rgba(204, 120, 92, 0.18);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.planner-workspace-preview__notice button:hover {
-  background: rgba(204, 120, 92, 0.28);
-}
-
 .planner-workspace-preview .react-flow {
   min-height: 0;
+}
+
+/* ============================================================================
+ * Canvas kinds — kanban / inbox / matrix
+ * Shared shell + 5 status accents, design tokens stay consistent with .planner-node.
+ * ============================================================================ */
+
+.canvas-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--text-dim);
+  padding: 32px;
+  gap: 6px;
+}
+.canvas-empty p { margin: 0; font-size: 14px; }
+.canvas-empty small { color: var(--text-faint); font-size: 11.5px; }
+
+/* ---- Kanban ---- */
+.canvas-kanban {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-paper);
+}
+.canvas-kanban--loading,
+.canvas-kanban--error {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.canvas-kanban__columns {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.canvas-kanban__column {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(168, 165, 155, 0.16);
+  border-radius: 8px;
+  min-height: 0;
+}
+.canvas-kanban__col-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.14);
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.canvas-kanban__col-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.canvas-kanban__col-label {
+  flex: 1;
+  font-family: var(--serif);
+  letter-spacing: -0.005em;
+}
+.canvas-kanban__col-count {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.canvas-kanban__col-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.canvas-kanban__col-empty {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: center;
+  margin: 12px 0;
+  font-style: italic;
+}
+.canvas-kanban__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+  font-family: inherit;
+}
+.canvas-kanban__card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(168, 165, 155, 0.32);
+}
+.canvas-kanban__card--blocked {
+  border-color: rgba(226, 95, 79, 0.42);
+  background: rgba(49, 31, 29, 0.32);
+}
+.canvas-kanban__card-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+.canvas-kanban__card-desc {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.canvas-kanban__card-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.canvas-kanban__card-executor,
+.canvas-kanban__card-doer {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+.canvas-kanban__card-blocked-reason {
+  font-size: 11px;
+  color: rgba(226, 95, 79, 0.92);
+  padding-top: 4px;
+  border-top: 1px solid rgba(226, 95, 79, 0.22);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ---- Inbox ---- */
+.canvas-inbox {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-paper);
+}
+.canvas-inbox--loading,
+.canvas-inbox--error {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.canvas-inbox__filters {
+  display: flex;
+  gap: 8px;
+  padding: 14px 16px 6px;
+}
+.canvas-inbox__chip {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.canvas-inbox__chip:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.canvas-inbox__chip.is-active {
+  background: rgba(204, 120, 92, 0.14);
+  color: var(--accent-hover);
+  border-color: rgba(204, 120, 92, 0.42);
+}
+.canvas-inbox__list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.canvas-inbox__row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.canvas-inbox__row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(168, 165, 155, 0.18);
+}
+.canvas-inbox__row--blocked .canvas-inbox__row-title {
+  color: rgba(226, 95, 79, 0.95);
+}
+.canvas-inbox__row-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.canvas-inbox__row-title {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.canvas-inbox__row-desc {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  grid-column: 2;
+  grid-row: 2;
+}
+.canvas-inbox__row-status,
+.canvas-inbox__row-executor,
+.canvas-inbox__row-doer {
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+.canvas-inbox__row-age {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* ---- Matrix ---- */
+.canvas-matrix {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-paper);
+}
+.canvas-matrix--loading,
+.canvas-matrix--error {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.canvas-matrix__scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+}
+.canvas-matrix__table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  min-width: 720px;
+}
+.canvas-matrix__corner,
+.canvas-matrix__col-head {
+  position: sticky;
+  top: 0;
+  background: var(--bg-paper);
+  z-index: 2;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.22);
+  text-align: left;
+  font-family: var(--serif);
+  letter-spacing: -0.005em;
+}
+.canvas-matrix__col-head {
+  display: table-cell;
+  white-space: nowrap;
+}
+.canvas-matrix__col-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.canvas-matrix__corner {
+  left: 0;
+  z-index: 3;
+}
+.canvas-matrix__row-head {
+  position: sticky;
+  left: 0;
+  background: var(--bg-paper);
+  z-index: 1;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text);
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.12);
+  text-align: left;
+  white-space: nowrap;
+}
+.canvas-matrix__row-head em {
+  color: var(--text-faint);
+  font-style: italic;
+  font-weight: 400;
+}
+.canvas-matrix__cell {
+  vertical-align: top;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.08);
+  border-left: 1px solid rgba(168, 165, 155, 0.06);
+  min-width: 130px;
+}
+.canvas-matrix__mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.canvas-matrix__mini-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 11.5px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.canvas-matrix__mini-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(168, 165, 155, 0.32);
+}
+.canvas-matrix__mini-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.canvas-matrix__mini-more {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 2px 4px;
+}
+
+/* ---- Kind selector in CanvasToolbar create modal ---- */
+.canvas-toolbar__kind-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+.canvas-toolbar__kind-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.canvas-toolbar__kind-tile:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(168, 165, 155, 0.4);
+}
+.canvas-toolbar__kind-tile.is-selected {
+  background: rgba(204, 120, 92, 0.16);
+  border-color: rgba(204, 120, 92, 0.55);
+}
+.canvas-toolbar__kind-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: var(--serif);
+  letter-spacing: -0.005em;
+}
+.canvas-toolbar__kind-hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.canvas-toolbar__kind-tile.is-selected .canvas-toolbar__kind-hint {
+  color: var(--accent-hover);
 }
 
 .planner-flow__edge .react-flow__edge-path {
@@ -523,29 +984,42 @@
 }
 
 /* Full node detail modal — mirrors the .planner-proposal-modal pattern. */
+/* Node inspector — right-side drawer (simplification spec §2.9: modal → side drawer).
+ * 之前实验性的 `pointer-events: none` 让 backdrop 不挡 click,目的是让 canvas 仍可点;
+ * 但副作用是 backdrop 的 onMouseDown(点 backdrop 关闭)永远不触发 + 所有事件穿透到
+ * canvas 后会再次触发 onPaneClick / onNodeClick 形成 click 循环,导致用户感受
+ * 「canvas 无法操作只能拖动」。回退成标准 modal backdrop 行为:挡 click,点 backdrop 关闭。 */
 .planner-node-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 70;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgba(18, 18, 16, 0.52);
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+  background: rgba(18, 18, 16, 0.35);
+  backdrop-filter: blur(1.5px);
 }
 
 .planner-node-modal {
   position: relative;
-  width: min(540px, calc(100vw - 36px));
-  max-height: min(760px, calc(100vh - 36px));
+  width: min(540px, calc(100vw - 60px));
+  height: 100vh;
+  max-height: 100vh;
   overflow: auto;
   display: grid;
   gap: 12px;
-  padding: 18px;
-  border: 1px solid rgba(168, 165, 155, 0.22);
-  border-radius: var(--radius);
+  padding: 24px 22px 28px;
+  border: none;
+  border-left: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 0;
   background: rgba(35, 35, 32, 0.98);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
   color: var(--text);
+  animation: planner-node-modal-slide-in 200ms ease-out;
+}
+@keyframes planner-node-modal-slide-in {
+  from { transform: translateX(40px); opacity: 0.4; }
+  to   { transform: translateX(0); opacity: 1; }
 }
 
 .planner-node-modal__close {
@@ -564,6 +1038,122 @@
   display: grid;
   gap: 7px;
   padding-right: 34px;
+}
+
+/* UI-simplification §2.9 — three-section group labels inside inspector. */
+.planner-node-modal__group-label {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 18px 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(168, 165, 155, 0.16);
+}
+/* UI-simplification inspector-three-section — widget settings toggle + popover
+ *  on 成果·剪贴板 group-label. Popover anchors top-right under the gear icon. */
+.planner-node-modal__widget-toggle {
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.planner-node-modal__widget-toggle:hover {
+  opacity: 1;
+}
+.planner-node-modal__widget-popover {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+.planner-node-modal__group-label > span {
+  font-family: var(--serif);
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.planner-node-modal__group-label > small {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.planner-node-modal__group-label:first-of-type { margin-top: 6px; }
+
+/* UI-simplification — 进展 段单行替代之前的 5-tile info grid + 独立 next-action 块 */
+.planner-node-modal__progress-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
+}
+.planner-node-modal__progress-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* UI-simplification §2.6 — 进展 段次级动作行(从节点卡片 footer 搬过来) */
+.planner-node-modal__progress-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+.planner-node-modal__progress-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.planner-node-modal__progress-action:hover {
+  background: rgba(168, 165, 155, 0.08);
+  color: var(--text);
+  border-color: rgba(168, 165, 155, 0.36);
+}
+
+/* UI-simplification — hover-revealed shortcut button on 「进展」 group label.
+ * Always laid out (no width jump on hover); fades from 0 → 1 opacity. */
+.planner-node-modal__open-session {
+  margin-left: auto;
+  padding: 3px 9px;
+  background: transparent;
+  border: 1px solid rgba(168, 165, 155, 0.20);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+.planner-node-modal__group-label--progress:hover .planner-node-modal__open-session,
+.planner-node-modal__open-session:focus-visible {
+  opacity: 1;
+}
+.planner-node-modal__open-session:hover {
+  background: rgba(204, 120, 92, 0.08);
+  border-color: rgba(204, 120, 92, 0.32);
 }
 
 .planner-node-modal__header-tags {
@@ -639,37 +1229,6 @@
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-
-.planner-node-modal__section-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.planner-node-modal__section-heading h3 {
-  min-width: 0;
-}
-
-.planner-node-modal__section-actions {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.planner-node-modal__section-heading button,
-.planner-node-modal__section-actions button {
-  flex: none;
-  min-height: 26px;
-  padding: 0 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
 }
 
 .planner-node-modal__grid {
@@ -787,6 +1346,104 @@
   font-size: 12px;
 }
 
+/* Inspector 进展段 runtime info (2026-05-29) — workflowRunState visible
+   + spawn/请回复/打开会话 entrypoints. Was blank even when card showed
+   Attention; users couldn't tell why a session needed attention. */
+.planner-node-modal__progress-runtime {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.planner-node-modal__progress-runtime-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.planner-node-modal__progress-runtime-state strong { color: var(--text-primary); font-weight: 600; }
+.planner-node-modal__progress-runtime-state.is-awaiting strong { color: #b85540; }
+.planner-node-modal__progress-runtime-state.is-running strong { color: #3b6e9a; }
+.planner-node-modal__progress-runtime-state.is-failed strong { color: #a3372a; }
+.planner-node-modal__progress-runtime-state.is-done strong { color: #4a7a4a; }
+.planner-node-modal__progress-runtime-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-faint, rgba(0, 0, 0, 0.35));
+  display: inline-block;
+}
+.is-awaiting .planner-node-modal__progress-runtime-dot {
+  background: #c87a45;
+  box-shadow: 0 0 0 3px rgba(200, 122, 69, 0.18);
+  animation: pulse-attention 1.6s ease-in-out infinite;
+}
+.is-running .planner-node-modal__progress-runtime-dot {
+  background: #4682c8;
+  animation: pulse-attention 1.6s ease-in-out infinite;
+}
+.is-failed .planner-node-modal__progress-runtime-dot { background: #a3372a; }
+.is-done .planner-node-modal__progress-runtime-dot { background: #6aa66a; }
+@keyframes pulse-attention {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.planner-node-modal__progress-runtime-session { font-size: 11px; opacity: 0.7; }
+.planner-node-modal__progress-runtime-session code {
+  font-size: 10px; padding: 1px 4px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.05));
+  border-radius: 3px;
+}
+.planner-node-modal__progress-runtime-action {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 13px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  background: var(--bg-paper); color: var(--text-primary);
+  cursor: pointer; width: fit-content;
+}
+.planner-node-modal__progress-runtime-action:hover { background: var(--bg-muted, rgba(0, 0, 0, 0.04)); }
+.planner-node-modal__progress-runtime-action.is-primary {
+  background: var(--accent, #c87a45); color: white; border-color: var(--accent, #c87a45);
+}
+.planner-node-modal__progress-runtime-action.is-primary:hover { background: #b86c3d; border-color: #b86c3d; }
+.planner-node-modal__progress-runtime-action.is-attention { font-weight: 600; }
+.planner-node-modal__progress-runtime-hint { font-size: 12px; color: var(--text-faint); margin: 0; }
+
+/* AuthoredFirstArtifactEditor — 内嵌"写第一份产物"编辑器(2026-05-29) */
+.planner-node-modal__empty-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.planner-node-modal__empty-editor-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  background: var(--bg-paper);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.planner-node-modal__empty-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent, #c87a45);
+}
+.planner-node-modal__empty-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.planner-node-modal__empty-editor-hint {
+  font-size: 11px;
+  color: var(--text-faint, rgba(0, 0, 0, 0.5));
+}
+
 .planner-node-modal__blockers {
   display: grid;
   gap: 6px;
@@ -850,6 +1507,10 @@
 .planner-node {
   width: 320px;
   padding: 12px;
+  /* UI-simplification — min-height 让 Push 1 精简内容后卡片不缩成几十像素的小条:
+   * 内容变短了但点击 / 拖动目标仍需有合理高度。也让 layout 上的相对位置稳定,
+   * 避免 ResizeObserver loop 触发 edge 闪烁。 */
+  min-height: 140px;
   border: 1px solid rgba(168, 165, 155, 0.22);
   border-left-width: 4px;
   border-radius: var(--radius-sm);
@@ -858,6 +1519,27 @@
   color: var(--text);
   cursor: grab;
   transition: opacity 140ms ease, filter 140ms ease, box-shadow 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+/* UI-simplification — artifact 折叠/展开按钮 */
+.planner-node__artifact-expand,
+.planner-node__artifact-collapse {
+  margin-top: 8px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+  text-align: center;
+}
+.planner-node__artifact-expand:hover,
+.planner-node__artifact-collapse:hover {
+  background: rgba(168, 165, 155, 0.06);
+  color: var(--text);
 }
 
 .planner-node.is-selected {
@@ -900,10 +1582,6 @@
   border-left-color: var(--danger);
   background: linear-gradient(180deg, rgba(55, 39, 37, 0.98), rgba(43, 35, 33, 0.96));
   box-shadow: 0 0 0 1px rgba(194, 106, 106, 0.12), 0 18px 48px rgba(0, 0, 0, 0.28);
-}
-
-.planner-node--artifact-gap {
-  border-color: rgba(214, 155, 92, 0.34);
 }
 
 .planner-node--perception-active {
@@ -1212,6 +1890,66 @@
   min-width: 0;
 }
 
+/* nodeKind 视觉分辨 (2026-05-28) — 卡片头部左上小 tag,跟 planner-node--kind-*
+   的边框 / 底色微差互相加强。每种 kind 一个低饱和度色调,不抢戏。 */
+.planner-node__kind-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 3px 6px 3px 5px;
+  border-radius: 4px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary, #6b6b6b);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.planner-node__kind-tag em {
+  font-style: normal;
+}
+.planner-node--kind-session .planner-node__kind-tag {
+  background: rgba(70, 130, 200, 0.10);
+  color: #3b6e9a;
+}
+.planner-node--kind-artifact .planner-node__kind-tag {
+  background: rgba(180, 130, 70, 0.10);
+  color: #8a5a2a;
+}
+.planner-node--kind-subCanvas .planner-node__kind-tag {
+  background: rgba(130, 90, 170, 0.10);
+  color: #6a4a8a;
+}
+.planner-node--kind-external .planner-node__kind-tag {
+  background: rgba(70, 140, 110, 0.10);
+  color: #3a7a5a;
+}
+.planner-node--kind-step .planner-node__kind-tag {
+  background: rgba(100, 100, 100, 0.08);
+  color: #5a5a5a;
+}
+:root[data-theme="dark"] .planner-node__kind-tag {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+}
+:root[data-theme="dark"] .planner-node--kind-session .planner-node__kind-tag {
+  background: rgba(100, 160, 230, 0.15);
+  color: #a5c8e8;
+}
+:root[data-theme="dark"] .planner-node--kind-artifact .planner-node__kind-tag {
+  background: rgba(210, 160, 100, 0.15);
+  color: #d8b88a;
+}
+:root[data-theme="dark"] .planner-node--kind-subCanvas .planner-node__kind-tag {
+  background: rgba(160, 120, 200, 0.15);
+  color: #c4a8da;
+}
+:root[data-theme="dark"] .planner-node--kind-external .planner-node__kind-tag {
+  background: rgba(100, 180, 140, 0.15);
+  color: #a8d4c0;
+}
+
 .planner-node__owner-pill {
   display: inline-flex;
   align-items: center;
@@ -1358,17 +2096,8 @@
   color: #e6ca8f;
 }
 
-.planner-node__badge--schedule {
-  border: 1px solid rgba(226, 199, 119, 0.42);
-  background: rgba(226, 199, 119, 0.22);
-  color: #f3da8a;
-  font-weight: 750;
-  box-shadow: 0 0 0 1px rgba(226, 199, 119, 0.10);
-}
-
-.planner-node__badge--schedule svg {
-  flex: none;
-}
+/* ui-simplification §2.11 · planner-node__badge--schedule 已下线,
+   schedule 信息折入 mode badge(modeBadgeLabel 拼 'auto · 每 1h')。*/
 
 .planner-node__badge.kind-subCanvas {
   background: rgba(204, 120, 92, 0.16);
@@ -1460,6 +2189,138 @@
   font-size: 14px;
   font-weight: 650;
   line-height: 1.28;
+}
+
+/* UI-simplification §3.1: 1-2 line description shown under title, optional */
+.planner-node__desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* zeta · prompt-brief — single-line hint at the prompt this node will run.
+ * Sits below desc, smaller + lower contrast so it reads as a faint sub-line,
+ * never wraps (truncate via ellipsis to keep the card compact). */
+.planner-node__prompt-brief {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  opacity: 0.65;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner-node__prompt-brief > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.planner-node__monitor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 20px;
+  margin-top: 6px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 720;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.planner-node__monitor-badge span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.planner-node__monitor-badge--reply {
+  color: color-mix(in srgb, var(--danger) 72%, #ffffff);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
+}
+
+.planner-node__monitor-badge--attention {
+  color: color-mix(in srgb, var(--warning) 84%, var(--text));
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--warning) 38%, var(--border-strong));
+}
+
+/* P2.4 widget dispatcher · 2026-05-28
+ * 节点 widget body — 当 node.widget 存在时显示。
+ * 给 widget 组件腾出空间;widget 内部自管布局。 */
+.planner-node__widget-body {
+  margin-top: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  border-top: 1px solid rgba(168, 165, 155, 0.14);
+  padding-top: 8px;
+}
+
+.planner-node__widget-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* UI-simplification §3.1: 「成果 · {title} [展开 ⊞]」行 */
+.planner-node__output-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; padding: 6px 9px;
+  background: rgba(168, 165, 155, 0.06);
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.planner-node__output-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: 10.5px; font-weight: 600;
+}
+.planner-node__output-title {
+  flex: 1; min-width: 0; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.planner-node__output-expand {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  background: transparent; border: 1px solid rgba(168, 165, 155, 0.22);
+  color: var(--accent); font-size: 10.5px; cursor: pointer; font-family: inherit;
+}
+.planner-node__output-expand:hover {
+  background: rgba(204, 120, 92, 0.10);
+  border-color: rgba(204, 120, 92, 0.32);
+}
+
+/* PR3 — 「查看输出」按钮:跟 output-expand 同形态,subtle secondary action,
+ *  不跟 primary spawn / open 按钮抢注意力。 */
+.planner-node__view-output-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  background: rgba(168, 165, 155, 0.08);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  color: var(--text); font-size: 10.5px; cursor: pointer; font-family: inherit;
+  white-space: nowrap;
+}
+.planner-node__view-output-btn:hover {
+  background: rgba(204, 120, 92, 0.10);
+  border-color: rgba(204, 120, 92, 0.32);
+  color: var(--accent);
 }
 
 .planner-node__responsible {
@@ -1744,84 +2605,6 @@
   color: rgba(168, 165, 155, 0.48);
 }
 
-.planner-node__artifact-fit {
-  width: 100%;
-  min-width: 0;
-  min-height: 30px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 5px 7px;
-  border: 1px solid rgba(168, 165, 155, 0.16);
-  border-radius: var(--radius-sm);
-  background: rgba(245, 244, 239, 0.045);
-  color: var(--text-dim);
-  font-size: 10px;
-  line-height: 1.25;
-  text-align: left;
-  cursor: pointer;
-}
-
-.planner-node__artifact-fit:disabled {
-  cursor: default;
-}
-
-.planner-node__artifact-fit svg {
-  flex: none;
-}
-
-.planner-node__artifact-fit span {
-  flex: none;
-  color: var(--text);
-  font-weight: 700;
-}
-
-.planner-node__artifact-fit em {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-faint);
-  font-style: normal;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.planner-node__artifact-fit strong {
-  flex: none;
-  margin-left: auto;
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.planner-node__artifact-fit--complete {
-  border-color: rgba(127, 169, 130, 0.22);
-  background: rgba(127, 169, 130, 0.08);
-}
-
-.planner-node__artifact-fit--complete svg,
-.planner-node__artifact-fit--complete span {
-  color: #bfe4cb;
-}
-
-.planner-node__artifact-fit--partial,
-.planner-node__artifact-fit--missing {
-  border-color: rgba(214, 155, 92, 0.28);
-  background: rgba(214, 155, 92, 0.09);
-}
-
-.planner-node__artifact-fit--partial svg,
-.planner-node__artifact-fit--partial span,
-.planner-node__artifact-fit--missing svg,
-.planner-node__artifact-fit--missing span {
-  color: #e5c199;
-}
-
-.planner-node__artifact-fit--partial:hover,
-.planner-node__artifact-fit--missing:hover {
-  border-color: rgba(214, 155, 92, 0.46);
-  background: rgba(214, 155, 92, 0.14);
-}
-
 .planner-node__subcanvas {
   width: 100%;
   justify-content: center;
@@ -1968,11 +2751,34 @@
   border-color: rgba(201, 164, 93, 0.32);
 }
 
+/* Duration chip — running / awaiting 时长。awaiting 用红色高亮促人响应。 */
+.planner-node__duration {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.planner-node__duration--running {
+  background: rgba(110, 165, 124, 0.16);
+  color: #aed7b6;
+  border-color: rgba(110, 165, 124, 0.32);
+}
+
+.planner-node__duration--awaiting {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
+  border-color: rgba(220, 80, 70, 0.45);
+}
+
 /* UI-1 · Re-run / Mark-down action buttons. They sit beside the primary
    action in the footer and use compact pill styling so they never crowd it. */
 .planner-node__rerun-action,
-.planner-node__markdown-action,
-.planner-node__artifact-action {
+.planner-node__markdown-action {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -1995,17 +2801,6 @@
 .planner-node__markdown-action:hover {
   border-color: rgba(204, 120, 92, 0.45);
   color: var(--accent-hover);
-}
-
-.planner-node__artifact-action {
-  border-color: rgba(201, 164, 93, 0.26);
-  background: rgba(201, 164, 93, 0.08);
-  color: #e6ca8f;
-}
-
-.planner-node__artifact-action:hover {
-  border-color: rgba(201, 164, 93, 0.48);
-  color: #f0d99c;
 }
 
 .planner-side {
@@ -3310,15 +4105,6 @@
   background: rgba(245, 244, 239, 0.035);
 }
 
-.planner-proposal-modal__changes h3 {
-  margin: 0 0 10px;
-  color: var(--text-dim);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .planner-proposal-modal__preview-canvas {
   min-width: 0;
   min-height: 0;
@@ -4385,49 +5171,6 @@
   white-space: nowrap;
 }
 
-.planner-node-modal__ai-callout {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(204, 120, 92, 0.32);
-  border-radius: var(--radius-sm);
-  background: rgba(204, 120, 92, 0.12);
-}
-
-.planner-node-modal__ai-callout div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.planner-node-modal__ai-callout span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--accent-hover);
-  font-size: 10px;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.planner-node-modal__ai-callout strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.planner-node-modal__ai-callout button {
-  flex: none;
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .planner-node-modal__schema {
   display: grid;
   gap: 8px;
@@ -4507,75 +5250,6 @@
 .planner-node-modal__schema-chips strong svg {
   flex: none;
   color: var(--text-faint);
-}
-
-.planner-node-modal__evidence {
-  display: grid;
-  gap: 6px;
-}
-
-.planner-node-modal__evidence-item {
-  min-width: 0;
-  display: grid;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 10px;
-  border: 1px solid rgba(168, 165, 155, 0.14);
-  border-radius: var(--radius-sm);
-  background: rgba(245, 244, 239, 0.035);
-  text-align: left;
-}
-
-.planner-node-modal__evidence-item:not(:disabled) {
-  cursor: pointer;
-}
-
-.planner-node-modal__evidence-item:not(:disabled):hover {
-  border-color: rgba(204, 120, 92, 0.36);
-  background: rgba(204, 120, 92, 0.10);
-}
-
-.planner-node-modal__evidence-item > div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.planner-node-modal__evidence-item strong,
-.planner-node-modal__evidence-item span,
-.planner-node-modal__evidence-item em {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.planner-node-modal__evidence-item strong {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.planner-node-modal__evidence-item span {
-  color: var(--text-faint);
-  font-size: 11px;
-}
-
-.planner-node-modal__evidence-item em {
-  max-width: 150px;
-  color: var(--text-faint);
-  font-size: 10px;
-  font-style: normal;
-  text-align: right;
-}
-
-.planner-node-modal__evidence-more {
-  justify-self: start;
-  min-height: 26px;
-  padding: 0 9px;
-  font-size: 11px;
 }
 
 .planner-node-modal__input-value {
@@ -4888,6 +5562,196 @@
   margin: 0;
   color: #edb0b0;
   font-size: 11px;
+}
+
+/* P2.6 — Node-level widget config in NodeInspectorModal.
+ *  Default folded toggle, expanding into kind / source / mapping editors.
+ *  Reuses the existing modal section chrome + accent tokens. */
+.planner-node-modal__view-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.planner-node-modal__view-toggle:hover {
+  color: var(--text);
+}
+.planner-node-modal__view-toggle > span {
+  flex: 1;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text-muted, #b8b3a5);
+}
+.planner-node-modal__view-toggle > em {
+  font-style: normal;
+  opacity: 0.7;
+}
+
+.planner-node-modal__view-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* P2.6 v2 (2026-05-28 简化) — 一行 chip 视图选择,旁边可选 saving / error 微提示。 */
+.planner-node-modal__view-row {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.planner-node-modal__view-row > em {
+  font-style: normal;
+  color: var(--text-faint);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.planner-node-modal__view-row--inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.planner-node-modal__view-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.planner-node-modal__view-saving {
+  font-style: normal;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+.planner-node-modal__view-error {
+  font-style: normal;
+  color: rgba(226, 95, 79, 0.95);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: help;
+}
+/* P2.11 — section 容器把 chip 行 + hint 行垂直堆叠。 */
+.planner-node-modal__view-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* P2.11 — chip 行下方的「当前 widget 在显示什么」中文一行解释。 */
+.planner-node-modal__view-hint {
+  padding-left: 22px;
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+.planner-node-modal__view-row--inline > input {
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  font-size: 12px;
+}
+.planner-node-modal__view-row--inline > input:focus {
+  outline: none;
+  border-color: rgba(168, 165, 155, 0.45);
+}
+
+.planner-node-modal__widget-kind-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.planner-node-modal__widget-kind-chip {
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  background: transparent;
+  color: var(--text-muted, #b8b3a5);
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.planner-node-modal__widget-kind-chip:hover:not(:disabled) {
+  border-color: rgba(168, 165, 155, 0.45);
+  color: var(--text);
+}
+.planner-node-modal__widget-kind-chip.is-selected {
+  border-color: var(--accent, #d4a373);
+  color: var(--accent, #d4a373);
+  background: rgba(212, 163, 115, 0.08);
+}
+.planner-node-modal__widget-kind-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* P2.12 — chip 因数据前提不满足而 disable:更淡 + 显示「不可用」状态,
+ *  hover 时 tooltip 解释怎么解锁。 */
+.planner-node-modal__widget-kind-chip.is-disabled {
+  opacity: 0.35;
+  cursor: help;
+  border-style: dashed;
+}
+.planner-node-modal__widget-kind-chip.is-disabled:hover {
+  opacity: 0.55;
+  border-color: rgba(168, 165, 155, 0.4);
+}
+
+.planner-node-modal__view-mapping-toggle {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: left;
+}
+.planner-node-modal__view-mapping-toggle:hover {
+  color: var(--text);
+}
+.planner-node-modal__view-mapping {
+  display: grid;
+  gap: 6px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(168, 165, 155, 0.12);
+}
+
+.planner-node-modal__view-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 4px;
+}
+.planner-node-modal__view-actions > button {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.planner-node-modal__view-actions > button:hover:not(:disabled) {
+  border-color: rgba(168, 165, 155, 0.45);
+}
+.planner-node-modal__view-actions > button.primary {
+  background: var(--accent, #d4a373);
+  color: #1a1a1a;
+  border-color: var(--accent, #d4a373);
+}
+.planner-node-modal__view-actions > button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .planner-node-actions__members {
@@ -5290,6 +6154,97 @@
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* PR1 (running-session-visual): status pill tones — card-side equivalents
+   of .planner-node-modal__state--*. deriveDisplayStatus() in labels.ts emits
+   one of these as the pill class so cards visibly reflect workflow run state
+   (running / awaiting / failed) instead of staying stuck on design status. */
+.planner-node__status--running {
+  background: rgba(110, 165, 124, 0.18);
+  color: #aed7b6;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--running::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #aed7b6;
+  animation: planner-status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes planner-status-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.planner-node__status--awaiting {
+  background: rgba(212, 138, 70, 0.18);
+  color: #f0b878;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--failed {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--done {
+  background: rgba(127, 169, 130, 0.16);
+  color: #bfe4cb;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--blocked {
+  background: rgba(194, 106, 106, 0.16);
+  color: #edb0b0;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.planner-node__status--ready {
+  background: rgba(245, 244, 239, 0.08);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* Inspector modal — matching tones for the badge in the header and 进展 line.
+   Existing --blocked / --ready / --done above stay; add --running / --awaiting /
+   --failed so deriveDisplayStatus emits a valid class for every tone. */
+.planner-node-modal__state--running {
+  background: rgba(110, 165, 124, 0.18);
+  color: #aed7b6;
+}
+
+.planner-node-modal__state--running::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #aed7b6;
+  animation: planner-status-pulse 1.4s ease-in-out infinite;
+}
+
+.planner-node-modal__state--awaiting {
+  background: rgba(212, 138, 70, 0.18);
+  color: #f0b878;
+}
+
+.planner-node-modal__state--failed {
+  background: rgba(220, 80, 70, 0.18);
+  color: #ff9b94;
 }
 
 /* Run history modal */
@@ -6321,6 +7276,10 @@
   background: rgba(168, 113, 50, 0.06);
 }
 
+/* 原 .ai-recap-drawer__summary 段已删 —— CanvasToolbar 的 parseRecapJSON banner
+ * 已经在 toolbar 上被动展示 headline + details + 「刚刚」时间戳,跟我之前加在 drawer 顶部
+ * 的 Canvas summary 等价。两套并存就视觉重叠,以 toolbar 那套为单一来源。 */
+
 .ai-recap-drawer__subsection {
   margin-bottom: 10px;
 }
@@ -6394,6 +7353,16 @@
 .ai-recap-drawer__row-meta {
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.ai-recap-drawer__row-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: color-mix(in srgb, var(--accent-hover) 86%, var(--text));
 }
 
 .ai-recap-drawer__empty {
@@ -6665,4 +7634,1068 @@
 :root[data-theme="light"] .planner-session-health-banner {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 36%, var(--border));
+}
+
+/* ---------------------------------------------------------------
+ * Light-theme wave: canvas surfaces, node cards, minimap, inspector,
+ * composer, side panel. These all carry bespoke dark navy / gradient
+ * backgrounds in the base rules that don't map cleanly to a single
+ * token, so they get explicit light overrides here.
+ * ------------------------------------------------------------- */
+
+/* Side chat panel + dialog toggle handle */
+:root[data-theme="light"] .planner-side {
+  background: var(--panel-bg);
+  border-right-color: var(--border);
+}
+:root[data-theme="light"] .planner-dialog-toggle {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .planner-dialog-toggle:hover {
+  background: var(--panel-bg-hover);
+  color: var(--text);
+}
+
+/* Proposal panel / dialog containers (dark navy in base) */
+:root[data-theme="light"] .planner-proposal-panel,
+:root[data-theme="light"] .planner-proposal-panel--left-rail,
+:root[data-theme="light"] .planner-dialog__composer,
+:root[data-theme="light"] .planner-proposal-panel--omni .planner-dialog__composer,
+:root[data-theme="light"] .planner-dialog__empty,
+:root[data-theme="light"] .planner-dialog__message,
+:root[data-theme="light"] .planner-states-list,
+:root[data-theme="light"] .planner-states-summary,
+:root[data-theme="light"] .planner-plan-card {
+  background: var(--panel-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-dialog__composer {
+  border-top-color: var(--border);
+}
+
+/* Onboarding card / starter suggestions / history toggles use white-tint
+ * fills that vanish on a light bg — give them a paper surface. */
+:root[data-theme="light"] .planner-dialog__onboarding,
+:root[data-theme="light"] .planner-dialog__starter-suggestions button,
+:root[data-theme="light"] .planner-proposal-panel--omni .planner-dialog__starter-suggestions button,
+:root[data-theme="light"] .planner-dialog__history-toggle,
+:root[data-theme="light"] .planner-dialog__history-trimmed,
+:root[data-theme="light"] .planner-markdown__expand,
+:root[data-theme="light"] .planner-proposal-change,
+:root[data-theme="light"] .planner-states-row {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Markdown code blocks / inline code (dark fills) */
+:root[data-theme="light"] .planner-markdown pre {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-markdown code {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-markdown.is-collapsed::after {
+  background: linear-gradient(to bottom, transparent, var(--panel-bg));
+}
+
+/* Composer textarea + selection chip */
+:root[data-theme="light"] .planner-dialog__composer textarea {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ---- Node card shell + perception / kind variants ---- */
+:root[data-theme="light"] .planner-node {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: 0 12px 32px rgba(62, 52, 40, 0.12);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent),
+    0 14px 36px rgba(62, 52, 40, 0.14);
+}
+:root[data-theme="light"] .planner-node--perception-done {
+  background: color-mix(in srgb, var(--success) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-attention {
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-active,
+:root[data-theme="light"] .planner-node--kind-session {
+  background: color-mix(in srgb, var(--info) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--info) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--perception-not-reached {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-node--kind-artifact,
+:root[data-theme="light"] .planner-node--artifact-node {
+  background: color-mix(in srgb, var(--warning) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--warning) 24%, var(--border));
+}
+:root[data-theme="light"] .planner-node--subcanvas-ref {
+  background: var(--bg-paper);
+}
+
+/* Node handle dot */
+:root[data-theme="light"] .planner-node__handle {
+  border-color: color-mix(in srgb, var(--text) 40%, transparent);
+  background: var(--bg-paper);
+}
+
+/* Node inner surfaces: textarea, artifact/io/kanban/output blocks (dark
+ * rgba(18,18,16,…) fills + white-tint fills) */
+:root[data-theme="light"] .planner-node__artifact-input textarea,
+:root[data-theme="light"] .planner-node__artifact-empty,
+:root[data-theme="light"] .planner-node__artifact-meta,
+:root[data-theme="light"] .planner-node__integration-preview,
+:root[data-theme="light"] .planner-node__artifact-pre,
+:root[data-theme="light"] .planner-node__kanban-column,
+:root[data-theme="light"] .planner-node__output-row,
+:root[data-theme="light"] .planner-node__io-item,
+:root[data-theme="light"] .planner-input-card {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+:root[data-theme="light"] .planner-node__details {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- Node inspector drawer ---- */
+:root[data-theme="light"] .planner-node-modal {
+  background: var(--modal-bg);
+  border-left-color: var(--border);
+  box-shadow: -24px 0 60px rgba(62, 52, 40, 0.18);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node-modal__widget-popover,
+:root[data-theme="light"] .planner-node-modal__tabs,
+:root[data-theme="light"] .planner-node-modal__action-summary > div,
+:root[data-theme="light"] .planner-node-modal__info-tile,
+:root[data-theme="light"] .planner-node-modal__schema-row,
+:root[data-theme="light"] .planner-node-modal__input-editor,
+:root[data-theme="light"] .planner-node-modal__list li,
+:root[data-theme="light"] .planner-node-actions__panel,
+:root[data-theme="light"] .planner-node-actions__member,
+:root[data-theme="light"] .planner-node-actions__buttons button,
+:root[data-theme="light"] .planner-node-modal__assign-doer {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-node-modal__input-editor textarea,
+:root[data-theme="light"] .planner-node-modal__view-row--inline > input,
+:root[data-theme="light"] .planner-node-actions__panel--schedule input,
+:root[data-theme="light"] .planner-node-actions__panel--schedule textarea,
+:root[data-theme="light"] .planner-node-actions__field select,
+:root[data-theme="light"] .planner-node-actions__field input,
+:root[data-theme="light"] .planner-node-actions__field textarea,
+:root[data-theme="light"] .planner-node-modal__attach-link input {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* ---- Proposal / node detail modals ---- */
+:root[data-theme="light"] .planner-proposal-modal,
+:root[data-theme="light"] .planner-proposal-modal__advanced div,
+:root[data-theme="light"] .planner-visibility-confirm,
+:root[data-theme="light"] .planner-session-picker,
+:root[data-theme="light"] .planner-run-history,
+:root[data-theme="light"] .planner-run-selector__menu,
+:root[data-theme="light"] .planner-delivery-start,
+:root[data-theme="light"] .planner-onboarding-card,
+:root[data-theme="light"] .planner-attach-popover,
+:root[data-theme="light"] .planner-assign-dialog {
+  background: var(--modal-bg);
+  border-color: var(--border);
+  box-shadow: 0 24px 64px rgba(62, 52, 40, 0.2);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-proposal-modal__changes,
+:root[data-theme="light"] .planner-proposal-modal__flow,
+:root[data-theme="light"] .planner-run-history__list button,
+:root[data-theme="light"] .planner-session-picker__row,
+:root[data-theme="light"] .planner-session-picker__search,
+:root[data-theme="light"] .planner-run-selector__current,
+:root[data-theme="light"] .planner-run-selector__start,
+:root[data-theme="light"] .planner-run-selector__mode,
+:root[data-theme="light"] .planner-delivery-start input,
+:root[data-theme="light"] .planner-delivery-start textarea,
+:root[data-theme="light"] .planner-attach-popover__field select,
+:root[data-theme="light"] .planner-attach-popover__field input,
+:root[data-theme="light"] .planner-attach-popover__actions button,
+:root[data-theme="light"] .planner-assign-dialog__search,
+:root[data-theme="light"] .planner-monitor__search,
+:root[data-theme="light"] .planner-monitor__filters select {
+  background: var(--input-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-proposal-modal__preview-canvas {
+  background: var(--bg-paper);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-proposal-modal__preview-viewport .react-flow {
+  background: var(--bg);
+}
+
+/* ---- Minimap (bottom-right overview) ---- */
+:root[data-theme="light"] .planner-overview-map {
+  background: color-mix(in srgb, var(--bg-paper) 96%, transparent);
+  border-color: var(--border);
+  box-shadow: 0 14px 36px rgba(62, 52, 40, 0.16);
+}
+:root[data-theme="light"] .planner-overview-map__frame {
+  fill: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+  stroke: var(--border);
+}
+:root[data-theme="light"] .planner-overview-map__node {
+  fill: #ece7dd;
+  stroke: var(--text-faint);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-done {
+  fill: color-mix(in srgb, var(--success) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-attention {
+  fill: color-mix(in srgb, var(--danger) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-active {
+  fill: color-mix(in srgb, var(--info) 22%, #ece7dd);
+}
+:root[data-theme="light"] .planner-overview-map__node.is-neutral,
+:root[data-theme="light"] .planner-overview-map__node.is-not-reached {
+  fill: #e4ded2;
+}
+
+/* ---- Flow controls + visibility toggle ---- */
+:root[data-theme="light"] .planner-flow__controls button {
+  background: var(--bg-paper);
+  border-bottom-color: var(--border);
+}
+:root[data-theme="light"] .planner-flow__controls button svg {
+  fill: var(--text);
+}
+:root[data-theme="light"] .planner-flow__state-badge,
+:root[data-theme="light"] .planner-flow__visibility,
+:root[data-theme="light"] .planner-flow__visibility-badge {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- Monitor lanes / cards (dark olive in base) ---- */
+:root[data-theme="light"] .planner-monitor-lane {
+  background: var(--panel-bg);
+  border-color: var(--border);
+}
+:root[data-theme="light"] .planner-monitor-lane__header,
+:root[data-theme="light"] .planner-monitor-card {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  color: var(--text);
+}
+:root[data-theme="light"] .planner-monitor-card:hover,
+:root[data-theme="light"] .planner-monitor-card:focus-visible,
+:root[data-theme="light"] .planner-monitor-lane__header:hover,
+:root[data-theme="light"] .planner-monitor-lane__header:focus-visible {
+  background: var(--panel-bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+}
+
+/* ---- Notification banners: keep semantic tint but lift the dark fill ---- */
+:root[data-theme="light"] .planner-session-action-banner.is-warning,
+:root[data-theme="light"] .planner-session-health-banner {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-session-action-banner.is-ready,
+:root[data-theme="light"] .planner-ready-session-banner {
+  background: color-mix(in srgb, var(--success) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-mcp-banner {
+  background: color-mix(in srgb, var(--warning) 10%, var(--bg-elevated));
+}
+:root[data-theme="light"] .planner-workspace-preview__notice {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+:root[data-theme="light"] .planner-workspace-preview__btn--reject {
+  background: var(--bg-paper);
+  border-color: var(--border);
+  color: var(--text-dim);
+}
+
+/* ---- AI recap drawer body + tabs ---- */
+:root[data-theme="light"] .planner-monitor {
+  background: var(--bg);
+}
+:root[data-theme="light"] .ai-recap-drawer__group-tabs {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+:root[data-theme="light"] .planner-dialog__message--user {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+/* Floating "+ Transform" edge button (dark navy chip in base) */
+:root[data-theme="light"] .planner-edge-insert__button {
+  background: var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+  color: color-mix(in srgb, var(--info) 70%, var(--text));
+  box-shadow: 0 2px 6px rgba(62, 52, 40, 0.14);
+}
+
+/* ---------------------------------------------------------------
+ * UI-simplification chunk G — CanvasKindHint banner
+ *
+ * 顶部轻量提示条,说明当前 canvas kind 的心智模型。用户可关闭(localStorage 记)。
+ * 仅在 kanban / inbox / matrix / monitor 时显示;board 默认编辑器不需要 hint。
+ * 复用 design tokens(--surface, --border, --text-dim 等),保持低视觉权重。
+ * ------------------------------------------------------------- */
+.canvas-kind-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  margin: 0 0 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.canvas-kind-hint__icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.canvas-kind-hint__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.canvas-kind-hint__copy strong {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.canvas-kind-hint__sep {
+  color: var(--text-faint);
+  opacity: 0.6;
+}
+
+.canvas-kind-hint__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.canvas-kind-hint__dismiss:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-dim);
+}
+
+/* ---------------------------------------------------------------
+ * UI-simplification chunk G — CanvasToolbar 「+ New canvas」 modal:
+ * 「从模板新建」首选 CTA + 「从空白开始」secondary section
+ * ------------------------------------------------------------- */
+.canvas-toolbar__template-cta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.canvas-toolbar__template-cta:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  border-color: var(--accent);
+}
+
+.canvas-toolbar__template-cta-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.canvas-toolbar__template-cta-main strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.canvas-toolbar__template-cta-main small {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
+.canvas-toolbar__template-cta-arrow {
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.canvas-toolbar__blank-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.canvas-toolbar__blank-divider::before,
+.canvas-toolbar__blank-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.5;
+}
+
+.canvas-toolbar__blank-divider span {
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.canvas-toolbar__blank-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  opacity: 0.92;
+}
+
+.canvas-toolbar__blank-label {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+
+.canvas-toolbar__blank-submit {
+  /* secondary — 字号小一档,颜色淡一档,跟 template CTA 形成视觉层级 */
+  font-size: 12px !important;
+  padding: 5px 12px !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text-dim) !important;
+}
+
+.canvas-toolbar__blank-submit:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 6%, var(--surface)) !important;
+  color: var(--text) !important;
+}
+
+/* ---------------------------------------------------------------
+ * UI-simplification chunk G — NodeInspectorModal 高级折叠
+ * 高级 ▾ 按钮:更弱的视觉权重,跟 Expand sub-canvas 同行但样式更淡。
+ * ------------------------------------------------------------- */
+.planner-node-actions__advanced-toggle {
+  background: transparent !important;
+  border: 1px dashed var(--border) !important;
+  color: var(--text-dim) !important;
+  font-size: 11.5px !important;
+  padding: 4px 10px !important;
+}
+
+.planner-node-actions__advanced-toggle:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent) !important;
+  border-style: solid !important;
+  color: var(--text) !important;
+}
+
+.planner-node-actions__advanced-toggle[aria-expanded="true"] {
+  border-style: solid !important;
+  color: var(--text) !important;
+}
+
+/* ---------------------------------------------------------------
+ * Node-widget components (chunk P2.2)
+ *
+ * Five `.widget-<kind>__*` blocks live below — kanban / inbox / matrix /
+ * badge / artifact. Each is scoped to a planner node card frame, so layout
+ * is fluid (no fixed widths) and colors come from the shared design tokens.
+ *
+ * Status palette is shared across widgets via the helper variables on
+ * `.widget-status-palette`; individual blocks reference them through
+ * `--w-color`/`--w-bg` per-modifier overrides.
+ * ------------------------------------------------------------- */
+
+:where(.widget-kanban, .widget-inbox, .widget-matrix, .widget-badge, .widget-artifact) {
+  --w-color-todo: var(--text-dim);
+  --w-color-awaiting: #2f72c0;
+  --w-color-running: #6a4ec5;
+  --w-color-blocked: #c0392b;
+  --w-color-done: #2f8055;
+  box-sizing: border-box;
+  font-family: inherit;
+  color: var(--text);
+}
+
+/* ---- Kanban ---- */
+.widget-kanban {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-paper);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.widget-kanban__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.widget-kanban__column-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.widget-kanban__column-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-kanban__column-count {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.widget-kanban__column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.widget-kanban__column-empty {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.widget-kanban__card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--w-color, var(--text-dim));
+  border-radius: 3px;
+  background: var(--bg-paper);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.widget-kanban__card:hover {
+  background: color-mix(in srgb, var(--text) 5%, var(--bg-paper));
+}
+
+.widget-kanban__card-title {
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-kanban__card-subtitle {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-kanban__card--todo     { --w-color: var(--w-color-todo); }
+.widget-kanban__card--awaiting { --w-color: var(--w-color-awaiting); }
+.widget-kanban__card--running  { --w-color: var(--w-color-running); }
+.widget-kanban__card--blocked  { --w-color: var(--w-color-blocked); }
+.widget-kanban__card--done     { --w-color: var(--w-color-done); }
+
+.widget-kanban__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--w-dot, var(--text-dim));
+}
+
+.widget-kanban__dot--todo     { background: var(--w-color-todo); }
+.widget-kanban__dot--awaiting { background: var(--w-color-awaiting); }
+.widget-kanban__dot--running  { background: var(--w-color-running); }
+.widget-kanban__dot--blocked  { background: var(--w-color-blocked); }
+.widget-kanban__dot--done     { background: var(--w-color-done); }
+
+.widget-kanban__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.widget-kanban__empty--error {
+  color: var(--w-color-blocked);
+}
+
+/* ---- Inbox ---- */
+.widget-inbox {
+  background: var(--bg-paper);
+  border-radius: 6px;
+  padding: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.widget-inbox__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.widget-inbox__row + .widget-inbox__row {
+  border-top: 1px solid var(--border);
+}
+
+.widget-inbox__row-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.widget-inbox__row-button:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.widget-inbox__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.widget-inbox__dot--todo     { background: var(--w-color-todo); }
+.widget-inbox__dot--awaiting { background: var(--w-color-awaiting); }
+.widget-inbox__dot--running  { background: var(--w-color-running); }
+.widget-inbox__dot--blocked  { background: var(--w-color-blocked); }
+.widget-inbox__dot--done     { background: var(--w-color-done); }
+
+.widget-inbox__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-inbox__subtitle {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-inbox__badge {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--w-color, var(--text-dim)) 40%, transparent);
+  color: var(--w-color, var(--text-dim));
+  background: color-mix(in srgb, var(--w-color, var(--text-dim)) 10%, transparent);
+}
+
+.widget-inbox__badge--todo     { --w-color: var(--w-color-todo); }
+.widget-inbox__badge--awaiting { --w-color: var(--w-color-awaiting); }
+.widget-inbox__badge--running  { --w-color: var(--w-color-running); }
+.widget-inbox__badge--blocked  { --w-color: var(--w-color-blocked); }
+.widget-inbox__badge--done     { --w-color: var(--w-color-done); }
+
+.widget-inbox__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.widget-inbox__empty--error {
+  color: var(--w-color-blocked);
+}
+
+/* ---- Matrix ---- */
+.widget-matrix {
+  background: var(--bg-paper);
+  border-radius: 6px;
+  padding: 6px;
+  overflow: auto;
+}
+
+.widget-matrix__grid {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.8fr) repeat(5, minmax(72px, 1fr));
+  gap: 4px;
+}
+
+.widget-matrix__corner {
+  /* empty top-left cell */
+}
+
+.widget-matrix__col-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.widget-matrix__row-header {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 4px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+}
+
+.widget-matrix__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+}
+
+.widget-matrix__cell-empty {
+  color: var(--text-faint);
+  font-size: 11px;
+  text-align: center;
+}
+
+.widget-matrix__mini-card {
+  font-size: 10.5px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--w-color, var(--text-dim));
+  background: var(--bg-paper);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
+  color: inherit;
+}
+
+.widget-matrix__mini-card:hover {
+  background: color-mix(in srgb, var(--text) 5%, var(--bg-paper));
+}
+
+.widget-matrix__mini-card--todo     { --w-color: var(--w-color-todo); }
+.widget-matrix__mini-card--awaiting { --w-color: var(--w-color-awaiting); }
+.widget-matrix__mini-card--running  { --w-color: var(--w-color-running); }
+.widget-matrix__mini-card--blocked  { --w-color: var(--w-color-blocked); }
+.widget-matrix__mini-card--done     { --w-color: var(--w-color-done); }
+
+.widget-matrix__more {
+  align-self: flex-start;
+  font-size: 10px;
+  color: var(--text-faint);
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.widget-matrix__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.widget-matrix__dot--todo     { background: var(--w-color-todo); }
+.widget-matrix__dot--awaiting { background: var(--w-color-awaiting); }
+.widget-matrix__dot--running  { background: var(--w-color-running); }
+.widget-matrix__dot--blocked  { background: var(--w-color-blocked); }
+.widget-matrix__dot--done     { background: var(--w-color-done); }
+
+.widget-matrix__empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.widget-matrix__empty--error {
+  color: var(--w-color-blocked);
+}
+
+/* ---- Badge ---- */
+.widget-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--w-color, var(--text-dim));
+  border-radius: 6px;
+  background: var(--bg-paper);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  overflow: hidden;
+}
+
+.widget-badge:hover {
+  background: color-mix(in srgb, var(--text) 4%, var(--bg-paper));
+}
+
+.widget-badge--todo     { --w-color: var(--w-color-todo); }
+.widget-badge--awaiting { --w-color: var(--w-color-awaiting); }
+.widget-badge--running  { --w-color: var(--w-color-running); }
+.widget-badge--blocked  { --w-color: var(--w-color-blocked); }
+.widget-badge--done     { --w-color: var(--w-color-done); }
+
+.widget-badge__dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.widget-badge__dot--todo     { background: var(--w-color-todo); }
+.widget-badge__dot--awaiting { background: var(--w-color-awaiting); }
+.widget-badge__dot--running  { background: var(--w-color-running); }
+.widget-badge__dot--blocked  { background: var(--w-color-blocked); }
+.widget-badge__dot--done     { background: var(--w-color-done); }
+
+.widget-badge__body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 1px;
+}
+
+.widget-badge__title {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-badge__subtitle {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-badge__more {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text-dim);
+}
+
+.widget-badge--empty,
+.widget-badge--error {
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  border-left-color: var(--border);
+  cursor: default;
+}
+
+.widget-badge--error {
+  color: var(--w-color-blocked);
+}
+
+/* ---- ArtifactPreview ---- */
+.widget-artifact {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--w-color, var(--text-dim));
+  border-radius: 6px;
+  background: var(--bg-paper);
+  overflow: hidden;
+  cursor: default;
+}
+
+.widget-artifact[role="button"] {
+  cursor: pointer;
+}
+
+.widget-artifact[role="button"]:hover {
+  background: color-mix(in srgb, var(--text) 4%, var(--bg-paper));
+}
+
+.widget-artifact--todo     { --w-color: var(--w-color-todo); }
+.widget-artifact--awaiting { --w-color: var(--w-color-awaiting); }
+.widget-artifact--running  { --w-color: var(--w-color-running); }
+.widget-artifact--blocked  { --w-color: var(--w-color-blocked); }
+.widget-artifact--done     { --w-color: var(--w-color-done); }
+
+.widget-artifact__caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.widget-artifact__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex: 0 0 auto;
+}
+
+.widget-artifact__dot--todo     { background: var(--w-color-todo); }
+.widget-artifact__dot--awaiting { background: var(--w-color-awaiting); }
+.widget-artifact__dot--running  { background: var(--w-color-running); }
+.widget-artifact__dot--blocked  { background: var(--w-color-blocked); }
+.widget-artifact__dot--done     { background: var(--w-color-done); }
+
+.widget-artifact__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-artifact__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.widget-artifact__line {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.widget-artifact__placeholder {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.widget-artifact--empty,
+.widget-artifact--error {
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  border-left-color: var(--border);
+}
+
+.widget-artifact--error {
+  color: var(--w-color-blocked);
 }

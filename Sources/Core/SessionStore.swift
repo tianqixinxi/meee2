@@ -464,6 +464,25 @@ public class SessionStore: ObservableObject {
         sessions = newSessions
     }
 
+    /// 清空内存中所有 session、queue、unread 缓存。
+    /// 仅在 Settings → Privacy 的"删除本地数据"流程里调用——
+    /// 磁盘文件由 SystemStorageAPI 删除，这里负责让 SwiftUI/@Published
+    /// 订阅者（Island / Web Board / TUI）立刻看到空状态，避免运行中
+    /// 的 UI 继续显示已被删除的 session 并把脏数据回写到 `~/.meee2`。
+    ///
+    /// 注意：这只清内存——磁盘删除责任在调用方。每条 session 单独发
+    /// `.sessionRemoved` 事件以触发现有订阅链路（BoardServer 等）。
+    public func clearAllInMemory() {
+        let removedIds = sessions.map { $0.sessionId }
+        sessions = []
+        for sid in removedIds {
+            // 文件层的 queue/unread 已经被磁盘 wipe 一并清掉，这里调用
+            // clearQueue/clearUnread 是 idempotent no-op（文件已不存在）。
+            SessionEventBus.shared.publish(.sessionRemoved(sessionId: sid))
+        }
+        MLog("[SessionStore] clearAllInMemory: removed \(removedIds.count) sessions from memory")
+    }
+
     // MARK: - 未读通知
 
     /// 设置未读通知

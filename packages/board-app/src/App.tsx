@@ -1,8 +1,5 @@
 import {
-  Component,
   createContext,
-  type ErrorInfo,
-  type ReactNode,
   useCallback,
   useContext,
   useEffect,
@@ -13,7 +10,7 @@ import {
 import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
-import { ArtifactsView, type ArtifactFocusTarget } from './components/ArtifactsView'
+import { ArtifactsView } from './components/ArtifactsView'
 import { NativeSessionsWorkspaceHost } from './components/NativeSessionsWorkspaceHost'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
@@ -22,19 +19,30 @@ import { SettingsView } from './components/SettingsView'
 import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
+import { CommandPalette } from './components/CommandPalette'
 import { useI18n } from './lib/i18n'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
+import { useCanvasMonitor } from './lib/canvasMonitor'
 import type {
   CanvasList,
   CanvasKind,
   CanvasScope,
   Meee2AgentRuntimeStatus,
+  PlannerGraphState,
   PlannerMonitorItem,
   ReadinessReport,
+  Session,
   SpawnProvider,
 } from './types'
-import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
+import {
+  WORKING_STATUSES,
+  RESTING_STATUSES,
+  ensureNotificationPermission,
+  indexSessions,
+  loadNotificationToggles,
+  runSessionTransitionNotifications,
+} from './notifications'
 import type {
   CanvasPersistence,
   LayoutMap,
@@ -43,6 +51,7 @@ import type {
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
   activateSession,
+  applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
   deleteCanvas,
@@ -52,7 +61,6 @@ import {
   fetchUserProfile,
   installMeee2AgentRuntime,
   repairReadiness,
-  setPlannerCanvasDescription,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -77,7 +85,6 @@ const FALLBACK_CANVAS_ID = 'personal-default'
 const WORKSPACE_RAIL_COLLAPSED_KEY = 'meee2.workspaceRail.collapsed'
 const FIRST_RUN_ONBOARDING_COMPLETED_KEY = 'meee2.onboarding.completed.v1'
 const BOARD_DEV_MODE = readBoardDevMode()
-const CANVAS_REFRESH_BURST_WINDOW_MS = 500
 // Minimum loading-overlay duration when an uncached canvas is hydrated.
 // Previously 3000ms — that made every fresh canvas switch feel sluggish even
 // when the real fetch returned in <100ms. 250ms is enough to smooth flicker
@@ -167,6 +174,8 @@ function canvasListSignature(list: CanvasList): string {
         kind: canvasKind(canvas),
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
+        parentCanvasId: canvas.parentCanvasId ?? null,
+        parentNodeId: canvas.parentNodeId ?? null,
         ownerUserId: canvas.ownerUserId ?? null,
         teamId: canvas.teamId ?? null,
         remoteId: canvas.remoteId ?? null,
@@ -199,58 +208,6 @@ interface ToastCtx {
 }
 const ToastContext = createContext<ToastCtx>({ push: () => {} })
 export const useToast = () => useContext(ToastContext)
-
-interface WorkspaceSurfaceErrorBoundaryProps {
-  resetKey: string
-  onOpenSettings: () => void
-  children: ReactNode
-}
-
-interface WorkspaceSurfaceErrorBoundaryState {
-  error: Error | null
-}
-
-class WorkspaceSurfaceErrorBoundary extends Component<
-  WorkspaceSurfaceErrorBoundaryProps,
-  WorkspaceSurfaceErrorBoundaryState
-> {
-  state: WorkspaceSurfaceErrorBoundaryState = { error: null }
-
-  static getDerivedStateFromError(error: Error): WorkspaceSurfaceErrorBoundaryState {
-    return { error }
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.warn('[App] workspace surface failed:', error.message, info.componentStack)
-  }
-
-  componentDidUpdate(prevProps: WorkspaceSurfaceErrorBoundaryProps) {
-    if (prevProps.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null })
-    }
-  }
-
-  render() {
-    if (!this.state.error) return this.props.children
-    return (
-      <div className="workspace-surface-error" role="alert">
-        <div>
-          <span>Workspace surface paused</span>
-          <h2>This view failed to render.</h2>
-          <p>{this.state.error.message || 'The current workspace surface hit an unexpected UI error.'}</p>
-        </div>
-        <div className="workspace-surface-error__actions">
-          <button type="button" onClick={() => this.setState({ error: null })}>
-            Retry
-          </button>
-          <button type="button" onClick={this.props.onOpenSettings}>
-            Open Settings
-          </button>
-        </div>
-      </div>
-    )
-  }
-}
 
 export default function App() {
   const { t } = useI18n()
@@ -307,33 +264,16 @@ export default function App() {
       })
   }, [applyCanvasList])
   const refreshCanvasesTimerRef = useRef<number | null>(null)
-  const activeCanvasRefreshTimerRef = useRef<number | null>(null)
-  const lastActiveCanvasRefreshAtRef = useRef(0)
   // U5.1 — auto-refresh on notification.
-  // Bump this counter when a WS state.changed event arrives. Anything that
-  // renders the active canvas (PlannerGraph / monitor) takes it as a prop and
-  // uses it to refetch its server state without a manual canvas switch. Claude
-  // can emit bursts while tooling; refresh immediately for the first event,
-  // then coalesce follow-ups so graph/monitor fetches don't churn per frame.
+  // bump this counter whenever a WS state.changed event arrives. Anything that
+  // renders the active canvas (PlannerGraph etc.) takes it as a prop and uses
+  // it as an effect dep to refetch its server state without a manual canvas
+  // switch.
   const [activeCanvasRefreshTick, setActiveCanvasRefreshTick] = useState(0)
   const scheduleCanvasListRefresh = useCallback(() => {
-    const bumpActiveCanvasRefresh = () => {
-      lastActiveCanvasRefreshAtRef.current = Date.now()
-      activeCanvasRefreshTimerRef.current = null
-      setActiveCanvasRefreshTick((value) => value + 1)
-    }
-    const elapsed = Date.now() - lastActiveCanvasRefreshAtRef.current
-    if (elapsed >= CANVAS_REFRESH_BURST_WINDOW_MS) {
-      if (activeCanvasRefreshTimerRef.current !== null) {
-        window.clearTimeout(activeCanvasRefreshTimerRef.current)
-      }
-      bumpActiveCanvasRefresh()
-    } else if (activeCanvasRefreshTimerRef.current === null) {
-      activeCanvasRefreshTimerRef.current = window.setTimeout(
-        bumpActiveCanvasRefresh,
-        CANVAS_REFRESH_BURST_WINDOW_MS - elapsed,
-      )
-    }
+    // bump the per-canvas refresh tick immediately so consumers diff against
+    // the server in <1s of the notification (acceptance #1).
+    setActiveCanvasRefreshTick((value) => value + 1)
     if (refreshCanvasesTimerRef.current !== null) {
       window.clearTimeout(refreshCanvasesTimerRef.current)
     }
@@ -349,9 +289,6 @@ export default function App() {
     return () => {
       if (refreshCanvasesTimerRef.current !== null) {
         window.clearTimeout(refreshCanvasesTimerRef.current)
-      }
-      if (activeCanvasRefreshTimerRef.current !== null) {
-        window.clearTimeout(activeCanvasRefreshTimerRef.current)
       }
     }
   }, [])
@@ -435,14 +372,26 @@ export default function App() {
   }, [activeCanvasId, canvasList])
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
+  const workspaceCanvases = useMemo(() => (canvasList?.canvases ?? []).filter(isWorkspaceCanvas), [canvasList])
+  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
+    ? activeCanvasId
+    : workspaceCanvases[0]?.id ?? activeCanvasId
+  const activeWorkspaceCanvas = canvasList?.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
+  const activeWorkspaceCanvasKind = canvasKind(activeWorkspaceCanvas)
+  const [activePlannerState, setActivePlannerState] = useState<PlannerGraphState | null>(null)
+  useEffect(() => {
+    setActivePlannerState(null)
+  }, [activeWorkspaceCanvasId])
+  const currentPlannerState = activePlannerState?.canvas.id === activeWorkspaceCanvasId ? activePlannerState : null
+  const activeCanvasMonitor = useCanvasMonitor({
+    plannerState: currentPlannerState,
+    boardState: boardState.state,
+  })
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
   const [degradedEntry, setDegradedEntry] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
-  const [plannerFocusTarget, setPlannerFocusTarget] = useState<{ canvasId: string; nodeId: string; requestId: number } | null>(null)
-  const [initialPlannerIntake, setInitialPlannerIntake] = useState<{ canvasId: string; id: number; text: string } | null>(null)
-  const [artifactFocusTarget, setArtifactFocusTarget] = useState<ArtifactFocusTarget | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
@@ -515,6 +464,26 @@ export default function App() {
     })
   }, [boardState.state])
 
+  // Chunk D: OS-level notifications. Diff session snapshots, fire system
+  // notifications for permission-request / session-blocked / session-done /
+  // recap-updated. Approval (planner gate-wait) is dispatched separately from
+  // PlannerGraph since planner state isn't part of BoardState.
+  const prevSessionsRef = useRef<Map<string, Session>>(new Map())
+  useEffect(() => {
+    // Request permission on first BoardState arrival (lazy — only once).
+    void ensureNotificationPermission()
+  }, [])
+  useEffect(() => {
+    const st = boardState.state
+    if (!st) return
+    const toggles = loadNotificationToggles()
+    // Defer to a microtask so the diff never blocks render.
+    queueMicrotask(() => {
+      runSessionTransitionNotifications(prevSessionsRef.current, st.sessions, toggles)
+      prevSessionsRef.current = indexSessions(st.sessions)
+    })
+  }, [boardState.state])
+
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, kind, text }])
@@ -583,6 +552,15 @@ export default function App() {
     const openSettings = () => setWorkspaceMode('settings')
     window.addEventListener('meee2:open-settings', openSettings)
     return () => window.removeEventListener('meee2:open-settings', openSettings)
+  }, [])
+
+  // UI-simplification chunk G — CanvasToolbar 「+ New canvas」 modal 顶部
+  // 「从模板新建」CTA 通过 window event 切到 Templates view。沿用上面 open-settings
+  // 同款 isolated listener,不动 routing 主链。
+  useEffect(() => {
+    const navTemplates = () => setWorkspaceMode('templates')
+    window.addEventListener('meee2:nav-templates', navTemplates)
+    return () => window.removeEventListener('meee2:nav-templates', navTemplates)
   }, [])
 
   const openSessionsWorkspaceFromDetail = useCallback((detail?: { sessionId?: string; surfaceId?: string } | null) => {
@@ -701,13 +679,43 @@ export default function App() {
     handleSetActiveCanvas(target.canvasId)
     setWorkspaceMode('planner')
     if (target.nodeId) {
-      setPlannerFocusTarget({
-        canvasId: target.canvasId,
-        nodeId: target.nodeId,
-        requestId: Date.now(),
-      })
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('meee2:select-node', {
+          detail: { canvasId: target.canvasId, nodeId: target.nodeId },
+        }))
+      }, 50)
     }
   }, [boardState, handleSetActiveCanvas, pushToast])
+
+  // Command palette handlers. Switching canvases is async (RTT against the
+  // local API), so for node selection we first ensure planner mode + the
+  // right active canvas, then dispatch a `meee2:select-node` event which
+  // PlannerGraph subscribes to (it opens its inspector for the matching node).
+  const handlePaletteOpenCanvas = useCallback((canvasId: string) => {
+    setWorkspaceMode('planner')
+    handleSetActiveCanvas(canvasId)
+  }, [handleSetActiveCanvas])
+
+  const handlePaletteOpenNode = useCallback((canvasId: string, nodeId: string) => {
+    setWorkspaceMode('planner')
+    if (canvasId !== activeCanvasId) {
+      handleSetActiveCanvas(canvasId)
+    }
+    // Give PlannerGraph one tick to remount on the new canvas before asking it
+    // to focus the node. PlannerGraph also re-applies the latest pending
+    // selection after its planner state finishes hydrating.
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('meee2:select-node', {
+        detail: { canvasId, nodeId },
+      }))
+    }, 50)
+  }, [activeCanvasId, handleSetActiveCanvas])
+
+  const handlePaletteOpenSession = useCallback((sessionId: string) => {
+    window.dispatchEvent(new CustomEvent('meee2:open-session', {
+      detail: { sessionId },
+    }))
+  }, [])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
@@ -775,23 +783,12 @@ export default function App() {
     }, 2000)
   }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
 
-  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope, initialGoal?: string) => {
-    return createCanvas({ name, scope })
-      .then(async (list) => {
+  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope, kind?: CanvasKind) => {
+    return createCanvas({ name, scope, kind })
+      .then((list) => {
         applyCanvasList(list)
-        const goal = initialGoal?.trim()
-        if (goal && list.activeCanvasId) {
-          try {
-            await setPlannerCanvasDescription(list.activeCanvasId, goal)
-          } catch (err) {
-            pushToast('error', (err as Error).message || 'Failed to save canvas goal')
-          }
-          setWorkspaceMode('planner')
-          setInitialPlannerIntake({ canvasId: list.activeCanvasId, id: Date.now(), text: goal })
-        }
-        return list.activeCanvasId
       })
-  }, [applyCanvasList, pushToast])
+  }, [applyCanvasList])
 
   const handleCreateTemplate = useCallback((name: string, scope: CanvasScope) => {
     return createCanvas({ name, scope, kind: 'template' })
@@ -800,6 +797,19 @@ export default function App() {
         return list.activeCanvasId
       })
   }, [applyCanvasList])
+
+  // Chunk F: spawn a canvas from a builtin gallery template, then jump to it.
+  const handleApplyTemplate = useCallback(
+    (templateId: string, name: string, scope: CanvasScope) => {
+      return applyCanvasTemplate(templateId, { name, scope }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
 
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
@@ -843,7 +853,6 @@ export default function App() {
   }, [boardSessionSignature, refreshCanvases])
 
   const handleWorkspaceModeChange = useCallback((nextMode: WorkspaceMode) => {
-    if (nextMode === 'artifacts') setArtifactFocusTarget(null)
     setWorkspaceMode(nextMode)
     if (nextMode !== 'planner' || !canvasList) return
     const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
@@ -905,20 +914,8 @@ export default function App() {
     )
   }
 
-  const workspaceCanvases = canvasList.canvases.filter(isWorkspaceCanvas)
-  const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
-    ? activeCanvasId
-    : workspaceCanvases[0]?.id ?? activeCanvasId
-  const activeWorkspaceCanvas = canvasList.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
-  const activeWorkspaceCanvasKind = canvasKind(activeWorkspaceCanvas)
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
   const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
-  const surfaceResetKey = [
-    workspaceMode,
-    activeWorkspaceCanvasId,
-    activeCanvasRefreshTick,
-    plannerClearRevision,
-  ].join(':')
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -946,137 +943,105 @@ export default function App() {
               </button>
             </div>
           )}
-          <WorkspaceSurfaceErrorBoundary
-            resetKey={surfaceResetKey}
-            onOpenSettings={() => setWorkspaceMode('settings')}
-          >
-            {workspaceMode === 'planner' ? (
-              activeWorkspaceCanvasKind === 'monitor' ? (
-                <WorkspaceMonitor
-                  activeCanvasId={activeWorkspaceCanvasId}
-                  canvases={workspaceCanvases}
-                  refreshTick={activeCanvasRefreshTick}
-                  onOpenItem={handleOpenMonitorItem}
-                  onOpenAllSessions={() => setWorkspaceMode('sessions')}
-                />
-              ) : (
-                <PlannerGraph
-                  canvasId={activeWorkspaceCanvasId}
-                  canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
-                  workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
-                  userProfile={userProfile}
-                  boardState={boardState.state}
-                  clearRevision={plannerClearRevision}
-                  refreshTick={activeCanvasRefreshTick}
-                  focusNodeId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.nodeId : null}
-                  focusRequestId={plannerFocusTarget?.canvasId === activeWorkspaceCanvasId ? plannerFocusTarget.requestId : 0}
-                  initialIntakeMessage={initialPlannerIntake?.canvasId === activeWorkspaceCanvasId ? initialPlannerIntake : null}
-                  onFocusNodeHandled={(requestId) => {
-                    setPlannerFocusTarget((current) => current?.requestId === requestId ? null : current)
-                  }}
-                  onInitialIntakeHandled={(requestId) => {
-                    setInitialPlannerIntake((current) => current?.id === requestId ? null : current)
-                  }}
-                  onOpenSubCanvas={handleSetActiveCanvas}
-                  onOpenArtifacts={(focus) => {
-                    setArtifactFocusTarget(focus
-                      ? { ...focus, id: Date.now() }
-                      : null)
-                    setWorkspaceMode('artifacts')
-                  }}
-                  onNotify={pushToast}
-                />
-              )
-            ) : workspaceMode === 'templates' ? (
-              <TemplatesView
-                canvases={canvasList.canvases}
-                activeCanvasId={activeCanvasId}
-                userProfile={userProfile}
-                boardState={boardState.state}
-                onOpenCanvas={handleSetActiveCanvas}
-                onCreateTemplate={handleCreateTemplate}
-              />
-            ) : workspaceMode === 'sessions' ? (
-              <NativeSessionsWorkspaceHost
-                state={boardState.state}
-                selectedSessionId={selectedSessionId}
-              />
-            ) : workspaceMode === 'artifacts' ? (
-              <ArtifactsView
-                canvases={workspaceCanvases}
+          {workspaceMode === 'planner' ? (
+            activeWorkspaceCanvasKind === 'monitor' ? (
+              <WorkspaceMonitor
                 activeCanvasId={activeWorkspaceCanvasId}
+                canvases={workspaceCanvases}
                 refreshTick={activeCanvasRefreshTick}
-                focusTarget={artifactFocusTarget}
-                onOpenCanvas={(canvasId) => {
-                  handleSetActiveCanvas(canvasId)
-                  setWorkspaceMode('planner')
-                }}
-                onOpenPlannerNode={(canvasId, nodeId) => {
-                  handleSetActiveCanvas(canvasId)
-                  setWorkspaceMode('planner')
-                  setPlannerFocusTarget({
-                    canvasId,
-                    nodeId,
-                    requestId: Date.now(),
-                  })
-                }}
-                onOpenSession={(sessionId) => {
-                  setSelectedSessionId(sessionId)
-                  setWorkspaceMode('sessions')
-                  boardState.refresh()
-                }}
-                onClearFocus={() => setArtifactFocusTarget(null)}
-              />
-            ) : workspaceMode === 'integrations' ? (
-              <IntegrationsView
-                state={boardState.state}
-                onJumpToCanvas={(canvasId) => {
-                  handleSetActiveCanvas(canvasId)
-                  setWorkspaceMode('planner')
-                }}
-              />
-            ) : workspaceMode === 'team' ? (
-              <TeamView userProfile={userProfile} />
-            ) : workspaceMode === 'settings' ? (
-              <SettingsView
-                onSaved={() => {
-                  refreshUserProfile()
-                  refreshAgentRuntimeStatus(false)
-                  refreshReadiness()
-                }}
-                onToast={pushToast}
-                agentRuntimeStatus={agentRuntimeStatus}
-                onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
-                onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
-                readinessReport={readinessReport}
-                readinessRepairAction={readinessRepairAction}
-                readinessRepairError={readinessRepairError}
-                readinessRepairLogs={readinessRepairLogs}
-                onRepairReadiness={handleRepairReadiness}
-                onRefreshReadiness={refreshReadiness}
-                devMode={BOARD_DEV_MODE}
-                onRestartOnboarding={restartFirstRunOnboarding}
-              />
-            ) : null}
-            {workspaceMode === 'planner' && (
-              <CanvasToolbar
-                canvases={workspaceCanvases}
-                activeCanvasId={activeWorkspaceCanvasId}
-                canGoBack={canvasHistoryIndex > 0}
-                canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
-                onActiveCanvasChange={handleSetActiveCanvas}
-                onGoBack={handleCanvasHistoryBack}
-                onGoForward={handleCanvasHistoryForward}
-                onCreateCanvas={handleCreateCanvas}
-                onRenameCanvas={handleRenameCanvas}
-                onClearCanvas={handleClearCanvas}
-                onDeleteCanvas={handleDeleteCanvas}
-                userProfile={userProfile}
-                boardState={boardState.state}
+                onOpenItem={handleOpenMonitorItem}
                 onOpenAllSessions={() => setWorkspaceMode('sessions')}
               />
-            )}
-          </WorkspaceSurfaceErrorBoundary>
+            ) : (
+              <PlannerGraph
+                canvasId={activeWorkspaceCanvasId}
+                canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+                userProfile={userProfile}
+                boardState={boardState.state}
+                clearRevision={plannerClearRevision}
+                refreshTick={activeCanvasRefreshTick}
+                onPlannerStateChange={setActivePlannerState}
+                onOpenSubCanvas={handleSetActiveCanvas}
+                onNotify={pushToast}
+                canvasMonitor={activeCanvasMonitor}
+              />
+            )
+          ) : workspaceMode === 'templates' ? (
+            <TemplatesView
+              canvases={canvasList.canvases}
+              activeCanvasId={activeCanvasId}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              onOpenCanvas={handleSetActiveCanvas}
+              onCreateTemplate={handleCreateTemplate}
+              onApplyTemplate={handleApplyTemplate}
+            />
+          ) : workspaceMode === 'sessions' ? (
+            <NativeSessionsWorkspaceHost
+              state={boardState.state}
+              selectedSessionId={selectedSessionId}
+            />
+          ) : workspaceMode === 'artifacts' ? (
+            <ArtifactsView
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              onOpenCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
+          ) : workspaceMode === 'integrations' ? (
+            <IntegrationsView
+              state={boardState.state}
+              onJumpToCanvas={(canvasId) => {
+                handleSetActiveCanvas(canvasId)
+                setWorkspaceMode('planner')
+              }}
+            />
+          ) : workspaceMode === 'team' ? (
+            <TeamView userProfile={userProfile} />
+          ) : workspaceMode === 'settings' ? (
+            <SettingsView
+              onSaved={() => {
+                refreshUserProfile()
+                refreshAgentRuntimeStatus(false)
+                refreshReadiness()
+              }}
+              onToast={pushToast}
+              agentRuntimeStatus={agentRuntimeStatus}
+              onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
+              onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+              readinessReport={readinessReport}
+              readinessRepairAction={readinessRepairAction}
+              readinessRepairError={readinessRepairError}
+              readinessRepairLogs={readinessRepairLogs}
+              onRepairReadiness={handleRepairReadiness}
+              onRefreshReadiness={refreshReadiness}
+              devMode={BOARD_DEV_MODE}
+              onRestartOnboarding={restartFirstRunOnboarding}
+            />
+          ) : null}
+          {workspaceMode === 'planner' && (
+            <CanvasToolbar
+              canvases={workspaceCanvases}
+              activeCanvasId={activeWorkspaceCanvasId}
+              canGoBack={canvasHistoryIndex > 0}
+              canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}
+              onActiveCanvasChange={handleSetActiveCanvas}
+              onGoBack={handleCanvasHistoryBack}
+              onGoForward={handleCanvasHistoryForward}
+              onCreateCanvas={handleCreateCanvas}
+              onRenameCanvas={handleRenameCanvas}
+              onClearCanvas={handleClearCanvas}
+              onDeleteCanvas={handleDeleteCanvas}
+              userProfile={userProfile}
+              boardState={boardState.state}
+              plannerState={currentPlannerState}
+              canvasMonitor={activeCanvasMonitor}
+              onOpenAllSessions={() => setWorkspaceMode('sessions')}
+            />
+          )}
           {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
@@ -1099,6 +1064,13 @@ export default function App() {
             onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
+        <CommandPalette
+          canvases={canvasList.canvases}
+          boardState={boardState.state}
+          onOpenCanvas={handlePaletteOpenCanvas}
+          onOpenNodeInspector={handlePaletteOpenNode}
+          onOpenSession={handlePaletteOpenSession}
+        />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>
