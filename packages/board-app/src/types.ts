@@ -499,6 +499,16 @@ export type ArtifactPositionTag =
   | 'proposed'    // agent 提议要提升,等 owner 批
 
 /**
+ * theta (2026-05-29) — Artifact review status.
+ * Mirrors Zod `ArtifactReviewStatus`.
+ *  pending  — agent submitted, owner has not yet promoted (UI shows badge + Promote)
+ *  approved — owner-promoted, or auto-approved for snapshot-style payloads
+ *  rejected — owner rejected; downstream consumers should fall back
+ * Absence ≡ 'approved' for back-compat with legacy artifacts.
+ */
+export type ArtifactReviewStatus = 'pending' | 'approved' | 'rejected'
+
+/**
  * Artifact payload discriminated union(UI-simplification §3.E).
  * 替代原来的 `payload: unknown`:用 type tag 区分,每种 payload 自带强类型字段。
  *
@@ -507,21 +517,36 @@ export type ArtifactPositionTag =
  * payload(写到 PlannerArtifactContent.payload)保留兼容;新写入走 typed
  * ArtifactPayload。Consumers 优先看 ArtifactPayload,缺失则 fallback 到旧 payload。
  */
+/**
+ * theta (2026-05-29) — common fields applied to every ArtifactPayload variant.
+ * Hoisted to a single intersect so future common gates (review / visibility /
+ * lock) only need to extend this one type.
+ */
+type ArtifactPayloadCommon = {
+  /**
+   * Review gate; absence ≡ 'approved'. Mirrors Zod `ArtifactReviewStatus`.
+   * widgetDataResolver prefers `approved` payloads; pending payloads show
+   * a "Promote" affordance in the inspector before being treated as
+   * canonical by downstream consumers.
+   */
+  reviewStatus?: ArtifactReviewStatus
+}
+
 export type ArtifactPayload =
-  | { type: 'prd';          tldr: string; sections: Array<{ heading: string; lines: number }> }
-  | { type: 'kanban';       columns: Array<{ name: string; items: string[] }> }
-  | { type: 'impl-pr';      number: number; branch: string; baseBranch: string;
-                            filesChanged: number; insertions: number; deletions: number;
-                            ciStatus: 'pass' | 'fail' | 'running';
-                            reviewers: string[] }
-  | { type: 'check-result'; pass: number; fail: number; skip: number;
-                            failing: string[] }
-  | { type: 'file';         filename: string; mime: string; sizeBytes: number;
-                            lines?: number | null }
-  | { type: 'markdown';     preview: string }
-  | { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
-                            externalId: string; externalUrl?: string | null;
-                            summary?: string | null }
+  | (ArtifactPayloadCommon & { type: 'prd';          tldr: string; sections: Array<{ heading: string; lines: number }> })
+  | (ArtifactPayloadCommon & { type: 'kanban';       columns: Array<{ name: string; items: string[] }> })
+  | (ArtifactPayloadCommon & { type: 'impl-pr';      number: number; branch: string; baseBranch: string;
+                                                     filesChanged: number; insertions: number; deletions: number;
+                                                     ciStatus: 'pass' | 'fail' | 'running';
+                                                     reviewers: string[] })
+  | (ArtifactPayloadCommon & { type: 'check-result'; pass: number; fail: number; skip: number;
+                                                     failing: string[] })
+  | (ArtifactPayloadCommon & { type: 'file';         filename: string; mime: string; sizeBytes: number;
+                                                     lines?: number | null })
+  | (ArtifactPayloadCommon & { type: 'markdown';     preview: string })
+  | (ArtifactPayloadCommon & { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
+                                                     externalId: string; externalUrl?: string | null;
+                                                     summary?: string | null })
 
 export type ArtifactPayloadType = ArtifactPayload['type']
 
@@ -540,6 +565,12 @@ export interface PlannerArtifact {
   typedPayload?: ArtifactPayload | null
   /** UI-simplification §3.C: position tag for clipboard model. Defaults to 'latest' if missing. */
   positionTag?: ArtifactPositionTag
+  /**
+   * theta (2026-05-29): review gate on the typed payload. Absence ≡ 'approved'.
+   * widgetDataResolver prefers `approved` artifacts; InspectorArtifactBody
+   * shows a pending badge + Promote button when this is 'pending'.
+   */
+  reviewStatus?: ArtifactReviewStatus
 }
 
 export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'

@@ -201,6 +201,54 @@ export function InspectorArtifactBody({
     activePayload?.type === 'prd' ||
     activePayload?.type === 'kanban'
 
+  // theta (2026-05-29) — review gate. Source of truth is the artifact-level
+  // reviewStatus; typedPayload.reviewStatus mirrors it for callers that only
+  // see the payload envelope. Absence ≡ 'approved'.
+  const activeReviewStatus =
+    activeArtifact?.reviewStatus ?? activePayload?.reviewStatus ?? 'approved'
+  const isReviewPending = activeReviewStatus === 'pending'
+  const [promoting, setPromoting] = useState(false)
+  const handlePromoteArtifact = () => {
+    if (!activeArtifact || promoting) return
+    setPromoting(true)
+    // 构造一个 attachArtifact PlanChange, 把同 reference 的 payload 重新
+    // 提交一遍, 只翻转 reviewStatus → 'approved'。后端 store 走「same slot
+    // = append new version」路径, 自动滚到 latest。
+    const nextPayload =
+      activeArtifact.typedPayload
+        ? { ...activeArtifact.typedPayload, reviewStatus: 'approved' as const }
+        : { type: 'markdown', reviewStatus: 'approved' as const, preview: '' }
+    proposePlannerGraphChange(canvasId, {
+      summary: `Promote ${activeArtifact.title} to approved`,
+      changes: [
+        {
+          kind: 'attachArtifact',
+          nodeId: node.id,
+          artifact: {
+            kind: activeArtifact.kind,
+            title: activeArtifact.title,
+            reference: activeArtifact.reference,
+            status: activeArtifact.status,
+            payload: nextPayload,
+          },
+        },
+      ],
+    })
+      .then((proposal) => {
+        setPromoting(false)
+        if (!proposal) {
+          toast.push('error', 'Promote 失败:服务端没返回提议')
+          return
+        }
+        onProposalCreated?.(proposal)
+        toast.push('success', `已提交 Promote 提议:${activeArtifact.title}`)
+      })
+      .catch((err) => {
+        setPromoting(false)
+        toast.push('error', `Promote 失败:${(err as Error).message || '未知错误'}`)
+      })
+  }
+
   // 卡片样式(widget chip)popover。
   const [widgetDraft, setWidgetDraft] = useState<Widget | null>(node.widget ?? null)
   const [widgetSaving, setWidgetSaving] = useState(false)
@@ -336,6 +384,28 @@ export function InspectorArtifactBody({
             <span className={`planner-node-modal__state planner-node-modal__state--${runState}`}>
               {runStateToBadge(String(runState))}
             </span>
+          )}
+          {/* theta — pending review badge + Promote button. Only renders for
+              the active artifact when its reviewStatus is 'pending'. */}
+          {!isTemplate && isReviewPending && activeArtifact && (
+            <>
+              <span
+                className="planner-node-modal__state planner-node-modal__state--blocked"
+                title="此产物尚未被 owner 提升为正式版本,下游消费者会回退到上一份 approved 产物。"
+              >
+                待审核
+              </span>
+              <button
+                type="button"
+                className="planner-node-modal__attach-data-source-button"
+                disabled={promoting}
+                onClick={handlePromoteArtifact}
+                title="把这份产物提升为 approved,下游 widget / resolver 会切到这一份"
+              >
+                <Sparkles size={12} aria-hidden />
+                {promoting ? ' 提升中…' : ' Promote'}
+              </button>
+            </>
           )}
         </div>
         <h2>{node.title}</h2>
