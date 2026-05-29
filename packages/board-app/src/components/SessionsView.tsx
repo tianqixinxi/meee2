@@ -2,10 +2,12 @@ import {
   AlertCircle,
   Archive,
   CheckCircle2,
+  ChevronDown,
   CircleStop,
   Clock3,
   EyeOff,
   ExternalLink,
+  FileText,
   MessageSquareText,
   Pencil,
   RefreshCw,
@@ -22,15 +24,18 @@ import {
   Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type TranscriptBlock, type TranscriptEntryFull } from '../api'
+import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
-import type { BoardState, Session, SessionIntakeDiagnostics } from '../types'
+import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
 interface Props {
   state: BoardState | null
+  canvases?: CanvasInfo[]
   unreadSids: Set<string>
   selectedSessionId?: string | null
   onSelectedSessionChange?: (id: string | null) => void
+  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId: string; nodeTitle?: string | null }) => void
 }
 
 type SessionFilter = 'all' | 'attention' | 'unread'
@@ -40,9 +45,12 @@ type NativeTerminalSyncType = 'attach' | 'layout' | 'focus'
 
 export function SessionsView({
   state,
+  canvases = [],
   unreadSids,
   selectedSessionId,
   onSelectedSessionChange,
+  onOpenPlannerNode,
+  onOpenArtifacts,
 }: Props) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -54,6 +62,8 @@ export function SessionsView({
   const [diagnostics, setDiagnostics] = useState<SessionIntakeDiagnostics | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [surfaces, setSurfaces] = useState<SessionSurface[]>([])
+  const routedSelectedSessionIdRef = useRef<string | null>(null)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
   const prewarmedInternalSurfaceIdsRef = useRef<Set<string>>(new Set())
@@ -89,6 +99,9 @@ export function SessionsView({
       session.id === selectedSessionId || session.surfaceId === selectedSessionId
     )) ?? null
   }, [selectedSessionId, sessions])
+  const pendingSelectedSessionId = selectedSessionId?.trim() && !selectedSession
+    ? selectedSessionId.trim()
+    : null
   const internalSessions = useMemo(() => {
     const list = visibleSessions.filter(isInternalSession)
     if (selectedSession && isInternalSession(selectedSession) && !list.some((session) => session.id === selectedSession.id)) {
@@ -104,9 +117,45 @@ export function SessionsView({
     if (!selectedSession) return null
     return (activeKindTab === 'internal') === isInternalSession(selectedSession) ? selectedSession : null
   }, [activeKindTab, selectedSession])
+  const sessionSurfaceSignature = useMemo(
+    () => sessions.map((session) => `${session.id}:${session.surfaceId ?? ''}:${session.surfaceStatus ?? ''}`).sort().join('|'),
+    [sessions],
+  )
+  useEffect(() => {
+    let cancelled = false
+    listSessionSurfaces()
+      .then((items) => {
+        if (!cancelled) setSurfaces(Array.isArray(items) ? items : [])
+      })
+      .catch(() => {
+        if (!cancelled) setSurfaces([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionSurfaceSignature])
+  const selectedSurface = useMemo(() => (
+    selectedSessionOnActiveTab
+      ? surfaces.find((surface) => surfaceMatchesSession(surface, selectedSessionOnActiveTab)) ?? null
+      : null
+  ), [selectedSessionOnActiveTab, surfaces])
+  const selectedSurfaceCanvas = useMemo(() => (
+    selectedSurface?.canvasId
+      ? canvases.find((canvas) => canvas.id === selectedSurface.canvasId) ?? null
+      : null
+  ), [canvases, selectedSurface?.canvasId])
+
+  useEffect(() => {
+    const selectedKey = selectedSessionId?.trim() || null
+    if (routedSelectedSessionIdRef.current === selectedKey) return
+    routedSelectedSessionIdRef.current = selectedKey
+    if (!selectedSession) return
+    setActiveKindTab(isInternalSession(selectedSession) ? 'internal' : 'external')
+  }, [selectedSession, selectedSessionId])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
     if (!session.surfaceId || !isLiveInternalSession(session)) return false
+    if (isNativeWorkspaceSession(session)) return false
     if (reason === 'react.idleTabPrewarm') return false
     const criticalInteraction = reason.startsWith('react.rowSelect') || reason.startsWith('react.rowOpen')
     if (!criticalInteraction && prewarmedInternalSurfaceIdsRef.current.has(session.surfaceId)) return true
@@ -148,18 +197,20 @@ export function SessionsView({
   }, [])
 
   useEffect(() => {
+    if (pendingSelectedSessionId) return
     if (activeKindTab !== 'internal' || selectedSessionOnActiveTab || internalSessions.length === 0) return
     const next = internalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next?.id ?? null)
-  }, [activeKindTab, internalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
+  }, [activeKindTab, internalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
+    if (pendingSelectedSessionId) return
     if (activeKindTab !== 'external' || selectedSessionOnActiveTab || externalSessions.length === 0) return
     const next = externalSessions[0]
     if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
     onSelectedSessionChange?.(next.id)
-  }, [activeKindTab, externalSessions, onSelectedSessionChange, selectedSessionId, selectedSessionOnActiveTab])
+  }, [activeKindTab, externalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
     if (activeKindTab !== 'internal') return
@@ -212,11 +263,11 @@ export function SessionsView({
     <section className="sessions-workspace" aria-label={t('sessions.title')}>
       <div className="sessions-workspace__inner">
         <div className="sessions-workspace__header">
-          <div>
+          <div className="sessions-workspace__title">
             <h1>{t('sessions.title')}</h1>
-            <p>{t('sessions.subtitle')}</p>
+            <span>{t('sessions.sessionCount', { visible: visibleSessions.length, total: sessions.length })}</span>
           </div>
-          <div className="sessions-workspace__tools">
+          <div className="sessions-workspace__filters">
             <label className="sessions-search">
               <Search size={14} aria-hidden />
               <input
@@ -236,22 +287,35 @@ export function SessionsView({
               <FilterButton label={t('sessions.controlArchived')} count={controlCounts.archived} active={controlFilter === 'archived'} onClick={() => setControlFilter('archived')} />
             </div>
           </div>
+          <div className="sessions-workspace__tools">
+            <SessionIntakeStatus
+              diagnostics={diagnostics}
+              error={diagnosticsError}
+              loading={diagnosticsLoading}
+              onRefresh={refreshDiagnostics}
+              t={t}
+            />
+          </div>
         </div>
-        <SessionIntakePanel
-          diagnostics={diagnostics}
-          error={diagnosticsError}
-          loading={diagnosticsLoading}
-          onRefresh={refreshDiagnostics}
-          t={t}
-        />
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && !pendingSelectedSessionId ? (
           <div className="sessions-empty">
             <TerminalIcon size={18} aria-hidden />
             <span>{t('sessions.empty')}</span>
           </div>
         ) : (
           <div className="sessions-board">
-            {visibleSessions.length === 0 ? (
+            {pendingSelectedSessionId && sessions.length === 0 ? (
+              <SessionDetail
+                session={null}
+                pendingSessionId={pendingSelectedSessionId}
+                opening={false}
+                openError={false}
+                onOpen={noopVoid}
+                onOpenPlannerNode={onOpenPlannerNode}
+                onOpenArtifacts={onOpenArtifacts}
+                t={t}
+              />
+            ) : visibleSessions.length === 0 ? (
               <div className="sessions-empty sessions-empty--compact">
                 <Search size={18} aria-hidden />
                 <span>{t('sessions.noMatch')}</span>
@@ -329,11 +393,16 @@ export function SessionsView({
                 </aside>
                 <SessionDetail
                   session={selectedSessionOnActiveTab}
+                  pendingSessionId={pendingSelectedSessionId}
                   opening={openingId === selectedSessionOnActiveTab?.id}
                   openError={openErrorId === selectedSessionOnActiveTab?.id}
                   switchStartedAt={selectedSessionOnActiveTab ? switchStartedAtRef.current[selectedSessionOnActiveTab.id] : undefined}
                   switchTraceId={selectedSessionOnActiveTab ? switchTraceIdRef.current[selectedSessionOnActiveTab.id] : undefined}
+                  surface={selectedSurface}
+                  surfaceCanvas={selectedSurfaceCanvas}
                   onOpen={() => selectedSessionOnActiveTab && openSession(selectedSessionOnActiveTab)}
+                  onOpenPlannerNode={onOpenPlannerNode}
+                  onOpenArtifacts={onOpenArtifacts}
                   t={t}
                 />
               </div>
@@ -345,7 +414,7 @@ export function SessionsView({
   )
 }
 
-function SessionIntakePanel({
+function SessionIntakeStatus({
   diagnostics,
   error,
   loading,
@@ -358,42 +427,43 @@ function SessionIntakePanel({
   onRefresh: () => void
   t: (key: TranslationKey, vars?: Record<string, string | number>) => string
 }) {
-  const hasItems = (diagnostics?.items.length ?? 0) > 0
+  const diagnosticItems = Array.isArray(diagnostics?.items) ? diagnostics.items : []
+  const liveSessions = diagnostics?.liveSessions ?? 0
+  const storedSessions = diagnostics?.storedSessions ?? 0
+  const historicalSessions = diagnostics?.historicalSessions ?? 0
   const tone = error ? 'error' : diagnostics?.ok === false ? 'warn' : 'ok'
   const summary = error
     ? error
     : diagnostics
       ? t('sessions.intakeSummary', {
-          live: diagnostics.liveSessions,
-          stored: diagnostics.storedSessions,
-          historical: diagnostics.historicalSessions,
+          live: liveSessions,
+          stored: storedSessions,
+          historical: historicalSessions,
         })
       : t('sessions.intakeLoading')
+  const title = diagnostics?.ok === false
+    ? t('sessions.intakeNeedsAttention')
+    : tone === 'ok'
+      ? t('sessions.intakeOk')
+      : t('sessions.intakeTitle')
+  const detail = diagnosticItems.slice(0, 2).map((item) => `${item.title}: ${item.detail}`).join('\n') || summary
 
   return (
-    <section className={`session-intake session-intake--${tone}`} aria-label={t('sessions.intakeTitle')}>
-      <div className="session-intake__main">
-        {tone === 'ok' ? <CheckCircle2 size={15} aria-hidden /> : <AlertCircle size={15} aria-hidden />}
-        <div>
-          <strong>{diagnostics?.ok === false ? t('sessions.intakeNeedsAttention') : t('sessions.intakeTitle')}</strong>
-          <span>{summary}</span>
-        </div>
-      </div>
-      {hasItems && (
-        <ul className="session-intake__items">
-          {diagnostics!.items.slice(0, 3).map((item) => (
-            <li key={item.id}>
-              <span>{item.title}</span>
-              <em>{item.detail}</em>
-            </li>
-          ))}
-        </ul>
-      )}
-      <button type="button" className="session-intake__refresh" onClick={onRefresh} disabled={loading}>
+    <button
+      type="button"
+      className={`session-intake-status session-intake-status--${tone}`}
+      onClick={onRefresh}
+      disabled={loading}
+      title={detail}
+      aria-label={t('sessions.intakeTitle')}
+    >
+      {tone === 'ok' ? <CheckCircle2 size={13} aria-hidden /> : <AlertCircle size={13} aria-hidden />}
+      <span>{title}</span>
+      <em>{summary}</em>
+      <span className="session-intake-status__refresh">
         <RefreshCw size={13} className={loading ? 'spin' : undefined} aria-hidden />
-        <span>{t('common.refresh')}</span>
-      </button>
-    </section>
+      </span>
+    </button>
   )
 }
 
@@ -544,19 +614,29 @@ const SessionRow = memo(function SessionRow({
 
 function SessionDetail({
   session,
+  pendingSessionId,
   opening,
   openError,
   switchStartedAt,
   switchTraceId,
+  surface,
+  surfaceCanvas,
   onOpen,
+  onOpenPlannerNode,
+  onOpenArtifacts,
   t,
 }: {
   session: Session | null
+  pendingSessionId?: string | null
   opening: boolean
   openError: boolean
   switchStartedAt?: number
   switchTraceId?: string
+  surface?: SessionSurface | null
+  surfaceCanvas?: CanvasInfo | null
   onOpen: () => void
+  onOpenPlannerNode?: (canvasId: string, nodeId: string) => void
+  onOpenArtifacts?: (focus: { canvasId: string; nodeId: string; nodeTitle?: string | null }) => void
   t: ReturnType<typeof useI18n>['t']
 }) {
   const [stopping, setStopping] = useState(false)
@@ -568,9 +648,11 @@ function SessionDetail({
   const [controlStatus, setControlStatus] = useState<string | null>(null)
   const [controlError, setControlError] = useState<string | null>(null)
   const [timeline, setTimeline] = useState<TranscriptEntryFull[]>([])
+  const [timelineLoaded, setTimelineLoaded] = useState(false)
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [timelineError, setTimelineError] = useState<string | null>(null)
   const [memoryRecords, setMemoryRecords] = useState<SessionMemoryRecord[]>([])
+  const [memoryLoaded, setMemoryLoaded] = useState(false)
   const [memoryDraft, setMemoryDraft] = useState('')
   const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null)
   const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
@@ -586,8 +668,10 @@ function SessionDetail({
     try {
       const response = await fetchTranscript(session.id, { limit: 48 })
       setTimeline(response.entries)
+      setTimelineLoaded(true)
     } catch (err) {
       setTimeline([])
+      setTimelineLoaded(true)
       setTimelineError((err as Error).message || t('sessions.timelineLoadFailed'))
     } finally {
       setTimelineLoading(false)
@@ -601,7 +685,9 @@ function SessionDetail({
     setMemoryError(null)
     try {
       setMemoryRecords(await fetchMemoryRecords('session', session.id))
+      setMemoryLoaded(true)
     } catch (err) {
+      setMemoryLoaded(true)
       setMemoryError((err as Error).message || t('sessions.memoryLoadFailed'))
     }
   }, [session, t])
@@ -614,10 +700,23 @@ function SessionDetail({
     setControlError(null)
     setStopError(null)
     setStopConfirming(false)
-    void refreshTimeline()
-    void refreshMemory()
-  }, [refreshMemory, refreshTimeline])
+    setTimeline([])
+    setTimelineLoaded(false)
+    setTimelineError(null)
+    setMemoryRecords([])
+    setMemoryLoaded(false)
+    setMemoryError(null)
+  }, [session?.id])
   if (!session) {
+    if (pendingSessionId) {
+      return (
+        <aside className="sessions-detail sessions-detail--empty sessions-detail--pending">
+          <RefreshCw size={18} className="spin" aria-hidden />
+          <strong>{t('sessions.pendingSelectedSession', { id: shortId(pendingSessionId) })}</strong>
+          <span>{t('sessions.pendingSelectedSessionHint')}</span>
+        </aside>
+      )
+    }
     return (
       <aside className="sessions-detail sessions-detail--empty">
         <TerminalIcon size={18} aria-hidden />
@@ -627,8 +726,15 @@ function SessionDetail({
   }
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
+  const nativeWorkspaceSession = internal && isNativeWorkspaceSession(session)
   const desktopSession = session.clientKind === 'desktop' && !internal
   const controlState = sessionControlState(session)
+  const hasPermissionAction = Boolean(session.pendingPermissionTool || session.pendingPermissionMessage)
+  const showActionDrawer = hasPermissionAction || desktopSession || Boolean(controlStatus || controlError)
+  const boundCanvasId = surface?.canvasId?.trim() || ''
+  const boundNodeId = surface?.nodeId?.trim() || ''
+  const boundNodeTitle = surface?.title?.trim() || session.title || boundNodeId
+  const timelineItemCount = buildTimelineItems(timeline, session, t).length
   const runControlAction = async (action: 'hide' | 'archive' | 'restore') => {
     setControlError(null)
     setControlStatus(null)
@@ -764,104 +870,90 @@ function SessionDetail({
   return (
     <aside className="sessions-detail">
       <div className="sessions-detail__header">
-        <div>
+        <div className="sessions-detail__identity">
           <span>{internal ? t('sessions.internal') : t('sessions.external')}</span>
           <h2>{session.title || shortId(session.id)}</h2>
+          <p>
+            <strong>{session.surfaceStatus || session.status}</strong>
+            <span>{session.project || t('sessions.noProject')}</span>
+            <em>{shortId(session.id)}</em>
+          </p>
         </div>
         <div className="sessions-detail__actions">
-          <button type="button" onClick={onOpen} disabled={opening}>
+          <button type="button" onClick={onOpen} disabled={opening} title={t('sessions.openSession')} aria-label={t('sessions.openSession')}>
             {internal ? <TerminalIcon size={14} aria-hidden /> : <ExternalLink size={14} aria-hidden />}
-            {opening ? t('common.opening') : t('sessions.openSession')}
+            <span>{opening ? t('common.opening') : t('sessions.openSession')}</span>
           </button>
           <button
             type="button"
             className={stopConfirming ? 'sessions-detail__danger' : undefined}
             onClick={stopSession}
             disabled={stopping || (internal && (session.surfaceStatus === 'exited' || session.surfaceStatus === 'failed'))}
+            title={stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+            aria-label={stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
           >
             <CircleStop size={14} aria-hidden />
-            {stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}
+            <span>{stopping ? t('sessions.stopping') : stopConfirming ? t('sessions.confirmStop') : t('sessions.stop')}</span>
           </button>
           {controlState === 'active' ? (
             <>
-              <button type="button" onClick={() => void runControlAction('hide')}>
+              <button type="button" onClick={() => void runControlAction('hide')} title={t('sessions.hide')} aria-label={t('sessions.hide')}>
                 <EyeOff size={14} aria-hidden />
-                {t('sessions.hide')}
+                <span>{t('sessions.hide')}</span>
               </button>
-              <button type="button" onClick={() => void runControlAction('archive')}>
+              <button type="button" onClick={() => void runControlAction('archive')} title={t('sessions.archive')} aria-label={t('sessions.archive')}>
                 <Archive size={14} aria-hidden />
-                {t('sessions.archive')}
+                <span>{t('sessions.archive')}</span>
               </button>
             </>
           ) : (
-            <button type="button" onClick={() => void runControlAction('restore')}>
+            <button type="button" onClick={() => void runControlAction('restore')} title={t('sessions.restore')} aria-label={t('sessions.restore')}>
               <RotateCcw size={14} aria-hidden />
-              {t('sessions.restore')}
+              <span>{t('sessions.restore')}</span>
             </button>
           )}
         </div>
       </div>
-      <dl className="sessions-detail__meta">
-        <div>
-          <dt>{t('sessions.columnStatus')}</dt>
-          <dd>{session.surfaceStatus || session.status}</dd>
-        </div>
-        <div>
-          <dt>{t('sessions.columnContext')}</dt>
-          <dd>{session.project || t('sessions.noProject')}</dd>
-        </div>
-        <div>
-          <dt>{t('sessions.id')}</dt>
-          <dd>{session.id}</dd>
-        </div>
-      </dl>
-      {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
-      {stopError && <p className="sessions-detail__error">{stopError}</p>}
-      <section className="sessions-control" aria-label={t('sessions.control')}>
-        <div className="sessions-control__heading">
+      {boundCanvasId && boundNodeId && (
+        <div className="sessions-detail__context">
           <div>
-            <strong>{t('sessions.control')}</strong>
-            <span>{session.inboxPending > 0 ? t('sessions.pendingMessages', { count: session.inboxPending }) : t('sessions.controlReady')}</span>
+            <span>{t('sessions.boundNode')}</span>
+            <strong>{boundNodeTitle}</strong>
+            <em>{surfaceCanvas?.name ?? shortId(boundCanvasId)}</em>
           </div>
-          {session.pendingPermissionTool && (
-            <div className="sessions-control__permission-actions">
-              <span className="sessions-control__permission">{t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })}</span>
-              <button type="button" onClick={() => void answerPermission('allow')}>
-                <ShieldCheck size={13} aria-hidden />
-                {t('sessions.allowPermission')}
-              </button>
-              <button type="button" onClick={() => void answerPermission('deny')}>
-                <ShieldX size={13} aria-hidden />
-                {t('sessions.denyPermission')}
-              </button>
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => onOpenPlannerNode?.(boundCanvasId, boundNodeId)}
+            disabled={!onOpenPlannerNode}
+          >
+            <ExternalLink size={13} aria-hidden />
+            {t('sessions.openNode')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenArtifacts?.({
+              canvasId: boundCanvasId,
+              nodeId: boundNodeId,
+              nodeTitle: boundNodeTitle,
+            })}
+            disabled={!onOpenArtifacts}
+          >
+            <FileText size={13} aria-hidden />
+            {t('sessions.openArtifacts')}
+          </button>
         </div>
-        <div className="sessions-composer">
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={t('sessions.messagePlaceholder')}
-            rows={3}
-          />
-          <div className="sessions-composer__actions">
-            <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
-              <Send size={13} aria-hidden />
-              {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+      )}
+      <section className="sessions-terminal-stage">
+        {nativeWorkspaceSession && liveInternal ? (
+          <div className="sessions-external">
+            <TerminalIcon size={18} aria-hidden />
+            <span>{t('sessions.nativeWorkspaceSummary')}</span>
+            <button type="button" onClick={onOpen} disabled={opening}>
+              <ExternalLink size={13} aria-hidden />
+              {opening ? t('common.opening') : t('sessions.openSession')}
             </button>
-            {desktopSession && (
-              <button type="button" onClick={pushNow} disabled={pushing}>
-                <Zap size={13} aria-hidden />
-                {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
-              </button>
-            )}
           </div>
-        </div>
-        {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
-        {controlError && <p className="sessions-detail__error">{controlError}</p>}
-      </section>
-      <section className="sessions-runtime">
-        {internal && session.surfaceId && liveInternal ? (
+        ) : internal && session.surfaceId && liveInternal ? (
           <NativeTerminalPanel session={session} switchStartedAt={switchStartedAt} switchTraceId={switchTraceId} />
         ) : internal ? (
           <div className="sessions-external">
@@ -874,38 +966,156 @@ function SessionDetail({
             <span>{t('sessions.externalSummary')}</span>
           </div>
         )}
-        <SessionTimeline
-          entries={timeline}
-          loading={timelineLoading}
-          error={timelineError}
-          session={session}
-          onRefresh={refreshTimeline}
-          t={t}
-        />
-        <SessionMemoryPanel
-          records={memoryRecords}
-          draft={memoryDraft}
-          busyId={memoryBusyId}
-          editingId={memoryEditingId}
-          editDraft={memoryEditDraft}
-          error={memoryError}
-          onDraftChange={setMemoryDraft}
-          onAdd={addMemory}
-          onEdit={(record) => {
-            setMemoryEditingId(record.id)
-            setMemoryEditDraft(record.content)
-          }}
-          onEditDraftChange={setMemoryEditDraft}
-          onSave={saveMemory}
-          onCancelEdit={() => {
-            setMemoryEditingId(null)
-            setMemoryEditDraft('')
-          }}
-          onDelete={removeMemory}
-          t={t}
-        />
       </section>
+      <div className="sessions-detail__drawers">
+        {(openError || stopError) && (
+          <div className="sessions-detail__alerts">
+            {openError && <p className="sessions-detail__error">{t('common.openFailed')}</p>}
+            {stopError && <p className="sessions-detail__error">{stopError}</p>}
+          </div>
+        )}
+        {showActionDrawer && (
+          <SessionDrawer
+            title={hasPermissionAction ? t('sessions.permissionRequired') : t('sessions.fallbackInput')}
+            meta={session.pendingPermissionTool
+              ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+              : desktopSession
+                ? t('sessions.fallbackInputMeta')
+                : t('sessions.actionsReady')}
+            defaultOpen={Boolean(hasPermissionAction || controlStatus || controlError)}
+          >
+            <section className="sessions-control" aria-label={t('sessions.control')}>
+              {hasPermissionAction && (
+                <div className="sessions-control__permission-actions">
+                  <span className="sessions-control__permission">
+                    {session.pendingPermissionTool
+                      ? t('sessions.permissionRequiredFor', { tool: session.pendingPermissionTool })
+                      : t('sessions.permissionRequired')}
+                  </span>
+                  <button type="button" onClick={() => void answerPermission('allow')}>
+                    <ShieldCheck size={13} aria-hidden />
+                    {t('sessions.allowPermission')}
+                  </button>
+                  <button type="button" onClick={() => void answerPermission('deny')}>
+                    <ShieldX size={13} aria-hidden />
+                    {t('sessions.denyPermission')}
+                  </button>
+                </div>
+              )}
+              {desktopSession && (
+                <div className="sessions-composer">
+                  <textarea
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    placeholder={t('sessions.messagePlaceholder')}
+                    rows={2}
+                  />
+                  <div className="sessions-composer__actions">
+                    <button type="button" onClick={sendMessage} disabled={sending || draft.trim().length === 0}>
+                      <Send size={13} aria-hidden />
+                      {sending ? t('sessions.sending') : t('sessions.sendMessage')}
+                    </button>
+                    <button type="button" onClick={pushNow} disabled={pushing}>
+                      <Zap size={13} aria-hidden />
+                      {pushing ? t('sessions.pushing') : t('sessions.pushNow')}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {controlStatus && <p className="sessions-detail__status">{controlStatus}</p>}
+              {controlError && <p className="sessions-detail__error">{controlError}</p>}
+            </section>
+          </SessionDrawer>
+        )}
+        <SessionDrawer
+          title={t('sessions.timeline')}
+          meta={timelineLoading
+            ? t('sessions.timelineLoading')
+            : timelineLoaded
+              ? t('sessions.timelineCount', { count: timelineItemCount })
+              : t('sessions.openToLoad')}
+          onOpen={() => {
+            if (!timelineLoaded && !timelineLoading) void refreshTimeline()
+          }}
+        >
+          <SessionTimeline
+            entries={timeline}
+            loading={timelineLoading}
+            error={timelineError}
+            session={session}
+            onRefresh={refreshTimeline}
+            t={t}
+          />
+        </SessionDrawer>
+        <SessionDrawer
+          title={t('sessions.memory')}
+          meta={memoryLoaded ? t('sessions.memoryCount', { count: memoryRecords.length }) : t('sessions.openToLoad')}
+          onOpen={() => {
+            if (!memoryLoaded) void refreshMemory()
+          }}
+        >
+          <SessionMemoryPanel
+            records={memoryRecords}
+            draft={memoryDraft}
+            busyId={memoryBusyId}
+            editingId={memoryEditingId}
+            editDraft={memoryEditDraft}
+            error={memoryError}
+            onDraftChange={setMemoryDraft}
+            onAdd={addMemory}
+            onEdit={(record) => {
+              setMemoryEditingId(record.id)
+              setMemoryEditDraft(record.content)
+            }}
+            onEditDraftChange={setMemoryEditDraft}
+            onSave={saveMemory}
+            onCancelEdit={() => {
+              setMemoryEditingId(null)
+              setMemoryEditDraft('')
+            }}
+            onDelete={removeMemory}
+            t={t}
+          />
+        </SessionDrawer>
+      </div>
     </aside>
+  )
+}
+
+function SessionDrawer({
+  title,
+  meta,
+  defaultOpen = false,
+  onOpen,
+  children,
+}: {
+  title: string
+  meta?: string
+  defaultOpen?: boolean
+  onOpen?: () => void
+  children: ReactNode
+}) {
+  const detailsRef = useRef<HTMLDetailsElement | null>(null)
+  useEffect(() => {
+    if (!defaultOpen || !detailsRef.current) return
+    detailsRef.current.open = true
+    onOpen?.()
+  }, [defaultOpen, onOpen])
+  return (
+    <details
+      ref={detailsRef}
+      className="sessions-drawer"
+      onToggle={(event) => {
+        if ((event.currentTarget as HTMLDetailsElement).open) onOpen?.()
+      }}
+    >
+      <summary>
+        <strong>{title}</strong>
+        {meta && <span>{meta}</span>}
+        <ChevronDown size={13} aria-hidden />
+      </summary>
+      <div className="sessions-drawer__body">{children}</div>
+    </details>
   )
 }
 
@@ -1140,6 +1350,13 @@ function compactTimelineText(value: string): string {
   return normalized.length > 220 ? `${normalized.slice(0, 220)}...` : normalized
 }
 
+function surfaceMatchesSession(surface: SessionSurface, session: Session): boolean {
+  return surface.surfaceId === session.surfaceId
+    || surface.sessionId === session.id
+    || Boolean(session.surfaceId && surface.sessionId === session.surfaceId)
+    || Boolean(session.surfaceId && surface.surfaceId === session.id)
+}
+
 function NativeTerminalPanel({
   session,
   switchStartedAt,
@@ -1327,6 +1544,10 @@ function isInternalSession(session: Session): boolean {
   return session.terminalKind === 'internal' || Boolean(session.surfaceId)
 }
 
+function isNativeWorkspaceSession(session: Session): boolean {
+  return session.openTarget === 'native-workspace' || session.nativeWorkspaceAvailable === true
+}
+
 function isLiveInternalSession(session: Session): boolean {
   const status = (session.surfaceStatus || session.status || '').toLowerCase()
   return status !== 'exited' && status !== 'failed' && status !== 'dead'
@@ -1431,6 +1652,7 @@ function scheduleInternalTabPrewarm(
 }
 
 function noopSessionAction(_session: Session) {}
+function noopVoid() {}
 
 function sessionControlState(session: Session): SessionControlFilter {
   return session.controlState === 'hidden' || session.controlState === 'archived'

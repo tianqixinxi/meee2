@@ -11,7 +11,7 @@ import { CanvasToolbar } from './components/CanvasToolbar'
 import { PlannerGraph } from './components/planner/PlannerGraph'
 import { WorkspaceMonitor } from './components/planner/WorkspaceMonitor'
 import { ArtifactsView } from './components/ArtifactsView'
-import { SessionsView } from './components/SessionsView'
+import { NativeSessionsWorkspaceHost } from './components/NativeSessionsWorkspaceHost'
 import { IntegrationsView } from './components/IntegrationsView'
 import { TemplatesView } from './components/TemplatesView'
 import { TeamView } from './components/TeamView'
@@ -21,6 +21,7 @@ import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
 import { useI18n } from './lib/i18n'
+import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
 import type {
@@ -29,6 +30,7 @@ import type {
   CanvasScope,
   Meee2AgentRuntimeStatus,
   PlannerGraphState,
+  PlannerMonitorItem,
   ReadinessReport,
   Session,
   SpawnProvider,
@@ -48,6 +50,7 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
+  activateSession,
   applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
@@ -61,6 +64,12 @@ import {
   updateCanvas,
   type UserProfile,
 } from './api'
+
+declare global {
+  interface Window {
+    __meee2PendingSessionsWorkspace?: { sessionId?: string; surfaceId?: string } | null
+  }
+}
 
 interface HydratedState {
   canvasId: string
@@ -554,18 +563,35 @@ export default function App() {
     return () => window.removeEventListener('meee2:nav-templates', navTemplates)
   }, [])
 
+  const openSessionsWorkspaceFromDetail = useCallback((detail?: { sessionId?: string; surfaceId?: string } | null) => {
+    const surfaceId = detail?.surfaceId?.trim()
+    const sessionId = detail?.sessionId?.trim()
+    setDegradedEntry(true)
+    setSelectedSessionId(sessionId || surfaceId || null)
+    setWorkspaceMode('sessions')
+    boardState.refresh()
+  }, [boardState.refresh])
+
   useEffect(() => {
     const openSession = (event: Event) => {
       const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
-      const surfaceId = detail?.surfaceId?.trim()
-      const sessionId = detail?.sessionId?.trim()
-      setSelectedSessionId(sessionId || surfaceId || null)
-      setWorkspaceMode('sessions')
-      boardState.refresh()
+      openSessionsWorkspaceFromDetail(detail)
     }
     window.addEventListener('meee2:open-session', openSession)
     return () => window.removeEventListener('meee2:open-session', openSession)
-  }, [boardState.refresh])
+  }, [openSessionsWorkspaceFromDetail])
+
+  useEffect(() => {
+    const openSessionsWorkspace = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
+      openSessionsWorkspaceFromDetail(detail)
+    }
+    window.addEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
+    if (window.__meee2PendingSessionsWorkspace) {
+      openSessionsWorkspaceFromDetail(window.__meee2PendingSessionsWorkspace)
+    }
+    return () => window.removeEventListener('meee2:open-sessions-workspace', openSessionsWorkspace)
+  }, [openSessionsWorkspaceFromDetail])
 
   const completeFirstRunOnboarding = useCallback(() => {
     if (readinessReport?.ready !== true) return
@@ -639,6 +665,27 @@ export default function App() {
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
+
+  const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
+    const target = resolveMonitorItemOpenTarget(item, boardState.state?.sessions)
+    if (target.kind === 'external-session') {
+      activateSession(target.sessionId)
+        .then((ok) => {
+          if (!ok) pushToast('error', 'Failed to open external session')
+        })
+        .finally(() => boardState.refresh())
+      return
+    }
+    handleSetActiveCanvas(target.canvasId)
+    setWorkspaceMode('planner')
+    if (target.nodeId) {
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('meee2:select-node', {
+          detail: { canvasId: target.canvasId, nodeId: target.nodeId },
+        }))
+      }, 50)
+    }
+  }, [boardState, handleSetActiveCanvas, pushToast])
 
   // Command palette handlers. Switching canvases is async (RTT against the
   // local API), so for node selection we first ensure planner mode + the
@@ -901,7 +948,8 @@ export default function App() {
               <WorkspaceMonitor
                 activeCanvasId={activeWorkspaceCanvasId}
                 canvases={workspaceCanvases}
-                onOpenCanvas={handleSetActiveCanvas}
+                refreshTick={activeCanvasRefreshTick}
+                onOpenItem={handleOpenMonitorItem}
                 onOpenAllSessions={() => setWorkspaceMode('sessions')}
               />
             ) : (
@@ -930,11 +978,9 @@ export default function App() {
               onApplyTemplate={handleApplyTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
-            <SessionsView
+            <NativeSessionsWorkspaceHost
               state={boardState.state}
-              unreadSids={unreadSids}
               selectedSessionId={selectedSessionId}
-              onSelectedSessionChange={setSelectedSessionId}
             />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView

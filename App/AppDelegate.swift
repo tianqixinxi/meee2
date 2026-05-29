@@ -89,12 +89,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 因此 A2AIdentity 在测试里默认无 resolver,cwd 路径返回 nil(测试本来
         // 也不依赖 cwd 解析,符合现状)。
         A2AIdentity.resolver = SessionStoreIdentityResolver()
+        TerminalSessionBackendRegistry.shared.register(GhosttySurfaceBackend.shared)
 
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 
         // 先建好主菜单栏——.accessory 时不显示，Board 窗口切 .regular 后自动出现
         setupMainMenu()
+        SessionPaletteManager.shared.registerHotKey()
 
         // 创建状态栏图标
         setupStatusBar()
@@ -347,6 +349,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let boardItem = NSMenuItem(title: "Open Board", action: #selector(openBoardMenu), keyEquivalent: "b")
         boardItem.target = self
         menu.addItem(boardItem)
+        let sessionsItem = NSMenuItem(title: "Open Sessions", action: #selector(openNativeSessionsWorkspaceMenu), keyEquivalent: "s")
+        sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+        sessionsItem.target = self
+        menu.addItem(sessionsItem)
+        let paletteItem = NSMenuItem(title: "Session Palette", action: #selector(openSessionPalette), keyEquivalent: "p")
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        paletteItem.target = self
+        menu.addItem(paletteItem)
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -461,11 +471,44 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         boardWindowController?.openSettings()
     }
 
+    @MainActor
+    @objc private func openSessionPalette() {
+        SessionPaletteManager.shared.toggle()
+    }
+
+    @MainActor
     @objc private func openBoardSession(_ notification: Notification) {
         let sessionId = notification.userInfo?["sessionId"] as? String
         let surfaceId = notification.userInfo?["surfaceId"] as? String
+        if isInternalTerminalTarget(sessionId: sessionId, surfaceId: surfaceId) {
+            showNativeSessionsWorkspaceInBoard(sessionId: sessionId, surfaceId: surfaceId)
+            return
+        }
         openBoardMenu()
         boardWindowController?.openSession(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    @MainActor
+    @objc private func openNativeSessionsWorkspaceMenu() {
+        showNativeSessionsWorkspaceInBoard(sessionId: nil, surfaceId: nil)
+    }
+
+    @MainActor
+    private func showNativeSessionsWorkspaceInBoard(sessionId: String?, surfaceId: String?) {
+        openBoardMenu()
+        boardWindowController?.openSessionsWorkspace(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    private func isInternalTerminalTarget(sessionId: String?, surfaceId: String?) -> Bool {
+        if let surfaceId, !surfaceId.isEmpty,
+           TerminalSessionBackendRegistry.shared.snapshot(id: surfaceId) != nil {
+            return true
+        }
+        if let sessionId, !sessionId.isEmpty,
+           TerminalSessionBackendRegistry.shared.snapshot(id: sessionId) != nil {
+            return true
+        }
+        return false
     }
 
     @objc private func openBoardMenu() {
@@ -570,6 +613,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                                          action: #selector(openBoardMenu),
                                          keyEquivalent: "b")
         boardItem.target = self
+        let sessionsItem = fileMenu.addItem(withTitle: "Open Sessions",
+                                            action: #selector(openNativeSessionsWorkspaceMenu),
+                                            keyEquivalent: "s")
+        sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
+        sessionsItem.target = self
+        let paletteItem = fileMenu.addItem(withTitle: "Session Palette",
+                                           action: #selector(openSessionPalette),
+                                           keyEquivalent: "p")
+        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        paletteItem.target = self
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window",
                          action: #selector(NSWindow.performClose(_:)),

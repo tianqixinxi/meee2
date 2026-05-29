@@ -1919,6 +1919,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var canvasTitle: String
     var nodeId: String?
     var nodeTitle: String?
+    var sessionId: String?
     var deliveryId: String?
     var proposalId: String?
     var proposalStatus: PlanProposalStatus?
@@ -1929,6 +1930,7 @@ struct PlannerMonitorItem: Codable, Equatable {
     var doerId: String?
     var riskRank: Int
     var evidenceCount: Int
+    var updatedAt: Date?
     /// Derived workflow-guidance line for `node`-kind items (Phase 6). `nil`
     /// for proposal items or nodes with no actionable workflow state.
     var nextAction: String?
@@ -1945,6 +1947,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         canvasTitle: String,
         nodeId: String?,
         nodeTitle: String?,
+        sessionId: String? = nil,
         deliveryId: String? = nil,
         proposalId: String?,
         proposalStatus: PlanProposalStatus?,
@@ -1955,6 +1958,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         doerId: String?,
         riskRank: Int,
         evidenceCount: Int = 0,
+        updatedAt: Date? = nil,
         nextAction: String? = nil,
         awaitingInputSince: Date? = nil
     ) {
@@ -1964,6 +1968,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.canvasTitle = canvasTitle
         self.nodeId = nodeId
         self.nodeTitle = nodeTitle
+        self.sessionId = sessionId
         self.deliveryId = deliveryId
         self.proposalId = proposalId
         self.proposalStatus = proposalStatus
@@ -1974,6 +1979,7 @@ struct PlannerMonitorItem: Codable, Equatable {
         self.doerId = doerId
         self.riskRank = riskRank
         self.evidenceCount = evidenceCount
+        self.updatedAt = updatedAt
         self.nextAction = nextAction
         self.awaitingInputSince = awaitingInputSince
     }
@@ -3326,14 +3332,19 @@ final class PlannerStore {
         canvas: PlanningCanvas,
         seedNodes: [PlanningNode],
         service: PlannerCoreService
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], artifacts: [PlannerArtifact]) {
         try withLock {
             let record = try record(for: canvas, seedNodes: seedNodes)
             var normalized = proposal
             try PlannerProposalValidator.validate(&normalized, canvas: canvas, nodes: record.nodes)
             let approved = service.approve(normalized)
             let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: approved)
-            return (approved, nodes)
+            let artifacts = mergeArtifacts(
+                record.artifacts,
+                proposalArtifacts(from: approved, nodes: nodes, canvasId: canvas.id)
+                    + derivedArtifacts(from: nodes, canvasId: canvas.id)
+            )
+            return (approved, nodes, artifacts)
         }
     }
 
@@ -5864,14 +5875,103 @@ enum PlannerBoardBridge {
             }
         }
         let graph = try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        let requirementHint = graph.nodes
+            .first(where: { $0.id == nodeId })
+            .flatMap { node in
+                artifactRequirementHint(
+                    for: node,
+                    artifacts: graph.artifacts.filter { $0.nodeId == nodeId }
+                )
+            }
         return PlannerNodeOutputResult(
             graph: graph,
             routes: submitted.routes,
-            hint: nil,
+            hint: requirementHint,
             versionId: submitted.version?.id,
             versionIndex: submitted.version?.versionIndex,
             autoDispatchedNodeIds: autoIds.isEmpty ? nil : autoIds
         )
+    }
+
+    private static func artifactRequirementHint(for node: PlanningNode, artifacts: [PlannerArtifact]) -> String? {
+        let expectedOutputs = uniqueRequirementTokens(node.schema.outputs)
+        let requiredRefs = uniqueRequirementTokens(node.gate?.requiredArtifactRefs ?? [])
+        let missingOutputs = expectedOutputs.filter { expected in
+            !artifacts.contains { artifactSatisfiesExpectation($0, expected) }
+        }
+        let missingRefs = requiredRefs.filter { required in
+            !artifacts.contains { artifactSatisfiesRequiredRef($0, required) }
+        }
+        let missing = missingOutputs + missingRefs
+        guard !missing.isEmpty else { return nil }
+        return "Artifact requirements still missing for \(node.title): \(missing.prefix(6).joined(separator: ", "))\(missing.count > 6 ? " and \(missing.count - 6) more" : "")."
+    }
+
+    private static func artifactSatisfiesExpectation(_ artifact: PlannerArtifact, _ expectation: String) -> Bool {
+        let expected = normalizeRequirementToken(expectation)
+        guard !expected.isEmpty else { return false }
+        return artifactRequirementCandidates(artifact).contains { candidate in
+            let normalized = normalizeRequirementToken(candidate)
+            guard !normalized.isEmpty else { return false }
+            return normalized == expected || normalized.contains(expected) || expected.contains(normalized)
+        }
+    }
+
+    private static func artifactSatisfiesRequiredRef(_ artifact: PlannerArtifact, _ requiredRef: String) -> Bool {
+        sameRequirement(artifact.reference, requiredRef)
+            || sameRequirement(artifact.title, requiredRef)
+            || artifactSatisfiesExpectation(artifact, requiredRef)
+    }
+
+    private static func artifactRequirementCandidates(_ artifact: PlannerArtifact) -> [String] {
+        uniqueRequirementTokens([
+            artifact.kind.rawValue,
+            artifact.reference,
+            artifact.title,
+            artifact.status
+        ] + artifactPayloadTextCandidates(artifact.payload))
+    }
+
+    private static func artifactPayloadTextCandidates(_ payload: BoardJSONValue?) -> [String] {
+        guard let payload else { return [] }
+        switch payload {
+        case .string(let value):
+            return [value]
+        case .array(let values):
+            return values.flatMap { artifactPayloadTextCandidates($0) }
+        case .object(let object):
+            let directKeys = ["summary", "description", "content", "text", "markdown", "html", "json"]
+            let nestedKeys = ["result", "output", "evidence", "payload"]
+            let direct = directKeys.compactMap { object[$0]?.stringValue }
+            let nested = nestedKeys.flatMap { artifactPayloadTextCandidates(object[$0]) }
+            return direct + nested
+        case .null, .bool, .number:
+            return []
+        }
+    }
+
+    private static func sameRequirement(_ left: String, _ right: String) -> Bool {
+        normalizeRequirementToken(left) == normalizeRequirementToken(right)
+    }
+
+    private static func normalizeRequirementToken(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: #"[\s_-]+"#, with: "-", options: .regularExpression)
+    }
+
+    private static func uniqueRequirementTokens(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalizeRequirementToken(trimmed)
+            guard !trimmed.isEmpty, !seen.contains(key) else { continue }
+            seen.insert(key)
+            result.append(trimmed)
+        }
+        return result
     }
 
     /// ENG-3 · List the append-only version chain for one artifact slot,
@@ -6060,7 +6160,7 @@ enum PlannerBoardBridge {
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
         guard proposal.canvasId == canvasId else {
             throw PlannerCoreError.canvasMismatch(expected: canvasId, actual: proposal.canvasId)
         }
@@ -6076,7 +6176,7 @@ enum PlannerBoardBridge {
         )
         let approved = preview.proposal
         let nodes = preview.nodes
-        return (approved, nodes, service.readNodeState(nodes: nodes))
+        return (approved, nodes, service.readNodeState(nodes: nodes), graphEdges(for: nodes), preview.artifacts)
     }
 
     static func approveProposal(
@@ -6106,14 +6206,14 @@ enum PlannerBoardBridge {
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.applyProposal, access: state.access)
         let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
         guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
             throw PlannerCoreError.proposalNotFound(proposalId)
         }
-        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes))
+        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes), graphEdges(for: record.nodes), record.artifacts)
     }
 
     static func workspaceMonitor(
@@ -6168,6 +6268,16 @@ enum PlannerBoardBridge {
                     return nodeState.assigneeId == actorId
                 }
                 guard includeForDoer else { continue }
+                let liveSessionId = runStates
+                    .sorted { lhs, rhs in
+                        monitorSessionPriority(for: lhs) < monitorSessionPriority(for: rhs)
+                    }
+                    .first { nodeState in
+                        guard let sessionId = nodeState.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              !sessionId.isEmpty else { return false }
+                        return monitorSessionPriority(for: nodeState) < Int.max
+                    }?
+                    .sessionId
                 items.append(PlannerMonitorItem(
                     id: "delivery-\(run.id)",
                     kind: .delivery,
@@ -6175,6 +6285,7 @@ enum PlannerBoardBridge {
                     canvasTitle: state.canvas.title,
                     nodeId: nil,
                     nodeTitle: nil,
+                    sessionId: liveSessionId,
                     deliveryId: run.id,
                     proposalId: nil,
                     proposalStatus: nil,
@@ -6185,6 +6296,7 @@ enum PlannerBoardBridge {
                     doerId: run.responsibleUserId,
                     riskRank: attentionCount > 0 ? 1 : (run.status == .active ? 3 : 5),
                     evidenceCount: runStates.reduce(0) { $0 + $1.artifactIds.count },
+                    updatedAt: run.updatedAt,
                     nextAction: "\(doneCount)/\(totalCount) steps"
                 ))
             }
@@ -6207,6 +6319,7 @@ enum PlannerBoardBridge {
                     canvasTitle: state.canvas.title,
                     nodeId: node.id,
                     nodeTitle: node.title,
+                    sessionId: node.sessionId,
                     proposalId: nil,
                     proposalStatus: nil,
                     summary: node.title,
@@ -6216,6 +6329,8 @@ enum PlannerBoardBridge {
                     doerId: node.doerId,
                     riskRank: rank,
                     evidenceCount: (node.artifactRefs ?? []).count + (artifactsByNodeId[node.id]?.count ?? 0),
+                    updatedAt: latestPlannerEventDate(in: state.events, nodeId: node.id)
+                        ?? node.outputSubmittedAt,
                     nextAction: PlannerWorkflowGuidance.nextAction(
                         for: node,
                         blockers: snapshot.blockers
@@ -6243,7 +6358,8 @@ enum PlannerBoardBridge {
                         riskRank: proposal.status == .pending ? 1 : 2,
                         evidenceCount: proposal.changes.reduce(0) { total, change in
                             total + (change.artifactRefs?.count ?? 0) + (change.artifact == nil ? 0 : 1)
-                        }
+                        },
+                        updatedAt: latestPlannerEventDate(in: state.events, proposalId: proposal.id)
                     ))
                 }
             }
@@ -6255,6 +6371,34 @@ enum PlannerBoardBridge {
             return $0.summary < $1.summary
         }
         return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
+    private static func latestPlannerEventDate(
+        in events: [PlannerEvent],
+        nodeId: String? = nil,
+        proposalId: String? = nil
+    ) -> Date? {
+        events
+            .filter { event in
+                if let nodeId, event.nodeId == nodeId { return true }
+                if let proposalId, event.proposalId == proposalId { return true }
+                return false
+            }
+            .map(\.createdAt)
+            .max()
+    }
+
+    private static func monitorSessionPriority(for nodeState: RunNodeState) -> Int {
+        switch nodeState.runState {
+        case .awaitingInput, .gateWait, .failed:
+            return 0
+        case .running:
+            return 1
+        case .pending, .readyToStart, .dispatched:
+            return 2
+        case .done:
+            return Int.max
+        }
     }
 
     private static func requireCanvas(

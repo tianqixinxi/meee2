@@ -1613,6 +1613,73 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(state.proposals.first?.status, .pending)
     }
 
+    func testPlannerBoardBridgeApplyPreviewAndApplyReturnGraphEdgesAndArtifacts() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let upstream = try XCTUnwrap(record.nodes.first)
+        let downstream = PlanningNode(
+            id: "canvas-a-dependent-node",
+            canvasId: "canvas-a",
+            title: "Dependent artifact check",
+            schema: NodeSchema(
+                inputs: ["upstream artifact"],
+                outputs: ["verified artifact"],
+                goal: "verify downstream output"
+            ),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .mock,
+            doerId: "owner-a",
+            status: .ready,
+            dependsOnNodeIds: [upstream.id]
+        )
+        let proposal = PlanProposal(
+            id: "proposal-dependent-edge",
+            canvasId: "canvas-a",
+            summary: "Add dependent node",
+            changes: [
+                .addNode(downstream),
+                .attachArtifact(
+                    nodeId: downstream.id,
+                    kind: .prd,
+                    title: "Verification Notes",
+                    reference: "verification-notes",
+                    payload: .string("ready")
+                )
+            ],
+            status: .pending
+        )
+
+        let preview = try PlannerBoardBridge.applyPreview(
+            proposal: proposal,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertTrue(preview.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+        XCTAssertTrue(preview.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
+
+        _ = try PlannerBoardBridge.store.saveProposal(
+            proposal,
+            canvas: record.canvas,
+            seedNodes: record.nodes
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        XCTAssertTrue(applied.edges.contains { $0.sourceNodeId == upstream.id && $0.targetNodeId == downstream.id })
+        XCTAssertTrue(applied.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
+    }
+
     func testPlannerStorePersistsStateAcrossInstances() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
@@ -2393,6 +2460,61 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(artifacts.first?.id, placeholder.id)
         XCTAssertEqual(artifacts.first?.title, "Idea List Kanban")
         XCTAssertEqual(artifacts.first?.payload, kanbanPayload(subCanvasId: nil))
+    }
+
+    func testSubmitNodeOutputHintsWhenArtifactsDoNotSatisfyContract() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-fit-hint", ownerId: "owner-a")
+        let canvas = PlanningCanvas(
+            id: "canvas-fit-hint",
+            ownerId: "owner-a",
+            title: "Fit Hint Canvas",
+            plannerContext: "canvas:canvas-fit-hint"
+        )
+        let node = PlanningNode(
+            id: "fit-node",
+            canvasId: "canvas-fit-hint",
+            title: "ship result",
+            schema: NodeSchema(inputs: [], outputs: ["prd", "launch-check"], goal: "Ship with evidence"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .claude,
+            doerId: "owner-a",
+            status: .ready,
+            nodeKind: .step,
+            gate: PlannerNodeGate(
+                type: "artifact-exists",
+                label: "PR gate",
+                requiredArtifactRefs: ["git://repo/pull/1"],
+                approvers: ["owner-a"],
+                onFailGotoNodeId: nil
+            )
+        )
+        _ = try PlannerBoardBridge.store.record(for: canvas, seedNodes: [node])
+
+        let result = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: node.id,
+            output: PlannerNodeOutput(
+                nodeId: node.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "prd done", routeTo: []),
+                artifacts: [
+                    PlannerNodeOutputArtifact(
+                        kind: .prd,
+                        title: "PRD",
+                        reference: "prd",
+                        payload: nil,
+                        routeTo: []
+                    )
+                ],
+                next: .complete
+            ),
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertTrue(result.hint?.contains("launch-check") == true)
+        XCTAssertTrue(result.hint?.contains("git://repo/pull/1") == true)
     }
 
     // MARK: - ENG-3 · Artifact Version Chain
