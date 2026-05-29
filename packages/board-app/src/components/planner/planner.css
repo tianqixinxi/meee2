@@ -1792,6 +1792,66 @@
   min-width: 0;
 }
 
+/* nodeKind 视觉分辨 (2026-05-28) — 卡片头部左上小 tag,跟 planner-node--kind-*
+   的边框 / 底色微差互相加强。每种 kind 一个低饱和度色调,不抢戏。 */
+.planner-node__kind-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 3px 6px 3px 5px;
+  border-radius: 4px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary, #6b6b6b);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.planner-node__kind-tag em {
+  font-style: normal;
+}
+.planner-node--kind-session .planner-node__kind-tag {
+  background: rgba(70, 130, 200, 0.10);
+  color: #3b6e9a;
+}
+.planner-node--kind-artifact .planner-node__kind-tag {
+  background: rgba(180, 130, 70, 0.10);
+  color: #8a5a2a;
+}
+.planner-node--kind-subCanvas .planner-node__kind-tag {
+  background: rgba(130, 90, 170, 0.10);
+  color: #6a4a8a;
+}
+.planner-node--kind-external .planner-node__kind-tag {
+  background: rgba(70, 140, 110, 0.10);
+  color: #3a7a5a;
+}
+.planner-node--kind-step .planner-node__kind-tag {
+  background: rgba(100, 100, 100, 0.08);
+  color: #5a5a5a;
+}
+:root[data-theme="dark"] .planner-node__kind-tag {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+}
+:root[data-theme="dark"] .planner-node--kind-session .planner-node__kind-tag {
+  background: rgba(100, 160, 230, 0.15);
+  color: #a5c8e8;
+}
+:root[data-theme="dark"] .planner-node--kind-artifact .planner-node__kind-tag {
+  background: rgba(210, 160, 100, 0.15);
+  color: #d8b88a;
+}
+:root[data-theme="dark"] .planner-node--kind-subCanvas .planner-node__kind-tag {
+  background: rgba(160, 120, 200, 0.15);
+  color: #c4a8da;
+}
+:root[data-theme="dark"] .planner-node--kind-external .planner-node__kind-tag {
+  background: rgba(100, 180, 140, 0.15);
+  color: #a8d4c0;
+}
+
 .planner-node__owner-pill {
   display: inline-flex;
   align-items: center;
