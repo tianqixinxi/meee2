@@ -45,6 +45,7 @@ import { resolveWidgetData } from './widgetDataResolver'
 import {
   ARTIFACT_LABELS,
   CARD_TOOLTIPS,
+  deriveDisplayStatus,
   FOOTER_LABELS,
   modeBadgeLabel,
   modeBadgeTooltip,
@@ -334,9 +335,18 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     )
   }
 
-  const statusLabel = isRunMode
-    ? workStatusLabelCN(runStatus, data.hasSelectedDelivery)
-    : planStatusLabelCN(designStatus)
+  // PR1 (running-session-visual) — step / session 卡片统一走 deriveDisplayStatus,
+  // 让运行态(running / awaiting / failed) 在 design 和 run mode 下都可见。
+  // 其他 nodeKind(artifact / subCanvas / external)保留旧逻辑。
+  const displayStatus = (nodeKind === 'step' || nodeKind === 'session')
+    ? deriveDisplayStatus(node)
+    : null
+  const statusLabel = displayStatus
+    ? displayStatus.label
+    : isRunMode
+      ? workStatusLabelCN(runStatus, data.hasSelectedDelivery)
+      : planStatusLabelCN(designStatus)
+  const statusToneClass = displayStatus ? `planner-node__status--${displayStatus.tone}` : ''
   const borderClass = isRunMode ? runStateClass(runStatus) : designStatus
   // Duration chip — running/awaiting 节点旁边的「已跑 X 分钟」/「等了 X 小时」。
   //   running     → 从 live attempt.startedAt 计时,绿/中性色。
@@ -439,7 +449,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         )}
         {!isRunMode && nodeKind === 'step' && data.canChangeStatus ? (
           <label
-            className="planner-node__status-select nodrag"
+            className={`planner-node__status-select nodrag${statusToneClass ? ` ${statusToneClass}` : ''}`}
             title={CARD_TOOLTIPS.changeStatus}
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
@@ -464,7 +474,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           // always render the status badge like other kinds (artifact 的初始
           // 「就绪」语义跟 step 一致:节点一存在就 ready,推进与否由 payload
           // / done 流程决定,没有独立的「草稿」状态需要藏)。
-          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}`}>
+          <span className={`planner-node__status${isRunMode ? '' : ' planner-node__status--design'}${statusToneClass ? ` ${statusToneClass}` : ''}`}>
             <Icon size={13} aria-hidden />
             {statusLabel}
           </span>
