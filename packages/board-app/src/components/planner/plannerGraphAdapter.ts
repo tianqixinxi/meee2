@@ -14,6 +14,7 @@ import type {
   RunNodeState,
 } from '../../types'
 import type { CanvasNodeMonitorItem } from '@meee1/recap-core'
+import { deriveIntegrationEntities } from '../../integrations/artifactEntity'
 
 export type PlannerPreviewKind = 'none' | 'added' | 'updated'
 export type PlannerNodePerception = 'done' | 'attention' | 'not-reached' | 'active' | 'neutral'
@@ -190,6 +191,13 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
   const stateByNodeId = new Map(input.states.map((state) => [state.nodeId, state]))
   const previewArtifacts = proposalArtifactsForPreview(input.proposal)
   const allArtifacts = [...(input.artifacts ?? []), ...previewArtifacts]
+  // Drive `external` widgets from the entities the AI session actually
+  // attached (GitHub PR / Lark doc / …), not a backend mock pool. Any pool the
+  // backend still sends is merged behind the derived one (forward-compat).
+  const integrationEntities: IntegrationEntity[] = [
+    ...deriveIntegrationEntities(allArtifacts),
+    ...(input.integrationEntities ?? []),
+  ]
   const artifactsByNodeId = new Map<string, PlannerArtifact[]>()
   for (const artifact of allArtifacts) {
     const artifacts = artifactsByNodeId.get(artifact.nodeId) ?? []
@@ -223,7 +231,7 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         allNodes: allCanvasNodes,
         state: stateByNodeId.get(node.id) ?? null,
         artifacts: artifactsByNodeId.get(node.id) ?? EMPTY_ARTIFACTS,
-        integrationEntities: input.integrationEntities,
+        integrationEntities,
         previewKind,
         perception: perceptionForNode(
           node,
