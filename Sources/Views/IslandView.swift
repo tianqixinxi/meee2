@@ -17,6 +17,11 @@ public struct IslandView: View {
     @ObservedObject var statusManager: StatusManager
     @StateObject private var buddyReader = BuddyReader.shared
 
+    /// Plugin 注册的 UI widget 表，按 placement 在 expandedContent 里渲染。
+    /// 直接观察 PluginManager.shared 而不是走 StatusManager 中转——StatusManager 只管 sessions，
+    /// widget 是新维度，不想再往里挤。
+    @ObservedObject private var pluginManager = PluginManager.shared
+
     // MARK: - Init
 
     public init(statusManager: StatusManager) {
@@ -578,6 +583,16 @@ public struct IslandView: View {
                         Color.black.opacity(0.01)  // 几乎不可见，但占位
                             .frame(height: 100)
                     } else {
+                        // Plugin 注册的 widget — 顶部 slot（速率条、汇总块等）
+                        let topWidgets = pluginManager.widgets(for: .expandedTop)
+                        if !topWidgets.isEmpty {
+                            VStack(spacing: 4) {
+                                ForEach(topWidgets, id: \.id) { widget in
+                                    widget.makeView()
+                                }
+                            }
+                        }
+
                         // 紧急信息面板 - 显示所有（最多3个）
                         if statusManager.hasUrgentSession {
                             ForEach(statusManager.urgentSessions.prefix(3)) { session in

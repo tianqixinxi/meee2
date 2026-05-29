@@ -17,12 +17,14 @@ import {
 } from 'lucide-react'
 import { setPlannerCanvasDescription, streamAssistantChat } from '../api'
 import {
+  ALLOW_CLOUD_PREFERENCES_CHANGED,
   CANVAS_RECAP_PREFERENCES_CHANGED,
+  loadAllowCloud,
   loadCanvasRecapIntervalMinutes,
 } from '../preferences'
 import { readLlmSettings } from '../lib/llmSettings'
 import { useI18n } from '../lib/i18n'
-import type { BoardState, CanvasInfo, CanvasScope, PlannerGraphState } from '../types'
+import type { BoardState, CanvasInfo, CanvasKind, CanvasScope, PlannerGraphState } from '../types'
 import type { UserProfile } from '../api'
 import { AIRecapDrawer } from './planner/AIRecapDrawer'
 import {
@@ -44,7 +46,7 @@ interface Props {
   onActiveCanvasChange: (canvasId: string) => void
   onGoBack?: () => void
   onGoForward?: () => void
-  onCreateCanvas: (name: string, scope: CanvasScope) => Promise<void> | void
+  onCreateCanvas: (name: string, scope: CanvasScope, kind?: CanvasKind) => Promise<void> | void
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
@@ -63,6 +65,13 @@ interface Props {
 type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
 }
+
+// 用户只能创建 board canvas。
+//  - monitor 是系统预置的默认首页(isDefault + 唯一),不暴露给用户创建,否则会
+//    出现「我新建一个 monitor,它默认监控所有 canvas」的行为错位
+//  - template 是 gallery 里 builtin template 用的,不是工作画板
+//  - kanban / inbox / matrix 不是 canvas 类型,是节点级 widget,跟 canvas
+//    心智正交(见 PlanningNode.widget,phase 2 落地)
 export function CanvasToolbar({
   canvases,
   activeCanvasId,
@@ -89,6 +98,7 @@ export function CanvasToolbar({
   const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  // 创建路径只产 board kind canvas;视图变化走节点级 widget,见 PlanningNode.widget
   const [clearConfirming, setClearConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
@@ -104,12 +114,37 @@ export function CanvasToolbar({
   const [recapError, setRecapError] = useState<string | null>(null)
   const [recapAgeNow, setRecapAgeNow] = useState(() => Date.now())
   const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
+  const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
+  const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
+  // ui-simplification §1 — failed/permission-pending sessions 转译成「需关注的
+  // 进展」。多条时点击 pill 展开 dropdown 让用户挑一条跳过去。
+  const [attentionMenuOpen, setAttentionMenuOpen] = useState(false)
+  const attentionRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    if (!attentionMenuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const node = attentionRef.current
+      if (node && event.target instanceof Node && node.contains(event.target)) return
+      setAttentionMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [attentionMenuOpen])
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
   const filteredCanvasEntries = useMemo(
     () => buildCanvasListEntries(canvases, canvasQuery, t),
     [canvasQuery, canvases, t],
   )
+  // ui-simplification §1: kind 是隐藏词,switcher 不暴露 board/monitor/template
+  // 文案。scope (private/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
+  // 只有当列表里同时存在 team 和 personal 时才渲染一个 icon 来快速辨识。
+  const showScopeIcon = useMemo(() => {
+    const hasTeam = canvases.some((c) => c.scope === 'team')
+    const hasPersonal = canvases.some((c) => c.scope !== 'team')
+    return hasTeam && hasPersonal
+  }, [canvases])
 
   const closePanels = () => {
     setCreating(false)
@@ -137,16 +172,6 @@ export function CanvasToolbar({
     return () => document.removeEventListener('pointerdown', onPointerDown, true)
   }, [menuOpen])
 
-  useEffect(() => {
-    const reload = () => setRecapIntervalMinutes(loadCanvasRecapIntervalMinutes())
-    window.addEventListener(CANVAS_RECAP_PREFERENCES_CHANGED, reload)
-    window.addEventListener('storage', reload)
-    return () => {
-      window.removeEventListener(CANVAS_RECAP_PREFERENCES_CHANGED, reload)
-      window.removeEventListener('storage', reload)
-    }
-  }, [])
-
   const refreshRecap = useCallback(async () => {
     if (!activeCanvas) return
     const requestId = recapRequestRef.current + 1
@@ -168,6 +193,14 @@ export function CanvasToolbar({
         setRecap(nextRecap)
         return
       }
+      // Chunk E (Privacy UI): when cloud calls are disabled, skip the AI
+      // overlay entirely and persist the local-only baseRecap.
+      if (!loadAllowCloud()) {
+        const nextRecap = { ...baseRecap, updatedAt: new Date().toISOString() }
+        recapCacheRef.current[activeCanvas.id] = nextRecap
+        setRecap(nextRecap)
+        return
+      }
       const aiRecap = await generateAIRecap(state, activeCanvas, canvasMonitorRef.current)
       if (recapRequestRef.current !== requestId) return
       const nextRecap = { ...baseRecap, ...aiRecap, updatedAt: new Date().toISOString() }
@@ -181,6 +214,19 @@ export function CanvasToolbar({
       if (recapRequestRef.current === requestId) setRecapLoading(false)
     }
   }, [activeCanvas?.id, activeCanvas?.name, t])
+
+  useEffect(() => {
+    const reload = () => setRecapIntervalMinutes(loadCanvasRecapIntervalMinutes())
+    const refreshCloudPreference = () => void refreshRecap()
+    window.addEventListener(CANVAS_RECAP_PREFERENCES_CHANGED, reload)
+    window.addEventListener(ALLOW_CLOUD_PREFERENCES_CHANGED, refreshCloudPreference)
+    window.addEventListener('storage', reload)
+    return () => {
+      window.removeEventListener(CANVAS_RECAP_PREFERENCES_CHANGED, reload)
+      window.removeEventListener(ALLOW_CLOUD_PREFERENCES_CHANGED, refreshCloudPreference)
+      window.removeEventListener('storage', reload)
+    }
+  }, [refreshRecap])
 
   useEffect(() => {
     if (!activeCanvas) return
@@ -217,7 +263,7 @@ export function CanvasToolbar({
   const submitCreate = () => {
     const name = canvasNameDraft.trim()
     if (!name) return
-    Promise.resolve(onCreateCanvas(name, canvasScopeDraft)).then(() => {
+    Promise.resolve(onCreateCanvas(name, canvasScopeDraft, 'board')).then(() => {
       setCanvasNameDraft('')
       setCanvasScopeDraft('personal')
       setCanvasQuery('')
@@ -256,7 +302,7 @@ export function CanvasToolbar({
   }
 
   const submitClear = () => {
-    if (!activeCanvas || !onClearCanvas) return
+    if (!activeCanvas || !onClearCanvas || activeCanvas.kind === 'monitor') return
     Promise.resolve(onClearCanvas(activeCanvas.id)).then(() => {
       setClearConfirming(false)
       setInfoOpen(false)
@@ -266,6 +312,7 @@ export function CanvasToolbar({
 
   if (!activeCanvas) return null
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
+  const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
 
   return (
     <div className="canvas-toolbar" ref={rootRef}>
@@ -363,17 +410,36 @@ export function CanvasToolbar({
                       setMenuOpen(false)
                       onActiveCanvasChange(canvas.id)
                     }}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      setHoveredCanvasId(canvas.id)
+                      setHoverAnchor({ top: rect.top, right: rect.right })
+                    }}
+                    onMouseLeave={() => {
+                      setHoveredCanvasId(null)
+                      setHoverAnchor(null)
+                    }}
                   >
                     <span className="canvas-toolbar__check">
                       {selected && <Check size={13} aria-hidden />}
                     </span>
-                    <span className="canvas-toolbar__item-text">
-                      <span>{displayCanvasName(canvas)}</span>
-                      <span className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}>
-                        {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
-                        {visibilityLabel(canvas, t)}
+                      <span className="canvas-toolbar__item-text">
+                        <span>{displayCanvasName(canvas)}</span>
+                        {canvas.isDefault && (
+                          <span className="canvas-toolbar__default-badge" title={t('canvas.cannotDelete')} aria-label="Default">
+                            Default
+                          </span>
+                        )}
+                        {showScopeIcon && (
+                          <span
+                            className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}
+                            title={visibilityLabel(canvas, t)}
+                            aria-label={visibilityLabel(canvas, t)}
+                          >
+                            {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
+                          </span>
+                        )}
                       </span>
-                    </span>
                   </button>
                 )
               })}
@@ -391,8 +457,8 @@ export function CanvasToolbar({
             className="canvas-toolbar__recap-trigger"
             aria-label={t('canvas.openRecap')}
             aria-expanded={recapDrawerOpen}
-            title={t('canvas.openRecap')}
-            onClick={() => setRecapDrawerOpen((v) => !v)}
+            title={recap?.headline ?? t('canvas.readingState')}
+            onClick={() => setRecapDrawerOpen((value) => !value)}
           >
             <Sparkles size={13} aria-hidden />
             <span className="canvas-toolbar__recap-copy">
@@ -434,6 +500,73 @@ export function CanvasToolbar({
               <small>{item.label}</small>
             </span>
           ))}
+          {/* UI-simplification §1 — session 是隐藏词,对外口径统一叫「进展」。
+           *  这里把 boardState.sessions 里 status 异常 / 等待权限的条目转译成
+           *  「需关注的进展」pill,点击直接跳到对应 session 详情:
+           *  - 1 条:直接 dispatch meee2:open-session(切到 SessionsView + 选中)
+           *  - 多条:展开 dropdown 列出节点名 + 状态,点一条跳过去
+           *  仅在非 0 时显示,不挤占空间。 */}
+          {(() => {
+            const attentionSessions = (boardState?.sessions ?? []).filter((s) =>
+              s.status === 'permissionRequired' ||
+              s.pendingPermissionTool ||
+              s.status === 'failed'
+            )
+            if (attentionSessions.length <= 0) return null
+            const count = attentionSessions.length
+            const openSession = (sessionId: string) => {
+              window.dispatchEvent(new CustomEvent('meee2:open-session', {
+                detail: { sessionId },
+              }))
+              setAttentionMenuOpen(false)
+            }
+            const handlePillClick = () => {
+              if (count === 1) {
+                openSession(attentionSessions[0].id)
+                return
+              }
+              setAttentionMenuOpen((value) => !value)
+            }
+            return (
+              <span className="canvas-toolbar__attention-wrap" ref={attentionRef}>
+                <button
+                  type="button"
+                  className="canvas-toolbar__status-pill is-attention canvas-toolbar__attention-trigger"
+                  title={t('canvas.attentionPillTitle')}
+                  aria-label={t('canvas.attentionPill', { count: String(count) })}
+                  aria-haspopup={count > 1 ? 'menu' : undefined}
+                  aria-expanded={count > 1 ? attentionMenuOpen : undefined}
+                  onClick={handlePillClick}
+                >
+                  <strong>{count}</strong>
+                  <small>{t('canvas.attentionPillShort')}</small>
+                </button>
+                {attentionMenuOpen && count > 1 && (
+                  <div className="canvas-toolbar__attention-menu" role="menu">
+                    {attentionSessions.map((session) => {
+                      const reason = session.pendingPermissionTool
+                        ? session.pendingPermissionTool
+                        : session.status
+                      return (
+                        <button
+                          key={session.id}
+                          type="button"
+                          role="menuitem"
+                          className="canvas-toolbar__attention-item"
+                          onClick={() => openSession(session.id)}
+                        >
+                          <span className="canvas-toolbar__attention-item-title">
+                            {session.title || session.project || session.id.slice(0, 8)}
+                          </span>
+                          <span className="canvas-toolbar__attention-item-reason">{reason}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+              </span>
+            )
+          })()}
         </div>
       )}
 
@@ -449,6 +582,49 @@ export function CanvasToolbar({
         onOpenAllSessions={onOpenAllSessions}
       />
 
+      {/* UI-simplification — hover canvas item in dropdown → semantic recap popover */}
+      {hoveredCanvasId && hoverAnchor && (() => {
+        const hovered = canvases.find((c) => c.id === hoveredCanvasId)
+        if (!hovered) return null
+        const cached = recapCacheRef.current[hoveredCanvasId]
+        return (
+          <div
+            className="canvas-toolbar__hover-recap"
+            style={{
+              position: 'fixed',
+              top: hoverAnchor.top,
+              left: hoverAnchor.right + 8,
+            }}
+            onMouseEnter={() => {
+              // Cursor entered the popover itself; the underlying row's
+              // onMouseLeave already cleared state. Re-pin so the popover
+              // stays visible (and scroll/text-select works).
+              setHoveredCanvasId(hoveredCanvasId)
+              setHoverAnchor(hoverAnchor)
+            }}
+            onMouseLeave={() => {
+              setHoveredCanvasId(null)
+              setHoverAnchor(null)
+            }}
+          >
+            <div className="canvas-toolbar__hover-recap-title">{displayCanvasName(hovered)}</div>
+            {cached ? (
+              <>
+                {cached.updatedAt && (
+                  <div className="canvas-toolbar__hover-recap-meta" data-mode={cached.mode}>
+                    {formatRecapAge(cached.updatedAt, Date.now())}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="canvas-toolbar__hover-recap-empty">
+                还没有进展摘要,首次进入画板会自动生成
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
       {infoOpen && (
         <div
           className="modal-backdrop"
@@ -459,7 +635,10 @@ export function CanvasToolbar({
           <div className="modal canvas-info-modal" role="dialog" aria-modal="true" aria-label={t('canvas.info')}>
             <div className="modal-header">
               <div className="modal-title">{displayCanvasName(activeCanvas)}</div>
-              <div className="modal-subtitle">{t('canvas.planningCanvas', { visibility: visibilityLabel(activeCanvas, t) })}</div>
+              <div className="modal-subtitle">{t('canvas.typedCanvas', {
+                visibility: visibilityLabel(activeCanvas, t),
+                type: canvasTypeLabel(activeCanvas, t),
+              })}</div>
             </div>
             <div className="canvas-info-modal__tabs" role="tablist" aria-label={t('canvas.sections')}>
               {(['overview', 'settings', 'danger'] as const).map((tab) => (
@@ -478,16 +657,29 @@ export function CanvasToolbar({
               {infoTab === 'overview' && (
                 <>
                   <div className="canvas-info-modal__row">
+                    <span>{t('canvas.type')}</span>
+                    <strong>{canvasTypeLabel(activeCanvas, t)}</strong>
+                  </div>
+                  {activeCanvas.kind === 'monitor' && (
+                    <div className="canvas-info-modal__row">
+                      <span>{t('canvas.aggregation')}</span>
+                      <strong>{t('canvas.monitorAggregation')}</strong>
+                    </div>
+                  )}
+                  <div className="canvas-info-modal__row">
                     <span>{t('canvas.visibility')}</span>
                     <strong>{visibilityLabel(activeCanvas, t)}</strong>
-                  </div>
-                  <div className="canvas-info-modal__row">
-                    <span>{t('canvas.id')}</span>
-                    <strong className="is-mono">{activeCanvas.id}</strong>
                   </div>
                   <p>
                     {t('canvas.scopedHelp')}
                   </p>
+                  <details className="canvas-info-modal__advanced">
+                    <summary>{t('canvas.advanced')}</summary>
+                    <div className="canvas-info-modal__row">
+                      <span>{t('canvas.id')}</span>
+                      <strong className="is-mono">{activeCanvas.id}</strong>
+                    </div>
+                  </details>
                 </>
               )}
               {infoTab === 'settings' && (
@@ -533,7 +725,7 @@ export function CanvasToolbar({
               )}
               {infoTab === 'danger' && (
                 <>
-                  {onClearCanvas && (
+                  {canClearCanvas && (
                     <div className="canvas-info-modal__danger">
                       <Eraser size={15} aria-hidden />
                       <div>
@@ -595,34 +787,49 @@ export function CanvasToolbar({
               <div className="modal-subtitle">{t('canvas.createSubtitle')}</div>
             </div>
             <div className="modal-body col" style={{ gap: 10 }}>
-              <input
-                value={canvasNameDraft}
-                onChange={(event) => setCanvasNameDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') submitCreate()
-                  if (event.key === 'Escape') setCreating(false)
+              {/* UI-simplification chunk G — 「从模板新建」 是首选 CTA,首屏入口最显眼。
+               *  「从空白开始」 仍保留但降级为 secondary,字号小一档颜色淡一档(下方表单 + 按钮)。
+               *  Templates view 切换走 window event(App.tsx 已有 meee2:open-settings 同款模式)。 */}
+              <button
+                type="button"
+                className="canvas-toolbar__template-cta"
+                onClick={() => {
+                  setCreating(false)
+                  setMenuOpen(false)
+                  window.dispatchEvent(new CustomEvent('meee2:nav-templates'))
                 }}
-                placeholder={t('canvas.namePlaceholder')}
-                autoFocus
-              />
-              <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('canvas.visibilityLabel')}>
-                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
-                  <button
-                    key={scope}
-                    type="button"
-                    className={canvasScopeDraft === scope ? 'is-selected' : ''}
-                    aria-pressed={canvasScopeDraft === scope}
-                    onClick={() => setCanvasScopeDraft(scope)}
-                  >
-                    {scope === 'team' ? t('templates.public') : t('templates.private')}
-                  </button>
-                ))}
+              >
+                <Sparkles size={14} aria-hidden />
+                <span className="canvas-toolbar__template-cta-main">
+                  <strong>从模板新建</strong>
+                  <small>挑一个预设画板:看板 / 收件箱 / Owner 矩阵 / Monitor…</small>
+                </span>
+                <span className="canvas-toolbar__template-cta-arrow" aria-hidden>→</span>
+              </button>
+
+              <div className="canvas-toolbar__blank-divider">
+                <span>或</span>
+              </div>
+
+              <div className="canvas-toolbar__blank-section">
+                <div className="canvas-toolbar__blank-label">从空白画板开始</div>
+                <input
+                  value={canvasNameDraft}
+                  onChange={(event) => setCanvasNameDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') submitCreate()
+                    if (event.key === 'Escape') setCreating(false)
+                  }}
+                  placeholder={t('canvas.namePlaceholder')}
+                />
+                {/* Scope toggle 已移除 — ui-simplification §1「藏起来的词」: 创建瞬间用户只面对画板+名字,
+                 *  scope 默认 personal,可见性变更走 Canvas Info modal。Kind selector 同样隐藏。 */}
               </div>
             </div>
             <div className="modal-footer">
               <button className="ghost" type="button" onClick={() => setCreating(false)}>{t('common.cancel')}</button>
               <button
-                className="primary"
+                className="secondary canvas-toolbar__blank-submit"
                 type="button"
                 onClick={submitCreate}
                 disabled={!canvasNameDraft.trim()}
@@ -633,7 +840,7 @@ export function CanvasToolbar({
           </div>
         </div>
       )}
-      {clearConfirming && (
+      {clearConfirming && canClearCanvas && (
         <div
           className="modal-backdrop"
           onMouseDown={(event) => {
@@ -696,7 +903,13 @@ function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
 }
 
 function displayCanvasName(canvas: CanvasInfo): string {
-  return canvas.name === 'Default canvas' ? 'My' : canvas.name
+  return canvas.name === 'Default canvas' ? 'Monitor' : canvas.name
+}
+
+function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
+  if (canvas.kind === 'monitor') return t('canvas.type.monitor')
+  if (canvas.kind === 'template') return t('canvas.type.template')
+  return t('canvas.type.board')
 }
 
 function buildCanvasListEntries(
@@ -729,7 +942,7 @@ function buildCanvasListEntries(
   const normalizedQuery = query.trim().toLowerCase()
   const matches = (canvas: CanvasInfo) => {
     if (!normalizedQuery) return true
-    return [canvas.name, canvas.id, visibilityLabel(canvas, t)]
+    return [canvas.name, canvas.id, visibilityLabel(canvas, t), canvasTypeLabel(canvas, t)]
       .some((value) => value.toLowerCase().includes(normalizedQuery))
   }
 
@@ -835,6 +1048,16 @@ async function generateAIRecap(
   canvas: CanvasInfo,
   monitor: CanvasMonitor | null,
 ): Promise<Pick<CanvasRecap, 'headline' | 'details'>> {
+  // Chunk E (Privacy UI): when the user has flipped off "allow cloud / model
+  // calls", short-circuit before any LLM fetch. The caller already computed a
+  // local `baseRecap` (from `buildCanvasStatusRecap`), so returning an empty
+  // overlay just leaves that local-only recap in place.
+  if (!loadAllowCloud()) {
+    return {
+      headline: '',
+      details: [],
+    }
+  }
   const llm = readLlmSettings()
   let text = ''
   for await (const ev of streamAssistantChat({

@@ -159,15 +159,56 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
     """
 }
 
+private final class NativeTerminalBridge: NSObject, WKScriptMessageHandler {
+    static let messageName = "meee2NativeTerminal"
+    weak var owner: BoardWebWindowController?
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let payload = message.body as? [String: Any] else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.owner?.handleNativeTerminalMessage(payload)
+        }
+    }
+}
+
+private final class NativeTerminalHostView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        for subview in subviews.reversed() where !subview.isHidden && subview.alphaValue > 0.01 {
+            let converted = convert(point, to: subview)
+            if let hit = subview.hitTest(converted) {
+                return hit
+            }
+        }
+        return nil
+    }
+}
+
 final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
     private static let frameAutosaveName = "meee2.board.window"
+    private static let maxEmbeddedTerminalCacheCount = 6
 
+    private let rootView = NSView()
+    private let terminalHostView = NativeTerminalHostView()
     private let webView: DragRegionWebView
     private let boardURL: URL
     private var retryWorkItem: DispatchWorkItem?
     private var isShowingLoadError = false
     private let jsConsoleBridge = JSConsoleBridge()
+    private let nativeTerminalBridge = NativeTerminalBridge()
+    private var embeddedTerminals: [String: EmbeddedNativeTerminalController] = [:]
+    private var embeddedTerminalLRU: [String] = []
+    private var activeEmbeddedTerminalKey: String?
+    private var embeddedTerminal: EmbeddedNativeTerminalController? {
+        guard let activeEmbeddedTerminalKey else { return nil }
+        return embeddedTerminals[activeEmbeddedTerminalKey]
+    }
+    private struct EmbeddedTerminalLayout {
+        let frame: NSRect
+        let hidden: Bool
+    }
     private var pendingOpenSettings = false
+    private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -208,6 +249,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             forMainFrameOnly: false
         ))
         userContentController.add(jsConsoleBridge, name: JSConsoleBridge.messageName)
+        userContentController.add(nativeTerminalBridge, name: NativeTerminalBridge.messageName)
         configuration.userContentController = userContentController
 
         webView = DragRegionWebView(frame: .zero, configuration: configuration)
@@ -251,8 +293,25 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
         super.init(window: window)
 
+        nativeTerminalBridge.owner = self
         window.delegate = self
-        window.contentView = webView
+        rootView.wantsLayer = true
+        rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.addSubview(webView)
+        terminalHostView.translatesAutoresizingMaskIntoConstraints = false
+        rootView.addSubview(terminalHostView)
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            terminalHostView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            terminalHostView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            terminalHostView.topAnchor.constraint(equalTo: rootView.topAnchor),
+            terminalHostView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor)
+        ])
+        window.contentView = rootView
         webView.navigationDelegate = self
         webView.uiDelegate = self
         // 不再挂 NSToolbar —— Reload / Open in Browser 走 web 内的 CommandBar
@@ -289,6 +348,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSettingsIfPossible()
     }
 
+    func openSession(sessionId: String?, surfaceId: String?) {
+        pendingOpenSession = (sessionId, surfaceId)
+        show()
+        dispatchOpenSessionIfPossible()
+    }
+
     private func loadIfNeeded() {
         guard webView.url == nil else { return }
         isShowingLoadError = false
@@ -318,9 +383,428 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowWillClose(_ notification: Notification) {
         MInfo("[BoardWebWindow] windowWillClose")
+        detachAllEmbeddedTerminals()
         retryWorkItem?.cancel()
         retryWorkItem = nil
         onClose?()
+    }
+
+    func handleNativeTerminalMessage(_ payload: [String: Any]) {
+        let type = payload["type"] as? String ?? "attach"
+        logTerminalTrace(payload, phase: "native.received", extra: "type=\(type)")
+        switch type {
+        case "prewarm":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            prewarmEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId, tracePayload: payload)
+        case "attach", "embed", "open":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            let rectPayload = payload["rect"] as? [String: Any]
+            _ = embedNativeTerminal(surfaceId: surfaceId, sessionId: sessionId, rectPayload: rectPayload, tracePayload: payload)
+        case "layout":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            if let rectPayload = payload["rect"] as? [String: Any] {
+                _ = updateEmbeddedTerminalFrame(
+                    rectPayload,
+                    surfaceId: surfaceId,
+                    sessionId: sessionId,
+                    tracePayload: payload
+                )
+            } else {
+                dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "missingRect", tracePayload: payload)
+            }
+        case "focus":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            if activeEmbeddedTerminalMatches(surfaceId: surfaceId, sessionId: sessionId) {
+                embeddedTerminal?.focus()
+                logTerminalTrace(payload, phase: "native.focus.done", extra: "hasTerminal=\(embeddedTerminal != nil)")
+                dispatchNativeTerminalSyncAck(type: "focus", surfaceId: surfaceId, sessionId: sessionId, ok: true, tracePayload: payload)
+            } else {
+                logTerminalTrace(payload, phase: "native.focus.skipped", extra: "reason=staleTarget")
+                dispatchNativeTerminalSyncAck(type: "focus", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "staleTarget", tracePayload: payload)
+            }
+        case "hide", "detach":
+            let surfaceId = payload["surfaceId"] as? String ?? ""
+            let sessionId = payload["sessionId"] as? String
+            let ok = hideEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId)
+            dispatchNativeTerminalSyncAck(type: type, surfaceId: surfaceId, sessionId: sessionId, ok: ok, reason: ok ? nil : "staleTarget", tracePayload: payload)
+            logTerminalTrace(payload, phase: "native.hide.done")
+        default:
+            break
+        }
+    }
+
+    private func prewarmEmbeddedTerminal(surfaceId: String, sessionId: String?, tracePayload: [String: Any]? = nil) {
+        guard !surfaceId.isEmpty || sessionId?.isEmpty == false else { return }
+        let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        if embeddedTerminals[key] != nil {
+            rememberEmbeddedTerminal(key)
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: true)
+            logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=true cacheCount=\(embeddedTerminals.count)")
+            return
+        }
+        let webPhase = tracePayload?["webPhase"] as? String ?? ""
+        if webPhase == "react.idleTabPrewarm" {
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: false, cacheHit: false, reason: "backgroundIdle")
+            logTerminalTrace(tracePayload, phase: "native.prewarm.skipped", extra: "reason=backgroundIdle cacheHit=false cacheCount=\(embeddedTerminals.count)")
+            return
+        }
+        guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
+            dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: false, cacheHit: false, reason: "createFailed")
+            logTerminalTrace(tracePayload, phase: "native.prewarm.failed", extra: "cacheHit=false")
+            return
+        }
+        hostEmbeddedTerminalView(created, frame: defaultHiddenTerminalFrame(), hidden: true)
+        embeddedTerminals[key] = created
+        rememberEmbeddedTerminal(key)
+        dispatchNativeTerminalPrewarmAck(surfaceId: surfaceId, sessionId: sessionId, ready: true, cacheHit: false)
+        logTerminalTrace(tracePayload, phase: "native.prewarm.done", extra: "cacheHit=false hosted=true cacheCount=\(embeddedTerminals.count)")
+    }
+
+    private func embedNativeTerminal(surfaceId: String, sessionId: String?, rectPayload: [String: Any]?, tracePayload: [String: Any]? = nil) -> Bool {
+        guard !surfaceId.isEmpty || sessionId?.isEmpty == false else {
+            dispatchNativeTerminalSyncAck(type: "attach", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "missingTarget", tracePayload: tracePayload)
+            return false
+        }
+        let key = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        let cacheHit = embeddedTerminals[key] != nil
+        let activeChanged = activeEmbeddedTerminalKey != key
+        let initialLayout = rectPayload.flatMap { embeddedTerminalLayout(from: $0) }
+        var hostedDuringAttach = false
+        if activeEmbeddedTerminalKey != key {
+            embeddedTerminal?.hide()
+            let controller: EmbeddedNativeTerminalController
+            if let cached = embeddedTerminals[key] {
+                controller = cached
+            } else {
+                guard let created = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
+                    logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=\(activeChanged)")
+                    dispatchNativeTerminalSyncAck(type: "attach", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "createFailed", tracePayload: tracePayload, cacheHit: false, activeChanged: activeChanged)
+                    NSSound.beep()
+                    return false
+                }
+                controller = created
+                embeddedTerminals[key] = created
+            }
+            activeEmbeddedTerminalKey = key
+            rememberEmbeddedTerminal(key)
+            hostEmbeddedTerminalView(
+                controller,
+                frame: initialLayout?.frame ?? .zero,
+                hidden: initialLayout?.hidden ?? true
+            )
+            hostedDuringAttach = true
+        } else if embeddedTerminal == nil {
+            activeEmbeddedTerminalKey = nil
+            guard let controller = makeEmbeddedTerminal(surfaceId: surfaceId, sessionId: sessionId) else {
+                logTerminalTrace(tracePayload, phase: "native.embed.failed", extra: "cacheHit=false activeChanged=false")
+                dispatchNativeTerminalSyncAck(type: "attach", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "createFailed", tracePayload: tracePayload, cacheHit: false, activeChanged: false)
+                NSSound.beep()
+                return false
+            }
+            embeddedTerminals[key] = controller
+            activeEmbeddedTerminalKey = key
+            rememberEmbeddedTerminal(key)
+            hostEmbeddedTerminalView(
+                controller,
+                frame: initialLayout?.frame ?? .zero,
+                hidden: initialLayout?.hidden ?? true
+            )
+            hostedDuringAttach = true
+        }
+        if let rectPayload {
+            if hostedDuringAttach || initialLayout == nil {
+                if let initialLayout {
+                    logTerminalLayoutDone(initialLayout, tracePayload: tracePayload)
+                } else {
+                    logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
+                }
+            } else {
+                _ = updateEmbeddedTerminalFrame(
+                    rectPayload,
+                    surfaceId: surfaceId,
+                    sessionId: sessionId,
+                    tracePayload: tracePayload
+                )
+            }
+        }
+        embeddedTerminal?.focus()
+        logTerminalTrace(
+            tracePayload,
+            phase: "native.embed.done",
+            extra: "cacheHit=\(cacheHit) activeChanged=\(activeChanged) cacheCount=\(embeddedTerminals.count)"
+        )
+        dispatchNativeTerminalSyncAck(type: "attach", surfaceId: surfaceId, sessionId: sessionId, ok: true, tracePayload: tracePayload, cacheHit: cacheHit, activeChanged: activeChanged)
+        return true
+    }
+
+    private func makeEmbeddedTerminal(surfaceId: String, sessionId: String?) -> EmbeddedNativeTerminalController? {
+        EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) { [weak self] exitedSurfaceId, exitedSessionId in
+            self?.removeEmbeddedTerminal(surfaceId: exitedSurfaceId, sessionId: exitedSessionId)
+        }
+    }
+
+    private func hostEmbeddedTerminalView(_ controller: EmbeddedNativeTerminalController, frame: NSRect, hidden: Bool) {
+        let initialFrame = frame.width >= 8 && frame.height >= 8 ? frame : defaultHiddenTerminalFrame()
+        if controller.view.superview == nil {
+            controller.view.frame = initialFrame
+            controller.view.autoresizingMask = []
+            terminalHostView.addSubview(controller.view)
+        } else if controller.view.superview !== terminalHostView {
+            controller.view.removeFromSuperview()
+            controller.view.frame = initialFrame
+            terminalHostView.addSubview(controller.view)
+        }
+        controller.layout(in: hidden && (frame.width < 8 || frame.height < 8) ? initialFrame : frame, hidden: hidden)
+    }
+
+    private func defaultHiddenTerminalFrame() -> NSRect {
+        let bounds = terminalHostView.bounds
+        if bounds.width >= 640, bounds.height >= 360 {
+            return NSRect(x: 0, y: 0, width: min(bounds.width, 1180), height: min(bounds.height, 760)).integral
+        }
+        return NSRect(x: 0, y: 0, width: 960, height: 540)
+    }
+
+    private func hideEmbeddedTerminal(surfaceId: String, sessionId: String?) -> Bool {
+        guard let active = embeddedTerminal else { return false }
+        guard surfaceId.isEmpty && (sessionId?.isEmpty ?? true) || active.matches(surfaceId: surfaceId, sessionId: sessionId) else {
+            return false
+        }
+        active.hide()
+        activeEmbeddedTerminalKey = nil
+        return true
+    }
+
+    private func activeEmbeddedTerminalMatches(surfaceId: String, sessionId: String?) -> Bool {
+        guard let active = embeddedTerminal else { return false }
+        if surfaceId.isEmpty && (sessionId?.isEmpty ?? true) { return true }
+        return active.matches(surfaceId: surfaceId, sessionId: sessionId)
+    }
+
+    private func detachAllEmbeddedTerminals() {
+        for controller in embeddedTerminals.values {
+            controller.detach()
+        }
+        embeddedTerminals.removeAll()
+        embeddedTerminalLRU.removeAll()
+        activeEmbeddedTerminalKey = nil
+    }
+
+    private func removeEmbeddedTerminal(surfaceId: String, sessionId: String?) {
+        let directKey = embeddedTerminalCacheKey(surfaceId: surfaceId, sessionId: sessionId)
+        let matchingKeys = embeddedTerminals.compactMap { key, controller in
+            key == directKey || controller.matches(surfaceId: surfaceId, sessionId: sessionId) ? key : nil
+        }
+        for key in matchingKeys {
+            if let removed = embeddedTerminals.removeValue(forKey: key) {
+                dispatchNativeTerminalPrewarmAck(
+                    surfaceId: removed.surfaceId,
+                    sessionId: removed.sessionId,
+                    ready: false,
+                    cacheHit: false,
+                    reason: "removed"
+                )
+                removed.detach()
+            }
+            embeddedTerminalLRU.removeAll { $0 == key }
+            if activeEmbeddedTerminalKey == key {
+                activeEmbeddedTerminalKey = nil
+            }
+        }
+    }
+
+    private func embeddedTerminalCacheKey(surfaceId: String, sessionId: String?) -> String {
+        if !surfaceId.isEmpty { return "surface:\(surfaceId)" }
+        return "session:\(sessionId ?? "")"
+    }
+
+    private func rememberEmbeddedTerminal(_ key: String) {
+        embeddedTerminalLRU.removeAll { $0 == key }
+        embeddedTerminalLRU.append(key)
+        while embeddedTerminalLRU.count > Self.maxEmbeddedTerminalCacheCount {
+            guard let evictedKey = embeddedTerminalLRU.first(where: { $0 != activeEmbeddedTerminalKey }) else {
+                break
+            }
+            embeddedTerminalLRU.removeAll { $0 == evictedKey }
+            if let evicted = embeddedTerminals.removeValue(forKey: evictedKey) {
+                dispatchNativeTerminalPrewarmAck(
+                    surfaceId: evicted.surfaceId,
+                    sessionId: evicted.sessionId,
+                    ready: false,
+                    cacheHit: false,
+                    reason: "evicted"
+                )
+                evicted.detach()
+            }
+        }
+    }
+
+    private func updateEmbeddedTerminalFrame(
+        _ rectPayload: [String: Any],
+        surfaceId: String = "",
+        sessionId: String? = nil,
+        tracePayload: [String: Any]? = nil
+    ) -> Bool {
+        guard let embeddedTerminal else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=noTerminal")
+            dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "noTerminal", tracePayload: tracePayload)
+            return false
+        }
+        guard activeEmbeddedTerminalMatches(surfaceId: surfaceId, sessionId: sessionId) else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=staleTarget")
+            dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "staleTarget", tracePayload: tracePayload)
+            return false
+        }
+        guard let layout = embeddedTerminalLayout(from: rectPayload) else {
+            logTerminalTrace(tracePayload, phase: "native.layout.skipped", extra: "reason=badRect")
+            dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: false, reason: "badRect", tracePayload: tracePayload)
+            return false
+        }
+        embeddedTerminal.layout(in: layout.frame, hidden: layout.hidden)
+        logTerminalLayoutDone(layout, tracePayload: tracePayload)
+        dispatchNativeTerminalSyncAck(type: "layout", surfaceId: surfaceId, sessionId: sessionId, ok: true, tracePayload: tracePayload)
+        return true
+    }
+
+    private func embeddedTerminalLayout(from rectPayload: [String: Any]) -> EmbeddedTerminalLayout? {
+        guard
+            let x = Self.doubleValue(rectPayload["x"]),
+            let y = Self.doubleValue(rectPayload["y"]),
+            let width = Self.doubleValue(rectPayload["width"]),
+            let height = Self.doubleValue(rectPayload["height"])
+        else {
+            return nil
+        }
+        let rootHeight = rootView.bounds.height
+        let frame = NSRect(
+            x: x,
+            y: rootHeight - y - height,
+            width: max(1, width),
+            height: max(1, height)
+        ).integral
+        let hidden = width < 8 || height < 8
+        return EmbeddedTerminalLayout(frame: frame, hidden: hidden)
+    }
+
+    private func logTerminalLayoutDone(_ layout: EmbeddedTerminalLayout, tracePayload: [String: Any]?) {
+        logTerminalTrace(
+            tracePayload,
+            phase: "native.layout.done",
+            extra: "frame=\(Int(layout.frame.width))x\(Int(layout.frame.height)) hidden=\(layout.hidden)"
+        )
+    }
+
+    private func requestEmbeddedTerminalLayout() {
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:layout-native-terminal'));
+        """, completionHandler: nil)
+    }
+
+    private func dispatchNativeTerminalPrewarmAck(
+        surfaceId: String,
+        sessionId: String?,
+        ready: Bool,
+        cacheHit: Bool,
+        reason: String? = nil
+    ) {
+        var detail: [String: Any] = [
+            "surfaceId": surfaceId,
+            "ready": ready,
+            "cacheHit": cacheHit
+        ]
+        if let sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let reason, !reason.isEmpty {
+            detail["reason"] = reason
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: detail),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:native-terminal-prewarm', { detail: \(json) }));
+        """, completionHandler: nil)
+    }
+
+    private func dispatchNativeTerminalSyncAck(
+        type: String,
+        surfaceId: String,
+        sessionId: String?,
+        ok: Bool,
+        reason: String? = nil,
+        tracePayload: [String: Any]? = nil,
+        cacheHit: Bool? = nil,
+        activeChanged: Bool? = nil
+    ) {
+        var detail: [String: Any] = [
+            "type": type,
+            "surfaceId": surfaceId,
+            "ok": ok,
+            "nativeAtMs": Self.timestampMillis()
+        ]
+        if let sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let reason, !reason.isEmpty {
+            detail["reason"] = reason
+        }
+        if let traceId = tracePayload?["traceId"] as? String, !traceId.isEmpty {
+            detail["traceId"] = traceId
+        }
+        if let cacheHit {
+            detail["cacheHit"] = cacheHit
+        }
+        if let activeChanged {
+            detail["activeChanged"] = activeChanged
+        }
+        guard
+            let data = try? JSONSerialization.data(withJSONObject: detail),
+            let json = String(data: data, encoding: .utf8)
+        else { return }
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:native-terminal-sync', { detail: \(json) }));
+        """, completionHandler: nil)
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? CGFloat { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private func logTerminalTrace(_ payload: [String: Any]?, phase: String, extra: String = "") {
+        guard
+            let payload,
+            let traceId = payload["traceId"] as? String,
+            !traceId.isEmpty
+        else {
+            return
+        }
+        let now = Self.timestampMillis()
+        let sentAt = Self.doubleValue(payload["sentAtMs"])
+        let clickStartedAt = Self.doubleValue(payload["clickStartedAtMs"])
+        let sendToNative = sentAt.map { Self.formatMillis(now - $0) } ?? "-"
+        let clickToNative = clickStartedAt.map { Self.formatMillis(now - $0) } ?? "-"
+        let webPhase = payload["webPhase"] as? String ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative)\(suffix)"
+        )
+    }
+
+    private static func timestampMillis() -> Double {
+        Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func formatMillis(_ value: Double) -> String {
+        String(format: "%.1f", value)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -344,6 +828,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         // 切换时也要更新（NSWindow.didResize 通知触发）。
         injectTitlebarMetrics()
         dispatchOpenSettingsIfPossible()
+        dispatchOpenSessionIfPossible()
     }
 
     private func dispatchOpenSettingsIfPossible() {
@@ -355,6 +840,32 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             if let error {
                 MWarn("[BoardWebWindow] open settings event failed: \(error.localizedDescription)")
                 self?.pendingOpenSettings = true
+            }
+        }
+    }
+
+    private func dispatchOpenSessionIfPossible() {
+        guard let pendingOpenSession, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        var detail: [String: String] = [:]
+        if let sessionId = pendingOpenSession.sessionId, !sessionId.isEmpty {
+            detail["sessionId"] = sessionId
+        }
+        if let surfaceId = pendingOpenSession.surfaceId, !surfaceId.isEmpty {
+            detail["surfaceId"] = surfaceId
+        }
+        guard !detail.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else {
+            self.pendingOpenSession = nil
+            return
+        }
+        self.pendingOpenSession = nil
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:open-session', { detail: \(json) }));
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open session event failed: \(error.localizedDescription)")
+                self?.pendingOpenSession = pendingOpenSession
             }
         }
     }
@@ -437,14 +948,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     func windowDidResize(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
         injectTitlebarMetrics()
+        requestEmbeddedTerminalLayout()
     }
 
     /// HTTP 4xx / 5xx 不会触发 `didFail*` —— WKWebView 把"服务器有响应"当成

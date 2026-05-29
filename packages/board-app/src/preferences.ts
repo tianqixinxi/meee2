@@ -12,14 +12,20 @@ const KEY_CANVAS_RECAP_INTERVAL_MINUTES = 'meee2.canvas.recapIntervalMinutes.v1'
 // the prior viewport offset/scale from the per-canvas pose persisted in
 // localStorage (see KEY_PLANNER_VIEWPORT_PREFIX below).
 const KEY_LOCK_VIEWPORT_ON_SWITCH = 'meee2.canvas.lockViewportOnSwitch.v1'
+// Chunk E (Privacy UI) — global kill-switch for cloud/model calls.
+// Default true (keeps existing behavior). Off means recap-core falls back to
+// the local-only summarizer (no Anthropic / OpenAI fetch).
+const KEY_ALLOW_CLOUD = 'meee2.privacy.allowCloud.v1'
 export const KEY_PLANNER_VIEWPORT_PREFIX = 'meee2.planner.viewport.'
 export const BOARD_PREFERENCES_CHANGED = 'meee2:board-preferences-changed'
 export const CANVAS_RECAP_PREFERENCES_CHANGED = 'meee2:canvas-recap-preferences-changed'
 export const LOCK_VIEWPORT_PREFERENCES_CHANGED = 'meee2:lock-viewport-preferences-changed'
+export const ALLOW_CLOUD_PREFERENCES_CHANGED = 'meee2:allow-cloud-preferences-changed'
 
 export const DEFAULT_SPAWN_PROVIDER: SpawnProvider = 'claude'
 export const DEFAULT_CANVAS_RECAP_INTERVAL_MINUTES = 5
 export const DEFAULT_LOCK_VIEWPORT_ON_SWITCH = false
+export const DEFAULT_ALLOW_CLOUD = true
 
 export function commandForSpawnProvider(provider: SpawnProvider): string {
   return provider === 'codex'
@@ -126,6 +132,30 @@ export function saveLockViewportOnSwitch(value: boolean): void {
       localStorage.setItem(KEY_LOCK_VIEWPORT_ON_SWITCH, value ? '1' : '0')
     }
     window.dispatchEvent(new Event(LOCK_VIEWPORT_PREFERENCES_CHANGED))
+  } catch {
+    /* ignore */
+  }
+}
+
+// Chunk E — Privacy: allow cloud / model calls
+export function loadAllowCloud(): boolean {
+  try {
+    const raw = localStorage.getItem(KEY_ALLOW_CLOUD)
+    if (raw == null) return DEFAULT_ALLOW_CLOUD
+    return raw === '1'
+  } catch {
+    return DEFAULT_ALLOW_CLOUD
+  }
+}
+
+export function saveAllowCloud(value: boolean): void {
+  try {
+    if (value === DEFAULT_ALLOW_CLOUD) {
+      localStorage.removeItem(KEY_ALLOW_CLOUD)
+    } else {
+      localStorage.setItem(KEY_ALLOW_CLOUD, value ? '1' : '0')
+    }
+    window.dispatchEvent(new Event(ALLOW_CLOUD_PREFERENCES_CHANGED))
   } catch {
     /* ignore */
   }

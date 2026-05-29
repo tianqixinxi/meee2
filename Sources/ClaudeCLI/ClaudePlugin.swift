@@ -63,6 +63,15 @@ class ClaudePlugin: SessionPlugin {
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
 
+    /// 灵动岛 token 速率监控器。1Hz 采样 sessionUsage 的 (input, output) 总量，
+    /// 在监控器内部做"启动后真实新增"差分。持久持有以保证 widget 跟它的
+    /// ObservedObject 绑定不断。
+    private lazy var tokenRateMonitor: TokenRateMonitor = {
+        TokenRateMonitor { [weak self] in
+            self?.tokensSnapshot() ?? (0, 0)
+        }
+    }()
+
     /// 已 start 标记 — start() 必须 idempotent。AppDelegate 会先启动
     /// ClaudePlugin，再延迟加载外部 plugin 并再次 startAll；不守卫的话 sessionMonitor
     /// 的 .sink {}.store(in: &cancellables) 会**追加一份订阅**，导致
@@ -105,6 +114,9 @@ class ClaudePlugin: SessionPlugin {
             }
         )
 
+        // 启动 token 速率采样
+        tokenRateMonitor.start()
+
         NSLog("[ClaudePlugin] Started")
         return true
     }
@@ -115,7 +127,32 @@ class ClaudePlugin: SessionPlugin {
         cancellables.removeAll()
         sessionMonitor.stopMonitoring()
         hookServer.stop()
+        tokenRateMonitor.stop()
         NSLog("[ClaudePlugin] Stopped")
+    }
+
+    // MARK: - Island Widgets
+
+    /// 暴露给 PluginManager / IslandView 的 widget 列表。
+    /// `tokenRateMonitor` 是 lazy 单例，每次调用都返回同一个实例，
+    /// 满足 IslandWidget 协议要求的"稳定 ObservableObject"约束。
+    override var widgets: [IslandWidget] {
+        [TokenRateWidget(monitor: tokenRateMonitor)]
+    }
+
+    /// 返回当前所有 session 的 (input_tokens 总和, output_tokens 总和)。
+    /// cache_read / cache_create 不计——prompt caching 是常数级开销，会把速率压满。
+    /// 供 TokenRateMonitor 1Hz 采样。
+    private func tokensSnapshot() -> TokenRateMonitor.TokensSnapshot {
+        sessionUsageLock.lock()
+        defer { sessionUsageLock.unlock() }
+        var inSum = 0
+        var outSum = 0
+        for stats in sessionUsage.values {
+            inSum += stats.inputTokens
+            outSum += stats.outputTokens
+        }
+        return (inSum, outSum)
     }
 
     override func cleanup() {
@@ -867,31 +904,8 @@ class ClaudePlugin: SessionPlugin {
 
     /// 同步 sessions 到 SessionStore（供 CLI/TUI 使用）
     private func syncToStore(_ sessions: [AISession]) {
-        // 清理 SessionStore 中进程已死亡的 session
-        // SessionMonitor 会将死进程标记为 completed，但其 PID.json 文件仍存在于 ~/.claude/sessions/
-        // 所以每次 sync 都会看到死 session，需要主动清理
-        var sessionsToDelete: [String] = []
         for storeSession in sessionStore.listAll() {
-            if let pid = storeSession.pid, !SessionStore.processAlive(pid) {
-                sessionsToDelete.append(storeSession.sessionId)
-            }
-        }
-
-        for sessionIdToDelete in sessionsToDelete {
-            sessionStore.delete(sessionIdToDelete)
-            // 清理相关缓存
-            hookStatesLock.lock()
-            hookStates.removeValue(forKey: sessionIdToDelete)
-            hookStatesLock.unlock()
-            pendingPermissionsLock.lock()
-            pendingPermissions.removeValue(forKey: sessionIdToDelete)
-            pendingPermissionsLock.unlock()
-            sessionTasksLock.lock()
-            sessionTasks.removeValue(forKey: sessionIdToDelete)
-            sessionTasksLock.unlock()
-            sessionUsageLock.lock()
-            sessionUsage.removeValue(forKey: sessionIdToDelete)
-            sessionUsageLock.unlock()
+            markRuntimeEndedIfProcessGone(storeSession)
         }
 
         for aiSession in sessions {
@@ -951,9 +965,15 @@ class ClaudePlugin: SessionPlugin {
             // 如果 store 中已有同 PID 的 session，检查 session ID 是否正确
             if let existingPidMatch = sessionStore.sessions.first(where: { $0.pid == aiSession.pid }) {
                 // 如果 session ID 不匹配，说明 PID.json 是旧的 --resume session
-                // 需要删除旧记录，用真实的 session ID 创建新记录
+                // 需要把旧记录迁移到真实 ID，不能 delete/create 丢掉用户状态
                 if existingPidMatch.sessionId != realSessionId {
-                    NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Deleting old and creating new.")
+                    NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Rekeying continuity record.")
+                    if Self.isMeee2InternalSessionId(existingPidMatch.sessionId) {
+                        SessionTerminalStore.shared.setProviderResumeSessionId(
+                            sessionId: existingPidMatch.sessionId,
+                            providerResumeSessionId: realSessionId
+                        )
+                    }
                     // 旧 record 上的 ghosttyTerminalId（如果有）属于同一个物理 Ghostty
                     // terminal（同一 PID = 同一 Claude CLI 实例 = 同一 tty）。
                     // 删旧之前先把它 buffer 到 realSessionId 上，避免新 record 失去
@@ -965,7 +985,8 @@ class ClaudePlugin: SessionPlugin {
                         }
                         pendingGhosttyTerminalIdsLock.unlock()
                     }
-                    sessionStore.delete(existingPidMatch.sessionId)
+                    moveVolatileSessionCaches(from: existingPidMatch.sessionId, to: realSessionId)
+                    _ = sessionStore.rekeySession(existingPidMatch.sessionId, to: realSessionId)
                     // 继续创建新记录（不 continue）
                 } else {
                     // session ID 匹配，正常更新
@@ -1070,6 +1091,80 @@ class ClaudePlugin: SessionPlugin {
         }
     }
 
+    private func markRuntimeEndedIfProcessGone(_ storeSession: SessionData) {
+        guard let pid = storeSession.pid,
+              !SessionStore.processAlive(pid) else {
+            return
+        }
+        let endedStatus: SessionStatus = storeSession.status == .completed ? .completed : .dead
+        guard storeSession.status != endedStatus
+            || storeSession.currentTool != nil
+            || storeSession.pendingPermissionTool != nil
+            || storeSession.pendingPermissionMessage != nil else {
+            return
+        }
+
+        sessionStore.update(storeSession.sessionId) { data in
+            data.status = endedStatus
+            data.currentTool = nil
+            data.pendingPermissionTool = nil
+            data.pendingPermissionMessage = nil
+        }
+
+        hookStatesLock.lock()
+        hookStates.removeValue(forKey: storeSession.sessionId)
+        hookStatesLock.unlock()
+
+        pendingPermissionsLock.lock()
+        pendingPermissions.removeValue(forKey: storeSession.sessionId)
+        pendingPermissionsLock.unlock()
+
+        sessionStatusesLock.lock()
+        sessionStatuses.removeValue(forKey: storeSession.sessionId)
+        sessionStatusesLock.unlock()
+
+        NSLog("[ClaudePlugin] Preserved ended session \(storeSession.sessionId.prefix(8)); pid \(pid) is gone")
+    }
+
+    private func moveVolatileSessionCaches(from oldSessionId: String, to newSessionId: String) {
+        guard oldSessionId != newSessionId else { return }
+
+        hookStatesLock.lock()
+        if hookStates[newSessionId] == nil {
+            hookStates[newSessionId] = hookStates[oldSessionId]
+        }
+        hookStates.removeValue(forKey: oldSessionId)
+        hookStatesLock.unlock()
+
+        pendingPermissionsLock.lock()
+        if pendingPermissions[newSessionId] == nil {
+            pendingPermissions[newSessionId] = pendingPermissions[oldSessionId]
+        }
+        pendingPermissions.removeValue(forKey: oldSessionId)
+        pendingPermissionsLock.unlock()
+
+        sessionTasksLock.lock()
+        if sessionTasks[newSessionId] == nil {
+            sessionTasks[newSessionId] = sessionTasks[oldSessionId]
+        }
+        sessionTasks.removeValue(forKey: oldSessionId)
+        sessionTasksLock.unlock()
+
+        sessionUsageLock.lock()
+        if sessionUsage[newSessionId] == nil {
+            sessionUsage[newSessionId] = sessionUsage[oldSessionId]
+        }
+        sessionUsage.removeValue(forKey: oldSessionId)
+        sessionUsageLock.unlock()
+
+        sessionStatusesLock.lock()
+        if sessionStatuses[newSessionId] == nil {
+            sessionStatuses[newSessionId] = sessionStatuses[oldSessionId]
+        }
+        sessionStatuses.removeValue(forKey: oldSessionId)
+        sessionStatusesLock.unlock()
+    }
+
     private func notifySessionsUpdated() {
         let sessions = getSessions()
         onSessionsUpdated?(sessions)
@@ -1109,6 +1204,11 @@ class ClaudePlugin: SessionPlugin {
         }
         lastMessageCacheLock.unlock()
         return value
+    }
+
+    private static func isMeee2InternalSessionId(_ sessionId: String) -> Bool {
+        let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
     }
 
     private static func fileFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {

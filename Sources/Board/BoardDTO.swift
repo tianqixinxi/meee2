@@ -49,6 +49,14 @@ struct SessionDTO: Encodable {
     let tty: String?
     /// 终端程序名（诊断用）；未知时为 null
     let termProgram: String?
+    /// "internal" means meee2 owns the PTY/surface; "external" means the
+    /// session still lives in Ghostty/iTerm/Terminal/cmux.
+    let terminalKind: String
+    let surfaceId: String?
+    let surfaceStatus: String?
+    let canOpenExternal: Bool
+    /// "active" | "hidden" | "archived" — local operator visibility state.
+    let controlState: String
 
     /// 当前后台在跑的 Claude Code 子 agent / task（Agent run_in_background / Monitor / Bash run_in_background）。
     /// 主 agent status 和这个字段是正交维度：主可以是 idle 而后台同时有 N 条在跑。
@@ -298,6 +306,13 @@ struct PlannerCanvasStateEnvelope: Encodable {
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
 }
+/// Minimal integration entity DTO (P3.0). Backend mocks for widget data-flow
+/// demo; phase 3 swaps this for a real integration-data fetcher.
+struct IntegrationEntityDTO: Encodable {
+    let schemaId: String     // e.g. "github:pr"
+    let payload: BoardJSONValue
+}
+
 struct PlannerGraphStateEnvelope: Encodable {
     let canvas: PlanningCanvas
     let nodes: [PlanningNode]
@@ -308,6 +323,33 @@ struct PlannerGraphStateEnvelope: Encodable {
     let events: [PlannerEvent]
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
+    /// P3.0 widget data — present when any node has a kanban/inbox/matrix
+    /// widget with source.inputKind == external. nil otherwise.
+    let integrationEntities: [IntegrationEntityDTO]?
+
+    init(
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        states: [NodeStateSnapshot],
+        proposals: [PlanProposal],
+        access: PlannerAccess,
+        activities: [PlannerActivity],
+        events: [PlannerEvent],
+        artifacts: [PlannerArtifact],
+        edges: [PlannerGraphEdge],
+        integrationEntities: [IntegrationEntityDTO]? = nil
+    ) {
+        self.canvas = canvas
+        self.nodes = nodes
+        self.states = states
+        self.proposals = proposals
+        self.access = access
+        self.activities = activities
+        self.events = events
+        self.artifacts = artifacts
+        self.edges = edges
+        self.integrationEntities = integrationEntities
+    }
 }
 struct PlannerProposalEnvelope: Encodable {
     let proposal: PlanProposal?
@@ -374,6 +416,34 @@ struct CanvasListEnvelope: Encodable {
     let activeCanvasId: String
     let defaultCanvasIds: [String]
     let memberships: [CanvasSessionMembershipDTO]
+}
+
+// MARK: - Canvas templates (gallery / apply)
+
+struct CanvasTemplateNodeSpecDTO: Encodable {
+    let title: String
+    let description: String?
+    let status: String
+    let doerId: String?
+    let positionHint: [String: Double]?
+    /// chunk P2.8 (2026-05-28): node-level widget declaration. nil ⇒ standard
+    /// view; non-nil ⇒ front-end should render the declared widget kind
+    /// (`Widget` itself is Codable — same shape as PlanningNode.widget).
+    let widget: Widget?
+}
+
+struct CanvasTemplateDTO: Encodable {
+    let id: String
+    let name: String
+    let description: String
+    let icon: String
+    let kind: String
+    let category: String
+    let defaultNodes: [CanvasTemplateNodeSpecDTO]
+}
+
+struct CanvasTemplatesEnvelope: Encodable {
+    let templates: [CanvasTemplateDTO]
 }
 
 // MARK: - 转换工具
@@ -779,6 +849,7 @@ enum BoardDTOBuilder {
         }()
 
         let sync = syncInfo(forSessionId: session.id)
+        let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
 
         return SessionDTO(
             id: session.id,
@@ -801,6 +872,11 @@ enum BoardDTOBuilder {
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,
             tty: tty,
             termProgram: termProgram,
+            terminalKind: "external",
+            surfaceId: nil,
+            surfaceStatus: nil,
+            canOpenExternal: true,
+            controlState: controlState.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
             clientKind: clientKind,
@@ -837,6 +913,7 @@ enum BoardDTOBuilder {
         }
 
         let sync = syncInfo(forSessionId: m.cliSessionId)
+        let controlState = SessionControlStore.shared.state(for: [m.cliSessionId])
 
         return SessionDTO(
             id: m.cliSessionId,
@@ -859,9 +936,74 @@ enum BoardDTOBuilder {
             ghosttyTerminalId: nil,
             tty: nil,
             termProgram: nil,
+            terminalKind: "external",
+            surfaceId: nil,
+            surfaceStatus: nil,
+            canOpenExternal: true,
+            controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "desktop",
+            syncEnabled: sync.enabled,
+            syncTeamId: sync.teamId,
+            syncTeamName: sync.teamName
+        )
+    }
+
+    static func internalSessionDTO(_ surface: InternalTerminalSurfaceSnapshot) -> SessionDTO {
+        let isCodex = surface.provider == "codex"
+        let pluginId = isCodex ? "com.meee2.plugin.codex" : "com.meee2.plugin.claude"
+        let info = PluginManager.shared.getPluginInfo(for: pluginId)
+        let displayName = info?.displayName ?? (isCodex ? "Codex" : "Claude Code")
+        let colorHex = info.map { hexString(from: $0.themeColor) } ?? (isCodex ? "#3B82F6" : "#FF9230")
+        let sessionData = SessionStore.shared.get(surface.sessionId)
+        let lifecycleStatus: SessionStatus = {
+            switch surface.status {
+            case "starting", "running":
+                return sessionData?.status == .dead ? .dead : .active
+            case "exited", "failed":
+                return .dead
+            default:
+                return sessionData?.status ?? .idle
+            }
+        }()
+        let sync = syncInfo(forSessionId: surface.sessionId)
+        let providerResumeId = SessionTerminalStore.shared.get(sessionId: surface.sessionId)?
+            .providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        let controlState = SessionControlStore.shared.state(for: controlIds)
+        return SessionDTO(
+            id: surface.sessionId,
+            title: surface.title,
+            project: surface.cwd,
+            pluginId: pluginId,
+            pluginDisplayName: displayName,
+            pluginColor: colorHex,
+            status: lifecycleStatus.rawValue,
+            inboxPending: directInboxCount(for: surface.sessionId),
+            recentMessages: [],
+            currentTool: surface.status == "running" ? "terminal" : nil,
+            startedAt: iso8601.string(from: surface.createdAt),
+            lastActivity: iso8601.string(from: surface.updatedAt),
+            usageStats: nil,
+            tasks: [],
+            currentTask: surface.nodeId.map { "Node \($0)" },
+            pendingPermissionTool: sessionData?.pendingPermissionTool,
+            pendingPermissionMessage: sessionData?.pendingPermissionMessage,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: "meee2-internal",
+            terminalKind: "internal",
+            surfaceId: surface.surfaceId,
+            surfaceStatus: surface.status,
+            canOpenExternal: false,
+            controlState: controlState.rawValue,
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: "cli",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
             syncTeamName: sync.teamName

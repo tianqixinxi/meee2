@@ -83,8 +83,12 @@ public struct DashboardView {
             guard let pid = session.pid else { return false }
             let isAlive = checkProcessAlive(pid: pid)
             if !isAlive {
-                // 进程已结束，清理缓存
-                SessionStore.shared.delete(session.sessionId)
+                SessionStore.shared.update(session.sessionId) { data in
+                    data.status = data.status == .completed ? .completed : .dead
+                    data.currentTool = nil
+                    data.pendingPermissionTool = nil
+                    data.pendingPermissionMessage = nil
+                }
             }
             return isAlive
         }

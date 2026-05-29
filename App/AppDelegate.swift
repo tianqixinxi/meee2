@@ -221,6 +221,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动状态监控
         statusManager.start()
         CoordinationWatcher.shared.start()
+        DispatchQueue.global(qos: .utility).async {
+            _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
+        }
 
         // Codex / Cursor / OpenClaw 是 dylib 形式的外部 plugin，加载阶段会做文件
         // 同步、dlopen 和 plugin.json 扫描。先让 Claude/ExternalChat 这些进程内
@@ -284,6 +287,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: Notification.Name("meee2.checkForUpdatesInBackground"),
             object: nil
         )
+
     }
 
     /// pill click 入口。三条路径:
@@ -411,6 +415,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("openBoard"),
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openBoardSession(_:)),
+            name: NSNotification.Name("meee2.openBoardSession"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -448,6 +459,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() {
         openBoardMenu()
         boardWindowController?.openSettings()
+    }
+
+    @objc private func openBoardSession(_ notification: Notification) {
+        let sessionId = notification.userInfo?["sessionId"] as? String
+        let surfaceId = notification.userInfo?["surfaceId"] as? String
+        openBoardMenu()
+        boardWindowController?.openSession(sessionId: sessionId, surfaceId: surfaceId)
     }
 
     @objc private func openBoardMenu() {

@@ -23,8 +23,12 @@ function systemTheme(): ResolvedTheme {
 
 function readStoredMode(): ThemeMode {
   if (typeof window === 'undefined') return 'system'
-  const stored = window.localStorage.getItem(STORAGE_KEY)
-  return isThemeMode(stored) ? stored : 'system'
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY)
+    return isThemeMode(stored) ? stored : 'system'
+  } catch {
+    return 'system'
+  }
 }
 
 function applyTheme(theme: ResolvedTheme) {
@@ -50,7 +54,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const setMode = useCallback((nextMode: ThemeMode) => {
-    window.localStorage.setItem(STORAGE_KEY, nextMode)
+    try {
+      window.localStorage.setItem(STORAGE_KEY, nextMode)
+    } catch {
+      // Theme should still update in WebViews where storage is unavailable.
+    }
     setModeState(nextMode)
   }, [])
 

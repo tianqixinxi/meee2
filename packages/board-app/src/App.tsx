@@ -19,17 +19,28 @@ import { SettingsView } from './components/SettingsView'
 import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
+import { CommandPalette } from './components/CommandPalette'
 import { useI18n } from './lib/i18n'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
 import type {
   CanvasList,
+  CanvasKind,
   CanvasScope,
   Meee2AgentRuntimeStatus,
   PlannerGraphState,
+  ReadinessReport,
+  Session,
   SpawnProvider,
 } from './types'
-import { WORKING_STATUSES, RESTING_STATUSES } from './notifications'
+import {
+  WORKING_STATUSES,
+  RESTING_STATUSES,
+  ensureNotificationPermission,
+  indexSessions,
+  loadNotificationToggles,
+  runSessionTransitionNotifications,
+} from './notifications'
 import type {
   CanvasPersistence,
   LayoutMap,
@@ -37,13 +48,16 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
+  applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
   deleteCanvas,
   fetchCanvases,
   fetchMeee2AgentRuntimeStatus,
+  fetchReadiness,
   fetchUserProfile,
   installMeee2AgentRuntime,
+  repairReadiness,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -117,9 +131,9 @@ function fallbackCanvasList(): CanvasList {
     memberships: [],
     canvases: [{
       id: FALLBACK_CANVAS_ID,
-      name: 'My',
+      name: 'Monitor',
       scope: 'personal',
-      kind: 'board',
+      kind: 'monitor',
       isDefault: true,
       workspacePath: '',
       ownerUserId: 'local-user',
@@ -128,8 +142,14 @@ function fallbackCanvasList(): CanvasList {
   }
 }
 
-function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): 'board' | 'template' {
-  return canvas?.kind === 'template' ? 'template' : 'board'
+function canvasKind(canvas: CanvasList['canvases'][number] | null | undefined): CanvasKind {
+  if (canvas?.kind === 'template') return 'template'
+  if (canvas?.kind === 'monitor') return 'monitor'
+  return 'board'
+}
+
+function isWorkspaceCanvas(canvas: CanvasList['canvases'][number] | null | undefined): boolean {
+  return canvasKind(canvas) !== 'template'
 }
 
 function canvasListSignature(list: CanvasList): string {
@@ -142,7 +162,7 @@ function canvasListSignature(list: CanvasList): string {
         id: canvas.id,
         name: canvas.name,
         scope: canvas.scope,
-        kind: canvas.kind === 'template' ? 'template' : 'board',
+        kind: canvasKind(canvas),
         isDefault: canvas.isDefault,
         workspacePath: canvas.workspacePath,
         parentCanvasId: canvas.parentCanvasId ?? null,
@@ -343,11 +363,12 @@ export default function App() {
   }, [activeCanvasId, canvasList])
 
   const boardState = useBoardState(scheduleCanvasListRefresh)
-  const workspaceCanvases = useMemo(() => (canvasList?.canvases ?? []).filter((canvas) => canvasKind(canvas) === 'board'), [canvasList])
+  const workspaceCanvases = useMemo(() => (canvasList?.canvases ?? []).filter(isWorkspaceCanvas), [canvasList])
   const activeWorkspaceCanvasId = workspaceCanvases.some((canvas) => canvas.id === activeCanvasId)
     ? activeCanvasId
     : workspaceCanvases[0]?.id ?? activeCanvasId
   const activeWorkspaceCanvas = canvasList?.canvases.find((canvas) => canvas.id === activeWorkspaceCanvasId)
+  const activeWorkspaceCanvasKind = canvasKind(activeWorkspaceCanvas)
   const [activePlannerState, setActivePlannerState] = useState<PlannerGraphState | null>(null)
   useEffect(() => {
     setActivePlannerState(null)
@@ -360,12 +381,18 @@ export default function App() {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('planner')
   const [workspaceRailCollapsed, setWorkspaceRailCollapsed] = useState(() => readWorkspaceRailCollapsed())
   const [firstRunOnboardingCompleted, setFirstRunOnboardingCompleted] = useState(() => readFirstRunOnboardingCompleted())
+  const [degradedEntry, setDegradedEntry] = useState(false)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const firstRunOnboardingCompletedAtMountRef = useRef(firstRunOnboardingCompleted)
   const [agentRuntimeStatus, setAgentRuntimeStatus] = useState<Meee2AgentRuntimeStatus | null>(null)
   const [agentRuntimeModalOpen, setAgentRuntimeModalOpen] = useState(false)
   const [agentRuntimeInstallTarget, setAgentRuntimeInstallTarget] = useState<'claude' | 'codex' | 'all' | null>(null)
   const [agentRuntimeInstallError, setAgentRuntimeInstallError] = useState<string | null>(null)
   const [agentRuntimeInstallLogs, setAgentRuntimeInstallLogs] = useState<string[]>([])
+  const [readinessReport, setReadinessReport] = useState<ReadinessReport | null>(null)
+  const [readinessRepairAction, setReadinessRepairAction] = useState<string | null>(null)
+  const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
+  const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
   // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
@@ -428,6 +455,26 @@ export default function App() {
     })
   }, [boardState.state])
 
+  // Chunk D: OS-level notifications. Diff session snapshots, fire system
+  // notifications for permission-request / session-blocked / session-done /
+  // recap-updated. Approval (planner gate-wait) is dispatched separately from
+  // PlannerGraph since planner state isn't part of BoardState.
+  const prevSessionsRef = useRef<Map<string, Session>>(new Map())
+  useEffect(() => {
+    // Request permission on first BoardState arrival (lazy — only once).
+    void ensureNotificationPermission()
+  }, [])
+  useEffect(() => {
+    const st = boardState.state
+    if (!st) return
+    const toggles = loadNotificationToggles()
+    // Defer to a microtask so the diff never blocks render.
+    queueMicrotask(() => {
+      runSessionTransitionNotifications(prevSessionsRef.current, st.sessions, toggles)
+      prevSessionsRef.current = indexSessions(st.sessions)
+    })
+  }, [boardState.state])
+
   const pushToast: ToastCtx['push'] = useCallback((kind, text) => {
     const id = Date.now() + Math.random()
     setToasts((t) => [...t, { id, kind, text }])
@@ -452,9 +499,45 @@ export default function App() {
       })
   }, [])
 
+  const refreshReadiness = useCallback(() => {
+    fetchReadiness()
+      .then((report) => {
+        setReadinessReport(report)
+        setReadinessRepairError(null)
+      })
+      .catch((err) => {
+        console.warn('[App] fetchReadiness failed:', (err as Error).message)
+        setReadinessReport(null)
+        setReadinessRepairError((err as Error).message || 'Failed to check local session readiness')
+      })
+  }, [])
+
+  const handleRepairReadiness = useCallback((actionId: string) => {
+    setReadinessRepairAction(actionId)
+    setReadinessRepairError(null)
+    setReadinessRepairLogs([`Starting recovery action: ${actionId}`])
+    repairReadiness(actionId)
+      .then((result) => {
+        setReadinessReport(result.report)
+        setReadinessRepairLogs(result.logs?.length ? result.logs : result.messages)
+        refreshAgentRuntimeStatus(false)
+        if (result.ok && result.report.ready) {
+          pushToast('success', 'Local session readiness is complete')
+        } else if (!result.ok) {
+          setReadinessRepairError(result.messages[result.messages.length - 1] ?? 'Readiness repair failed')
+        }
+      })
+      .catch((err) => {
+        setReadinessRepairError((err as Error).message || 'Readiness repair failed')
+        setReadinessRepairLogs((current) => [...current, (err as Error).message || 'Readiness repair failed'])
+      })
+      .finally(() => setReadinessRepairAction(null))
+  }, [pushToast, refreshAgentRuntimeStatus])
+
   useEffect(() => {
     refreshAgentRuntimeStatus(firstRunOnboardingCompletedAtMountRef.current)
-  }, [refreshAgentRuntimeStatus])
+    refreshReadiness()
+  }, [refreshAgentRuntimeStatus, refreshReadiness])
 
   useEffect(() => {
     const openSettings = () => setWorkspaceMode('settings')
@@ -462,13 +545,40 @@ export default function App() {
     return () => window.removeEventListener('meee2:open-settings', openSettings)
   }, [])
 
+  // UI-simplification chunk G — CanvasToolbar 「+ New canvas」 modal 顶部
+  // 「从模板新建」CTA 通过 window event 切到 Templates view。沿用上面 open-settings
+  // 同款 isolated listener,不动 routing 主链。
+  useEffect(() => {
+    const navTemplates = () => setWorkspaceMode('templates')
+    window.addEventListener('meee2:nav-templates', navTemplates)
+    return () => window.removeEventListener('meee2:nav-templates', navTemplates)
+  }, [])
+
+  useEffect(() => {
+    const openSession = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string; surfaceId?: string }>).detail
+      const surfaceId = detail?.surfaceId?.trim()
+      const sessionId = detail?.sessionId?.trim()
+      setSelectedSessionId(sessionId || surfaceId || null)
+      setWorkspaceMode('sessions')
+      boardState.refresh()
+    }
+    window.addEventListener('meee2:open-session', openSession)
+    return () => window.removeEventListener('meee2:open-session', openSession)
+  }, [boardState.refresh])
+
   const completeFirstRunOnboarding = useCallback(() => {
+    if (readinessReport?.ready !== true) return
     setFirstRunOnboardingCompleted(true)
     try {
       window.localStorage.setItem(FIRST_RUN_ONBOARDING_COMPLETED_KEY, '1')
     } catch {
       // Persistence is best-effort; entering the app should still work.
     }
+  }, [readinessReport])
+
+  const enterDegradedWorkspace = useCallback(() => {
+    setDegradedEntry(true)
   }, [])
 
   const restartFirstRunOnboarding = useCallback(() => {
@@ -480,9 +590,14 @@ export default function App() {
     setAgentRuntimeInstallError(null)
     setAgentRuntimeInstallLogs([])
     setAgentRuntimeInstallTarget(null)
+    setReadinessRepairError(null)
+    setReadinessRepairLogs([])
+    setReadinessRepairAction(null)
+    setDegradedEntry(false)
     setFirstRunOnboardingCompleted(false)
     refreshAgentRuntimeStatus(false)
-  }, [refreshAgentRuntimeStatus])
+    refreshReadiness()
+  }, [refreshAgentRuntimeStatus, refreshReadiness])
 
   const handleInstallAgentRuntime = useCallback((target: 'claude' | 'codex' | 'all') => {
     setAgentRuntimeInstallTarget(target)
@@ -525,9 +640,50 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
+  // Command palette handlers. Switching canvases is async (RTT against the
+  // local API), so for node selection we first ensure planner mode + the
+  // right active canvas, then dispatch a `meee2:select-node` event which
+  // PlannerGraph subscribes to (it opens its inspector for the matching node).
+  const handlePaletteOpenCanvas = useCallback((canvasId: string) => {
+    setWorkspaceMode('planner')
+    handleSetActiveCanvas(canvasId)
+  }, [handleSetActiveCanvas])
+
+  const handlePaletteOpenNode = useCallback((canvasId: string, nodeId: string) => {
+    setWorkspaceMode('planner')
+    if (canvasId !== activeCanvasId) {
+      handleSetActiveCanvas(canvasId)
+    }
+    // Give PlannerGraph one tick to remount on the new canvas before asking it
+    // to focus the node. PlannerGraph also re-applies the latest pending
+    // selection after its planner state finishes hydrating.
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('meee2:select-node', {
+        detail: { canvasId, nodeId },
+      }))
+    }, 50)
+  }, [activeCanvasId, handleSetActiveCanvas])
+
+  const handlePaletteOpenSession = useCallback((sessionId: string) => {
+    window.dispatchEvent(new CustomEvent('meee2:open-session', {
+      detail: { sessionId },
+    }))
+  }, [])
+
+  const initialMonitorCanvasSelectedRef = useRef(false)
+  useEffect(() => {
+    if (initialMonitorCanvasSelectedRef.current || !canvasList || workspaceMode !== 'planner') return
+    initialMonitorCanvasSelectedRef.current = true
+    const monitorCanvas = canvasList.canvases.find((canvas) => canvas.kind === 'monitor' && canvas.isDefault)
+      ?? canvasList.canvases.find((canvas) => canvas.kind === 'monitor')
+    if (monitorCanvas && monitorCanvas.id !== activeCanvasId) {
+      handleSetActiveCanvas(monitorCanvas.id)
+    }
+  }, [activeCanvasId, canvasList, handleSetActiveCanvas, workspaceMode])
+
   const workspaceCanvasIds = useMemo(() => (
     (canvasList?.canvases ?? [])
-      .filter((canvas) => canvasKind(canvas) === 'board')
+      .filter(isWorkspaceCanvas)
       .map((canvas) => canvas.id)
   ), [canvasList])
   const activeHistoryCanvasId = workspaceCanvasIds.includes(activeCanvasId)
@@ -580,8 +736,8 @@ export default function App() {
     }, 2000)
   }, [canvasHistory, canvasHistoryIndex, handleSetActiveCanvas, workspaceCanvasIds])
 
-  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope) => {
-    return createCanvas({ name, scope })
+  const handleCreateCanvas = useCallback((name: string, scope: CanvasScope, kind?: CanvasKind) => {
+    return createCanvas({ name, scope, kind })
       .then((list) => {
         applyCanvasList(list)
       })
@@ -594,6 +750,19 @@ export default function App() {
         return list.activeCanvasId
       })
   }, [applyCanvasList])
+
+  // Chunk F: spawn a canvas from a builtin gallery template, then jump to it.
+  const handleApplyTemplate = useCallback(
+    (templateId: string, name: string, scope: CanvasScope) => {
+      return applyCanvasTemplate(templateId, { name, scope }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
 
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
@@ -641,7 +810,7 @@ export default function App() {
     if (nextMode !== 'planner' || !canvasList) return
     const currentCanvas = canvasList.canvases.find((canvas) => canvas.id === activeCanvasId)
     if (canvasKind(currentCanvas) !== 'template') return
-    const firstWorkspaceCanvas = canvasList.canvases.find((canvas) => canvasKind(canvas) === 'board')
+    const firstWorkspaceCanvas = canvasList.canvases.find(isWorkspaceCanvas)
     if (firstWorkspaceCanvas) handleSetActiveCanvas(firstWorkspaceCanvas.id)
   }, [activeCanvasId, canvasList, handleSetActiveCanvas])
 
@@ -666,18 +835,18 @@ export default function App() {
     return () => window.removeEventListener('focus', refreshUserProfile)
   }, [refreshUserProfile])
 
-  if (!firstRunOnboardingCompleted) {
+  if (!firstRunOnboardingCompleted && !degradedEntry) {
     return (
       <ToastContext.Provider value={toastCtx}>
         <FirstRunOnboarding
-          status={agentRuntimeStatus}
-          installingTarget={agentRuntimeInstallTarget}
-          installError={agentRuntimeInstallError}
-          installLogs={agentRuntimeInstallLogs}
-          onInstall={handleInstallAgentRuntime}
-          onRefresh={() => refreshAgentRuntimeStatus(false)}
+          report={readinessReport}
+          repairingAction={readinessRepairAction}
+          repairError={readinessRepairError}
+          repairLogs={readinessRepairLogs}
+          onRepair={handleRepairReadiness}
+          onRefresh={refreshReadiness}
           onComplete={completeFirstRunOnboarding}
-          onSkip={completeFirstRunOnboarding}
+          onDegradedEntry={enterDegradedWorkspace}
         />
         <div className="toasts">
           {toasts.map((t) => (
@@ -699,6 +868,7 @@ export default function App() {
   }
 
   const activeCanvasLoading = canvasLoading || hydrated.canvasId !== activeCanvasId
+  const showCanvasLoading = activeCanvasLoading && (workspaceMode === 'planner' || workspaceMode === 'templates')
 
   return (
     <ToastContext.Provider value={toastCtx}>
@@ -715,20 +885,40 @@ export default function App() {
           onModeChange={handleWorkspaceModeChange}
         />
         <div className="board-area">
+          {readinessReport && !readinessReport.ready && (
+            <div className="readiness-banner" role="status">
+              <div>
+                <strong>Local session readiness needs setup</strong>
+                <span>{readinessReport.requiredFailed} required check{readinessReport.requiredFailed === 1 ? '' : 's'} failing. Workspace is in degraded entry.</span>
+              </div>
+              <button type="button" className="ghost" onClick={() => setWorkspaceMode('settings')}>
+                Open Settings
+              </button>
+            </div>
+          )}
           {workspaceMode === 'planner' ? (
-            <PlannerGraph
-              canvasId={activeWorkspaceCanvasId}
-              canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
-              workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
-              userProfile={userProfile}
-              boardState={boardState.state}
-              clearRevision={plannerClearRevision}
-              refreshTick={activeCanvasRefreshTick}
-              onPlannerStateChange={setActivePlannerState}
-              onOpenSubCanvas={handleSetActiveCanvas}
-              onNotify={pushToast}
-              canvasMonitor={activeCanvasMonitor}
-            />
+            activeWorkspaceCanvasKind === 'monitor' ? (
+              <WorkspaceMonitor
+                activeCanvasId={activeWorkspaceCanvasId}
+                canvases={workspaceCanvases}
+                onOpenCanvas={handleSetActiveCanvas}
+                onOpenAllSessions={() => setWorkspaceMode('sessions')}
+              />
+            ) : (
+              <PlannerGraph
+                canvasId={activeWorkspaceCanvasId}
+                canvasName={activeWorkspaceCanvas?.name ?? 'Canvas'}
+                workspacePath={activeWorkspaceCanvas?.workspacePath ?? ''}
+                userProfile={userProfile}
+                boardState={boardState.state}
+                clearRevision={plannerClearRevision}
+                refreshTick={activeCanvasRefreshTick}
+                onPlannerStateChange={setActivePlannerState}
+                onOpenSubCanvas={handleSetActiveCanvas}
+                onNotify={pushToast}
+                canvasMonitor={activeCanvasMonitor}
+              />
+            )
           ) : workspaceMode === 'templates' ? (
             <TemplatesView
               canvases={canvasList.canvases}
@@ -737,9 +927,15 @@ export default function App() {
               boardState={boardState.state}
               onOpenCanvas={handleSetActiveCanvas}
               onCreateTemplate={handleCreateTemplate}
+              onApplyTemplate={handleApplyTemplate}
             />
           ) : workspaceMode === 'sessions' ? (
-            <SessionsView state={boardState.state} unreadSids={unreadSids} />
+            <SessionsView
+              state={boardState.state}
+              unreadSids={unreadSids}
+              selectedSessionId={selectedSessionId}
+              onSelectedSessionChange={setSelectedSessionId}
+            />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView
               canvases={workspaceCanvases}
@@ -764,17 +960,22 @@ export default function App() {
               onSaved={() => {
                 refreshUserProfile()
                 refreshAgentRuntimeStatus(false)
+                refreshReadiness()
               }}
               onToast={pushToast}
               agentRuntimeStatus={agentRuntimeStatus}
               onOpenAgentRuntime={handleOpenAgentRuntimeSetup}
               onRefreshAgentRuntime={() => refreshAgentRuntimeStatus(false)}
+              readinessReport={readinessReport}
+              readinessRepairAction={readinessRepairAction}
+              readinessRepairError={readinessRepairError}
+              readinessRepairLogs={readinessRepairLogs}
+              onRepairReadiness={handleRepairReadiness}
+              onRefreshReadiness={refreshReadiness}
               devMode={BOARD_DEV_MODE}
               onRestartOnboarding={restartFirstRunOnboarding}
             />
-          ) : (
-            <WorkspaceMonitor />
-          )}
+          ) : null}
           {workspaceMode === 'planner' && (
             <CanvasToolbar
               canvases={workspaceCanvases}
@@ -795,7 +996,7 @@ export default function App() {
               onOpenAllSessions={() => setWorkspaceMode('sessions')}
             />
           )}
-          {activeCanvasLoading && (
+          {showCanvasLoading && (
             <div className="canvas-global-loading" role="status" aria-live="polite">
               <div className="canvas-global-loading__ring" aria-hidden />
               <div className="canvas-global-loading__label">{t('common.switchingCanvas')}</div>
@@ -817,6 +1018,13 @@ export default function App() {
             onClose={() => setAgentRuntimeModalOpen(false)}
           />
         )}
+        <CommandPalette
+          canvases={canvasList.canvases}
+          boardState={boardState.state}
+          onOpenCanvas={handlePaletteOpenCanvas}
+          onOpenNodeInspector={handlePaletteOpenNode}
+          onOpenSession={handlePaletteOpenSession}
+        />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

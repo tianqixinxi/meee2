@@ -131,6 +131,185 @@ enum BoardAPI {
         return jsonResponse(Meee2AgentRuntimeInstaller.install(target: target))
     }
 
+    // MARK: - Local session readiness
+
+    static func getReadiness(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(ReadinessDoctor.diagnose())
+    }
+
+    static func repairReadiness(_ req: HttpRequest) -> HttpResponse {
+        struct RepairRequest: Decodable {
+            let actionId: String?
+        }
+        let body = decodeJSONBody(req, as: RepairRequest.self)
+        guard let actionId = body?.actionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !actionId.isEmpty else {
+            return errorResponse("bad_request", "actionId is required", status: 400)
+        }
+        let result = ReadinessDoctor.repair(actionId: actionId)
+        return jsonResponse(result, status: result.ok ? 200 : 400, reason: result.ok ? "OK" : "Bad Request")
+    }
+
+    static func exportDebug(_ req: HttpRequest) -> HttpResponse {
+        do {
+            return jsonResponse(try DebugExporter.exportToDefaultLocation())
+        } catch {
+            return errorResponse("debug_export_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    // MARK: - Privacy: storage stats + delete local data
+
+    static func getStorageStats(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(SystemStorageAPI.gatherStats())
+    }
+
+    static func issueDeleteLocalDataToken(_ req: HttpRequest) -> HttpResponse {
+        jsonResponse(SystemStorageAPI.issueDeleteToken())
+    }
+
+    static func deleteLocalData(_ req: HttpRequest) -> HttpResponse {
+        struct DeleteRequest: Decodable {
+            let token: String?
+        }
+        let body = decodeJSONBody(req, as: DeleteRequest.self)
+        guard let token = body?.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return errorResponse("bad_request", "token is required", status: 400)
+        }
+        do {
+            return jsonResponse(try SystemStorageAPI.deleteLocalData(token: token))
+        } catch let e as SystemStorageAPI.APIError {
+            return errorResponse("invalid_token", e.errorDescription ?? "invalid token", status: 400)
+        } catch {
+            return errorResponse("delete_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    // MARK: - GET /api/sessions/intake-diagnostics
+
+    private struct SessionIntakeDiagnosticItem: Encodable {
+        let id: String
+        let severity: String
+        let title: String
+        let detail: String
+        let sessionId: String?
+        let recoveryAction: String?
+    }
+
+    private struct SessionIntakeDiagnostics: Encodable {
+        let ok: Bool
+        let liveSessions: Int
+        let storedSessions: Int
+        let historicalSessions: Int
+        let items: [SessionIntakeDiagnosticItem]
+        let checkedAt: String
+    }
+
+    static func getSessionIntakeDiagnostics(_ req: HttpRequest) -> HttpResponse {
+        let readiness = ReadinessDoctor.diagnose()
+        let stored = SessionStore.shared.listAll()
+        let pluginSessions = PluginManager.shared.sessions
+            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
+        let livePluginSessions = pluginSessions.filter { !$0.status.isHistorical }
+        let liveKeys = Set(livePluginSessions.map(canonicalSessionKey))
+        let historical = stored.filter { session in
+            session.status.isHistorical || TranscriptStatusResolver.resolve(for: session).isHistorical
+        }
+
+        var items: [SessionIntakeDiagnosticItem] = []
+        if readiness.requiredFailed > 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "local-readiness-failing",
+                severity: "error",
+                title: "Local session readiness is incomplete",
+                detail: "\(readiness.requiredFailed) required readiness check(s) are failing before real session intake can be trusted.",
+                sessionId: nil,
+                recoveryAction: "Open Settings and run the failing readiness recovery actions."
+            ))
+        }
+
+        if livePluginSessions.isEmpty && readiness.requiredFailed == 0 {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "no-live-provider-sessions",
+                severity: "warn",
+                title: "No live provider sessions are visible",
+                detail: "meee2 is ready, but no live Claude Code or Codex session is currently being reported by enabled providers.",
+                sessionId: nil,
+                recoveryAction: "Start or resume a real Claude Code/Codex session, then refresh this view."
+            ))
+        }
+
+        for session in stored {
+            guard !session.status.isHistorical,
+                  let pid = session.pid,
+                  !SessionStore.processAlive(pid) else { continue }
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stale-runtime-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session has a stale runtime",
+                detail: "Session \(String(session.sessionId.prefix(8))) still points at pid \(pid), but that process is gone. The record should be preserved and marked historical.",
+                sessionId: session.sessionId,
+                recoveryAction: "Refresh sessions; meee2 will keep the record and mark the runtime ended."
+            ))
+        }
+
+        let storedActiveNotSurfaced = stored.filter { session in
+            guard !session.status.isHistorical else { return false }
+            return !liveKeys.contains(canonicalSessionKey(pluginId: "com.meee2.plugin.claude", sessionId: session.sessionId))
+        }
+        for session in storedActiveNotSurfaced.prefix(5) {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "stored-not-surfaced-\(session.sessionId)",
+                severity: "warn",
+                title: "Stored session is not in the live provider view",
+                detail: "Session \(String(session.sessionId.prefix(8))) is persisted locally but is not currently surfaced by the enabled Claude provider.",
+                sessionId: session.sessionId,
+                recoveryAction: "Check whether the provider is disabled, the session is archived, or the provider needs refresh."
+            ))
+        }
+
+        let duplicateLivePids = Dictionary(grouping: stored.compactMap { session -> (Int, String)? in
+            guard let pid = session.pid,
+                  !session.status.isHistorical,
+                  SessionStore.processAlive(pid) else { return nil }
+            return (pid, session.sessionId)
+        }, by: { $0.0 })
+            .filter { $0.value.count > 1 }
+        for (pid, entries) in duplicateLivePids.prefix(5) {
+            let ids = entries.map { String($0.1.prefix(8)) }.joined(separator: ", ")
+            items.append(SessionIntakeDiagnosticItem(
+                id: "duplicate-live-pid-\(pid)",
+                severity: "error",
+                title: "Multiple stored sessions point at one live runtime",
+                detail: "pid \(pid) is attached to multiple stored sessions: \(ids). This usually means stale-id recovery should merge instead of duplicate.",
+                sessionId: entries.first?.1,
+                recoveryAction: "Wait for the next provider refresh; if it persists, capture debug export."
+            ))
+        }
+
+        if historical.count > 0 && items.isEmpty {
+            items.append(SessionIntakeDiagnosticItem(
+                id: "historical-records-preserved",
+                severity: "info",
+                title: "Historical sessions are preserved",
+                detail: "\(historical.count) completed or dead session record(s) are retained for continuity and hidden from the default live monitor.",
+                sessionId: nil,
+                recoveryAction: nil
+            ))
+        }
+
+        let ok = !items.contains { $0.severity == "error" }
+        return jsonResponse(SessionIntakeDiagnostics(
+            ok: ok,
+            liveSessions: livePluginSessions.count,
+            storedSessions: stored.count,
+            historicalSessions: historical.count,
+            items: items,
+            checkedAt: BoardDTOBuilder.iso(Date())
+        ))
+    }
+
     // MARK: - GET /api/state
 
     static func getState(_ req: HttpRequest) -> HttpResponse {
@@ -141,10 +320,8 @@ enum BoardAPI {
                 MLog(String(format: "[Perf][BoardAPI] getState %.1fms", ms))
             }
         }
-        // Web UI 不显示 .dead 的 session：Ghostty 终端被关 / 进程已退 / 文件
-        // 早被清理的"幽灵卡"。Island + StatusManager 内部仍然能读到 .dead
-        // 用来触发 "session ended" 通知，所以只在 BoardDTO 出口过滤，不动
-        // PluginManager 的全集。
+        // Web UI 默认只显示 live sessions；completed/dead 记录仍保留在
+        // SessionStore 供 history / diagnostic / recovery 使用。
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
         let sessions = currentBoardSessions()
@@ -176,6 +353,111 @@ enum BoardAPI {
         if raw.contains("codex") { return "codex" }
         if raw.contains("claude") { return "claude" }
         return nil
+    }
+
+    private static func normalizedProvider(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().contains("codex") ? "codex" : "claude"
+    }
+
+    // MARK: - Internal session terminal surfaces
+
+    static func listSessionSurfaces(_ req: HttpRequest) -> HttpResponse {
+        struct Envelope: Encodable { let surfaces: [InternalTerminalSurfaceSnapshot] }
+        return jsonResponse(Envelope(surfaces: InternalTerminalRuntime.shared.listSnapshots()))
+    }
+
+    static func getSessionSurface(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing surface id", status: 400)
+        }
+        guard let snapshot = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: id) else {
+            return errorResponse("not_found", "surface not found: \(id)", status: 404)
+        }
+        return jsonResponse(snapshot)
+    }
+
+    static func createSessionSurface(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let provider = normalizedProvider((json["provider"] as? String) ?? "claude")
+        guard let rawCwd = json["cwd"] as? String, !rawCwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("bad_request", "missing cwd", status: 400)
+        }
+        do {
+            let cwd = try explicitSessionCwd(rawCwd) ?? rawCwd
+            let command = AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+            let createIfMissing = (json["createIfMissing"] as? Bool) ?? true
+            let initialPrompt = (json["initialPrompt"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let snapshot = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: createIfMissing,
+                canvasId: json["canvasId"] as? String,
+                nodeId: json["nodeId"] as? String,
+                initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
+            )
+            return jsonResponse(snapshot, status: 201, reason: "Created")
+        } catch {
+            return errorResponse("spawn_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func closeSessionSurface(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"], !id.isEmpty else {
+            return errorResponse("bad_request", "missing surface id", status: 400)
+        }
+        guard InternalTerminalRuntime.shared.close(surfaceOrSessionId: id) else {
+            return errorResponse("not_found", "surface not found: \(id)", status: 404)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func createInternalSessionSurface(
+        provider: String,
+        cwd: String,
+        command: String,
+        createIfMissing: Bool,
+        canvasId: String?,
+        nodeId: String?,
+        initialPrompt: String?,
+        preferredSessionId: String? = nil
+    ) throws -> InternalTerminalSurfaceSnapshot {
+        var isDir: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDir) || !isDir.boolValue {
+            if createIfMissing {
+                try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+            } else {
+                throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
+            }
+        }
+        let snapshot = try InternalTerminalRuntime.shared.createSurface(
+            provider: provider,
+            cwd: cwd,
+            command: command,
+            canvasId: canvasId,
+            nodeId: nodeId,
+            initialPrompt: initialPrompt,
+            preferredSessionId: preferredSessionId
+        )
+        BoardServer.shared.broadcastStateChanged()
+        return snapshot
+    }
+
+    private static func graphEnvelope(_ state: PlannerGraphState) -> PlannerGraphStateEnvelope {
+        PlannerGraphStateEnvelope(
+            canvas: state.canvas,
+            nodes: state.nodes,
+            states: state.states,
+            proposals: state.proposals,
+            access: state.access,
+            activities: state.activities,
+            events: state.events,
+            artifacts: state.artifacts,
+            edges: state.edges
+        )
     }
 
     private static func parseISODate(_ raw: String?) -> Date? {
@@ -224,15 +506,21 @@ enum BoardAPI {
     private static func feedPlannerSessionRunStates(_ sessions: [SessionDTO]) {
         for session in sessions {
             let status = SessionStatus.from(rawString: session.status)
-            PlannerSessionRunStateBridge.observeBound(
+            let boundRecord = PlannerSessionRunStateBridge.observeBound(
                 sessionId: session.id,
                 status: status
             )
-            syncPlannerSessionOutputArtifacts(sessionId: session.id)
+            if boundRecord != nil {
+                syncPlannerSessionOutputArtifacts(sessionId: session.id)
+            }
         }
     }
 
     private static func syncPlannerSessionOutputArtifacts(sessionId: String? = nil, canvasId: String? = nil) {
+        if let sessionId,
+           (SessionStore.shared.get(sessionId)?.transcriptPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return
+        }
         let snapshot = BoardLayoutStore.shared.snapshot()
         let canvases = snapshot.canvases.filter { canvasId == nil || $0.id == canvasId }
         for canvas in canvases {
@@ -517,13 +805,48 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// P3.0 — mock integration data for widget demo.
+    ///
+    /// 当画板里至少一个节点带 `widget` 且 `source.inputKind == .external`,后端返回
+    /// 一批样本 IntegrationEntity 让前端 widget 真渲染出数据,而不是显示
+    /// 「暂无 integration 数据」 hint。phase 3 把这块换成对接真实 GitHub /
+    /// Linear / Slack 等 integration 的拉取。
+    private static func mockIntegrationEntitiesFor(nodes: [PlanningNode]) -> [IntegrationEntityDTO]? {
+        let hasExternalWidget = nodes.contains(where: { node in
+            guard let widget = node.widget else { return false }
+            return widget.source?.inputKind == .external
+        })
+        guard hasExternalWidget else { return nil }
+        // 5 个 mock GitHub PR,跨 status 分布
+        return [
+            mockPR(number: 23, title: "refactor: simplify SessionStore persistence", author: "qc", branch: "qc/sessionstore-refactor", state: "draft"),
+            mockPR(number: 42, title: "feat: add Kanban widget on PlannerNodeCard", author: "kai", branch: "kai/widget-kanban", state: "open"),
+            mockPR(number: 51, title: "fix: StateTrace stuck-thinking after PostToolUse Bash", author: "qc", branch: "qc/statetrace-bash-fix", state: "awaiting"),
+            mockPR(number: 47, title: "chore: bump Sparkle to 2.9.1", author: "wjk", branch: "wjk/sparkle-2.9.1", state: "blocked"),
+            mockPR(number: 7, title: "feat: planner sidecar bridge", author: "kai", branch: "main", state: "done")
+        ]
+    }
+
+    private static func mockPR(number: Int, title: String, author: String, branch: String, state: String) -> IntegrationEntityDTO {
+        let payload: [String: BoardJSONValue] = [
+            "number": .number(Double(number)),
+            "title": .string("#\(number) \(title)"),
+            "author": .string(author),
+            "branch": .string(branch),
+            "state": .string(state),
+            "id": .string("pr-\(number)")
+        ]
+        return IntegrationEntityDTO(schemaId: "github:pr", payload: .object(payload))
     }
 
     /// POST /api/planner/canvases/:id/clear
@@ -550,7 +873,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1143,7 +1467,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1176,39 +1501,184 @@ enum BoardAPI {
             let spawnRequest = try recordPlannerDispatchIntent(
                 canvasId: canvasId,
                 node: result.dispatchedNode,
-                cwdOverride: body?.cwd
+                cwdOverride: body?.cwd,
+                includeInitialPromptInIntent: false
             )
             if let spawnRequest {
-                switch startTerminalSession(
-                    cwd: spawnRequest.cwd,
-                    command: spawnRequest.command,
-                    createIfMissing: true,
-                    termProgram: nil
-                ) {
-                case .success:
-                    break
-                case .failed(let reason):
-                    return errorResponse("spawn_failed", reason, status: 500)
+                do {
+                    let surface = try createInternalSessionSurface(
+                        provider: spawnRequest.provider,
+                        cwd: spawnRequest.cwd,
+                        command: spawnRequest.command,
+                        createIfMissing: true,
+                        canvasId: canvasId,
+                        nodeId: nodeId,
+                        initialPrompt: spawnRequest.initialPrompt
+                    )
+                    _ = PlannerSessionRunStateBridge.observe(
+                        sessionId: surface.sessionId,
+                        purpose: spawnRequest.purpose,
+                        status: .active
+                    )
+                } catch {
+                    return errorResponse("spawn_failed", error.localizedDescription, status: 500)
                 }
             }
             BoardServer.shared.broadcastStateChanged()
-            let state = result.graph
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges
-            ))
+            let state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    static func ensurePlannerNodeInternalSession(_ req: HttpRequest) -> HttpResponse {
+        struct EnsureRequest: Decodable {
+            let runner: PlannerDispatchRunner?
+            let cwd: String?
+        }
+        struct EnsureResponse: Encodable {
+            let ok: Bool
+            let sessionId: String
+            let surfaceId: String
+            let cwd: String
+            let command: String
+            let terminalKind: String
+            let action: String
+            let graph: PlannerGraphStateEnvelope
+        }
+
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let body = decodeJSONBody(req, as: EnsureRequest.self)
+        do {
+            var state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            guard let existingNode = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found: \(nodeId)", status: 404)
+            }
+
+            let surface: InternalTerminalSurfaceSnapshot
+            var action = "reuse"
+            if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !sessionId.isEmpty {
+                if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
+                   isReusableInternalSurface(existingSurface) {
+                    surface = existingSurface
+                } else {
+                    try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
+                    let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
+                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
+                    let command = resumeSessionId.map {
+                        plannerResumeCommand(for: existingNode, sessionId: $0)
+                    }
+                        ?? plannerFreshCommand(for: existingNode)
+                    let canResume = resumeSessionId != nil
+                    action = canResume ? "resume" : "recreate"
+                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
+                    let provider = AgentLaunchCommand.provider(forCommand: command)
+                    surface = try createInternalSessionSurface(
+                        provider: provider,
+                        cwd: cwd,
+                        command: command,
+                        createIfMissing: true,
+                        canvasId: canvasId,
+                        nodeId: nodeId,
+                        initialPrompt: canResume ? nil : plannerDispatchPrompt(for: existingNode, canvasId: canvasId, cwd: cwd),
+                        preferredSessionId: preferredSessionId
+                    )
+                    if canResume {
+                        _ = PlannerSessionRunStateBridge.observeBound(
+                            sessionId: surface.sessionId,
+                            status: .active
+                        )
+                    } else {
+                        _ = PlannerSessionRunStateBridge.observe(
+                            sessionId: surface.sessionId,
+                            purpose: "planner:\(nodeId)",
+                            status: .active
+                        )
+                    }
+                    BoardServer.shared.broadcastStateChanged()
+                    state = try PlannerBoardBridge.graphState(
+                        for: canvasId,
+                        snapshot: BoardLayoutStore.shared.snapshot(),
+                        actorUserId: PlannerPermission.currentActorId()
+                    )
+                }
+            } else {
+                let result = try PlannerBoardBridge.dispatchNode(
+                    nodeId: nodeId,
+                    runner: body?.runner ?? .claude,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                )
+                guard let dispatchedNode = result.graph.nodes.first(where: { $0.id == nodeId }) else {
+                    return errorResponse("not_found", "node not found after dispatch: \(nodeId)", status: 404)
+                }
+                guard let spawnRequest = try recordPlannerDispatchIntent(
+                    canvasId: canvasId,
+                    node: dispatchedNode,
+                    cwdOverride: body?.cwd,
+                    includeInitialPromptInIntent: false
+                ) else {
+                    return errorResponse("bad_request", "node runner does not create an internal session", status: 400)
+                }
+                surface = try createInternalSessionSurface(
+                    provider: spawnRequest.provider,
+                    cwd: spawnRequest.cwd,
+                    command: spawnRequest.command,
+                    createIfMissing: true,
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    initialPrompt: spawnRequest.initialPrompt
+                )
+                action = "create"
+                _ = PlannerSessionRunStateBridge.observe(
+                    sessionId: surface.sessionId,
+                    purpose: spawnRequest.purpose,
+                    status: .active
+                )
+                BoardServer.shared.broadcastStateChanged()
+                state = try PlannerBoardBridge.graphState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                )
+            }
+
+            return jsonResponse(EnsureResponse(
+                ok: true,
+                sessionId: surface.sessionId,
+                surfaceId: surface.surfaceId,
+                cwd: surface.cwd,
+                command: surface.command,
+                terminalKind: "internal",
+                action: action,
+                graph: graphEnvelope(state)
+            ), status: 201, reason: "Created")
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("spawn_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    private static func isReusableInternalSurface(_ surface: InternalTerminalSurfaceSnapshot) -> Bool {
+        surface.status == InternalTerminalLifecycle.starting.rawValue
+            || surface.status == InternalTerminalLifecycle.running.rawValue
     }
 
     static func abandonPlannerNodeSession(_ req: HttpRequest) -> HttpResponse {
@@ -1233,7 +1703,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1264,7 +1735,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1279,9 +1751,12 @@ enum BoardAPI {
         }
         struct ResumedSession: Encodable {
             let sessionId: String
+            let surfaceId: String
             let nodeIds: [String]
             let cwd: String
             let command: String
+            let terminalKind: String
+            let action: String
         }
         struct SkippedSession: Encodable {
             let sessionId: String
@@ -1325,18 +1800,48 @@ enum BoardAPI {
                     for node in nodes {
                         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
                     }
-                    let command = plannerResumeCommand(for: nodes.first, sessionId: sessionId)
-                    switch startTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: nil) {
-                    case .success:
-                        resumed.append(ResumedSession(
-                            sessionId: sessionId,
-                            nodeIds: nodes.map(\.id),
-                            cwd: cwd,
-                            command: command
-                        ))
-                    case .failed(let reason):
-                        skipped.append(SkippedSession(sessionId: sessionId, reason: reason))
+                    let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
+                    let command = resumeSessionId.map {
+                        plannerResumeCommand(for: nodes.first, sessionId: $0)
                     }
+                        ?? plannerFreshCommand(for: nodes.first)
+                    let canResume = resumeSessionId != nil
+                    let action = canResume ? "resume" : "recreate"
+                    let preferredSessionId = isProviderResumeSessionId(sessionId) || canResume ? sessionId : nil
+                    let provider = AgentLaunchCommand.provider(forCommand: command)
+                    let surface = try createInternalSessionSurface(
+                        provider: provider,
+                        cwd: cwd,
+                        command: command,
+                        createIfMissing: true,
+                        canvasId: canvasId,
+                        nodeId: nodes.first?.id,
+                        initialPrompt: canResume ? nil : nodes.first.map { plannerDispatchPrompt(for: $0, canvasId: canvasId, cwd: cwd) },
+                        preferredSessionId: preferredSessionId
+                    )
+                    if canResume {
+                        _ = PlannerSessionRunStateBridge.observeBound(
+                            sessionId: surface.sessionId,
+                            status: .active
+                        )
+                    } else {
+                        for node in nodes {
+                            _ = PlannerSessionRunStateBridge.observe(
+                                sessionId: surface.sessionId,
+                                purpose: "planner:\(node.id)",
+                                status: .active
+                            )
+                        }
+                    }
+                    resumed.append(ResumedSession(
+                        sessionId: surface.sessionId,
+                        surfaceId: surface.surfaceId,
+                        nodeIds: nodes.map(\.id),
+                        cwd: surface.cwd,
+                        command: surface.command,
+                        terminalKind: "internal",
+                        action: action
+                    ))
                 } catch {
                     skipped.append(SkippedSession(sessionId: sessionId, reason: error.localizedDescription))
                 }
@@ -1390,7 +1895,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1442,7 +1948,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1480,7 +1987,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1518,7 +2026,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1570,7 +2079,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1601,7 +2111,8 @@ enum BoardAPI {
                 activities: state.activities,
                 events: state.events,
                 artifacts: state.artifacts,
-                edges: state.edges
+                edges: state.edges,
+                integrationEntities: mockIntegrationEntitiesFor(nodes: state.nodes)
             ))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
@@ -1675,26 +2186,29 @@ enum BoardAPI {
                     let spawnRequest = try recordPlannerDispatchIntent(
                         canvasId: canvasId,
                         node: node,
-                        cwdOverride: nil
+                        cwdOverride: nil,
+                        includeInitialPromptInIntent: false
                     )
                     guard let spawnReq = spawnRequest else {
                         autoSpawnSkipped.append("\(autoNodeId): no spawn request")
                         continue
                     }
-                    switch startTerminalSession(
+                    let surface = try createInternalSessionSurface(
+                        provider: spawnReq.provider,
                         cwd: spawnReq.cwd,
                         command: spawnReq.command,
                         createIfMissing: true,
-                        termProgram: nil,
-                        createInBackground: true
-                    ) {
-                    case .success:
-                        autoSpawnStarted += 1
-                        NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) background=true")
-                    case .failed(let reason):
-                        autoSpawnFailed.append("\(autoNodeId): \(reason)")
-                        NSLog("[ENG-2][auto-spawn] failed node=\(autoNodeId) reason=\(reason)")
-                    }
+                        canvasId: canvasId,
+                        nodeId: autoNodeId,
+                        initialPrompt: spawnReq.initialPrompt
+                    )
+                    _ = PlannerSessionRunStateBridge.observe(
+                        sessionId: surface.sessionId,
+                        purpose: spawnReq.purpose,
+                        status: .active
+                    )
+                    autoSpawnStarted += 1
+                    NSLog("[ENG-2][auto-spawn] node=\(autoNodeId) cwd=\(spawnReq.cwd) surface=\(surface.surfaceId) background=true")
                 } catch {
                     autoSpawnFailed.append("\(autoNodeId): \(error.localizedDescription)")
                     NSLog("[ENG-2][auto-spawn] intent failed node=\(autoNodeId) err=\(error.localizedDescription)")
@@ -2264,6 +2778,8 @@ enum BoardAPI {
         switch err {
         case .canvasNotFound, .proposalNotFound, .runNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .monitorClearNotAllowed:
+            return errorResponse("monitor_clear_not_allowed", err.localizedDescription, status: 409)
         case .permissionDenied:
             return errorResponse("forbidden", err.localizedDescription, status: 403)
         case .proposalNotApproved,
@@ -2296,6 +2812,9 @@ enum BoardAPI {
     private struct PlannerDispatchSpawnRequest {
         let cwd: String
         let command: String
+        let provider: String
+        let purpose: String
+        let initialPrompt: String
     }
 
     /// Record the CLI spawn intent for a single dispatched node. Shared by the
@@ -2305,32 +2824,44 @@ enum BoardAPI {
     private static func recordPlannerDispatchIntent(
         canvasId: String,
         node: PlanningNode,
-        cwdOverride: String?
+        cwdOverride: String?,
+        includeInitialPromptInIntent: Bool = true
     ) throws -> PlannerDispatchSpawnRequest? {
         guard node.workflowRunState == .dispatched else { return nil }
         guard let dispatch = node.dispatch, dispatch.runner.spawnsSession else { return nil }
         let cwd = try explicitSessionCwd(cwdOverride) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
-        let command = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawCommand = command?.isEmpty == false
-            ? command!
+        let storedCommand = dispatch.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawCommand = storedCommand?.isEmpty == false
+            ? storedCommand!
             : (dispatch.runner.spawnCommand ?? "claude")
         let launch = AgentLaunchCommand.normalize(
             command: rawCommand,
             fallbackProvider: dispatch.runner.rawValue
         )
+        let command = AgentLaunchCommand.commandRequestsResume(launch.command)
+            ? AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+            : launch.command
         // Purpose is tagged with the *step* node id; the session PlanningNode
         // (created alongside the dispatch) `dependsOnNodeIds` this step, so
         // `PlannerSessionRunStateBridge` can resolve step → session.
+        let purpose = "planner:\(node.id)"
+        let initialPrompt = plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd)
         try BoardLayoutStore.shared.recordSpawnIntent(
             canvasId: canvasId,
             cwd: cwd,
-            command: launch.command,
+            command: command,
             provider: launch.provider,
-            purpose: "planner:\(node.id)",
-            initialPrompt: plannerDispatchPrompt(for: node, canvasId: canvasId, cwd: cwd),
+            purpose: purpose,
+            initialPrompt: includeInitialPromptInIntent ? initialPrompt : nil,
             layoutHint: nil
         )
-        return PlannerDispatchSpawnRequest(cwd: cwd, command: launch.command)
+        return PlannerDispatchSpawnRequest(
+            cwd: cwd,
+            command: command,
+            provider: launch.provider,
+            purpose: purpose,
+            initialPrompt: initialPrompt
+        )
     }
 
     private static func plannerDispatchPrompt(for node: PlanningNode, canvasId: String, cwd: String) -> String {
@@ -2458,7 +2989,13 @@ enum BoardAPI {
 
     private static func isPlannerSessionLive(_ sessionId: String, in sessions: [SessionDTO]) -> Bool {
         sessions.contains { session in
-            boardSession(session, matches: sessionId)
+            guard boardSession(session, matches: sessionId) else { return false }
+            if SessionStatus.from(rawString: session.status).isHistorical { return false }
+            if let surfaceStatus = session.surfaceStatus?.lowercased(),
+               surfaceStatus == "exited" || surfaceStatus == "failed" {
+                return false
+            }
+            return true
         }
     }
 
@@ -2487,11 +3024,39 @@ enum BoardAPI {
         return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
     }
 
+    private static func plannerFreshCommand(for node: PlanningNode?) -> String {
+        let rawCommand = node?.dispatch?.command?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = node?.dispatch?.runner.spawnCommand ?? AgentLaunchCommand.fullAccessCommand(forProvider: node?.dispatch?.runner.rawValue ?? "claude")
+        let launch = AgentLaunchCommand.normalize(
+            command: rawCommand?.isEmpty == false ? rawCommand! : fallback,
+            fallbackProvider: node?.dispatch?.runner.rawValue ?? "claude"
+        )
+        if AgentLaunchCommand.commandRequestsResume(launch.command) {
+            return AgentLaunchCommand.fullAccessCommand(forProvider: launch.provider)
+        }
+        return launch.command
+    }
+
+    private static func isProviderResumeSessionId(_ sessionId: String) -> Bool {
+        AgentLaunchCommand.isLikelyProviderResumeSessionId(sessionId)
+    }
+
+    private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
+        if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !mapped.isEmpty,
+           !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
+            return mapped
+        }
+        return isProviderResumeSessionId(sessionId) ? sessionId : nil
+    }
+
     private static func shellQuote(_ raw: String) -> String {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func currentBoardSessions() -> [SessionDTO] {
+        _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
         let archivedDesktopSids: Set<String> = {
             var set = Set<String>()
             for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
@@ -2502,9 +3067,17 @@ enum BoardAPI {
             }
             return set
         }()
+        let internalSessions = InternalTerminalRuntime.shared
+            .listSnapshots()
+            .filter { $0.status != "exited" && $0.status != "failed" }
+            .map(BoardDTOBuilder.internalSessionDTO)
+        let internalProviderResumeIds = Set(internalSessions.compactMap {
+            SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
             .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
-            .filter { $0.status != .dead }
+            .filter { !$0.status.isHistorical }
             .filter { session in
                 let realSid = session.id.hasPrefix("\(session.pluginId)-")
                     ? String(session.id.dropFirst("\(session.pluginId)-".count))
@@ -2512,6 +3085,13 @@ enum BoardAPI {
                 return !archivedDesktopSids.contains(realSid)
             }
             .map { BoardDTOBuilder.sessionDTO($0) }
+            .filter { !internalProviderResumeIds.contains($0.id) }
+            .filter { external in
+                !internalSessions.contains { internalSession in
+                    boardSession(internalSession, matches: external.id)
+                        || boardSession(external, matches: internalSession.id)
+                }
+            }
 
         // Desktop 的 session 生命周期是"请求级"，所以用 metadata 合成持久展示。
         let realSids: Set<String> = Set(realSessions.map { $0.id })
@@ -2521,10 +3101,24 @@ enum BoardAPI {
                 guard PluginManager.shared.isPluginEnabled("com.meee2.plugin.claude") else { return nil }
                 guard let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: cliSid),
                       !m.isArchived,
-                      !realSids.contains(cliSid) else { return nil }
+                      !realSids.contains(cliSid),
+                      !internalProviderResumeIds.contains(cliSid),
+                      !internalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
         }
-        return realSessions + syntheticDesktopSessions
+        return internalSessions + realSessions + syntheticDesktopSessions
+    }
+
+    private static func canonicalSessionKey(_ session: PluginSession) -> String {
+        canonicalSessionKey(pluginId: session.pluginId, sessionId: session.id)
+    }
+
+    private static func canonicalSessionKey(pluginId: String, sessionId: String) -> String {
+        let prefix = "\(pluginId)-"
+        let rawId = sessionId.hasPrefix(prefix)
+            ? String(sessionId.dropFirst(prefix.count))
+            : sessionId
+        return "\(pluginId)::\(rawId)"
     }
 
     private static func explicitSessionCwd(_ raw: String?) throws -> String? {
@@ -3113,6 +3707,30 @@ enum BoardAPI {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
         }
+        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+            struct ActivateInternalResponse: Encodable {
+                let ok: Bool
+                let terminalKind: String
+                let surfaceId: String
+                let sessionId: String
+            }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: Notification.Name("meee2.openBoardSession"),
+                    object: nil,
+                    userInfo: [
+                        "sessionId": surface.sessionId,
+                        "surfaceId": surface.surfaceId
+                    ]
+                )
+            }
+            return jsonResponse(ActivateInternalResponse(
+                ok: true,
+                terminalKind: "internal",
+                surfaceId: surface.surfaceId,
+                sessionId: surface.sessionId
+            ))
+        }
         if let metadataSid = resolveDesktopMetadataSid(sid) {
             ClaudeDesktopActivator.activate(sid: metadataSid)
             return jsonResponse(OkEnvelope(ok: true))
@@ -3135,6 +3753,10 @@ enum BoardAPI {
     static func closeSession(_ req: HttpRequest) -> HttpResponse {
         guard let sid = req.params[":id"] else {
             return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        if InternalTerminalRuntime.shared.close(surfaceOrSessionId: sid) {
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(CloseEnvelope(ok: true, alreadyDead: false))
         }
         // SessionStore 同时支持 full-id 和单一前缀匹配，跟 inject / activate 一致
         let resolved: SessionData? = {
@@ -3175,6 +3797,156 @@ enum BoardAPI {
     private struct CloseEnvelope: Encodable {
         let ok: Bool
         let alreadyDead: Bool
+    }
+
+    static func updateSessionControl(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let action = (json["action"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing action", status: 400)
+        }
+        let state: SessionControlState
+        switch action {
+        case "hide":
+            state = .hidden
+        case "archive":
+            state = .archived
+        case "restore":
+            state = .active
+        default:
+            return errorResponse("bad_request", "action must be hide, archive, or restore", status: 400)
+        }
+        let resolvedId = resolveSessionControlId(sid) ?? sid
+        let record = SessionControlStore.shared.setState(sessionId: resolvedId, state: state)
+        BoardServer.shared.broadcastStateChanged()
+        struct SessionControlEnvelope: Encodable {
+            let ok: Bool
+            let record: SessionControlRecord
+        }
+        return jsonResponse(SessionControlEnvelope(ok: true, record: record))
+    }
+
+    static func respondToSessionPermission(_ req: HttpRequest) -> HttpResponse {
+        guard let sid = req.params[":id"] else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req),
+              let rawDecision = (json["decision"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return errorResponse("bad_request", "missing decision", status: 400)
+        }
+        guard let session = resolvePluginSession(sid) else {
+            return errorResponse("not_found", "session not found: \(sid)", status: 404)
+        }
+        guard let event = session.urgentEvent, event.eventType == "permission", event.respond != nil else {
+            return errorResponse("no_pending_permission", "session has no pending permission request", status: 409)
+        }
+        switch rawDecision {
+        case "allow":
+            event.respond?(.allow)
+        case "deny":
+            let reason = (json["reason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            event.respond?(.deny(reason: reason?.isEmpty == true ? nil : reason))
+        default:
+            return errorResponse("bad_request", "decision must be allow or deny", status: 400)
+        }
+        BoardServer.shared.broadcastStateChanged()
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func resolveSessionControlId(_ sid: String) -> String? {
+        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+            return surface.sessionId
+        }
+        if let metadataSid = resolveDesktopMetadataSid(sid) {
+            return metadataSid
+        }
+        if let session = resolvePluginSession(sid) {
+            return inboxSessionId(for: session)
+        }
+        if let stored = SessionStore.shared.get(sid) {
+            return stored.sessionId
+        }
+        let matches = SessionStore.shared.listAll().filter { $0.sessionId.hasPrefix(sid) }
+        return matches.count == 1 ? matches[0].sessionId : nil
+    }
+
+    static func listMemoryRecords(_ req: HttpRequest) -> HttpResponse {
+        let scope = queryValue(req, name: "scope") ?? "session"
+        guard let subjectId = queryValue(req, name: "subjectId"),
+              !subjectId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        struct MemoryListEnvelope: Encodable {
+            let records: [SessionMemoryRecord]
+        }
+        return jsonResponse(MemoryListEnvelope(records: SessionMemoryStore.shared.list(scope: scope, subjectId: subjectId)))
+    }
+
+    static func createMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let scope = ((json["scope"] as? String) ?? "session").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let subjectId = (json["subjectId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !subjectId.isEmpty else {
+            return errorResponse("bad_request", "subjectId is required", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = ((json["kind"] as? String) ?? "note").trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = ((json["source"] as? String) ?? "operator").trimmingCharacters(in: .whitespacesAndNewlines)
+        let evidenceRef = (json["evidenceRef"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        let record = SessionMemoryStore.shared.create(
+            scope: scope.isEmpty ? "session" : scope,
+            subjectId: subjectId,
+            kind: kind.isEmpty ? "note" : kind,
+            content: content,
+            source: source.isEmpty ? "operator" : source,
+            evidenceRef: evidenceRef?.isEmpty == true ? nil : evidenceRef
+        )
+        return jsonResponse(MemoryEnvelope(record: record), status: 201, reason: "Created")
+    }
+
+    static func updateMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let content = (json["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !content.isEmpty else {
+            return errorResponse("bad_request", "content is required", status: 400)
+        }
+        let kind = (json["kind"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let record = SessionMemoryStore.shared.update(id: id, content: content, kind: kind) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        struct MemoryEnvelope: Encodable {
+            let record: SessionMemoryRecord
+        }
+        return jsonResponse(MemoryEnvelope(record: record))
+    }
+
+    static func deleteMemoryRecord(_ req: HttpRequest) -> HttpResponse {
+        guard let id = req.params[":id"] else {
+            return errorResponse("bad_request", "missing memory id", status: 400)
+        }
+        guard SessionMemoryStore.shared.delete(id: id) else {
+            return errorResponse("not_found", "memory record not found: \(id)", status: 404)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    private static func queryValue(_ req: HttpRequest, name: String) -> String? {
+        req.queryParams.first(where: { $0.0 == name })?.1
     }
 
     /// short-id / full-id 匹配 Claude Desktop metadata 索引。命中即说明
@@ -3268,6 +4040,19 @@ enum BoardAPI {
         }
         guard let content = json["content"] as? String, !content.isEmpty else {
             return errorResponse("bad_request", "missing or empty 'content'", status: 400)
+        }
+
+        if InternalTerminalRuntime.shared.writeInput(sessionId: sid, text: content + "\n") {
+            struct InternalInjectEnvelope: Encodable {
+                let message: MessageDTO?
+                let delivery: String?
+            }
+            BoardServer.shared.broadcastStateChanged()
+            return jsonResponse(
+                InternalInjectEnvelope(message: nil, delivery: nil),
+                status: 201,
+                reason: "Created"
+            )
         }
 
         // Desktop synthetic session（PluginManager 不知道、只剩 metadata）没法
@@ -3699,14 +4484,46 @@ enum BoardAPI {
         // 转 URL-绝对路径
         cwd = (cwd as NSString).standardizingPath
 
-        let command = AgentLaunchCommand.normalize(
+        let launch = AgentLaunchCommand.normalize(
             command: (json["command"] as? String) ?? "",
             fallbackProvider: "claude"
-        ).command
+        )
+        let command = launch.command
         let termProgram = (json["termProgram"] as? String)
         let createIfMissing = (json["createIfMissing"] as? Bool) ?? false
 
-        return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: createIfMissing, termProgram: termProgram)
+        if (json["terminalMode"] as? String)?.lowercased() == "external" {
+            return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: createIfMissing, termProgram: termProgram)
+        }
+        do {
+            let surface = try createInternalSessionSurface(
+                provider: launch.provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: createIfMissing,
+                canvasId: nil,
+                nodeId: nil,
+                initialPrompt: nil
+            )
+            struct SpawnResp: Encodable {
+                let ok: Bool
+                let cwd: String
+                let command: String
+                let sessionId: String
+                let surfaceId: String
+                let terminalKind: String
+            }
+            return jsonResponse(SpawnResp(
+                ok: true,
+                cwd: cwd,
+                command: command,
+                sessionId: surface.sessionId,
+                surfaceId: surface.surfaceId,
+                terminalKind: "internal"
+            ), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("spawn_failed", error.localizedDescription, status: 500)
+        }
     }
 
     /// POST /api/canvases/:id/sessions/spawn-global
@@ -3739,7 +4556,34 @@ enum BoardAPI {
                 initialPrompt: nil,
                 layoutHint: nil
             )
-            return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: termProgram)
+            if (json["terminalMode"] as? String)?.lowercased() == "external" {
+                return spawnTerminalSession(cwd: cwd, command: command, createIfMissing: true, termProgram: termProgram)
+            }
+            let surface = try createInternalSessionSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                createIfMissing: true,
+                canvasId: canvasId,
+                nodeId: nil,
+                initialPrompt: nil
+            )
+            struct SpawnResp: Encodable {
+                let ok: Bool
+                let cwd: String
+                let command: String
+                let sessionId: String
+                let surfaceId: String
+                let terminalKind: String
+            }
+            return jsonResponse(SpawnResp(
+                ok: true,
+                cwd: cwd,
+                command: command,
+                sessionId: surface.sessionId,
+                surfaceId: surface.surfaceId,
+                terminalKind: "internal"
+            ), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
         }
@@ -4173,7 +5017,7 @@ enum BoardAPI {
         }
         let rawKind = (json["kind"] as? String) ?? BoardLayoutStore.CanvasKind.board.rawValue
         guard let kind = BoardLayoutStore.CanvasKind(rawValue: rawKind) else {
-            return errorResponse("bad_request", "kind must be board or template", status: 400)
+            return errorResponse("bad_request", "kind must be board, monitor, template, kanban, inbox, or matrix", status: 400)
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
@@ -4264,36 +5108,120 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Canvas templates (Chunk F · Official templates / Demo canvases)
+
+    /// GET /api/templates — returns the static builtin gallery
+    /// (see `CanvasTemplateRegistry.all`). Order matches PRD priority.
+    static func listCanvasTemplates(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        let dtos = CanvasTemplateRegistry.all.map { template -> CanvasTemplateDTO in
+            CanvasTemplateDTO(
+                id: template.id,
+                name: template.name,
+                description: template.description,
+                icon: template.icon,
+                kind: template.kind.rawValue,
+                category: template.category,
+                defaultNodes: template.defaultNodes.map { spec in
+                    CanvasTemplateNodeSpecDTO(
+                        title: spec.title,
+                        description: spec.description,
+                        status: spec.status,
+                        doerId: spec.doerId,
+                        positionHint: spec.positionHint,
+                        widget: spec.widget
+                    )
+                }
+            )
+        }
+        return jsonResponse(CanvasTemplatesEnvelope(templates: dtos))
+    }
+
+    /// POST /api/templates/:id/apply — body `{ name, scope }`.
+    /// Materialize a canvas from the template, seed its default nodes, and
+    /// return the same `CanvasListEnvelope` shape as `createCanvas` so the
+    /// caller can drop the result straight into `applyCanvasList`.
+    static func applyCanvasTemplate(_ req: HttpRequest) -> HttpResponse {
+        guard let templateId = req.params[":id"] else {
+            return errorResponse("bad_request", "missing template id", status: 400)
+        }
+        guard let template = CanvasTemplateRegistry.get(templateId) else {
+            return errorResponse("not_found", "template not found: \(templateId)", status: 404)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let name = (json["name"] as? String).flatMap({ s in
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }) else {
+            return errorResponse("bad_request", "missing canvas name", status: 400)
+        }
+        let rawScope = (json["scope"] as? String) ?? "personal"
+        guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+        do {
+            // 1) Create the canvas itself with the template-declared kind.
+            let snapshot = try BoardLayoutStore.shared.createCanvas(
+                name: name,
+                scope: scope,
+                kind: template.kind
+            )
+            // 2) Resolve the freshly-created canvas (active is set by createCanvas).
+            let canvasId = snapshot.activeCanvasId
+            guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+                return errorResponse("internal", "freshly created canvas missing from snapshot", status: 500)
+            }
+            // 3) Seed nodes. We talk to PlannerStore directly through
+            //    `PlannerBoardBridge.store` — same pattern as the existing
+            //    delivery-pipeline template path in `canvasState(for:)`.
+            let ownerId = boardCanvas.ownerUserId ?? boardCanvas.createdBy ?? "local-owner"
+            let planningCanvas = PlanningCanvas(
+                id: boardCanvas.id,
+                ownerId: ownerId,
+                title: boardCanvas.name,
+                plannerContext: "canvas:\(boardCanvas.id)"
+            )
+            let seedNodes = CanvasTemplateRegistry.materializeNodes(
+                template: template,
+                canvasId: canvasId,
+                ownerId: ownerId
+            )
+            _ = try PlannerBoardBridge.store.record(for: planningCanvas, seedNodes: [])
+            _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
         let parentRefs = PlannerStore.shared.canvasParentRefs()
-        let canvases = snapshot.canvases.map {
-            let workspacePath = (try? BoardLayoutStore.shared.workspacePath(canvasId: $0.id)) ?? ""
-            let parentRef = parentRefs[$0.id]
+        let workspacePaths = BoardLayoutStore.shared.loadAllWorkspacePaths()
+        let canvases = snapshot.canvases.map { canvas -> CanvasInfoDTO in
+            let parentRef = parentRefs[canvas.id]
             return CanvasInfoDTO(
-                id: $0.id,
-                name: $0.name,
-                scope: $0.scope.rawValue,
-                kind: ($0.kind ?? .board).rawValue,
-                isDefault: $0.isDefault,
-                workspacePath: workspacePath,
+                id: canvas.id,
+                name: canvas.name,
+                scope: canvas.scope.rawValue,
+                kind: (canvas.kind ?? .board).rawValue,
+                isDefault: canvas.isDefault,
+                workspacePath: workspacePaths[canvas.id] ?? "",
                 parentCanvasId: parentRef?.parentCanvasId,
                 parentNodeId: parentRef?.parentNodeId,
-                teamId: $0.teamId,
-                ownerUserId: $0.ownerUserId ?? $0.createdBy,
-                remoteId: $0.remoteId,
-                remoteVersion: $0.remoteVersion,
-                syncStatus: $0.syncStatus,
-                dirtySince: $0.dirtySince.map(BoardDTOBuilder.iso),
-                lastSyncedAt: $0.lastSyncedAt.map(BoardDTOBuilder.iso),
-                lastRemoteUpdatedAt: $0.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
+                teamId: canvas.teamId,
+                ownerUserId: canvas.ownerUserId ?? canvas.createdBy,
+                remoteId: canvas.remoteId,
+                remoteVersion: canvas.remoteVersion,
+                syncStatus: canvas.syncStatus,
+                dirtySince: canvas.dirtySince.map(BoardDTOBuilder.iso),
+                lastSyncedAt: canvas.lastSyncedAt.map(BoardDTOBuilder.iso),
+                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
             )
         }
         let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }
-        let layouts: [String: BoardLayoutStore.Layout] = Dictionary(
-            uniqueKeysWithValues: snapshot.canvases.map { canvas in
-                (canvas.id, BoardLayoutStore.shared.load(canvasId: canvas.id))
-            }
-        )
+        let layouts: [String: BoardLayoutStore.Layout] = BoardLayoutStore.shared.loadAllLayouts()
         let memberships = snapshot.memberships.map {
             CanvasSessionMembershipDTO(
                 canvasId: $0.canvasId,

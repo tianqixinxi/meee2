@@ -162,7 +162,7 @@ enum AssistantContextBuilder {
     }
 
     private static func currentSessionSummary(context: CanvasContext) -> String {
-        let live = PluginManager.shared.sessions.filter { $0.status != .dead }
+        let live = PluginManager.shared.sessions.filter { !$0.status.isHistorical }
         guard !live.isEmpty else { return "" }
 
         let rows = live.map { session in

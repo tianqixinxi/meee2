@@ -23,7 +23,7 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
   const inFlight = useRef(false)
   const pendingRefetch = useRef(false)
   const pendingWhileHidden = useRef(false)
-  const debounceTimer = useRef<number | null>(null)
+  const burstRefetchTimer = useRef<number | null>(null)
   const hasState = useRef(false)
   // 上一次 setState 的 payload 指纹（JSON）。Claude 活跃时 WS 每秒 push 多次
   // state.changed，但绝大多数 tick 的内容没变——还是会让全 App 重渲一次。
@@ -68,7 +68,10 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
       if (pendingRefetch.current) {
         pendingRefetch.current = false
         // queue a follow-up to collapse bursts
-        debounceTimer.current = window.setTimeout(() => void refresh(), 750)
+        burstRefetchTimer.current = window.setTimeout(() => {
+          burstRefetchTimer.current = null
+          void refresh()
+        }, 160)
       }
     }
   }, [])
@@ -79,13 +82,11 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
       return
     }
     onStateChangedEvent?.()
-    if (debounceTimer.current) {
-      window.clearTimeout(debounceTimer.current)
+    if (burstRefetchTimer.current !== null) {
+      window.clearTimeout(burstRefetchTimer.current)
+      burstRefetchTimer.current = null
     }
-    debounceTimer.current = window.setTimeout(() => {
-      debounceTimer.current = null
-      void refresh()
-    }, 750)
+    void refresh()
   }, [onStateChangedEvent, refresh])
 
   useEffect(() => {
@@ -105,9 +106,9 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
     return () => {
       dispose()
       document.removeEventListener('visibilitychange', onVisible)
-      if (debounceTimer.current) {
-        window.clearTimeout(debounceTimer.current)
-        debounceTimer.current = null
+      if (burstRefetchTimer.current) {
+        window.clearTimeout(burstRefetchTimer.current)
+        burstRefetchTimer.current = null
       }
     }
   }, [onStateChangedEvent, refresh, scheduleRefresh])
@@ -119,7 +120,8 @@ export function useBoardState(onStateChangedEvent?: () => void): BoardStateHook 
  * 计算 BoardState 的内容指纹。故意排除"churny" 字段（lastActivity、
  * startedAt —— 这些每个 WS tick 都在刷新但 UI 不直接渲染它们）。
  * 只对"真变了用户才关心"的字段做比对：sessions 的 id/status/title/project/
- * currentTool/inboxPending/pendingPermissionTool/older(派生)/recentMessages、channels。
+ * terminal surface identity/lifecycle/currentTool/inboxPending/
+ * pendingPermissionTool/older(派生)/recentMessages、channels。
  *
  * `older` 改成前端从 lastActivity 派生（isOlderSession）。在 signature 里
  * 记录其布尔值，确保 1h 阈值翻越时下游 UI 能拿到 new state 触发重渲。
@@ -131,6 +133,10 @@ function signatureFor(s: BoardState): string {
       title: x.title,
       project: x.project,
       status: x.status,
+      terminalKind: x.terminalKind,
+      surfaceId: x.surfaceId,
+      surfaceStatus: x.surfaceStatus,
+      canOpenExternal: x.canOpenExternal,
       currentTool: x.currentTool,
       inboxPending: x.inboxPending,
       pendingPermissionTool: x.pendingPermissionTool,

@@ -3,6 +3,22 @@ import AppKit
 
 /// 调试数据导出器
 class DebugExporter {
+    struct ExportResult: Encodable {
+        let ok: Bool
+        let path: String
+    }
+
+    static func exportToDefaultLocation() throws -> ExportResult {
+        let dir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("debug-exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("meee2-Debug-\(timestampString()).zip")
+        try exportToZip(url)
+        NSLog("[DebugExporter] Exported to: \(url.path)")
+        return ExportResult(ok: true, path: url.path)
+    }
+
     /// 导出调试数据到 zip 文件
     static func export() {
         let panel = NSSavePanel()

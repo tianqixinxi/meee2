@@ -162,7 +162,7 @@ enum AssistantTools {
             let visibleSessionIds = Set(visibleMemberships.map { $0.sessionId })
 
             var sessions: [[String: Any]] = []
-            for s in PluginManager.shared.sessions where s.status != .dead && visibleSessionIds.contains(s.id) {
+            for s in PluginManager.shared.sessions where !s.status.isHistorical && visibleSessionIds.contains(s.id) {
                 var row: [String: Any] = [
                     "id": s.id,
                     "title": s.title,
@@ -266,7 +266,7 @@ enum AssistantTools {
         let projectFilter = args["project"] as? String
 
         var rows: [[String: Any]] = []
-        for s in PluginManager.shared.sessions where s.status != .dead {
+        for s in PluginManager.shared.sessions where !s.status.isHistorical {
             if let pf = pluginFilter, s.pluginId != pf { continue }
             if let sf = statusFilter, statusName(s.status).lowercased() != sf { continue }
             if let proj = projectFilter,
@@ -1265,7 +1265,6 @@ enum AssistantTools {
         cwd = (cwd as NSString).standardizingPath
 
         let createIfMissing = (args["createIfMissing"] as? Bool) ?? (mode == "global")
-        let termProgram = args["termProgram"] as? String
         let initialPrompt = stringValue(args["initialPrompt"])?.trimmingCharacters(in: .whitespacesAndNewlines)
         let layoutHint = parseLayoutHint(args["layoutHint"])
 
@@ -1294,7 +1293,7 @@ enum AssistantTools {
                     command: command,
                     provider: provider,
                     purpose: mode,
-                    initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil,
+                    initialPrompt: nil,
                     layoutHint: layoutHint
                 )
                 spawnIntentId = intent.id
@@ -1303,11 +1302,19 @@ enum AssistantTools {
             }
         }
 
-        let spawner = SpawnerRouter.forTerminal(termProgram)
-        let cwdFinal = cwd
-        let commandFinal = command
-        Task {
-            _ = await spawner.spawn(cwd: cwdFinal, command: commandFinal)
+        let surface: InternalTerminalSurfaceSnapshot
+        do {
+            surface = try InternalTerminalRuntime.shared.createSurface(
+                provider: provider,
+                cwd: cwd,
+                command: command,
+                canvasId: context?.canvas.id,
+                nodeId: nil,
+                initialPrompt: initialPrompt?.isEmpty == false ? initialPrompt : nil
+            )
+            BoardServer.shared.broadcastStateChanged()
+        } catch {
+            return .failure("failed to create internal terminal session: \(error.localizedDescription)")
         }
 
         return .success([
@@ -1316,9 +1323,12 @@ enum AssistantTools {
             "provider": provider,
             "cwd": cwd,
             "command": command,
+            "sessionId": surface.sessionId,
+            "surfaceId": surface.surfaceId,
+            "terminalKind": "internal",
             "canvasId": context?.canvas.id ?? "",
             "spawnIntentId": spawnIntentId,
-            "note": "Spawn dispatched. Session will appear on the current canvas once meee2 observes it."
+            "note": "Internal session created. It is managed inside meee2."
         ])
     }
 
@@ -1363,7 +1373,9 @@ enum AssistantTools {
                 return .failure("create_coordinator_session requires at least two selected sessions")
             }
 
-            let live = Dictionary(uniqueKeysWithValues: PluginManager.shared.sessions.map { ($0.id, $0) })
+            let live = Dictionary(uniqueKeysWithValues: PluginManager.shared.sessions
+                .filter { !$0.status.isHistorical }
+                .map { ($0.id, $0) })
             let missing = ids.filter { live[$0] == nil }
             guard missing.isEmpty else {
                 return .failure("selected sessions are not live: \(missing.joined(separator: ", "))")

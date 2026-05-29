@@ -75,6 +75,61 @@ export interface Meee2AgentRuntimeInstallResult {
   status: Meee2AgentRuntimeStatus
 }
 
+export type ReadinessStatus = 'pass' | 'fail' | 'warn' | 'info'
+export type ReadinessSeverity = 'required' | 'recommended' | 'informational'
+export type ReadinessOverallStatus = 'ready' | 'needsSetup' | 'broken'
+
+export interface ReadinessAction {
+  id: string
+  label: string
+  kind: string
+  command: string | null
+}
+
+export interface ReadinessCheck {
+  id: string
+  title: string
+  status: ReadinessStatus
+  severity: ReadinessSeverity
+  detail: string
+  recoveryAction: ReadinessAction | null
+  metadata: Record<string, string>
+}
+
+export interface ReadinessReport {
+  overall: ReadinessOverallStatus
+  ready: boolean
+  requiredFailed: number
+  checks: ReadinessCheck[]
+  checkedAt: string
+}
+
+export interface ReadinessRepairResult {
+  ok: boolean
+  actionId: string
+  messages: string[]
+  logs: string[]
+  report: ReadinessReport
+}
+
+export interface SessionIntakeDiagnosticItem {
+  id: string
+  severity: 'info' | 'warn' | 'error' | string
+  title: string
+  detail: string
+  sessionId: string | null
+  recoveryAction: string | null
+}
+
+export interface SessionIntakeDiagnostics {
+  ok: boolean
+  liveSessions: number
+  storedSessions: number
+  historicalSessions: number
+  items: SessionIntakeDiagnosticItem[]
+  checkedAt: string
+}
+
 export interface Session {
   id: string
   title: string
@@ -106,6 +161,11 @@ export interface Session {
   ghosttyTerminalId?: string | null
   tty?: string | null
   termProgram?: string | null
+  terminalKind?: 'internal' | 'external' | string
+  surfaceId?: string | null
+  surfaceStatus?: 'starting' | 'running' | 'exited' | 'failed' | string | null
+  canOpenExternal?: boolean
+  controlState?: 'active' | 'hidden' | 'archived' | string
   /** Session 来源：cli (`claude` 终端) / desktop (Claude.app 内置 Code agent)
    *  / cowork (Claude.app local-agent-mode VM session) / null (其他 plugin) */
   clientKind?: ClientKind | null
@@ -209,7 +269,7 @@ export interface BoardState {
 }
 
 export type CanvasScope = 'personal' | 'team'
-export type CanvasKind = 'board' | 'template'
+export type CanvasKind = 'board' | 'monitor' | 'template'
 export type SpawnProvider = 'claude' | 'codex'
 export type CanvasRelationStylePreset = 'coordination' | 'review' | 'dependency' | 'handoff' | 'group'
 export type CanvasShapeKind = 'rectangle' | 'ellipse' | 'diamond'
@@ -421,6 +481,45 @@ export interface PlannerNodeDispatch {
   fallbackRunner?: PlannerDispatchRunner | null
 }
 
+/**
+ * Artifact 在剪贴板里的位置标签(UI-simplification §3.C).
+ * 跟 status (freeform string) 互补:status 描述「这份成果完成度」,
+ * positionTag 描述「这份成果在 inspector 剪贴板里的角色」。
+ */
+export type ArtifactPositionTag =
+  | 'latest'      // 默认引用的那份(主推)
+  | 'candidate'   // 同节点的其他版本
+  | 'discarded'   // 不再考虑但留档
+  | 'promoted'    // 已被提升为独立画板节点(原 kanban item 等)
+  | 'proposed'    // agent 提议要提升,等 owner 批
+
+/**
+ * Artifact payload discriminated union(UI-simplification §3.E).
+ * 替代原来的 `payload: unknown`:用 type tag 区分,每种 payload 自带强类型字段。
+ *
+ * 现有 PlannerArtifactPayloadType('text'|'html'|'kanban'|'integration'|'json'|'file')
+ * 是「技术形态」分类;ArtifactPayload 是「语义形态」分类。两者并存:旧的
+ * payload(写到 PlannerArtifactContent.payload)保留兼容;新写入走 typed
+ * ArtifactPayload。Consumers 优先看 ArtifactPayload,缺失则 fallback 到旧 payload。
+ */
+export type ArtifactPayload =
+  | { type: 'prd';          tldr: string; sections: Array<{ heading: string; lines: number }> }
+  | { type: 'kanban';       columns: Array<{ name: string; items: string[] }> }
+  | { type: 'impl-pr';      number: number; branch: string; baseBranch: string;
+                            filesChanged: number; insertions: number; deletions: number;
+                            ciStatus: 'pass' | 'fail' | 'running';
+                            reviewers: string[] }
+  | { type: 'check-result'; pass: number; fail: number; skip: number;
+                            failing: string[] }
+  | { type: 'file';         filename: string; mime: string; sizeBytes: number;
+                            lines?: number | null }
+  | { type: 'markdown';     preview: string }
+  | { type: 'integration';  connector: string;   // 'notion' / 'slack' / 'linear' / ...
+                            externalId: string; externalUrl?: string | null;
+                            summary?: string | null }
+
+export type ArtifactPayloadType = ArtifactPayload['type']
+
 export interface PlannerArtifact {
   id: string
   canvasId: string
@@ -430,7 +529,12 @@ export interface PlannerArtifact {
   reference: string
   status: string
   createdAt: string
+  /** Legacy free-form payload(`PlannerArtifactPayloadType` 系统),保留向后兼容。新写入用 `typedPayload`。 */
   payload?: unknown
+  /** UI-simplification §3.E: 强类型 payload。Consumer 优先用这个,缺失则 fallback `payload`. */
+  typedPayload?: ArtifactPayload | null
+  /** UI-simplification §3.C: position tag for clipboard model. Defaults to 'latest' if missing. */
+  positionTag?: ArtifactPositionTag
 }
 
 export type PlannerArtifactPayloadType = 'text' | 'html' | 'kanban' | 'integration' | 'json' | 'file'
@@ -645,6 +749,101 @@ export interface NodeContractV2 {
   output: NodeContractOutput
 }
 
+/* ---------- Node Contract v2 · external input source (chunk I) ----------
+ *
+ * Distinct from `NodeContractExternalInput` above which is the post-fetch
+ * *snapshot* shape stored on a node version. The discriminated union below
+ * is the *proposal-level* declaration of an external input source — its
+ * Zod twin lives in `meee2-online/src/planner-runtime/contract/proposal.ts`
+ * (`NodeContractExternalInput`). Swift twin: `NodeContractExternalInputSource`
+ * in PlannerCore.swift. PRD: `doc/prd/integration.md` §5.
+ */
+export type NodeContractExternalInputSyncPolicy = 'poll' | 'webhook' | 'manual'
+
+export interface NodeContractExternalInputSourceURL {
+  kind: 'url'
+  url: string
+  refreshSeconds?: number
+}
+
+export interface NodeContractExternalInputSourceIntegration {
+  kind: 'integration'
+  /** Matches `IntegrationViewSchema.integrationId`. */
+  integrationId: string
+  /** Matches `IntegrationViewSchema.entityKind`. */
+  entityKind: string
+  /** Integration-specific stable reference (e.g. `owner/repo#123`). */
+  entityRef: string
+  /** Defaults to `'poll'` server-side. */
+  syncPolicy: NodeContractExternalInputSyncPolicy
+  /** Defaults to `60` server-side. */
+  pollSeconds: number
+}
+
+export type NodeContractExternalInputSource =
+  | NodeContractExternalInputSourceURL
+  | NodeContractExternalInputSourceIntegration
+
+/* ---------- Integration view-schema (chunk I) ----------
+ *
+ * Zod twin: `meee2-online/src/planner-runtime/contract/integration-view.ts`.
+ * Swift twin: `IntegrationViewSchema` in PlannerCore.swift.
+ * Per-(integration, entityKind) literals: `src/integrations/viewSchemas/`.
+ */
+export type IntegrationBadgeStatus = 'todo' | 'running' | 'awaiting' | 'blocked' | 'done'
+export type IntegrationPreviewDetailKind = 'text' | 'link' | 'code' | 'diff' | 'image'
+export type IntegrationAffordanceKind = 'link' | 'mcp_call' | 'shell' | 'copy'
+
+export interface IntegrationBadge {
+  title: string
+  secondary?: string
+  status: IntegrationBadgeStatus
+  icon: string
+  accentColor?: string
+}
+
+export interface IntegrationPreviewDetail {
+  label: string
+  value: string
+  kind: IntegrationPreviewDetailKind
+}
+
+export interface IntegrationPreview {
+  summary: string
+  details: IntegrationPreviewDetail[]
+  sourceUrl?: string
+  lastSyncedAt?: string
+}
+
+export interface IntegrationAffordance {
+  id: string
+  label: string
+  kind: IntegrationAffordanceKind
+  payload: unknown
+}
+
+export interface IntegrationViewSchema {
+  integrationId: string
+  entityKind: string
+  badge: IntegrationBadge
+  preview: IntegrationPreview
+  affordances: IntegrationAffordance[]
+}
+
+/**
+ * A concrete external entity rendered on a canvas (chunk I v0.1).
+ *
+ * `schemaId` follows the `<integrationId>:<entityKind>` convention used by
+ * `getViewSchema()`. `payload` is integration-specific — the renderer reads
+ * it through the matching view-schema to extract title / status / preview
+ * details. v0.1 the canvas just consumes the badge for placement; richer
+ * preview rendering comes in a later wave.
+ */
+export interface IntegrationEntity {
+  schemaId: string
+  payload: unknown
+}
+
 export interface PlannerOutputRoute {
   target: string
   targetNodeId?: string | null
@@ -659,15 +858,64 @@ export interface PlannerNodeOutputResult {
   hint?: string | null
 }
 
+/**
+ * Team-ready handoff policy (release-plan-qc #5 chunk B). Mirror of Zod
+ * `HandoffPolicy` in meee2-online/src/planner-runtime/contract/proposal.ts.
+ */
+export type HandoffPolicy =
+  | 'none'
+  | 'reviewer-must-approve'
+  | 'any-approver'
+  | 'all-approvers'
+
+/**
+ * Node-level widget (2026-05-28 心智修正).
+ *
+ * Twin of Zod `meee2-online/src/planner-runtime/contract/widget.ts`.
+ * Absence on PlanningNode = default `standard` view (title + assignee + run
+ * state). Presence = render as the declared kind, backed by `source` (with
+ * optional `mapping` overrides on top of integration view-schema defaults).
+ */
+export type WidgetKind = 'kanban' | 'inbox' | 'matrix' | 'badge' | 'artifact-preview'
+export type WidgetSourceKind = 'external' | 'upstream' | 'subcanvas-aggregate'
+export interface WidgetSource {
+  inputKind: WidgetSourceKind
+  inputIndex: number
+  /** Only used when `inputKind === 'subcanvas-aggregate'`. */
+  subcanvasIds?: string[]
+}
+export interface WidgetMapping {
+  statusField?: string
+  titleField?: string
+  subtitleField?: string
+  sortField?: string
+  rowGroupField?: string
+  colGroupField?: string
+}
+export interface Widget {
+  kind: WidgetKind
+  source?: WidgetSource
+  mapping?: WidgetMapping
+}
+
 export interface PlanningNode {
   id: string
   canvasId: string
   title: string
+  /** 1-2 line description shown on the canvas node card under the title.
+   *  Optional; UI hides the line when empty. UI-simplification §2.6/§3.1. */
+  desc?: string | null
   schema: NodeSchema
   contextSources: ContextSource[]
   executionMode: ExecutionMode
   executorType: ExecutorType
   doerId: string
+  /** Team-ready (#5): reviewer user ids. Default `[]`. See `handoffPolicy`. */
+  reviewerIds: string[]
+  /** Team-ready (#5): approver user ids. Default `[]`. See `handoffPolicy`. */
+  approverIds: string[]
+  /** Team-ready (#5): how reviewer/approver signals gate hand-off. Default `'none'`. */
+  handoffPolicy: HandoffPolicy
   status: PlanningNodeStatus
   sessionId?: string | null
   chatThreadId?: string | null
@@ -692,6 +940,12 @@ export interface PlanningNode {
    * with no actionable workflow state.
    */
   nextAction?: string | null
+  /**
+   * Node-level view widget (2026-05-28). Absent = standard view (title +
+   * assignee + run state). Present = render as kanban / inbox / matrix /
+   * badge / artifact-preview backed by widget.source. See `Widget` above.
+   */
+  widget?: Widget | null
 }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
@@ -711,6 +965,8 @@ export interface PlanChange {
   node?: PlanningNode | null
   nodeId?: string | null
   title?: string | null
+  /** UI-simplification §3.1: proposals can attach a new 1-2 line desc to a node. */
+  desc?: string | null
   status?: PlanningNodeStatus | null
   schema?: NodeSchema | null
   contextSources?: ContextSource[] | null
@@ -736,6 +992,14 @@ export interface PlanChange {
    * lightweight `updateNode` proposal that touches only `doerId`.
    */
   doerId?: string | null
+  /** Team-ready (#5): proposal-driven update of `PlanningNode.reviewerIds`. */
+  reviewerIds?: string[] | null
+  /** Team-ready (#5): proposal-driven update of `PlanningNode.approverIds`. */
+  approverIds?: string[] | null
+  /** Team-ready (#5): proposal-driven update of `PlanningNode.handoffPolicy`. */
+  handoffPolicy?: HandoffPolicy | null
+  /** Node-widget (2026-05-28): proposal-driven update of `PlanningNode.widget`. */
+  widget?: Widget | null
   artifact?: PlanArtifactDraft | null
 }
 
@@ -775,6 +1039,7 @@ export interface PlannerMonitorItem {
   needsOwnerReview: boolean
   doerId?: string | null
   riskRank: number
+  evidenceCount?: number
   /**
    * Derived workflow-guidance line for `node`-kind items (Phase 6). Absent
    * for proposal items or nodes with no actionable workflow state.
@@ -815,6 +1080,13 @@ export interface PlannerCanvasState {
 export type PlannerGraphState = PlannerCanvasState & {
   artifacts: PlannerArtifact[]
   edges: PlannerGraphEdge[]
+  /**
+   * Integration entity pool (P3.0). Backend provides entities for nodes that
+   * have a widget with `source.inputKind === 'external'`. Widget resolver
+   * filters by node-specific binding (v0.1: all nodes share the same pool).
+   * v0.1 backend mocks 5 GitHub PRs; phase 3 swaps to real fetch.
+   */
+  integrationEntities?: IntegrationEntity[]
 }
 
 // -- P1/P3: Workflow Run layer --------------------------------------------

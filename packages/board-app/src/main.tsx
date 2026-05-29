@@ -6,7 +6,7 @@ import { ThemeProvider } from './lib/theme'
 import '@xyflow/react/dist/style.css'
 import './styles.css'
 
-if (navigator.userAgent.includes('meee2-board-shell')) {
+if (typeof navigator !== 'undefined' && navigator.userAgent.includes('meee2-board-shell')) {
   document.documentElement.classList.add('meee2-board-shell')
 }
 

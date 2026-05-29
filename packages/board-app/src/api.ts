@@ -7,6 +7,9 @@ import type {
   Meee2MCPStatus,
   Meee2AgentRuntimeInstallResult,
   Meee2AgentRuntimeStatus,
+  ReadinessRepairResult,
+  ReadinessReport,
+  SessionIntakeDiagnostics,
   CanvasList,
   CanvasScope,
   SelectedCanvasElementContext,
@@ -41,6 +44,14 @@ import type {
   OwnedCanvasSummary,
 } from './types'
 
+declare global {
+  interface Window {
+    webkit?: {
+      messageHandlers?: Record<string, { postMessage: (payload: unknown) => void } | undefined>
+    }
+  }
+}
+
 /** Uniform error thrown by the API helpers. */
 export class ApiRequestError extends Error {
   code: string
@@ -64,7 +75,7 @@ let demoCanvasRecords: Record<string, CanvasList['canvases'][number]> = {
     id: DEMO_CANVAS_ID,
     name: 'meee2 AI Demo',
     scope: 'personal',
-    kind: 'board',
+    kind: 'monitor',
     isDefault: true,
     workspacePath: '/demo/planner',
     ownerUserId: DEMO_OWNER_ID,
@@ -193,6 +204,9 @@ function demoNode(input: {
     executionMode: input.executionMode,
     executorType: input.executorType,
     doerId: input.executorType === 'human' ? DEMO_OWNER_ID : `agent-${input.executorType}`,
+    reviewerIds: [],
+    approverIds: [],
+    handoffPolicy: 'none',
     status: input.status,
     sessionId: input.sessionId ?? null,
     chatThreadId: input.sessionId ? `${input.sessionId}-thread` : null,
@@ -413,6 +427,10 @@ export function fetchState(): Promise<BoardState> {
   return jsonRequest<BoardState>('/api/state')
 }
 
+export function fetchSessionIntakeDiagnostics(): Promise<SessionIntakeDiagnostics> {
+  return jsonRequest<SessionIntakeDiagnostics>('/api/sessions/intake-diagnostics')
+}
+
 export function fetchMeee2MCPStatus(): Promise<Meee2MCPStatus> {
   if (PLANNER_DEMO_MODE) {
     return Promise.resolve({
@@ -441,6 +459,17 @@ export function installMeee2AgentRuntime(target: 'claude' | 'codex' | 'all'): Pr
   return jsonRequest<Meee2AgentRuntimeInstallResult>('/api/system/meee2-agent-runtime-install', {
     method: 'POST',
     body: JSON.stringify({ target }),
+  })
+}
+
+export function fetchReadiness(): Promise<ReadinessReport> {
+  return jsonRequest<ReadinessReport>('/api/system/readiness')
+}
+
+export function repairReadiness(actionId: string): Promise<ReadinessRepairResult> {
+  return jsonRequest<ReadinessRepairResult>('/api/system/readiness/repair', {
+    method: 'POST',
+    body: JSON.stringify({ actionId }),
   })
 }
 
@@ -587,18 +616,139 @@ export function resolveCanvasConflict(
   })
 }
 
+// ─── Canvas templates (Chunk F · Official templates / Demo canvases) ───
+
+export interface CanvasTemplateNodeSpec {
+  title: string
+  description?: string | null
+  status: string
+  doerId?: string | null
+  positionHint?: Record<string, number> | null
+}
+
+export interface CanvasTemplate {
+  id: string
+  name: string
+  description: string
+  icon: string
+  /**
+   * Mirrors `BoardLayoutStore.CanvasKind` raw values. Always present in the
+   * server response (unlike `CanvasInfo.kind` which can be missing on legacy
+   * canvases), so we declare it non-optional here.
+   */
+  kind: NonNullable<CanvasList['canvases'][number]['kind']>
+  /** 'engineering' / 'team' / 'demo' (free-form for future categories). */
+  category: string
+  defaultNodes: CanvasTemplateNodeSpec[]
+}
+
+export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
+  return jsonRequest<{ templates: CanvasTemplate[] }>('/api/templates').then(
+    (envelope) => envelope.templates,
+  )
+}
+
+export function applyCanvasTemplate(
+  id: string,
+  input: { name: string; scope: CanvasScope },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function spawnGlobalSession(
   canvasId: string,
   provider: SpawnProvider,
   cwd?: string,
-): Promise<{ ok: boolean; cwd: string; command: string }> {
-  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+): Promise<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }>(
     `/api/canvases/${encodeURIComponent(canvasId)}/sessions/spawn-global`,
     {
       method: 'POST',
       body: JSON.stringify({ provider, cwd }),
     },
   )
+}
+
+export interface SessionSurface {
+  surfaceId: string
+  sessionId: string
+  provider: 'claude' | 'codex' | string
+  title: string
+  cwd: string
+  command: string
+  canvasId?: string | null
+  nodeId?: string | null
+  status: 'starting' | 'running' | 'exited' | 'failed' | string
+  pid?: number | null
+  exitCode?: number | null
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export function listSessionSurfaces(): Promise<SessionSurface[]> {
+  return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
+}
+
+export function closeSessionSurface(id: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`/api/session-surfaces/${encodeURIComponent(id)}/close`, {
+    method: 'POST',
+  })
+}
+
+export interface NativeTerminalRect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export function openNativeTerminalSurface(input: {
+  surfaceId?: string
+  sessionId?: string
+  rect?: NativeTerminalRect
+  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | 'prewarm'
+  traceId?: string
+  clickStartedAtMs?: number
+  sentAtMs?: number
+  webPhase?: string
+}): boolean {
+  const bridge = window.webkit?.messageHandlers?.meee2NativeTerminal
+  if (!bridge) return false
+  bridge.postMessage({
+    type: input.type ?? 'attach',
+    surfaceId: input.surfaceId,
+    sessionId: input.sessionId,
+    rect: input.rect,
+    traceId: input.traceId,
+    clickStartedAtMs: input.clickStartedAtMs,
+    sentAtMs: input.sentAtMs,
+    webPhase: input.webPhase,
+  })
+  return true
+}
+
+export interface NativeTerminalPrewarmAck {
+  surfaceId?: string
+  sessionId?: string
+  ready?: boolean
+  cacheHit?: boolean
+  reason?: string
+}
+
+export interface NativeTerminalSyncAck {
+  type?: 'attach' | 'layout' | 'hide' | 'detach' | 'focus' | string
+  surfaceId?: string
+  sessionId?: string
+  ok?: boolean
+  reason?: string
+  traceId?: string
+  cacheHit?: boolean
+  activeChanged?: boolean
+  nativeAtMs?: number
 }
 
 // -- planner ---------------------------------------------------------------
@@ -910,6 +1060,34 @@ export function dispatchPlannerNodeSession(
   )
 }
 
+export interface PlannerNodeInternalSessionResult {
+  ok: boolean
+  sessionId: string
+  surfaceId: string
+  cwd: string
+  command: string
+  terminalKind: 'internal' | string
+  action?: 'reuse' | 'create' | 'resume' | 'recreate' | string
+  graph: PlannerGraphState
+}
+
+export function ensurePlannerNodeInternalSession(
+  canvasId: string,
+  nodeId: string,
+  input?: {
+    runner?: PlannerDispatchRunner
+    cwd?: string
+  },
+): Promise<PlannerNodeInternalSessionResult> {
+  return jsonRequest<PlannerNodeInternalSessionResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/internal-session`,
+    {
+      method: 'POST',
+      body: JSON.stringify(input ?? {}),
+    },
+  )
+}
+
 export function updatePlannerNodeGate(
   canvasId: string,
   nodeId: string,
@@ -952,9 +1130,12 @@ export function detachPlannerNodeSession(
 
 export interface ResumeClosedPlannerSessionResult {
   sessionId: string
+  surfaceId: string
   nodeIds: string[]
   cwd: string
   command: string
+  terminalKind: 'internal' | string
+  action?: 'resume' | 'recreate' | string
 }
 
 export interface ResumeClosedPlannerSessionsResponse {
@@ -1919,16 +2100,17 @@ export async function dropMessage(id: string): Promise<Message> {
 }
 
 /**
- * Spawn 一个新 Claude CLI session：按 cwd 打开一个新的 Ghostty 窗口，里面自动
- * 跑 `claude`（沿用本地 `~/.claude/` 的 OAuth，无需重新登录）。
+ * Spawn 一个新 CLI session。默认创建 meee2 内置终端；传
+ * `terminalMode: "external"` 时保留旧的外部终端行为。
  */
 export async function spawnSession(input: {
   cwd: string
   command?: string
   createIfMissing?: boolean
   termProgram?: string
-}): Promise<{ ok: boolean; cwd: string; command: string }> {
-  return jsonRequest<{ ok: boolean; cwd: string; command: string }>(
+  terminalMode?: 'internal' | 'external'
+}): Promise<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }> {
+  return jsonRequest<{ ok: boolean; cwd: string; command: string; sessionId?: string; surfaceId?: string; terminalKind?: string }>(
     '/api/sessions/spawn',
     {
       method: 'POST',
@@ -2133,6 +2315,18 @@ export interface InjectResult {
   delivery: 'queued_until_next_turn' | null
 }
 
+export interface SessionMemoryRecord {
+  id: string
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind: string
+  content: string
+  source: string
+  evidenceRef: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export async function injectToSession(
   id: string,
   content: string,
@@ -2213,6 +2407,107 @@ export async function pushToDesktopNow(
   }
 }
 
+export async function updateSessionControl(
+  id: string,
+  action: 'hide' | 'archive' | 'restore',
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/control`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  })
+}
+
+export async function respondToSessionPermission(
+  id: string,
+  decision: 'allow' | 'deny',
+  reason?: string,
+): Promise<void> {
+  await jsonRequest(`/api/sessions/${encodeURIComponent(id)}/permission`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  })
+}
+
+export async function fetchMemoryRecords(
+  scope: 'session' | 'canvas' | 'node' | string,
+  subjectId: string,
+): Promise<SessionMemoryRecord[]> {
+  const params = new URLSearchParams({ scope, subjectId })
+  const response = await jsonRequest<{ records: SessionMemoryRecord[] }>(`/api/memory?${params.toString()}`)
+  return response.records
+}
+
+export async function createMemoryRecord(input: {
+  scope: 'session' | 'canvas' | 'node' | string
+  subjectId: string
+  kind?: string
+  content: string
+  source?: string
+  evidenceRef?: string | null
+}): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>('/api/memory', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function updateMemoryRecord(
+  id: string,
+  input: { content: string; kind?: string },
+): Promise<SessionMemoryRecord> {
+  const response = await jsonRequest<{ record: SessionMemoryRecord }>(`/api/memory/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+  return response.record
+}
+
+export async function deleteMemoryRecord(id: string): Promise<void> {
+  await jsonRequest(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function exportDebugBundle(): Promise<{ ok: boolean; path: string }> {
+  return jsonRequest<{ ok: boolean; path: string }>('/api/system/debug-export', { method: 'POST' })
+}
+
+// ---- Privacy: storage stats + delete local data --------------------------
+
+export interface StorageStats {
+  root: string
+  canvases: number
+  sessions: number
+  runbooks: number
+  total: number
+}
+
+export interface DeleteConfirmToken {
+  token: string
+  issuedAt: string
+  expiresAt: string
+}
+
+export interface DeleteLocalDataResult {
+  ok: boolean
+  removedBytes: number
+  removedPaths: string[]
+}
+
+export async function fetchStorageStats(): Promise<StorageStats> {
+  return jsonRequest<StorageStats>('/api/system/storage-stats')
+}
+
+export async function requestDeleteLocalDataToken(): Promise<DeleteConfirmToken> {
+  return jsonRequest<DeleteConfirmToken>('/api/system/delete-local-data/token', { method: 'POST' })
+}
+
+export async function deleteLocalData(token: string): Promise<DeleteLocalDataResult> {
+  return jsonRequest<DeleteLocalDataResult>('/api/system/delete-local-data', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
+}
+
 /// 让用户跳到 macOS System Settings → Privacy & Security → Accessibility，
 /// 给 meee2 授权 keystroke。配合 push-now 失败时 errorCode='accessibility_denied'
 /// 的 toast 一起用。
@@ -2273,10 +2568,18 @@ function fileToBase64(file: File): Promise<string> {
 export async function activateSession(id: string): Promise<boolean> {
   // console.log('[activateSession] POST /api/sessions/' + id.slice(0, 8) + '/activate')
   try {
-    await jsonRequest<{ ok: boolean }>(
+    const response = await jsonRequest<{ ok: boolean; terminalKind?: string; surfaceId?: string; sessionId?: string }>(
       `/api/sessions/${encodeURIComponent(id)}/activate`,
       { method: 'POST' },
     )
+    if (response.terminalKind === 'internal' && response.surfaceId) {
+      window.dispatchEvent(new CustomEvent('meee2:open-session', {
+        detail: {
+          sessionId: response.sessionId ?? id,
+          surfaceId: response.surfaceId,
+        },
+      }))
+    }
     // console.log('[activateSession] OK for', id.slice(0, 8))
     return true
   } catch (e) {

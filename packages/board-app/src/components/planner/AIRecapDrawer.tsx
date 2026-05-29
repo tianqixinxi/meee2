@@ -44,6 +44,11 @@ import { activateSession, fetchRecentArtifactVersions, type ArtifactVersionSumma
 import './planner.css'
 
 interface Props {
+  /**
+   * UI-simplification §4.3: drawer is always-mounted, collapsed/expanded toggled
+   * by clicking the header. `open` retained for back-compat with CanvasToolbar
+   * but now treated as "expanded" — false collapses to a 44px header bar.
+   */
   open: boolean
   onClose: () => void
   canvasId: string
@@ -174,6 +179,13 @@ export function AIRecapDrawer({
     handleJump(item.nodeId)
   }
 
+  // UI-simplification §4.3 revisit:retain modal-style opt-in mount.
+  // Earlier change(218245b) made the drawer always-mounted but the real
+  // canvas has other absolute-positioned banners(canvas-toolbar /
+  // PreviewOverlay / RecapRefreshing toast)at the same top-left coord with
+  // z-index 260+ — multiple floats overlap and the page becomes unreadable.
+  // Keep open/close behavior; the canvas summary section is still surfaced
+  // here(see below)— users see it the moment they open the drawer.
   if (!open) return null
 
   return (
@@ -192,6 +204,14 @@ export function AIRecapDrawer({
           <X size={14} aria-hidden />
         </button>
       </header>
+
+      {/* Canvas summary 段已移除 —— CanvasToolbar 的 preview recap 卡片(parseRecapJSON
+       *  + headline/details/formatRecapAge,见 CanvasToolbar.tsx ~line 820)已经在被动
+       *  展示同样信息(headline + details + 「刚刚」时间戳)。
+       *  把 summary 也塞进 drawer 顶部等于两套 recap overlay 重叠。
+       *  Spec §4.3 的「每 5min BYOA narrative」是数据源升级,不需要 UI 新位置 —— 等
+       *  /api/v1/canvas/:id/recap-summary endpoint 落地后,直接喂给现有 toolbar banner 即可。
+       *  drawer 里仍提供 Needs attention + Activity 的细节聚合(下方两段)。 */}
 
       {/* ── Top: pinned event highlights ─────────────────────────────── */}
       <section className="ai-recap-drawer__section ai-recap-drawer__highlights">
