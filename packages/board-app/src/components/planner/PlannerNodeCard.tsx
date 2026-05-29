@@ -586,10 +586,11 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
        *  blockers 全部下沉到 inspector(进展/成果/足迹三段);schedule/gate 信息已折入 mode badge。
        *  详情、re-run、mark-down 通过点击节点打开 inspector 操作。 */}
 
-      {/* UI-simplification §3.1 — 「成果」行:有 artifact 时显示主推 artifact + 展开按钮。
-       *  点击 [展开] 暂时打开 inspector 的 成果·剪贴板 段(Wave 4 计划把它升级为
-       *  在 canvas 上 spawn 一个数据节点 capsule,按 typedPayload 渲染) */}
-      {nodeKind === 'step' && !data.virtual && data.artifacts && data.artifacts.length > 0 && (
+      {/* UI-simplification §3.1 / PR3 — 「成果」行:step / session 节点有 artifact
+       *  时显示主推 artifact + 「查看输出」按钮。点击打开 inspector,artifact 区域
+       *  会渲染完整剪贴板。session 节点也走出口口径,跟 step 路径一致(都属于
+       *  「会产出 artifact 的节点」)。 */}
+      {(nodeKind === 'step' || nodeKind === 'session') && !data.virtual && data.artifacts && data.artifacts.length > 0 && (
         <div className="planner-node__output-row">
           <span className="planner-node__output-label">
             <ArrowUpRight size={11} aria-hidden /> 成果
@@ -599,15 +600,15 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           </span>
           <button
             type="button"
-            className="planner-node__output-expand nodrag"
+            className="planner-node__view-output-btn nodrag"
             onClick={(event) => {
               event.stopPropagation()
               data.onOpenDetails?.(node.id)
             }}
             onPointerDown={(event) => event.stopPropagation()}
-            title="展开 — 打开 inspector 看完整剪贴板"
+            title="查看输出 — 打开 inspector 看完整产物"
           >
-            展开 ⊞
+            查看输出
           </button>
         </div>
       )}

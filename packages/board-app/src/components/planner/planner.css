@@ -2307,6 +2307,22 @@
   border-color: rgba(204, 120, 92, 0.32);
 }
 
+/* PR3 — 「查看输出」按钮:跟 output-expand 同形态,subtle secondary action,
+ *  不跟 primary spawn / open 按钮抢注意力。 */
+.planner-node__view-output-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 4px;
+  background: rgba(168, 165, 155, 0.08);
+  border: 1px solid rgba(168, 165, 155, 0.22);
+  color: var(--text); font-size: 10.5px; cursor: pointer; font-family: inherit;
+  white-space: nowrap;
+}
+.planner-node__view-output-btn:hover {
+  background: rgba(204, 120, 92, 0.10);
+  border-color: rgba(204, 120, 92, 0.32);
+  color: var(--accent);
+}
+
 .planner-node__responsible {
   display: flex;
   align-items: center;
