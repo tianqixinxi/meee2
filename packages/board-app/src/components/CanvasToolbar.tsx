@@ -568,14 +568,6 @@ export function CanvasToolbar({
             <div className="canvas-toolbar__hover-recap-title">{displayCanvasName(hovered)}</div>
             {cached ? (
               <>
-                {cached.headline && (
-                  <div className="canvas-toolbar__hover-recap-headline">{cached.headline}</div>
-                )}
-                {cached.details && cached.details.length > 0 && (
-                  <ul className="canvas-toolbar__hover-recap-details">
-                    {cached.details.slice(0, 4).map((d, i) => <li key={i}>{d}</li>)}
-                  </ul>
-                )}
                 {cached.updatedAt && (
                   <div className="canvas-toolbar__hover-recap-meta" data-mode={cached.mode}>
                     {formatRecapAge(cached.updatedAt, Date.now())}
