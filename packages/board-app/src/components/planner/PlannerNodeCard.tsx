@@ -345,7 +345,9 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
     workflowRunState: node.workflowRunState ?? null,
     responsibleLabel: data.responsibleLabel,
     nodeKind,
+    status: designStatus,
     blockers,
+    canChangeStatus: Boolean(data.canChangeStatus),
     canCreateSession: Boolean(data.canChangeStatus && data.onCreateSession),
     creatingSession: Boolean(data.creatingSession),
   })
@@ -548,14 +550,17 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
                   data.onOpenSubCanvas?.(node.subCanvasId)
                 } else if (primaryAction === 'create-session') {
                   data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
+                } else if (primaryAction === 'spawn-session') {
+                  // alpha (2026-05-29) — 「开干」按钮:design 态 ready 节点直接 spawn session。
+                  data.onCreateSession?.(node.id, dispatchRunnerForNode(node.executorType))
                 } else if (primaryAction === 'open-session' && sessionId) {
                   data.onOpenSession?.(sessionId, node.id)
                 } else {
                   data.onOpenDetails?.(node.id)
                 }
               }}
-              aria-label={`${primaryActionText} for ${node.title}`}
-              title={primaryActionText}
+              aria-label={`${primaryActionText} · ${node.title}`}
+              title={`${primaryActionText} · ${node.title}`}
             >
               {primaryActionText}
             </button>

@@ -94,6 +94,7 @@ export type PrimaryAction =
   | 'create-session'
   | 'creating-session'
   | 'open-session'
+  | 'spawn-session'
   | 'view-output'
   | 'resolve'
   | 'open'
@@ -105,6 +106,7 @@ export const PRIMARY_ACTION_TEXT: Record<Exclude<PrimaryAction, 'none'>, string>
   'create-session': '开新会话',
   'creating-session': '创建中…',
   'open-session': '打开会话',
+  'spawn-session': '开干',
   'view-output': '查看成果',
   resolve: '去处理',
   open: '打开',
@@ -120,7 +122,9 @@ export function primaryActionLabel(input: {
   sessionId: string | null
   responsibleLabel?: string
   nodeKind: string
+  status?: string
   blockers: string[]
+  canChangeStatus?: boolean
   canCreateSession: boolean
   creatingSession: boolean
 }): PrimaryAction {
@@ -129,10 +133,24 @@ export function primaryActionLabel(input: {
   // 用户点节点开 inspector,在 进展 hover 出 session detail。
   if (input.mode === 'design') {
     if (input.nodeKind === 'subCanvas') return 'open-sub-canvas'
-    if (input.nodeKind === 'step') {
-      if (input.sessionId) return 'none'
+    // alpha (2026-05-29) — 「开干」按钮:design 态 ready 节点(step 或 session),
+    // 没有 session 且具备创建权限时,直接 spawn session。这条路径合并了原
+    // step 分支的 create-session 语义,并补上 session 节点的 spawn 入口
+    // (之前 session nodeKind 走 fall-through 返回 'none',用户无从启动)。
+    if (input.nodeKind === 'step' || input.nodeKind === 'session') {
       if (input.creatingSession) return 'creating-session'
-      return input.canCreateSession ? 'create-session' : 'none'
+      if (input.sessionId) return 'none'
+      if (
+        input.status === 'ready'
+        && input.canChangeStatus
+        && input.canCreateSession
+      ) {
+        return 'spawn-session'
+      }
+      if (input.nodeKind === 'step') {
+        return input.canCreateSession ? 'create-session' : 'none'
+      }
+      return 'none'
     }
     return 'none'
   }
