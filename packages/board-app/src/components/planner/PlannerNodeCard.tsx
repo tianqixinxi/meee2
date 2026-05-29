@@ -10,12 +10,15 @@ import {
   Code2,
   FileText,
   History,
+  Layers,
+  Link2,
   Lock,
   MessageCircle,
   PlayCircle,
   Plug,
   Route,
   Signpost,
+  SquareCheckBig,
   Trash2,
   UserPlus,
   UserRound,
@@ -29,6 +32,7 @@ import type {
   PlannerDispatchRunner,
   PlannerWorkflowRunState,
   PlanningNode,
+  PlanningNodeKind,
   PlanningNodeStatus,
   RunNextAction,
 } from '../../types'
@@ -365,6 +369,19 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
       <div className="planner-node__header">
+        {/* nodeKind 视觉分辨 (2026-05-28) — 让用户一眼看出 artifact 是数据 /
+            session 是 AI 会话 / step 是动作 / external 是外部引用 / subCanvas
+            是子画板。配 CSS .planner-node--kind-* 的边色调一起做完整视觉。 */}
+        {!data.virtual && (
+          <span
+            className="planner-node__kind-tag"
+            title={NODE_KIND_LABEL[nodeKind]}
+            aria-label={`节点类型 ${NODE_KIND_LABEL[nodeKind]}`}
+          >
+            <NodeKindIcon kind={nodeKind} size={11} />
+            <em>{NODE_KIND_LABEL[nodeKind]}</em>
+          </span>
+        )}
         {!isRunMode && nodeKind === 'step' && data.canChangeStatus ? (
           <label
             className="planner-node__status-select nodrag"
@@ -626,6 +643,42 @@ function ArtifactIcon({ kind, size }: { kind: CanvasArtifactKind; size: number }
   if (kind === 'kanban') return <Route size={size} aria-hidden />
   if (kind === 'json' || kind === 'file') return <Code2 size={size} aria-hidden />
   return <FileText size={size} aria-hidden />
+}
+
+/**
+ * nodeKind 视觉分辨 icon (2026-05-28) —— 卡片左上角小 icon,让 artifact /
+ * session / step / external / subCanvas 在画板上一眼区分。
+ *
+ * Map:
+ *   step       → SquareCheckBig (动作 / 流程)
+ *   session    → MessageCircle  (AI session / 对话)
+ *   artifact   → FileText       (数据 / 产物)
+ *   subCanvas  → Layers         (下钻 / 嵌套)
+ *   external   → Link2          (外部引用)
+ */
+function NodeKindIcon({ kind, size = 12 }: { kind: PlanningNodeKind; size?: number }) {
+  const props = { size, 'aria-hidden': true } as const
+  switch (kind) {
+    case 'session':
+      return <MessageCircle {...props} />
+    case 'artifact':
+      return <FileText {...props} />
+    case 'subCanvas':
+      return <Layers {...props} />
+    case 'external':
+      return <Link2 {...props} />
+    case 'step':
+    default:
+      return <SquareCheckBig {...props} />
+  }
+}
+
+const NODE_KIND_LABEL: Record<PlanningNodeKind, string> = {
+  step: '流程',
+  session: '会话',
+  artifact: '产物',
+  subCanvas: '子画板',
+  external: '外部引用',
 }
 
 function ArtifactPreview({
@@ -1083,7 +1136,7 @@ function artifactMatchesExpectation(reference: string, expected: string): boolea
 //     PRIMARY_ACTION_TEXT[action];switch 分发用枚举,不再字符串比较。
 //   - nextPlanAction / nextWorkAction / runNextActionLabel — inspector 行文案。
 
-function designKind(node: PlannerGraphNode['data']['node']): string {
+function designKind(node: PlannerGraphNode['data']['node']): PlanningNodeKind {
   return node.nodeKind ?? (node.source === 'session' ? 'session' : node.subCanvasId ? 'subCanvas' : 'step')
 }
 
