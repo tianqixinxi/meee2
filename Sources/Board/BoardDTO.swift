@@ -455,6 +455,33 @@ struct CanvasTemplatesEnvelope: Encodable {
     let templates: [CanvasTemplateDTO]
 }
 
+// MARK: - Claude Code workflows
+
+struct ClaudeWorkflowPhaseDTO: Encodable {
+    let title: String
+    let detail: String?
+}
+
+struct ClaudeWorkflowDTO: Encodable {
+    let id: String
+    let name: String
+    let commandName: String
+    let description: String?
+    let phases: [ClaudeWorkflowPhaseDTO]
+    let path: String
+    let sizeBytes: Int
+    let modifiedAt: Date
+    let preview: String
+    let readable: Bool
+    let error: String?
+}
+
+struct ClaudeWorkflowListEnvelope: Encodable {
+    let root: String
+    let workflows: [ClaudeWorkflowDTO]
+    let error: String?
+}
+
 // MARK: - 转换工具
 
 enum BoardDTOBuilder {

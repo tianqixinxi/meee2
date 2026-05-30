@@ -1217,6 +1217,35 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         return nil
     }
 
+    /// WKWebView does not present file pickers by itself inside an app shell.
+    /// Bridge `<input type=file>` to a native open panel so React flows such as
+    /// Claude workflow upload can receive the selected local file URL.
+    func webView(_ webView: WKWebView,
+                 runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canCreateDirectories = false
+        panel.resolvesAliases = true
+
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK else {
+                completionHandler(nil)
+                return
+            }
+            completionHandler(panel.urls)
+        }
+
+        if let window = webView.window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            panel.begin(completionHandler: finish)
+        }
+    }
+
     private func showLoadError(_ error: Error) {
         isShowingLoadError = true
         let escapedURL = Self.escapeHTML(boardURL.absoluteString)

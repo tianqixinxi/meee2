@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  FileCode2,
   Gamepad2,
   GitPullRequest,
   Globe2,
@@ -10,14 +11,19 @@ import {
   Search,
   Sparkles,
   Users,
+  Upload,
   Wrench,
+  RefreshCw,
   type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { type ChangeEvent, useEffect, useMemo, useState } from 'react'
 import type { BoardState, CanvasInfo, CanvasScope } from '../types'
 import {
   fetchCanvasTemplates,
+  fetchClaudeWorkflows,
   fetchTeamMembers,
+  type ClaudeWorkflow,
+  type ClaudeWorkflowList,
   type CanvasTemplate,
   type UserProfile,
 } from '../api'
@@ -43,6 +49,8 @@ interface TemplatesViewProps {
    * its default nodes. Caller is expected to switch to the new canvas.
    */
   onApplyTemplate: (templateId: string, name: string, scope: CanvasScope) => Promise<string>
+  onImportClaudeWorkflow: (workflowId: string, name: string, scope: CanvasScope) => Promise<string>
+  onUploadClaudeWorkflow: (filename: string, source: string, name: string, scope: CanvasScope) => Promise<string>
 }
 
 type GalleryCategory = 'engineering' | 'team' | 'demo'
@@ -60,6 +68,11 @@ const ICONS_BY_NAME: Record<string, LucideIcon> = {
 }
 
 const CATEGORY_ORDER: GalleryCategory[] = ['engineering', 'team', 'demo']
+const CLAUDE_WORKFLOW_MAX_BYTES = 256 * 1024
+
+type WorkflowImportTarget =
+  | { kind: 'library'; id: string; name: string; commandName: string; path: string }
+  | { kind: 'upload'; filename: string; source: string; name: string; commandName: string; path: string }
 
 const CATEGORY_I18N_KEY: Record<GalleryCategory, 'templates.gallery.category.engineering' | 'templates.gallery.category.team' | 'templates.gallery.category.demo'> = {
   engineering: 'templates.gallery.category.engineering',
@@ -75,6 +88,8 @@ export function TemplatesView({
   onOpenCanvas,
   onCreateTemplate,
   onApplyTemplate,
+  onImportClaudeWorkflow,
+  onUploadClaudeWorkflow,
 }: TemplatesViewProps) {
   const { t } = useI18n()
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null)
@@ -94,6 +109,15 @@ export function TemplatesView({
   const [applyScopeDraft, setApplyScopeDraft] = useState<CanvasScope>('personal')
   const [applyError, setApplyError] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
+  const [workflowList, setWorkflowList] = useState<ClaudeWorkflowList | null>(null)
+  const [workflowError, setWorkflowError] = useState<string | null>(null)
+  const [workflowsLoading, setWorkflowsLoading] = useState(false)
+  const [workflowImportTarget, setWorkflowImportTarget] = useState<WorkflowImportTarget | null>(null)
+  const [workflowNameDraft, setWorkflowNameDraft] = useState('')
+  const [workflowScopeDraft, setWorkflowScopeDraft] = useState<CanvasScope>('personal')
+  const [workflowImportError, setWorkflowImportError] = useState<string | null>(null)
+  const [workflowImporting, setWorkflowImporting] = useState(false)
+  const [workflowUploadError, setWorkflowUploadError] = useState<string | null>(null)
 
   // epsilon (session-hide): `nodeKind === 'session'` is deprecated as a
   // user-creatable surface — new work seeds `step` nodes with
@@ -167,6 +191,24 @@ export function TemplatesView({
     }
   }, [])
 
+  const refreshWorkflows = () => {
+    setWorkflowsLoading(true)
+    setWorkflowError(null)
+    fetchClaudeWorkflows()
+      .then((result) => {
+        setWorkflowList(result)
+        setWorkflowError(result.error ?? null)
+      })
+      .catch((err) => {
+        setWorkflowError((err as Error).message || 'Failed to load Claude Code workflows')
+      })
+      .finally(() => setWorkflowsLoading(false))
+  }
+
+  useEffect(() => {
+    refreshWorkflows()
+  }, [])
+
   const galleryByCategory = useMemo(() => {
     const buckets: Record<GalleryCategory, CanvasTemplate[]> = {
       engineering: [],
@@ -229,6 +271,79 @@ export function TemplatesView({
       .catch((err) => {
         setApplyError((err as Error).message || t('templates.gallery.applyFailed'))
         setApplying(false)
+      })
+  }
+
+  const openWorkflowImportDialog = (workflow: ClaudeWorkflow) => {
+    setWorkflowImportTarget({
+      kind: 'library',
+      id: workflow.id,
+      name: workflow.name,
+      commandName: workflow.commandName,
+      path: workflow.path,
+    })
+    setWorkflowNameDraft(workflow.name)
+    setWorkflowScopeDraft('personal')
+    setWorkflowImportError(null)
+  }
+
+  const handleWorkflowUploadSelected = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0] ?? null
+    event.currentTarget.value = ''
+    if (!file) return
+    if (!file.name.toLowerCase().endsWith('.js')) {
+      setWorkflowUploadError('Choose a Claude Code workflow .js file.')
+      return
+    }
+    if (file.size > CLAUDE_WORKFLOW_MAX_BYTES) {
+      setWorkflowUploadError(`Workflow is too large to import (${formatBytes(file.size)}, max ${formatBytes(CLAUDE_WORKFLOW_MAX_BYTES)}).`)
+      return
+    }
+    file.text()
+      .then((source) => {
+        const baseName = file.name.replace(/\.js$/i, '') || 'uploaded-workflow'
+        setWorkflowImportTarget({
+          kind: 'upload',
+          filename: file.name,
+          source,
+          name: baseName,
+          commandName: `/${baseName}`,
+          path: `uploaded:${file.name}`,
+        })
+        setWorkflowNameDraft(baseName)
+        setWorkflowScopeDraft('personal')
+        setWorkflowImportError(null)
+        setWorkflowUploadError(null)
+      })
+      .catch((err) => {
+        setWorkflowUploadError((err as Error).message || 'Failed to read workflow file')
+      })
+  }
+
+  const closeWorkflowImportDialog = () => {
+    setWorkflowImportTarget(null)
+    setWorkflowNameDraft('')
+    setWorkflowImportError(null)
+    setWorkflowImporting(false)
+  }
+
+  const submitWorkflowImport = () => {
+    if (!workflowImportTarget) return
+    const name = workflowNameDraft.trim()
+    if (!name) {
+      setWorkflowImportError(t('templates.gallery.canvasNameRequired'))
+      return
+    }
+    setWorkflowImporting(true)
+    setWorkflowImportError(null)
+    const request = workflowImportTarget.kind === 'library'
+      ? onImportClaudeWorkflow(workflowImportTarget.id, name, workflowScopeDraft)
+      : onUploadClaudeWorkflow(workflowImportTarget.filename, workflowImportTarget.source, name, workflowScopeDraft)
+    request
+      .then(() => closeWorkflowImportDialog())
+      .catch((err) => {
+        setWorkflowImportError((err as Error).message || 'Failed to import Claude Code workflow')
+        setWorkflowImporting(false)
       })
   }
 
@@ -333,6 +448,51 @@ export function TemplatesView({
             <div className="template-gallery__grid">
               {visibleGallery.map((tpl) => (
                 <GalleryCard key={tpl.id} template={tpl} onUse={() => openApplyDialog(tpl)} t={t} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="claude-workflows" aria-label="Claude Code workflows">
+          <div className="template-gallery__header">
+            <div>
+              <h2 className="template-gallery__title">Claude Code workflows</h2>
+              <p className="claude-workflows__root">{workflowList?.root ?? '~/.claude/workflows'}</p>
+            </div>
+            <div className="claude-workflows__actions">
+              <label className="ghost claude-workflows__refresh claude-workflows__upload">
+                <Upload size={13} aria-hidden />
+                Upload .js
+                <input
+                  type="file"
+                  accept=".js,text/javascript,application/javascript"
+                  className="claude-workflows__file-input"
+                  onClick={() => setWorkflowUploadError(null)}
+                  onChange={handleWorkflowUploadSelected}
+                />
+              </label>
+              <button type="button" className="ghost claude-workflows__refresh" onClick={refreshWorkflows} disabled={workflowsLoading}>
+                <RefreshCw size={13} aria-hidden />
+                {workflowsLoading ? 'Scanning…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {workflowUploadError ? (
+            <div className="inline-error template-gallery__error">{workflowUploadError}</div>
+          ) : workflowError ? (
+            <div className="inline-error template-gallery__error">{workflowError}</div>
+          ) : !workflowList || workflowsLoading ? (
+            <div className="template-gallery__empty">Scanning global Claude Code workflows…</div>
+          ) : workflowList.workflows.length === 0 ? (
+            <div className="template-gallery__empty">No global <code>*.js</code> workflows found.</div>
+          ) : (
+            <div className="claude-workflows__list">
+              {workflowList.workflows.map((workflow) => (
+                <WorkflowRow
+                  key={workflow.id}
+                  workflow={workflow}
+                  onImport={() => openWorkflowImportDialog(workflow)}
+                />
               ))}
             </div>
           )}
@@ -511,6 +671,76 @@ export function TemplatesView({
           </div>
         </div>
       )}
+
+      {workflowImportTarget && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !workflowImporting) closeWorkflowImportDialog()
+          }}
+        >
+          <div
+            className="modal canvas-confirm-modal template-gallery__apply-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Import ${workflowImportTarget.commandName}`}
+          >
+            <div className="modal-header">
+              <div className="modal-title">Import {workflowImportTarget.commandName}</div>
+              <div className="modal-subtitle">
+                meee2 will read workflow metadata and phases to create a canvas plan. The script is not executed.
+              </div>
+            </div>
+            <div className="modal-body col" style={{ gap: 10 }}>
+              <input
+                value={workflowNameDraft}
+                onChange={(event) => setWorkflowNameDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submitWorkflowImport()
+                  if (event.key === 'Escape' && !workflowImporting) closeWorkflowImportDialog()
+                }}
+                placeholder={t('templates.gallery.canvasNamePlaceholder')}
+                autoFocus
+                disabled={workflowImporting}
+              />
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label={t('templates.gallery.visibilityAriaLabel')}>
+                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={workflowScopeDraft === scope ? 'is-selected' : ''}
+                    aria-pressed={workflowScopeDraft === scope}
+                    disabled={workflowImporting}
+                    onClick={() => setWorkflowScopeDraft(scope)}
+                  >
+                    {scope === 'team' ? t('templates.public') : t('templates.private')}
+                  </button>
+                ))}
+              </div>
+              <code className="claude-workflows__modal-path">{workflowImportTarget.path}</code>
+              {workflowImportError && <div className="inline-error">{workflowImportError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button
+                className="ghost"
+                type="button"
+                onClick={closeWorkflowImportDialog}
+                disabled={workflowImporting}
+              >
+                {t('common.cancel')}
+              </button>
+              <button
+                className="primary"
+                type="button"
+                onClick={submitWorkflowImport}
+                disabled={workflowImporting || !workflowNameDraft.trim()}
+              >
+                {workflowImporting ? 'Importing…' : 'Import workflow'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -548,6 +778,57 @@ function GalleryCard({ template, onUse, t }: GalleryCardProps) {
       </div>
     </article>
   )
+}
+
+interface WorkflowRowProps {
+  workflow: ClaudeWorkflow
+  onImport: () => void
+}
+
+function WorkflowRow({ workflow, onImport }: WorkflowRowProps) {
+  const description = workflow.description?.trim() || workflow.preview || workflow.path
+  const visiblePhases = (workflow.phases ?? []).slice(0, 6)
+  return (
+    <article className="claude-workflows__row" data-readable={workflow.readable ? 'true' : 'false'}>
+      <span className="claude-workflows__icon" aria-hidden>
+        <FileCode2 size={17} />
+      </span>
+      <div className="claude-workflows__main">
+        <div className="claude-workflows__title-row">
+          <strong>{workflow.name}</strong>
+          <code>{workflow.commandName}</code>
+          <span>{formatBytes(workflow.sizeBytes)}</span>
+        </div>
+        <p>{description}</p>
+        {visiblePhases.length > 0 && (
+          <ol className="claude-workflows__phases" aria-label={`${workflow.name} phases`}>
+            {visiblePhases.map((phase, index) => (
+              <li key={`${phase.title}-${index}`} title={phase.detail ?? phase.title}>
+                <span>{index + 1}</span>
+                <strong>{phase.title}</strong>
+              </li>
+            ))}
+          </ol>
+        )}
+        {!workflow.readable && workflow.error && <em>{workflow.error}</em>}
+      </div>
+      <button type="button" className="primary claude-workflows__import" onClick={onImport} disabled={!workflow.readable}>
+        Import
+      </button>
+    </article>
+  )
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB']
+  let value = bytes
+  let idx = 0
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024
+    idx += 1
+  }
+  return `${idx === 0 ? Math.round(value) : value.toFixed(value < 10 ? 1 : 0)} ${units[idx]}`
 }
 
 

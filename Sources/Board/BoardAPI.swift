@@ -5474,6 +5474,120 @@ enum BoardAPI {
         }
     }
 
+    // MARK: - Claude Code workflows
+
+    static func listClaudeWorkflows(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        let scan = ClaudeWorkflowLibrary.shared.scan()
+        return jsonResponse(ClaudeWorkflowListEnvelope(
+            root: scan.root.path,
+            workflows: scan.workflows.map(claudeWorkflowDTO(_:)),
+            error: scan.error
+        ))
+    }
+
+    static func importClaudeWorkflow(_ req: HttpRequest) -> HttpResponse {
+        guard let workflowId = req.params[":id"]?.removingPercentEncoding else {
+            return errorResponse("bad_request", "missing workflow id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let name = (json["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawScope = (json["scope"] as? String) ?? "personal"
+        guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+
+        do {
+            let snapshot = try ClaudeWorkflowImporter().importWorkflow(
+                id: workflowId,
+                name: name,
+                scope: scope
+            )
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch let error as ClaudeWorkflowLibraryError {
+            switch error {
+            case .notFound:
+                return errorResponse("not_found", error.localizedDescription, status: 404)
+            case .tooLarge, .invalidSource, .unreadable, .unsupportedFileType:
+                return errorResponse("bad_request", error.localizedDescription, status: 400)
+            case .aiParseFailed:
+                return errorResponse("workflow_import_failed", error.localizedDescription, status: 500)
+            }
+        } catch {
+            return errorResponse("workflow_import_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    static func importUploadedClaudeWorkflow(_ req: HttpRequest) -> HttpResponse {
+        struct UploadRequest: Decodable {
+            let filename: String?
+            let source: String?
+            let name: String?
+            let scope: String?
+        }
+
+        guard let body = decodeJSONBody(req, as: UploadRequest.self) else {
+            return errorResponse(
+                "invalid_json",
+                "body must be {\"filename\": String, \"source\": String, \"name\"?: String, \"scope\"?: \"personal\" | \"team\"}",
+                status: 400
+            )
+        }
+        let filename = body.filename?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !filename.isEmpty else {
+            return errorResponse("bad_request", "filename is required", status: 400)
+        }
+        guard let source = body.source else {
+            return errorResponse("bad_request", "source is required", status: 400)
+        }
+        let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawScope = body.scope ?? "personal"
+        guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+
+        do {
+            let snapshot = try ClaudeWorkflowImporter().importUploadedWorkflow(
+                filename: filename,
+                source: source,
+                name: name,
+                scope: scope
+            )
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch let error as ClaudeWorkflowLibraryError {
+            switch error {
+            case .notFound:
+                return errorResponse("not_found", error.localizedDescription, status: 404)
+            case .tooLarge, .invalidSource, .unreadable, .unsupportedFileType:
+                return errorResponse("bad_request", error.localizedDescription, status: 400)
+            case .aiParseFailed:
+                return errorResponse("workflow_import_failed", error.localizedDescription, status: 500)
+            }
+        } catch {
+            return errorResponse("workflow_import_failed", error.localizedDescription, status: 500)
+        }
+    }
+
+    private static func claudeWorkflowDTO(_ workflow: ClaudeWorkflowFile) -> ClaudeWorkflowDTO {
+        ClaudeWorkflowDTO(
+            id: workflow.id,
+            name: workflow.name,
+            commandName: workflow.commandName,
+            description: workflow.description,
+            phases: workflow.phases.map {
+                ClaudeWorkflowPhaseDTO(title: $0.title, detail: $0.detail)
+            },
+            path: workflow.path,
+            sizeBytes: workflow.sizeBytes,
+            modifiedAt: workflow.modifiedAt,
+            preview: workflow.preview,
+            readable: workflow.readable,
+            error: workflow.error
+        )
+    }
+
     private static func canvasEnvelope(_ snapshot: BoardLayoutStore.Snapshot) -> CanvasListEnvelope {
         let parentRefs = PlannerStore.shared.canvasParentRefs()
         let workspacePaths = BoardLayoutStore.shared.loadAllWorkspacePaths()
