@@ -3478,7 +3478,30 @@ enum BoardAPI {
                 ) else { return nil }
                 return dto
         }
-        return internalSessions + staleInternalSessions + realSessions + syntheticDesktopSessions
+        // Surface → CLI correlation: a planner step dispatches `claude` inside a
+        // meee2 surface session (`claude-ghostty-XXX`); the NODE binds to that
+        // surface id, but the real `claude` runs under its own CLI uuid which is
+        // what the hook pipeline tracks (transcript / status / permission). The
+        // two SessionStore records only share the managed-workspace cwd. Enrich
+        // each managed-workspace surface that has no transcript with its
+        // correlated CLI session so both the inspector (recentMessages) and the
+        // planner run-state mirror (pendingPermissionTool → gateWait) see the
+        // real progress. The CLI session itself stays dedup-filtered above, so
+        // this introduces no duplicate card.
+        let cliCorrelationCandidates = SessionStore.shared.listAll()
+        let enrichedInternalSessions = (internalSessions + staleInternalSessions).map { dto -> SessionDTO in
+            guard BoardDTOBuilder.isInternalTerminalProgram(dto.termProgram),
+                  dto.recentMessages.isEmpty,
+                  let cli = InternalSessionIdentity.correlatedCliSession(
+                    forWorkspaceCwd: dto.project,
+                    among: cliCorrelationCandidates
+                  ),
+                  cli.sessionId != dto.id else {
+                return dto
+            }
+            return BoardDTOBuilder.surfaceDTOAdoptingCliSession(dto, cli: cli)
+        }
+        return enrichedInternalSessions + realSessions + syntheticDesktopSessions
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {

@@ -715,7 +715,7 @@ export function NodeInspectorModal({
 // canvas-spec §8 — find the produced artifact bound to an output slot
 // reference. `artifacts` is the latest-per-slot mirror, so a match by
 // reference / title yields the head (latest version) of that slot's chain.
-function artifactForReference(artifacts: PlannerArtifact[], reference: string): PlannerArtifact | undefined {
+export function artifactForReference(artifacts: PlannerArtifact[], reference: string): PlannerArtifact | undefined {
   const target = reference.trim().toLowerCase()
   return artifacts.find((artifact) =>
     artifact.reference.trim().toLowerCase() === target
@@ -838,7 +838,7 @@ function formatVersionLabel(v: PlannerArtifactVersion): string {
   return `${stamp} · ${submitter}`
 }
 
-function artifactPositionLabel(tag: PlannerArtifact['positionTag']): string {
+export function artifactPositionLabel(tag: PlannerArtifact['positionTag']): string {
   switch (tag) {
     case 'candidate':
       return '候选'
@@ -856,7 +856,7 @@ function artifactPositionLabel(tag: PlannerArtifact['positionTag']): string {
 
 // 相对时间标签:把 ISO 时间戳渲染成「刚刚 / N 分钟前 / N 小时前 / N 天前」。
 // 浏览器端 (board-app) 用 Date.now() / new Date() 没问题。
-function relativeTimeLabel(iso: string): string {
+export function relativeTimeLabel(iso: string): string {
   const ts = Date.parse(iso)
   if (!Number.isFinite(ts)) return ''
   const deltaMs = Date.now() - ts
@@ -871,13 +871,13 @@ function relativeTimeLabel(iso: string): string {
 }
 
 // 把会话最近消息裁成单行预览(role + 截断文本),给 进展 live block 用。
-function truncateMessageText(text: string, max = 80): string {
+export function truncateMessageText(text: string, max = 80): string {
   const flat = text.replace(/\s+/g, ' ').trim()
   if (flat.length <= max) return flat
   return `${flat.slice(0, max).trimEnd()}…`
 }
 
-function dedupeStrings(values: Array<string | null | undefined>): string[] {
+export function dedupeStrings(values: Array<string | null | undefined>): string[] {
   const seen = new Set<string>()
   const result: string[] = []
   for (const value of values) {
@@ -929,7 +929,7 @@ function formatScheduleDate(value: string | number | null | undefined): string |
   return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-function compactLabel(value: string): string {
+export function compactLabel(value: string): string {
   const withoutQuery = value.trim().split('?')[0]
   const parts = withoutQuery.split(/[/:#]/).filter(Boolean)
   return parts[parts.length - 1]?.trim() || value
