@@ -4234,7 +4234,7 @@ textarea {
 .sessions-console {
   display: grid;
   grid-template-columns: clamp(224px, 18vw, 292px) minmax(0, 1fr);
-  gap: 8px;
+  gap: 10px;
 }
 
 .sessions-console--external {
@@ -4247,6 +4247,8 @@ textarea {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 7px;
+  padding-right: 10px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 72%, rgba(245, 244, 239, 0.3));
 }
 
 .sessions-list-tools {
@@ -5156,6 +5158,14 @@ textarea {
   .sessions-console--external {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(150px, 28%) minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .sessions-console__sidebar {
+    padding-right: 0;
+    padding-bottom: 10px;
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, rgba(245, 244, 239, 0.3));
   }
 
   .sessions-table__head {
