@@ -107,12 +107,18 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
         guard let dict = message.body as? [String: Any] else { return }
         let level = (dict["level"] as? String) ?? "error"
         let msg = (dict["msg"] as? String) ?? ""
+        guard !Self.isBenignBrowserDiagnostic(msg) else { return }
         // 截断单条日志，防 React 抛个 10MB JSON 把日志撑爆
         let trimmed = msg.count > 2000 ? String(msg.prefix(2000)) + "…(truncated)" : msg
         switch level {
         case "warn": MWarn("[BoardWebWindow.js] \(trimmed)")
         default: MError("[BoardWebWindow.js] \(trimmed)")
         }
+    }
+
+    private static func isBenignBrowserDiagnostic(_ msg: String) -> Bool {
+        msg.contains("ResizeObserver loop completed with undelivered notifications")
+            || msg.contains("ResizeObserver loop limit exceeded")
     }
 
     /// 在 documentStart 注入：包裹 console.error/warn + 监听全局错误 +
@@ -145,6 +151,10 @@ private final class JSConsoleBridge: NSObject, WKScriptMessageHandler {
       var origWarn = console.warn.bind(console);
       console.warn = function() { send('warn', arguments); origWarn.apply(console, arguments); };
       window.addEventListener('error', function(e) {
+        if (e && typeof e.message === 'string' && (
+          e.message.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
+          e.message.indexOf('ResizeObserver loop limit exceeded') !== -1
+        )) return;
         var loc = (e.filename || '?') + ':' + (e.lineno || '?') + ':' + (e.colno || '?');
         send('error', ['[uncaught] ' + (e.message || '?') + ' @ ' + loc]);
       });

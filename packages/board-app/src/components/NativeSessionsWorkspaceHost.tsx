@@ -17,6 +17,7 @@ interface Props {
 export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelectedSessionChange }: Props) {
   const { t } = useI18n()
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
+  const layoutFrameRef = useRef<number | null>(null)
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
@@ -179,23 +180,35 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
     latestSyncRef.current = syncTerminal
   }, [syncTerminal])
 
+  const scheduleLayout = useCallback(() => {
+    if (layoutFrameRef.current !== null) return
+    layoutFrameRef.current = window.requestAnimationFrame(() => {
+      layoutFrameRef.current = null
+      latestSyncRef.current('layout')
+    })
+  }, [])
+
   useLayoutEffect(() => {
     syncTerminal('show')
     const host = terminalHostRef.current
     if (!host) return undefined
-    const resizeObserver = new ResizeObserver(() => latestSyncRef.current('layout'))
+    const resizeObserver = new ResizeObserver(() => scheduleLayout())
     resizeObserver.observe(host)
-    const handleWindowLayout = () => latestSyncRef.current('layout')
+    const handleWindowLayout = () => scheduleLayout()
     window.addEventListener('resize', handleWindowLayout)
     window.addEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
     return () => {
+      if (layoutFrameRef.current !== null) {
+        window.cancelAnimationFrame(layoutFrameRef.current)
+        layoutFrameRef.current = null
+      }
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleWindowLayout)
       window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
       syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
       lastRectRef.current = null
     }
-  }, [])
+  }, [scheduleLayout])
 
   useEffect(() => {
     syncTerminal('focus')
