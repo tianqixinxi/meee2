@@ -226,6 +226,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     private var pendingOpenSessionsWorkspace: (sessionId: String?, surfaceId: String?)?
+    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -388,6 +389,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         pendingOpenSessionsWorkspace = (sessionId, surfaceId)
         show()
         dispatchOpenSessionsWorkspaceIfPossible()
+    }
+
+    func openPlannerItem(canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?) {
+        pendingOpenPlannerItem = (canvasId, nodeId, deliveryId, proposalId)
+        show()
+        dispatchOpenPlannerItemIfPossible()
     }
 
     private func loadIfNeeded() {
@@ -943,6 +950,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSettingsIfPossible()
         dispatchOpenSessionsWorkspaceIfPossible()
         dispatchOpenSessionIfPossible()
+        dispatchOpenPlannerItemIfPossible()
     }
 
     private func dispatchOpenSettingsIfPossible() {
@@ -1016,6 +1024,57 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 self?.pendingOpenSessionsWorkspace = pendingOpenSessionsWorkspace
             } else {
                 MInfo("[BoardWebWindow] dispatched open sessions workspace")
+            }
+        }
+    }
+
+    private func dispatchOpenPlannerItemIfPossible() {
+        guard let pendingOpenPlannerItem, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        guard let canvasId = pendingOpenPlannerItem.canvasId, !canvasId.isEmpty else {
+            self.pendingOpenPlannerItem = nil
+            return
+        }
+        var detail: [String: Any] = [
+            "kind": "canvas",
+            "canvasId": canvasId,
+            "source": "island",
+            "guide": [
+                "enabled": true,
+                "title": "Opened from Dynamic Island",
+                "body": "This is the node that needs your attention.",
+                "openInspector": false
+            ]
+        ]
+        if let nodeId = pendingOpenPlannerItem.nodeId, !nodeId.isEmpty {
+            detail["kind"] = "planner-node"
+            detail["nodeId"] = nodeId
+        } else if let proposalId = pendingOpenPlannerItem.proposalId, !proposalId.isEmpty {
+            detail["kind"] = "planner-proposal"
+            detail["proposalId"] = proposalId
+            if var guide = detail["guide"] as? [String: Any] {
+                guide["title"] = "Review proposal"
+                detail["guide"] = guide
+            }
+        } else if let deliveryId = pendingOpenPlannerItem.deliveryId, !deliveryId.isEmpty {
+            detail["kind"] = "planner-delivery"
+            detail["deliveryId"] = deliveryId
+            if var guide = detail["guide"] as? [String: Any] {
+                guide["title"] = "Delivery needs attention"
+                detail["guide"] = guide
+            }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else {
+            self.pendingOpenPlannerItem = nil
+            return
+        }
+        self.pendingOpenPlannerItem = nil
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:open-board-target', { detail: \(json) }));
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open planner item event failed: \(error.localizedDescription)")
+                self?.pendingOpenPlannerItem = pendingOpenPlannerItem
             }
         }
     }

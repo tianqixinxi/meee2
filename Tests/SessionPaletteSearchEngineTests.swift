@@ -3,7 +3,7 @@ import Meee2PluginKit
 @testable import meee2Kit
 
 final class SessionPaletteSearchEngineTests: XCTestCase {
-    func testSearchMatchesLiveSessionsAndFiltersHistorical() {
+    func testSearchIgnoresPluginOnlyExternalSessions() {
         let engine = SessionPaletteSearchEngine()
         engine.query = "checkout"
 
@@ -27,9 +27,7 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
 
         let results = engine.search(sessions: [historical, live], storeSessions: [])
 
-        XCTAssertEqual(results.map(\.sessionId), ["session-a"])
-        XCTAssertEqual(results.first?.project, "checkout")
-        XCTAssertEqual(results.first?.terminalKind, "external")
+        XCTAssertTrue(results.isEmpty)
     }
 
     func testSearchIncludesInternalSurfacesAndBoardTarget() {
@@ -71,7 +69,7 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
         XCTAssertFalse(results.first?.isTerminalJumpable ?? true)
     }
 
-    func testSearchDeduplicatesPluginSessionsByRealSessionId() {
+    func testSearchDoesNotPromotePluginOnlyDuplicates() {
         let engine = SessionPaletteSearchEngine()
 
         let older = PluginSession(
@@ -95,7 +93,7 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
 
         let results = engine.search(sessions: [older, duplicate], storeSessions: [])
 
-        XCTAssertEqual(results.map(\.sessionId), ["session-a"])
+        XCTAssertTrue(results.isEmpty)
     }
 
     func testDistinctPluginsDoesNotDoubleCountInternalSurfaceMirror() {

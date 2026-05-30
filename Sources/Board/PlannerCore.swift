@@ -7795,7 +7795,6 @@ enum PlannerBoardBridge {
             latestRunUpdate,
             latestNodeUpdate
         ].compactMap { $0 }.max()
-        let liveSessionId = canvasLiveSessionId(nodes: nodes, statesByNodeId: statesByNodeId, sessions: sessions)
         let doneCount = visibleStates.filter { $0.state.runState == NodeRunState.done }.count
         let totalCount = max(visibleStates.count, nodes.count)
         return PlannerMonitorItem(
@@ -7805,7 +7804,7 @@ enum PlannerBoardBridge {
             canvasTitle: canvas.title,
             nodeId: nil,
             nodeTitle: nil,
-            sessionId: liveSessionId,
+            sessionId: nil,
             deliveryId: canvas.id,
             proposalId: nil,
             proposalStatus: nil,
@@ -7840,52 +7839,11 @@ enum PlannerBoardBridge {
         }
     }
 
-    private static func canvasLiveSessionId(
-        nodes: [PlanningNode],
-        statesByNodeId: [String: NodeStateSnapshot],
-        sessions: [SessionDTO]?
-    ) -> String? {
-        nodes
-            .filter { node in
-                guard let state = statesByNodeId[node.id], state.runState != .done else { return false }
-                return monitorSessionKind(for: node.sessionId, sessions: sessions) == .externalSession
-            }
-            .sorted {
-                monitorRank(for: statesByNodeId[$0.id]!) < monitorRank(for: statesByNodeId[$1.id]!)
-            }
-            .first?
-            .sessionId
-    }
-
     private static func canvasAwaitingInputSince(nodes: [PlanningNode], activeRun: WorkflowRun?) -> Date? {
         guard let activeRun else { return nil }
         return nodes
             .compactMap { activeRun.nodeStates[$0.id]?.attempts.last?.awaitingInputSince }
             .min()
-    }
-
-    private enum MonitorSessionKind {
-        case none
-        case externalSession
-        case internalSession
-    }
-
-    private static func monitorSessionKind(for rawSessionId: String?, sessions: [SessionDTO]?) -> MonitorSessionKind {
-        guard let rawSessionId,
-              let sessions else { return .none }
-        let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sessionId.isEmpty else { return .none }
-        guard let session = sessions.first(where: { monitorSession($0, matches: sessionId) }) else {
-            return .none
-        }
-        let surfaceId = session.surfaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if session.terminalKind == "internal" || !surfaceId.isEmpty {
-            return .internalSession
-        }
-        if SessionStatus.from(rawString: session.status).isHistorical || !session.canOpenExternal {
-            return .none
-        }
-        return .externalSession
     }
 
     private static func monitorSession(_ session: SessionDTO, matches sessionId: String) -> Bool {

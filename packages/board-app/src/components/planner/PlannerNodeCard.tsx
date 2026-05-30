@@ -209,6 +209,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           `planner-node--artifact-${renderKind}`,
           `planner-node--artifact-${data.artifactDirection ?? 'output'}`,
           selected ? 'is-selected' : '',
+          data.guided ? 'is-guided' : '',
         ].filter(Boolean).join(' ')}
       >
         <Handle type="target" position={Position.Left} className="planner-node__handle" />
@@ -331,6 +332,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         avatarUrl={data.responsibleAvatarUrl}
         onOpenAssignedSubCanvas={data.onOpenAssignedSubCanvas}
         selected={selected}
+        guided={data.guided ?? false}
       />
     )
   }
@@ -428,6 +430,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         `planner-node--mode-${data.mode}`,
         `planner-node--perception-${data.perception}`,
         selected ? 'is-selected' : '',
+        data.guided ? 'is-guided' : '',
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
       ].filter(Boolean).join(' ')}
     >
@@ -1737,6 +1740,7 @@ interface SubCanvasRefCardProps {
   avatarUrl?: string
   onOpenAssignedSubCanvas?: (subCanvasId: string) => void
   selected: boolean
+  guided: boolean
 }
 
 /** UI-2 · F1.1 — the node body collapsed to a sub-canvas reference chip.
@@ -1751,6 +1755,7 @@ function SubCanvasRefCard({
   avatarUrl,
   onOpenAssignedSubCanvas,
   selected,
+  guided,
 }: SubCanvasRefCardProps) {
   const inputCardinalityRaw = assignment.frozenIOContract?.input?.upstream?.mode ?? 'unspecified'
   const outputCardinalityRaw = assignment.frozenIOContract?.output?.cardinality ?? 'unspecified'
@@ -1762,6 +1767,7 @@ function SubCanvasRefCard({
         'planner-node',
         'planner-node--subcanvas-ref',
         selected ? 'is-selected' : '',
+        guided ? 'is-guided' : '',
       ].filter(Boolean).join(' ')}
     >
       <Handle type="target" position={Position.Left} className="planner-node__handle" />

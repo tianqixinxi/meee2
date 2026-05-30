@@ -192,12 +192,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 还是 nil，所有查询返回 fallback（空数组 / nil），plugin 自治逻辑被静默废掉。
         Meee2PluginKit.A2AContext.shared.register(A2AContextHostProvider())
 
-        // Register builtin in-process plugins. ExternalChatPlugin receives
-        // browser-extension pushed sessions (ChatGPT / Claude.ai web chats)
-        // via /api/external-sessions/* — must register *before* startAll so
-        // PluginManager wires up onSessionsUpdated callbacks.
-        PluginManager.shared.register(ExternalChatPlugin.shared)
-
         // Claude Desktop session metadata 索引器：扫
         // ~/Library/Application Support/Claude/claude-code-sessions/
         // 把 desktop 起的 session（cliSessionId / title / model / isArchived）
@@ -432,6 +426,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("meee2.openBoardSession"),
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openPlannerItem(_:)),
+            name: NSNotification.Name("meee2.openPlannerItem"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -486,6 +487,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         openBoardMenu()
         boardWindowController?.openSession(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    @MainActor
+    @objc private func openPlannerItem(_ notification: Notification) {
+        let canvasId = notification.userInfo?["canvasId"] as? String
+        let nodeId = notification.userInfo?["nodeId"] as? String
+        let deliveryId = notification.userInfo?["deliveryId"] as? String
+        let proposalId = notification.userInfo?["proposalId"] as? String
+        openBoardMenu()
+        boardWindowController?.openPlannerItem(
+            canvasId: canvasId,
+            nodeId: nodeId,
+            deliveryId: deliveryId,
+            proposalId: proposalId
+        )
     }
 
     @MainActor

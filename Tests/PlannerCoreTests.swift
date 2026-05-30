@@ -1499,7 +1499,7 @@ final class PlannerCoreTests: XCTestCase {
         })
     }
 
-    func testPlannerWorkspaceMonitorCarriesExternalSessionOnCanvasItem() throws {
+    func testPlannerWorkspaceMonitorDoesNotCarryExternalSessionOnCanvasItem() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let nodes = record.nodes
@@ -1519,9 +1519,10 @@ final class PlannerCoreTests: XCTestCase {
             ]
         )
 
-        let item = try XCTUnwrap(monitor.items.first { $0.sessionId == "external-session-a" })
+        let item = try XCTUnwrap(monitor.items.first { $0.deliveryId == "canvas-a" })
         XCTAssertEqual(item.kind, .delivery)
         XCTAssertNil(item.nodeId)
+        XCTAssertNil(item.sessionId)
     }
 
     func testPlannerWorkspaceMonitorHidesInternalSessionItems() throws {

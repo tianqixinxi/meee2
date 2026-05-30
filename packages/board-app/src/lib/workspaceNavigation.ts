@@ -1,29 +1,32 @@
-import type { PlannerMonitorItem, Session } from '../types'
+import type { PlannerMonitorItem } from '../types'
 
 export type MonitorItemOpenTarget =
-  | { kind: 'canvas'; canvasId: string; nodeId?: string | null }
-  | { kind: 'external-session'; sessionId: string }
+  | { kind: 'node'; canvasId: string; nodeId: string }
+  | { kind: 'proposal'; canvasId: string; proposalId: string }
+  | { kind: 'delivery'; canvasId: string; deliveryId: string }
+  | { kind: 'canvas'; canvasId: string }
 
 export type MonitorItemOpenLabel = 'item' | 'canvas' | 'session'
 export type MonitorItemSourceKind = 'canvas' | 'node' | 'approval' | 'live'
 
 export function resolveMonitorItemOpenTarget(
   item: PlannerMonitorItem,
-  sessions: Session[] | null | undefined,
 ): MonitorItemOpenTarget {
-  const sessionId = item.sessionId?.trim()
-  if (sessionId && !isCanvasScopedMonitorItem(item)) {
-    const session = sessions?.find((candidate) => (
-      candidate.id === sessionId || candidate.surfaceId === sessionId
-    ))
-    if (session && isExternalMonitorSession(session)) {
-      return { kind: 'external-session', sessionId: session.id }
-    }
+  const nodeId = item.nodeId?.trim()
+  if (nodeId) {
+    return { kind: 'node', canvasId: item.canvasId, nodeId }
+  }
+  const proposalId = item.proposalId?.trim()
+  if (proposalId) {
+    return { kind: 'proposal', canvasId: item.canvasId, proposalId }
+  }
+  const deliveryId = item.deliveryId?.trim()
+  if (deliveryId) {
+    return { kind: 'delivery', canvasId: item.canvasId, deliveryId }
   }
   return {
     kind: 'canvas',
     canvasId: item.canvasId,
-    nodeId: item.nodeId?.trim() || null,
   }
 }
 
@@ -60,12 +63,4 @@ export function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
       || item.deliveryId?.trim()
       || item.proposalId?.trim(),
   )
-}
-
-export function isExternalMonitorSession(
-  session: Pick<Session, 'terminalKind' | 'surfaceId' | 'canOpenExternal'>,
-): boolean {
-  return session.terminalKind !== 'internal'
-    && !session.surfaceId?.trim()
-    && session.canOpenExternal !== false
 }

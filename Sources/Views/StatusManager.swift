@@ -2,10 +2,13 @@ import Foundation
 import Combine
 import SwiftUI
 import Meee2PluginKit
+import Meee2CommKit
 
 /// 状态管理器 - 聚合所有插件的数据
 /// 作为 UI 的数据源
 public class StatusManager: ObservableObject {
+    private static let islandAttentionRefreshDebounce: DispatchQueue.SchedulerTimeType.Stride = .seconds(1)
+
     // MARK: - Published Properties
 
     /// 所有 sessions (来自所有插件，包括 Claude)
@@ -19,6 +22,9 @@ public class StatusManager: ObservableObject {
 
     /// 最新的事件消息
     @Published public var latestMessage: String?
+
+    /// Dynamic Island 的高维 attention 聚合状态。
+    @Published var islandAttentionState: IslandAttentionState = .empty()
 
     /// 刘海尺寸 (由 AppDelegate 设置)
     @Published public var notchSize: CGSize = CGSize(width: 150, height: 32)
@@ -111,6 +117,35 @@ public class StatusManager: ObservableObject {
         }
     }
 
+    func openBoard(for item: IslandAttentionItem) {
+        NotificationCenter.default.post(
+            name: NSNotification.Name("meee2.openPlannerItem"),
+            object: nil,
+            userInfo: [
+                "canvasId": item.canvasId ?? "",
+                "nodeId": item.nodeId ?? "",
+                "deliveryId": item.deliveryId ?? "",
+                "proposalId": item.proposalId ?? ""
+            ]
+        )
+    }
+
+    func rejectProposal(for item: IslandAttentionItem) {
+        guard let canvasId = item.canvasId, let proposalId = item.proposalId else { return }
+        do {
+            _ = try PlannerBoardBridge.rejectProposal(
+                proposalId: proposalId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            refreshIslandAttentionState()
+        } catch {
+            MWarn("[StatusManager] failed to reject proposal from Island: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Plugin Info
 
     /// 获取 plugin 信息
@@ -126,7 +161,10 @@ public class StatusManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
                 guard let self = self else { return }
-                self.sessions = sessions.filter { !$0.status.isHistorical || $0.urgentEvent != nil }
+                self.sessions = sessions
+                    .filter(Self.isManagedIslandSession)
+                    .filter { !$0.status.isHistorical || $0.urgentEvent != nil }
+                self.refreshIslandAttentionState(sessions: self.sessions)
                 self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
@@ -135,12 +173,57 @@ public class StatusManager: ObservableObject {
 
         // 检测 urgent 状态
         pluginManager.$sessions
-            .map { $0.contains { !$0.status.isHistorical && $0.urgentEvent != nil } }
+            .map {
+                $0.contains {
+                    Self.isManagedIslandSession($0) && !$0.status.isHistorical && $0.urgentEvent != nil
+                }
+            }
             .receive(on: DispatchQueue.main)
             .assign(to: &$hasUrgentSession)
+
+        SessionEventBus.shared.publisher
+            .filter(Self.shouldRefreshIslandAttention)
+            .debounce(for: Self.islandAttentionRefreshDebounce, scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                self.refreshIslandAttentionState()
+                self.updateSystemStatus()
+            }
+            .store(in: &cancellables)
+    }
+
+    private static func shouldRefreshIslandAttention(for event: SessionEvent) -> Bool {
+        switch event {
+        case .boardLayoutChanged, .sessionAdded, .sessionRemoved, .sessionMetadataChanged:
+            return true
+        case .transcriptAppended, .channelMutated, .messageMutated, .cardTemplateChanged:
+            return false
+        }
+    }
+
+    private static func isManagedIslandSession(_ session: PluginSession) -> Bool {
+        let realId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
+        if TerminalSessionBackendRegistry.shared.isManagedSession(session.id)
+            || TerminalSessionBackendRegistry.shared.isManagedSession(realId) {
+            return true
+        }
+        let termProgram = (
+            SessionStore.shared.get(session.id)?.terminalInfo?.termProgram
+                ?? SessionStore.shared.get(realId)?.terminalInfo?.termProgram
+                ?? session.terminalInfo?.termProgram
+                ?? ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return termProgram == "meee2-internal" || termProgram == "meee2-ghostty-surface"
     }
 
     private func updateSystemStatus() {
+        if islandAttentionState.hasAttention {
+            systemStatus = .needsAttention
+            return
+        }
+
         if sessions.isEmpty {
             systemStatus = .idle
             return
@@ -152,6 +235,18 @@ public class StatusManager: ObservableObject {
         }
 
         systemStatus = .running
+    }
+
+    private func refreshIslandAttentionState(sessions sourceSessions: [PluginSession]? = nil) {
+        let visibleSessions = sourceSessions ?? sessions
+        islandAttentionState = IslandAttentionBuilder.build(sessions: visibleSessions) {
+            let monitor = try PlannerBoardBridge.workspaceMonitor(
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId(),
+                sessions: BoardSessionSnapshotProvider.currentBoardSessions()
+            )
+            return monitor.items
+        }
     }
 }
 

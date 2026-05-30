@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import meee2Kit
-import Meee2PluginKit
 
 @MainActor
 final class NativeSessionsWorkspaceWindowController: NSWindowController, NSWindowDelegate {
@@ -62,7 +61,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private var cancellables: Set<AnyCancellable> = []
     private var selectedRailId: String?
     private var rowButtons: [String: NativeSessionRowButton] = [:]
-    private var collapsedSectionIds: Set<String> = ["internal-inactive", "external-inactive"]
+    private var collapsedSectionIds: Set<String> = ["internal-inactive"]
     private var searchQuery = ""
     private var lastRailSignature = ""
     private var pendingReloadWorkItem: DispatchWorkItem?
@@ -319,9 +318,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         } else {
             selectedRailId = nil
             registry.hideActive()
-            emptyTerminalLabel.stringValue = items.filter { !$0.isInternal }.isEmpty
-                ? "No live sessions"
-                : "Select an external session to open it in its host app"
+            emptyTerminalLabel.stringValue = "No live managed sessions"
             emptyTerminalLabel.isHidden = false
         }
     }
@@ -379,8 +376,6 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     @objc private func selectSessionRow(_ sender: NativeSessionRowButton) {
         if sender.item.isInternal {
             focus(sender.item.surfaceSnapshot)
-        } else {
-            focusExternal(sender.item)
         }
     }
 
@@ -403,19 +398,6 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         }
     }
 
-    private func focusExternal(_ item: NativeSessionRailItem) {
-        selectedRailId = item.id
-        updateRowSelection()
-        registry.hideActive()
-        emptyTerminalLabel.stringValue = "Opened in host app: \(item.title)"
-        emptyTerminalLabel.isHidden = false
-        if let pluginSession = item.pluginSession {
-            PluginManager.shared.activateTerminal(for: pluginSession)
-        } else if let external = item.externalSession {
-            ExternalSessionActivator.activate(external)
-        }
-    }
-
     private func resolveTarget(sessionId: String?, surfaceId: String?) -> TerminalSessionSnapshot? {
         if let surfaceId, !surfaceId.isEmpty,
            let surface = TerminalSessionBackendRegistry.shared.snapshot(id: surfaceId) {
@@ -430,41 +412,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
 
     private func sessionRailItems() -> [NativeSessionRailItem] {
         let internalSessions = internalSessions()
-        let internalSessionIds = Set(internalSessions.map(\.sessionId))
-        let activeInternalManagedWorkspaceCwds = Set(
-            internalSessions
-                .filter(\.isLiveInternal)
-                .compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.cwd) }
-        )
-        let internalItems = internalSessions.map(NativeSessionRailItem.internalSurface)
-        let pluginItems = PluginManager.shared.sessions
-            .filter { pluginSession in
-                let realId = Self.realSessionId(for: pluginSession)
-                let cwd = pluginSession.cwd ?? pluginSession.title
-                return !internalSessionIds.contains(realId)
-                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
-                        cwd: cwd,
-                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
-                    )
-                    && SessionControlStore.shared.state(for: [pluginSession.id, realId]) == .active
-            }
-            .map(NativeSessionRailItem.pluginExternalSession)
-        let pluginSessionIds = Set(PluginManager.shared.sessions.flatMap { [$0.id, Self.realSessionId(for: $0)] })
-        let storeItems = SessionStore.shared.listAll()
-            .filter { session in
-                let cwd = session.cwd ?? session.project
-                return !internalSessionIds.contains(session.sessionId)
-                    && !pluginSessionIds.contains(session.sessionId)
-                    && session.terminalInfo?.termProgram != "meee2-ghostty-surface"
-                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
-                        cwd: cwd,
-                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
-                    )
-                    && SessionControlStore.shared.state(for: [session.sessionId]) == .active
-            }
-            .map(NativeSessionRailItem.externalSession)
-        let externalItems = (pluginItems + storeItems).sorted { $0.updatedAt > $1.updatedAt }
-        return internalItems + externalItems
+        return internalSessions.map(NativeSessionRailItem.internalSurface)
     }
 
     private func filteredItems(_ items: [NativeSessionRailItem]) -> [NativeSessionRailItem] {
@@ -477,23 +425,13 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         [
             NativeSessionRailSection(
                 id: "internal-active",
-                title: "Internal active",
+                title: "Managed active",
                 items: items.filter { $0.isInternal && $0.isActive }
             ),
             NativeSessionRailSection(
-                id: "external-active",
-                title: "External active",
-                items: items.filter { !$0.isInternal && $0.isActive }
-            ),
-            NativeSessionRailSection(
                 id: "internal-inactive",
-                title: "Internal inactive",
+                title: "Managed inactive",
                 items: items.filter { $0.isInternal && !$0.isActive }
-            ),
-            NativeSessionRailSection(
-                id: "external-inactive",
-                title: "External inactive",
-                items: items.filter { !$0.isInternal && !$0.isActive }
             )
         ].filter { !$0.items.isEmpty }
     }
@@ -520,12 +458,6 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
-    private static func realSessionId(for session: PluginSession) -> String {
-        let prefix = "\(session.pluginId)-"
-        return session.id.hasPrefix(prefix)
-            ? String(session.id.dropFirst(prefix.count))
-            : session.id
-    }
 }
 
 private extension TerminalSessionSnapshot {
@@ -548,24 +480,11 @@ private struct NativeSessionRailItem {
     let status: String
     let updatedAt: Date
     let surfaceSnapshot: TerminalSessionSnapshot
-    let externalSession: SessionData?
-    let pluginSession: PluginSession?
     let isInternal: Bool
 
     var isActive: Bool {
-        if isInternal {
-            return status == InternalTerminalLifecycle.starting.rawValue
-                || status == InternalTerminalLifecycle.running.rawValue
-        }
-        guard let sessionStatus = SessionStatus(rawValue: status) else {
-            return status == "active" || status == "running"
-        }
-        switch sessionStatus {
-        case .active, .thinking, .tooling, .permissionRequired, .compacting:
-            return true
-        case .idle, .waitingForUser, .completed, .dead:
-            return false
-        }
+        status == InternalTerminalLifecycle.starting.rawValue
+            || status == InternalTerminalLifecycle.running.rawValue
     }
 
     func matches(query: String) -> Bool {
@@ -574,7 +493,7 @@ private struct NativeSessionRailItem {
             title,
             subtitle,
             status,
-            isInternal ? "internal" : "external",
+            "managed",
             surfaceSnapshot.sessionId,
             surfaceSnapshot.surfaceId,
             surfaceSnapshot.provider,
@@ -591,72 +510,7 @@ private struct NativeSessionRailItem {
             status: surface.status,
             updatedAt: surface.updatedAt,
             surfaceSnapshot: surface,
-            externalSession: nil,
-            pluginSession: nil,
             isInternal: true
-        )
-    }
-
-    static func pluginExternalSession(_ session: PluginSession) -> NativeSessionRailItem {
-        let fallbackCwd = session.cwd ?? session.title
-        let snapshot = TerminalSessionSnapshot(
-            sessionId: session.id,
-            surfaceId: session.id,
-            backend: .external,
-            status: session.status.rawValue,
-            pid: nil,
-            cwd: fallbackCwd,
-            command: "",
-            provider: "external",
-            canvasId: nil,
-            nodeId: nil,
-            createdAt: session.startedAt,
-            updatedAt: session.lastUpdated ?? session.startedAt
-        )
-        let pluginName = PluginManager.shared.loadedPlugins[session.pluginId]?.displayName
-            ?? session.pluginId
-        let subtitle = [pluginName, fallbackCwd]
-            .filter { !$0.isEmpty }
-            .joined(separator: " - ")
-        return NativeSessionRailItem(
-            id: "plugin:\(session.id)",
-            title: session.title,
-            subtitle: subtitle,
-            status: session.status.rawValue,
-            updatedAt: session.lastUpdated ?? session.startedAt,
-            surfaceSnapshot: snapshot,
-            externalSession: nil,
-            pluginSession: session,
-            isInternal: false
-        )
-    }
-
-    static func externalSession(_ session: SessionData) -> NativeSessionRailItem {
-        let fallbackCwd = session.cwd ?? session.project
-        let placeholder = TerminalSessionSnapshot(
-            sessionId: session.sessionId,
-            surfaceId: session.sessionId,
-            backend: .external,
-            status: session.status.rawValue,
-            pid: session.pid,
-            cwd: fallbackCwd,
-            command: "",
-            provider: "external",
-            canvasId: nil,
-            nodeId: nil,
-            createdAt: session.startedAt,
-            updatedAt: session.lastActivity
-        )
-        return NativeSessionRailItem(
-            id: "external:\(session.sessionId)",
-            title: session.project,
-            subtitle: fallbackCwd,
-            status: session.status.rawValue,
-            updatedAt: session.lastActivity,
-            surfaceSnapshot: placeholder,
-            externalSession: session,
-            pluginSession: nil,
-            isInternal: false
         )
     }
 

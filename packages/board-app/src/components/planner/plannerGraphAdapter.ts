@@ -136,6 +136,8 @@ export interface PlannerNodeData extends Record<string, unknown> {
   /** UI-2: false when ENG-4 RLS would refuse internal edits. */
   canEditInternals?: boolean
   monitorItem?: CanvasNodeMonitorItem | null
+  /** Ephemeral one-shot guidance highlight; never persisted to planner state. */
+  guided?: boolean
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>

@@ -576,10 +576,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func shouldSyncPluginSession(_ session: PluginSession) -> Bool {
-        if session.pluginId == "com.meee2.plugin.claude" {
-            return false
-        }
-        return shouldSyncSessionId(session.id)
+        _ = session
+        return false
     }
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {

@@ -1251,10 +1251,8 @@ export interface PlannerNodeInternalSessionResult {
   cwd: string
   command: string
   terminalKind: 'internal' | string
-  // "native-workspace" for internal surfaces; "external" when the bound session
-  // is a live ghostty/external terminal the frontend must focus via activateSession.
-  openTarget?: 'native-workspace' | 'external' | string
-  action?: 'reuse' | 'create' | 'resume' | 'recreate' | 'focus-external' | string
+  openTarget?: 'native-workspace' | string
+  action?: 'reuse' | 'create' | 'resume' | 'recreate' | string
   graph: PlannerGraphState
 }
 

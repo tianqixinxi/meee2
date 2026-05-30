@@ -20,7 +20,14 @@ import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
+import { GuideOverlay } from './components/GuideOverlay'
 import { useI18n } from './lib/i18n'
+import {
+  boardTargetFromPlannerItem,
+  requestBoardTarget,
+  type BoardOpenTarget,
+} from './lib/boardTarget'
+import { requestBoardGuide, requestPlannerNodeSelection } from './lib/guide'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
@@ -50,7 +57,6 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-  activateSession,
   applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
@@ -666,56 +672,178 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
   }, [applyCanvasList, pushToast])
 
-  const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
-    const target = resolveMonitorItemOpenTarget(item, boardState.state?.sessions)
-    if (target.kind === 'external-session') {
-      activateSession(target.sessionId)
-        .then((ok) => {
-          if (!ok) pushToast('error', 'Failed to open external session')
-        })
-        .finally(() => boardState.refresh())
+  const handleOpenBoardTarget = useCallback((target: BoardOpenTarget) => {
+    if (target.kind === 'session') {
+      setWorkspaceMode('sessions')
+      window.dispatchEvent(new CustomEvent('meee2:open-session', {
+        detail: { sessionId: target.sessionId },
+      }))
       return
     }
-    handleSetActiveCanvas(target.canvasId)
+
     setWorkspaceMode('planner')
-    if (target.nodeId) {
+    if (target.canvasId !== activeCanvasId) {
+      handleSetActiveCanvas(target.canvasId)
+    }
+
+    if (target.kind === 'canvas') {
+      if (target.guide?.enabled) {
+        window.setTimeout(() => {
+          requestBoardGuide({
+            kind: 'selector',
+            selector: '[data-guide-target="planner-flow"]',
+            title: target.guide?.title,
+            body: target.guide?.body,
+            durationMs: target.guide?.durationMs,
+            source: target.source,
+          })
+        }, 180)
+      }
+      return
+    }
+
+    if (target.kind === 'planner-proposal') {
       window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('meee2:select-node', {
-          detail: { canvasId: target.canvasId, nodeId: target.nodeId },
-        }))
-      }, 50)
+        requestBoardGuide({
+          kind: 'selector',
+          selector: '[data-guide-target="planner-proposal"], [data-guide-target="planner-workspace-preview"]',
+          title: target.guide?.title ?? 'Review proposal',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          source: target.source,
+        })
+      }, 220)
+      return
     }
-  }, [boardState, handleSetActiveCanvas, pushToast])
 
-  // Command palette handlers. Switching canvases is async (RTT against the
-  // local API), so for node selection we first ensure planner mode + the
-  // right active canvas, then dispatch a `meee2:select-node` event which
-  // PlannerGraph subscribes to (it opens its inspector for the matching node).
-  const handlePaletteOpenCanvas = useCallback((canvasId: string) => {
-    setWorkspaceMode('planner')
-    handleSetActiveCanvas(canvasId)
-  }, [handleSetActiveCanvas])
-
-  const handlePaletteOpenNode = useCallback((canvasId: string, nodeId: string) => {
-    setWorkspaceMode('planner')
-    if (canvasId !== activeCanvasId) {
-      handleSetActiveCanvas(canvasId)
+    if (target.kind === 'planner-delivery') {
+      window.setTimeout(() => {
+        requestBoardGuide({
+          kind: 'selector',
+          selector: '[data-guide-target="planner-flow"]',
+          title: target.guide?.title ?? 'Delivery canvas',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          source: target.source,
+        })
+      }, 220)
+      return
     }
-    // Give PlannerGraph one tick to remount on the new canvas before asking it
-    // to focus the node. PlannerGraph also re-applies the latest pending
-    // selection after its planner state finishes hydrating.
+
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('meee2:select-node', {
-        detail: { canvasId, nodeId },
-      }))
+      requestPlannerNodeSelection({
+        canvasId: target.canvasId,
+        nodeId: target.nodeId,
+        guide: target.guide?.enabled ?? false,
+        source: target.source,
+        title: target.guide?.title,
+        body: target.guide?.body,
+        durationMs: target.guide?.durationMs,
+        openInspector: target.guide?.openInspector,
+      })
     }, 50)
   }, [activeCanvasId, handleSetActiveCanvas])
 
-  const handlePaletteOpenSession = useCallback((sessionId: string) => {
-    window.dispatchEvent(new CustomEvent('meee2:open-session', {
-      detail: { sessionId },
-    }))
+  const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
+    const target = resolveMonitorItemOpenTarget(item)
+    if (target.kind === 'node') {
+      requestBoardTarget({
+        kind: 'planner-node',
+        canvasId: target.canvasId,
+        nodeId: target.nodeId,
+        source: 'monitor',
+        guide: {
+          enabled: true,
+          title: 'Needs attention',
+          body: item.summary,
+          openInspector: false,
+        },
+      })
+      return
+    }
+    if (target.kind === 'proposal') {
+      requestBoardTarget({
+        kind: 'planner-proposal',
+        canvasId: target.canvasId,
+        proposalId: target.proposalId,
+        source: 'monitor',
+        guide: {
+          enabled: true,
+          title: 'Review proposal',
+          body: item.summary,
+        },
+      })
+      return
+    }
+    if (target.kind === 'delivery') {
+      requestBoardTarget({
+        kind: 'planner-delivery',
+        canvasId: target.canvasId,
+        deliveryId: target.deliveryId,
+        source: 'monitor',
+        guide: {
+          enabled: true,
+          title: 'Delivery needs attention',
+          body: item.summary,
+        },
+      })
+      return
+    }
+    requestBoardTarget({
+      kind: 'canvas',
+      canvasId: target.canvasId,
+      source: 'monitor',
+      guide: {
+        enabled: true,
+        title: 'Canvas needs attention',
+        body: item.summary,
+      },
+    })
   }, [])
+
+  useEffect(() => {
+    const openBoardTarget = (event: Event) => {
+      const target = (event as CustomEvent<BoardOpenTarget>).detail
+      if (!target?.kind) return
+      handleOpenBoardTarget(target)
+    }
+    const openPlannerItem = (event: Event) => {
+      const detail = (event as CustomEvent<{ canvasId?: string; nodeId?: string }>).detail
+      const target = boardTargetFromPlannerItem({
+        canvasId: detail?.canvasId,
+        nodeId: detail?.nodeId,
+        source: 'island',
+        guide: {
+          enabled: true,
+          title: 'Opened from Dynamic Island',
+          body: 'This is the node that needs your attention.',
+          openInspector: false,
+        },
+      })
+      if (target) handleOpenBoardTarget(target)
+    }
+    window.addEventListener('meee2:open-board-target', openBoardTarget)
+    window.addEventListener('meee2:open-planner-item', openPlannerItem)
+    return () => {
+      window.removeEventListener('meee2:open-board-target', openBoardTarget)
+      window.removeEventListener('meee2:open-planner-item', openPlannerItem)
+    }
+  }, [handleOpenBoardTarget])
+
+  // Command palette and native bridge share the same board-target path. The
+  // target handler owns canvas switching; PlannerGraph consumes the pending
+  // node selection once that canvas has hydrated.
+  const handlePaletteOpenCanvas = useCallback((canvasId: string) => {
+    handleOpenBoardTarget({ kind: 'canvas', canvasId, source: 'palette' })
+  }, [handleOpenBoardTarget])
+
+  const handlePaletteOpenNode = useCallback((canvasId: string, nodeId: string) => {
+    handleOpenBoardTarget({ kind: 'planner-node', canvasId, nodeId, source: 'palette' })
+  }, [handleOpenBoardTarget])
+
+  const handlePaletteOpenSession = useCallback((sessionId: string) => {
+    handleOpenBoardTarget({ kind: 'session', sessionId, source: 'palette' })
+  }, [handleOpenBoardTarget])
 
   const initialMonitorCanvasSelectedRef = useRef(false)
   useEffect(() => {
@@ -1072,6 +1200,7 @@ export default function App() {
           onOpenNodeInspector={handlePaletteOpenNode}
           onOpenSession={handlePaletteOpenSession}
         />
+        <GuideOverlay />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

@@ -34,12 +34,6 @@ public struct SettingsView: View {
     /// 自动收起时间 (秒)
     @AppStorage("autoCloseInterval") private var autoCloseInterval: Double = 8
 
-    /// 收起状态是否展示 session 信息
-    @AppStorage("showSessionInCompact") private var showSessionInCompact: Bool = true
-
-    /// 轮播时长 (秒)
-    @AppStorage("carouselInterval") private var carouselInterval: Double = 10
-
     // MARK: - meee2 Settings
 
     /// meee2 是否已连接
@@ -209,21 +203,6 @@ public struct SettingsView: View {
                     }
                     .font(.caption)
                     .padding(.top, 4)
-                }
-            }
-
-            Section("Compact View") {
-                Toggle("Show session info in compact view", isOn: $showSessionInCompact)
-                    .disabled(!showIsland)
-
-                if showIsland && showSessionInCompact {
-                    HStack {
-                        Text("Carousel interval:")
-                        Spacer()
-                        Slider(value: $carouselInterval, in: 3...30, step: 1)
-                        Text("\(Int(carouselInterval))s")
-                            .frame(width: 40)
-                    }
                 }
             }
 

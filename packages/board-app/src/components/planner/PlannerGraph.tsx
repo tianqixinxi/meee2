@@ -11,7 +11,6 @@ import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } f
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
-  activateSession,
   applyPlannerProposal,
   approvePlannerProposal,
   abandonPlannerNodeSession,
@@ -76,6 +75,12 @@ import {
   runPlannerApprovalNotifications,
 } from '../../notifications'
 import { useI18n } from '../../lib/i18n'
+import {
+  cssEscape,
+  requestBoardGuide,
+  type BoardGuideTarget,
+  type PlannerNodeSelectionDetail,
+} from '../../lib/guide'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { DataSourceRail } from './DataSourceRail'
@@ -167,6 +172,9 @@ function PlannerGraphInner({
   }, [plannerState?.nodes])
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [guidedNodeId, setGuidedNodeId] = useState<string | null>(null)
+  const guidedNodeTimerRef = useRef<number | null>(null)
+  const guideDispatchTimerRef = useRef<number | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   /**
    * 2026-05-29 (PR #91 codex P2 fix): when a non-latest artifact chip on the
@@ -338,20 +346,109 @@ function PlannerGraphInner({
     setNodeModalOpen(true)
   }, [])
 
-  // External hook for the command palette (Cmd+K). When App.tsx routes a node
-  // hit through `meee2:select-node`, it switches the active canvas first; this
-  // listener focuses the inspector once the matching canvas has mounted.
+  const clearGuidedNode = useCallback(() => {
+    if (guidedNodeTimerRef.current !== null) {
+      window.clearTimeout(guidedNodeTimerRef.current)
+      guidedNodeTimerRef.current = null
+    }
+    if (guideDispatchTimerRef.current !== null) {
+      window.clearTimeout(guideDispatchTimerRef.current)
+      guideDispatchTimerRef.current = null
+    }
+    setGuidedNodeId(null)
+  }, [])
+
+  const focusPlannerNode = useCallback((detail: PlannerNodeSelectionDetail): boolean => {
+    const nodeId = detail.nodeId?.trim()
+    if (!nodeId) return false
+    if (detail.canvasId && detail.canvasId !== canvasId) return false
+    if (plannerState?.canvas.id !== canvasId) return false
+    const nodeExists = flowNodes.some((node) => node.id === nodeId)
+      || plannerState.nodes.some((node) => node.id === nodeId)
+    if (!nodeExists) return false
+
+    if (detail.openInspector !== false) {
+      setSelectedNodeId(nodeId)
+      setInitialInspectorArtifactId(null)
+      setNodeModalOpen(true)
+    }
+
+    if (detail.guide) {
+      if (guidedNodeTimerRef.current !== null) {
+        window.clearTimeout(guidedNodeTimerRef.current)
+      }
+      if (guideDispatchTimerRef.current !== null) {
+        window.clearTimeout(guideDispatchTimerRef.current)
+      }
+      setGuidedNodeId(nodeId)
+      reactFlow.fitView({
+        nodes: [{ id: nodeId }],
+        duration: 420,
+        padding: 0.34,
+        minZoom: 0.45,
+        maxZoom: 1.18,
+      })
+      guideDispatchTimerRef.current = window.setTimeout(() => {
+        requestBoardGuide({
+          kind: 'selector',
+          selector: `.react-flow__node[data-id="${cssEscape(nodeId)}"] .planner-node`,
+          title: detail.title,
+          body: detail.body,
+          durationMs: detail.durationMs,
+          source: detail.source,
+        })
+        guideDispatchTimerRef.current = null
+      }, 460)
+      guidedNodeTimerRef.current = window.setTimeout(() => {
+        setGuidedNodeId((current) => (current === nodeId ? null : current))
+        guidedNodeTimerRef.current = null
+      }, detail.durationMs ?? 5200)
+    }
+    return true
+  }, [canvasId, flowNodes, plannerState, reactFlow])
+
+  useEffect(() => clearGuidedNode, [clearGuidedNode])
+
+  // External hook for the command palette / native bridge. App.tsx may switch
+  // canvases first, so the latest request is also kept as a one-shot pending
+  // selection until this graph has the target node mounted.
   useEffect(() => {
     const onSelectNode = (event: Event) => {
-      const detail = (event as CustomEvent<{ canvasId?: string; nodeId?: string }>).detail
+      const detail = (event as CustomEvent<PlannerNodeSelectionDetail>).detail
       if (!detail?.nodeId) return
-      if (detail.canvasId && detail.canvasId !== canvasId) return
-      setSelectedNodeId(detail.nodeId)
-      setNodeModalOpen(true)
+      window.__meee2PendingPlannerNodeSelection = detail
+      if (focusPlannerNode(detail)) window.__meee2PendingPlannerNodeSelection = null
     }
     window.addEventListener('meee2:select-node', onSelectNode)
     return () => window.removeEventListener('meee2:select-node', onSelectNode)
-  }, [canvasId])
+  }, [focusPlannerNode])
+
+  useEffect(() => {
+    const onGuideTarget = (event: Event) => {
+      const target = (event as CustomEvent<BoardGuideTarget>).detail
+      if (!target || target.kind !== 'planner-node') return
+      const detail: PlannerNodeSelectionDetail = {
+        canvasId: target.canvasId,
+        nodeId: target.nodeId,
+        guide: true,
+        source: target.source,
+        title: target.title,
+        body: target.body,
+        durationMs: target.durationMs,
+        openInspector: target.openInspector ?? false,
+      }
+      window.__meee2PendingPlannerNodeSelection = detail
+      if (focusPlannerNode(detail)) window.__meee2PendingPlannerNodeSelection = null
+    }
+    window.addEventListener('meee2:guide-target', onGuideTarget)
+    return () => window.removeEventListener('meee2:guide-target', onGuideTarget)
+  }, [focusPlannerNode])
+
+  useEffect(() => {
+    const pending = window.__meee2PendingPlannerNodeSelection
+    if (!pending?.nodeId) return
+    if (focusPlannerNode(pending)) window.__meee2PendingPlannerNodeSelection = null
+  }, [focusPlannerNode])
 
   const notifyError = useCallback((message: string) => {
     onNotify?.('error', message)
@@ -478,19 +575,12 @@ function PlannerGraphInner({
     })
       .then((result) => {
         handleGraphStateChanged(result.graph)
-        if (result.action === 'focus-external' || result.openTarget === 'external') {
-          // The bound session is a LIVE ghostty/external terminal. Focus it via
-          // the same path Island uses (TerminalJumper) instead of opening an
-          // internal workspace surface.
-          void activateSession(result.sessionId)
-        } else {
-          window.dispatchEvent(new CustomEvent('meee2:open-session', {
-            detail: {
-              sessionId: result.sessionId,
-              surfaceId: result.surfaceId,
-            },
-          }))
-        }
+        window.dispatchEvent(new CustomEvent('meee2:open-session', {
+          detail: {
+            sessionId: result.sessionId,
+            surfaceId: result.surfaceId,
+          },
+        }))
         void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         return true
       })
@@ -590,26 +680,10 @@ function PlannerGraphInner({
     if (!trimmed) return
     setBusy(true)
     setError(null)
-    // Route by backend: a node dispatched with a ghostty/external spawn-provider
-    // binds an EXTERNAL terminal session. /internal-session can't open those (it
-    // only tracks internal surfaces), so focus the live external terminal via the
-    // same path Island uses (activateSession → TerminalJumper). Only internal
-    // surfaces go through /internal-session.
-    const boundLive = (boardState?.sessions ?? []).find((session) => sessionMatchesBoundId(session.id, trimmed))
-    if (boundLive && boundLive.terminalKind !== 'internal') {
-      void activateSession(boundLive.id)
-        .then((ok) => {
-          if (!ok) notifyError('Failed to focus the bound terminal session.')
-        })
-        .finally(() => setBusy(false))
-      return
-    }
     // BUG 1.2 — "open progress": open the ALREADY-bound session only. If it has
     // genuinely died (not a reusable internal surface AND not live in the board
     // sessions), the server reports `session_ended` (handled in
     // openInternalSessionForNode) instead of silently spawning a replacement.
-    // If it's a live external session the server didn't expose in boardState yet,
-    // the backend returns action=focus-external and we focus it there too.
     openInternalSessionForNode(nodeId, undefined, true)
       .then((ok) => {
         if (ok) {
@@ -620,7 +694,7 @@ function PlannerGraphInner({
         }
       })
       .finally(() => setBusy(false))
-  }, [boardState?.sessions, notifyError, onNotify, openInternalSessionForNode])
+  }, [boardState?.sessions, onNotify, openInternalSessionForNode])
 
   const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
     setBusy(true)
@@ -901,7 +975,7 @@ function PlannerGraphInner({
   }, [canvasId])
 
   const graph = useMemo(() => {
-    return buildPlannerGraph({
+    const built = buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
@@ -944,6 +1018,13 @@ function PlannerGraphInner({
       canEditInternals: plannerState?.canEditInternals ?? true,
       monitorItemsByNodeId,
     })
+    if (!guidedNodeId) return built
+    return {
+      ...built,
+      nodes: built.nodes.map((node) => node.id === guidedNodeId
+        ? { ...node, data: { ...node.data, guided: true } }
+        : node),
+    }
   }, [
     plannerState?.nodes,
     plannerState?.states,
@@ -981,6 +1062,7 @@ function PlannerGraphInner({
     handleOpenAssignedSubCanvas,
     plannerState?.canEditInternals,
     monitorItemsByNodeId,
+    guidedNodeId,
   ])
 
   const reviewGraph = useMemo(() => {
@@ -1622,9 +1704,9 @@ function PlannerGraphInner({
     : 'Recreate missing'
 
   return (
-    <section className="planner-workspace" aria-label="meee2 AI graph">
+    <section className="planner-workspace" aria-label="meee2 AI graph" data-guide-target="planner-workspace">
       {emptyCanvasMode ? (
-        <div className="planner-empty-omni">
+        <div className="planner-empty-omni" data-guide-target="planner-proposal">
           <PlannerProposalPanel
             canvasId={canvasId}
             canvasName={plannerState?.canvas.title ?? canvasName}
@@ -1665,7 +1747,7 @@ function PlannerGraphInner({
           {plannerPanelCollapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
         </button>
         {!plannerPanelCollapsed && (
-          <div className="planner-side">
+          <div className="planner-side" data-guide-target="planner-proposal">
             <button
               type="button"
               className="planner-side__resize"
@@ -1713,7 +1795,7 @@ function PlannerGraphInner({
             )}
           </div>
         )}
-        <div className="planner-flow">
+        <div className="planner-flow" data-guide-target="planner-flow">
           {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
               the canvas.monitor.v2 flag and renders nothing when the canvas has
               no monitorSpec, so legacy canvases are visually unchanged. */}
@@ -2481,7 +2563,7 @@ function PlannerWorkspacePreview({
   busy?: boolean
 }) {
   return (
-    <div className="planner-workspace-preview" aria-label="Proposal preview">
+    <div className="planner-workspace-preview" aria-label="Proposal preview" data-guide-target="planner-workspace-preview">
       <div className="planner-workspace-preview__notice" role="status">
         <span>Preview only</span>
         <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>

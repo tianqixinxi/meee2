@@ -24,7 +24,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { activateSession, closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
+import { closeSession, closeSessionSurface, createMemoryRecord, deleteMemoryRecord, fetchMemoryRecords, fetchSessionIntakeDiagnostics, fetchTranscript, injectToSession, listSessionSurfaces, openAccessibilitySettings, openNativeTerminalSurface, pushToDesktopNow, respondToSessionPermission, updateMemoryRecord, updateSessionControl, type NativeTerminalPrewarmAck, type NativeTerminalRect, type NativeTerminalSyncAck, type SessionMemoryRecord, type SessionSurface, type TranscriptBlock, type TranscriptEntryFull } from '../api'
 import { useI18n, type TranslationKey } from '../lib/i18n'
 import type { BoardState, CanvasInfo, Session, SessionIntakeDiagnostics } from '../types'
 
@@ -84,6 +84,7 @@ export function SessionsView({
   const visibleSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     return sessions
+      .filter(isInternalSession)
       .filter((session) => sessionControlState(session) === controlFilter)
       .filter((session) => sessionMatchesQuery(session, normalized))
       .filter((session) => {
@@ -109,14 +110,10 @@ export function SessionsView({
     }
     return list
   }, [selectedSession, visibleSessions])
-  const externalSessions = useMemo(
-    () => visibleSessions.filter((session) => !isInternalSession(session)),
-    [visibleSessions],
-  )
   const selectedSessionOnActiveTab = useMemo(() => {
     if (!selectedSession) return null
-    return (activeKindTab === 'internal') === isInternalSession(selectedSession) ? selectedSession : null
-  }, [activeKindTab, selectedSession])
+    return isInternalSession(selectedSession) ? selectedSession : null
+  }, [selectedSession])
   const sessionSurfaceSignature = useMemo(
     () => sessions.map((session) => `${session.id}:${session.surfaceId ?? ''}:${session.surfaceStatus ?? ''}`).sort().join('|'),
     [sessions],
@@ -150,7 +147,7 @@ export function SessionsView({
     if (routedSelectedSessionIdRef.current === selectedKey) return
     routedSelectedSessionIdRef.current = selectedKey
     if (!selectedSession) return
-    setActiveKindTab(isInternalSession(selectedSession) ? 'internal' : 'external')
+    setActiveKindTab('internal')
   }, [selectedSession, selectedSessionId])
 
   const prewarmInternalSession = useCallback((session: Session, reason = 'react.prewarm') => {
@@ -205,14 +202,6 @@ export function SessionsView({
   }, [activeKindTab, internalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
 
   useEffect(() => {
-    if (pendingSelectedSessionId) return
-    if (activeKindTab !== 'external' || selectedSessionOnActiveTab || externalSessions.length === 0) return
-    const next = externalSessions[0]
-    if (selectedSessionId === next.id || selectedSessionId === next.surfaceId) return
-    onSelectedSessionChange?.(next.id)
-  }, [activeKindTab, externalSessions, onSelectedSessionChange, pendingSelectedSessionId, selectedSessionId, selectedSessionOnActiveTab])
-
-  useEffect(() => {
     if (activeKindTab !== 'internal') return
     const targets = uniqueSessionsById([
       ...(selectedSessionOnActiveTab ? [selectedSessionOnActiveTab] : []),
@@ -239,10 +228,6 @@ export function SessionsView({
     onSelectedSessionChange?.(session.id)
   }, [onSelectedSessionChange, prewarmInternalSession])
 
-  const selectExternalSession = useCallback((session: Session) => {
-    onSelectedSessionChange?.(session.id)
-  }, [onSelectedSessionChange])
-
   const prewarmSessionRow = useCallback((session: Session) => {
     if (isInternalSession(session)) prewarmInternalSession(session, 'react.rowHoverPrewarm')
   }, [prewarmInternalSession])
@@ -254,9 +239,8 @@ export function SessionsView({
     }
     setOpeningId(session.id)
     setOpenErrorId(null)
-    const ok = await activateSession(session.id)
     setOpeningId(null)
-    if (!ok) setOpenErrorId(session.id)
+    setOpenErrorId(session.id)
   }, [selectInternalSession])
 
   return (
@@ -331,65 +315,31 @@ export function SessionsView({
                       active={activeKindTab === 'internal'}
                       onClick={() => setActiveKindTab('internal')}
                     />
-                    <KindTabButton
-                      label={t('sessions.externalSessions')}
-                      count={externalSessions.length}
-                      icon={<ExternalLink size={13} aria-hidden />}
-                      active={activeKindTab === 'external'}
-                      onClick={() => setActiveKindTab('external')}
-                    />
                   </div>
-                  {activeKindTab === 'internal' ? (
-                    <SessionsSection
-                      title={t('sessions.internalSessions')}
-                      subtitle={t('sessions.internalSubtitle')}
-                      count={internalSessions.length}
-                      emptyIcon={<TerminalIcon size={18} aria-hidden />}
-                      emptyText={t('sessions.noInternalSessions')}
-                    >
-                      <div className="sessions-list sessions-list--internal" aria-label={t('sessions.internalSessions')}>
-                        {internalSessions.map((session) => (
-                          <SessionRow
-                            key={session.id}
-                            session={session}
-                            selected={selectedSessionOnActiveTab?.id === session.id}
-                            opening={openingId === session.id}
-                            openError={openErrorId === session.id}
-                            unread={unreadSids.has(session.id)}
-                            onSelect={selectInternalSession}
-                            onOpen={openSession}
-                            onPrewarm={prewarmSessionRow}
-                            t={t}
-                          />
-                        ))}
-                      </div>
-                    </SessionsSection>
-                  ) : (
-                    <SessionsSection
-                      title={t('sessions.externalSessions')}
-                      subtitle={t('sessions.externalSubtitle')}
-                      count={externalSessions.length}
-                      emptyIcon={<ExternalLink size={18} aria-hidden />}
-                      emptyText={t('sessions.noExternalSessions')}
-                    >
-                      <div className="sessions-list sessions-list--external" aria-label={t('sessions.externalSessions')}>
-                        {externalSessions.map((session) => (
-                          <SessionRow
-                            key={session.id}
-                            session={session}
-                            selected={selectedSessionOnActiveTab?.id === session.id}
-                            opening={openingId === session.id}
-                            openError={openErrorId === session.id}
-                            unread={unreadSids.has(session.id)}
-                            onSelect={selectExternalSession}
-                            onOpen={openSession}
-                            onPrewarm={noopSessionAction}
-                            t={t}
-                          />
-                        ))}
-                      </div>
-                    </SessionsSection>
-                  )}
+                  <SessionsSection
+                    title={t('sessions.internalSessions')}
+                    subtitle={t('sessions.internalSubtitle')}
+                    count={internalSessions.length}
+                    emptyIcon={<TerminalIcon size={18} aria-hidden />}
+                    emptyText={t('sessions.noInternalSessions')}
+                  >
+                    <div className="sessions-list sessions-list--internal" aria-label={t('sessions.internalSessions')}>
+                      {internalSessions.map((session) => (
+                        <SessionRow
+                          key={session.id}
+                          session={session}
+                          selected={selectedSessionOnActiveTab?.id === session.id}
+                          opening={openingId === session.id}
+                          openError={openErrorId === session.id}
+                          unread={unreadSids.has(session.id)}
+                          onSelect={selectInternalSession}
+                          onOpen={openSession}
+                          onPrewarm={prewarmSessionRow}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  </SessionsSection>
                 </aside>
                 <SessionDetail
                   session={selectedSessionOnActiveTab}
@@ -963,7 +913,7 @@ function SessionDetail({
         ) : (
           <div className="sessions-external">
             <ExternalLink size={18} aria-hidden />
-            <span>{t('sessions.externalSummary')}</span>
+            <span>{t('sessions.unmanagedSummary')}</span>
           </div>
         )}
       </section>
@@ -1651,7 +1601,6 @@ function scheduleInternalTabPrewarm(
   }
 }
 
-function noopSessionAction(_session: Session) {}
 function noopVoid() {}
 
 function sessionControlState(session: Session): SessionControlFilter {
