@@ -7,6 +7,8 @@ import Meee2CommKit
 /// 状态管理器 - 聚合所有插件的数据
 /// 作为 UI 的数据源
 public class StatusManager: ObservableObject {
+    private static let islandAttentionRefreshDebounce: DispatchQueue.SchedulerTimeType.Stride = .seconds(1)
+
     // MARK: - Published Properties
 
     /// 所有 sessions (来自所有插件，包括 Claude)
@@ -181,7 +183,7 @@ public class StatusManager: ObservableObject {
 
         SessionEventBus.shared.publisher
             .filter(Self.shouldRefreshIslandAttention)
-            .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
+            .debounce(for: Self.islandAttentionRefreshDebounce, scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self = self else { return }
                 self.refreshIslandAttentionState()
