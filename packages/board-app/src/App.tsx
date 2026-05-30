@@ -20,7 +20,9 @@ import { FirstRunOnboarding } from './components/FirstRunOnboarding'
 import { WorkspaceRail, type WorkspaceMode } from './components/WorkspaceRail'
 import { AgentRuntimeSetupModal } from './components/AgentRuntimeSetupModal'
 import { CommandPalette } from './components/CommandPalette'
+import { GuideOverlay } from './components/GuideOverlay'
 import { useI18n } from './lib/i18n'
+import { requestPlannerNodeSelection } from './lib/guide'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
@@ -669,11 +671,18 @@ export default function App() {
     const target = resolveMonitorItemOpenTarget(item)
     handleSetActiveCanvas(target.canvasId)
     setWorkspaceMode('planner')
-    if (target.nodeId) {
+    const nodeId = target.nodeId ?? undefined
+    if (nodeId) {
       window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent('meee2:select-node', {
-          detail: { canvasId: target.canvasId, nodeId: target.nodeId },
-        }))
+        requestPlannerNodeSelection({
+          canvasId: target.canvasId,
+          nodeId,
+          guide: true,
+          source: 'monitor',
+          title: 'Needs attention',
+          body: item.summary,
+          openInspector: false,
+        })
       }, 50)
     }
   }, [handleSetActiveCanvas])
@@ -688,9 +697,15 @@ export default function App() {
         handleSetActiveCanvas(canvasId)
         if (nodeId) {
           window.setTimeout(() => {
-            window.dispatchEvent(new CustomEvent('meee2:select-node', {
-              detail: { canvasId, nodeId },
-            }))
+            requestPlannerNodeSelection({
+              canvasId,
+              nodeId,
+              guide: true,
+              source: 'island',
+              title: 'Opened from Dynamic Island',
+              body: 'This is the node that needs your attention.',
+              openInspector: false,
+            })
           }, 50)
         }
       }
@@ -717,9 +732,7 @@ export default function App() {
     // to focus the node. PlannerGraph also re-applies the latest pending
     // selection after its planner state finishes hydrating.
     window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('meee2:select-node', {
-        detail: { canvasId, nodeId },
-      }))
+      requestPlannerNodeSelection({ canvasId, nodeId, source: 'palette' })
     }, 50)
   }, [activeCanvasId, handleSetActiveCanvas])
 
@@ -1084,6 +1097,7 @@ export default function App() {
           onOpenNodeInspector={handlePaletteOpenNode}
           onOpenSession={handlePaletteOpenSession}
         />
+        <GuideOverlay />
         <div className="toasts">
           {toasts.map((t) => (
             <div key={t.id} className={`toast ${t.kind}`}>

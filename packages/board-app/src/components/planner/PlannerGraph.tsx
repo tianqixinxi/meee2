@@ -75,6 +75,12 @@ import {
   runPlannerApprovalNotifications,
 } from '../../notifications'
 import { useI18n } from '../../lib/i18n'
+import {
+  cssEscape,
+  requestBoardGuide,
+  type BoardGuideTarget,
+  type PlannerNodeSelectionDetail,
+} from '../../lib/guide'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
 import { DataSourceRail } from './DataSourceRail'
@@ -166,6 +172,8 @@ function PlannerGraphInner({
   }, [plannerState?.nodes])
   const [proposal, setProposal] = useState<PlanProposal | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [guidedNodeId, setGuidedNodeId] = useState<string | null>(null)
+  const guidedNodeTimerRef = useRef<number | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   /**
    * 2026-05-29 (PR #91 codex P2 fix): when a non-latest artifact chip on the
@@ -337,20 +345,101 @@ function PlannerGraphInner({
     setNodeModalOpen(true)
   }, [])
 
-  // External hook for the command palette (Cmd+K). When App.tsx routes a node
-  // hit through `meee2:select-node`, it switches the active canvas first; this
-  // listener focuses the inspector once the matching canvas has mounted.
+  const clearGuidedNode = useCallback(() => {
+    if (guidedNodeTimerRef.current !== null) {
+      window.clearTimeout(guidedNodeTimerRef.current)
+      guidedNodeTimerRef.current = null
+    }
+    setGuidedNodeId(null)
+  }, [])
+
+  const focusPlannerNode = useCallback((detail: PlannerNodeSelectionDetail): boolean => {
+    const nodeId = detail.nodeId?.trim()
+    if (!nodeId) return false
+    if (detail.canvasId && detail.canvasId !== canvasId) return false
+    if (plannerState?.canvas.id !== canvasId) return false
+    const nodeExists = flowNodes.some((node) => node.id === nodeId)
+      || plannerState.nodes.some((node) => node.id === nodeId)
+    if (!nodeExists) return false
+
+    if (detail.openInspector !== false) {
+      setSelectedNodeId(nodeId)
+      setInitialInspectorArtifactId(null)
+      setNodeModalOpen(true)
+    }
+
+    if (detail.guide) {
+      if (guidedNodeTimerRef.current !== null) {
+        window.clearTimeout(guidedNodeTimerRef.current)
+      }
+      setGuidedNodeId(nodeId)
+      reactFlow.fitView({
+        nodes: [{ id: nodeId }],
+        duration: 420,
+        padding: 0.34,
+        minZoom: 0.45,
+        maxZoom: 1.18,
+      })
+      window.setTimeout(() => {
+        requestBoardGuide({
+          kind: 'selector',
+          selector: `.react-flow__node[data-id="${cssEscape(nodeId)}"] .planner-node`,
+          title: detail.title,
+          body: detail.body,
+          durationMs: detail.durationMs,
+          source: detail.source,
+        })
+      }, 460)
+      guidedNodeTimerRef.current = window.setTimeout(() => {
+        setGuidedNodeId((current) => (current === nodeId ? null : current))
+        guidedNodeTimerRef.current = null
+      }, detail.durationMs ?? 5200)
+    }
+    return true
+  }, [canvasId, flowNodes, plannerState, reactFlow])
+
+  useEffect(() => clearGuidedNode, [clearGuidedNode])
+
+  // External hook for the command palette / native bridge. App.tsx may switch
+  // canvases first, so the latest request is also kept as a one-shot pending
+  // selection until this graph has the target node mounted.
   useEffect(() => {
     const onSelectNode = (event: Event) => {
-      const detail = (event as CustomEvent<{ canvasId?: string; nodeId?: string }>).detail
+      const detail = (event as CustomEvent<PlannerNodeSelectionDetail>).detail
       if (!detail?.nodeId) return
-      if (detail.canvasId && detail.canvasId !== canvasId) return
-      setSelectedNodeId(detail.nodeId)
-      setNodeModalOpen(true)
+      window.__meee2PendingPlannerNodeSelection = detail
+      if (focusPlannerNode(detail)) window.__meee2PendingPlannerNodeSelection = null
     }
     window.addEventListener('meee2:select-node', onSelectNode)
     return () => window.removeEventListener('meee2:select-node', onSelectNode)
-  }, [canvasId])
+  }, [focusPlannerNode])
+
+  useEffect(() => {
+    const onGuideTarget = (event: Event) => {
+      const target = (event as CustomEvent<BoardGuideTarget>).detail
+      if (!target || target.kind !== 'planner-node') return
+      const detail: PlannerNodeSelectionDetail = {
+        canvasId: target.canvasId,
+        nodeId: target.nodeId,
+        guide: true,
+        source: target.source,
+        title: target.title,
+        body: target.body,
+        durationMs: target.durationMs,
+        openInspector: target.openInspector ?? false,
+      }
+      window.__meee2PendingPlannerNodeSelection = detail
+      if (focusPlannerNode(detail)) window.__meee2PendingPlannerNodeSelection = null
+    }
+    window.addEventListener('meee2:guide-target', onGuideTarget)
+    return () => window.removeEventListener('meee2:guide-target', onGuideTarget)
+  }, [focusPlannerNode])
+
+  useEffect(() => {
+    const pending = window.__meee2PendingPlannerNodeSelection
+    if (!pending?.nodeId) return
+    if (focusPlannerNode(pending)) window.__meee2PendingPlannerNodeSelection = null
+  }, [focusPlannerNode])
 
   const notifyError = useCallback((message: string) => {
     onNotify?.('error', message)
@@ -867,7 +956,7 @@ function PlannerGraphInner({
   }, [canvasId])
 
   const graph = useMemo(() => {
-    return buildPlannerGraph({
+    const built = buildPlannerGraph({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
@@ -910,6 +999,13 @@ function PlannerGraphInner({
       canEditInternals: plannerState?.canEditInternals ?? true,
       monitorItemsByNodeId,
     })
+    if (!guidedNodeId) return built
+    return {
+      ...built,
+      nodes: built.nodes.map((node) => node.id === guidedNodeId
+        ? { ...node, data: { ...node.data, guided: true } }
+        : node),
+    }
   }, [
     plannerState?.nodes,
     plannerState?.states,
@@ -947,6 +1043,7 @@ function PlannerGraphInner({
     handleOpenAssignedSubCanvas,
     plannerState?.canEditInternals,
     monitorItemsByNodeId,
+    guidedNodeId,
   ])
 
   const reviewGraph = useMemo(() => {

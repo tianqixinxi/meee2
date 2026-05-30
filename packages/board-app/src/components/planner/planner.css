@@ -1601,6 +1601,31 @@
   box-shadow: 0 0 0 2px rgba(245, 244, 239, 0.08), 0 18px 44px rgba(0, 0, 0, 0.28);
 }
 
+.planner-node.is-guided {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent),
+    0 0 0 10px color-mix(in srgb, var(--accent) 12%, transparent),
+    0 22px 56px rgba(0, 0, 0, 0.34);
+  animation: planner-node-guide-pulse 1300ms ease-in-out infinite;
+}
+
+@keyframes planner-node-guide-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 0 0 8px color-mix(in srgb, var(--accent) 10%, transparent),
+      0 22px 56px rgba(0, 0, 0, 0.34);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 52%, transparent),
+      0 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent),
+      0 24px 62px rgba(0, 0, 0, 0.38);
+  }
+}
+
 .react-flow__node.dragging .planner-node {
   cursor: grabbing;
 }
