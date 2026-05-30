@@ -356,18 +356,42 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         touch()
         onStatusChange(surfaceId, "running")
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        var scheduledTrustAutoAccept = false
         if shouldSendLaunchCommand(trimmedCommand) {
             let startedAt = Date()
             terminalView.sendText(trimmedCommand + "\n")
             logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
+            scheduledTrustAutoAccept = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
         }
         guard let initialPrompt, !initialPrompt.isEmpty, !didSendInitialPrompt else { return }
         didSendInitialPrompt = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+        let promptDelay: DispatchTimeInterval = scheduledTrustAutoAccept ? .milliseconds(2_300) : .milliseconds(1_200)
+        DispatchQueue.main.asyncAfter(deadline: .now() + promptDelay) { [weak self] in
             guard let self, !self.detached else { return }
             self.terminalView.sendText(initialPrompt + "\n")
             self.touch()
         }
+    }
+
+    @discardableResult
+    private func scheduleWorkspaceTrustAutoAcceptIfNeeded(command: String) -> Bool {
+        guard InternalWorkspaceTrustPromptDetector.shouldProactivelyAutoAccept(
+            provider: provider,
+            command: command,
+            cwd: cwd
+        ) else {
+            return false
+        }
+
+        // Ghostty exec surfaces do not expose stdout, so trusted meee2 workspaces get a narrow startup Enter.
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1_100)) { [weak self] in
+            guard let self, !self.detached else { return }
+            let startedAt = Date()
+            self.terminalView.sendText("\r")
+            self.touch()
+            self.logPerf("auto_accept_workspace_trust", startedAt: startedAt, extra: "mode=enter")
+        }
+        return true
     }
 
     private func shouldSendLaunchCommand(_ command: String) -> Bool {

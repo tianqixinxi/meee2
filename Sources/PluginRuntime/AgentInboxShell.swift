@@ -19,7 +19,7 @@ import Meee2CommKit
 /// 幂等：`(sessionId, msgId)` 已在 push 中就跳过——必要的。Plugin 每秒一次
 /// `sessionMetadataChanged` 会让 `flushInboxIfResting` 看到 push 还没结束的
 /// 旧 msg 又开一个 Task，没幂等就会双推。
-public final class AgentInboxShell {
+public final class AgentInboxShell: @unchecked Sendable {
     public static let shared = AgentInboxShell()
 
     /// 正在 Ghostty 推送的 (sessionId|msgId) 集合。访问须持 queue。

@@ -62,24 +62,24 @@ final class WeakInternalTerminalSurfaceClient {
     }
 }
 
-enum InternalWorkspaceTrustPromptDetector {
-    static func shouldAutoAccept(provider: String, command: String, output: String) -> Bool {
+public enum InternalWorkspaceTrustPromptDetector {
+    public static func shouldAutoAccept(provider: String, command: String, output: String) -> Bool {
         let normalizedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalizedProvider == "claude" || normalizedCommand.hasPrefix("claude ") || normalizedCommand == "claude" else {
-            return false
-        }
+        guard launchesClaude(provider: normalizedProvider, command: normalizedCommand) else { return false }
 
         let normalizedOutput = stripTerminalControls(output).lowercased()
         guard normalizedOutput.contains("trust") else { return false }
 
         return normalizedOutput.contains("do you trust the files")
+            || normalizedOutput.contains("quick safety check")
+            || normalizedOutput.contains("yes, i trust this folder")
             || normalizedOutput.contains("trust this workspace")
             || normalizedOutput.contains("trust this folder")
             || normalizedOutput.contains("trust this project")
     }
 
-    static func response(for output: String) -> String {
+    public static func response(for output: String) -> String {
         let normalizedOutput = stripTerminalControls(output).lowercased()
         if normalizedOutput.contains("[y/n]")
             || normalizedOutput.contains("(y/n)")
@@ -87,7 +87,27 @@ enum InternalWorkspaceTrustPromptDetector {
             || normalizedOutput.contains("yes/no") {
             return "y\r"
         }
+        if normalizedOutput.contains("enter to confirm") {
+            return "\r"
+        }
         return "1\r"
+    }
+
+    public static func shouldProactivelyAutoAccept(provider: String, command: String, cwd: String) -> Bool {
+        let normalizedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard launchesClaude(provider: normalizedProvider, command: normalizedCommand) else { return false }
+        return isMeee2ManagedWorkspace(cwd)
+    }
+
+    private static func launchesClaude(provider: String, command: String) -> Bool {
+        if provider == "claude" { return true }
+        let executable = command.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        return executable == "claude" || executable.hasSuffix("/claude")
+    }
+
+    private static func isMeee2ManagedWorkspace(_ cwd: String) -> Bool {
+        InternalSessionIdentity.isMeee2ManagedWorkspace(cwd)
     }
 
     private static func stripTerminalControls(_ text: String) -> String {
@@ -699,6 +719,7 @@ final class InternalTerminalSurface {
         processSource?.cancel()
         processSource = nil
         primaryHandle?.readabilityHandler = nil
+        drainAvailableOutputBeforeExit()
         primaryHandle?.closeFile()
         primaryFD = -1
         lock.lock()
@@ -717,6 +738,36 @@ final class InternalTerminalSurface {
         SessionStore.shared.delete(sessionId)
         SessionTerminalStore.shared.remove(sessionId: sessionId)
         BoardServer.shared.broadcastStateChanged()
+    }
+
+    private func drainAvailableOutputBeforeExit() {
+        let fd = primaryFD
+        guard fd >= 0 else { return }
+        let flags = fcntl(fd, F_GETFL)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
+        defer {
+            if flags >= 0 {
+                _ = fcntl(fd, F_SETFL, flags)
+            }
+        }
+
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let byteCount = buffer.withUnsafeMutableBytes { rawBuffer -> Int in
+                guard let baseAddress = rawBuffer.baseAddress else { return 0 }
+                return Darwin.read(fd, baseAddress, rawBuffer.count)
+            }
+            if byteCount > 0 {
+                emitOutput(Data(buffer.prefix(byteCount)))
+                continue
+            }
+            if byteCount == -1 && errno == EINTR {
+                continue
+            }
+            break
+        }
     }
 
     private func makeProcessExitSource(pid: pid_t) -> DispatchSourceProcess {
