@@ -24,9 +24,10 @@ import { GuideOverlay } from './components/GuideOverlay'
 import { useI18n } from './lib/i18n'
 import {
   boardTargetFromPlannerItem,
+  requestBoardTarget,
   type BoardOpenTarget,
 } from './lib/boardTarget'
-import { requestPlannerNodeSelection } from './lib/guide'
+import { requestBoardGuide, requestPlannerNodeSelection } from './lib/guide'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
@@ -685,7 +686,50 @@ export default function App() {
       handleSetActiveCanvas(target.canvasId)
     }
 
-    if (target.kind !== 'planner-node') return
+    if (target.kind === 'canvas') {
+      if (target.guide?.enabled) {
+        window.setTimeout(() => {
+          requestBoardGuide({
+            kind: 'selector',
+            selector: '[data-guide-target="planner-flow"]',
+            title: target.guide?.title,
+            body: target.guide?.body,
+            durationMs: target.guide?.durationMs,
+            source: target.source,
+          })
+        }, 180)
+      }
+      return
+    }
+
+    if (target.kind === 'planner-proposal') {
+      window.setTimeout(() => {
+        requestBoardGuide({
+          kind: 'selector',
+          selector: '[data-guide-target="planner-proposal"], [data-guide-target="planner-workspace-preview"]',
+          title: target.guide?.title ?? 'Review proposal',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          source: target.source,
+        })
+      }, 220)
+      return
+    }
+
+    if (target.kind === 'planner-delivery') {
+      window.setTimeout(() => {
+        requestBoardGuide({
+          kind: 'selector',
+          selector: '[data-guide-target="planner-flow"]',
+          title: target.guide?.title ?? 'Delivery canvas',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          source: target.source,
+        })
+      }, 220)
+      return
+    }
+
     window.setTimeout(() => {
       requestPlannerNodeSelection({
         canvasId: target.canvasId,
@@ -702,12 +746,11 @@ export default function App() {
 
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
     const target = resolveMonitorItemOpenTarget(item)
-    const nodeId = target.nodeId ?? undefined
-    handleOpenBoardTarget(nodeId
-      ? {
+    if (target.kind === 'node') {
+      requestBoardTarget({
         kind: 'planner-node',
         canvasId: target.canvasId,
-        nodeId,
+        nodeId: target.nodeId,
         source: 'monitor',
         guide: {
           enabled: true,
@@ -715,13 +758,48 @@ export default function App() {
           body: item.summary,
           openInspector: false,
         },
-      }
-      : {
-        kind: 'canvas',
-        canvasId: target.canvasId,
-        source: 'monitor',
       })
-  }, [handleOpenBoardTarget])
+      return
+    }
+    if (target.kind === 'proposal') {
+      requestBoardTarget({
+        kind: 'planner-proposal',
+        canvasId: target.canvasId,
+        proposalId: target.proposalId,
+        source: 'monitor',
+        guide: {
+          enabled: true,
+          title: 'Review proposal',
+          body: item.summary,
+        },
+      })
+      return
+    }
+    if (target.kind === 'delivery') {
+      requestBoardTarget({
+        kind: 'planner-delivery',
+        canvasId: target.canvasId,
+        deliveryId: target.deliveryId,
+        source: 'monitor',
+        guide: {
+          enabled: true,
+          title: 'Delivery needs attention',
+          body: item.summary,
+        },
+      })
+      return
+    }
+    requestBoardTarget({
+      kind: 'canvas',
+      canvasId: target.canvasId,
+      source: 'monitor',
+      guide: {
+        enabled: true,
+        title: 'Canvas needs attention',
+        body: item.summary,
+      },
+    })
+  }, [])
 
   useEffect(() => {
     const openBoardTarget = (event: Event) => {

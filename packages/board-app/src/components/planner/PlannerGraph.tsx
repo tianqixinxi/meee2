@@ -174,6 +174,7 @@ function PlannerGraphInner({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [guidedNodeId, setGuidedNodeId] = useState<string | null>(null)
   const guidedNodeTimerRef = useRef<number | null>(null)
+  const guideDispatchTimerRef = useRef<number | null>(null)
   const [nodeModalOpen, setNodeModalOpen] = useState(false)
   /**
    * 2026-05-29 (PR #91 codex P2 fix): when a non-latest artifact chip on the
@@ -350,6 +351,10 @@ function PlannerGraphInner({
       window.clearTimeout(guidedNodeTimerRef.current)
       guidedNodeTimerRef.current = null
     }
+    if (guideDispatchTimerRef.current !== null) {
+      window.clearTimeout(guideDispatchTimerRef.current)
+      guideDispatchTimerRef.current = null
+    }
     setGuidedNodeId(null)
   }, [])
 
@@ -372,6 +377,9 @@ function PlannerGraphInner({
       if (guidedNodeTimerRef.current !== null) {
         window.clearTimeout(guidedNodeTimerRef.current)
       }
+      if (guideDispatchTimerRef.current !== null) {
+        window.clearTimeout(guideDispatchTimerRef.current)
+      }
       setGuidedNodeId(nodeId)
       reactFlow.fitView({
         nodes: [{ id: nodeId }],
@@ -380,7 +388,7 @@ function PlannerGraphInner({
         minZoom: 0.45,
         maxZoom: 1.18,
       })
-      window.setTimeout(() => {
+      guideDispatchTimerRef.current = window.setTimeout(() => {
         requestBoardGuide({
           kind: 'selector',
           selector: `.react-flow__node[data-id="${cssEscape(nodeId)}"] .planner-node`,
@@ -389,6 +397,7 @@ function PlannerGraphInner({
           durationMs: detail.durationMs,
           source: detail.source,
         })
+        guideDispatchTimerRef.current = null
       }, 460)
       guidedNodeTimerRef.current = window.setTimeout(() => {
         setGuidedNodeId((current) => (current === nodeId ? null : current))
@@ -1685,9 +1694,9 @@ function PlannerGraphInner({
     : 'Recreate missing'
 
   return (
-    <section className="planner-workspace" aria-label="meee2 AI graph">
+    <section className="planner-workspace" aria-label="meee2 AI graph" data-guide-target="planner-workspace">
       {emptyCanvasMode ? (
-        <div className="planner-empty-omni">
+        <div className="planner-empty-omni" data-guide-target="planner-proposal">
           <PlannerProposalPanel
             canvasId={canvasId}
             canvasName={plannerState?.canvas.title ?? canvasName}
@@ -1728,7 +1737,7 @@ function PlannerGraphInner({
           {plannerPanelCollapsed ? <PanelLeftOpen size={16} aria-hidden /> : <PanelLeftClose size={16} aria-hidden />}
         </button>
         {!plannerPanelCollapsed && (
-          <div className="planner-side">
+          <div className="planner-side" data-guide-target="planner-proposal">
             <button
               type="button"
               className="planner-side__resize"
@@ -1776,7 +1785,7 @@ function PlannerGraphInner({
             )}
           </div>
         )}
-        <div className="planner-flow">
+        <div className="planner-flow" data-guide-target="planner-flow">
           {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
               the canvas.monitor.v2 flag and renders nothing when the canvas has
               no monitorSpec, so legacy canvases are visually unchanged. */}
@@ -2544,7 +2553,7 @@ function PlannerWorkspacePreview({
   busy?: boolean
 }) {
   return (
-    <div className="planner-workspace-preview" aria-label="Proposal preview">
+    <div className="planner-workspace-preview" aria-label="Proposal preview" data-guide-target="planner-workspace-preview">
       <div className="planner-workspace-preview__notice" role="status">
         <span>Preview only</span>
         <strong>{proposal.summary || 'meee2 AI proposed canvas changes'}</strong>

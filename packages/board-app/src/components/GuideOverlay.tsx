@@ -105,7 +105,11 @@ export function GuideOverlay() {
   const calloutBelow = calloutTop + 72 < window.innerHeight
 
   return (
-    <div className="guide-overlay" aria-live="polite">
+    <div
+      className="guide-overlay"
+      aria-live="polite"
+      onPointerDown={clearGuide}
+    >
       <div
         className="guide-overlay__ring"
         style={{ left, top, width, height }}

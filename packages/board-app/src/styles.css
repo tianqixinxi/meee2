@@ -7834,11 +7834,13 @@ html.board-empty-omni .canvas-toolbar__panel {
   position: fixed;
   inset: 0;
   z-index: 410;
-  pointer-events: none;
+  cursor: default;
+  pointer-events: auto;
 }
 
 .guide-overlay__ring {
   position: fixed;
+  pointer-events: none;
   border: 2px solid color-mix(in srgb, var(--accent) 86%, white 8%);
   border-radius: 10px;
   box-shadow:
@@ -7850,6 +7852,7 @@ html.board-empty-omni .canvas-toolbar__panel {
 
 .guide-overlay__callout {
   position: fixed;
+  pointer-events: none;
   width: min(280px, calc(100vw - 24px));
   padding: 10px 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
@@ -7890,6 +7893,13 @@ html.board-empty-omni .canvas-toolbar__panel {
       0 0 0 9999px rgba(8, 8, 7, 0.24),
       0 0 0 13px color-mix(in srgb, var(--accent) 24%, transparent),
       0 20px 58px rgba(0, 0, 0, 0.38);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-overlay__ring,
+  .planner-node.is-guided {
+    animation: none;
   }
 }
 

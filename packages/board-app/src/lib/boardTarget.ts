@@ -23,6 +23,20 @@ export type BoardOpenTarget =
     guide?: BoardTargetGuide
   }
   | {
+    kind: 'planner-proposal'
+    canvasId: string
+    proposalId: string
+    source?: GuideSource
+    guide?: BoardTargetGuide
+  }
+  | {
+    kind: 'planner-delivery'
+    canvasId: string
+    deliveryId: string
+    source?: GuideSource
+    guide?: BoardTargetGuide
+  }
+  | {
     kind: 'session'
     sessionId: string
     source?: GuideSource

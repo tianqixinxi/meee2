@@ -1,7 +1,10 @@
 import type { PlannerMonitorItem } from '../types'
 
 export type MonitorItemOpenTarget =
-  | { kind: 'canvas'; canvasId: string; nodeId?: string | null }
+  | { kind: 'node'; canvasId: string; nodeId: string }
+  | { kind: 'proposal'; canvasId: string; proposalId: string }
+  | { kind: 'delivery'; canvasId: string; deliveryId: string }
+  | { kind: 'canvas'; canvasId: string }
 
 export type MonitorItemOpenLabel = 'item' | 'canvas' | 'session'
 export type MonitorItemSourceKind = 'canvas' | 'node' | 'approval' | 'live'
@@ -9,10 +12,21 @@ export type MonitorItemSourceKind = 'canvas' | 'node' | 'approval' | 'live'
 export function resolveMonitorItemOpenTarget(
   item: PlannerMonitorItem,
 ): MonitorItemOpenTarget {
+  const nodeId = item.nodeId?.trim()
+  if (nodeId) {
+    return { kind: 'node', canvasId: item.canvasId, nodeId }
+  }
+  const proposalId = item.proposalId?.trim()
+  if (proposalId) {
+    return { kind: 'proposal', canvasId: item.canvasId, proposalId }
+  }
+  const deliveryId = item.deliveryId?.trim()
+  if (deliveryId) {
+    return { kind: 'delivery', canvasId: item.canvasId, deliveryId }
+  }
   return {
     kind: 'canvas',
     canvasId: item.canvasId,
-    nodeId: item.nodeId?.trim() || null,
   }
 }
 
