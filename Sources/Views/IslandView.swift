@@ -79,7 +79,6 @@ public struct IslandView: View {
 
     private let spacing: CGFloat = 12
     private let attentionCardSpacing: CGFloat = 6
-    private let attentionCardEstimatedHeight: CGFloat = 78
 
     // MARK: - Computed Properties
 
@@ -120,14 +119,15 @@ public struct IslandView: View {
 
     /// 计算内容实际高度（不含最大高度限制）
     private var contentHeight: CGFloat {
-        var height = notchHeight + spacing * 2  // 顶部刘海 + 上下 padding
+        var height = notchHeight  // 顶部刘海
 
         let items = statusManager.islandAttentionState.displayedItems
         if items.isEmpty {
-            height += 112
+            height += 112 + spacing
         } else {
-            height += CGFloat(items.count) * attentionCardEstimatedHeight
+            height += items.reduce(CGFloat(0)) { $0 + estimatedAttentionCardHeight(for: $1) }
             height += CGFloat(max(0, items.count - 1)) * attentionCardSpacing
+            height += spacing
         }
 
         return height
@@ -528,6 +528,11 @@ public struct IslandView: View {
 
     private func hasInlineActions(for item: IslandAttentionItem) -> Bool {
         item.source == .permission || item.source == .urgent || item.source == .proposal
+    }
+
+    private func estimatedAttentionCardHeight(for item: IslandAttentionItem) -> CGFloat {
+        guard hasInlineActions(for: item) else { return 56 }
+        return item.detail?.isEmpty == false ? 82 : 76
     }
 
     private func isBoardNavigable(_ item: IslandAttentionItem) -> Bool {
