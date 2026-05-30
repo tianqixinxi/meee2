@@ -19,7 +19,7 @@ final class AgentLaunchCommandTests: XCTestCase {
         )
 
         XCTAssertEqual(launch.provider, "codex")
-        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox")
+        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
     }
 
     func testNormalizeKeepsProviderResumeIds() {
@@ -30,6 +30,16 @@ final class AgentLaunchCommandTests: XCTestCase {
 
         XCTAssertEqual(launch.provider, "claude")
         XCTAssertEqual(launch.command, "claude --resume 8db44e39-685d-47ab-bd0e-5e97386ded80 --dangerously-skip-permissions")
+    }
+
+    func testNormalizeAddsCodexHookTrustBypassForAutomation() {
+        let launch = AgentLaunchCommand.normalize(
+            command: "codex --dangerously-bypass-approvals-and-sandbox",
+            fallbackProvider: "codex"
+        )
+
+        XCTAssertEqual(launch.provider, "codex")
+        XCTAssertEqual(launch.command, "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust")
     }
 
     func testProviderResumeIdHeuristicRequiresRealUuidAndRejectsInternalIds() {

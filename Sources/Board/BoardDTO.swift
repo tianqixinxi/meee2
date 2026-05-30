@@ -854,6 +854,25 @@ enum BoardDTOBuilder {
             return u
         }()
 
+        let orphanedInternalResume = isOrphanedInternalResumeProcess(
+            sessionData: sessionData,
+            terminalInfo: terminalInfo,
+            clientKind: clientKind
+        )
+        let canOpenExternal = !orphanedInternalResume && externalSessionCanOpen(
+            session: session,
+            sessionData: sessionData,
+            terminalInfo: terminalInfo,
+            clientKind: clientKind,
+            resolvedStatus: resolvedStatus
+        )
+        let displayStatus = orphanedInternalResume ? SessionStatus.dead : resolvedStatus
+        let externalSurfaceStatus = orphanedInternalResume || resolvedStatus.isHistorical ? "exited" : nil
+        let terminalKind = orphanedInternalResume ? "internal" : "external"
+        let terminalBackend = orphanedInternalResume
+            ? TerminalSessionBackendKind.legacyInternal.rawValue
+            : TerminalSessionBackendKind.external.rawValue
+        let openTarget = orphanedInternalResume ? "web-fallback" : "external"
         let sync = syncInfo(forSessionId: session.id)
         let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
 
@@ -864,7 +883,7 @@ enum BoardDTOBuilder {
             pluginId: session.pluginId,
             pluginDisplayName: displayName,
             pluginColor: colorHex,
-            status: resolvedStatus.rawValue,
+            status: displayStatus.rawValue,
             inboxPending: pending,
             recentMessages: transcriptEntries,
             currentTool: currentTool,
@@ -878,13 +897,13 @@ enum BoardDTOBuilder {
             ghosttyTerminalId: sessionData?.ghosttyTerminalId,
             tty: tty,
             termProgram: termProgram,
-            terminalKind: "external",
+            terminalKind: terminalKind,
             surfaceId: nil,
-            surfaceStatus: nil,
-            canOpenExternal: true,
-            terminalBackend: TerminalSessionBackendKind.external.rawValue,
+            surfaceStatus: externalSurfaceStatus,
+            canOpenExternal: canOpenExternal,
+            terminalBackend: terminalBackend,
             nativeWorkspaceAvailable: false,
-            openTarget: "external",
+            openTarget: openTarget,
             controlState: controlState.rawValue,
             backgroundAgents: bgAgents,
             latestRecap: recapDTO,
@@ -909,9 +928,10 @@ enum BoardDTOBuilder {
         // （~/.claude/projects/<encoded-host-cwd>/<sid>.jsonl）。文件不存在时为 nil → recent 空。
         let recent: [TranscriptEntryDTO] = m.transcriptPath.map(transcriptPreviewFromFullReader) ?? []
 
-        // 状态：desktop 子进程不长跑，metadata-only 默认 idle。Web UI 卡片
-        // 用 lastActivity 时间显示 "X 分钟前"。
-        let status: SessionStatus = .idle
+        // Desktop metadata-only sessions are not live terminal sessions. They
+        // can still be opened through Claude.app, but the runtime lifecycle has
+        // ended, so the Sessions list should not present them as idle/live.
+        let status: SessionStatus = .dead
 
         let usageDTO: UsageStatsDTO? = m.model.map { model in
             UsageStatsDTO(
@@ -947,7 +967,7 @@ enum BoardDTOBuilder {
             termProgram: nil,
             terminalKind: "external",
             surfaceId: nil,
-            surfaceStatus: nil,
+            surfaceStatus: "exited",
             canOpenExternal: true,
             terminalBackend: TerminalSessionBackendKind.external.rawValue,
             nativeWorkspaceAvailable: false,
@@ -956,6 +976,94 @@ enum BoardDTOBuilder {
             backgroundAgents: [],
             latestRecap: nil,
             clientKind: "desktop",
+            syncEnabled: sync.enabled,
+            syncTeamId: sync.teamId,
+            syncTeamName: sync.teamName
+        )
+    }
+
+    static func isInternalTerminalProgram(_ termProgram: String?) -> Bool {
+        switch termProgram?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "meee2-internal", "meee2-ghostty-surface":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func staleInternalSessionDTO(_ sessionData: SessionData, terminalInfo: SessionTerminalInfo?) -> SessionDTO {
+        let provider = (terminalInfo?.provider ?? sessionData.sessionId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let isCodex = provider.contains("codex")
+        let pluginId = isCodex ? "com.meee2.plugin.codex" : "com.meee2.plugin.claude"
+        let info = PluginManager.shared.getPluginInfo(for: pluginId)
+        let displayName = info?.displayName ?? (isCodex ? "Codex" : "Claude Code")
+        let colorHex = info.map { hexString(from: $0.themeColor) } ?? (isCodex ? "#3B82F6" : "#FF9230")
+        let cwd = sessionData.cwd ?? terminalInfo?.cwd ?? sessionData.project
+        let basename = URL(fileURLWithPath: cwd).lastPathComponent
+        let storedSurfaceStatus = terminalInfo?.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let surfaceStatus = storedSurfaceStatus == "failed" ? "failed" : "exited"
+        let backend: String = {
+            if let raw = terminalInfo?.backend?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !raw.isEmpty {
+                return raw
+            }
+            if isInternalTerminalProgram(sessionData.terminalInfo?.termProgram),
+               sessionData.terminalInfo?.termProgram?.lowercased() == "meee2-ghostty-surface" {
+                return TerminalSessionBackendKind.ghosttySurface.rawValue
+            }
+            return TerminalSessionBackendKind.legacyInternal.rawValue
+        }()
+        let sync = syncInfo(forSessionId: sessionData.sessionId)
+        let providerResumeId = terminalInfo?.providerResumeSessionId?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let controlIds = [sessionData.sessionId, terminalInfo?.cmuxSurfaceId, providerResumeId]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+        let controlState = SessionControlStore.shared.state(for: controlIds)
+
+        return SessionDTO(
+            id: sessionData.sessionId,
+            title: "\(displayName) - \(basename.isEmpty ? sessionData.project : basename)",
+            project: cwd,
+            pluginId: pluginId,
+            pluginDisplayName: displayName,
+            pluginColor: colorHex,
+            status: SessionStatus.idle.rawValue,
+            inboxPending: directInboxCount(for: sessionData.sessionId),
+            recentMessages: [],
+            currentTool: nil,
+            startedAt: iso8601.string(from: sessionData.startedAt),
+            lastActivity: iso8601.string(from: sessionData.lastActivity),
+            usageStats: sessionData.usageStats.map {
+                UsageStatsDTO(
+                    inputTokens: $0.inputTokens,
+                    outputTokens: $0.outputTokens,
+                    cacheCreateTokens: $0.cacheCreateTokens,
+                    cacheReadTokens: $0.cacheReadTokens,
+                    turns: $0.turns,
+                    model: $0.model
+                )
+            },
+            tasks: sessionData.tasks.map { TaskDTO(id: $0.id, name: $0.name, status: $0.status.rawValue) },
+            currentTask: sessionData.currentTask,
+            pendingPermissionTool: sessionData.pendingPermissionTool,
+            pendingPermissionMessage: sessionData.pendingPermissionMessage,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: sessionData.terminalInfo?.termProgram ?? terminalInfo?.termProgram ?? "meee2-internal",
+            terminalKind: "internal",
+            surfaceId: nil,
+            surfaceStatus: surfaceStatus,
+            canOpenExternal: false,
+            terminalBackend: backend,
+            nativeWorkspaceAvailable: false,
+            openTarget: "web-fallback",
+            controlState: controlState.rawValue,
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: "cli",
             syncEnabled: sync.enabled,
             syncTeamId: sync.teamId,
             syncTeamName: sync.teamName
@@ -1025,6 +1133,73 @@ enum BoardDTOBuilder {
             syncTeamId: sync.teamId,
             syncTeamName: sync.teamName
         )
+    }
+
+    private static func externalSessionCanOpen(
+        session: PluginSession,
+        sessionData: SessionData?,
+        terminalInfo: PluginTerminalInfo?,
+        clientKind: String,
+        resolvedStatus: SessionStatus
+    ) -> Bool {
+        if resolvedStatus.isHistorical { return false }
+        if session.pluginId != "com.meee2.plugin.claude" { return true }
+        if clientKind == "desktop" { return true }
+        if let pid = sessionData?.pid {
+            return SessionStore.processAlive(pid) && hasExternalJumpSignal(terminalInfo)
+        }
+        return hasExternalJumpSignal(terminalInfo)
+    }
+
+    private static func isOrphanedInternalResumeProcess(
+        sessionData: SessionData?,
+        terminalInfo: PluginTerminalInfo?,
+        clientKind: String
+    ) -> Bool {
+        guard clientKind == "cli",
+              let sessionData,
+              !hasExternalJumpSignal(terminalInfo),
+              let pid = sessionData.pid,
+              SessionStore.processAlive(pid),
+              let command = processCommand(pid: pid) else {
+            return false
+        }
+        return AgentLaunchCommand.commandUsesInternalResumeId(command)
+    }
+
+    private static func processCommand(pid: Int) -> String? {
+        let task = Process()
+        task.launchPath = "/bin/ps"
+        task.arguments = ["-p", "\(pid)", "-o", "command="]
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return output?.isEmpty == false ? output : nil
+        } catch {
+            return nil
+        }
+    }
+
+    private static func hasExternalJumpSignal(_ info: PluginTerminalInfo?) -> Bool {
+        guard let info else { return false }
+        let values = [
+            info.tty,
+            info.termProgram,
+            info.termBundleId,
+            info.cmuxSocketPath,
+            info.cmuxSurfaceId,
+            info.jumpHandlerId
+        ]
+        return values.contains { raw in
+            raw?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        }
     }
 
     private static func transcriptPreviewFromClaude(path: String) -> [TranscriptEntryDTO] {

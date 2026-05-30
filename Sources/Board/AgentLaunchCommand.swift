@@ -1,9 +1,11 @@
 import Foundation
 
 enum AgentLaunchCommand {
+    static let codexAutomationFlags = "--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
+
     static func fullAccessCommand(forProvider provider: String) -> String {
         normalizedProvider(provider) == "codex"
-            ? "codex --dangerously-bypass-approvals-and-sandbox"
+            ? "codex \(codexAutomationFlags)"
             : "claude --dangerously-skip-permissions"
     }
 
@@ -61,10 +63,7 @@ enum AgentLaunchCommand {
             return (inferredProvider, fullAccessCommand(forProvider: inferredProvider))
         }
         if lower.hasPrefix("codex") {
-            if lower.contains("--dangerously-bypass-approvals-and-sandbox") {
-                return ("codex", trimmed)
-            }
-            return ("codex", "\(trimmed) --dangerously-bypass-approvals-and-sandbox")
+            return ("codex", commandWithCodexAutomationFlags(trimmed))
         }
         if lower.hasPrefix("claude") {
             if lower.contains("--dangerously-skip-permissions") || lower.contains("--permission-mode bypasspermissions") {
@@ -73,5 +72,17 @@ enum AgentLaunchCommand {
             return ("claude", "\(trimmed) --dangerously-skip-permissions")
         }
         return (normalizedProvider(fallbackProvider), trimmed)
+    }
+
+    private static func commandWithCodexAutomationFlags(_ command: String) -> String {
+        var parts = [command]
+        let lower = command.lowercased()
+        if !lower.contains("--dangerously-bypass-approvals-and-sandbox") {
+            parts.append("--dangerously-bypass-approvals-and-sandbox")
+        }
+        if !lower.contains("--dangerously-bypass-hook-trust") {
+            parts.append("--dangerously-bypass-hook-trust")
+        }
+        return parts.joined(separator: " ")
     }
 }

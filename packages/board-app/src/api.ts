@@ -735,6 +735,20 @@ export function listSessionSurfaces(): Promise<SessionSurface[]> {
   return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
 }
 
+export function createSessionSurface(input: {
+  provider: 'claude' | 'codex' | string
+  cwd: string
+  createIfMissing?: boolean
+  canvasId?: string | null
+  nodeId?: string | null
+  initialPrompt?: string | null
+}): Promise<SessionSurface> {
+  return jsonRequest<SessionSurface>('/api/session-surfaces', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function closeSessionSurface(id: string): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>(`/api/session-surfaces/${encodeURIComponent(id)}/close`, {
     method: 'POST',
@@ -776,17 +790,27 @@ export function openNativeTerminalSurface(input: {
 export function syncNativeSessionsWorkspace(input: {
   rect?: NativeTerminalRect
   phase?: 'show' | 'layout' | 'hide' | 'focus'
+  mode?: 'full' | 'terminal'
   sessionId?: string | null
   surfaceId?: string | null
+  traceId?: string
+  clickStartedAtMs?: number
+  sentAtMs?: number
+  webPhase?: string
 }): boolean {
   const bridge = window.webkit?.messageHandlers?.meee2Workspace
   if (!bridge) return false
   bridge.postMessage({
     type: 'sessionsWorkspace',
     phase: input.phase ?? 'layout',
+    mode: input.mode ?? 'full',
     rect: input.rect,
     sessionId: input.sessionId ?? undefined,
     surfaceId: input.surfaceId ?? undefined,
+    traceId: input.traceId,
+    clickStartedAtMs: input.clickStartedAtMs,
+    sentAtMs: input.sentAtMs,
+    webPhase: input.webPhase,
   })
   return true
 }

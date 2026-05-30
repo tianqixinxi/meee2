@@ -1910,6 +1910,7 @@ enum PlannerMonitorItemKind: String, Codable, Equatable {
     case node
     case proposal
     case delivery
+    case session
 }
 
 struct PlannerMonitorItem: Codable, Equatable {
@@ -6258,7 +6259,8 @@ enum PlannerBoardBridge {
 
     static func workspaceMonitor(
         snapshot: BoardLayoutStore.Snapshot,
-        actorUserId: String? = nil
+        actorUserId: String? = nil,
+        sessions: [SessionDTO]? = nil
     ) throws -> PlannerMonitorState {
         var items: [PlannerMonitorItem] = []
         for boardCanvas in snapshot.canvases {
@@ -6350,11 +6352,15 @@ enum PlannerBoardBridge {
             for node in visibleNodes {
                 guard let snapshot = statesByNodeId[node.id],
                       snapshot.runState != .done else { continue }
+                let sessionKind = monitorSessionKind(for: node.sessionId, sessions: sessions)
+                if sessionKind == .internalSession {
+                    continue
+                }
                 let rank = monitorRank(for: snapshot)
                 let awaitingSince = activeRun?.nodeStates[node.id]?.attempts.last?.awaitingInputSince
                 items.append(PlannerMonitorItem(
                     id: "node-\(node.id)",
-                    kind: .node,
+                    kind: sessionKind == .externalSession ? .session : .node,
                     canvasId: state.canvas.id,
                     canvasTitle: state.canvas.title,
                     nodeId: node.id,
@@ -6411,6 +6417,47 @@ enum PlannerBoardBridge {
             return $0.summary < $1.summary
         }
         return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
+    private enum MonitorSessionKind {
+        case none
+        case externalSession
+        case internalSession
+    }
+
+    private static func monitorSessionKind(for rawSessionId: String?, sessions: [SessionDTO]?) -> MonitorSessionKind {
+        guard let rawSessionId,
+              let sessions else { return .none }
+        let sessionId = rawSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sessionId.isEmpty else { return .none }
+        guard let session = sessions.first(where: { monitorSession($0, matches: sessionId) }) else {
+            return .none
+        }
+        let surfaceId = session.surfaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if session.terminalKind == "internal" || !surfaceId.isEmpty {
+            return .internalSession
+        }
+        if SessionStatus.from(rawString: session.status).isHistorical || !session.canOpenExternal {
+            return .none
+        }
+        return .externalSession
+    }
+
+    private static func monitorSession(_ session: SessionDTO, matches sessionId: String) -> Bool {
+        var candidates = [session.id]
+        let prefix = "\(session.pluginId)-"
+        if session.id.hasPrefix(prefix) {
+            candidates.append(String(session.id.dropFirst(prefix.count)))
+        }
+        if let surfaceId = session.surfaceId,
+           !surfaceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            candidates.append(surfaceId)
+        }
+        return candidates.contains { candidate in
+            candidate == sessionId
+                || candidate.hasSuffix("-\(sessionId)")
+                || sessionId.hasSuffix("-\(candidate)")
+        }
     }
 
     private static func latestPlannerEventDate(

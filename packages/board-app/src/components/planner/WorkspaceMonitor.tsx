@@ -31,7 +31,7 @@ const stateIcons: Partial<Record<NodeRunState, typeof AlertTriangle>> = {
 }
 
 type MonitorLaneKey = 'blocked' | 'approval' | 'running' | 'ready' | 'done'
-type MonitorSourceFilter = 'all' | 'live' | 'node' | 'approval' | 'artifact'
+type MonitorSourceFilter = 'all' | 'live' | 'node' | 'canvas' | 'approval' | 'artifact'
 type MonitorDensity = 'compact' | 'comfortable'
 type MonitorSort = 'severity' | 'updated'
 type Translator = ReturnType<typeof useI18n>['t']
@@ -185,6 +185,7 @@ export function WorkspaceMonitor({
               <option value="all">{t('monitor.sourceAll')}</option>
               <option value="live">{t('monitor.sourceLive')}</option>
               <option value="node">{t('monitor.sourceNode')}</option>
+              <option value="canvas">{t('monitor.sourceCanvas')}</option>
               <option value="approval">{t('monitor.sourceApproval')}</option>
               <option value="artifact">{t('monitor.sourceArtifact')}</option>
             </select>
@@ -278,9 +279,14 @@ function MonitorCard({
   onOpenItem: (item: PlannerMonitorItem) => void
   t: Translator
 }) {
+  const sourceKind = monitorItemSourceKind(item)
   const Icon = item.kind === 'proposal'
     ? GitPullRequestArrow
-    : stateIcons[item.runState ?? 'ready'] ?? Clock3
+    : item.kind === 'session'
+      ? List
+      : sourceKind === 'canvas'
+        ? Route
+        : stateIcons[item.runState ?? 'ready'] ?? Clock3
   const evidence = evidenceCount(item)
   return (
     <button
@@ -357,7 +363,9 @@ function sourceMatches(item: PlannerMonitorItem, source: MonitorSourceFilter): b
     case 'live':
       return sourceKind === 'live'
     case 'node':
-      return sourceKind === 'node' || sourceKind === 'canvas'
+      return sourceKind === 'node'
+    case 'canvas':
+      return sourceKind === 'canvas'
     case 'approval':
       return sourceKind === 'approval' || item.needsOwnerReview
     case 'artifact':

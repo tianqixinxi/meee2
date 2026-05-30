@@ -1194,7 +1194,8 @@ enum BoardAPI {
         do {
             let monitor = try PlannerBoardBridge.workspaceMonitor(
                 snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
+                actorUserId: PlannerPermission.currentActorId(),
+                sessions: currentBoardSessions()
             )
             return jsonResponse(PlannerMonitorEnvelope(
                 generatedAt: monitor.generatedAt,
@@ -3248,9 +3249,12 @@ enum BoardAPI {
     private static func plannerResumeCommand(for node: PlanningNode?, sessionId: String) -> String {
         let command = node?.dispatch?.command ?? node?.dispatch?.runner.spawnCommand ?? ""
         let provider = AgentLaunchCommand.provider(forCommand: command.isEmpty ? node?.dispatch?.runner.rawValue ?? "claude" : command)
+        if AgentLaunchCommand.isMeee2InternalSessionId(sessionId) {
+            return AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+        }
         let quotedSessionId = shellQuote(sessionId)
         if provider == "codex" {
-            return "codex --dangerously-bypass-approvals-and-sandbox resume \(quotedSessionId)"
+            return "codex \(AgentLaunchCommand.codexAutomationFlags) resume \(quotedSessionId)"
         }
         return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
     }
@@ -3288,6 +3292,7 @@ enum BoardAPI {
 
     private static func currentBoardSessions() -> [SessionDTO] {
         _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
+        let terminalInfos = SessionTerminalStore.shared.getAll()
         let archivedDesktopSids: Set<String> = {
             var set = Set<String>()
             for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
@@ -3302,8 +3307,20 @@ enum BoardAPI {
             .listSnapshots()
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
-        let internalProviderResumeIds = Set(internalSessions.compactMap {
-            SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
+        let staleInternalSessions = SessionStore.shared.listAll()
+            .filter { !$0.status.isHistorical }
+            .filter { BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
+            .filter { session in
+                !internalSessions.contains { internalSession in
+                    boardSession(internalSession, matches: session.sessionId)
+                }
+            }
+            .map { session in
+                BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
+            }
+        let allInternalSessions = internalSessions + staleInternalSessions
+        let internalProviderResumeIds = Set(allInternalSessions.compactMap {
+            terminalInfos[$0.id]?.providerResumeSessionId?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
@@ -3318,7 +3335,7 @@ enum BoardAPI {
             .map { BoardDTOBuilder.sessionDTO($0) }
             .filter { !internalProviderResumeIds.contains($0.id) }
             .filter { external in
-                !internalSessions.contains { internalSession in
+                !allInternalSessions.contains { internalSession in
                     boardSession(internalSession, matches: external.id)
                         || boardSession(external, matches: internalSession.id)
                 }
@@ -3334,10 +3351,10 @@ enum BoardAPI {
                       !m.isArchived,
                       !realSids.contains(cliSid),
                       !internalProviderResumeIds.contains(cliSid),
-                      !internalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
+                      !allInternalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
                 return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
         }
-        return internalSessions + realSessions + syntheticDesktopSessions
+        return internalSessions + staleInternalSessions + realSessions + syntheticDesktopSessions
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {
