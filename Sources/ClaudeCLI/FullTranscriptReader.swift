@@ -94,12 +94,23 @@ public enum FullTranscriptReader {
         let offset = fileSize - tailSize
         do {
             try handle.seek(toOffset: offset)
-            guard let data = try handle.readToEnd(),
-                  let raw = String(data: data, encoding: .utf8) else {
-                return nil
+            guard var data = try handle.readToEnd() else { return nil }
+
+            // offset>0 时 tail 切口可能落在某一行中间，且对含 CJK/emoji 的
+            // transcript 还可能砍在 UTF-8 多字节字符的 continuation byte 上，
+            // 让 `String(data:encoding:.utf8)` 对整段返回 nil → 整条 transcript
+            // 在 UI 上不可见。先按 `\n`(ASCII 0x0A) 砍掉被截断的首行，剩余字节
+            // 天然落在干净的行/字符边界上；再 lossy 兜底防止行内坏字节。
+            var hadPartialFirstLine = false
+            if offset > 0, let nl = data.firstIndex(of: 0x0A) {
+                data = data.subdata(in: data.index(after: nl)..<data.endIndex)
+                hadPartialFirstLine = true
             }
+            let raw = TranscriptByteDecoder.lossyUTF8(data)
             var lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
-            if offset > 0, !raw.hasPrefix("\n"), !lines.isEmpty {
+            // 首行已在字节层丢弃；仅当我们没找到换行符（极端：整段是一行的中段）
+            // 才需要再在字符串层补丢一次。
+            if offset > 0, !hadPartialFirstLine, !raw.hasPrefix("\n"), !lines.isEmpty {
                 lines.removeFirst()
             }
             return lines

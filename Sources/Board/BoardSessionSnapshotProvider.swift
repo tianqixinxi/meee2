@@ -19,7 +19,20 @@ enum BoardSessionSnapshotProvider {
             .map { session in
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
-        return internalSessions + staleInternalSessions
+        let cliCorrelationCandidates = SessionStore.shared.listAll()
+        let enrichedInternalSessions = (internalSessions + staleInternalSessions).map { dto -> SessionDTO in
+            guard BoardDTOBuilder.isInternalTerminalProgram(dto.termProgram),
+                  dto.recentMessages.isEmpty,
+                  let cli = InternalSessionIdentity.correlatedCliSession(
+                    forWorkspaceCwd: dto.project,
+                    among: cliCorrelationCandidates
+                  ),
+                  cli.sessionId != dto.id else {
+                return dto
+            }
+            return BoardDTOBuilder.surfaceDTOAdoptingCliSession(dto, cli: cli)
+        }
+        return enrichedInternalSessions
     }
 
     private static func boardSession(_ session: SessionDTO, matches sessionId: String) -> Bool {

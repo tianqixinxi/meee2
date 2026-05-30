@@ -1,6 +1,26 @@
 import Foundation
 import Meee2PluginKit
 
+/// 把 transcript tail 的原始字节解码成字符串。
+///
+/// 为什么要单独抽出来：我们只读文件尾部（最近 4KB / 64KB / N×64KB），seek 到的
+/// offset 极可能落在某一行中间，对含 CJK/emoji 的 transcript 还可能砍在一个 UTF-8
+/// 多字节字符的 continuation byte（0x80–0xBF）上。直接 `String(data:encoding:.utf8)`
+/// 这种 failable 解码会对整段返回 nil → reader 整体吐空 → recentMessages 永远是 0。
+/// 调用方先按 `\n`(0x0A) 砍掉被截断的首行让剩余字节落在干净边界，再用本 helper 的
+/// non-failable lossy 解码兜底：单个坏字节降级成 U+FFFD，而不是让整条 transcript 不可见。
+enum TranscriptByteDecoder {
+    static func lossyUTF8(_ data: Data) -> String {
+        if let exact = String(bytes: data, encoding: .utf8) {
+            return exact
+        }
+        // non-failable lossy 解码——坏字节降级成 U+FFFD。lint 的 failable 建议
+        // 在这里不适用（我们要的就是"永不返回 nil"），故就地豁免。
+        // swiftlint:disable:next optional_data_string_conversion
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 /// Transcript 条目 - 从 JSONL 文件解析的消息
 public struct TranscriptEntry {
     public let type: String?          // "user", "assistant", "system"
@@ -131,8 +151,24 @@ public class TranscriptParser {
             let tailSize = min(fileSize, UInt64(maxSize))
             handle.seek(toFileOffset: fileSize - tailSize)
 
-            let data = handle.readDataToEndOfFile()
-            guard let tail = String(data: data, encoding: .utf8) else { return nil }
+            var data = handle.readDataToEndOfFile()
+
+            // 当我们只截了文件尾部（不是整文件）时，offset `fileSize-tailSize`
+            // 极可能落在某一行中间——而且对含 CJK / emoji 的 transcript 还可能落
+            // 在一个 UTF-8 多字节字符的 continuation byte（0x80–0xBF）上。这两种
+            // 情况都会让 `String(data:encoding:.utf8)` 对整段返回 nil，于是
+            // parseTail→loadMessages 整体吐空，recentMessages 一直是 0
+            // （surface→CLI 关联里那两个一直 opaque 的 node 就是这么来的：它们的
+            // CLI transcript 724KB，64KB 切口正好砍在中文字符中段）。
+            // 修法：把截断那行整行丢掉——`\n` 是 ASCII(0x0A)，砍到第一个换行符后
+            // 的剩余字节天然落在干净的行边界 + UTF-8 字符边界上。
+            if tailSize < fileSize, let nl = data.firstIndex(of: 0x0A) {
+                data = data.subdata(in: data.index(after: nl)..<data.endIndex)
+            }
+            // 兜底：极端情况下（行内仍有坏字节 / 文件本身非法编码）用 lossy 解码，
+            // 让单个坏字节降级成 U+FFFD 而不是让整段 transcript 不可见。
+            // `String(decoding:as:)` 是 non-failable lossy 解码，正是这里要的语义。
+            let tail = TranscriptByteDecoder.lossyUTF8(data)
 
             // 解析每一行
             var entries: [TranscriptEntry] = []
