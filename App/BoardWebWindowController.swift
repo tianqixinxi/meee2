@@ -1030,11 +1030,23 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
 
     private func dispatchOpenPlannerItemIfPossible() {
         guard let pendingOpenPlannerItem, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
-        var detail: [String: String] = [:]
-        if let canvasId = pendingOpenPlannerItem.canvasId, !canvasId.isEmpty {
-            detail["canvasId"] = canvasId
+        guard let canvasId = pendingOpenPlannerItem.canvasId, !canvasId.isEmpty else {
+            self.pendingOpenPlannerItem = nil
+            return
         }
+        var detail: [String: Any] = [
+            "kind": "canvas",
+            "canvasId": canvasId,
+            "source": "island",
+            "guide": [
+                "enabled": true,
+                "title": "Opened from Dynamic Island",
+                "body": "This is the node that needs your attention.",
+                "openInspector": false
+            ]
+        ]
         if let nodeId = pendingOpenPlannerItem.nodeId, !nodeId.isEmpty {
+            detail["kind"] = "planner-node"
             detail["nodeId"] = nodeId
         }
         guard let data = try? JSONSerialization.data(withJSONObject: detail),
@@ -1044,7 +1056,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         }
         self.pendingOpenPlannerItem = nil
         webView.evaluateJavaScript("""
-        window.dispatchEvent(new CustomEvent('meee2:open-planner-item', { detail: \(json) }));
+        window.dispatchEvent(new CustomEvent('meee2:open-board-target', { detail: \(json) }));
         """) { [weak self] _, error in
             if let error {
                 MWarn("[BoardWebWindow] open planner item event failed: \(error.localizedDescription)")
