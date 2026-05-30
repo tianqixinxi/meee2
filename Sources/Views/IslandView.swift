@@ -78,6 +78,8 @@ public struct IslandView: View {
     private let expandedMaxHeight: CGFloat = 700  // 最大高度
 
     private let spacing: CGFloat = 12
+    private let attentionCardSpacing: CGFloat = 6
+    private let attentionCardEstimatedHeight: CGFloat = 78
 
     // MARK: - Computed Properties
 
@@ -124,11 +126,8 @@ public struct IslandView: View {
         if items.isEmpty {
             height += 112
         } else {
-            height += CGFloat(items.count) * 112
-            height += CGFloat(max(0, items.count - 1)) * spacing
-            if statusManager.islandAttentionState.totalAttentionCount > items.count {
-                height += 28
-            }
+            height += CGFloat(items.count) * attentionCardEstimatedHeight
+            height += CGFloat(max(0, items.count - 1)) * attentionCardSpacing
         }
 
         return height
@@ -375,15 +374,10 @@ public struct IslandView: View {
                         if attentionState.displayedItems.isEmpty {
                             islandAllClearView(attentionState: attentionState)
                         } else {
-                            LazyVStack(spacing: 8) {
+                            LazyVStack(spacing: attentionCardSpacing) {
                                 ForEach(attentionState.displayedItems) { item in
                                     islandAttentionCard(item)
                                 }
-                            }
-                            if attentionState.totalAttentionCount > attentionState.displayedItems.count {
-                                Text("+\(attentionState.totalAttentionCount - attentionState.displayedItems.count) more in Monitor")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.45))
                             }
                         }
                     }
@@ -425,44 +419,60 @@ public struct IslandView: View {
     @ViewBuilder
     private func islandAttentionCard(_ item: IslandAttentionItem) -> some View {
         let tint = attentionTint(for: item)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+        let isBoardNavigable = isBoardNavigable(item)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: attentionIcon(for: item))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(tint)
-                    .frame(width: 22, height: 22)
+                    .frame(width: 20, height: 20)
                     .background(Circle().fill(tint.opacity(0.18)))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.white)
                         .lineLimit(1)
                     Text(item.subtitle)
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.58))
                         .lineLimit(1)
                 }
                 Spacer()
+                if isBoardNavigable {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.32))
+                }
             }
 
             if let detail = item.detail, !detail.isEmpty {
-                Text(detail.count > 120 ? String(detail.prefix(119)) + "…" : detail)
-                    .font(.system(size: 10))
+                Text(detail.count > 96 ? String(detail.prefix(95)) + "…" : detail)
+                    .font(.system(size: 9))
                     .foregroundColor(.white.opacity(0.46))
-                    .lineLimit(2)
+                    .lineLimit(1)
             }
 
-            HStack(spacing: 7) {
-                attentionActions(for: item)
+            if hasInlineActions(for: item) {
+                HStack(spacing: 6) {
+                    attentionActions(for: item)
+                    Spacer(minLength: 0)
+                }
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, minHeight: hasInlineActions(for: item) ? 76 : 56, alignment: .leading)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .onTapGesture {
+            guard isBoardNavigable else { return }
+            statusManager.openBoard(for: item)
+            closeExpanded()
+        }
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 10)
                 .fill(tint.opacity(0.12))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 10)
                         .stroke(tint.opacity(0.22), lineWidth: 1)
                 )
         )
@@ -497,17 +507,7 @@ public struct IslandView: View {
                 statusManager.rejectProposal(for: item)
                 closeAfterIslandAction()
             }
-            islandActionButton("Open Board", icon: "square.grid.2x2") {
-                statusManager.openBoard(for: item)
-                closeExpanded()
-            }
-        } else {
-            islandActionButton("Open Board", icon: "square.grid.2x2") {
-                statusManager.openBoard(for: item)
-                closeExpanded()
-            }
         }
-        Spacer()
     }
 
     private func islandActionButton(_ label: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -519,11 +519,19 @@ public struct IslandView: View {
                     .font(.system(size: 9, weight: .semibold))
             }
             .foregroundColor(.white.opacity(0.88))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
             .background(Capsule().fill(Color.white.opacity(0.14)))
         }
         .buttonStyle(.plain)
+    }
+
+    private func hasInlineActions(for item: IslandAttentionItem) -> Bool {
+        item.source == .permission || item.source == .urgent || item.source == .proposal
+    }
+
+    private func isBoardNavigable(_ item: IslandAttentionItem) -> Bool {
+        item.canvasId != nil || item.nodeId != nil || item.deliveryId != nil || item.proposalId != nil
     }
 
     private func session(for item: IslandAttentionItem) -> PluginSession? {

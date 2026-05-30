@@ -66,6 +66,22 @@ final class IslandAttentionStateTests: XCTestCase {
         XCTAssertEqual(state.displayedItems.last?.proposalId, "proposal-a")
     }
 
+    func testWorkspaceMonitorItemsAreNotTruncatedForScrollableIsland() {
+        let state = IslandAttentionBuilder.build(
+            sessions: [],
+            monitorItems: [
+                blockedMonitorItem(id: "blocked-a"),
+                blockedMonitorItem(id: "blocked-b"),
+                blockedMonitorItem(id: "blocked-c"),
+                blockedMonitorItem(id: "blocked-d")
+            ],
+            maxDisplayedItems: 3
+        )
+
+        XCTAssertEqual(state.totalAttentionCount, 4)
+        XCTAssertEqual(state.displayedItems.count, 4)
+    }
+
     func testMonitorFailureFallsBackToUrgentSessionItems() {
         enum MonitorFailure: Error { case boom }
         let session = pluginSession(
@@ -104,9 +120,9 @@ final class IslandAttentionStateTests: XCTestCase {
         )
     }
 
-    private func blockedMonitorItem() -> PlannerMonitorItem {
+    private func blockedMonitorItem(id: String = "canvas-canvas-a") -> PlannerMonitorItem {
         PlannerMonitorItem(
-            id: "canvas-canvas-a",
+            id: id,
             kind: .delivery,
             canvasId: "canvas-a",
             canvasTitle: "Release Canvas",

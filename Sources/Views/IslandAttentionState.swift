@@ -104,6 +104,7 @@ enum IslandAttentionBuilder {
         monitorFailed: Bool = false,
         maxDisplayedItems: Int = 3
     ) -> IslandAttentionState {
+        _ = maxDisplayedItems
         let sessionItems = sessions.compactMap(sessionAttentionItem)
         let monitorAttentionItems = monitorItems.compactMap(monitorAttentionItem)
         let allItems = (sessionItems + monitorAttentionItems)
@@ -111,7 +112,7 @@ enum IslandAttentionBuilder {
             .sorted(by: sortAttentionItems)
         return IslandAttentionState(
             generatedAt: Date(),
-            displayedItems: Array(allItems.prefix(maxDisplayedItems)),
+            displayedItems: allItems,
             totalAttentionCount: allItems.count,
             activeSessionCount: sessions.filter { !$0.status.isHistorical }.count,
             monitorFailed: monitorFailed
