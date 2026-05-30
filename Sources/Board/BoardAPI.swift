@@ -3592,6 +3592,18 @@ enum BoardAPI {
         if let carouselInterval = numeric(json["carouselInterval"]) {
             defaults.set(clamp(carouselInterval, min: 3, max: 30), forKey: "carouselInterval")
         }
+        if let quickOpenShortcut = json["quickOpenShortcut"] as? String {
+            guard let shortcut = QuickOpenShortcut(rawValue: quickOpenShortcut) else {
+                return errorResponse("invalid_shortcut", "quickOpenShortcut is not a supported key combination", status: 400)
+            }
+            let current = QuickOpenShortcut.current
+            if shortcut == current {
+                QuickOpenShortcut.setCurrentConflictWarning(QuickOpenShortcut.currentConflictWarning)
+            } else {
+                QuickOpenShortcut.setCurrentConflictWarning(QuickOpenShortcut.conflictWarning(for: shortcut))
+            }
+            QuickOpenShortcut.current = shortcut
+        }
 
         DispatchQueue.main.async {
             if didChangeIslandVisibility {
@@ -3651,7 +3663,10 @@ enum BoardAPI {
             autoExpandEnabled: defaults.object(forKey: "autoExpandEnabled") as? Bool ?? true,
             autoCloseInterval: storedDouble(defaults, key: "autoCloseInterval", fallback: 8),
             showSessionInCompact: defaults.object(forKey: "showSessionInCompact") as? Bool ?? true,
-            carouselInterval: storedDouble(defaults, key: "carouselInterval", fallback: 10)
+            carouselInterval: storedDouble(defaults, key: "carouselInterval", fallback: 10),
+            quickOpenShortcut: QuickOpenShortcut.current.rawValue,
+            quickOpenShortcutLabel: QuickOpenShortcut.current.menuDisplayName,
+            quickOpenShortcutConflict: QuickOpenShortcut.currentConflictWarning
         )
     }
 

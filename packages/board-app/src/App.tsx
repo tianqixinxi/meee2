@@ -730,6 +730,23 @@ export default function App() {
       return
     }
 
+    if (target.kind === 'planner-artifact') {
+      window.setTimeout(() => {
+        requestPlannerNodeSelection({
+          canvasId: target.canvasId,
+          nodeId: target.nodeId,
+          artifactId: target.artifactId,
+          guide: target.guide?.enabled ?? true,
+          source: target.source,
+          title: target.guide?.title ?? 'Opened artifact',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          openInspector: true,
+        })
+      }, 50)
+      return
+    }
+
     window.setTimeout(() => {
       requestPlannerNodeSelection({
         canvasId: target.canvasId,

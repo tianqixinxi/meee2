@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
 import { NotificationSettings } from './NotificationSettings'
 import { ReadinessChecklist } from './ReadinessChecklist'
@@ -61,6 +61,8 @@ interface Props {
   onRestartOnboarding?: () => void
 }
 
+type SettingsCategory = 'general' | 'account' | 'privacy' | 'notifications' | 'runtime' | 'models' | 'developer'
+
 const DEFAULT_APP_SETTINGS: AppSettings = {
   theme: 'system',
   locale: 'en',
@@ -72,6 +74,86 @@ const DEFAULT_APP_SETTINGS: AppSettings = {
   autoCloseInterval: 8,
   showSessionInCompact: true,
   carouselInterval: 10,
+  quickOpenShortcut: 'cmd+option+KeyP',
+  quickOpenShortcutLabel: '⌘⌥P',
+  quickOpenShortcutConflict: null,
+}
+
+const MODIFIER_CODES = new Set([
+  'MetaLeft',
+  'MetaRight',
+  'AltLeft',
+  'AltRight',
+  'ControlLeft',
+  'ControlRight',
+  'ShiftLeft',
+  'ShiftRight',
+])
+
+const KEY_LABELS: Record<string, string> = {
+  Backquote: '`',
+  Backslash: '\\',
+  Backspace: 'Delete',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Comma: ',',
+  Digit0: '0',
+  Digit1: '1',
+  Digit2: '2',
+  Digit3: '3',
+  Digit4: '4',
+  Digit5: '5',
+  Digit6: '6',
+  Digit7: '7',
+  Digit8: '8',
+  Digit9: '9',
+  Enter: 'Return',
+  Equal: '=',
+  Escape: 'Esc',
+  Minus: '-',
+  Period: '.',
+  Quote: "'",
+  Semicolon: ';',
+  Slash: '/',
+  Space: 'Space',
+  Tab: 'Tab',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  ArrowDown: 'Down',
+  ArrowUp: 'Up',
+}
+
+function formatShortcut(raw: string | null | undefined): string {
+  if (!raw || raw === 'disabled') return 'Disabled'
+  const parts = raw.split('+')
+  const key = parts.length > 0 ? parts[parts.length - 1] : ''
+  const modifiers = parts.slice(0, -1).map((part) => {
+    if (part === 'cmd') return '⌘'
+    if (part === 'option') return '⌥'
+    if (part === 'control') return '⌃'
+    if (part === 'shift') return '⇧'
+    return ''
+  }).join('')
+  const label = key.startsWith('Key')
+    ? key.slice(3)
+    : KEY_LABELS[key] ?? key.replace(/^Digit/, '')
+  return `${modifiers}${label}`
+}
+
+type ShortcutKeyboardInput = Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>
+
+function shortcutFromKeyboardEvent(event: ShortcutKeyboardInput): string | null {
+  if (event.key === 'Escape') return null
+  if (MODIFIER_CODES.has(event.code)) return null
+  const modifiers = [
+    event.ctrlKey ? 'control' : '',
+    event.altKey ? 'option' : '',
+    event.shiftKey ? 'shift' : '',
+    event.metaKey ? 'cmd' : '',
+  ].filter(Boolean)
+  const hasPrimaryModifier = event.metaKey || event.ctrlKey || event.altKey
+  if (!hasPrimaryModifier || modifiers.length === 0) return null
+  return [...modifiers, event.code].join('+')
 }
 
 export function SettingsView({
@@ -98,7 +180,10 @@ export function SettingsView({
   const [llm, setLlm] = useState<LlmSettings>(() => readLlmSettings())
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
-  const [saving, setSaving] = useState(false)
+  const [activeSettingsCategory, setActiveSettingsCategory] = useState<SettingsCategory>('general')
+  const [recordingQuickOpenShortcut, setRecordingQuickOpenShortcut] = useState(false)
+  const quickOpenRecorderRef = useRef<HTMLButtonElement | null>(null)
+  const recordingPreviousShortcutRef = useRef<string | null>(null)
   const [debugExporting, setDebugExporting] = useState(false)
   const [debugExportPath, setDebugExportPath] = useState<string | null>(null)
   // Chunk E (Privacy UI)
@@ -110,10 +195,25 @@ export function SettingsView({
   const [deleteConfirmAcknowledged, setDeleteConfirmAcknowledged] = useState(false)
   const [deletingLocalData, setDeletingLocalData] = useState(false)
   const effectiveAppSettings = normalizeAppSettings(appSettings)
+  const settingsCategories: Array<{ id: SettingsCategory; label: string }> = [
+    { id: 'general', label: t('settings.categoryGeneral') },
+    { id: 'account', label: t('settings.categoryAccount') },
+    { id: 'privacy', label: t('settings.categoryPrivacy') },
+    { id: 'notifications', label: t('settings.categoryNotifications') },
+    { id: 'runtime', label: t('settings.categoryRuntime') },
+    { id: 'models', label: t('settings.categoryModels') },
+    ...(devMode || effectiveAppSettings.devMode
+      ? [{ id: 'developer' as SettingsCategory, label: t('settings.categoryDeveloper') }]
+      : []),
+  ]
 
   const notify = useCallback((kind: 'info' | 'error' | 'success', text: string) => {
     onToast?.(kind, text)
   }, [onToast])
+
+  const notifySaved = useCallback(() => {
+    notify('success', t('common.saved'))
+  }, [notify, t])
 
   const loadProfile = useCallback(() => {
     fetchUserProfile()
@@ -148,33 +248,6 @@ export function SettingsView({
     }
   }, [loadAppSettings, loadProfile, loadStorageStats])
 
-  const save = async () => {
-    setSaving(true)
-    const settingsToSave = normalizeAppSettings(appSettings)
-    try {
-      saveSpawnProvider(spawnProvider)
-      saveBoardGridEnabled(boardGridEnabled)
-      saveLockViewportOnSwitch(lockViewportOnSwitch)
-      saveCanvasRecapIntervalMinutes(canvasRecapIntervalMinutes)
-      writeLlmSettings(llm)
-      const next = await updateAppSettings({
-        theme: mode,
-        locale,
-        showIsland: settingsToSave.showIsland,
-        selectedScreenId: settingsToSave.selectedScreenId,
-        autoExpandEnabled: settingsToSave.autoExpandEnabled,
-        autoCloseInterval: settingsToSave.autoCloseInterval,
-      })
-      setAppSettings(normalizeAppSettings(next))
-      notify('success', t('toast.settingsSaved'))
-      onSaved?.(spawnProvider)
-    } catch (err) {
-      notify('error', (err as Error).message || 'Failed to save settings')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const runDebugExport = async () => {
     setDebugExporting(true)
     setDebugExportPath(null)
@@ -192,6 +265,7 @@ export function SettingsView({
   const toggleAllowCloud = (next: boolean) => {
     setAllowCloud(next)
     saveAllowCloud(next)
+    notifySaved()
   }
 
   const openDeleteConfirm = () => {
@@ -228,13 +302,158 @@ export function SettingsView({
     }
   }
 
-  const setProvider = (p: LlmProvider) => {
-    setLlm((s) => ({ ...s, provider: p }))
+  const updateAppSettingsDraft = useCallback((patch: Partial<AppSettings>) => {
+    setAppSettings((current) => ({ ...normalizeAppSettings(current), ...patch }))
+  }, [])
+
+  const applyAppSettingsPatch = useCallback(async (patch: Partial<AppSettings>) => {
+    updateAppSettingsDraft(patch)
+    try {
+      const next = await updateAppSettings(patch)
+      setAppSettings(normalizeAppSettings(next))
+      notifySaved()
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to save settings')
+      loadAppSettings()
+    }
+  }, [loadAppSettings, notify, notifySaved, updateAppSettingsDraft])
+
+  const applyThemeMode = useCallback((nextMode: ThemeMode) => {
+    setMode(nextMode)
+    void applyAppSettingsPatch({ theme: nextMode })
+  }, [applyAppSettingsPatch, setMode])
+
+  const applyLocale = useCallback((nextLocale: Locale) => {
+    setLocale(nextLocale)
+    void applyAppSettingsPatch({ locale: nextLocale })
+  }, [applyAppSettingsPatch, setLocale])
+
+  const applySpawnProvider = useCallback((provider: SpawnProvider) => {
+    setSpawnProvider(provider)
+    saveSpawnProvider(provider)
+    notifySaved()
+    onSaved?.(provider)
+  }, [notifySaved, onSaved])
+
+  const applyBoardGridEnabled = useCallback((enabled: boolean) => {
+    setBoardGridEnabled(enabled)
+    saveBoardGridEnabled(enabled)
+    notifySaved()
+  }, [notifySaved])
+
+  const applyLockViewportOnSwitch = useCallback((enabled: boolean) => {
+    setLockViewportOnSwitch(enabled)
+    saveLockViewportOnSwitch(enabled)
+    notifySaved()
+  }, [notifySaved])
+
+  const applyCanvasRecapIntervalMinutes = useCallback((minutes: number) => {
+    const normalized = Math.max(0, Math.min(120, minutes))
+    setCanvasRecapIntervalMinutes(normalized)
+    saveCanvasRecapIntervalMinutes(normalized)
+    notifySaved()
+  }, [notifySaved])
+
+  const saveLlmDraft = useCallback((next: LlmSettings) => {
+    writeLlmSettings(next)
+    notifySaved()
+  }, [notifySaved])
+
+  const applyLlmProvider = useCallback((provider: LlmProvider) => {
+    const next = { ...llm, provider }
+    setLlm(next)
+    saveLlmDraft(next)
+  }, [llm, saveLlmDraft])
+
+  const updateLlmDraft = useCallback((patch: Partial<LlmSettings>) => {
+    setLlm((current) => ({ ...current, ...patch }))
+  }, [])
+
+  const applyQuickOpenShortcut = useCallback(async (shortcut: string) => {
+    const label = formatShortcut(shortcut)
+    recordingPreviousShortcutRef.current = null
+    updateAppSettingsDraft({
+      quickOpenShortcut: shortcut,
+      quickOpenShortcutLabel: label,
+      quickOpenShortcutConflict: null,
+    })
+    try {
+      const next = await updateAppSettings({ quickOpenShortcut: shortcut })
+      setAppSettings((current) => ({
+        ...normalizeAppSettings(current),
+        quickOpenShortcut: next.quickOpenShortcut,
+        quickOpenShortcutLabel: next.quickOpenShortcutLabel,
+        quickOpenShortcutConflict: next.quickOpenShortcutConflict,
+      }))
+    } catch (err) {
+      notify('error', (err as Error).message || 'Failed to update shortcut')
+    }
+  }, [notify, updateAppSettingsDraft])
+
+  const restoreQuickOpenShortcutRecording = useCallback(() => {
+    const previousShortcut = recordingPreviousShortcutRef.current
+    recordingPreviousShortcutRef.current = null
+    setRecordingQuickOpenShortcut(false)
+    if (previousShortcut) {
+      void applyQuickOpenShortcut(previousShortcut)
+    }
+  }, [applyQuickOpenShortcut])
+
+  const handleQuickOpenShortcutKey = useCallback((event: ShortcutKeyboardInput) => {
+    if (event.key === 'Escape') {
+      restoreQuickOpenShortcutRecording()
+      return
+    }
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      recordingPreviousShortcutRef.current = null
+      void applyQuickOpenShortcut('disabled')
+      setRecordingQuickOpenShortcut(false)
+      return
+    }
+    const shortcut = shortcutFromKeyboardEvent(event)
+    if (!shortcut) {
+      notify('info', t('settings.quickOpenShortcutNeedsModifier'))
+      return
+    }
+    void applyQuickOpenShortcut(shortcut)
+    setRecordingQuickOpenShortcut(false)
+  }, [applyQuickOpenShortcut, notify, restoreQuickOpenShortcutRecording, t])
+
+  const recordQuickOpenShortcut = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    handleQuickOpenShortcutKey(event)
   }
 
-  const updateAppSettingsDraft = (patch: Partial<AppSettings>) => {
-    setAppSettings((current) => ({ ...normalizeAppSettings(current), ...patch }))
+  const startQuickOpenShortcutRecording = () => {
+    if (!recordingQuickOpenShortcut) {
+      recordingPreviousShortcutRef.current = effectiveAppSettings.quickOpenShortcut
+      void updateAppSettings({ quickOpenShortcut: 'disabled' }).catch((err: Error) => {
+        notify('error', err.message || 'Failed to prepare shortcut recorder')
+      })
+    }
+    setRecordingQuickOpenShortcut(true)
+    window.requestAnimationFrame(() => quickOpenRecorderRef.current?.focus())
   }
+
+  useEffect(() => {
+    if (!recordingQuickOpenShortcut) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      handleQuickOpenShortcutKey(event)
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    quickOpenRecorderRef.current?.focus()
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+      const previousShortcut = recordingPreviousShortcutRef.current
+      if (previousShortcut) {
+        recordingPreviousShortcutRef.current = null
+        void applyQuickOpenShortcut(previousShortcut)
+      }
+    }
+  }, [applyQuickOpenShortcut, handleQuickOpenShortcutKey, recordingQuickOpenShortcut])
 
   const setDefaultSync = async (enabled: boolean) => {
     try {
@@ -287,12 +506,25 @@ export function SettingsView({
           <h1>{t('settings.title')}</h1>
           <p>{t('settings.subtitle')}</p>
         </div>
-        <button className="primary" type="button" onClick={() => void save()} disabled={saving}>
-          {saving ? t('common.loading') : t('common.save')}
-        </button>
       </header>
 
-      <div className="settings-page__content settings-body">
+      <div className="settings-page__main">
+        <aside className="settings-category-rail" aria-label={t('settings.categoryLabel')}>
+          {settingsCategories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              className={activeSettingsCategory === category.id ? 'active' : ''}
+              onClick={() => setActiveSettingsCategory(category.id)}
+            >
+              {category.label}
+            </button>
+          ))}
+        </aside>
+
+        <div className="settings-page__content settings-body">
+        {activeSettingsCategory === 'general' && (
+          <>
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -310,7 +542,7 @@ export function SettingsView({
                   key={value}
                   type="button"
                   className={mode === value ? 'active' : ''}
-                  onClick={() => setMode(value)}
+                  onClick={() => applyThemeMode(value)}
                 >
                   {value === 'system' ? t('settings.themeSystem') : value === 'light' ? t('settings.themeLight') : t('settings.themeDark')}
                 </button>
@@ -328,7 +560,7 @@ export function SettingsView({
                   key={value}
                   type="button"
                   className={locale === value ? 'active' : ''}
-                  onClick={() => setLocale(value)}
+                  onClick={() => applyLocale(value)}
                 >
                   {value === 'en' ? t('settings.languageEnglish') : t('settings.languageChinese')}
                 </button>
@@ -352,7 +584,7 @@ export function SettingsView({
             <input
               type="checkbox"
               checked={effectiveAppSettings.showIsland}
-              onChange={(event) => updateAppSettingsDraft({ showIsland: event.target.checked })}
+              onChange={(event) => void applyAppSettingsPatch({ showIsland: event.target.checked })}
             />
           </label>
           <label className="settings-field-row settings-panel">
@@ -362,7 +594,7 @@ export function SettingsView({
             <select
               value={effectiveAppSettings.selectedScreenId}
               disabled={!effectiveAppSettings.showIsland}
-              onChange={(event) => updateAppSettingsDraft({ selectedScreenId: event.target.value })}
+              onChange={(event) => void applyAppSettingsPatch({ selectedScreenId: event.target.value })}
             >
               {effectiveAppSettings.availableScreens.map((screen) => (
                 <option key={screen.id} value={screen.id}>
@@ -379,7 +611,7 @@ export function SettingsView({
               type="checkbox"
               disabled={!effectiveAppSettings.showIsland}
               checked={effectiveAppSettings.autoExpandEnabled}
-              onChange={(event) => updateAppSettingsDraft({ autoExpandEnabled: event.target.checked })}
+              onChange={(event) => void applyAppSettingsPatch({ autoExpandEnabled: event.target.checked })}
             />
           </label>
           <SettingSlider
@@ -389,10 +621,51 @@ export function SettingsView({
             max={30}
             value={effectiveAppSettings.autoCloseInterval}
             valueLabel={t('settings.seconds', { value: effectiveAppSettings.autoCloseInterval })}
-            onChange={(value) => updateAppSettingsDraft({ autoCloseInterval: value })}
+            onChange={(value) => void applyAppSettingsPatch({ autoCloseInterval: value })}
           />
+          <div className="settings-field-row settings-panel settings-shortcut-row">
+            <span>
+              <strong>{t('settings.quickOpenShortcut')}</strong>
+              <small>{t('settings.quickOpenShortcutHelp')}</small>
+              {effectiveAppSettings.quickOpenShortcutConflict && (
+                <small className="settings-shortcut-warning">
+                  {t('settings.quickOpenShortcutConflict')}
+                </small>
+              )}
+            </span>
+            <span className="settings-shortcut-controls">
+              <button
+                ref={quickOpenRecorderRef}
+                type="button"
+                className="settings-shortcut-recorder"
+                data-recording={recordingQuickOpenShortcut ? 'true' : 'false'}
+                onClick={startQuickOpenShortcutRecording}
+                onKeyDown={recordQuickOpenShortcut}
+                onBlur={() => {
+                  if (recordingQuickOpenShortcut) restoreQuickOpenShortcutRecording()
+                }}
+              >
+                {recordingQuickOpenShortcut
+                  ? t('settings.quickOpenShortcutRecording')
+                  : (effectiveAppSettings.quickOpenShortcut === 'disabled'
+                    ? t('common.disabled')
+                    : (effectiveAppSettings.quickOpenShortcutLabel || formatShortcut(effectiveAppSettings.quickOpenShortcut)))}
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void applyQuickOpenShortcut('disabled')}
+              >
+                {t('common.disabled')}
+              </button>
+            </span>
+          </div>
         </section>
 
+          </>
+        )}
+
+        {activeSettingsCategory === 'account' && (
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -470,7 +743,10 @@ export function SettingsView({
             )}
           </div>
         </section>
+        )}
 
+        {activeSettingsCategory === 'privacy' && (
+          <>
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -619,7 +895,10 @@ export function SettingsView({
             deleting={deletingLocalData}
           />
         )}
+          </>
+        )}
 
+        {activeSettingsCategory === 'general' && (
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -632,14 +911,14 @@ export function SettingsView({
               <strong>{t('settings.showGrid')}</strong>
               <small>{t('settings.showGridHelp')}</small>
             </span>
-            <input type="checkbox" checked={boardGridEnabled} onChange={(event) => setBoardGridEnabled(event.target.checked)} />
+            <input type="checkbox" checked={boardGridEnabled} onChange={(event) => applyBoardGridEnabled(event.target.checked)} />
           </label>
           <label className="settings-toggle-row settings-panel">
             <span>
               <strong>{t('settings.lockViewport')}</strong>
               <small>{t('settings.lockViewportHelp')}</small>
             </span>
-            <input type="checkbox" checked={lockViewportOnSwitch} onChange={(event) => setLockViewportOnSwitch(event.target.checked)} />
+            <input type="checkbox" checked={lockViewportOnSwitch} onChange={(event) => applyLockViewportOnSwitch(event.target.checked)} />
           </label>
           <label className="settings-field-row settings-panel">
             <span>
@@ -655,16 +934,21 @@ export function SettingsView({
                 value={canvasRecapIntervalMinutes}
                 onChange={(event) => {
                   const next = Number.parseInt(event.target.value, 10)
-                  setCanvasRecapIntervalMinutes(Number.isFinite(next) ? Math.max(0, Math.min(120, next)) : 0)
+                  applyCanvasRecapIntervalMinutes(Number.isFinite(next) ? next : 0)
                 }}
               />
               <small>{t('settings.minutes')}</small>
             </span>
           </label>
         </section>
+        )}
 
-        <NotificationSettings onToast={onToast} />
+        {activeSettingsCategory === 'notifications' && (
+          <NotificationSettings onToast={onToast} />
+        )}
 
+        {activeSettingsCategory === 'runtime' && (
+          <>
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -703,7 +987,7 @@ export function SettingsView({
           </div>
           <div className="segment">
             {(['claude', 'codex'] as SpawnProvider[]).map((provider) => (
-              <button key={provider} type="button" className={spawnProvider === provider ? 'active' : ''} onClick={() => setSpawnProvider(provider)}>
+              <button key={provider} type="button" className={spawnProvider === provider ? 'active' : ''} onClick={() => applySpawnProvider(provider)}>
                 {spawnProviderLabel(provider)}
               </button>
             ))}
@@ -714,11 +998,15 @@ export function SettingsView({
             onSetUp={() => onOpenAgentRuntime?.(spawnProvider)}
             onRefresh={onRefreshAgentRuntime}
           />
-          <button className="ghost" style={{ alignSelf: 'flex-start', fontSize: 11, padding: '2px 8px' }} onClick={() => setSpawnProvider(DEFAULT_SPAWN_PROVIDER)}>
+          <button className="ghost" style={{ alignSelf: 'flex-start', fontSize: 11, padding: '2px 8px' }} onClick={() => applySpawnProvider(DEFAULT_SPAWN_PROVIDER)}>
             {t('common.reset')}
           </button>
         </section>
 
+          </>
+        )}
+
+        {activeSettingsCategory === 'models' && (
         <section className="settings-section">
           <div className="settings-section-header">
             <div>
@@ -728,16 +1016,16 @@ export function SettingsView({
           </div>
           <div className="segment">
             {(['local', 'openai', 'anthropic'] as LlmProvider[]).map((p) => (
-              <button key={p} className={p === llm.provider ? 'active' : ''} onClick={() => setProvider(p)} type="button">
+              <button key={p} className={p === llm.provider ? 'active' : ''} onClick={() => applyLlmProvider(p)} type="button">
                 {providerLabel(p)}
               </button>
             ))}
           </div>
           {llm.provider !== 'local' && (
             <div className="col" style={{ gap: 6 }}>
-              <SettingsTextInput label={t('settings.apiKey')} type="password" value={llm.apiKey} placeholder={llm.provider === 'openai' ? 'sk-...' : 'sk-ant-...'} onChange={(value) => setLlm((s) => ({ ...s, apiKey: value }))} />
-              <SettingsTextInput label={`${t('settings.baseUrl')} (${t('settings.blankDefault')})`} value={llm.baseUrl} placeholder={DEFAULT_BASE_URL[llm.provider]} onChange={(value) => setLlm((s) => ({ ...s, baseUrl: value }))} />
-              <SettingsTextInput label={`${t('settings.model')} (${t('settings.blankDefault')})`} value={llm.model} placeholder={DEFAULT_MODEL[llm.provider]} onChange={(value) => setLlm((s) => ({ ...s, model: value }))} />
+              <SettingsTextInput label={t('settings.apiKey')} type="password" value={llm.apiKey} placeholder={llm.provider === 'openai' ? 'sk-...' : 'sk-ant-...'} onChange={(value) => updateLlmDraft({ apiKey: value })} onBlur={() => saveLlmDraft(llm)} />
+              <SettingsTextInput label={`${t('settings.baseUrl')} (${t('settings.blankDefault')})`} value={llm.baseUrl} placeholder={DEFAULT_BASE_URL[llm.provider]} onChange={(value) => updateLlmDraft({ baseUrl: value })} onBlur={() => saveLlmDraft(llm)} />
+              <SettingsTextInput label={`${t('settings.model')} (${t('settings.blankDefault')})`} value={llm.model} placeholder={DEFAULT_MODEL[llm.provider]} onChange={(value) => updateLlmDraft({ model: value })} onBlur={() => saveLlmDraft(llm)} />
             </div>
           )}
           {llm.provider === 'local' && (
@@ -746,8 +1034,9 @@ export function SettingsView({
             </div>
           )}
         </section>
+        )}
 
-        {(devMode || effectiveAppSettings.devMode) && (
+        {activeSettingsCategory === 'developer' && (devMode || effectiveAppSettings.devMode) && (
           <section className="settings-section">
             <div className="settings-section-header">
               <div>
@@ -770,6 +1059,7 @@ export function SettingsView({
             </label>
           </section>
         )}
+        </div>
       </div>
     </main>
   )
@@ -830,12 +1120,14 @@ function SettingsTextInput({
   value,
   placeholder,
   onChange,
+  onBlur,
 }: {
   label: string
   type?: string
   value: string
   placeholder?: string
   onChange: (value: string) => void
+  onBlur?: () => void
 }) {
   return (
     <div className="col" style={{ gap: 2 }}>
@@ -849,6 +1141,7 @@ function SettingsTextInput({
         autoCapitalize="off"
         autoCorrect="off"
         spellCheck={false}
+        onBlur={onBlur}
       />
     </div>
   )

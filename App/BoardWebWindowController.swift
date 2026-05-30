@@ -226,7 +226,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     private var pendingOpenSessionsWorkspace: (sessionId: String?, surfaceId: String?)?
-    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?)?
+    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?, artifactId: String?, deliveryId: String?, proposalId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -391,8 +391,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSessionsWorkspaceIfPossible()
     }
 
-    func openPlannerItem(canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?) {
-        pendingOpenPlannerItem = (canvasId, nodeId, deliveryId, proposalId)
+    func openPlannerItem(canvasId: String?, nodeId: String?, artifactId: String? = nil, deliveryId: String?, proposalId: String?) {
+        pendingOpenPlannerItem = (canvasId, nodeId, artifactId, deliveryId, proposalId)
         show()
         dispatchOpenPlannerItemIfPossible()
     }
@@ -1046,7 +1046,17 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             ]
         ]
         if let nodeId = pendingOpenPlannerItem.nodeId, !nodeId.isEmpty {
-            detail["kind"] = "planner-node"
+            if let artifactId = pendingOpenPlannerItem.artifactId, !artifactId.isEmpty {
+                detail["kind"] = "planner-artifact"
+                detail["artifactId"] = artifactId
+                if var guide = detail["guide"] as? [String: Any] {
+                    guide["title"] = "Opened artifact"
+                    guide["openInspector"] = true
+                    detail["guide"] = guide
+                }
+            } else {
+                detail["kind"] = "planner-node"
+            }
             detail["nodeId"] = nodeId
         } else if let proposalId = pendingOpenPlannerItem.proposalId, !proposalId.isEmpty {
             detail["kind"] = "planner-proposal"

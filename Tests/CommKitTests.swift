@@ -201,7 +201,12 @@ final class CommKitTests: XCTestCase {
 
     /// 一个简单的 stub IdentityResolver。
     private final class StubResolver: IdentityResolver {
-        var byCwd: [String: [String]] = [:]
+        let byCwd: [String: [String]]
+
+        init(byCwd: [String: [String]] = [:]) {
+            self.byCwd = byCwd
+        }
+
         func sessionsForCwd(_ cwd: String) -> [String] { byCwd[cwd] ?? [] }
     }
 
@@ -213,10 +218,9 @@ final class CommKitTests: XCTestCase {
         let prior = A2AIdentity.resolver
         defer { A2AIdentity.resolver = prior }
 
-        let stub = StubResolver()
         let cwd = FileManager.default.currentDirectoryPath
         let expected = "sid-resolver-\(UUID().uuidString.prefix(6))"
-        stub.byCwd[cwd] = [expected]
+        let stub = StubResolver(byCwd: [cwd: [expected]])
         A2AIdentity.resolver = stub
 
         // 必须先把环境变量清空,否则 env 优先于 cwd
@@ -256,9 +260,8 @@ final class CommKitTests: XCTestCase {
         let prior = A2AIdentity.resolver
         defer { A2AIdentity.resolver = prior }
 
-        let stub = StubResolver()
         let cwd = FileManager.default.currentDirectoryPath
-        stub.byCwd[cwd] = ["sid-one", "sid-two"]
+        let stub = StubResolver(byCwd: [cwd: ["sid-one", "sid-two"]])
         A2AIdentity.resolver = stub
 
         let envBackup = ProcessInfo.processInfo.environment

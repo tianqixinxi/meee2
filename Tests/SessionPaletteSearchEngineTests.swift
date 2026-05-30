@@ -3,7 +3,7 @@ import Meee2PluginKit
 @testable import meee2Kit
 
 final class SessionPaletteSearchEngineTests: XCTestCase {
-    func testSearchIgnoresPluginOnlyExternalSessions() {
+    func testSearchIncludesExternalPluginSessions() {
         let engine = SessionPaletteSearchEngine()
         engine.query = "checkout"
 
@@ -27,7 +27,9 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
 
         let results = engine.search(sessions: [historical, live], storeSessions: [])
 
-        XCTAssertTrue(results.isEmpty)
+        XCTAssertEqual(results.map(\.sessionId), [live.id])
+        XCTAssertEqual(results.first?.kind, .session)
+        XCTAssertEqual(results.first?.terminalKind, "external")
     }
 
     func testSearchIncludesInternalSurfacesAndBoardTarget() {
@@ -35,7 +37,7 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
         engine.query = "node-a"
 
         let duplicatePluginSession = PluginSession(
-            id: "com.meee2.plugin.claude-internal-session-1",
+            id: "internal-session-1",
             pluginId: "com.meee2.plugin.claude",
             title: "Writer node",
             status: .active,
@@ -66,67 +68,75 @@ final class SessionPaletteSearchEngineTests: XCTestCase {
         XCTAssertEqual(results.map(\.sessionId), ["internal-session-1"])
         XCTAssertEqual(results.first?.surfaceId, "surface-1")
         XCTAssertEqual(results.first?.terminalKind, "internal")
-        XCTAssertFalse(results.first?.isTerminalJumpable ?? true)
     }
 
-    func testSearchDoesNotPromotePluginOnlyDuplicates() {
+    func testSearchIncludesCanvasesAndArtifacts() {
         let engine = SessionPaletteSearchEngine()
+        engine.query = "release"
 
-        let older = PluginSession(
-            id: "com.meee2.plugin.claude-session-a",
-            pluginId: "com.meee2.plugin.claude",
-            title: "Older duplicate",
-            status: .active,
-            startedAt: Date(timeIntervalSince1970: 10),
-            lastUpdated: Date(timeIntervalSince1970: 20),
-            cwd: "/tmp/shop/checkout"
+        let canvas = BoardLayoutStore.Canvas(
+            id: "canvas-release",
+            name: "Release Plan",
+            scope: .personal,
+            ownerUserId: "local",
+            teamId: nil,
+            isDefault: false,
+            workspaceFolderName: "release-plan",
+            createdBy: "local",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
         )
-        let duplicate = PluginSession(
-            id: "session-a",
-            pluginId: "com.meee2.plugin.claude",
-            title: "Duplicate raw id",
-            status: .active,
-            startedAt: Date(timeIntervalSince1970: 11),
-            lastUpdated: Date(timeIntervalSince1970: 30),
-            cwd: "/tmp/shop/checkout"
+        let artifact = PlannerArtifact(
+            id: "artifact-release",
+            canvasId: canvas.id,
+            nodeId: "node-release",
+            kind: .prd,
+            title: "Release checklist",
+            reference: "artifact://release/checklist",
+            status: "ready",
+            createdAt: Date(timeIntervalSince1970: 3)
         )
 
-        let results = engine.search(sessions: [older, duplicate], storeSessions: [])
+        let results = engine.search(
+            sessions: [],
+            storeSessions: [],
+            canvases: [canvas],
+            artifacts: [artifact]
+        )
 
-        XCTAssertTrue(results.isEmpty)
+        XCTAssertEqual(Set(results.map(\.kind)), Set([.canvas, .artifact]))
+        XCTAssertEqual(results.first(where: { $0.kind == .artifact })?.artifactId, artifact.id)
+        XCTAssertEqual(results.first(where: { $0.kind == .artifact })?.nodeId, artifact.nodeId)
     }
 
-    func testDistinctPluginsDoesNotDoubleCountInternalSurfaceMirror() {
+    func testDomainFilterLimitsResults() {
         let engine = SessionPaletteSearchEngine()
-        let pluginSession = PluginSession(
-            id: "com.meee2.plugin.codex-internal-session-1",
-            pluginId: "com.meee2.plugin.codex",
-            title: "Internal mirror",
-            status: .active,
-            startedAt: Date(timeIntervalSince1970: 10),
-            cwd: "/tmp/meee2"
+        engine.domainFilter = .artifacts
+
+        let canvas = BoardLayoutStore.Canvas(
+            id: "canvas-a",
+            name: "Canvas A",
+            scope: .personal,
+            ownerUserId: "local",
+            teamId: nil,
+            isDefault: false,
+            createdBy: "local",
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
         )
-        let surface = TerminalSessionSnapshot(
-            sessionId: "internal-session-1",
-            surfaceId: "surface-1",
-            backend: .ghosttySurface,
-            status: "running",
-            pid: 123,
-            cwd: "/tmp/meee2",
-            command: "codex",
-            provider: "codex",
-            canvasId: nil,
-            nodeId: nil,
-            createdAt: Date(timeIntervalSince1970: 10),
-            updatedAt: Date(timeIntervalSince1970: 30)
+        let artifact = PlannerArtifact(
+            id: "artifact-a",
+            canvasId: canvas.id,
+            nodeId: "node-a",
+            kind: .generic,
+            title: "Output A",
+            reference: "artifact://a",
+            status: "ready",
+            createdAt: Date(timeIntervalSince1970: 3)
         )
 
-        let plugins = engine.distinctPlugins(
-            sessions: [pluginSession],
-            internalSurfaces: [surface]
-        )
+        let results = engine.search(sessions: [], storeSessions: [], canvases: [canvas], artifacts: [artifact])
 
-        XCTAssertEqual(plugins.first?.id, "com.meee2.plugin.codex")
-        XCTAssertEqual(plugins.first?.count, 1)
+        XCTAssertEqual(results.map(\.kind), [.artifact])
     }
 }

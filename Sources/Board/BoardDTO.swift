@@ -250,6 +250,9 @@ struct AppSettingsDTO: Encodable {
     let autoCloseInterval: Double
     let showSessionInCompact: Bool
     let carouselInterval: Double
+    let quickOpenShortcut: String
+    let quickOpenShortcutLabel: String
+    let quickOpenShortcutConflict: String?
 }
 
 /// One identity in the team member directory — the authoritative source the

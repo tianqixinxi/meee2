@@ -183,6 +183,14 @@ enum PlanningNodeStatus: String, Codable, Equatable, CaseIterable {
     }
 }
 
+private func isLegacyDraftStatus(_ status: PlanningNodeStatus) -> Bool {
+    status.rawValue == "draft"
+}
+
+private func isLegacyWorkingStatus(_ status: PlanningNodeStatus) -> Bool {
+    status.rawValue == "working"
+}
+
 enum PlanningNodeSource: String, Codable, Equatable {
     case planner
     case session
@@ -2981,7 +2989,7 @@ final class PlannerCoreService {
                 executionMode: .human,
                 executorType: .codex,
                 doerId: "A",
-                status: .working,
+                status: .ready,
                 dependsOnNodeIds: []
             ),
             PlanningNode(
@@ -3237,7 +3245,7 @@ final class PlannerCoreService {
                 guard !dependencyInvalidationNodeIds.contains(updatedNodes[index].id) else {
                     continue
                 }
-                updatedNodes[index].status = .draft
+                updatedNodes[index].status = .ready
             }
         }
 
@@ -3258,7 +3266,7 @@ final class PlannerCoreService {
             executionMode: step.executionMode,
             executorType: step.executorType,
             doerId: step.doerId,
-            status: .working,
+            status: .ready,
             source: .session,
             dependsOnNodeIds: [step.id],
             nodeKind: .session,
@@ -3485,7 +3493,7 @@ enum SessionToPlanningNodeMapper {
     private static func nodeStatus(_ status: SessionStatus) -> PlanningNodeStatus {
         switch status {
         case .thinking, .tooling, .active, .compacting:
-            return .working
+            return .ready
         case .permissionRequired, .dead:
             return .blocked
         case .completed:
@@ -4491,7 +4499,7 @@ final class PlannerStore {
         case .pending, .readyToStart:
             return .ready
         case .dispatched, .running:
-            return .working
+            return .ready
         case .awaitingInput, .gateWait:
             return .blocked
         case .done:
@@ -6077,7 +6085,7 @@ final class PlannerStore {
             record.nodes[index].chatThreadId = sessionId
             record.nodes[index].source = .session
             record.nodes[index].workflowRunState = .running
-            record.nodes[index].status = .working
+            record.nodes[index].status = .ready
             record.events.append(event(
                 canvasId: canvasId,
                 type: .nodeStateChanged,
@@ -6136,7 +6144,7 @@ final class PlannerStore {
             let runState: PlannerWorkflowRunState = runner == .human ? .running : .dispatched
             record.nodes[index].dispatch = dispatch
             record.nodes[index].workflowRunState = runState
-            record.nodes[index].status = .working
+            record.nodes[index].status = .ready
             // Release the explicit-submit latch — a fresh dispatch means the
             // node is taking new work and any subsequent session-state mirror
             // is once again the authoritative signal.
@@ -6174,7 +6182,7 @@ final class PlannerStore {
             record.nodes[index].sessionId = nil
             record.nodes[index].chatThreadId = nil
             record.nodes[index].outputSubmittedAt = nil
-            if record.nodes[index].status == .working {
+            if isLegacyWorkingStatus(record.nodes[index].status) {
                 record.nodes[index].status = .ready
             }
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
@@ -6209,7 +6217,7 @@ final class PlannerStore {
             record.nodes[index].sessionId = nil
             record.nodes[index].chatThreadId = nil
             record.nodes[index].outputSubmittedAt = nil
-            if record.nodes[index].status == .working {
+            if isLegacyWorkingStatus(record.nodes[index].status) {
                 record.nodes[index].status = .ready
             }
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
@@ -7092,7 +7100,7 @@ enum PlannerBoardBridge {
         guard (node.nodeKind ?? .step) == .step else {
             throw PlannerCoreError.invalidNodeOutput("Only step nodes can change status.")
         }
-        guard status != .working else {
+        guard status.rawValue != "working" else {
             throw PlannerCoreError.invalidNodeOutput("In progress is derived from the bound session; start or resume the session instead.")
         }
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
@@ -7501,7 +7509,7 @@ enum PlannerBoardBridge {
             canvasId: node.canvasId,
             summary: "meee2 AI detected drift for \(node.title)",
             changes: [
-                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .draft)
+                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
             status: .pending
         )
@@ -8011,7 +8019,7 @@ enum PlannerBoardBridge {
         actorId: String
     ) -> PlannerActivity {
         let selected = nodes.first { node in
-            node.doerId == actorId && (node.status == .working || node.status == .blocked || node.status == .draft)
+            node.doerId == actorId && (isLegacyWorkingStatus(node.status) || node.status == .blocked || isLegacyDraftStatus(node.status))
         }
         return PlannerActivity(
             userId: actorId,
@@ -8174,7 +8182,7 @@ enum PlannerProposalFactory {
             executionMode: .human,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .draft,
+            status: .ready,
             dependsOnNodeIds: [node.id]
         )
         return PlanProposal(
@@ -8182,7 +8190,7 @@ enum PlannerProposalFactory {
             canvasId: node.canvasId,
             summary: "Refine \(node.title)",
             changes: [
-                .updateNode(id: node.id, status: .draft),
+                .updateNode(id: node.id, status: .ready),
                 .addNode(followUp)
             ],
             status: .pending
@@ -8441,7 +8449,7 @@ enum PlannerDriftAdvisor {
                 .updateNode(
                     id: node.id,
                     title: "\(node.title) (schema repair planned)",
-                    status: .draft,
+                    status: .ready,
                     contextSources: node.contextSources + [
                         ContextSource(
                             kind: .artifact,
@@ -8474,7 +8482,7 @@ enum PlannerDriftAdvisor {
             executionMode: .human,
             executorType: node.executorType,
             doerId: node.doerId,
-            status: .draft,
+            status: .ready,
             dependsOnNodeIds: [node.id]
         )
         let blockerSummary = state.blockers.isEmpty ? "blocked state" : state.blockers.joined(separator: "; ")
@@ -8483,7 +8491,7 @@ enum PlannerDriftAdvisor {
             canvasId: node.canvasId,
             summary: "Split \(node.title) because \(blockerSummary)",
             changes: [
-                .updateNode(id: node.id, status: .draft),
+                .updateNode(id: node.id, status: .ready),
                 .addNode(splitNode)
             ],
             status: .pending
@@ -8556,7 +8564,7 @@ final class MockPlannerAgent: PlannerAgent {
             canvasId: node.canvasId,
             summary: "meee2 AI detected drift for \(node.title)",
             changes: [
-                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .draft)
+                .updateNode(id: node.id, title: "\(node.title) (needs attention)", status: .ready)
             ],
             status: .pending
         )
