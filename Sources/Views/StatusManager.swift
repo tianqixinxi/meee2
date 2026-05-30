@@ -180,18 +180,23 @@ public class StatusManager: ObservableObject {
             .assign(to: &$hasUrgentSession)
 
         SessionEventBus.shared.publisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] event in
+            .filter(Self.shouldRefreshIslandAttention)
+            .debounce(for: .milliseconds(350), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
                 guard let self = self else { return }
-                switch event {
-                case .boardLayoutChanged, .sessionAdded, .sessionRemoved, .sessionMetadataChanged, .transcriptAppended:
-                    self.refreshIslandAttentionState()
-                    self.updateSystemStatus()
-                case .channelMutated, .messageMutated, .cardTemplateChanged:
-                    break
-                }
+                self.refreshIslandAttentionState()
+                self.updateSystemStatus()
             }
             .store(in: &cancellables)
+    }
+
+    private static func shouldRefreshIslandAttention(for event: SessionEvent) -> Bool {
+        switch event {
+        case .boardLayoutChanged, .sessionAdded, .sessionRemoved, .sessionMetadataChanged:
+            return true
+        case .transcriptAppended, .channelMutated, .messageMutated, .cardTemplateChanged:
+            return false
+        }
     }
 
     private static func isManagedIslandSession(_ session: PluginSession) -> Bool {
