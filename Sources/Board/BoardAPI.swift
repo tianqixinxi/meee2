@@ -10,6 +10,20 @@ import Meee2CommKit
 enum BoardAPI {
     // MARK: - 响应辅助
 
+    enum PlannerRuntimeError: LocalizedError {
+        case timedOut(canvasId: String)
+        case failed(canvasId: String, underlying: Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .timedOut(let canvasId):
+                return "Planner runtime timed out for canvas \(canvasId). No local proposal was generated."
+            case .failed(let canvasId, let underlying):
+                return "Planner runtime failed for canvas \(canvasId): \(underlying.localizedDescription)"
+            }
+        }
+    }
+
     /// 将 Encodable 作为 JSON body 返回
     static func jsonResponse<T: Encodable>(_ body: T, status: Int = 200, reason: String = "OK") -> HttpResponse {
         let encoder = JSONEncoder()
@@ -37,6 +51,8 @@ enum BoardAPI {
             case 403: return "Forbidden"
             case 404: return "Not Found"
             case 409: return "Conflict"
+            case 502: return "Bad Gateway"
+            case 503: return "Service Unavailable"
             case 500: return "Internal Server Error"
             default: return "Error"
             }
@@ -1227,7 +1243,8 @@ enum BoardAPI {
         do {
             let monitor = try PlannerBoardBridge.workspaceMonitor(
                 snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
+                actorUserId: PlannerPermission.currentActorId(),
+                sessions: currentBoardSessions()
             )
             return jsonResponse(PlannerMonitorEnvelope(
                 generatedAt: monitor.generatedAt,
@@ -1403,7 +1420,7 @@ enum BoardAPI {
         do {
             // Phase 8: route through the swappable planner agent runtime
             // (PlannerAgentRuntimeRegistry.shared) as a `.userGoal` event,
-            // instead of calling the adapter/heuristic directly. The runtime
+            // instead of calling the adapter directly. The runtime
             // output is validated again by saveAdapterProposal before it can
             // touch the store, so a swapped-in runtime is still untrusted.
             let context = json["context"] as? String
@@ -1421,18 +1438,15 @@ enum BoardAPI {
                     reason: "Created"
                 )
             }
-            // Runtime timed out — keep the existing heuristic proposal so demo
-            // / offline flows still work.
-            MLog("[Planner] generatePlannerProposal canvas=\(canvasId) path=fallback-heuristic")
-            let proposal = try PlannerBoardBridge.generateProposal(
-                goal: goal,
-                for: canvasId,
-                snapshot: snapshot,
-                actorUserId: actorUserId
+            return errorResponse(
+                "planner_no_proposal",
+                "Planner runtime returned no proposal. No local plan was generated.",
+                status: 409
             )
-            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
+        } catch let err as PlannerRuntimeError {
+            return errorResponse("planner_runtime_unavailable", err.localizedDescription, status: 503)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
@@ -1440,10 +1454,9 @@ enum BoardAPI {
 
     /// Run the planner agent runtime synchronously (the HTTP handler is sync)
     /// for a proposal-producing event, persist the first proposal, and return
-    /// it. Returns `nil` when the runtime timed out (caller falls back to the
-    /// heuristic) or when the runtime returned no proposal (e.g. a healthy
-    /// graph on `.driftInspection`). A `PlannerCoreError` (RBAC / validation)
-    /// is rethrown so the caller maps it to the right HTTP status.
+    /// it. Returns `nil` only when the runtime returned no proposal (e.g. a
+    /// healthy graph on `.driftInspection`). Runtime/provider failures are
+    /// surfaced as errors so callers do not create local fallback plans.
     ///
     /// `internal` so the integration recommend-workflow endpoint can reuse it
     /// without duplicating the runtime + save pipeline.
@@ -1475,7 +1488,7 @@ enum BoardAPI {
         }
         if group.wait(timeout: .now() + 120) == .timedOut {
             MWarn("[Planner] planner runtime timed out for canvas=\(canvasId)")
-            return nil
+            throw PlannerRuntimeError.timedOut(canvasId: canvasId)
         }
 
         if let runtimeError {
@@ -1483,9 +1496,10 @@ enum BoardAPI {
             if let coreError = runtimeError as? PlannerCoreError {
                 throw coreError
             }
-            // Runtime infrastructure error — fall back gracefully.
+            // Runtime infrastructure/provider errors are surfaced. A proposal
+            // without the adapter/LLM is not useful.
             MWarn("[Planner] planner runtime errored for canvas=\(canvasId): \(runtimeError.localizedDescription)")
-            return nil
+            throw PlannerRuntimeError.failed(canvasId: canvasId, underlying: runtimeError)
         }
         guard let outcome else { return nil }
         guard let proposal = outcome.proposals.first else {
@@ -1526,6 +1540,8 @@ enum BoardAPI {
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
+        } catch let err as PlannerRuntimeError {
+            return errorResponse("planner_runtime_unavailable", err.localizedDescription, status: 503)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
@@ -3343,9 +3359,12 @@ enum BoardAPI {
     private static func plannerResumeCommand(for node: PlanningNode?, sessionId: String) -> String {
         let command = node?.dispatch?.command ?? node?.dispatch?.runner.spawnCommand ?? ""
         let provider = AgentLaunchCommand.provider(forCommand: command.isEmpty ? node?.dispatch?.runner.rawValue ?? "claude" : command)
+        if AgentLaunchCommand.isMeee2InternalSessionId(sessionId) {
+            return AgentLaunchCommand.fullAccessCommand(forProvider: provider)
+        }
         let quotedSessionId = shellQuote(sessionId)
         if provider == "codex" {
-            return "codex --dangerously-bypass-approvals-and-sandbox resume \(quotedSessionId)"
+            return "codex \(AgentLaunchCommand.codexAutomationFlags) resume \(quotedSessionId)"
         }
         return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
     }
@@ -3383,6 +3402,7 @@ enum BoardAPI {
 
     private static func currentBoardSessions() -> [SessionDTO] {
         _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
+        let terminalInfos = SessionTerminalStore.shared.getAll()
         let archivedDesktopSids: Set<String> = {
             var set = Set<String>()
             for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
@@ -3397,8 +3417,23 @@ enum BoardAPI {
             .listSnapshots()
             .filter { $0.status != "exited" && $0.status != "failed" }
             .map(BoardDTOBuilder.internalSessionDTO)
-        let internalProviderResumeIds = Set(internalSessions.compactMap {
-            SessionTerminalStore.shared.get(sessionId: $0.id)?.providerResumeSessionId?
+        let staleInternalSessions = SessionStore.shared.listAll()
+            .filter { !$0.status.isHistorical }
+            .filter { BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
+            .filter { session in
+                !internalSessions.contains { internalSession in
+                    boardSession(internalSession, matches: session.sessionId)
+                }
+            }
+            .map { session in
+                BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
+            }
+        let allInternalSessions = internalSessions + staleInternalSessions
+        let activeInternalManagedWorkspaceCwds = Set(
+            internalSessions.compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.project) }
+        )
+        let internalProviderResumeIds = Set(allInternalSessions.compactMap {
+            terminalInfos[$0.id]?.providerResumeSessionId?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }.filter { !$0.isEmpty })
         let realSessions = PluginManager.shared.sessions
@@ -3411,9 +3446,15 @@ enum BoardAPI {
                 return !archivedDesktopSids.contains(realSid)
             }
             .map { BoardDTOBuilder.sessionDTO($0) }
+            .filter {
+                !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                    cwd: $0.project,
+                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                )
+            }
             .filter { !internalProviderResumeIds.contains($0.id) }
             .filter { external in
-                !internalSessions.contains { internalSession in
+                !allInternalSessions.contains { internalSession in
                     boardSession(internalSession, matches: external.id)
                         || boardSession(external, matches: internalSession.id)
                 }
@@ -3429,10 +3470,15 @@ enum BoardAPI {
                       !m.isArchived,
                       !realSids.contains(cliSid),
                       !internalProviderResumeIds.contains(cliSid),
-                      !internalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
-                return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
+                      !allInternalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
+                let dto = BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
+                guard !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                    cwd: dto.project,
+                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                ) else { return nil }
+                return dto
         }
-        return internalSessions + realSessions + syntheticDesktopSessions
+        return internalSessions + staleInternalSessions + realSessions + syntheticDesktopSessions
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {

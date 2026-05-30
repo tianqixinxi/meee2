@@ -680,7 +680,81 @@ export interface CanvasTemplate {
   defaultNodes: CanvasTemplateNodeSpec[]
 }
 
+const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
+  {
+    id: 'code-review',
+    name: 'Code Review Kanban',
+    description: '围绕 GitHub PR 的代码评审看板',
+    icon: 'git-pull-request',
+    kind: 'board',
+    category: 'engineering',
+    defaultNodes: [{ title: 'PR 评审看板', status: 'ready' }],
+  },
+  {
+    id: 'release-checklist',
+    name: 'Release Checklist',
+    description: 'Release 前的 gate + smoke + tag + notify 流程',
+    icon: 'rocket',
+    kind: 'board',
+    category: 'engineering',
+    defaultNodes: [
+      { title: '[Gate] Feature freeze', status: 'blocked' },
+      { title: 'Run CI suite', status: 'ready' },
+      { title: 'Smoke test prod-like env', status: 'ready' },
+      { title: 'Tag release', status: 'ready' },
+      { title: 'Notify stakeholders', status: 'ready' },
+    ],
+  },
+  {
+    id: 'overnight-recap',
+    name: 'Overnight Recap',
+    description: '夜间 AI 跑完后，早晨 5 分钟翻完 recap 决定哪些 follow up',
+    icon: 'moon',
+    kind: 'board',
+    category: 'team',
+    defaultNodes: [{ title: '隔夜 Recap 收件箱', status: 'ready' }],
+  },
+  {
+    id: 'team-control-tower',
+    name: 'Team Control Tower',
+    description: '团队跨工作流总览，看每个人在哪个 status',
+    icon: 'users',
+    kind: 'board',
+    category: 'team',
+    defaultNodes: [{ title: '团队 Owner × Status 矩阵', status: 'ready' }],
+  },
+  {
+    id: 'engineering-refactor',
+    name: 'Engineering Refactor',
+    description: '工程重构 — 拆 scope、下钻 subcanvas、跟踪 blocked',
+    icon: 'tool',
+    kind: 'board',
+    category: 'engineering',
+    defaultNodes: [
+      { title: '重构 PRD 预览', status: 'ready' },
+      { title: 'Scope: PluginManager dylib reload', status: 'ready' },
+      { title: 'Scope: Hook ingestion path simplify', status: 'blocked' },
+      { title: 'Subcanvas: BoardAPI route split-out', status: 'ready' },
+    ],
+  },
+  {
+    id: 'npc-canvas',
+    name: 'NPC Canvas',
+    description: '游戏 NPC 编排画板（demo）',
+    icon: 'gamepad-2',
+    kind: 'board',
+    category: 'demo',
+    defaultNodes: [
+      { title: 'Quest giver: village elder', status: 'ready' },
+      { title: 'Combat NPC: forest wolf', status: 'ready' },
+      { title: 'Merchant: roaming trader', status: 'ready' },
+      { title: 'Lore NPC: ancient librarian', status: 'ready' },
+    ],
+  },
+]
+
 export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
+  if (PLANNER_DEMO_MODE) return Promise.resolve(DEMO_CANVAS_TEMPLATES)
   return jsonRequest<{ templates: CanvasTemplate[] }>('/api/templates').then(
     (envelope) => envelope.templates,
   )
@@ -735,6 +809,20 @@ export function listSessionSurfaces(): Promise<SessionSurface[]> {
   return jsonRequest<{ surfaces: SessionSurface[] }>('/api/session-surfaces').then((result) => result.surfaces)
 }
 
+export function createSessionSurface(input: {
+  provider: 'claude' | 'codex' | string
+  cwd: string
+  createIfMissing?: boolean
+  canvasId?: string | null
+  nodeId?: string | null
+  initialPrompt?: string | null
+}): Promise<SessionSurface> {
+  return jsonRequest<SessionSurface>('/api/session-surfaces', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export function closeSessionSurface(id: string): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>(`/api/session-surfaces/${encodeURIComponent(id)}/close`, {
     method: 'POST',
@@ -776,17 +864,27 @@ export function openNativeTerminalSurface(input: {
 export function syncNativeSessionsWorkspace(input: {
   rect?: NativeTerminalRect
   phase?: 'show' | 'layout' | 'hide' | 'focus'
+  mode?: 'full' | 'terminal'
   sessionId?: string | null
   surfaceId?: string | null
+  traceId?: string
+  clickStartedAtMs?: number
+  sentAtMs?: number
+  webPhase?: string
 }): boolean {
   const bridge = window.webkit?.messageHandlers?.meee2Workspace
   if (!bridge) return false
   bridge.postMessage({
     type: 'sessionsWorkspace',
     phase: input.phase ?? 'layout',
+    mode: input.mode ?? 'full',
     rect: input.rect,
     sessionId: input.sessionId ?? undefined,
     surfaceId: input.surfaceId ?? undefined,
+    traceId: input.traceId,
+    clickStartedAtMs: input.clickStartedAtMs,
+    sentAtMs: input.sentAtMs,
+    webPhase: input.webPhase,
   })
   return true
 }

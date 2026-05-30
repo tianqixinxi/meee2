@@ -28,6 +28,7 @@ export function resolveMonitorItemOpenTarget(
 }
 
 export function monitorItemOpenLabel(item: PlannerMonitorItem): MonitorItemOpenLabel {
+  if (item.kind === 'session') return 'session'
   if (item.nodeId?.trim()) return 'item'
   if (item.deliveryId?.trim() || item.proposalId?.trim()) return 'canvas'
   return item.sessionId?.trim() ? 'session' : 'canvas'
@@ -36,6 +37,9 @@ export function monitorItemOpenLabel(item: PlannerMonitorItem): MonitorItemOpenL
 export function monitorItemSourceKind(item: PlannerMonitorItem): MonitorItemSourceKind {
   if (item.kind === 'proposal' || item.proposalId?.trim()) {
     return 'approval'
+  }
+  if (item.kind === 'session') {
+    return 'live'
   }
   if (item.kind === 'delivery' || item.deliveryId?.trim()) {
     return 'canvas'
@@ -50,6 +54,7 @@ export function monitorItemSourceKind(item: PlannerMonitorItem): MonitorItemSour
 }
 
 export function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
+  if (item.kind === 'session') return false
   return Boolean(
     item.nodeId?.trim()
       || item.deliveryId?.trim()
@@ -58,7 +63,9 @@ export function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
 }
 
 export function isExternalMonitorSession(
-  session: Pick<Session, 'terminalKind' | 'surfaceId'>,
+  session: Pick<Session, 'terminalKind' | 'surfaceId' | 'canOpenExternal'>,
 ): boolean {
-  return session.terminalKind !== 'internal' && !session.surfaceId?.trim()
+  return session.terminalKind !== 'internal'
+    && !session.surfaceId?.trim()
+    && session.canOpenExternal !== false
 }

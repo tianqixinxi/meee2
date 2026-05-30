@@ -58,6 +58,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "App",
+            exclude: ["Info.plist"],
             linkerSettings: [
                 .linkedFramework("Foundation"),
                 .linkedFramework("AppKit"),

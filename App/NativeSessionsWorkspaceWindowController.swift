@@ -66,6 +66,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private var searchQuery = ""
     private var lastRailSignature = ""
     private var pendingReloadWorkItem: DispatchWorkItem?
+    private var terminalOnlyMode = false
 
     init() {
         registry = TerminalPaneRegistry(hostView: terminalHostView)
@@ -81,16 +82,46 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func activate(sessionId: String? = nil, surfaceId: String? = nil) {
-        reloadRows()
+    func setTerminalOnlyMode(_ terminalOnly: Bool) {
+        guard terminalOnlyMode != terminalOnly else { return }
+        terminalOnlyMode = terminalOnly
+        railView.isHidden = terminalOnly
+        lastRailSignature = ""
+        if terminalOnly {
+            selectedRailId = nil
+            rowButtons.removeAll()
+            rowStack.arrangedSubviews.forEach {
+                rowStack.removeArrangedSubview($0)
+                $0.removeFromSuperview()
+            }
+        } else {
+            reloadRows()
+        }
+    }
+
+    func activate(
+        sessionId: String? = nil,
+        surfaceId: String? = nil,
+        terminalOnly: Bool = false,
+        tracePayload: [String: Any]? = nil
+    ) {
+        setTerminalOnlyMode(terminalOnly)
+        if !terminalOnly {
+            reloadRows()
+        }
         if let target = resolveTarget(sessionId: sessionId, surfaceId: surfaceId) {
-            focus(target)
+            focus(target, tracePayload: tracePayload)
+        } else if terminalOnly {
+            selectedRailId = nil
+            registry.hideActive()
+            emptyTerminalLabel.stringValue = "Select an internal session"
+            emptyTerminalLabel.isHidden = false
         } else if selectedRailId == nil,
                   let first = internalSessions().first(where: {
                       $0.status == InternalTerminalLifecycle.starting.rawValue
                           || $0.status == InternalTerminalLifecycle.running.rawValue
                   }) ?? internalSessions().first {
-            focus(first)
+            focus(first, tracePayload: tracePayload)
         }
     }
 
@@ -240,6 +271,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     }
 
     private func scheduleReloadRows() {
+        guard !terminalOnlyMode else { return }
         pendingReloadWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
             self?.reloadRows()
@@ -249,6 +281,7 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     }
 
     private func reloadRows() {
+        guard !terminalOnlyMode else { return }
         let allItems = sessionRailItems()
         let items = filteredItems(allItems)
         let sections = railSections(for: items)
@@ -360,11 +393,11 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         reloadRows()
     }
 
-    private func focus(_ surface: TerminalSessionSnapshot) {
+    private func focus(_ surface: TerminalSessionSnapshot, tracePayload: [String: Any]? = nil) {
         selectedRailId = NativeSessionRailItem.internalId(for: surface)
         updateRowSelection()
         emptyTerminalLabel.isHidden = true
-        if !registry.focus(surface: surface) {
+        if !registry.focus(surface: surface, tracePayload: tracePayload) {
             emptyTerminalLabel.stringValue = "Unable to open terminal surface"
             emptyTerminalLabel.isHidden = false
         }
@@ -398,20 +431,35 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private func sessionRailItems() -> [NativeSessionRailItem] {
         let internalSessions = internalSessions()
         let internalSessionIds = Set(internalSessions.map(\.sessionId))
+        let activeInternalManagedWorkspaceCwds = Set(
+            internalSessions
+                .filter(\.isLiveInternal)
+                .compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.cwd) }
+        )
         let internalItems = internalSessions.map(NativeSessionRailItem.internalSurface)
         let pluginItems = PluginManager.shared.sessions
             .filter { pluginSession in
                 let realId = Self.realSessionId(for: pluginSession)
+                let cwd = pluginSession.cwd ?? pluginSession.title
                 return !internalSessionIds.contains(realId)
+                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                        cwd: cwd,
+                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                    )
                     && SessionControlStore.shared.state(for: [pluginSession.id, realId]) == .active
             }
             .map(NativeSessionRailItem.pluginExternalSession)
         let pluginSessionIds = Set(PluginManager.shared.sessions.flatMap { [$0.id, Self.realSessionId(for: $0)] })
         let storeItems = SessionStore.shared.listAll()
             .filter { session in
-                !internalSessionIds.contains(session.sessionId)
+                let cwd = session.cwd ?? session.project
+                return !internalSessionIds.contains(session.sessionId)
                     && !pluginSessionIds.contains(session.sessionId)
                     && session.terminalInfo?.termProgram != "meee2-ghostty-surface"
+                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                        cwd: cwd,
+                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                    )
                     && SessionControlStore.shared.state(for: [session.sessionId]) == .active
             }
             .map(NativeSessionRailItem.externalSession)
@@ -477,6 +525,13 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         return session.id.hasPrefix(prefix)
             ? String(session.id.dropFirst(prefix.count))
             : session.id
+    }
+}
+
+private extension TerminalSessionSnapshot {
+    var isLiveInternal: Bool {
+        status == InternalTerminalLifecycle.starting.rawValue
+            || status == InternalTerminalLifecycle.running.rawValue
     }
 }
 
@@ -683,15 +738,23 @@ private final class TerminalPaneRegistry {
         self.hostView = hostView
     }
 
-    func focus(surface: TerminalSessionSnapshot) -> Bool {
+    func focus(surface: TerminalSessionSnapshot, tracePayload: [String: Any]? = nil) -> Bool {
+        let startedAt = Self.timestampMillis()
         let key = surface.surfaceId
         if activeKey != key {
             activeController?.hide()
         }
         let controller: NativeTerminalPaneControlling
         if let cached = controllers[key] {
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.registry.cache.hit",
+                startedAt: startedAt,
+                extra: "surface=\(key.prefix(8))"
+            )
             controller = cached
         } else {
+            let createStartedAt = Self.timestampMillis()
             let created: NativeTerminalPaneControlling?
             switch surface.backend {
             case .ghosttySurface:
@@ -709,8 +772,20 @@ private final class TerminalPaneRegistry {
                 )
             }
             guard let created else {
+                Self.logTrace(
+                    tracePayload,
+                    phase: "native.workspace.registry.create.failed",
+                    startedAt: createStartedAt,
+                    extra: "surface=\(key.prefix(8)) backend=\(surface.backend.rawValue)"
+                )
                 return false
             }
+            Self.logTrace(
+                tracePayload,
+                phase: "native.workspace.registry.create.done",
+                startedAt: createStartedAt,
+                extra: "surface=\(key.prefix(8)) backend=\(surface.backend.rawValue)"
+            )
             controller = created
             controllers[key] = created
         }
@@ -718,6 +793,12 @@ private final class TerminalPaneRegistry {
         remember(key)
         attach(controller)
         controller.focus()
+        Self.logTrace(
+            tracePayload,
+            phase: "native.workspace.focus.done",
+            startedAt: startedAt,
+            extra: "surface=\(key.prefix(8)) cacheCount=\(controllers.count)"
+        )
         return true
     }
 
@@ -766,6 +847,44 @@ private final class TerminalPaneRegistry {
         if activeKey == surfaceId {
             activeKey = nil
         }
+    }
+
+    private static func timestampMillis() -> Double {
+        Date().timeIntervalSince1970 * 1000
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let value = value as? Double { return value }
+        if let value = value as? CGFloat { return Double(value) }
+        if let value = value as? NSNumber { return value.doubleValue }
+        if let value = value as? String { return Double(value) }
+        return nil
+    }
+
+    private static func logTrace(
+        _ payload: [String: Any]?,
+        phase: String,
+        startedAt: Double? = nil,
+        extra: String = ""
+    ) {
+        guard
+            let payload,
+            let traceId = payload["traceId"] as? String,
+            !traceId.isEmpty
+        else {
+            return
+        }
+        let now = timestampMillis()
+        let sentAt = doubleValue(payload["sentAtMs"])
+        let clickStartedAt = doubleValue(payload["clickStartedAtMs"])
+        let sendToNative = sentAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let clickToNative = clickStartedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let duration = startedAt.map { String(format: "%.1f", now - $0) } ?? "-"
+        let webPhase = payload["webPhase"] as? String ?? "-"
+        let suffix = extra.isEmpty ? "" : " \(extra)"
+        NSLog(
+            "[TerminalSwitchPerf] trace=\(traceId) phase=\(phase) webPhase=\(webPhase) sendToNativeMs=\(sendToNative) clickToNativeMs=\(clickToNative) durationMs=\(duration)\(suffix)"
+        )
     }
 }
 

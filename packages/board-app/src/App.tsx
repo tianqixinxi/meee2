@@ -981,6 +981,7 @@ export default function App() {
             <NativeSessionsWorkspaceHost
               state={boardState.state}
               selectedSessionId={selectedSessionId}
+              onSelectedSessionChange={setSelectedSessionId}
             />
           ) : workspaceMode === 'artifacts' ? (
             <ArtifactsView

@@ -1145,7 +1145,7 @@ export interface NodeStateSnapshot {
   needsOwnerReview: boolean
 }
 
-export type PlannerMonitorItemKind = 'node' | 'proposal' | 'delivery'
+export type PlannerMonitorItemKind = 'node' | 'proposal' | 'delivery' | 'session'
 
 export interface PlannerMonitorItem {
   id: string

@@ -23,6 +23,7 @@ import {
   detachPlannerNodeSession,
   dispatchPlannerNodeSession,
   ensurePlannerNodeInternalSession,
+  fetchCanvasTemplates,
   fetchMeee2MCPStatus,
   fetchPlannerGraphState,
   fetchState,
@@ -54,7 +55,7 @@ import type {
   PlanningNodeStatus,
 } from '../../types'
 import type { BoardState } from '../../types'
-import type { TeamMember, UserProfile } from '../../api'
+import type { CanvasTemplate, TeamMember, UserProfile } from '../../api'
 import type { CanvasMonitor } from '@meee1/recap-core'
 import {
   LOCK_VIEWPORT_PREFERENCES_CHANGED,
@@ -151,6 +152,7 @@ function PlannerGraphInner({
   const { t } = useI18n()
   const reactFlow = useReactFlow()
   const [plannerState, setPlannerState] = useState<PlannerGraphState | null>(null)
+  const [officialCanvasTemplates, setOfficialCanvasTemplates] = useState<CanvasTemplate[]>([])
   // Chunk D: planner-side approval notifications. Diff node workflowRunState
   // for gate-wait transitions across PlannerGraph re-fetches.
   const prevPlannerNodesRef = useRef<Map<string, import('../../types').PlanningNode>>(new Map())
@@ -1008,11 +1010,32 @@ function PlannerGraphInner({
     && !activeProposal,
   )
   const showWorkspacePreview = Boolean(activeProposal && reviewGraph.nodes.length > 0)
-  const starterSuggestions = useMemo(() => buildStarterSuggestions(canvasName, plannerState?.canvas.plannerContext, t), [
+  const starterSuggestions = useMemo(() => buildStarterSuggestions(
     canvasName,
+    plannerState?.canvas.plannerContext,
+    officialCanvasTemplates,
+    t,
+  ), [
+    canvasName,
+    officialCanvasTemplates,
     plannerState?.canvas.plannerContext,
     t,
   ])
+
+  useEffect(() => {
+    if (!emptyCanvasMode || officialCanvasTemplates.length > 0) return
+    let cancelled = false
+    fetchCanvasTemplates()
+      .then((templates) => {
+        if (!cancelled) setOfficialCanvasTemplates(templates)
+      })
+      .catch(() => {
+        if (!cancelled) setOfficialCanvasTemplates([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [emptyCanvasMode, officialCanvasTemplates.length])
 
   useEffect(() => {
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
@@ -1478,7 +1501,7 @@ function PlannerGraphInner({
   }, [canvasId])
 
   const handleApproveAndApply = useCallback(() => {
-    if (!proposal) return
+    if (!proposal || busy) return
     setBusy(true)
     setError(null)
     const applyApproved = (proposalId: string) => applyPlannerProposal(canvasId, proposalId)
@@ -1519,7 +1542,7 @@ function PlannerGraphInner({
       })
       .catch((err) => setError((err as Error).message || 'Failed to approve and apply meee2 AI proposal'))
       .finally(() => setBusy(false))
-  }, [canvasId, canvasName, proposal, reactFlow])
+  }, [busy, canvasId, canvasName, proposal, reactFlow])
 
   const handleReject = useCallback(() => {
     if (!proposal) return
@@ -2464,6 +2487,7 @@ function PlannerWorkspacePreview({
               className="planner-workspace-preview__btn planner-workspace-preview__btn--reject"
               onClick={onReject}
               disabled={busy}
+              aria-busy={busy}
               title="Reject this proposal — revert to previous canvas"
             >
               {busy ? '…' : '✕ Reject'}
@@ -2475,9 +2499,10 @@ function PlannerWorkspacePreview({
               className="planner-workspace-preview__btn planner-workspace-preview__btn--apply"
               onClick={onApply}
               disabled={busy}
+              aria-busy={busy}
               title="Approve & apply this proposal — make these changes real"
             >
-              {busy ? '…' : '✓ Apply'}
+              {busy ? 'Applying…' : '✓ Apply'}
             </button>
           )}
         </div>
@@ -2517,47 +2542,26 @@ function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
 function buildStarterSuggestions(
   canvasName: string,
   canvasTask: string | null | undefined,
+  templates: CanvasTemplate[],
   t: ReturnType<typeof useI18n>['t'],
 ) {
   const target = readableCanvasStarterTarget(canvasName, canvasTask, t)
-  return [
-    {
-      id: 'starter-delivery',
-      label: t('planner.starterDelivery'),
-      value: t('planner.starterDeliveryValue', { target }),
-      description: t('planner.starterDeliveryDesc'),
-      preview: [
-        t('planner.previewGoal'),
-        t('planner.previewMilestones'),
-        t('planner.previewOwnerReview'),
-        t('planner.previewArtifacts'),
-      ],
-    },
-    {
-      id: 'starter-research',
-      label: t('planner.starterResearch'),
-      value: t('planner.starterResearchValue', { target }),
-      description: t('planner.starterResearchDesc'),
-      preview: [
-        t('planner.previewQuestions'),
-        t('planner.previewEvidence'),
-        t('planner.previewSynthesis'),
-        t('planner.previewDecision'),
-      ],
-    },
-    {
-      id: 'starter-ops',
-      label: t('planner.starterOps'),
-      value: t('planner.starterOpsValue', { target }),
-      description: t('planner.starterOpsDesc'),
-      preview: [
-        t('planner.previewCheckIn'),
-        t('planner.previewBlockers'),
-        t('planner.previewEscalation'),
-        t('planner.previewReview'),
-      ],
-    },
-  ]
+  return templates.map((template) => {
+    const nodeTitles = template.defaultNodes.map((node) => node.title)
+    return {
+      id: `official-${template.id}`,
+      label: template.name,
+      value: t('planner.officialTemplateValue', {
+        target,
+        name: template.name,
+        description: template.description,
+        nodes: nodeTitles.length > 0 ? nodeTitles.join(', ') : t('planner.noStarterNodes'),
+      }),
+      description: template.description,
+      preview: nodeTitles.slice(0, 4),
+      nodeCount: nodeTitles.length,
+    }
+  })
 }
 
 function readableCanvasStarterTarget(

@@ -1,5 +1,5 @@
 import { Background, ReactFlow, ReactFlowProvider } from '@xyflow/react'
-import { Check, ChevronDown, Eye, Info, LayoutTemplate, Send, X } from 'lucide-react'
+import { Check, ChevronDown, Eye, Info, LayoutTemplate, Loader2, Send, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -73,6 +73,7 @@ interface PlannerChatChoice {
   value: string
   description?: string
   preview?: string[]
+  nodeCount?: number
 }
 
 interface PlannerChatChoiceGroup {
@@ -133,6 +134,7 @@ export function PlannerProposalPanel({
   const emptyIntakeTimerRef = useRef<number | null>(null)
   const handledClearRevisionRef = useRef(0)
   const handledAnswerOnlyIdRef = useRef(0)
+  const blockingSawBusyRef = useRef(false)
   // ENG-5: first-Q&A auto-expand. We flip historyOpen=true the first time a
   // planner reply (proposal OR answer-only) lands following a user message,
   // so the textual answer doesn't stay buried in a collapsed panel — which
@@ -144,6 +146,7 @@ export function PlannerProposalPanel({
   const [historyOpen, setHistoryOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [blockingOperation, setBlockingOperation] = useState<'draft' | 'apply' | null>(null)
   const [emptyIntakeError, setEmptyIntakeError] = useState<string | null>(null)
   const [draftContext, setDraftContext] = useState<{ text: string; label: string } | null>(null)
   const isTemplate = variant === 'template'
@@ -290,6 +293,27 @@ export function PlannerProposalPanel({
     if (!busy) setThinking(false)
   }, [busy])
 
+  useEffect(() => {
+    if (!blockingOperation) {
+      blockingSawBusyRef.current = false
+      return
+    }
+    if (busy) {
+      blockingSawBusyRef.current = true
+      return
+    }
+    if (blockingSawBusyRef.current && !thinking) {
+      blockingSawBusyRef.current = false
+      setBlockingOperation(null)
+    }
+  }, [blockingOperation, busy, thinking])
+
+  useEffect(() => {
+    if (proposal?.status === 'applied' || proposal?.status === 'rejected') {
+      setReviewOpen(false)
+    }
+  }, [proposal?.status])
+
   // A new proposal just arrived from chat, drift inspection, or a node action.
   // Surface the review gate in every layout so the preview cannot be mistaken
   // for already-applied canvas state.
@@ -320,6 +344,9 @@ export function PlannerProposalPanel({
   const guidance = plannerGuidance(nodeCount, hasActionableDrift)
   const visibleHistory = history.slice(-VISIBLE_HISTORY_LIMIT)
   const hiddenHistoryCount = Math.max(0, history.length - visibleHistory.length)
+  const isDraftingCanvas = blockingOperation === 'draft'
+  const isApplyingProposal = blockingOperation === 'apply'
+  const reviewLocked = busy || isApplyingProposal
   const placeholder = emptyMode
     ? t('planner.emptyPlaceholder')
     : hasActionableDrift
@@ -431,6 +458,7 @@ export function PlannerProposalPanel({
 
   const buildConfirmedPlan = (prompt: string) => {
     if (!prompt.trim() || busy || thinking || !canCreateProposal) return
+    setBlockingOperation('draft')
     setThinking(true)
     onSubmit(prompt)
   }
@@ -569,7 +597,7 @@ export function PlannerProposalPanel({
                 </button>
               </div>
             </div>
-          ) : history.length === 0 && (
+          ) : history.length === 0 && !(emptyMode && layout === 'omni') && (
             <div className="planner-dialog__hint" role="note">
               <div className="planner-dialog__hint-label">
                 <Info size={11} aria-hidden />
@@ -629,25 +657,14 @@ export function PlannerProposalPanel({
             <span>{t('planner.templatesHelp')}</span>
           </div>
           {starterSuggestions.map((choice) => (
-            <button
+            <StarterSuggestionCard
               key={choice.id}
-              type="button"
-              onClick={() => {
+              choice={choice}
+              onChoose={() => {
                 setMessage(choice.value)
                 window.requestAnimationFrame(() => textareaRef.current?.focus())
               }}
-              title={choice.description}
-            >
-              <span>{choice.label}</span>
-              {choice.description && <small>{choice.description}</small>}
-              {choice.preview && choice.preview.length > 0 && (
-                <div className="planner-template-preview" aria-hidden>
-                  {choice.preview.map((item) => (
-                    <i key={item}>{item}</i>
-                  ))}
-                </div>
-              )}
-            </button>
+            />
           ))}
         </div>
       )}
@@ -656,13 +673,14 @@ export function PlannerProposalPanel({
         <div
           className="planner-proposal-modal-backdrop"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setReviewOpen(false)
+            if (event.target === event.currentTarget && !reviewLocked) setReviewOpen(false)
           }}
         >
           <div className="planner-proposal-modal" role="dialog" aria-modal="true" aria-label={t('planner.reviewChanges')}>
             <button
               type="button"
               className="planner-proposal-modal__close"
+              disabled={reviewLocked}
               onClick={() => setReviewOpen(false)}
               aria-label={t('planner.closeProposalReview')}
             >
@@ -713,19 +731,25 @@ export function PlannerProposalPanel({
               <button
                 type="button"
                 className="primary"
-                disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !canApproveAndApply(proposal, access)}
+                disabled={reviewLocked || proposal.status === 'applied' || proposal.status === 'rejected' || !canApproveAndApply(proposal, access)}
+                aria-busy={isApplyingProposal}
                 onClick={() => {
+                  if (reviewLocked) return
+                  setBlockingOperation('apply')
                   onApproveAndApply()
-                  setReviewOpen(false)
                 }}
                 title={isTemplate ? t('planner.applyTemplateTitle') : t('planner.applyCanvasTitle')}
               >
-                <Check size={14} aria-hidden />
-                {isTemplate ? t('planner.applyToTemplate') : t('planner.applyToCanvas')}
+                {isApplyingProposal
+                  ? <Loader2 size={14} className="spin" aria-hidden />
+                  : <Check size={14} aria-hidden />}
+                {isApplyingProposal
+                  ? t('planner.applyingChanges')
+                  : isTemplate ? t('planner.applyToTemplate') : t('planner.applyToCanvas')}
               </button>
               <button
                 type="button"
-                disabled={busy || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
+                disabled={reviewLocked || proposal.status === 'applied' || proposal.status === 'rejected' || !access?.canRejectProposal}
                 onClick={() => {
                   onReject()
                   setReviewOpen(false)
@@ -734,6 +758,16 @@ export function PlannerProposalPanel({
                 {isTemplate ? t('planner.discardProposal') : t('planner.rejectProposal')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {isDraftingCanvas && (
+        <div className="planner-blocking-overlay" role="alert" aria-live="assertive" aria-busy="true">
+          <div className="planner-blocking-overlay__panel">
+            <Loader2 size={22} className="spin" aria-hidden />
+            <strong>{t('planner.draftingCanvas')}</strong>
+            <span>{t('planner.draftingCanvasDetail')}</span>
           </div>
         </div>
       )}
@@ -779,6 +813,39 @@ function RecommendedTemplate({
         {recommendation.label}
       </button>
     </div>
+  )
+}
+
+function StarterSuggestionCard({
+  choice,
+  onChoose,
+}: {
+  choice: PlannerChatChoice
+  onChoose: () => void
+}) {
+  const { t } = useI18n()
+  const nodeCount = choice.nodeCount ?? choice.preview?.length ?? 0
+  return (
+    <button
+      type="button"
+      className="planner-starter-card"
+      onClick={onChoose}
+      title={choice.description}
+    >
+      <span>{choice.label}</span>
+      {choice.description && <small>{choice.description}</small>}
+      {choice.preview && choice.preview.length > 0 && (
+        <div className="planner-template-preview" aria-hidden>
+          {choice.preview.map((item) => (
+            <i key={item}>{item}</i>
+          ))}
+        </div>
+      )}
+      <div className="planner-starter-card__footer" aria-hidden>
+        <em>{t('planner.templateNodeCount', { count: nodeCount, plural: nodeCount === 1 ? '' : 's' })}</em>
+        <b>{t('planner.useStarter')}</b>
+      </div>
+    </button>
   )
 }
 
@@ -976,11 +1043,67 @@ async function requestEmptyCanvasAIReply({
       if (ev.type === 'delta') text += ev.text
       if (ev.type === 'error') throw new Error(ev.message)
     }
-    return emptyCanvasAIReplyToMessage(text, history)
+    try {
+      return emptyCanvasAIReplyToMessage(text, history)
+    } catch (parseErr) {
+      const repaired = await repairEmptyCanvasAIReply({
+        canvasId,
+        canvasName,
+        canvasTask,
+        history,
+        rawText: text,
+        signal,
+        llm,
+      })
+      try {
+        return emptyCanvasAIReplyToMessage(repaired, history)
+      } catch {
+        throw parseErr
+      }
+    }
   } catch (err) {
     if (signal.aborted) throw err
-    return fallbackEmptyCanvasPlanMessage(canvasName, canvasTask, history, err)
+    throw new Error(formatEmptyCanvasAIError(history, err))
   }
+}
+
+async function repairEmptyCanvasAIReply({
+  canvasId,
+  canvasName,
+  canvasTask,
+  history,
+  rawText,
+  signal,
+  llm,
+}: {
+  canvasId: string
+  canvasName: string
+  canvasTask: string
+  history: PlannerChatMessage[]
+  rawText: string
+  signal: AbortSignal
+  llm: ReturnType<typeof readLlmSettings>
+}): Promise<string> {
+  if (!rawText.trim()) throw new Error('meee2 AI returned an empty setup response.')
+  let repaired = ''
+  for await (const ev of streamAssistantChat({
+    messages: buildEmptyCanvasAIRepairMessages(canvasName, canvasTask, history, rawText),
+    settings: {
+      provider: llm.provider,
+      apiKey: llm.apiKey,
+      baseUrl: llm.baseUrl,
+      model: llm.model,
+      enabledTools: [],
+      scope: 'this-mac',
+      canvasId,
+      canvasName,
+    },
+    signal,
+  })) {
+    if (ev.type === 'delta') repaired += ev.text
+    if (ev.type === 'error') throw new Error(ev.message)
+  }
+  return repaired
 }
 
 function buildEmptyCanvasAIMessages(
@@ -995,6 +1118,9 @@ function buildEmptyCanvasAIMessages(
   const prompt = {
     instruction: [
       'You are meee2 AI helping a user start from an empty meee2 canvas.',
+      'A meee2 canvas is a graph of executable node cards connected by dependencies. A plan step should become a concrete node card, not a generic document section.',
+      'For each plan step, describe the input, the operation/tool or actor, and the expected output/artifact.',
+      'Do not add a "canvas interaction/design" step unless the user explicitly asked to design the canvas UI itself.',
       'Do not create a canvas proposal yet. Your job is only to conduct intake and decide the next conversational step.',
       'If the request lacks critical information, ask exactly one helpful follow-up question.',
       'When asking, include 2-4 concrete option chips and keep free-form typing possible through the composer.',
@@ -1019,16 +1145,17 @@ function buildEmptyCanvasAIMessages(
           title: 'Plan title',
           intro: 'Summary asking whether this looks right.',
           steps: [
-            { title: 'Step title', body: 'What this part will cover.' },
+            { title: 'Executable node title', body: 'Inputs, operation/tool or actor, and expected output/artifact.' },
           ],
-          prompt: 'A complete prompt that can be sent to the canvas proposal generator if the user clicks Build it.',
+          prompt: 'A complete prompt for the canvas proposal generator: concrete nodes, dependencies, outputs/artifacts, and constraints.',
         },
       },
     },
     rules: [
       'Return JSON only, no markdown fence.',
       'For action=ask, choices must come from your reasoning about the user request, not a generic fixed template.',
-      'For action=plan, include 3-5 steps and a prompt that preserves all user details and the confirmed plan.',
+      'For action=plan, include 3-5 node steps. Every step must be actionable on the canvas.',
+      'For action=plan, the prompt must preserve all user details and describe the exact node graph the canvas proposal generator should draft.',
       'If the user is correcting a previous plan, produce an updated plan instead of asking again unless one key detail is still missing.',
     ],
     canvas: {
@@ -1040,8 +1167,59 @@ function buildEmptyCanvasAIMessages(
   return [{ role: 'user', content: JSON.stringify(prompt, null, 2) }]
 }
 
+function buildEmptyCanvasAIRepairMessages(
+  canvasName: string,
+  canvasTask: string,
+  history: PlannerChatMessage[],
+  rawText: string,
+): AssistantMessage[] {
+  return [{
+    role: 'user',
+    content: JSON.stringify({
+      instruction: [
+        'Convert the previous assistant response into the required meee2 empty-canvas intake JSON.',
+        'Do not add new facts. Preserve the user language and intent.',
+        'Plan steps must be executable meee2 canvas node cards with inputs, operation/tool or actor, and expected outputs/artifacts.',
+        'Do not add a "canvas interaction/design" step unless the user explicitly asked to design the canvas UI itself.',
+        'Return JSON only, no markdown fence.',
+      ],
+      validShapes: {
+        ask: {
+          action: 'ask',
+          message: 'Short assistant message before the question.',
+          question: 'The single question to answer next.',
+          choices: [
+            { label: 'Option label', value: 'Full value sent if selected', description: 'Optional short description' },
+          ],
+        },
+        plan: {
+          action: 'plan',
+          message: 'One sentence explaining your understanding.',
+          plan: {
+            title: 'Plan title',
+            intro: 'Summary asking whether this looks right.',
+            steps: [
+              { title: 'Executable node title', body: 'Inputs, operation/tool or actor, and expected output/artifact.' },
+            ],
+            prompt: 'A complete prompt for the canvas proposal generator: concrete nodes, dependencies, outputs/artifacts, and constraints.',
+          },
+        },
+      },
+      canvas: {
+        name: canvasName,
+        context: canvasTask || null,
+      },
+      conversation: history.map((item) => ({
+        role: item.role === 'user' ? 'user' : 'assistant',
+        content: item.planCard ? `${item.planCard.intro}\n\nPlan: ${item.planCard.title}` : item.markdown,
+      })),
+      previousAssistantResponse: rawText,
+    }, null, 2),
+  }]
+}
+
 function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessage[]): PlannerChatMessage {
-  const parsed = parseEmptyCanvasAIReply(rawText)
+  const parsed = normalizeEmptyCanvasAIReply(parseEmptyCanvasAIReply(rawText))
   if (parsed?.action === 'ask') {
     const choices = normalizeAIChoices(parsed.choices)
     const message = stringValue(parsed.message) ?? 'I need one more detail before I can draft the plan.'
@@ -1066,52 +1244,59 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
   throw new Error('meee2 AI returned an unsupported setup response.')
 }
 
-function fallbackEmptyCanvasPlanMessage(
-  canvasName: string,
-  canvasTask: string,
-  history: PlannerChatMessage[],
-  err: unknown,
-): PlannerChatMessage {
-  const userText = latestUserRequest(history) || canvasTask || canvasName || 'this canvas'
-  const chinese = containsCJK(userText)
-  const title = inferredPlanTitle(canvasName, userText, chinese)
-  const intro = chinese
-    ? '本地 fallback 已经把你的需求整理成一个可确认计划；你可以继续补充，也可以直接生成画布草案。'
-    : 'Local fallback turned your request into a confirmable plan; you can refine it or build the canvas draft now.'
-  const steps: PlannerPlanCardStep[] = chinese
-    ? [
-        { title: '梳理目标和验收信号', body: '把原始需求拆成目标、边界、产物和通过标准。' },
-        { title: '绘制可执行节点', body: '生成可派发给 Claude/Codex 或人工处理的节点，并保留 owner、gate 和 next action。' },
-        { title: '接入 session 执行', body: '为需要执行的节点创建或绑定 session，后续可从节点直接跳转交互。' },
-        { title: '用 artifact 验收结果', body: '要求输出可追溯 artifact，并用 expected output 与 gate refs 检查是否满足需求。' },
-      ]
-    : [
-        { title: 'Clarify the outcome and checks', body: 'Turn the request into goals, boundaries, expected artifacts, and acceptance signals.' },
-        { title: 'Draft executable nodes', body: 'Create nodes that can be assigned to Claude/Codex or a human, with owners, gates, and next actions.' },
-        { title: 'Attach sessions for execution', body: 'Create or bind sessions for runnable nodes so the user can jump in and interact.' },
-        { title: 'Verify through artifacts', body: 'Require traceable artifacts and compare them against expected outputs and gate refs.' },
-      ]
-  const planCard = {
-    title,
-    intro,
-    steps,
-    prompt: buildEmptyCanvasPlanPromptFromHistory(title, intro, steps, history),
+function normalizeEmptyCanvasAIReply(parsed: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!parsed) return null
+  const action = normalizedEmptyCanvasAction(parsed.action) ?? normalizedEmptyCanvasAction(parsed.type)
+  if (action) {
+    return { ...parsed, action }
   }
+  const ask = objectValue(parsed.ask)
+  if (ask) {
+    return { ...ask, action: 'ask' }
+  }
+  const plan = objectValue(parsed.plan)
+  if (plan && looksLikePlanObject(plan)) {
+    return { ...parsed, action: 'plan', plan }
+  }
+  if (typeof parsed.question === 'string' || Array.isArray(parsed.choices)) {
+    return { ...parsed, action: 'ask' }
+  }
+  if (looksLikePlanObject(parsed)) {
+    return {
+      action: 'plan',
+      message: parsed.message,
+      plan: parsed,
+    }
+  }
+  return parsed
+}
+
+function normalizedEmptyCanvasAction(raw: unknown): 'ask' | 'plan' | null {
+  if (typeof raw !== 'string') return null
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === 'ask' || normalized === 'question' || normalized === 'clarify') return 'ask'
+  if (normalized === 'plan' || normalized === 'confirm' || normalized === 'summary') return 'plan'
+  return null
+}
+
+function objectValue(raw: unknown): Record<string, unknown> | null {
+  return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null
+}
+
+function looksLikePlanObject(raw: Record<string, unknown>): boolean {
+  return typeof raw.title === 'string'
+    || typeof raw.intro === 'string'
+    || typeof raw.prompt === 'string'
+    || Array.isArray(raw.steps)
+}
+
+function formatEmptyCanvasAIError(history: PlannerChatMessage[], err: unknown): string {
   const reason = err instanceof Error ? err.message : String(err || 'assistant unavailable')
-  return {
-    id: `planner:local-plan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
-    role: 'planner',
-    markdown: intro,
-    meta: chinese ? ['本地计划'] : ['local plan'],
-    planCard: {
-      ...planCard,
-      prompt: [
-        planCard.prompt,
-        '',
-        `Local fallback reason: ${reason.slice(0, 180)}`,
-      ].join('\n'),
-    },
-  }
+  const userText = latestUserRequest(history)
+  const chinese = containsCJK(userText)
+  return chinese
+    ? `meee2 AI 请求失败：${reason.slice(0, 220)}。没有经过 LLM 的计划不会生成；请检查 Settings 里的 LLM provider / Claude CLI 后重试。`
+    : `meee2 AI request failed: ${reason.slice(0, 220)}. No plan will be generated without an LLM-backed response; check Settings LLM provider / Claude CLI and try again.`
 }
 
 function latestUserRequest(history: PlannerChatMessage[]): string {
@@ -1126,15 +1311,6 @@ function latestUserRequest(history: PlannerChatMessage[]): string {
 
 function containsCJK(value: string): boolean {
   return /[\u3400-\u9fff]/.test(value)
-}
-
-function inferredPlanTitle(canvasName: string, userText: string, chinese: boolean): string {
-  const name = canvasName.trim()
-  if (name && !isGenericCanvasTitle(name)) return name
-  const compact = userText.replace(/\s+/g, ' ').trim()
-  if (!compact) return chinese ? '新画布计划' : 'New canvas plan'
-  const limit = chinese ? 18 : 54
-  return compact.length > limit ? `${compact.slice(0, limit).trim()}...` : compact
 }
 
 function parseEmptyCanvasAIReply(rawText: string): Record<string, unknown> | null {
@@ -1208,7 +1384,7 @@ function normalizeAIPlanCard(
     title,
     intro,
     steps: finalSteps,
-    prompt: stringValue(plan.prompt) ?? buildEmptyCanvasPlanPromptFromHistory(title, intro, finalSteps, history),
+    prompt: buildEmptyCanvasPlanPromptFromHistory(title, intro, finalSteps, history, stringValue(plan.prompt)),
   }
 }
 
@@ -1230,14 +1406,18 @@ function buildEmptyCanvasPlanPromptFromHistory(
   intro: string,
   steps: PlannerPlanCardStep[],
   history: PlannerChatMessage[],
+  modelPrompt?: string,
 ): string {
   const userMessages = history
     .filter((item) => item.role === 'user')
     .map((item) => item.markdown)
     .join('\n\n')
   return [
-    'Create a meee2 canvas from this confirmed plan.',
-    'Tailor the result to the original request and the follow-up answers. Use canvas and session language; avoid calling the structure a workflow unless the user explicitly asks for one.',
+    'Create a concrete meee2 canvas proposal from this confirmed plan.',
+    'Represent the plan as executable node cards connected by dependencies, not as generic outline sections.',
+    'Each node should include a clear title, goal, inputs, outputs/artifacts, and useful executor/tool hints when inferable.',
+    'Do not create meta nodes about canvas interaction, canvas design, review UI, or preview UX unless the user explicitly asked to build the canvas UI itself.',
+    'Tailor the result to the original request and follow-up answers. Use canvas and session language; avoid calling the structure a workflow unless the user explicitly says workflow.',
     '',
     `Canvas title: ${title}`,
     `Plan summary: ${intro}`,
@@ -1247,6 +1427,13 @@ function buildEmptyCanvasPlanPromptFromHistory(
     '',
     'Confirmed plan:',
     ...steps.map((step, index) => `${index + 1}. ${step.title}: ${step.body}`),
+    ...(modelPrompt?.trim()
+      ? [
+          '',
+          'Additional model-proposed drafting details:',
+          modelPrompt.trim(),
+        ]
+      : []),
   ].join('\n')
 }
 
@@ -1269,6 +1456,7 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
         const meta = Array.isArray(item.meta)
           ? item.meta.filter((value: unknown): value is string => typeof value === 'string')
           : undefined
+        if (isLocalFallbackHistoryItem(item.id, item.markdown, meta)) return null
         const planCard = normalizePersistedPlanCard(item.planCard)
         return {
           id: item.id,
@@ -1283,6 +1471,13 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
   } catch {
     return []
   }
+}
+
+function isLocalFallbackHistoryItem(id: string, markdown: string, meta?: string[]): boolean {
+  if (id.startsWith('planner:local-plan:')) return true
+  const metaText = meta?.join(' ').toLowerCase() ?? ''
+  const body = markdown.toLowerCase()
+  return metaText.includes('local plan') || body.includes('本地计划') || body.includes('local fallback plan')
 }
 
 function normalizePersistedPlanCard(raw: unknown): PlannerPlanCard | undefined {
