@@ -63,6 +63,7 @@ final class IslandAttentionStateTests: XCTestCase {
         XCTAssertEqual(state.displayedItems.map(\.source), [.canvas, .proposal])
         XCTAssertEqual(state.displayedItems.first?.title, "Blocked work")
         XCTAssertEqual(state.displayedItems.last?.title, "Proposal needs review")
+        XCTAssertEqual(state.displayedItems.last?.proposalId, "proposal-a")
     }
 
     func testMonitorFailureFallsBackToUrgentSessionItems() {

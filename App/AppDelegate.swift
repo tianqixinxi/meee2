@@ -493,8 +493,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openPlannerItem(_ notification: Notification) {
         let canvasId = notification.userInfo?["canvasId"] as? String
         let nodeId = notification.userInfo?["nodeId"] as? String
+        let deliveryId = notification.userInfo?["deliveryId"] as? String
+        let proposalId = notification.userInfo?["proposalId"] as? String
         openBoardMenu()
-        boardWindowController?.openPlannerItem(canvasId: canvasId, nodeId: nodeId)
+        boardWindowController?.openPlannerItem(
+            canvasId: canvasId,
+            nodeId: nodeId,
+            deliveryId: deliveryId,
+            proposalId: proposalId
+        )
     }
 
     @MainActor

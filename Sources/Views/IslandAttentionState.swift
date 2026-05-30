@@ -29,6 +29,7 @@ struct IslandAttentionItem: Identifiable, Equatable {
     let detail: String?
     let canvasId: String?
     let nodeId: String?
+    let deliveryId: String?
     let proposalId: String?
     let sessionId: String?
     let eventId: String?
@@ -130,6 +131,7 @@ enum IslandAttentionBuilder {
             detail: event.message,
             canvasId: nil,
             nodeId: nil,
+            deliveryId: nil,
             proposalId: nil,
             sessionId: session.id,
             eventId: event.id
@@ -162,6 +164,7 @@ enum IslandAttentionBuilder {
             detail: item.blockers.first ?? item.nextAction,
             canvasId: item.canvasId,
             nodeId: item.nodeId,
+            deliveryId: item.deliveryId,
             proposalId: item.proposalId,
             sessionId: item.sessionId,
             eventId: nil

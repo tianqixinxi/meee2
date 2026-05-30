@@ -121,7 +121,9 @@ public class StatusManager: ObservableObject {
             object: nil,
             userInfo: [
                 "canvasId": item.canvasId ?? "",
-                "nodeId": item.nodeId ?? ""
+                "nodeId": item.nodeId ?? "",
+                "deliveryId": item.deliveryId ?? "",
+                "proposalId": item.proposalId ?? ""
             ]
         )
     }

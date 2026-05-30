@@ -226,7 +226,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     private var pendingOpenSessionsWorkspace: (sessionId: String?, surfaceId: String?)?
-    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?)?
+    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -391,8 +391,8 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSessionsWorkspaceIfPossible()
     }
 
-    func openPlannerItem(canvasId: String?, nodeId: String?) {
-        pendingOpenPlannerItem = (canvasId, nodeId)
+    func openPlannerItem(canvasId: String?, nodeId: String?, deliveryId: String?, proposalId: String?) {
+        pendingOpenPlannerItem = (canvasId, nodeId, deliveryId, proposalId)
         show()
         dispatchOpenPlannerItemIfPossible()
     }
@@ -1048,6 +1048,20 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         if let nodeId = pendingOpenPlannerItem.nodeId, !nodeId.isEmpty {
             detail["kind"] = "planner-node"
             detail["nodeId"] = nodeId
+        } else if let proposalId = pendingOpenPlannerItem.proposalId, !proposalId.isEmpty {
+            detail["kind"] = "planner-proposal"
+            detail["proposalId"] = proposalId
+            if var guide = detail["guide"] as? [String: Any] {
+                guide["title"] = "Review proposal"
+                detail["guide"] = guide
+            }
+        } else if let deliveryId = pendingOpenPlannerItem.deliveryId, !deliveryId.isEmpty {
+            detail["kind"] = "planner-delivery"
+            detail["deliveryId"] = deliveryId
+            if var guide = detail["guide"] as? [String: Any] {
+                guide["title"] = "Delivery needs attention"
+                detail["guide"] = guide
+            }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: detail),
               let json = String(data: data, encoding: .utf8) else {
