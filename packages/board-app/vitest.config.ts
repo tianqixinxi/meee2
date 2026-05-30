@@ -13,7 +13,10 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'text-summary'],
+      // text/text-summary → console + CI step summary; html → uploaded as a CI
+      // artifact for drill-down; json-summary → machine-readable for tooling.
+      reporter: ['text', 'text-summary', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
       include: ['src/components/planner/**'],
     },
   },
