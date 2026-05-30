@@ -200,6 +200,8 @@ enum IntegrationsAPI {
             )
         } catch let err as PlannerCoreError {
             return BoardAPI.mapPlannerCoreError(err)
+        } catch let err as BoardAPI.PlannerRuntimeError {
+            return BoardAPI.errorResponse("planner_runtime_unavailable", err.localizedDescription, status: 503)
         } catch {
             return BoardAPI.errorResponse("planner_error", error.localizedDescription, status: 400)
         }

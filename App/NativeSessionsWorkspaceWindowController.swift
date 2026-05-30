@@ -431,20 +431,35 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
     private func sessionRailItems() -> [NativeSessionRailItem] {
         let internalSessions = internalSessions()
         let internalSessionIds = Set(internalSessions.map(\.sessionId))
+        let activeInternalManagedWorkspaceCwds = Set(
+            internalSessions
+                .filter(\.isLiveInternal)
+                .compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.cwd) }
+        )
         let internalItems = internalSessions.map(NativeSessionRailItem.internalSurface)
         let pluginItems = PluginManager.shared.sessions
             .filter { pluginSession in
                 let realId = Self.realSessionId(for: pluginSession)
+                let cwd = pluginSession.cwd ?? pluginSession.title
                 return !internalSessionIds.contains(realId)
+                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                        cwd: cwd,
+                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                    )
                     && SessionControlStore.shared.state(for: [pluginSession.id, realId]) == .active
             }
             .map(NativeSessionRailItem.pluginExternalSession)
         let pluginSessionIds = Set(PluginManager.shared.sessions.flatMap { [$0.id, Self.realSessionId(for: $0)] })
         let storeItems = SessionStore.shared.listAll()
             .filter { session in
-                !internalSessionIds.contains(session.sessionId)
+                let cwd = session.cwd ?? session.project
+                return !internalSessionIds.contains(session.sessionId)
                     && !pluginSessionIds.contains(session.sessionId)
                     && session.terminalInfo?.termProgram != "meee2-ghostty-surface"
+                    && !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                        cwd: cwd,
+                        internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                    )
                     && SessionControlStore.shared.state(for: [session.sessionId]) == .active
             }
             .map(NativeSessionRailItem.externalSession)
@@ -510,6 +525,13 @@ final class NativeSessionsWorkspaceViewController: NSViewController {
         return session.id.hasPrefix(prefix)
             ? String(session.id.dropFirst(prefix.count))
             : session.id
+    }
+}
+
+private extension TerminalSessionSnapshot {
+    var isLiveInternal: Bool {
+        status == InternalTerminalLifecycle.starting.rawValue
+            || status == InternalTerminalLifecycle.running.rawValue
     }
 }
 

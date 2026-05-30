@@ -10,6 +10,20 @@ import Meee2CommKit
 enum BoardAPI {
     // MARK: - 响应辅助
 
+    enum PlannerRuntimeError: LocalizedError {
+        case timedOut(canvasId: String)
+        case failed(canvasId: String, underlying: Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .timedOut(let canvasId):
+                return "Planner runtime timed out for canvas \(canvasId). No local proposal was generated."
+            case .failed(let canvasId, let underlying):
+                return "Planner runtime failed for canvas \(canvasId): \(underlying.localizedDescription)"
+            }
+        }
+    }
+
     /// 将 Encodable 作为 JSON body 返回
     static func jsonResponse<T: Encodable>(_ body: T, status: Int = 200, reason: String = "OK") -> HttpResponse {
         let encoder = JSONEncoder()
@@ -37,6 +51,8 @@ enum BoardAPI {
             case 403: return "Forbidden"
             case 404: return "Not Found"
             case 409: return "Conflict"
+            case 502: return "Bad Gateway"
+            case 503: return "Service Unavailable"
             case 500: return "Internal Server Error"
             default: return "Error"
             }
@@ -1371,7 +1387,7 @@ enum BoardAPI {
         do {
             // Phase 8: route through the swappable planner agent runtime
             // (PlannerAgentRuntimeRegistry.shared) as a `.userGoal` event,
-            // instead of calling the adapter/heuristic directly. The runtime
+            // instead of calling the adapter directly. The runtime
             // output is validated again by saveAdapterProposal before it can
             // touch the store, so a swapped-in runtime is still untrusted.
             let context = json["context"] as? String
@@ -1389,18 +1405,15 @@ enum BoardAPI {
                     reason: "Created"
                 )
             }
-            // Runtime timed out — keep the existing heuristic proposal so demo
-            // / offline flows still work.
-            MLog("[Planner] generatePlannerProposal canvas=\(canvasId) path=fallback-heuristic")
-            let proposal = try PlannerBoardBridge.generateProposal(
-                goal: goal,
-                for: canvasId,
-                snapshot: snapshot,
-                actorUserId: actorUserId
+            return errorResponse(
+                "planner_no_proposal",
+                "Planner runtime returned no proposal. No local plan was generated.",
+                status: 409
             )
-            return jsonResponse(PlannerProposalEnvelope(proposal: proposal), status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
+        } catch let err as PlannerRuntimeError {
+            return errorResponse("planner_runtime_unavailable", err.localizedDescription, status: 503)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
@@ -1408,10 +1421,9 @@ enum BoardAPI {
 
     /// Run the planner agent runtime synchronously (the HTTP handler is sync)
     /// for a proposal-producing event, persist the first proposal, and return
-    /// it. Returns `nil` when the runtime timed out (caller falls back to the
-    /// heuristic) or when the runtime returned no proposal (e.g. a healthy
-    /// graph on `.driftInspection`). A `PlannerCoreError` (RBAC / validation)
-    /// is rethrown so the caller maps it to the right HTTP status.
+    /// it. Returns `nil` only when the runtime returned no proposal (e.g. a
+    /// healthy graph on `.driftInspection`). Runtime/provider failures are
+    /// surfaced as errors so callers do not create local fallback plans.
     ///
     /// `internal` so the integration recommend-workflow endpoint can reuse it
     /// without duplicating the runtime + save pipeline.
@@ -1443,7 +1455,7 @@ enum BoardAPI {
         }
         if group.wait(timeout: .now() + 120) == .timedOut {
             MWarn("[Planner] planner runtime timed out for canvas=\(canvasId)")
-            return nil
+            throw PlannerRuntimeError.timedOut(canvasId: canvasId)
         }
 
         if let runtimeError {
@@ -1451,9 +1463,10 @@ enum BoardAPI {
             if let coreError = runtimeError as? PlannerCoreError {
                 throw coreError
             }
-            // Runtime infrastructure error — fall back gracefully.
+            // Runtime infrastructure/provider errors are surfaced. A proposal
+            // without the adapter/LLM is not useful.
             MWarn("[Planner] planner runtime errored for canvas=\(canvasId): \(runtimeError.localizedDescription)")
-            return nil
+            throw PlannerRuntimeError.failed(canvasId: canvasId, underlying: runtimeError)
         }
         guard let outcome else { return nil }
         guard let proposal = outcome.proposals.first else {
@@ -1494,6 +1507,8 @@ enum BoardAPI {
             return jsonResponse(PlannerProposalEnvelope(proposal: proposal))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
+        } catch let err as PlannerRuntimeError {
+            return errorResponse("planner_runtime_unavailable", err.localizedDescription, status: 503)
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
@@ -3319,6 +3334,9 @@ enum BoardAPI {
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
         let allInternalSessions = internalSessions + staleInternalSessions
+        let activeInternalManagedWorkspaceCwds = Set(
+            internalSessions.compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.project) }
+        )
         let internalProviderResumeIds = Set(allInternalSessions.compactMap {
             terminalInfos[$0.id]?.providerResumeSessionId?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3333,6 +3351,12 @@ enum BoardAPI {
                 return !archivedDesktopSids.contains(realSid)
             }
             .map { BoardDTOBuilder.sessionDTO($0) }
+            .filter {
+                !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                    cwd: $0.project,
+                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                )
+            }
             .filter { !internalProviderResumeIds.contains($0.id) }
             .filter { external in
                 !allInternalSessions.contains { internalSession in
@@ -3352,7 +3376,12 @@ enum BoardAPI {
                       !realSids.contains(cliSid),
                       !internalProviderResumeIds.contains(cliSid),
                       !allInternalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
-                return BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
+                let dto = BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
+                guard !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
+                    cwd: dto.project,
+                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
+                ) else { return nil }
+                return dto
         }
         return internalSessions + staleInternalSessions + realSessions + syntheticDesktopSessions
     }

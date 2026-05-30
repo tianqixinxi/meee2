@@ -360,11 +360,13 @@ final class PlannerCoreTests: XCTestCase {
 
     func testWorkspaceMonitorItemsCarryNextAction() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
-        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "owner-a")
 
-        let nodeItems = monitor.items.filter { $0.kind == .node }
-        XCTAssertFalse(nodeItems.isEmpty)
+        let states = service.readNodeState(nodes: record.nodes)
+        let doneCount = states.filter { $0.runState == .done }.count
+        let deliveryItem = try XCTUnwrap(monitor.items.first { $0.kind == .delivery })
+        XCTAssertEqual(deliveryItem.nextAction, "\(doneCount)/\(states.count) nodes")
         for item in monitor.items where item.kind == .proposal {
             XCTAssertNil(item.nextAction)
         }
@@ -1028,154 +1030,24 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNotNil(outcome.rationale)
     }
 
-    func testDefaultRuntimeRevisesTaggedNodeToHtmlWithoutAddingStep() async throws {
-        let node = PlanningNode(
-            id: "node-idea-fetch",
-            canvasId: "canvas-a",
-            title: "idea fetch",
-            schema: NodeSchema(
-                inputs: ["lark_doc"],
-                outputs: ["idea_kanban"],
-                goal: "Fetch content from a Lark document and transform it into an idea Kanban board"
-            ),
-            contextSources: [],
-            executionMode: .human,
-            executorType: .mock,
-            doerId: "owner-a",
-            status: .draft,
-            nodeKind: .step
-        )
-        let runtime = DefaultPlannerAgentRuntime { settings in
-            BYOAPlannerAdapter(provider: FakeAssistantProvider(errorMessage: "adapter should not run"), settings: settings)
-        }
-
-        let outcome = try await runtime.handle(
-            .userGoal(
-                canvasId: "canvas-a",
-                goal: """
-                @node:node-idea-fetch #revise Node: idea fetch
-                Inputs: lark_doc
-                Outputs: idea_kanban
-                Idea kanban update txt to html
-                """,
-                context: nil
-            ),
-            state: runtimeGraphState(nodes: [node]),
-            settings: fakeAdapterSettings()
-        )
-
-        let proposal = try XCTUnwrap(outcome.proposals.first)
-        XCTAssertEqual(proposal.changes.count, 1)
-        XCTAssertEqual(proposal.changes.first?.kind, .updateNode)
-        XCTAssertEqual(proposal.changes.first?.nodeId, "node-idea-fetch")
-        XCTAssertNil(proposal.changes.first?.node)
-        XCTAssertEqual(proposal.changes.first?.schema?.outputs, ["idea_kanban_html"])
-        XCTAssertEqual(proposal.changes.first?.status, .draft)
-    }
-
-    func testDefaultRuntimeParsesExplicitNodeContractWithoutAdapter() async throws {
-        let runtime = DefaultPlannerAgentRuntime { settings in
-            BYOAPlannerAdapter(provider: FakeAssistantProvider(errorMessage: "adapter should not run"), settings: settings)
-        }
-
-        let outcome = try await runtime.handle(
-            .userGoal(
-                canvasId: "canvas-a",
-                goal: "create: idea fetch(input=lark_doc, output=html kanban)",
-                context: nil
-            ),
-            state: runtimeGraphState(),
-            settings: fakeAdapterSettings()
-        )
-
-        let proposal = try XCTUnwrap(outcome.proposals.first)
-        XCTAssertEqual(proposal.status, .pending)
-        XCTAssertEqual(proposal.changes.count, 2)
-        let node = try XCTUnwrap(proposal.changes.first?.node)
-        XCTAssertEqual(node.title, "idea fetch")
-        XCTAssertEqual(node.schema.inputs, ["lark_doc"])
-        XCTAssertEqual(node.schema.outputs, ["html kanban"])
-        XCTAssertEqual(node.executionMode, .auto)
-        XCTAssertEqual(node.executorType, .claude)
-        XCTAssertEqual(node.status, .ready)
-        XCTAssertEqual(node.nodeKind, .step)
-        let artifactChange = proposal.changes[1]
-        XCTAssertEqual(artifactChange.kind, .attachArtifact)
-        XCTAssertEqual(artifactChange.nodeId, node.id)
-        XCTAssertEqual(artifactChange.artifact?.kind, .kanban)
-        XCTAssertEqual(artifactChange.artifact?.reference, "html kanban")
-        guard case .object(let payload)? = artifactChange.artifact?.payload else {
-            return XCTFail("Expected kanban payload")
-        }
-        XCTAssertEqual(payload["version"], .number(1))
-        XCTAssertEqual(payload["items"], .array([]))
-        guard case .array(let columns)? = payload["columns"],
-              case .object(let firstColumn)? = columns.first else {
-            return XCTFail("Expected kanban columns")
-        }
-        XCTAssertEqual(firstColumn["title"], .string("Idea list"))
-        XCTAssertTrue(outcome.rationale?.contains("explicit node contract") == true)
-    }
-
-    func testDefaultRuntimeParsesExplicitWorkflowChainWithoutAdapter() async throws {
-        let runtime = DefaultPlannerAgentRuntime { settings in
-            BYOAPlannerAdapter(provider: FakeAssistantProvider(errorMessage: "adapter should not run"), settings: settings)
-        }
-        let outcome = try await runtime.handle(
-            .userGoal(
-                canvasId: "canvas-a",
-                goal: "Create nodes workflow: idea->prd-draft->prd pr->code pr to pre-release->code pr to release",
-                context: nil
-            ),
-            state: runtimeGraphState(),
-            settings: fakeAdapterSettings()
-        )
-
-        let proposal = try XCTUnwrap(outcome.proposals.first)
-        XCTAssertEqual(proposal.status, .pending)
-        XCTAssertEqual(proposal.changes.count, 5)
-        XCTAssertEqual(proposal.changes.compactMap { $0.node?.title }, [
-            "Idea",
-            "PRD Draft",
-            "PRD PR",
-            "Code PR to Pre-release",
-            "Code PR to Release"
-        ])
-        let nodes = proposal.changes.compactMap(\.node)
-        XCTAssertEqual(nodes[1].dependsOnNodeIds, [nodes[0].id])
-        XCTAssertEqual(nodes[4].dependsOnNodeIds, [nodes[3].id])
-        XCTAssertEqual(nodes[0].schema.inputs, ["owner idea"])
-        XCTAssertEqual(nodes[0].schema.outputs, ["idea"])
-        XCTAssertEqual(nodes[4].schema.goal, "Complete Code PR to Release")
-        XCTAssertTrue(outcome.rationale?.contains("workflow chain") == true)
-
-        let saved = try PlannerBoardBridge.saveAdapterProposal(
-            proposal,
-            for: "canvas-a",
-            snapshot: boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a"),
-            actorUserId: "owner-a"
-        )
-        XCTAssertEqual(saved.changes.count, 5)
-    }
-
-    func testDefaultRuntimeUserGoalFallsBackToHeuristicWhenAdapterUnavailable() async throws {
+    func testDefaultRuntimeUserGoalSurfacesAdapterErrorWithoutLocalFallback() async throws {
         let runtime = DefaultPlannerAgentRuntime { settings in
             BYOAPlannerAdapter(
                 provider: FakeAssistantProvider(errorMessage: "claude unavailable"),
                 settings: settings
             )
         }
-        let outcome = try await runtime.handle(
-            .userGoal(canvasId: "canvas-a", goal: "Build the plan", context: nil),
-            state: runtimeGraphState(),
-            settings: fakeAdapterSettings()
-        )
 
-        XCTAssertEqual(outcome.proposals.count, 1)
-        XCTAssertEqual(outcome.proposals.first?.status, .pending)
-        XCTAssertEqual(outcome.proposals.first?.changes.first?.node?.title, "Build the plan")
-        XCTAssertNil(outcome.noActionReason)
-        XCTAssertFalse(outcome.risks.isEmpty)
+        do {
+            _ = try await runtime.handle(
+                .userGoal(canvasId: "canvas-a", goal: "Build the plan", context: nil),
+                state: runtimeGraphState(),
+                settings: fakeAdapterSettings()
+            )
+            XCTFail("Expected adapter error to propagate without a local fallback proposal")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("claude unavailable"))
+        }
     }
 
     func testDefaultRuntimeDriftInspectionHealthyGraphReturnsNoAction() async throws {
@@ -1196,10 +1068,26 @@ final class PlannerCoreTests: XCTestCase {
     }
 
     func testDefaultRuntimeDriftInspectionUnhealthyGraphProducesProposal() async throws {
-        let runtime = DefaultPlannerAgentRuntime { settings in
-            BYOAPlannerAdapter(provider: FakeAssistantProvider(text: ""), settings: settings)
-        }
         let nodes = service.nodeMock(canvasId: "canvas-a")
+        let raw = """
+        {
+          "id": "proposal-drift-adapter",
+          "canvasId": "canvas-a",
+          "summary": "Adapter drift recovery",
+          "changes": [
+            {
+              "kind": "updateNode",
+              "nodeId": "\(nodes[0].id)",
+              "title": "\(nodes[0].title) recovery",
+              "status": "draft"
+            }
+          ],
+          "status": "pending"
+        }
+        """
+        let runtime = DefaultPlannerAgentRuntime { settings in
+            BYOAPlannerAdapter(provider: FakeAssistantProvider(text: raw), settings: settings)
+        }
         let driftState = NodeStateSnapshot(
             nodeId: nodes[0].id,
             runState: .blocked,
@@ -1214,6 +1102,7 @@ final class PlannerCoreTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome.proposals.count, 1)
+        XCTAssertEqual(outcome.proposals.first?.id, "proposal-drift-adapter")
         XCTAssertEqual(outcome.proposals.first?.changes.first?.kind, .updateNode)
         XCTAssertEqual(outcome.proposals.first?.changes.first?.nodeId, nodes[0].id)
         XCTAssertNil(outcome.noActionReason)
@@ -1577,7 +1466,28 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(monitor.items.first?.riskRank, 0)
     }
 
-    func testPlannerWorkspaceMonitorDoerViewFiltersAssignedNodes() throws {
+    func testPlannerWorkspaceMonitorReturnsCanvasItemsInsteadOfNodeItems() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "owner-a")
+
+        let canvasItem = try XCTUnwrap(monitor.items.first { $0.canvasId == "canvas-a" && $0.kind == .delivery })
+        XCTAssertEqual(canvasItem.nodeId, nil)
+        XCTAssertEqual(canvasItem.summary, "Planning Canvas")
+        XCTAssertFalse(monitor.items.contains { $0.kind == .node })
+    }
+
+    func testPlannerWorkspaceMonitorSkipsSystemMonitorCanvasNodes() throws {
+        let snapshot = boardSnapshot(canvasId: "monitor-a", ownerId: "owner-a", kind: .monitor)
+        _ = try seedPlannerNodes(canvasId: "monitor-a", ownerId: "owner-a")
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(snapshot: snapshot, actorUserId: "owner-a")
+
+        XCTAssertTrue(monitor.items.isEmpty)
+    }
+
+    func testPlannerWorkspaceMonitorDoerViewFiltersToAssignedCanvas() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
 
@@ -1585,11 +1495,11 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertFalse(monitor.items.isEmpty)
         XCTAssertTrue(monitor.items.allSatisfy { item in
-            item.kind == .node && item.doerId == "B"
+            item.kind == .delivery && item.doerId == "B" && item.nodeId == nil
         })
     }
 
-    func testPlannerWorkspaceMonitorMarksExternalSessionItems() throws {
+    func testPlannerWorkspaceMonitorCarriesExternalSessionOnCanvasItem() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
         let nodes = record.nodes
@@ -1610,8 +1520,8 @@ final class PlannerCoreTests: XCTestCase {
         )
 
         let item = try XCTUnwrap(monitor.items.first { $0.sessionId == "external-session-a" })
-        XCTAssertEqual(item.kind, .session)
-        XCTAssertEqual(item.nodeId, nodes[index].id)
+        XCTAssertEqual(item.kind, .delivery)
+        XCTAssertNil(item.nodeId)
     }
 
     func testPlannerWorkspaceMonitorHidesInternalSessionItems() throws {

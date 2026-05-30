@@ -11,9 +11,10 @@ type StatusFilter = 'all' | 'live' | 'attention' | 'idle' | 'exited'
 interface Props {
   state: BoardState | null
   selectedSessionId?: string | null
+  onSelectedSessionChange?: (id: string | null) => void
 }
 
-export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props) {
+export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelectedSessionChange }: Props) {
   const { t } = useI18n()
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
@@ -52,10 +53,13 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props)
     [visibleSessions],
   )
   const selectedSession = useMemo(() => {
-    const id = (localSelectedId || selectedSessionId || '').trim()
+    const id = (selectedSessionId || localSelectedId || '').trim()
     if (!id) return null
     return sessions.find((session) => session.id === id || session.surfaceId === id) ?? null
   }, [localSelectedId, selectedSessionId, sessions])
+  const pendingSelectedSessionId = selectedSessionId?.trim() && !selectedSession
+    ? selectedSessionId.trim()
+    : null
   const terminalTarget = useMemo(() => {
     const resolved = nativeTargetForSession(selectedSession)
     if (resolved.sessionId || resolved.surfaceId) return resolved
@@ -70,10 +74,20 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props)
   }, [selectedSessionId])
 
   useEffect(() => {
+    if (pendingSelectedSessionId) return
     if (pendingNativeTarget?.sessionId && localSelectedId === pendingNativeTarget.sessionId) return
-    if (selectedSession && visibleSessions.some((session) => session.id === selectedSession.id)) return
-    setLocalSelectedId(visibleSessions[0]?.id ?? null)
-  }, [localSelectedId, pendingNativeTarget, selectedSession, visibleSessions])
+    if (selectedSession) return
+    const nextId = visibleSessions[0]?.id ?? null
+    setLocalSelectedId(nextId)
+    onSelectedSessionChange?.(nextId)
+  }, [
+    localSelectedId,
+    onSelectedSessionChange,
+    pendingNativeTarget,
+    pendingSelectedSessionId,
+    selectedSession,
+    visibleSessions,
+  ])
 
   useEffect(() => {
     if (!selectedSession || !pendingNativeTarget?.sessionId) return
@@ -166,7 +180,8 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props)
       surfaceId: session.surfaceId,
     })
     setLocalSelectedId(session.id)
-  }, [])
+    onSelectedSessionChange?.(session.id)
+  }, [onSelectedSessionChange])
 
   const openSession = useCallback(async (session: Session) => {
     selectSession(session)
@@ -198,6 +213,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props)
         surfaceId: created.surfaceId,
       }
       setLocalSelectedId(created.sessionId)
+      onSelectedSessionChange?.(created.sessionId)
       setPendingNativeTarget(target)
       window.__meee2PendingSessionsWorkspace = target
     } catch {
@@ -205,7 +221,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId }: Props)
     } finally {
       setOpeningId(null)
     }
-  }, [selectSession])
+  }, [onSelectedSessionChange, selectSession])
 
   return (
     <section className="native-sessions-workspace-host" aria-label={t('sessions.title')}>

@@ -6264,6 +6264,7 @@ enum PlannerBoardBridge {
     ) throws -> PlannerMonitorState {
         var items: [PlannerMonitorItem] = []
         for boardCanvas in snapshot.canvases {
+            guard boardCanvas.kind != .monitor else { continue }
             // Skip canvases the actor cannot see — a private canvas only shows
             // up in the monitor for its owner / role-holders.
             let state: (
@@ -6294,54 +6295,6 @@ enum PlannerBoardBridge {
 
             let runs = (try? store.runs(canvasId: state.canvas.id)) ?? []
             let artifactsByNodeId = Dictionary(grouping: state.artifacts, by: \.nodeId)
-            for run in runs {
-                let runStates = Array(run.nodeStates.values)
-                let attentionCount = runStates.filter { nodeState in
-                    // `awaitingInput` needs a human reply just like `gateWait`
-                    // / `failed` — keep such deliveries in the attention bucket
-                    // so operators don't miss a run blocked on their input.
-                    nodeState.runState == .failed
-                        || nodeState.runState == .gateWait
-                        || nodeState.runState == .awaitingInput
-                }.count
-                let doneCount = runStates.filter { $0.runState == .done }.count
-                let totalCount = max(runStates.count, 1)
-                let includeForDoer = state.access.role != .doer || runStates.contains { nodeState in
-                    return nodeState.assigneeId == actorId
-                }
-                guard includeForDoer else { continue }
-                let liveSessionId = runStates
-                    .sorted { lhs, rhs in
-                        monitorSessionPriority(for: lhs) < monitorSessionPriority(for: rhs)
-                    }
-                    .first { nodeState in
-                        guard let sessionId = nodeState.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                              !sessionId.isEmpty else { return false }
-                        return monitorSessionPriority(for: nodeState) < Int.max
-                    }?
-                    .sessionId
-                items.append(PlannerMonitorItem(
-                    id: "delivery-\(run.id)",
-                    kind: .delivery,
-                    canvasId: state.canvas.id,
-                    canvasTitle: state.canvas.title,
-                    nodeId: nil,
-                    nodeTitle: nil,
-                    sessionId: liveSessionId,
-                    deliveryId: run.id,
-                    proposalId: nil,
-                    proposalStatus: nil,
-                    summary: run.title,
-                    runState: nil,
-                    blockers: run.summary.map { [$0] } ?? [],
-                    needsOwnerReview: attentionCount > 0,
-                    doerId: run.responsibleUserId,
-                    riskRank: attentionCount > 0 ? 1 : (run.status == .active ? 3 : 5),
-                    evidenceCount: runStates.reduce(0) { $0 + $1.artifactIds.count },
-                    updatedAt: run.updatedAt,
-                    nextAction: "\(doneCount)/\(totalCount) steps"
-                ))
-            }
 
             // Pluck the live attempt's awaitingInputSince from the active run
             // (if any) so the monitor can boost stale-awaiting items and the
@@ -6349,40 +6302,19 @@ enum PlannerBoardBridge {
             // active run's per-node state carries the clock; older attempts
             // are immutable.
             let activeRun = runs.first(where: { $0.status == .active })
-            for node in visibleNodes {
-                guard let snapshot = statesByNodeId[node.id],
-                      snapshot.runState != .done else { continue }
-                let sessionKind = monitorSessionKind(for: node.sessionId, sessions: sessions)
-                if sessionKind == .internalSession {
-                    continue
-                }
-                let rank = monitorRank(for: snapshot)
-                let awaitingSince = activeRun?.nodeStates[node.id]?.attempts.last?.awaitingInputSince
-                items.append(PlannerMonitorItem(
-                    id: "node-\(node.id)",
-                    kind: sessionKind == .externalSession ? .session : .node,
-                    canvasId: state.canvas.id,
-                    canvasTitle: state.canvas.title,
-                    nodeId: node.id,
-                    nodeTitle: node.title,
-                    sessionId: node.sessionId,
-                    proposalId: nil,
-                    proposalStatus: nil,
-                    summary: node.title,
-                    runState: snapshot.runState,
-                    blockers: snapshot.blockers,
-                    needsOwnerReview: snapshot.needsOwnerReview,
-                    doerId: node.doerId,
-                    riskRank: rank,
-                    evidenceCount: (node.artifactRefs ?? []).count + (artifactsByNodeId[node.id]?.count ?? 0),
-                    updatedAt: latestPlannerEventDate(in: state.events, nodeId: node.id)
-                        ?? node.outputSubmittedAt,
-                    nextAction: PlannerWorkflowGuidance.nextAction(
-                        for: node,
-                        blockers: snapshot.blockers
-                    ),
-                    awaitingInputSince: awaitingSince
-                ))
+            if let canvasItem = monitorCanvasItem(
+                canvas: state.canvas,
+                nodes: visibleNodes,
+                statesByNodeId: statesByNodeId,
+                runs: runs,
+                artifactsByNodeId: artifactsByNodeId,
+                events: state.events,
+                actorId: actorId,
+                role: state.access.role,
+                sessions: sessions,
+                activeRun: activeRun
+            ) {
+                items.append(canvasItem)
             }
 
             if state.access.role == .owner {
@@ -6417,6 +6349,141 @@ enum PlannerBoardBridge {
             return $0.summary < $1.summary
         }
         return PlannerMonitorState(generatedAt: Date(), items: items)
+    }
+
+    private static func monitorCanvasItem(
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        statesByNodeId: [String: NodeStateSnapshot],
+        runs: [WorkflowRun],
+        artifactsByNodeId: [String: [PlannerArtifact]],
+        events: [PlannerEvent],
+        actorId: String,
+        role: PlannerCanvasRole,
+        sessions: [SessionDTO]?,
+        activeRun: WorkflowRun?
+    ) -> PlannerMonitorItem? {
+        let visibleStates = nodes.compactMap { node -> (node: PlanningNode, state: NodeStateSnapshot)? in
+            guard let state = statesByNodeId[node.id] else { return nil }
+            return (node, state)
+        }
+        let visibleRuns = runs.filter { run in
+            role != .doer || run.nodeStates.values.contains { $0.assigneeId == actorId }
+        }
+        guard !nodes.isEmpty || !visibleRuns.isEmpty else { return nil }
+
+        let unfinishedStates = visibleStates.filter { $0.state.runState != NodeRunState.done }
+        let candidateStates = unfinishedStates.isEmpty ? visibleStates : unfinishedStates
+        let nodeRank = candidateStates.map { monitorRank(for: $0.state) }.min() ?? 5
+        let runRank = visibleRuns.map { run -> Int in
+            let hasAttention = run.nodeStates.values.contains { state in
+                state.runState == PlannerWorkflowRunState.failed
+                    || state.runState == PlannerWorkflowRunState.gateWait
+                    || state.runState == PlannerWorkflowRunState.awaitingInput
+            }
+            if hasAttention {
+                return 1
+            }
+            return run.status == .active ? 3 : 5
+        }.min() ?? 5
+        let rank = min(nodeRank, runRank)
+        let candidateNodeStates = candidateStates.map { $0.state }
+        let runState = canvasRunState(for: candidateNodeStates, fallbackRank: rank)
+        let blockers = Array(visibleStates.flatMap { $0.state.blockers }.prefix(3))
+        let nodeNeedsOwnerReview = visibleStates.contains { $0.state.needsOwnerReview }
+        let runNeedsOwnerReview = visibleRuns.contains { run in
+            run.nodeStates.values.contains { state in
+                state.runState == PlannerWorkflowRunState.failed
+                    || state.runState == PlannerWorkflowRunState.gateWait
+                    || state.runState == PlannerWorkflowRunState.awaitingInput
+                }
+        }
+        let needsOwnerReview = nodeNeedsOwnerReview || runNeedsOwnerReview
+        let nodeEvidenceCount = visibleStates.reduce(0) { total, pair in
+            total + (pair.node.artifactRefs ?? []).count + (artifactsByNodeId[pair.node.id]?.count ?? 0)
+        }
+        let runEvidenceCount = visibleRuns.reduce(0) { total, run in
+            let runArtifacts = run.nodeStates.values.reduce(0) { subtotal, state in
+                subtotal + state.artifactIds.count
+            }
+            return total + runArtifacts
+        }
+        let evidenceCount = nodeEvidenceCount + runEvidenceCount
+        let latestRunUpdate = visibleRuns.map { $0.updatedAt }.max()
+        let latestNodeUpdate = visibleStates.compactMap { pair in
+            latestPlannerEventDate(in: events, nodeId: pair.node.id) ?? pair.node.outputSubmittedAt
+        }.max()
+        let updatedAt = [
+            latestRunUpdate,
+            latestNodeUpdate
+        ].compactMap { $0 }.max()
+        let liveSessionId = canvasLiveSessionId(nodes: nodes, statesByNodeId: statesByNodeId, sessions: sessions)
+        let doneCount = visibleStates.filter { $0.state.runState == NodeRunState.done }.count
+        let totalCount = max(visibleStates.count, nodes.count)
+        return PlannerMonitorItem(
+            id: "canvas-\(canvas.id)",
+            kind: .delivery,
+            canvasId: canvas.id,
+            canvasTitle: canvas.title,
+            nodeId: nil,
+            nodeTitle: nil,
+            sessionId: liveSessionId,
+            deliveryId: canvas.id,
+            proposalId: nil,
+            proposalStatus: nil,
+            summary: canvas.title,
+            runState: runState,
+            blockers: blockers,
+            needsOwnerReview: needsOwnerReview,
+            doerId: role == .doer ? actorId : nil,
+            riskRank: rank,
+            evidenceCount: evidenceCount,
+            updatedAt: updatedAt,
+            nextAction: "\(doneCount)/\(totalCount) nodes",
+            awaitingInputSince: canvasAwaitingInputSince(nodes: nodes, activeRun: activeRun)
+        )
+    }
+
+    private static func canvasRunState(for states: [NodeStateSnapshot], fallbackRank: Int) -> NodeRunState? {
+        if states.contains(where: { $0.runState == .blocked }) { return .blocked }
+        if states.contains(where: { $0.runState == .working }) { return .working }
+        if states.contains(where: { $0.runState == .draft }) { return .draft }
+        if states.contains(where: { $0.runState == .ready }) { return .ready }
+        if states.contains(where: { $0.runState == .done }) { return .done }
+        switch fallbackRank {
+        case 0:
+            return .blocked
+        case 1...3:
+            return .working
+        case 4:
+            return .ready
+        default:
+            return nil
+        }
+    }
+
+    private static func canvasLiveSessionId(
+        nodes: [PlanningNode],
+        statesByNodeId: [String: NodeStateSnapshot],
+        sessions: [SessionDTO]?
+    ) -> String? {
+        nodes
+            .filter { node in
+                guard let state = statesByNodeId[node.id], state.runState != .done else { return false }
+                return monitorSessionKind(for: node.sessionId, sessions: sessions) == .externalSession
+            }
+            .sorted {
+                monitorRank(for: statesByNodeId[$0.id]!) < monitorRank(for: statesByNodeId[$1.id]!)
+            }
+            .first?
+            .sessionId
+    }
+
+    private static func canvasAwaitingInputSince(nodes: [PlanningNode], activeRun: WorkflowRun?) -> Date? {
+        guard let activeRun else { return nil }
+        return nodes
+            .compactMap { activeRun.nodeStates[$0.id]?.attempts.last?.awaitingInputSince }
+            .min()
     }
 
     private enum MonitorSessionKind {
