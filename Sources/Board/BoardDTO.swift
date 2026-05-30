@@ -1135,6 +1135,84 @@ enum BoardDTOBuilder {
         )
     }
 
+    /// Return a copy of a planner-bound surface DTO enriched with the transcript
+    /// of the real `claude` CLI session running inside it.
+    ///
+    /// The surface session (`internalSessionDTO` / `staleInternalSessionDTO`)
+    /// has `transcriptPath == nil`, so its DTO carries `recentMessages == []`,
+    /// `pendingPermissionTool == nil` and a lifecycle-only status. The CLI
+    /// session — correlated by shared managed-workspace cwd — owns the real
+    /// transcript / permission state that the Dynamic Island already tracks.
+    /// Adopting its transcript-derived fields fixes both the empty-progress and
+    /// the stuck-at-`running`-on-permission symptoms WITHOUT introducing a
+    /// duplicate card (the CLI session itself stays dedup-filtered).
+    ///
+    /// Only the transcript-derived view is adopted; the surface session keeps
+    /// its own identity (`id`, terminal kind/backend, open target, surface id).
+    static func surfaceDTOAdoptingCliSession(
+        _ surface: SessionDTO,
+        cli: SessionData
+    ) -> SessionDTO {
+        let recent: [TranscriptEntryDTO] = cli.transcriptPath
+            .map(transcriptPreviewFromClaude) ?? surface.recentMessages
+        let resolvedStatus = TranscriptStatusResolver.resolve(for: cli)
+        let currentTool: String? = {
+            if let override = TranscriptStatusResolver.resolveCurrentTool(
+                transcriptPath: cli.transcriptPath,
+                currentTool: cli.currentTool
+            ) {
+                return override
+            }
+            return cli.currentTool ?? surface.currentTool
+        }()
+
+        return SessionDTO(
+            id: surface.id,
+            title: surface.title,
+            project: surface.project,
+            pluginId: surface.pluginId,
+            pluginDisplayName: surface.pluginDisplayName,
+            pluginColor: surface.pluginColor,
+            status: resolvedStatus.rawValue,
+            inboxPending: surface.inboxPending,
+            recentMessages: recent,
+            currentTool: currentTool,
+            startedAt: surface.startedAt,
+            lastActivity: iso8601.string(from: cli.lastActivity),
+            usageStats: surface.usageStats ?? cli.usageStats.map {
+                UsageStatsDTO(
+                    inputTokens: $0.inputTokens,
+                    outputTokens: $0.outputTokens,
+                    cacheCreateTokens: $0.cacheCreateTokens,
+                    cacheReadTokens: $0.cacheReadTokens,
+                    turns: $0.turns,
+                    model: $0.model
+                )
+            },
+            tasks: surface.tasks,
+            currentTask: surface.currentTask,
+            pendingPermissionTool: cli.pendingPermissionTool,
+            pendingPermissionMessage: cli.pendingPermissionMessage,
+            ghosttyTerminalId: surface.ghosttyTerminalId,
+            tty: surface.tty,
+            termProgram: surface.termProgram,
+            terminalKind: surface.terminalKind,
+            surfaceId: surface.surfaceId,
+            surfaceStatus: surface.surfaceStatus,
+            canOpenExternal: surface.canOpenExternal,
+            terminalBackend: surface.terminalBackend,
+            nativeWorkspaceAvailable: surface.nativeWorkspaceAvailable,
+            openTarget: surface.openTarget,
+            controlState: surface.controlState,
+            backgroundAgents: surface.backgroundAgents,
+            latestRecap: surface.latestRecap,
+            clientKind: surface.clientKind,
+            syncEnabled: surface.syncEnabled,
+            syncTeamId: surface.syncTeamId,
+            syncTeamName: surface.syncTeamName
+        )
+    }
+
     private static func externalSessionCanOpen(
         session: PluginSession,
         sessionData: SessionData?,

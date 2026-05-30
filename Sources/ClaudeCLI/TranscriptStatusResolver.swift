@@ -564,22 +564,48 @@ private func readTail(path: String?, bytes: Int) -> String? {
         let fileSize = try handle.seekToEnd()
         let tailSize = min(fileSize, UInt64(bytes))
         try handle.seek(toOffset: fileSize - tailSize)
-        let data = handle.readDataToEndOfFile()
-        return String(bytes: data, encoding: .utf8)
+        var data = handle.readDataToEndOfFile()
+        // 尾部切口可能落在某行中间、甚至落在 CJK/emoji 的 UTF-8 continuation
+        // byte 上，导致 `String(bytes:encoding:.utf8)` 对整段返回 nil → resolver
+        // 拿不到 tail，只能退回 hookStatus。先按 `\n` 砍掉被截断的首行，再 lossy
+        // 兜底，保证含中文的 transcript 也能被 resolve。
+        if tailSize < fileSize, let nl = data.firstIndex(of: 0x0A) {
+            data = data.subdata(in: data.index(after: nl)..<data.endIndex)
+        }
+        return TranscriptByteDecoder.lossyUTF8(data)
     } catch {
         return nil
     }
 }
 
+/// Does this tail line parse as a complete JSON object? Used to decide whether
+/// the first line is a real (already-boundary-clean) entry or a truncated
+/// mid-JSON fragment that should be dropped.
+private func lineParsesAsJSONObject(_ line: Substring) -> Bool {
+    guard let data = line.data(using: .utf8),
+          let parsed = try? JSONSerialization.jsonObject(with: data) else {
+        return false
+    }
+    return parsed is [String: Any]
+}
+
 /// Walk the tail from bottom → top, return the first entry we consider
 /// "relevant" (i.e. not a local !bash command / isMeta user entry).
 func findLastRelevantEntry(tail: String) -> LastEntry? {
-    // Drop the (potentially truncated) first line — it may be mid-JSON.
     let rawLines = tail.split(separator: "\n", omittingEmptySubsequences: true)
-    // If there's more than one line and we're likely mid-line at the top,
-    // skip the first one to avoid parsing a fragment.
+    // The tail's first line *may* be a mid-JSON fragment from the 4KB/64KB byte
+    // cut. Historically we unconditionally dropped it. But the readers now strip
+    // the truncated partial line at the byte boundary themselves, so an
+    // unconditional drop here would DOUBLE-drop: it would discard the now-first
+    // *complete* line — and in the common shape (one real user/assistant/system
+    // entry followed by trailing meta / local-command lines) that real entry is
+    // exactly line 1, so the resolver would see "no relevant entry" and fall
+    // back to the stale hook status. So only drop line 1 when it does NOT parse
+    // as a complete JSON object (i.e. it really is a truncated fragment). A line
+    // that already parses is kept — whoever produced the tail already gave us a
+    // clean boundary, and the relevant-type scan below filters non-entries anyway.
     let lines: [Substring]
-    if rawLines.count > 1 {
+    if rawLines.count > 1, !lineParsesAsJSONObject(rawLines[rawLines.startIndex]) {
         lines = Array(rawLines.dropFirst())
     } else {
         lines = Array(rawLines)

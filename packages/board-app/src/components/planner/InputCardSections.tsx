@@ -169,7 +169,7 @@ export function InputCardSections({
 
 /* -------- derivation helpers -------- */
 
-function deriveUpstream(node: PlanningNode): NodeContractUpstreamInput {
+export function deriveUpstream(node: PlanningNode): NodeContractUpstreamInput {
   const firstDependency = (node.dependsOnNodeIds ?? [])[0] ?? null
   return {
     mode: 'passthrough',
@@ -177,7 +177,7 @@ function deriveUpstream(node: PlanningNode): NodeContractUpstreamInput {
   }
 }
 
-function deriveExternalInputs(node: PlanningNode): NodeContractExternalInput[] {
+export function deriveExternalInputs(node: PlanningNode): NodeContractExternalInput[] {
   const sources = node.contextSources ?? []
   return sources
     .filter((source) => isExternalSource(source))
@@ -193,7 +193,7 @@ function isExternalSource(source: ContextSource): boolean {
   return true
 }
 
-function connectorFromSource(source: ContextSource): string {
+export function connectorFromSource(source: ContextSource): string {
   // Heuristic: pick scheme from reference when present (e.g. `github://repo`),
   // otherwise fall back to `kind`. INT-2 will replace this with the actual
   // connector slug stored on `NodeContractExternalInput.connector`.
@@ -203,7 +203,7 @@ function connectorFromSource(source: ContextSource): string {
   return source.kind
 }
 
-function shortRef(ref: string): string {
+export function shortRef(ref: string): string {
   const trimmed = (ref || '').trim()
   if (!trimmed) return '—'
   if (trimmed.length <= 36) return trimmed

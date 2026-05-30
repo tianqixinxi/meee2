@@ -429,4 +429,74 @@ final class TranscriptStatusResolverTests: XCTestCase {
         let entry = findLastRelevantEntry(tail: tail)
         XCTAssertEqual(entry?.type, "user")
     }
+
+    /// Regression (PR #97 review P2): the UTF-8 tail-decode fix now strips the
+    /// truncated partial first line at the BYTE boundary inside `readTail`. So
+    /// `findLastRelevantEntry` must NOT also drop the first line when that line
+    /// already parses as a complete JSON entry — otherwise the now-first
+    /// *complete* relevant entry gets double-dropped. Here line 1 is a complete
+    /// fresh `user` entry followed only by a trailing meta line; the function
+    /// must return the user entry, not nil.
+    func testFindLast_doesNotDropCompleteFirstLine() {
+        let tail = """
+        {"type":"user","message":{"role":"user","content":"real prompt"},"timestamp":"2026-04-24T10:00:00Z"}
+        {"type":"last-prompt","lastPrompt":"real prompt"}
+        """
+        let entry = findLastRelevantEntry(tail: tail)
+        XCTAssertEqual(entry?.type, "user",
+                       "a complete first line must not be dropped — only truncated fragments are")
+        XCTAssertFalse(entry?.isInterrupt ?? true)
+    }
+
+    // MARK: - End-to-end resolver: >4KB tail cut mid-line + one complete entry
+
+    private func writeFixture(_ lines: [String]) throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("resolver-tail-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("transcript.jsonl")
+        try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        return file.path
+    }
+
+    /// The exact shape the reviewer described: a >4KB transcript whose 4KB tail
+    /// byte-slice starts mid-line (inside a large padding entry), then ONE
+    /// complete relevant entry (a fresh `assistant`), then trailing meta lines.
+    ///
+    /// With hook=idle, the assistant rule "fresh (<30s) + hook ∈ resting →
+    /// .active (mid-turn)" makes the transcript-derived status `.active`, which
+    /// is distinct from the stale-hook fallback `.idle`. Pre-fix the double-drop
+    /// discarded the lone assistant entry → resolver saw "no relevant entry" →
+    /// fell back to hookStatus (.idle). Post-fix it returns `.active`.
+    func testResolve_keepsLoneRelevantEntryAfterMidLineCut() throws {
+        // Padding entry big enough (>4KB) that the 4KB tail window cuts inside
+        // it, leaving a non-parsing fragment as the tail's first line.
+        let bigText = String(repeating: "padding ", count: 800) // ~6.4KB
+        let nowISO = ISO8601DateFormatter().string(from: Date()) // fresh (<30s)
+        let lines = [
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\#(bigText)"}]},"timestamp":"2020-01-01T00:00:00Z"}"#,
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]},"timestamp":"\#(nowISO)"}"#,
+            #"{"type":"last-prompt","lastPrompt":"x"}"#
+        ]
+        let path = try writeFixture(lines)
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent()
+            )
+        }
+
+        // Sanity: file exceeds the 4KB tail window AND the cut lands mid-line.
+        let size = (try FileManager.default.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0
+        XCTAssertGreaterThan(size, 4096, "fixture must exceed the 4KB tail window")
+
+        let resolved = TranscriptStatusResolver.resolve(
+            sessionId: nil,            // no cache
+            transcriptPath: path,
+            hookStatus: .idle,         // stale resting hook
+            pid: nil,                  // skip liveness check
+            ghosttyTerminalId: nil     // skip ghostty check
+        )
+        XCTAssertEqual(resolved, .active,
+                       "resolver must use the lone fresh assistant entry (.active mid-turn), not fall back to stale hook .idle")
+    }
 }

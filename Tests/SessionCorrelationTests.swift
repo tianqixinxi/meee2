@@ -1,0 +1,426 @@
+import XCTest
+@testable import meee2Kit
+import Meee2PluginKit
+
+/// Regression coverage for the planner surface→CLI correlation fix.
+///
+/// When a planner step is dispatched, meee2 launches `claude` inside a
+/// meee2-owned surface session (`claude-ghostty-XXX`); the node binds to THAT
+/// surface id. The real `claude` process runs under its own CLI uuid, and that
+/// CLI session — not the surface — is the record the hook pipeline tracks
+/// (transcript / status / pendingPermissionTool). The two SessionStore records
+/// share only the managed-workspace cwd.
+///
+/// Pre-fix behaviour (what these tests guard against):
+///   - Bug A: the bound surface session's DTO had `recentMessages == []`
+///     forever, because `internalSessionDTO` hardcodes it and the surface
+///     record has no transcriptPath.
+///   - Bug B: a permission-required CLI session left the node stuck at
+///     `running`, because `effectiveSessionStatus` read the surface DTO whose
+///     `pendingPermissionTool` is nil → never mapped to `.gateWait`.
+final class SessionCorrelationTests: XCTestCase {
+
+    /// Managed-workspace cwd shared by the surface + CLI records (the only link).
+    private func managedWorkspaceCwd() -> String {
+        (NSHomeDirectory() as NSString)
+            .appendingPathComponent(".meee2/workspaces/global/meee2-corr-\(UUID().uuidString)")
+    }
+
+    /// Write a minimal Claude transcript JSONL so `transcriptPreviewFromClaude`
+    /// returns real entries, then return its path.
+    private func writeTranscript(lines: [String]) throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-corr-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("transcript.jsonl")
+        try lines.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+        return file.path
+    }
+
+    private func surfaceSnapshot(sessionId: String, surfaceId: String, cwd: String) -> TerminalSessionSnapshot {
+        TerminalSessionSnapshot(
+            sessionId: sessionId,
+            surfaceId: surfaceId,
+            backend: .ghosttySurface,
+            status: "running",
+            pid: nil,
+            cwd: cwd,
+            command: "claude --dangerously-skip-permissions",
+            provider: "claude",
+            canvasId: "canvas-corr",
+            nodeId: "node-corr",
+            createdAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_000)
+        )
+    }
+
+    // MARK: - 1. Correlation helper resolves surface → CLI by cwd
+
+    func testCorrelationResolvesSurfaceToCliByCwd() {
+        let cwd = managedWorkspaceCwd()
+        let surface = SessionData(
+            sessionId: "claude-ghostty-\(UUID().uuidString)",
+            project: cwd,
+            cwd: cwd,
+            transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_000),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(
+                termProgram: "meee2-ghostty-surface",
+                termBundleId: "meee2-ghostty-surface"
+            )
+        )
+        let cli = SessionData(
+            sessionId: UUID().uuidString,
+            project: cwd,
+            cwd: cwd,
+            transcriptPath: "/tmp/does-not-need-to-exist.jsonl",
+            startedAt: Date(timeIntervalSince1970: 1_100),
+            lastActivity: Date(timeIntervalSince1970: 1_200),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        let resolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: cwd,
+            among: [surface, cli]
+        )
+        XCTAssertEqual(resolved?.sessionId, cli.sessionId,
+                       "Surface should correlate to the CLI session sharing its managed-workspace cwd.")
+
+        // Guard: never correlate across a DIFFERENT cwd.
+        let otherCwd = managedWorkspaceCwd()
+        XCTAssertNil(
+            InternalSessionIdentity.correlatedCliSession(forWorkspaceCwd: otherCwd, among: [surface, cli]),
+            "A different managed-workspace cwd must not adopt this CLI session."
+        )
+
+        // Guard: a surface with NO live CLI session (CLI gone) → nil, no crash.
+        XCTAssertNil(
+            InternalSessionIdentity.correlatedCliSession(forWorkspaceCwd: cwd, among: [surface]),
+            "When only the surface record exists, correlation yields nil (leave surface as-is)."
+        )
+    }
+
+    func testCorrelationPrefersLiveThenMostRecentCli() {
+        let cwd = managedWorkspaceCwd()
+        let stale = SessionData(
+            sessionId: "stale-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/a.jsonl",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 9_999), // newer, but historical
+            status: .completed
+        )
+        let live = SessionData(
+            sessionId: "live-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/b.jsonl",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_200), // older, but live
+            status: .active
+        )
+        let resolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: cwd, among: [stale, live]
+        )
+        XCTAssertEqual(resolved?.sessionId, live.sessionId,
+                       "A live CLI session is preferred over a more-recent historical one.")
+    }
+
+    // MARK: - 1b. Multi-session-per-workspace (the live張三/王五 edge case)
+
+    /// Two surface sessions bound to two different nodes share ONE managed
+    /// workspace. Only one transcript-bearing CLI session exists there and it is
+    /// `completed` (historical) — mirroring the live `prd-e2e-91a682f6` case
+    /// where `50b35574…` was the sole transcript-bearing record. Transcript-less
+    /// `dead` CLI records AND a distractor whose `transcriptPath` is set but
+    /// stale (file does not exist) also share the cwd. Both surfaces must adopt
+    /// the substantive transcript-bearing CLI — never the stale-path distractor,
+    /// never nil.
+    func testMultipleSurfacesInOneWorkspaceAdoptSameTranscriptBearingCli() throws {
+        let cwd = managedWorkspaceCwd()
+
+        // The real, substantive CLI session — historical (completed) with a
+        // transcript file that actually exists and has content.
+        let transcriptPath = try writeTranscript(lines: [
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"REAL-CLI substantive output"}]}}"#
+        ])
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: transcriptPath).deletingLastPathComponent()
+            )
+        }
+        let realCliId = "real-\(UUID().uuidString)"
+        let realCli = SessionData(
+            sessionId: realCliId, project: "prd-e2e", cwd: cwd,
+            transcriptPath: transcriptPath,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_100),
+            status: .completed, // historical — must STILL be chosen
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        // Distractor A: transcriptPath set, but the file does not exist (stale),
+        // and it is MORE RECENT than the real one. Pre-hardening "most-recent"
+        // ranking would have picked this → 0 messages.
+        let stalePathCli = SessionData(
+            sessionId: "stale-\(UUID().uuidString)", project: "prd-e2e", cwd: cwd,
+            transcriptPath: "/tmp/meee2-stale-\(UUID().uuidString)-does-not-exist.jsonl",
+            startedAt: Date(timeIntervalSince1970: 2_000),
+            lastActivity: Date(timeIntervalSince1970: 9_999), // newest
+            status: .completed,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        // Distractor B: transcript-less dead CLI session in the same cwd.
+        let transcriptlessCli = SessionData(
+            sessionId: "dead-\(UUID().uuidString)", project: "prd-e2e", cwd: cwd,
+            transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_500),
+            lastActivity: Date(timeIntervalSince1970: 1_500),
+            status: .dead,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        // Two surface sessions (張三 / 王五) bound to two nodes, same workspace.
+        func surface(_ tag: String) -> SessionData {
+            SessionData(
+                sessionId: "claude-ghostty-\(tag)-\(UUID().uuidString)",
+                project: cwd, cwd: cwd, transcriptPath: nil,
+                startedAt: Date(timeIntervalSince1970: 1_000),
+                lastActivity: Date(timeIntervalSince1970: 1_000),
+                status: .active,
+                terminalInfo: PluginTerminalInfo(
+                    termProgram: "meee2-ghostty-surface",
+                    termBundleId: "meee2-ghostty-surface"
+                )
+            )
+        }
+        let surfaceZhang = surface("zhangsan")
+        let surfaceWang = surface("wangwu")
+
+        let pool = [stalePathCli, transcriptlessCli, surfaceZhang, surfaceWang, realCli]
+
+        let zhangResolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceZhang.cwd, among: pool
+        )
+        let wangResolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceWang.cwd, among: pool
+        )
+
+        XCTAssertEqual(zhangResolved?.sessionId, realCliId,
+                       "張三's surface must adopt the substantive transcript-bearing CLI, not the stale-path distractor.")
+        XCTAssertEqual(wangResolved?.sessionId, realCliId,
+                       "王五's surface must adopt the SAME transcript-bearing CLI as 張三.")
+        XCTAssertEqual(zhangResolved?.sessionId, wangResolved?.sessionId,
+                       "Two surfaces sharing one workspace must resolve to the same CLI session.")
+
+        // And the adopted transcript actually surfaces content (end-to-end).
+        let zhangDTO = BoardDTOBuilder.internalSessionDTO(
+            surfaceSnapshot(sessionId: surfaceZhang.sessionId, surfaceId: surfaceZhang.sessionId, cwd: cwd)
+        )
+        let cli = try XCTUnwrap(zhangResolved)
+        let enriched = BoardDTOBuilder.surfaceDTOAdoptingCliSession(zhangDTO, cli: cli)
+        XCTAssertTrue(
+            enriched.recentMessages.contains { $0.text.contains("REAL-CLI") },
+            "Enriched surface DTO should carry the substantive CLI transcript's content."
+        )
+    }
+
+    // MARK: - 2. Permission-required CLI drives the bound node to .gateWait
+
+    func testPermissionRequiredCliDrivesBoundNodeToGateWait() throws {
+        let cwd = managedWorkspaceCwd()
+        let store = SessionStore.shared
+
+        let surfaceId = "claude-ghostty-\(UUID().uuidString)"
+        var surfaceData = SessionData(
+            sessionId: surfaceId, project: cwd, cwd: cwd,
+            transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_000),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(
+                termProgram: "meee2-ghostty-surface",
+                termBundleId: "meee2-ghostty-surface"
+            )
+        )
+        surfaceData.pendingPermissionTool = nil // surface never carries the gate
+
+        let cliId = UUID().uuidString
+        var cliData = SessionData(
+            sessionId: cliId, project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/perm-\(UUID().uuidString).jsonl",
+            startedAt: Date(timeIntervalSince1970: 1_100),
+            lastActivity: Date(timeIntervalSince1970: 1_200),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        cliData.pendingPermissionTool = "Bash"
+        cliData.pendingPermissionMessage = "Run rm -rf build/"
+
+        store.create(surfaceData)
+        store.create(cliData)
+        defer { store.delete(surfaceId); store.delete(cliId) }
+
+        // Production path: build the surface DTO exactly as currentBoardSessions does.
+        let surfaceDTO = BoardDTOBuilder.internalSessionDTO(
+            surfaceSnapshot(sessionId: surfaceId, surfaceId: surfaceId, cwd: cwd)
+        )
+
+        // PRE-FIX path: feedPlannerSessionRunStates read the surface DTO directly.
+        // Its pendingPermissionTool is nil → effectiveSessionStatus stays a
+        // working state → node runState == .running (the stuck bug).
+        let preFixStatus = BoardAPI.effectiveSessionStatus(for: surfaceDTO)
+        XCTAssertNotEqual(PlannerSessionRunStateBridge.runState(for: preFixStatus), .gateWait,
+                          "Pre-fix: the bare surface DTO must NOT reach gateWait (proves the bug existed).")
+
+        // POST-FIX path: enrich the surface DTO with the correlated CLI session.
+        let cli = try XCTUnwrap(InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceDTO.project,
+            among: store.listAll()
+        ))
+        XCTAssertEqual(cli.sessionId, cliId)
+        let enriched = BoardDTOBuilder.surfaceDTOAdoptingCliSession(surfaceDTO, cli: cli)
+
+        XCTAssertEqual(enriched.pendingPermissionTool, "Bash",
+                       "Enriched surface DTO adopts the CLI session's pending permission.")
+        let postFixStatus = BoardAPI.effectiveSessionStatus(for: enriched)
+        XCTAssertEqual(postFixStatus, .permissionRequired)
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: postFixStatus), .gateWait,
+                       "Post-fix: a permission-required CLI session drives the bound node to gateWait.")
+    }
+
+    // MARK: - 3. Bound surface session reflects the CLI session's transcript
+
+    func testBoundSurfaceReflectsCliTranscript() throws {
+        let cwd = managedWorkspaceCwd()
+        let store = SessionStore.shared
+
+        let transcriptPath = try writeTranscript(lines: [
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Build the landing page"}]}}"#,
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"CORRELATION-MARKER assistant reply"}]}}"#
+        ])
+
+        let surfaceId = "claude-ghostty-\(UUID().uuidString)"
+        let surfaceData = SessionData(
+            sessionId: surfaceId, project: cwd, cwd: cwd,
+            transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_000),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(
+                termProgram: "meee2-ghostty-surface",
+                termBundleId: "meee2-ghostty-surface"
+            )
+        )
+        let cliId = UUID().uuidString
+        let cliData = SessionData(
+            sessionId: cliId, project: cwd, cwd: cwd,
+            transcriptPath: transcriptPath,
+            startedAt: Date(timeIntervalSince1970: 1_100),
+            lastActivity: Date(timeIntervalSince1970: 1_200),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        store.create(surfaceData)
+        store.create(cliData)
+        defer {
+            store.delete(surfaceId); store.delete(cliId)
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: transcriptPath).deletingLastPathComponent()
+            )
+        }
+
+        let surfaceDTO = BoardDTOBuilder.internalSessionDTO(
+            surfaceSnapshot(sessionId: surfaceId, surfaceId: surfaceId, cwd: cwd)
+        )
+        // PRE-FIX: the bare surface DTO has no transcript progress.
+        XCTAssertTrue(surfaceDTO.recentMessages.isEmpty,
+                      "Pre-fix: the surface DTO carries no recentMessages (proves Bug A).")
+
+        // POST-FIX: enrich from the correlated CLI session.
+        let cli = try XCTUnwrap(InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceDTO.project,
+            among: store.listAll()
+        ))
+        let enriched = BoardDTOBuilder.surfaceDTOAdoptingCliSession(surfaceDTO, cli: cli)
+
+        XCTAssertFalse(enriched.recentMessages.isEmpty,
+                       "Post-fix: the bound surface DTO reflects the CLI session's transcript.")
+        XCTAssertTrue(
+            enriched.recentMessages.contains { $0.text.contains("CORRELATION-MARKER") },
+            "Enriched recentMessages should contain the CLI transcript's assistant reply."
+        )
+    }
+
+    // MARK: - 4. End-to-end: large CJK CLI transcript still enriches the surface
+    //
+    // The exact live `prd-e2e-91a682f6` failure: surface built by the real
+    // `internalSessionDTO`, correlated to a `completed` CLI whose transcript is
+    // a ~700KB CJK-dense `.jsonl`. The 64KB tail cut landed mid-Chinese-char →
+    // `transcriptPreviewFromClaude` decoded to nil → recentMessages stayed [].
+    // This drives the surface through the full adopt path with such a transcript.
+    func testBoundSurfaceReflectsLargeCJKCliTranscript() throws {
+        let cwd = managedWorkspaceCwd()
+        let store = SessionStore.shared
+
+        // Build a >64KB CJK-dense transcript so the tail window cut lands
+        // mid-character (the live shape).
+        let marker = "CJK-CLI-MARKER-\(UUID().uuidString.prefix(8))"
+        let cjk = String(repeating: "中文内容填充测试一二三四五六七八九十", count: 40)
+        var lines: [String] = []
+        let approxLineBytes = cjk.utf8.count + 80
+        let count = max(8, (65536 * 2) / approxLineBytes)
+        for i in 0..<count {
+            let role = i % 2 == 0 ? "user" : "assistant"
+            lines.append(#"{"type":"\#(role)","message":{"role":"\#(role)","content":[{"type":"text","text":"\#(cjk) #\#(i)"}]}}"#)
+        }
+        lines.append(#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\#(marker) \#(cjk)"}]}}"#)
+        let transcriptPath = try writeTranscript(lines: lines)
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: transcriptPath).deletingLastPathComponent()
+            )
+        }
+        let size = (try FileManager.default.attributesOfItem(atPath: transcriptPath)[.size] as? NSNumber)?.intValue ?? 0
+        XCTAssertGreaterThan(size, 65536, "fixture must exceed the 64KB tail window to exercise the cut")
+
+        let surfaceId = "claude-ghostty-\(UUID().uuidString)"
+        let surfaceData = SessionData(
+            sessionId: surfaceId, project: cwd, cwd: cwd, transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_000),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(
+                termProgram: "meee2-ghostty-surface",
+                termBundleId: "meee2-ghostty-surface"
+            )
+        )
+        let cliId = UUID().uuidString
+        let cliData = SessionData(
+            sessionId: cliId, project: "prd-e2e", cwd: cwd, transcriptPath: transcriptPath,
+            startedAt: Date(timeIntervalSince1970: 1_100),
+            lastActivity: Date(timeIntervalSince1970: 1_200),
+            status: .completed, // historical — exactly like 50b35574
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        store.create(surfaceData)
+        store.create(cliData)
+        defer { store.delete(surfaceId); store.delete(cliId) }
+
+        let surfaceDTO = BoardDTOBuilder.internalSessionDTO(
+            surfaceSnapshot(sessionId: surfaceId, surfaceId: surfaceId, cwd: cwd)
+        )
+        let cli = try XCTUnwrap(InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceDTO.project, among: store.listAll()
+        ))
+        XCTAssertEqual(cli.sessionId, cliId)
+        let enriched = BoardDTOBuilder.surfaceDTOAdoptingCliSession(surfaceDTO, cli: cli)
+
+        XCTAssertFalse(enriched.recentMessages.isEmpty,
+                       "Large CJK CLI transcript must still surface recentMessages (was 0 live).")
+        XCTAssertTrue(enriched.recentMessages.contains { $0.text.contains(marker) },
+                      "The latest CJK assistant message must be recovered past the tail cut.")
+    }
+}
