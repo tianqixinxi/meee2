@@ -11,6 +11,7 @@ import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } f
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
+  activateSession,
   applyPlannerProposal,
   approvePlannerProposal,
   abandonPlannerNodeSession,
@@ -39,6 +40,7 @@ import {
   updatePlannerNodeGate,
   updatePlannerNodeLayout,
   updatePlannerNodeStatus,
+  ApiRequestError,
 } from '../../api'
 import { AssignNodeDialog } from './AssignNodeDialog'
 import type {
@@ -76,8 +78,11 @@ import {
 import { useI18n } from '../../lib/i18n'
 import { emitPlannerEvent, reportPlannerRevert } from '../../lib/plannerTelemetry'
 import { AttachDataSourcePopover } from './AttachDataSourcePopover'
+import { DataSourceRail } from './DataSourceRail'
 import { NodeInspectorModal } from './NodeInspectorModal'
 import { PlannerNodeCard } from './PlannerNodeCard'
+import { MonitorGrid } from './monitor/MonitorGrid'
+import { MonitorHtmlFrame } from './monitor/MonitorHtmlFrame'
 import { PlannerOverviewMap } from './PlannerOverviewMap'
 import { PlannerAgentChatPanel } from './PlannerAgentChatPanel'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
@@ -463,28 +468,44 @@ function PlannerGraphInner({
   const openInternalSessionForNode = useCallback((
     nodeId: string,
     runner?: PlannerDispatchRunner,
+    openOnly?: boolean,
   ) => {
     const cwd = workspacePath.trim()
     return ensurePlannerNodeInternalSession(canvasId, nodeId, {
       runner,
       cwd: cwd || undefined,
+      openOnly,
     })
       .then((result) => {
         handleGraphStateChanged(result.graph)
-        window.dispatchEvent(new CustomEvent('meee2:open-session', {
-          detail: {
-            sessionId: result.sessionId,
-            surfaceId: result.surfaceId,
-          },
-        }))
+        if (result.action === 'focus-external' || result.openTarget === 'external') {
+          // The bound session is a LIVE ghostty/external terminal. Focus it via
+          // the same path Island uses (TerminalJumper) instead of opening an
+          // internal workspace surface.
+          void activateSession(result.sessionId)
+        } else {
+          window.dispatchEvent(new CustomEvent('meee2:open-session', {
+            detail: {
+              sessionId: result.sessionId,
+              surfaceId: result.surfaceId,
+            },
+          }))
+        }
         void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         return true
       })
       .catch((err) => {
+        // BUG 1.2 — the bound session ended; do not silently spawn a fresh one.
+        // Surface it and refresh state so the demoted (awaiting) node shows up.
+        if ((err as ApiRequestError)?.code === 'session_ended') {
+          onNotify?.('error', 'This session has ended. Re-dispatch the node to start a new one.')
+          void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
+          return false
+        }
         notifyError((err as Error).message || 'Failed to open internal session')
         return false
       })
-  }, [canvasId, handleGraphStateChanged, notifyError, workspacePath])
+  }, [canvasId, handleGraphStateChanged, notifyError, onNotify, workspacePath])
 
   const handleCreateNodeSession = useCallback((nodeId: string, runner: PlannerDispatchRunner) => {
     const cwd = workspacePath.trim()
@@ -559,7 +580,27 @@ function PlannerGraphInner({
     if (!trimmed) return
     setBusy(true)
     setError(null)
-    openInternalSessionForNode(nodeId)
+    // Route by backend: a node dispatched with a ghostty/external spawn-provider
+    // binds an EXTERNAL terminal session. /internal-session can't open those (it
+    // only tracks internal surfaces), so focus the live external terminal via the
+    // same path Island uses (activateSession → TerminalJumper). Only internal
+    // surfaces go through /internal-session.
+    const boundLive = (boardState?.sessions ?? []).find((session) => sessionMatchesBoundId(session.id, trimmed))
+    if (boundLive && boundLive.terminalKind !== 'internal') {
+      void activateSession(boundLive.id)
+        .then((ok) => {
+          if (!ok) notifyError('Failed to focus the bound terminal session.')
+        })
+        .finally(() => setBusy(false))
+      return
+    }
+    // BUG 1.2 — "open progress": open the ALREADY-bound session only. If it has
+    // genuinely died (not a reusable internal surface AND not live in the board
+    // sessions), the server reports `session_ended` (handled in
+    // openInternalSessionForNode) instead of silently spawning a replacement.
+    // If it's a live external session the server didn't expose in boardState yet,
+    // the backend returns action=focus-external and we focus it there too.
+    openInternalSessionForNode(nodeId, undefined, true)
       .then((ok) => {
         if (ok) {
           const sessionStillVisible = (boardState?.sessions ?? []).some((session) => (
@@ -569,7 +610,7 @@ function PlannerGraphInner({
         }
       })
       .finally(() => setBusy(false))
-  }, [boardState?.sessions, onNotify, openInternalSessionForNode])
+  }, [boardState?.sessions, notifyError, onNotify, openInternalSessionForNode])
 
   const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
     setBusy(true)
@@ -638,6 +679,34 @@ function PlannerGraphInner({
         ...existing,
         [directionKey]: existing[directionKey].filter((value) => value !== item),
       }
+      const next = { ...current }
+      if (nextEntry.inputs.length === 0 && nextEntry.outputs.length === 0) {
+        delete next[nodeId]
+      } else {
+        next[nodeId] = nextEntry
+      }
+      return next
+    })
+  }, [])
+
+  // canvas-spec §7.1 — toggle an I/O slot artifact on/off the canvas. Defined
+  // here (above the `graph` useMemo) so the adapter can wire it onto every node
+  // card's 「查看输出」 button; the useMemo factory executes during render,
+  // before any later const declaration would have initialized.
+  const handleToggleIOArtifact = useCallback((
+    nodeId: string,
+    direction: keyof IOArtifactVisibility,
+    item: string,
+    visible: boolean,
+  ) => {
+    const normalized = item.trim()
+    if (!normalized) return
+    setIOArtifactVisibility((current) => {
+      const existing = current[nodeId] ?? { inputs: [], outputs: [] }
+      const nextList = visible
+        ? Array.from(new Set([...existing[direction], normalized]))
+        : existing[direction].filter((value) => value !== normalized)
+      const nextEntry = { ...existing, [direction]: nextList }
       const next = { ...current }
       if (nextEntry.inputs.length === 0 && nextEntry.outputs.length === 0) {
         delete next[nodeId]
@@ -826,6 +895,7 @@ function PlannerGraphInner({
       nodes: plannerState?.nodes ?? [],
       states: plannerState?.states ?? [],
       edges: plannerState?.edges ?? [],
+      firstClassEdges: plannerState?.canvas.edges ?? [],
       artifacts: plannerState?.artifacts ?? [],
       integrationEntities: plannerState?.integrationEntities,
       proposal: null,
@@ -850,6 +920,7 @@ function PlannerGraphInner({
       onCancelSessionCreation: handleCancelNodeSessionCreation,
       onDeleteNode: handleDeleteNode,
       onHideIOArtifact: handleHideIOArtifact,
+      onToggleIOArtifact: handleToggleIOArtifact,
       onRerunNode: handleRerunNode,
       onAttachDataSource: handleOpenAttachDataSource,
       onRefreshExternalInput: handleRefreshExternalInput,
@@ -867,6 +938,7 @@ function PlannerGraphInner({
     plannerState?.nodes,
     plannerState?.states,
     plannerState?.edges,
+    plannerState?.canvas.edges,
     plannerState?.artifacts,
     plannerState?.canvas.ownerId,
     plannerState?.canvas.visibility,
@@ -886,6 +958,7 @@ function PlannerGraphInner({
     handleCancelNodeSessionCreation,
     handleDeleteNode,
     handleHideIOArtifact,
+    handleToggleIOArtifact,
     handleRerunNode,
     handleOpenAttachDataSource,
     handleRefreshExternalInput,
@@ -906,6 +979,7 @@ function PlannerGraphInner({
       nodes: plannerState.nodes,
       states: plannerState.states,
       edges: plannerState.edges,
+      firstClassEdges: plannerState.canvas.edges ?? [],
       artifacts: plannerState.artifacts,
       integrationEntities: plannerState.integrationEntities,
       proposal,
@@ -921,6 +995,7 @@ function PlannerGraphInner({
     plannerState?.nodes,
     plannerState?.states,
     plannerState?.edges,
+    plannerState?.canvas.edges,
     plannerState?.artifacts,
     plannerState?.canvas.ownerId,
     proposal,
@@ -1069,29 +1144,6 @@ function PlannerGraphInner({
     setIOArtifactVisibility(readStoredIOArtifactVisibility(canvasId))
   }, [canvasId])
 
-  const handleToggleIOArtifact = useCallback((
-    nodeId: string,
-    direction: keyof IOArtifactVisibility,
-    item: string,
-    visible: boolean,
-  ) => {
-    const normalized = item.trim()
-    if (!normalized) return
-    setIOArtifactVisibility((current) => {
-      const existing = current[nodeId] ?? { inputs: [], outputs: [] }
-      const nextList = visible
-        ? Array.from(new Set([...existing[direction], normalized]))
-        : existing[direction].filter((value) => value !== normalized)
-      const nextEntry = { ...existing, [direction]: nextList }
-      const next = { ...current }
-      if (nextEntry.inputs.length === 0 && nextEntry.outputs.length === 0) {
-        delete next[nodeId]
-      } else {
-        next[nodeId] = nextEntry
-      }
-      return next
-    })
-  }, [])
 
   const handlePanelResizeStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     event.preventDefault()
@@ -1652,6 +1704,50 @@ function PlannerGraphInner({
           </div>
         )}
         <div className="planner-flow">
+          {/* Canvas runtime Atom 4 — owner-curated monitor grid. Self-gates on
+              the canvas.monitor.v2 flag and renders nothing when the canvas has
+              no monitorSpec, so legacy canvases are visually unchanged. */}
+          {plannerState && plannerState.canvas.id === canvasId && (
+            <MonitorGrid
+              spec={plannerState.canvas.monitorSpec}
+              nodes={plannerState.nodes ?? []}
+              states={plannerState.states ?? []}
+              artifacts={plannerState.artifacts ?? []}
+              viewerId={userProfile?.userId}
+            />
+          )}
+          {/* canvas-spec §7.2 — planner-authored HTML Monitor(s). A monitor is an
+              artifact node with artifactSource=canvas-runtime + widget.kind='html';
+              its planner-authored HTML renders SANDBOXED in MonitorHtmlFrame and
+              consumes the read-only canvasRuntime snapshot. Additive — the card
+              MonitorGrid above is unchanged. */}
+          {plannerState &&
+            plannerState.canvas.id === canvasId &&
+            (plannerState.nodes ?? [])
+              .filter(
+                (n) =>
+                  n.widget?.kind === 'html' &&
+                  n.widget?.html &&
+                  n.artifactSource?.kind === 'canvas-runtime',
+              )
+              .map((n) => (
+                <div key={`monitor-html-${n.id}`} className="planner-monitor-html">
+                  <MonitorHtmlFrame
+                    title={n.title}
+                    html={n.widget!.html!}
+                    runtime={plannerState.canvasRuntime}
+                  />
+                </div>
+              ))}
+          {/* Canvas runtime Atom 1 — read-only "数据源" rail. Renders nothing
+              when the canvas has no dataSources, so legacy canvases are
+              visually unchanged. */}
+          {plannerState && plannerState.canvas.id === canvasId && (
+            <DataSourceRail
+              canvasId={canvasId}
+              dataSources={plannerState.canvas.dataSources}
+            />
+          )}
           {(hasSessionActionBanner || mcpWarning) && (
             <div className="planner-banner-stack">
               {hasSessionActionBanner && (
@@ -1799,6 +1895,11 @@ function PlannerGraphInner({
           onRerunNode={handleRerunNode}
           onChangeStatus={handleChangeNodeStatus}
           canChangeStatus={variant !== 'template' && (plannerState?.canEditInternals ?? true)}
+          boundSession={
+            (boardState?.sessions ?? []).find((s) =>
+              sessionMatchesBoundId(s.id, selectedNode?.sessionId ?? ''),
+            ) ?? null
+          }
         />
       )}
       {attachDataSourceNodeId && (

@@ -39,6 +39,10 @@ struct NodeAttempt: Codable, Equatable {
         case finishedAt
         case outcome
         case awaitingInputSince
+        // Canvas runtime 5-atom data model (decode-only, PR2+6.5). All three
+        // are tolerant of legacy persisted attempts that lack the keys.
+        case origin
+        case edgeConsumptions
     }
 
     /// 0-based attempt index within the node's `attempts` list.
@@ -62,6 +66,22 @@ struct NodeAttempt: Codable, Equatable {
     /// resumed running state restarts the clock.
     var awaitingInputSince: Date?
 
+    // MARK: Canvas runtime 5-atom fields (decode-only — PR2+6.5)
+    //
+    // These mirror the contract additions in `PlannerAtoms.swift`. They are
+    // populated on decode (tolerant of legacy attempts that lack them) but are
+    // NOT yet written by `appendAttempt` — the single-writer wrap that makes
+    // `origin`/`edgeConsumptions` mandatory lands in a later PR. See
+    // `doc/prd/canvas-runtime-data-model.md` §5.2 / addendum §5.
+
+    /// Atom 3 — recorded provenance of this attempt. Non-optional in the final
+    /// contract; here it is decode-tolerant with a legacy human-origin default
+    /// (`{kind:"human", actorId:"__legacy__"}`) per the §9.1 migration note, so
+    /// old persisted attempts (which have no `origin`) still load.
+    var origin: TriggerOrigin
+    /// Atom 2 — edge consumptions resolved for this attempt. Default `[]`.
+    var edgeConsumptions: [EdgeConsumption]
+
     init(
         index: Int,
         sessionId: String? = nil,
@@ -69,7 +89,9 @@ struct NodeAttempt: Codable, Equatable {
         startedAt: Date = Date(),
         finishedAt: Date? = nil,
         outcome: String? = nil,
-        awaitingInputSince: Date? = nil
+        awaitingInputSince: Date? = nil,
+        origin: TriggerOrigin = .legacy,
+        edgeConsumptions: [EdgeConsumption] = []
     ) {
         self.index = index
         self.sessionId = sessionId
@@ -78,6 +100,8 @@ struct NodeAttempt: Codable, Equatable {
         self.finishedAt = finishedAt
         self.outcome = outcome
         self.awaitingInputSince = awaitingInputSince
+        self.origin = origin
+        self.edgeConsumptions = edgeConsumptions
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +113,10 @@ struct NodeAttempt: Codable, Equatable {
         self.finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
         self.outcome = try container.decodeIfPresent(String.self, forKey: .outcome)
         self.awaitingInputSince = try container.decodeIfPresent(Date.self, forKey: .awaitingInputSince)
+        // Legacy-tolerant: attempts persisted before the 5-atom model have no
+        // `origin` — default to the sentinel human origin rather than throwing.
+        self.origin = try container.decodeIfPresent(TriggerOrigin.self, forKey: .origin) ?? .legacy
+        self.edgeConsumptions = try container.decodeIfPresent([EdgeConsumption].self, forKey: .edgeConsumptions) ?? []
     }
 }
 

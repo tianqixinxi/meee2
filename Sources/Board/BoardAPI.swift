@@ -628,7 +628,7 @@ enum BoardAPI {
     /// session node, so this is cheap for the common (non-planner) case.
     private static func feedPlannerSessionRunStates(_ sessions: [SessionDTO]) {
         for session in sessions {
-            let status = SessionStatus.from(rawString: session.status)
+            let status = effectiveSessionStatus(for: session)
             let boundRecord = PlannerSessionRunStateBridge.observeBound(
                 sessionId: session.id,
                 status: status
@@ -637,6 +637,37 @@ enum BoardAPI {
                 syncPlannerSessionOutputArtifacts(sessionId: session.id)
             }
         }
+    }
+
+    /// Derive the *interaction* status fed to the planner mirror from the full
+    /// DTO — not just the coarse `status` string.
+    ///
+    /// Root cause this guards against: a bound session can have a permission
+    /// prompt pending (`pendingPermissionTool` set) while its resolved `status`
+    /// string still reads as a working state (e.g. `.active`/`.thinking` — a
+    /// fresh-assistant transcript tail resolves to `.active` "mid-turn"). This
+    /// is especially common for ghostty/EXTERNAL sessions, where the
+    /// permission/idle-waiting state is carried in `pendingPermissionTool`
+    /// rather than baked into the coarse status. `feedPlannerSessionRunStates`
+    /// previously read `status` only, so the node stayed `running` ("运行中")
+    /// while the session was actually blocked on a human gate.
+    ///
+    /// Precedence:
+    /// 1. A pending permission prompt (`pendingPermissionTool` non-empty)
+    ///    dominates → `.permissionRequired` → node `gateWait` (待审核/等反馈),
+    ///    regardless of the coarse status. A real permission gate is the
+    ///    strongest "ball is in the human's court" signal.
+    /// 2. Otherwise fall back to the resolver's `status` mapping, which already
+    ///    expresses `.waitingForUser` (Claude finished, waiting on the user) →
+    ///    `.awaitingInput` and the working states → `.running`.
+    static func effectiveSessionStatus(for session: SessionDTO) -> SessionStatus {
+        let baseStatus = SessionStatus.from(rawString: session.status)
+        if let pendingTool = session.pendingPermissionTool?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !pendingTool.isEmpty {
+            return .permissionRequired
+        }
+        return baseStatus
     }
 
     private static func syncPlannerSessionOutputArtifacts(sessionId: String? = nil, canvasId: String? = nil) {
@@ -1042,6 +1073,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
         do {
+            reconcilePlannerRunState(canvasId: canvasId)
             syncPlannerSessionOutputArtifacts(canvasId: canvasId)
             let state = try PlannerBoardBridge.canvasState(
                 for: canvasId,
@@ -1071,6 +1103,7 @@ enum BoardAPI {
             return errorResponse("bad_request", "missing canvas id", status: 400)
         }
         do {
+            reconcilePlannerRunState(canvasId: canvasId)
             syncPlannerSessionOutputArtifacts(canvasId: canvasId)
             let state = try PlannerBoardBridge.graphState(
                 for: canvasId,
@@ -1802,6 +1835,11 @@ enum BoardAPI {
         struct EnsureRequest: Decodable {
             let runner: PlannerDispatchRunner?
             let cwd: String?
+            // BUG 1.2 — "打开进展" (open the bound session) passes `openOnly`.
+            // In that mode a node whose bound session is no longer live must
+            // NOT silently re-spawn a fresh session; we report it ended and let
+            // the user re-dispatch. The create/replace flows leave this nil.
+            let openOnly: Bool?
         }
         struct EnsureResponse: Encodable {
             let ok: Bool
@@ -1810,6 +1848,10 @@ enum BoardAPI {
             let cwd: String
             let command: String
             let terminalKind: String
+            // "native-workspace" for internal surfaces; "external" when the bound
+            // session is a live ghostty/external terminal the frontend must focus
+            // via /activate rather than open an internal surface for.
+            let openTarget: String
             let action: String
             let graph: PlannerGraphStateEnvelope
         }
@@ -1836,6 +1878,41 @@ enum BoardAPI {
                 if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
                    isReusableInternalSurface(existingSurface) {
                     surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
+                } else if body?.openOnly == true {
+                    // BUG 1.2 — the caller only asked to OPEN the already-bound
+                    // session (not create one). The session is not a reusable
+                    // INTERNAL surface, but it may still be a LIVE ghostty/external
+                    // session (InternalTerminalRuntime only tracks internal
+                    // surfaces, so its snapshot is nil for those). Before declaring
+                    // the session dead, check broad liveness against the board
+                    // session list (covers ghostty/external + surfaceStatus).
+                    let liveSessions = currentBoardSessions()
+                    if isPlannerSessionLive(sessionId, in: liveSessions),
+                       let live = liveSessions.first(where: { boardSession($0, matches: sessionId) }) {
+                        // The bound session is alive in an external/ghostty terminal.
+                        // Do NOT 409 and do NOT spawn a replacement — tell the
+                        // frontend to FOCUS the existing live terminal via /activate.
+                        return jsonResponse(EnsureResponse(
+                            ok: true,
+                            sessionId: live.id,
+                            surfaceId: live.surfaceId ?? "",
+                            cwd: (try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)) ?? "",
+                            command: "",
+                            terminalKind: live.terminalKind,
+                            openTarget: live.openTarget,
+                            action: "focus-external",
+                            graph: graphEnvelope(state)
+                        ), status: 200, reason: "OK")
+                    }
+                    // Genuinely dead across ALL backends — not a reusable internal
+                    // surface AND not live in the board sessions. Surface that the
+                    // session ended so the user can re-dispatch; do not silently
+                    // spawn a replacement.
+                    return errorResponse(
+                        "session_ended",
+                        "The session bound to this node has ended. Re-dispatch the node to start a new one.",
+                        status: 409
+                    )
                 } else {
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
@@ -1926,6 +2003,7 @@ enum BoardAPI {
                 cwd: surface.cwd,
                 command: surface.command,
                 terminalKind: "internal",
+                openTarget: "native-workspace",
                 action: action,
                 graph: graphEnvelope(state)
             ), status: 201, reason: "Created")
@@ -3017,8 +3095,11 @@ enum BoardAPI {
 
     static func mapPlannerCoreError(_ err: PlannerCoreError) -> HttpResponse {
         switch err {
-        case .canvasNotFound, .proposalNotFound, .runNotFound:
+        case .canvasNotFound, .proposalNotFound, .runNotFound,
+             .dataSourceNotFound, .edgeNotFound, .monitorCardNotFound:
             return errorResponse("not_found", err.localizedDescription, status: 404)
+        case .monitorSpecReplaceGuard:
+            return errorResponse("monitor_spec_replace_guard", err.localizedDescription, status: 409)
         case .monitorClearNotAllowed:
             return errorResponse("monitor_clear_not_allowed", err.localizedDescription, status: 409)
         case .permissionDenied:
@@ -3111,7 +3192,9 @@ enum BoardAPI {
         )
     }
 
-    private static func plannerDispatchPrompt(for node: PlanningNode, canvasId: String, cwd: String) -> String {
+    // internal (was private) so the PRD-pipeline E2E test can assert criterion 2:
+    // dispatch generates a non-empty default prompt carrying the node protocol.
+    static func plannerDispatchPrompt(for node: PlanningNode, canvasId: String, cwd: String) -> String {
         let inlineLimitKB = PlannerArtifactStorage.inlinePayloadLimitBytes / 1024
         let artifactTypes = PlannerArtifactPayloadType.allCases.map(\.rawValue).joined(separator: ", ")
         var lines = [
@@ -3226,6 +3309,18 @@ enum BoardAPI {
             "",
             "Use read_node_contract before continuing, then submit_node_output when this node is complete or blocked."
         ].joined(separator: "\n")
+    }
+
+    /// BUG 1.1 — demote stale "running" nodes whose bound session no longer
+    /// exists. Computes the live session set once and hands a matcher closure to
+    /// the planner store. Called right before every canvas/graph read so the UI
+    /// never shows `running` for a session that died while the app was closed.
+    private static func reconcilePlannerRunState(canvasId: String) {
+        let liveSessions = currentBoardSessions()
+        _ = try? PlannerBoardBridge.store.reconcileRunStateAgainstLiveSessions(
+            canvasId: canvasId,
+            isLive: { sessionId in isPlannerSessionLive(sessionId, in: liveSessions) }
+        )
     }
 
     private static func plannerNodeNeedsLiveSession(_ node: PlanningNode) -> Bool {

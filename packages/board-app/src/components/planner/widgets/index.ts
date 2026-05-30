@@ -23,7 +23,11 @@ export { MatrixWidget } from './MatrixWidget'
 export { BadgeWidget } from './BadgeWidget'
 export { ArtifactPreviewWidget } from './ArtifactPreviewWidget'
 
-const REGISTRY: Record<WidgetKind, ComponentType<BaseWidgetProps>> = {
+// Partial: not every WidgetKind renders as an in-node mini-widget. `html`
+// (canvas-spec §7.2 Monitor) is rendered separately + SANDBOXED by
+// MonitorHtmlFrame, not through this per-node registry, so it is intentionally
+// absent here and resolves to the BadgeWidget fallback if ever asked for.
+const REGISTRY: Partial<Record<WidgetKind, ComponentType<BaseWidgetProps>>> = {
   'kanban': KanbanWidget,
   'inbox': InboxWidget,
   'matrix': MatrixWidget,

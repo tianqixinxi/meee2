@@ -653,28 +653,92 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
        *  时显示主推 artifact + 「查看输出」按钮。点击打开 inspector,artifact 区域
        *  会渲染完整剪贴板。session 节点也走出口口径,跟 step 路径一致(都属于
        *  「会产出 artifact 的节点」)。 */}
-      {(nodeKind === 'step' || nodeKind === 'session') && !data.virtual && data.artifacts && data.artifacts.length > 0 && (
-        <div className="planner-node__output-row">
-          <span className="planner-node__output-label">
-            <ArrowUpRight size={11} aria-hidden /> 成果
-          </span>
-          <span className="planner-node__output-title">
-            {data.artifacts[0]?.title ?? compactArtifactLabel(data.artifacts[0]?.reference ?? '')}
-          </span>
-          <button
-            type="button"
-            className="planner-node__view-output-btn nodrag"
-            onClick={(event) => {
-              event.stopPropagation()
-              data.onOpenDetails?.(node.id)
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            title="查看输出 — 打开 inspector 看完整产物"
-          >
-            查看输出
-          </button>
-        </div>
-      )}
+      {/* canvas-spec §7.3 — step/session 节点在卡片上展示其 output 槽 artifact
+       *  的「最新版本」:每个 output 槽一行,标题 + v 标记(最新/候选…) + 一段
+       *  内容预览(markdown/kanban/text…),不再只是一行标题。`data.artifacts`
+       *  是 latest-per-slot 镜像,每个 entry 就是该槽版本链的 head(最新版)。
+       *  多槽时全部展示(capped),「查看输出」仍打开 inspector 看完整版本时间线。 */}
+      {(nodeKind === 'step' || nodeKind === 'session') && !data.virtual && data.artifacts && data.artifacts.length > 0 && (() => {
+        const slots = pickLatestOutputSlots(data.artifacts)
+        const visible = slots.slice(0, 3)
+        const overflow = slots.length - visible.length
+        // canvas-spec §7.1 — 「查看输出」 EXPANDS the node's output artifact(s)
+        // onto the canvas as standalone artifact node(s) — a view of the same
+        // artifact / version chain (latest version) — instead of opening the
+        // inspector. Reuses the existing visibleIOArtifacts / onToggleIOArtifact
+        // mechanism: toggling a slot's reference visible makes the adapter mint
+        // a virtual artifact node (`nodeKind==='artifact'`, `data.virtual`) next
+        // to this producing node, rendered by the existing artifact-node
+        // renderer. Toggling again hides it.
+        const visibleOutputs = new Set(data.ioArtifactVisibility?.outputs ?? [])
+        const slotReferences = slots.map((artifact) => artifact.reference).filter(Boolean)
+        const allShown = slotReferences.length > 0 && slotReferences.every((ref) => visibleOutputs.has(ref))
+        const canToggle = Boolean(data.onToggleIOArtifact) && slotReferences.length > 0
+        return (
+          <div className="planner-node__output-block">
+            <div className="planner-node__output-head">
+              <span className="planner-node__output-label">
+                <ArrowUpRight size={11} aria-hidden /> 成果
+              </span>
+              {canToggle && (
+                <button
+                  type="button"
+                  className={`planner-node__view-output-btn nodrag${allShown ? ' is-on' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    // Toggle every output slot's artifact onto / off the canvas.
+                    // When all are already shown → hide them (toggle off);
+                    // otherwise → show the ones not yet on the canvas.
+                    const nextVisible = !allShown
+                    for (const ref of slotReferences) {
+                      if (nextVisible && visibleOutputs.has(ref)) continue
+                      data.onToggleIOArtifact?.(node.id, 'outputs', ref, nextVisible)
+                    }
+                  }}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  title={allShown
+                    ? '从画板收起输出产物'
+                    : '在画板上展开输出产物(显示最新版本的完整内容)'}
+                  aria-pressed={allShown}
+                >
+                  {allShown ? '收起输出' : '查看输出'}
+                </button>
+              )}
+            </div>
+            {visible.map((artifact) => {
+              const preview = compactArtifactPreview(artifact)
+              return (
+                <div key={artifact.id} className="planner-node__output-slot">
+                  <div className="planner-node__output-slot-head">
+                    <span
+                      className="planner-node__output-title"
+                      title={artifact.title || artifact.reference}
+                    >
+                      {artifact.title || compactArtifactLabel(artifact.reference)}
+                    </span>
+                    <span
+                      className="planner-node__output-version"
+                      title={`输出产物的当前版本 — 完整版本链见「查看输出」`}
+                    >
+                      {artifactVersionMarker(artifact)}
+                    </span>
+                  </div>
+                  {preview ? (
+                    <p className="planner-node__output-preview">{preview}</p>
+                  ) : (
+                    <p className="planner-node__output-preview planner-node__output-preview--empty">
+                      (无内容预览 — 点「查看输出」)
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+            {overflow > 0 && (
+              <span className="planner-node__output-more">还有 {overflow} 个产物 — 查看输出</span>
+            )}
+          </div>
+        )
+      })()}
 
       {(primaryAction || (!data.virtual && data.onDeleteNode)) && (
         <div className="planner-node__footer">
@@ -1306,6 +1370,115 @@ function derivePromptBrief(node: PlannerGraphNode['data']['node']): string {
   const combined = [title, firstDescLine].filter(Boolean).join(' — ')
   if (!combined) return ''
   return combined.length > 30 ? `${combined.slice(0, 30)}…` : combined
+}
+
+// canvas-spec §7.3 — step/session node cards must show the LATEST VERSION of
+// their output artifact: a compact content preview + a version marker, not just
+// the title. `data.artifacts` is the latest-per-slot mirror (each entry is the
+// head of its slot's version chain), so each entry already IS the latest
+// version for its slot.
+//
+// 提取一段 ≤ N 字的内容预览,优先级:
+//   typedPayload(markdown.preview / prd.tldr / kanban 摘要 / integration.summary)
+//   → legacy payload 的 text/html/json 内联字符串 → payload.preview/content/summary
+//   → 字符串 payload 本身。拿不到内容则返回 null(调用方退回只显示标题)。
+function compactArtifactPreview(artifact: PlannerArtifact | undefined, max = 90): string | null {
+  if (!artifact) return null
+  const typed = artifact.typedPayload
+  let raw: string | null = null
+  if (typed) {
+    switch (typed.type) {
+      case 'markdown':
+        raw = typed.preview
+        break
+      case 'prd':
+        raw = typed.tldr
+        break
+      case 'kanban':
+        raw = typed.columns.map((c) => `${c.name} (${c.items.length})`).join(' · ')
+        break
+      case 'integration':
+        raw = typed.summary ?? typed.externalUrl ?? `${typed.connector}:${typed.externalId}`
+        break
+      case 'impl-pr':
+        raw = `#${typed.number} ${typed.branch} → ${typed.baseBranch}`
+        break
+      case 'check-result':
+        raw = `${typed.pass} pass · ${typed.fail} fail · ${typed.skip} skip`
+        break
+      case 'file':
+        raw = typed.filename
+        break
+    }
+  }
+  if (!raw) {
+    raw =
+      inlineString(artifact.payload, 'text') ??
+      inlineString(artifact.payload, 'html') ??
+      inlineString(artifact.payload, 'json') ??
+      stringField(objectPayload(artifact.payload), 'preview') ??
+      stringField(objectPayload(artifact.payload), 'content') ??
+      stringField(objectPayload(artifact.payload), 'summary') ??
+      (typeof artifact.payload === 'string' ? artifact.payload : null)
+  }
+  if (!raw) return null
+  const normalized = raw.replace(/\s+/g, ' ').trim()
+  if (!normalized) return null
+  return normalized.length > max ? `${normalized.slice(0, max)}…` : normalized
+}
+
+// canvas-spec §7.3 — version marker for an output-slot artifact card.
+//
+// 限制:`data.artifacts` 是 latest-per-slot 镜像,**不携带版本号/版本计数**
+// (真正的 append-only 版本链在后端 `listArtifactVersions` 里,卡片不拉)。
+// 因此卡片上无法 fabricate 一个准确的 `v{n}` 数字 —— 只能 surface 已知的语义:
+//   positionTag === 'latest'(或缺省)→ 「最新」
+//   其他 positionTag → 对应中文标签(候选/已丢弃/已提升/提议中)
+// 完整版本时间线(v{n} 列表)在 inspector 「版本」段(点「查看输出」进入)。
+// TODO(spec §7.3): 后端把每个 artifact 的 versionIndex/versionCount 带到
+// PlannerArtifact 上后,这里改成真实的 `v{n}`(latest 链 head 的序号)。
+// canvas-spec §7.3 — one row per output SLOT. `data.artifacts` is the
+// latest-per-slot mirror, but a slot can in principle appear more than once
+// (legacy data / multiple refs) — dedupe by reference keeping the newest, and
+// sort newest-first so the primary output leads.
+function pickLatestOutputSlots(artifacts: PlannerArtifact[]): PlannerArtifact[] {
+  const bySlot = new Map<string, PlannerArtifact>()
+  for (const artifact of artifacts) {
+    const slot = (artifact.reference || artifact.id).trim().toLowerCase()
+    const existing = bySlot.get(slot)
+    if (!existing) {
+      bySlot.set(slot, artifact)
+      continue
+    }
+    const ta = Date.parse(String(existing.createdAt))
+    const tb = Date.parse(String(artifact.createdAt))
+    if ((Number.isFinite(tb) ? tb : 0) > (Number.isFinite(ta) ? ta : 0)) {
+      bySlot.set(slot, artifact)
+    }
+  }
+  return [...bySlot.values()].sort((a, b) => {
+    const ta = Date.parse(String(a.createdAt))
+    const tb = Date.parse(String(b.createdAt))
+    return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+  })
+}
+
+function artifactVersionMarker(artifact: PlannerArtifact | undefined): string {
+  const tag = artifact?.positionTag ?? 'latest'
+  switch (tag) {
+    case 'latest':
+      return '最新'
+    case 'candidate':
+      return '候选'
+    case 'discarded':
+      return '已丢弃'
+    case 'promoted':
+      return '已提升'
+    case 'proposed':
+      return '提议中'
+    default:
+      return '最新'
+  }
 }
 
 function designKind(node: PlannerGraphNode['data']['node']): PlanningNodeKind {

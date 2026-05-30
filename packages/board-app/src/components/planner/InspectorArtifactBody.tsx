@@ -125,6 +125,13 @@ const ARTIFACT_DATA_SOURCE_OPTIONS: ReadonlyArray<{
 //   1. node.artifactDataSource (top-level string) — Swift 后端写的字段
 //   2. node.artifact.dataSource / node.artifactConfig.dataSource (loose) — 旧 wave-3 试探
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
+  // canvas-spec §7 unification: prefer the canonical unified `artifactSource`.
+  //   - dataSource-kind        ⇒ 'mirrored'
+  //   - slot / canvas-runtime  ⇒ 'authored'
+  // Fall back to the legacy loose lookup for old data (one-release compat).
+  if (node.artifactSource) {
+    return node.artifactSource.kind === 'dataSource' ? 'mirrored' : 'authored'
+  }
   const cfg = node as unknown as {
     artifactDataSource?: string
     artifact?: { dataSource?: string | { mode?: string } }
@@ -149,6 +156,52 @@ function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode 
     default:
       return 'authored'
   }
+}
+
+// canvas-spec §7.4 — authoring rule. An artifact is hand-fillable (authorable)
+// ONLY when it is a source/seed: it has NO producing step (no upstream producer
+// feeding the slot) and its role is to hold authored data (e.g. 想法收件箱,
+// uploaded transcript, hand-written PRD). A step's OUTPUT artifact (execution
+// product) must NOT be hand-fillable; inputs / canvas-runtime are read-only.
+// 这是修「output 居然能手填」bug 的门。
+//
+// HEURISTIC (no explicit `Artifact.authorable` field exists yet — see TODO):
+// treat a node as a seed-output (hand-fillable) only when it has NO upstream
+// producer for its slot:
+//   - dependsOnNodeIds 为空(edges 派生的上游依赖投影 —— 有上游 ⇒ 该 artifact
+//     是执行产物,不能手填)
+//   - schema.inputs 为空(声明了 input 槽 ⇒ 是 transform/execution 节点,消费
+//     上游产物,不是种子)
+//   - 没有绑定的外部 context source(chatHistory 除外 —— 那只是会话历史,不构成
+//     上游 producer)
+// 全满足才视为 source/seed。任何一条不满足 → 偏向「不显示手填编辑器」(spec
+// §7.4 要求:对 step 节点带上游输入的明确 output,不该 authorable)。
+//
+// canvas-spec §7 unification (2026-05-29): the authoring gate now keys off the
+// unified `Artifact.source` first. A `dataSource`-kind (mirrored / external)
+// source is NEVER hand-fillable; a `canvas-runtime` source is read-only; only a
+// seed/authored `slot` OUTPUT source is authorable. When the unified field is
+// present we trust it directly (the backend already applied §7.4); otherwise we
+// fall back to the legacy heuristic below for old data.
+//
+// TODO(spec §7.4): once the contract carries an explicit `Artifact.authorable`
+// boolean we can drop both this `source`-derivation AND the heuristic and read
+// the flag directly.
+function isSeedAuthorableNode(node: PlanningNode): boolean {
+  if (node.artifactSource) {
+    const src = node.artifactSource
+    // dataSource mirror / canvas-runtime / input slot → not authorable.
+    return src.kind === 'slot' && src.direction === 'output'
+  }
+  const hasUpstreamProducers = (node.dependsOnNodeIds ?? []).length > 0
+  if (hasUpstreamProducers) return false
+  const hasDeclaredInputs = (node.schema?.inputs ?? []).length > 0
+  if (hasDeclaredInputs) return false
+  const hasExternalContext = (node.contextSources ?? []).some(
+    (source) => source.kind !== 'chatHistory',
+  )
+  if (hasExternalContext) return false
+  return true
 }
 
 export function InspectorArtifactBody({
@@ -200,14 +253,23 @@ export function InspectorArtifactBody({
   const activeArtifact =
     nodeArtifacts.find((a) => a.id === selectedArtifactId) ?? latestArtifact
 
+  // canvas-spec §7.4 — only source/seed artifacts are hand-fillable. See
+  // isSeedAuthorableNode above. Gates both the AuthoredFirstArtifactEditor and
+  // the per-version 「编辑」 toggles: a step node with upstream inputs producing
+  // an execution product → NOT authorable; its output renders read-only.
+  const isSeedAuthorable = useMemo(() => isSeedAuthorableNode(node), [node])
+
   // 编辑切换(仅 markdown / prd / kanban 类型可编辑;v0.1 是占位 — 编辑器尚未上)。
   const [editMode, setEditMode] = useState(false)
   const activePayload: ArtifactPayload | null =
     activeArtifact?.typedPayload ?? null
+  // canvas-spec §7.4 — 编辑入口只对源/种子产物开放。非种子(step 执行产物)的
+  // payload 即便是 markdown/prd/kanban,也只读,不给「编辑」toggle。
   const canEditPayload =
-    activePayload?.type === 'markdown' ||
-    activePayload?.type === 'prd' ||
-    activePayload?.type === 'kanban'
+    isSeedAuthorable &&
+    (activePayload?.type === 'markdown' ||
+      activePayload?.type === 'prd' ||
+      activePayload?.type === 'kanban')
 
   // theta (2026-05-29) — review gate. Source of truth is the artifact-level
   // reviewStatus; typedPayload.reviewStatus mirrors it for callers that only
@@ -562,8 +624,14 @@ export function InspectorArtifactBody({
         {/* authored 模式编辑器:不论是否已有产物,都保留(2026-05-29 fix Q3)。
             原先只在 !activeArtifact 时渲染 → 用户填完一次就锁死,inbox 类
             累积型场景完全用不了。现在改成"始终可写",每次保存追加新版本
-            (后端按 reference 做 append-version)。 */}
-        {dataSourceDraft === 'authored' && (
+            (后端按 reference 做 append-version)。
+
+            canvas-spec §7.4 gate(2026-05-29):手填编辑器**仅对源/种子 artifact**
+            渲染 —— `isSeedAuthorable`(无上游 producer / 无 input 槽 / 无外部
+            context)为真时才显示。step 节点带上游输入产出的执行产物 → 不显示
+            编辑器,上面的 PayloadBodySwitch 已经把 agent 产出的内容只读展示。
+            这修掉「output 居然能手填」的 bug。 */}
+        {dataSourceDraft === 'authored' && isSeedAuthorable && (
           <AuthoredFirstArtifactEditor
             node={node}
             canvasId={canvasId}
@@ -571,6 +639,15 @@ export function InspectorArtifactBody({
             onCreated={onProposalCreated}
             toast={toast}
           />
+        )}
+        {/* canvas-spec §7.4 — authored 模式但非源/种子(step 执行产物):明确告诉
+            用户这份产物由执行产生、不能手填,内容已在上方只读展示。避免用户以为
+            「这里没编辑器是 bug」。 */}
+        {dataSourceDraft === 'authored' && !isSeedAuthorable && (
+          <p className="planner-node-modal__view-hint">
+            这份产物由上游执行(step / 会话)产生,只能由 agent 写回,不能手填。
+            完整内容见上方预览与下方「版本」。
+          </p>
         )}
         {dataSourceDraft === 'mirrored' && !activeArtifact && (
           <div className="planner-node-modal__empty planner-node-modal__empty-state-hint">

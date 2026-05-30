@@ -1,5 +1,6 @@
 import { MarkerType, type Edge, type Node } from '@xyflow/react'
 import type {
+  CanvasEdge,
   IntegrationEntity,
   NodeAssignment,
   NodeContractExternalInput,
@@ -102,6 +103,15 @@ export interface PlannerNodeData extends Record<string, unknown> {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  /** canvas-spec §7.1 — toggle an I/O slot artifact visible/hidden as a
+   *  standalone artifact node on the canvas (same mechanism the inspector
+   *  output-slot switches use). The card's 「查看输出」 button drives this so the
+   *  output renders ON the canvas as a virtual artifact node, not in the
+   *  inspector. */
+  onToggleIOArtifact?: (nodeId: string, direction: keyof IOArtifactVisibility, item: string, visible: boolean) => void
+  /** canvas-spec §7.1 — this producing node's current I/O artifact visibility,
+   *  so 「查看输出」 can show on/off state and toggle correctly. */
+  ioArtifactVisibility?: IOArtifactVisibility
   /** UI-1 · Re-run a node by appending a new artifact version. */
   onRerunNode?: (nodeId: string, reference?: string) => void
   /**
@@ -136,7 +146,18 @@ export interface PlannerGraphEdgeData extends Record<string, unknown> {
   onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void
   /** UI-4: when true, suppresses the + insert button (artifact / preview edges). */
   suppressInsert?: boolean
+  /** Atom 2: non-dependency first-class edge mode, badged at the edge midpoint
+   *  ("队列" / "快照"). Absent for plain dependency / legacy / preview edges. */
+  edgeMode?: PlannerEdgeMode
 }
+
+/**
+ * Atom 2 — first-class consumption edge mode badged on the canvas. Only the
+ * non-`dependency` modes carry a visual badge ("队列" for queue-claim, "快照"
+ * for document-snapshot). `dependency` (synthetic, id prefix `dep-`) and legacy
+ * derived edges stay visually unchanged. Forward-compat modes carry their raw
+ * string but render no badge (no known label). */
+export type PlannerEdgeMode = 'queue-claim' | 'document-snapshot'
 
 export type PlannerGraphEdge = Edge<PlannerGraphEdgeData>
 
@@ -144,6 +165,10 @@ interface PlannerGraphInput {
   nodes: PlanningNode[]
   states: NodeStateSnapshot[]
   edges?: PlannerGraphStateEdge[]
+  /** Atom 2 — authoritative first-class consumption edges (`canvas.edges`).
+   *  Used only to badge non-dependency modes onto the rendered dependency
+   *  edges; the `dependency`-mode entries are ignored here (already drawn). */
+  firstClassEdges?: CanvasEdge[]
   artifacts?: PlannerArtifact[]
   /** P3.0 — canvas-level integration entity pool. */
   integrationEntities?: IntegrationEntity[]
@@ -178,6 +203,8 @@ interface PlannerGraphInput {
   onCancelSessionCreation?: (nodeId: string) => void
   onDeleteNode?: (nodeId: string, title?: string) => void
   onHideIOArtifact?: (nodeId: string, direction: IOArtifactDirection, item: string) => void
+  /** canvas-spec §7.1 — toggle an I/O slot artifact on/off the canvas. */
+  onToggleIOArtifact?: (nodeId: string, direction: keyof IOArtifactVisibility, item: string, visible: boolean) => void
   onRerunNode?: (nodeId: string, reference?: string) => void
   /** UI-4 hooks — see PlannerNodeData for descriptions. */
   onAttachDataSource?: (nodeId: string) => void
@@ -270,6 +297,8 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
         ),
         virtual: false,
         canvasId: input.canvasId,
+        onToggleIOArtifact: input.onToggleIOArtifact,
+        ioArtifactVisibility: input.ioArtifactVisibility?.[node.id] ?? undefined,
         onOpenDetails: input.onOpenDetails,
         onOpenArtifact: input.onOpenArtifact,
         onOpenSubCanvas: input.onOpenSubCanvas,
@@ -314,7 +343,13 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
 
   const perceptionByNodeId = new Map(graphNodes.map((node) => [node.id, node.data.perception]))
   const edges = [
-    ...buildDependencyEdges(previewNodes, perceptionByNodeId, input.edges, input.onInsertTransformBetween),
+    ...buildDependencyEdges(
+      previewNodes,
+      perceptionByNodeId,
+      input.edges,
+      input.onInsertTransformBetween,
+      input.firstClassEdges,
+    ),
     ...buildIOArtifactEdges(virtualArtifactNodes),
   ]
   return { nodes: [...graphNodes, ...virtualArtifactNodes.map((item) => item.node)], edges }
@@ -333,7 +368,11 @@ function buildVisibleIOArtifactNodes(input: {
   const graphNodeById = new Map(input.graphNodes.map((node) => [node.id, node]))
   const result: Array<{ node: PlannerGraphNode; sourceNodeId: string; direction: IOArtifactDirection }> = []
   for (const { node: sourceNode } of input.previewNodes) {
-    if ((sourceNode.nodeKind ?? 'step') !== 'step') continue
+    // canvas-spec §7.1 — step AND session nodes can expand their I/O slot
+    // artifacts onto the canvas (both are "会产出 artifact 的节点"). Other kinds
+    // (artifact / subCanvas / external) don't host I/O slot expansion.
+    const kind = sourceNode.nodeKind ?? 'step'
+    if (kind !== 'step' && kind !== 'session') continue
     const visible = input.visibility[sourceNode.id]
     if (!visible) continue
     const sourceGraphNode = graphNodeById.get(sourceNode.id)
@@ -781,15 +820,71 @@ function applyUpdateOverlay(
   }
 }
 
+/** Map known first-class edge modes to a badge label. `dependency` and any
+ *  unknown/forward-compat mode return undefined → no badge (plain edge). */
+function plannerEdgeMode(mode: string | undefined): PlannerEdgeMode | undefined {
+  if (mode === 'queue-claim' || mode === 'document-snapshot') return mode
+  return undefined
+}
+
+/** Index first-class edges by `source→target` so a rendered dependency edge can
+ *  be decorated with its consumption mode. Only non-dependency modes are kept;
+ *  the last one wins on a duplicate pair (a node pair carries one visible mode
+ *  badge). */
+function buildEdgeModeByPair(
+  firstClassEdges: CanvasEdge[] | undefined,
+  nodeIds: Set<string>,
+): Map<string, PlannerEdgeMode> {
+  const byPair = new Map<string, PlannerEdgeMode>()
+  for (const edge of firstClassEdges ?? []) {
+    const mode = plannerEdgeMode(edge.edgeMode?.mode)
+    if (!mode) continue
+    const source = edge.sourceRef?.nodeId
+    const target = edge.targetRef?.nodeId
+    if (!source || !target || !nodeIds.has(source) || !nodeIds.has(target)) continue
+    byPair.set(`${source} ${target}`, mode)
+  }
+  return byPair
+}
+
 function buildDependencyEdges(
   previewNodes: Array<{ node: PlanningNode; previewKind: PlannerPreviewKind }>,
   perceptionByNodeId: Map<string, PlannerNodePerception>,
   stateEdges?: PlannerGraphStateEdge[],
   onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void,
+  firstClassEdges?: CanvasEdge[],
 ): PlannerGraphEdge[] {
   const nodeIds = new Set(previewNodes.map((item) => item.node.id))
+  const modeByPair = buildEdgeModeByPair(firstClassEdges, nodeIds)
+  // Pairs whose mode badge has been rendered on an existing dependency edge.
+  // Anything left over gets its own standalone mode edge (no double-draw of a
+  // dependency line for the same pair).
+  const renderedPairs = new Set<string>()
+  const modeForPair = (source: string, target: string): PlannerEdgeMode | undefined => {
+    const key = `${source} ${target}`
+    const mode = modeByPair.get(key)
+    if (mode) renderedPairs.add(key)
+    return mode
+  }
+  const withStandaloneModeEdges = (edges: PlannerGraphEdge[]): PlannerGraphEdge[] => {
+    for (const [key, mode] of modeByPair) {
+      if (renderedPairs.has(key)) continue
+      const [source, target] = key.split(' ')
+      edges.push(edgeFor({
+        id: `planner-mode-edge-${source}-${target}`,
+        source,
+        target,
+        perception: edgePerception(source, target, perceptionByNodeId, false),
+        preview: false,
+        onInsertTransform,
+        edgeMode: mode,
+      }))
+    }
+    return edges
+  }
+
   if (stateEdges?.length) {
-    return stateEdges
+    return withStandaloneModeEdges(stateEdges
       .filter((edge) => nodeIds.has(edge.sourceNodeId) && nodeIds.has(edge.targetNodeId))
       .map((edge) => edgeFor({
         id: edge.id,
@@ -799,7 +894,8 @@ function buildDependencyEdges(
         preview: false,
         forceAnimated: edge.kind === 'subCanvas',
         onInsertTransform,
-      }))
+        edgeMode: edge.kind === 'subCanvas' ? undefined : modeForPair(edge.sourceNodeId, edge.targetNodeId),
+      })))
   }
   const edges: PlannerGraphEdge[] = []
   for (const current of previewNodes) {
@@ -812,11 +908,12 @@ function buildDependencyEdges(
         perception: edgePerception(dependencyId, current.node.id, perceptionByNodeId, current.previewKind !== 'none'),
         preview: current.previewKind !== 'none',
         onInsertTransform,
+        edgeMode: current.previewKind !== 'none' ? undefined : modeForPair(dependencyId, current.node.id),
       }))
     }
   }
 
-  if (edges.length > 0) return edges
+  if (edges.length > 0) return withStandaloneModeEdges(edges)
   for (let index = 1; index < previewNodes.length; index += 1) {
     const previous = previewNodes[index - 1]
     const current = previewNodes[index]
@@ -829,7 +926,7 @@ function buildDependencyEdges(
       onInsertTransform,
     }))
   }
-  return edges
+  return withStandaloneModeEdges(edges)
 }
 
 function edgeFor(input: {
@@ -840,6 +937,7 @@ function edgeFor(input: {
   preview: boolean
   forceAnimated?: boolean
   onInsertTransform?: (sourceNodeId: string, targetNodeId: string) => void
+  edgeMode?: PlannerEdgeMode
 }): PlannerGraphEdge {
   return {
     id: input.id,
@@ -863,11 +961,13 @@ function edgeFor(input: {
       // Preview edges and subCanvas edges should not show the + (would
       // try to mutate a state that doesn't exist yet).
       suppressInsert: input.preview || Boolean(input.forceAnimated),
+      edgeMode: input.edgeMode,
     },
     className: [
       'planner-flow__edge',
       `planner-flow__edge--${input.perception}`,
       input.preview ? 'planner-flow__edge--preview' : '',
+      input.edgeMode ? `planner-flow__edge--mode-${input.edgeMode}` : '',
     ].filter(Boolean).join(' '),
   }
 }

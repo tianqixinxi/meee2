@@ -1251,7 +1251,10 @@ export interface PlannerNodeInternalSessionResult {
   cwd: string
   command: string
   terminalKind: 'internal' | string
-  action?: 'reuse' | 'create' | 'resume' | 'recreate' | string
+  // "native-workspace" for internal surfaces; "external" when the bound session
+  // is a live ghostty/external terminal the frontend must focus via activateSession.
+  openTarget?: 'native-workspace' | 'external' | string
+  action?: 'reuse' | 'create' | 'resume' | 'recreate' | 'focus-external' | string
   graph: PlannerGraphState
 }
 
@@ -1261,6 +1264,9 @@ export function ensurePlannerNodeInternalSession(
   input?: {
     runner?: PlannerDispatchRunner
     cwd?: string
+    // BUG 1.2 — "open progress" only: never silently spawn a replacement if the
+    // bound session has died; the server returns a `session_ended` error instead.
+    openOnly?: boolean
   },
 ): Promise<PlannerNodeInternalSessionResult> {
   return jsonRequest<PlannerNodeInternalSessionResult>(
