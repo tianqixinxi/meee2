@@ -1201,7 +1201,7 @@ public struct IslandView: View {
             isExpanded = true
             expandMode = .auto
         }
-        // auto 模式不设置自动关闭计时器
+        updateAutoCloseTimer()
     }
 
     private func openByHover() {
@@ -1225,8 +1225,8 @@ public struct IslandView: View {
 
     private func updateAutoCloseTimer() {
         cancelAutoCloseTimer()
-        // 只在 manual 模式时设置自动关闭
-        guard isExpanded && expandMode == .manual else { return }
+        // manual / auto 展开都按设置自动折叠；hover 由鼠标离开控制。
+        guard isExpanded && (expandMode == .manual || expandMode == .auto) else { return }
         autoCloseTimer = Timer.scheduledTimer(withTimeInterval: autoCloseInterval, repeats: false) { _ in
             withAnimation(self.animation) {
                 self.isExpanded = false
