@@ -44,6 +44,68 @@ jobs:
       - name: Typecheck board packages
         run: pnpm typecheck
 
+  # Informational only — NOT a required status check, so a test failure or low
+  # coverage never blocks merge (deliberately no gate). Runs the board-app
+  # vitest suite, surfaces the coverage table in the run summary, and uploads
+  # the HTML report as an artifact.
+  board-tests:
+    name: Board Packages · Test · Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      # board-app imports sibling packages' .d.ts; build the workspace first so
+      # vitest can resolve cross-package types (mirrors the validate job).
+      - name: Build board packages
+        run: pnpm build
+
+      - name: Run board-app tests with coverage
+        # Informational only — a test failure surfaces as a red STEP but must
+        # not fail the job (the job itself is already non-required, but this
+        # keeps it honestly green so it never reads as a merge gate).
+        continue-on-error: true
+        working-directory: packages/board-app
+        run: pnpm test:cov 2>&1 | tee /tmp/vitest-cov.txt
+
+      - name: Coverage → job summary
+        if: always()
+        run: |
+          {
+            echo "## board-app test coverage (planner)"
+            echo ""
+            echo "> Informational only — not a merge gate."
+            echo ""
+            echo '```'
+            awk '/Coverage report from v8/{p=1} p' /tmp/vitest-cov.txt || cat /tmp/vitest-cov.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: board-app-coverage-html
+          path: packages/board-app/coverage/
+          retention-days: 14
+          if-no-files-found: warn
+
   validate:
     name: Build · Test · Lint
     # macos-15 (Xcode 16 / Swift 6) — macos-14 ships Xcode 15.4 / Swift 5.10
