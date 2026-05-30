@@ -680,6 +680,26 @@ export interface CanvasTemplate {
   defaultNodes: CanvasTemplateNodeSpec[]
 }
 
+export interface ClaudeWorkflow {
+  id: string
+  name: string
+  commandName: string
+  description?: string | null
+  phases: Array<{ title: string; detail?: string | null }>
+  path: string
+  sizeBytes: number
+  modifiedAt: string
+  preview: string
+  readable: boolean
+  error?: string | null
+}
+
+export interface ClaudeWorkflowList {
+  root: string
+  workflows: ClaudeWorkflow[]
+  error?: string | null
+}
+
 const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
   {
     id: 'code-review',
@@ -765,6 +785,32 @@ export function applyCanvasTemplate(
   input: { name: string; scope: CanvasScope },
 ): Promise<CanvasList> {
   return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function fetchClaudeWorkflows(): Promise<ClaudeWorkflowList> {
+  return jsonRequest<ClaudeWorkflowList>('/api/claude/workflows')
+}
+
+export function importClaudeWorkflow(
+  id: string,
+  input: { name?: string; scope: CanvasScope },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/claude/workflows/${encodeURIComponent(id)}/import`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function uploadClaudeWorkflow(input: {
+  filename: string
+  source: string
+  name?: string
+  scope: CanvasScope
+}): Promise<CanvasList> {
+  return jsonRequest<CanvasList>('/api/claude/workflows/import-upload', {
     method: 'POST',
     body: JSON.stringify(input),
   })
