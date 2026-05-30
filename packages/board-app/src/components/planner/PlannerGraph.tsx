@@ -11,6 +11,7 @@ import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } f
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
+  announceNodePresence,
   applyPlannerProposal,
   approvePlannerProposal,
   abandonPlannerNodeSession,
@@ -34,6 +35,7 @@ import {
   rejectPlannerProposal,
   rerunPlannerNode,
   resumeClosedPlannerSessions,
+  revokeNodeAssignment,
   sendPlannerActivity,
   updatePlannerNodeGate,
   updatePlannerNodeLayout,
@@ -54,6 +56,7 @@ import type {
 import type { BoardState } from '../../types'
 import type { TeamMember, UserProfile } from '../../api'
 import type { CanvasMonitor } from '@meee1/recap-core'
+import type { PresenceEntry } from '../../hooks/useCanvasRealtime'
 import {
   LOCK_VIEWPORT_PREFERENCES_CHANGED,
   loadLockViewportOnSwitch,
@@ -100,6 +103,21 @@ interface Props {
    * changes within ~1s, without forcing the user to manually switch canvas.
    */
   refreshTick?: number
+  /**
+   * RT-3 (team-canvas-sharing) — per-node revision map keyed
+   * `"${canvasId}:${nodeId}"`, bumped by {@link useCanvasRealtime} on a
+   * `node.changed` frame. When a revision for a node on *this* canvas advances
+   * we silently refetch this graph (scoped: a node change on another canvas
+   * does not refetch us, unlike the global `refreshTick`). Optional so callers
+   * without realtime wiring still render.
+   */
+  nodeRevisions?: Record<string, number>
+  /**
+   * RT-5 (team-canvas-sharing) — live presence keyed by nodeId (null key =
+   * editing the canvas at large), already TTL-filtered and self-excluded by
+   * {@link useCanvasRealtime}. Used to paint "who is editing this node" dots.
+   */
+  presenceByNode?: Map<string | null, PresenceEntry[]>
   onOpenSubCanvas?: (canvasId: string) => void
   onNotify?: (kind: 'success' | 'error', text: string) => void
   onPlannerStateChange?: (state: PlannerGraphState | null) => void
@@ -138,6 +156,8 @@ function PlannerGraphInner({
   boardState = null,
   clearRevision = 0,
   refreshTick = 0,
+  nodeRevisions,
+  presenceByNode,
   onOpenSubCanvas,
   onNotify,
   onPlannerStateChange,
@@ -274,6 +294,63 @@ function PlannerGraphInner({
       cancelled = true
     }
   }, [canvasId, refreshTick])
+
+  // RT-3 (team-canvas-sharing) — node-level realtime invalidation. A
+  // `node.changed` frame bumps the revision for `"${canvasId}:${nodeId}"` in
+  // `nodeRevisions`. We sum the revisions of nodes on *this* canvas into a
+  // signature; when it advances we silently refetch this graph. This is
+  // strictly finer than `refreshTick`: a node change on another teammate's
+  // sub-canvas (a different canvasId) leaves our signature untouched, so we do
+  // not rehydrate for changes the user is not looking at.
+  const nodeRevisionSignature = useMemo(() => {
+    if (!nodeRevisions) return 0
+    const prefix = `${canvasId}:`
+    let sum = 0
+    for (const [key, rev] of Object.entries(nodeRevisions)) {
+      if (key.startsWith(prefix)) sum += rev
+    }
+    return sum
+  }, [nodeRevisions, canvasId])
+  const lastHandledNodeRevisionRef = useRef(nodeRevisionSignature)
+  useEffect(() => {
+    if (nodeRevisionSignature === lastHandledNodeRevisionRef.current) return
+    lastHandledNodeRevisionRef.current = nodeRevisionSignature
+    if (!canvasId) return
+    let cancelled = false
+    fetchPlannerGraphState(canvasId)
+      .then((state) => {
+        if (cancelled) return
+        setPlannerState(state)
+        setProposal(
+          state.proposals.find(
+            (item) => item.status === 'pending' || item.status === 'approved',
+          ) ?? null,
+        )
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.warn(
+          '[PlannerGraph] RT-3 node-change refresh failed:',
+          (err as Error).message,
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canvasId, nodeRevisionSignature])
+
+  // RT-5 (team-canvas-sharing) — emit a presence beacon while the node inspector
+  // is open (the user is "editing" that node). We announce on open and retract
+  // on close / node switch / unmount. Beacons are best-effort and no-op on local
+  // (non-team) canvases or when offline, so we can fire unconditionally.
+  useEffect(() => {
+    if (!canvasId || !nodeModalOpen || !selectedNodeId) return
+    const editingNodeId = selectedNodeId
+    void announceNodePresence(canvasId, editingNodeId, true)
+    return () => {
+      void announceNodePresence(canvasId, editingNodeId, false)
+    }
+  }, [canvasId, nodeModalOpen, selectedNodeId])
 
   const refreshMCPStatus = useCallback(() => {
     setMCPStatusError(null)
@@ -684,6 +761,26 @@ function PlannerGraphInner({
       .finally(() => setAssignBusy(false))
   }, [assignDialogNodeId, canvasId, handleGraphStateChanged, onNotify])
 
+  // AS-3 — reverse-assign (revoke). Execution-layer / direct effect (I-3):
+  // calls the DELETE assignment route, then reloads the graph so the node stops
+  // rendering as a sub-canvas ref chip and becomes owner-editable again. Rejects
+  // on failure so the inspector can keep its confirm panel open with the error.
+  const handleRevokeAssignment = useCallback(
+    async (nodeId: string) => {
+      const result = await revokeNodeAssignment(canvasId, nodeId)
+      loadState()
+      const rebound = result.sessionCountRebound
+      onNotify?.(
+        'success',
+        rebound > 0
+          ? `Assignment revoked; ${rebound} session${rebound === 1 ? '' : 's'} rebound to this node.`
+          : 'Assignment revoked.',
+      )
+      return result
+    },
+    [canvasId, loadState, onNotify],
+  )
+
   // UI-2: when a sub-canvas chip's "Open" button fires, hand off to the
   // existing sub-canvas navigator. Reuses the same callback the kanban-item
   // path uses so we land in the same canvas viewer.
@@ -939,9 +1036,25 @@ function PlannerGraphInner({
     t,
   ])
 
+  // RT-5 (team-canvas-sharing) — overlay live presence onto the freshly built
+  // graph nodes. Done here (not inside buildPlannerGraph) so a short-TTL
+  // presence beacon does not force a full graph rebuild; the overlay is a cheap
+  // per-node `presentEditors` patch. `null`-keyed presence (editing the canvas
+  // at large rather than a specific node) is intentionally not painted on any
+  // card.
+  const graphNodesWithPresence = useMemo(() => {
+    if (!presenceByNode || presenceByNode.size === 0) return graph.nodes
+    return graph.nodes.map((node) => {
+      const editors = presenceByNode.get(node.id)
+      if (!editors || editors.length === 0) return node
+      const names = editors.map((entry) => entry.displayName || entry.userId)
+      return { ...node, data: { ...node.data, presentEditors: names } }
+    })
+  }, [graph.nodes, presenceByNode])
+
   useEffect(() => {
-    setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
-  }, [graph.nodes])
+    setFlowNodes((current) => mergeGraphNodesPreservingPositions(graphNodesWithPresence, current))
+  }, [graphNodesWithPresence])
 
   const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
     setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
@@ -1776,6 +1889,8 @@ function PlannerGraphInner({
           onRerunNode={handleRerunNode}
           onChangeStatus={handleChangeNodeStatus}
           canChangeStatus={variant !== 'template' && (plannerState?.canEditInternals ?? true)}
+          assignment={nodeAssignmentsByNodeId[selectedNode.id] ?? null}
+          onRevokeAssignment={variant === 'template' ? undefined : handleRevokeAssignment}
         />
       )}
       {attachDataSourceNodeId && (

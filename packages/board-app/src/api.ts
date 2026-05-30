@@ -11,6 +11,7 @@ import type {
   ReadinessReport,
   SessionIntakeDiagnostics,
   CanvasList,
+  CanvasInfo,
   CanvasScope,
   SelectedCanvasElementContext,
   SpawnProvider,
@@ -44,6 +45,8 @@ import type {
   ContextSourceKind,
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
+  AssignmentDTO,
+  RevokeAssignmentResult,
 } from './types'
 
 declare global {
@@ -830,6 +833,29 @@ export function fetchPlannerGraphState(canvasId: string): Promise<PlannerGraphSt
   return jsonRequest<PlannerGraphState>(`/api/planner/canvases/${encodeURIComponent(canvasId)}/graph`)
 }
 
+/**
+ * RT-5 (team-canvas-sharing) — announce that the local user started/stopped
+ * editing a node (or the canvas at large when `nodeId` is null). The
+ * BoardServer relays a short-TTL `presence.update` frame; failures are silent
+ * (presence is best-effort and must never block the editor). In planner demo
+ * mode this is a no-op.
+ */
+export async function announceNodePresence(
+  canvasId: string,
+  nodeId: string | null,
+  editing: boolean,
+): Promise<void> {
+  if (PLANNER_DEMO_MODE || !canvasId) return
+  try {
+    await jsonRequest(`/api/planner/canvases/${encodeURIComponent(canvasId)}/presence`, {
+      method: 'POST',
+      body: JSON.stringify({ editing, nodeId: nodeId ?? undefined }),
+    })
+  } catch {
+    // best-effort presence; ignore transport errors (offline etc.)
+  }
+}
+
 export function clearPlannerCanvasContent(canvasId: string): Promise<PlannerGraphState> {
   if (PLANNER_DEMO_MODE) {
     demoNodesByCanvasId[canvasId] = []
@@ -1381,6 +1407,13 @@ export function attachPlannerArtifactToNode(
     reference: string
     status?: string
     payload?: unknown
+    /**
+     * DM-1 (team-canvas-sharing): attribution — the session this artifact was
+     * produced in, if any. Carried so the team timeline can answer "who/which
+     * session produced this at node X" (`meee2_artifacts.session_id`). Integration
+     * artifacts have no originating session and omit this (treated as null).
+     */
+    sessionId?: string | null
   },
 ): Promise<PlannerGraphState> {
   return jsonRequest<PlannerGraphState>(
@@ -1504,6 +1537,114 @@ export function assignPlannerNode(
 /** UI-2: List sub-canvases the current user owns (proxy for `meee2_list_owned_canvases`). */
 export function fetchOwnedCanvases(): Promise<{ canvases: OwnedCanvasSummary[] }> {
   return jsonRequest<{ canvases: OwnedCanvasSummary[] }>('/api/planner/owned-canvases')
+}
+
+/**
+ * API-1 (team-canvas-sharing): map a `meee2_list_owned_canvases` summary row to
+ * the `CanvasInfo` shape the switcher consumes. A summary that carries a
+ * `parentCanvasId` is a sub-canvas the user received through assignment
+ * (`meee2_assign_node`) — tag it `assignmentScope='assigned'` so the UI can
+ * group it under "分派给我"; summaries without a parent are own top-level
+ * canvases (`'owned'`).
+ *
+ * `assigneeDisplayName` is the current user (the assignee of an assigned
+ * sub-canvas is always self); callers that have the resolved profile pass it
+ * in, otherwise it stays `null`.
+ */
+function ownedSummaryToCanvasInfo(
+  summary: OwnedCanvasSummary,
+  selfDisplayName: string | null,
+): CanvasInfo {
+  const isAssigned = !!(summary.parentCanvasId && summary.parentCanvasId.trim())
+  return {
+    id: summary.id,
+    name: summary.name,
+    // Owned/assigned sub-canvases live inside a team tenant.
+    scope: 'team',
+    kind: 'board',
+    isDefault: false,
+    // The summary RPC does not carry a local workspace path; the assigned
+    // sub-canvas is remote-first and gets its path on first open/sync.
+    workspacePath: '',
+    parentCanvasId: summary.parentCanvasId,
+    parentNodeId: summary.parentNodeId,
+    teamId: summary.teamId,
+    // The current user owns every row `meee2_list_owned_canvases` returns.
+    remoteId: summary.id,
+    lastRemoteUpdatedAt: summary.updatedAt,
+    assignmentScope: isAssigned ? 'assigned' : 'owned',
+    assigneeDisplayName: isAssigned ? selfDisplayName : null,
+  }
+}
+
+/**
+ * API-1: fetch the current user's owned canvases as `CanvasInfo[]`. Top-level
+ * owned canvases come back tagged `assignmentScope='owned'`. Mostly useful as
+ * the source for {@link getAssignedCanvases}; the primary switcher list still
+ * comes from {@link fetchCanvases}.
+ */
+export async function getOwnedCanvases(
+  selfDisplayName: string | null = null,
+): Promise<CanvasInfo[]> {
+  const { canvases } = await fetchOwnedCanvases()
+  return canvases.map((summary) => ownedSummaryToCanvasInfo(summary, selfDisplayName))
+}
+
+/**
+ * API-1: fetch the sub-canvases assigned to the current user, as `CanvasInfo[]`
+ * tagged `assignmentScope='assigned'`. These are the rows from
+ * `meee2_list_owned_canvases` that carry a `parentCanvasId` (the parent is
+ * owned by whoever assigned the node). Callers merge these into the switcher
+ * list under the "分派给我" group.
+ */
+export async function getAssignedCanvases(
+  selfDisplayName: string | null = null,
+): Promise<CanvasInfo[]> {
+  const owned = await getOwnedCanvases(selfDisplayName)
+  return owned.filter((canvas) => canvas.assignmentScope === 'assigned')
+}
+
+/**
+ * AS-2 (team-canvas-sharing): list the assignments that originate from a
+ * canvas (i.e. the nodes the canvas owner has handed to teammates). The
+ * desktop proxies meee2-online's
+ * `GET /api/v1/team/{teamId}/canvases/{canvasId}/assignments`; the Swift
+ * `BoardAPI` resolves the team from local settings and maps the server's
+ * snake_case rows to the {@link AssignmentDTO} camelCase shape consumed here.
+ *
+ * By default only *active* assignments are returned; pass
+ * `includeRevoked: true` for the AS-6 history view (revoked rows carry a
+ * non-null `revokedAt`).
+ */
+export function fetchCanvasAssignments(
+  canvasId: string,
+  options: { includeRevoked?: boolean } = {},
+): Promise<{ assignments: AssignmentDTO[] }> {
+  const qs = options.includeRevoked ? '?includeRevoked=1' : ''
+  return jsonRequest<{ assignments: AssignmentDTO[] }>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/assignments${qs}`,
+  )
+}
+
+/**
+ * AS-3 (team-canvas-sharing): revoke a node assignment. This is the reverse of
+ * {@link assignPlannerNode} — execution-layer, direct effect (DESIGN §I-3): the
+ * desktop proxies
+ * `DELETE /api/v1/team/{teamId}/canvases/{canvasId}/assignments/{nodeId}`, which
+ * runs the `meee2_revoke_assignment` RPC server-side (set `revoked_at`, re-bind
+ * the sub-canvas sessions back to the source node, emit
+ * `node_assignment_revoked`). On success the source node becomes editable again
+ * by the parent owner. The caller is expected to reload the graph afterwards so
+ * the node stops rendering as a sub-canvas reference chip.
+ */
+export function revokeNodeAssignment(
+  canvasId: string,
+  nodeId: string,
+): Promise<RevokeAssignmentResult> {
+  return jsonRequest<RevokeAssignmentResult>(
+    `/api/planner/canvases/${encodeURIComponent(canvasId)}/assignments/${encodeURIComponent(nodeId)}`,
+    { method: 'DELETE' },
+  )
 }
 
 export function openKanbanItemSubCanvas(
@@ -2758,15 +2899,78 @@ export async function listChannelMessages(
 // -- WS --------------------------------------------------------------------
 
 /**
+ * RT-3 / RT-5 (team-canvas-sharing) — structured frames the local BoardServer
+ * pushes over `/api/events` in addition to the coarse `state.changed` tick.
+ *
+ * - `state.changed` — the legacy "something changed, refetch" frame. Always
+ *   honored via {@link connectEvents}'s `onChange` for back-compat.
+ * - `node.changed` — RT-3 node-level invalidation: only the named node on the
+ *   named canvas changed, so a consumer can re-render just that node instead of
+ *   rehydrating the whole board.
+ * - `presence.update` — RT-5 presence: a short-TTL signal of who is currently
+ *   editing which node, fanned through from the team realtime channel so the
+ *   board can paint presence dots without opening its own Supabase socket.
+ */
+export type BoardEventFrame =
+  | { type: 'state.changed' }
+  | { type: 'node.changed'; canvasId: string; nodeId: string }
+  | {
+      type: 'presence.update'
+      canvasId: string
+      nodeId: string | null
+      userId: string
+      displayName: string | null
+      /** ISO timestamp this presence beacon was emitted; consumers TTL it. */
+      at: string
+      /** When true the user stopped editing (presence should be dropped). */
+      gone?: boolean
+    }
+
+function parseBoardEventFrame(raw: unknown): BoardEventFrame | null {
+  if (!raw || typeof raw !== 'object') return null
+  const frame = raw as Record<string, unknown>
+  switch (frame.type) {
+    case 'state.changed':
+      return { type: 'state.changed' }
+    case 'node.changed':
+      if (typeof frame.canvasId === 'string' && typeof frame.nodeId === 'string') {
+        return { type: 'node.changed', canvasId: frame.canvasId, nodeId: frame.nodeId }
+      }
+      return null
+    case 'presence.update':
+      if (typeof frame.canvasId === 'string' && typeof frame.userId === 'string') {
+        return {
+          type: 'presence.update',
+          canvasId: frame.canvasId,
+          nodeId: typeof frame.nodeId === 'string' ? frame.nodeId : null,
+          userId: frame.userId,
+          displayName: typeof frame.displayName === 'string' ? frame.displayName : null,
+          at: typeof frame.at === 'string' ? frame.at : new Date().toISOString(),
+          gone: frame.gone === true,
+        }
+      }
+      return null
+    default:
+      return null
+  }
+}
+
+/**
  * Connect to /api/events. The server broadcasts `{type:"state.changed"}` frames
  * (plus one on open). We call `onChange` for each of those. Auto-reconnect
  * with 1.5s backoff.
+ *
+ * `onFrame` (optional) receives every structured frame the server pushes
+ * (including `state.changed`), so finer-grained consumers — RT-3 node
+ * invalidation, RT-5 presence — can react without a full refetch. `onChange`
+ * still fires for `state.changed` so existing callers are unaffected.
  *
  * Returns a disposer.
  */
 export function connectEvents(
   onChange: () => void,
   onStatus: (connected: boolean) => void,
+  onFrame?: (frame: BoardEventFrame) => void,
 ): () => void {
   let ws: WebSocket | null = null
   let reconnectTimer: number | null = null
@@ -2785,7 +2989,10 @@ export function connectEvents(
     ws.onmessage = (e) => {
       try {
         const parsed = JSON.parse(e.data)
-        if (parsed && parsed.type === 'state.changed') {
+        const frame = parseBoardEventFrame(parsed)
+        if (!frame) return
+        if (onFrame) onFrame(frame)
+        if (frame.type === 'state.changed') {
           onChange()
         }
       } catch {

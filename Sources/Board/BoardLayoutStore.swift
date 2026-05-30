@@ -185,6 +185,13 @@ public final class BoardLayoutStore {
         public var conflictRemoteVersion: Int?
         public var conflictRemoteState: BoardJSONValue?
         public var conflictRemoteDeleted: Bool?
+        /// RT-4 (team-canvas-sharing) — set when a same-owner VERSION_CONFLICT was
+        /// auto-resolved by reload-and-reapply (rebase local intent onto the
+        /// newer remote base). Carried to the board-app so it can surface a
+        /// lightweight "reloaded latest" notice once; consumers should treat a
+        /// newer timestamp than they last saw as "show the toast". This is
+        /// transient UI state, not a sync state — it does not gate pushes.
+        public var reloadedNoticeAt: Date?
         public var createdAt: Date
         public var updatedAt: Date
 
@@ -207,6 +214,7 @@ public final class BoardLayoutStore {
             conflictRemoteVersion: Int? = nil,
             conflictRemoteState: BoardJSONValue? = nil,
             conflictRemoteDeleted: Bool? = nil,
+            reloadedNoticeAt: Date? = nil,
             createdAt: Date,
             updatedAt: Date
         ) {
@@ -228,6 +236,7 @@ public final class BoardLayoutStore {
             self.conflictRemoteVersion = conflictRemoteVersion
             self.conflictRemoteState = conflictRemoteState
             self.conflictRemoteDeleted = conflictRemoteDeleted
+            self.reloadedNoticeAt = reloadedNoticeAt
             self.createdAt = createdAt
             self.updatedAt = updatedAt
         }
@@ -964,6 +973,57 @@ public final class BoardLayoutStore {
         }
     }
 
+    /// SS-4 (team-canvas-sharing) — session archive cascade.
+    ///
+    /// When a session is archived it should stop appearing on every team canvas
+    /// it was placed on: drop it from each team-canvas membership and remove its
+    /// card from the layout, marking those canvases dirty so the next sync
+    /// propagates the removal (`visible=false`) to teammates' boards. Personal
+    /// canvases are left untouched — archive is a team-visibility concern; the
+    /// local owner can still restore the session there.
+    ///
+    /// Idempotent: archiving a session not on any team canvas is a no-op. Returns
+    /// the ids of the team canvases that changed (for targeted RT-3 / logging).
+    @discardableResult
+    public func archiveSessionFromTeamCanvases(_ sessionId: String) -> [String] {
+        queue.sync {
+            guard !sessionId.isEmpty else { return [] }
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            var affected: [String] = []
+
+            for canvas in store.canvases where canvas.scope == .team {
+                let hadMembership = store.memberships[canvas.id]?[sessionId] != nil
+                let hadLayout = store.layouts[canvas.id]?.sessions[sessionId] != nil
+                    || (store.layouts[canvas.id]?.dismissedSids.contains(sessionId) ?? false)
+                    || (store.layouts[canvas.id]?.unreadSids.contains(sessionId) ?? false)
+                guard hadMembership || hadLayout else { continue }
+
+                store.memberships[canvas.id]?[sessionId] = nil
+                if var layout = store.layouts[canvas.id] {
+                    layout.sessions.removeValue(forKey: sessionId)
+                    layout.dismissedSids.removeAll { $0 == sessionId }
+                    layout.unreadSids.removeAll { $0 == sessionId }
+                    layout.updatedAt = Date()
+                    store.layouts[canvas.id] = layout
+                }
+                markTeamCanvasDirtyLocked(&store, canvasId: canvas.id)
+                affected.append(canvas.id)
+            }
+
+            guard !affected.isEmpty else { return [] }
+            do {
+                try writeToDiskLocked(store)
+                cached = store
+            } catch {
+                MWarn("[BoardLayoutStore] SS-4 archive cascade persist failed: \(error)")
+                return []
+            }
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return affected
+        }
+    }
+
     public func dirtyTeamCanvasPayloads() -> [[String: Any]] {
         queue.sync {
             var store = cached ?? loadFromDiskLocked()
@@ -1092,12 +1152,36 @@ public final class BoardLayoutStore {
                     store.canvases[idx].conflictRemoteDeleted = nil
                     changed = true
                 } else if status == "conflict" {
-                    store.canvases[idx].syncStatus = "conflict"
-                    store.canvases[idx].conflictRemoteVersion = intValue(result["version"])
-                    if let state = result["state"], let value = BoardJSONValue.fromAny(state) {
-                        store.canvases[idx].conflictRemoteState = value
+                    // RT-4 (team-canvas-sharing) — single-owner reload-and-reapply.
+                    //
+                    // I-1 guarantees a canvas has exactly one editor identity, so
+                    // a VERSION_CONFLICT here can only mean the SAME owner pushed
+                    // from another device and bumped the remote version. There is
+                    // no other user's edit to merge (no 3-way merge, no node
+                    // locks — see DESIGN §6). Resolution: rebase the local pending
+                    // intent onto the newer remote base — adopt the remote
+                    // `version` as our new `baseVersion`, KEEP the local dirty
+                    // `state`, and re-arm the push as `force-pending` so the next
+                    // sync re-applies our intent on top (last writer of the same
+                    // owner wins per field). We surface a lightweight "reloaded
+                    // latest" notice via `reloadedNoticeAt`; no conflict picker.
+                    let remoteVersion = intValue(result["version"])
+                    store.canvases[idx].remoteVersion = remoteVersion ?? store.canvases[idx].remoteVersion
+                    // Re-arm as force-pending: our local state is intact and we
+                    // now carry the remote base version, so the next push will be
+                    // accepted (CAS on the bumped base) instead of re-conflicting.
+                    store.canvases[idx].syncStatus = "force-pending"
+                    store.canvases[idx].dirtySince = store.canvases[idx].dirtySince ?? Date()
+                    // Clear any parked conflict snapshot — we are not surfacing a
+                    // picker for the same-owner case.
+                    store.canvases[idx].conflictRemoteVersion = nil
+                    store.canvases[idx].conflictRemoteState = nil
+                    store.canvases[idx].conflictRemoteDeleted = nil
+                    store.canvases[idx].reloadedNoticeAt = Date()
+                    if let updatedAt = dateValue(result["updated_at"]) {
+                        store.canvases[idx].lastRemoteUpdatedAt = updatedAt
                     }
-                    store.canvases[idx].conflictRemoteDeleted = false
+                    MLog("[BoardLayoutStore] RT-4 reload-and-reapply on conflict for canvas \(store.canvases[idx].id) (remote v\(remoteVersion.map(String.init) ?? "?"))")
                     changed = true
                 }
             }
@@ -1141,10 +1225,19 @@ public final class BoardLayoutStore {
                         continue
                     }
                     if local.dirtySince != nil && remote.version > localVersion {
-                        store.canvases[idx].syncStatus = "conflict"
-                        store.canvases[idx].conflictRemoteVersion = remote.version
-                        store.canvases[idx].conflictRemoteState = BoardJSONValue.fromAny(remote.state)
-                        store.canvases[idx].conflictRemoteDeleted = false
+                        // RT-4 — same-owner reload-and-reapply (see the matching
+                        // branch in `markTeamCanvasSyncResults`). The pull saw a
+                        // newer remote version while we still hold local edits;
+                        // I-1 means this is our own other-device push. Rebase:
+                        // adopt the remote version as the new base, keep local
+                        // state, re-arm as force-pending so the next push wins.
+                        // No conflict picker; surface the "reloaded latest" notice.
+                        store.canvases[idx].remoteVersion = remote.version
+                        store.canvases[idx].syncStatus = "force-pending"
+                        store.canvases[idx].conflictRemoteVersion = nil
+                        store.canvases[idx].conflictRemoteState = nil
+                        store.canvases[idx].conflictRemoteDeleted = nil
+                        store.canvases[idx].reloadedNoticeAt = Date()
                         store.canvases[idx].lastRemoteUpdatedAt = remote.updatedAt
                         changed = true
                     } else if local.dirtySince == nil && remote.version > localVersion {

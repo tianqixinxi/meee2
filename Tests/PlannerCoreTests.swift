@@ -1680,6 +1680,102 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(applied.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
     }
 
+    // PG-8 · applying a governance proposal that nominates a doer writes the
+    // approval chain back as a summary artifact on the affected node, and the
+    // chain records proposed → approved → applied with the deciding actor.
+    func testApplyProposalWritesApprovalChainArtifactOnAffectedNode() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let targetNode = try XCTUnwrap(record.nodes.first)
+
+        let proposal = PlanProposal(
+            id: "proposal-assign-doer",
+            canvasId: "canvas-a",
+            summary: "Assign teammate as doer",
+            changes: [
+                .updateNode(id: targetNode.id, doerId: "member-b", reviewerIds: ["member-c"])
+            ],
+            status: .pending
+        )
+
+        _ = try PlannerBoardBridge.store.saveProposal(
+            proposal,
+            canvas: record.canvas,
+            seedNodes: record.nodes
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // PG-8 · the chain summary artifact is attached to the affected node.
+        let chainArtifact = try XCTUnwrap(applied.artifacts.first {
+            $0.nodeId == targetNode.id
+                && $0.reference == "approval-chain://proposal-assign-doer/\(targetNode.id)"
+        })
+        XCTAssertEqual(chainArtifact.kind, .generic)
+        XCTAssertTrue(chainArtifact.title.contains("Approval chain"))
+
+        // The persisted record carries the full decision chain.
+        let stored = try PlannerBoardBridge.store.record(for: record.canvas, seedNodes: [])
+        let chain = try XCTUnwrap(stored.approvalRecords.first { $0.proposalId == proposal.id })
+        XCTAssertEqual(chain.affectedNodeIds, [targetNode.id])
+        XCTAssertEqual(chain.steps.map(\.decision), [.proposed, .approved, .applied])
+        // The owner who decided is recorded on the approve + apply steps.
+        XCTAssertEqual(chain.steps.first { $0.decision == .approved }?.actorUserId, "owner-a")
+        XCTAssertEqual(chain.steps.first { $0.decision == .applied }?.actorUserId, "owner-a")
+    }
+
+    // PG-8 · a proposal that nominates nobody (pure structural edit) does NOT
+    // emit a chain artifact — the writeback is scoped to member-affecting
+    // governance changes.
+    func testApplyProposalWithoutMemberNominationWritesNoChainArtifact() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let targetNode = try XCTUnwrap(record.nodes.first)
+
+        let proposal = PlanProposal(
+            id: "proposal-title-only",
+            canvasId: "canvas-a",
+            summary: "Rename node",
+            changes: [.updateNode(id: targetNode.id, title: "Renamed")],
+            status: .pending
+        )
+
+        _ = try PlannerBoardBridge.store.saveProposal(
+            proposal,
+            canvas: record.canvas,
+            seedNodes: record.nodes
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        XCTAssertFalse(applied.artifacts.contains {
+            $0.reference.hasPrefix("approval-chain://proposal-title-only")
+        })
+        let stored = try PlannerBoardBridge.store.record(for: record.canvas, seedNodes: [])
+        let chain = try XCTUnwrap(stored.approvalRecords.first { $0.proposalId == proposal.id })
+        XCTAssertTrue(chain.affectedNodeIds.isEmpty)
+    }
+
     func testPlannerStorePersistsStateAcrossInstances() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(

@@ -1889,6 +1889,47 @@ struct PlannerEvent: Codable, Equatable {
     var createdAt: Date
 }
 
+// MARK: - PG-5/PG-8 · Governance approval chain
+//
+// PG-5 (online twin: meee2_planner_approval_queue) models *who must approve* a
+// governance proposal and *what they decided*. The desktop PlannerCore is the
+// authoritative store for proposals applied locally, so it keeps the matching
+// decision chain here. PG-8 writes that chain back onto the affected node(s) as
+// a summary artifact at apply time, so the node history shows the full
+// proposed → approved → applied lineage (and who acted at each step).
+
+/// One decision step in a governance proposal's lifecycle.
+enum PlannerApprovalDecision: String, Codable, Equatable {
+    case proposed
+    case approved
+    case rejected
+    case applied
+    case withdrawn
+}
+
+struct PlannerApprovalStep: Codable, Equatable {
+    var decision: PlannerApprovalDecision
+    /// The acting user (owner/admin) for approve/reject/apply; the proposing
+    /// agent/owner for `proposed`. `nil` when the actor is unknown (legacy /
+    /// solo desktop run with no signed-in user).
+    var actorUserId: String?
+    var note: String?
+    var at: Date
+}
+
+/// The append-only decision chain for one governance proposal, keyed by
+/// `proposalId`. Mirrors the lifecycle column of meee2_planner_approval_queue
+/// (PG-5) on the desktop side.
+struct PlannerApprovalRecord: Codable, Equatable {
+    var proposalId: String
+    var canvasId: String
+    var summary: String
+    /// Node ids the proposal nominates a doer/reviewer/approver for — the
+    /// surfaces PG-8 writes the summary artifact onto.
+    var affectedNodeIds: [String]
+    var steps: [PlannerApprovalStep]
+}
+
 enum PlannerCrossCanvasSuggestionStatus: String, Codable, Equatable {
     case pending
     case accepted
@@ -2990,6 +3031,10 @@ final class PlannerStore {
         /// ENG-3 owns long-term storage in `meee2_session_versions`; this
         /// in-process slice is the source of truth for the running engine.
         var nodeVersions: [NodeVersion]
+        /// PG-5/PG-8 · governance approval chains keyed by proposalId. Append-only
+        /// decision history (proposed → approved/rejected → applied/withdrawn);
+        /// PG-8 reads it at apply time to write the chain back as a node summary.
+        var approvalRecords: [PlannerApprovalRecord]
 
         init(
             canvas: PlanningCanvas,
@@ -3000,7 +3045,8 @@ final class PlannerStore {
             artifactVersions: [PlannerArtifactVersion] = [],
             runs: [WorkflowRun] = [],
             activeRunId: String? = nil,
-            nodeVersions: [NodeVersion] = []
+            nodeVersions: [NodeVersion] = [],
+            approvalRecords: [PlannerApprovalRecord] = []
         ) {
             self.canvas = canvas
             self.nodes = nodes
@@ -3011,10 +3057,11 @@ final class PlannerStore {
             self.runs = runs
             self.activeRunId = activeRunId
             self.nodeVersions = nodeVersions
+            self.approvalRecords = approvalRecords
         }
 
         enum CodingKeys: String, CodingKey {
-            case canvas, nodes, proposals, events, artifacts, artifactVersions, runs, activeRunId, nodeVersions
+            case canvas, nodes, proposals, events, artifacts, artifactVersions, runs, activeRunId, nodeVersions, approvalRecords
         }
 
         init(from decoder: Decoder) throws {
@@ -3030,6 +3077,8 @@ final class PlannerStore {
             self.runs = try container.decodeIfPresent([WorkflowRun].self, forKey: .runs) ?? []
             self.activeRunId = try container.decodeIfPresent(String.self, forKey: .activeRunId)
             self.nodeVersions = try container.decodeIfPresent([NodeVersion].self, forKey: .nodeVersions) ?? []
+            // PG-5/PG-8 back-compat: legacy records have no approval chain.
+            self.approvalRecords = try container.decodeIfPresent([PlannerApprovalRecord].self, forKey: .approvalRecords) ?? []
         }
     }
 
@@ -3211,7 +3260,8 @@ final class PlannerStore {
         _ proposal: PlanProposal,
         canvas: PlanningCanvas,
         seedNodes: [PlanningNode],
-        validationNodes: [PlanningNode]? = nil
+        validationNodes: [PlanningNode]? = nil,
+        actorUserId: String? = nil
     ) throws -> PlanProposal {
         try withLock {
             var record = try record(for: canvas, seedNodes: seedNodes)
@@ -3234,6 +3284,14 @@ final class PlannerStore {
                     summary: normalized.summary
                 ))
             }
+            // PG-5/PG-8 · open the approval chain on first save with a `proposed`
+            // step. Idempotent: re-saving the same proposal does not duplicate it.
+            Self.recordApprovalStep(
+                in: &record,
+                proposal: normalized,
+                decision: .proposed,
+                actorUserId: actorUserId
+            )
             document.canvases[canvas.id] = record
             try save(canvasId: canvas.id)
             return normalized
@@ -3242,7 +3300,9 @@ final class PlannerStore {
 
     func approveProposal(
         proposalId: String,
-        canvasId: String
+        canvasId: String,
+        actorUserId: String? = nil,
+        note: String? = nil
     ) throws -> PlanProposal {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -3259,6 +3319,14 @@ final class PlannerStore {
                 proposalId: proposalId,
                 summary: record.proposals[index].summary
             ))
+            // PG-8 · append the approval decision to the chain.
+            Self.recordApprovalStep(
+                in: &record,
+                proposal: record.proposals[index],
+                decision: .approved,
+                actorUserId: actorUserId,
+                note: note
+            )
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record.proposals[index]
@@ -3267,7 +3335,9 @@ final class PlannerStore {
 
     func rejectProposal(
         proposalId: String,
-        canvasId: String
+        canvasId: String,
+        actorUserId: String? = nil,
+        note: String? = nil
     ) throws -> PlanProposal {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -3284,6 +3354,14 @@ final class PlannerStore {
                 proposalId: proposalId,
                 summary: record.proposals[index].summary
             ))
+            // PG-8 · append the rejection decision to the chain.
+            Self.recordApprovalStep(
+                in: &record,
+                proposal: record.proposals[index],
+                decision: .rejected,
+                actorUserId: actorUserId,
+                note: note
+            )
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record.proposals[index]
@@ -3293,7 +3371,8 @@ final class PlannerStore {
     func applyProposal(
         proposalId: String,
         canvasId: String,
-        service: PlannerCoreService
+        service: PlannerCoreService,
+        actorUserId: String? = nil
     ) throws -> CanvasRecord {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
@@ -3361,6 +3440,16 @@ final class PlannerStore {
                 proposalId: proposalId,
                 summary: proposal.summary
             ))
+            // PG-8 · close the approval chain with an `applied` step, then write
+            // the full chain back as a summary artifact on each affected node so
+            // the node history shows proposed → approved → applied lineage.
+            Self.recordApprovalStep(
+                in: &record,
+                proposal: proposal,
+                decision: .applied,
+                actorUserId: actorUserId
+            )
+            writeApprovalChainArtifacts(into: &record, proposalId: proposalId)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -5242,6 +5331,137 @@ final class PlannerStore {
         }
     }
 
+    // MARK: - PG-5/PG-8 · approval chain helpers
+
+    /// Node ids a governance proposal nominates a doer / reviewer / approver
+    /// for — the surfaces PG-8 writes the chain summary onto. Pure; static so
+    /// `saveProposal` can call it before the record is fully built.
+    static func affectedNodeIds(of proposal: PlanProposal) -> [String] {
+        var ids: [String] = []
+        for change in proposal.changes where change.kind == .updateNode {
+            guard let nodeId = change.nodeId else { continue }
+            let touchesMember = change.doerId != nil
+                || (change.reviewerIds?.isEmpty == false)
+                || (change.approverIds?.isEmpty == false)
+            if touchesMember { ids.append(nodeId) }
+        }
+        // De-dup, preserve order.
+        var seen = Set<String>()
+        return ids.filter { seen.insert($0).inserted }
+    }
+
+    /// Append a decision step to the proposal's approval chain, creating the
+    /// record on first call (PG-5). Idempotent for `proposed`: a repeat save of
+    /// the same proposal does not add a second `proposed` step.
+    static func recordApprovalStep(
+        in record: inout CanvasRecord,
+        proposal: PlanProposal,
+        decision: PlannerApprovalDecision,
+        actorUserId: String? = nil,
+        note: String? = nil,
+        at: Date = Date()
+    ) {
+        let step = PlannerApprovalStep(
+            decision: decision,
+            actorUserId: actorUserId,
+            note: note,
+            at: at
+        )
+        if let index = record.approvalRecords.firstIndex(where: { $0.proposalId == proposal.id }) {
+            if decision == .proposed,
+               record.approvalRecords[index].steps.contains(where: { $0.decision == .proposed }) {
+                return  // already opened — don't duplicate the proposed step
+            }
+            record.approvalRecords[index].steps.append(step)
+        } else {
+            record.approvalRecords.append(PlannerApprovalRecord(
+                proposalId: proposal.id,
+                canvasId: proposal.canvasId,
+                summary: proposal.summary,
+                affectedNodeIds: affectedNodeIds(of: proposal),
+                steps: [step]
+            ))
+        }
+    }
+
+    /// PG-8 · materialize the approval chain for `proposalId` as a summary
+    /// artifact attached to each affected node (a `generic` PlannerArtifact +
+    /// version-chain row), so the node history surfaces the proposed → approved
+    /// → applied lineage and who acted at each step. No-op when the proposal has
+    /// no recorded chain or nominates no member node.
+    func writeApprovalChainArtifacts(into record: inout CanvasRecord, proposalId: String) {
+        guard let chain = record.approvalRecords.first(where: { $0.proposalId == proposalId }) else {
+            return
+        }
+        guard !chain.affectedNodeIds.isEmpty else { return }
+
+        let isoFormatter = ISO8601DateFormatter()
+        let stepValues: [BoardJSONValue] = chain.steps.map { step in
+            var fields: [String: BoardJSONValue] = [
+                "decision": .string(step.decision.rawValue),
+                "at": .string(isoFormatter.string(from: step.at)),
+            ]
+            if let actor = step.actorUserId { fields["actorUserId"] = .string(actor) }
+            if let note = step.note { fields["note"] = .string(note) }
+            return .object(fields)
+        }
+
+        let now = Date()
+        for nodeId in chain.affectedNodeIds {
+            // Only attach to nodes that actually exist on the canvas after apply.
+            guard record.nodes.contains(where: { $0.id == nodeId }) else { continue }
+            let reference = "approval-chain://\(proposalId)/\(nodeId)"
+            let payload = BoardJSONValue.object([
+                "proposalId": .string(proposalId),
+                "summary": .string(chain.summary),
+                "steps": .array(stepValues),
+            ])
+            let artifact = PlannerArtifact(
+                id: "artifact-\(record.canvas.id)-\(nodeId)-approval-\(stableSuffix(proposalId))",
+                canvasId: record.canvas.id,
+                nodeId: nodeId,
+                kind: .generic,
+                title: "Approval chain · \(chain.summary)",
+                reference: reference,
+                status: "attached",
+                createdAt: now,
+                payload: payload,
+                producedBy: .agent
+            )
+            record.artifacts = mergeArtifacts(record.artifacts, [artifact])
+            // Append a version-chain row so repeat applies preserve history,
+            // mirroring the proposal-artifact path in applyProposal.
+            let slotKey = artifactSlotKey(
+                canvasId: artifact.canvasId,
+                nodeId: artifact.nodeId,
+                reference: artifact.reference
+            )
+            let parent = latestVersion(in: record.artifactVersions, slotKey: slotKey)?.versionId
+            record.artifactVersions.append(PlannerArtifactVersion(
+                versionId: "ver-\(artifact.canvasId)-\(artifact.nodeId)-\(stableSuffix("\(reference)-\(artifact.id)-\(now.timeIntervalSince1970)"))",
+                parentVersionId: parent,
+                canvasId: artifact.canvasId,
+                nodeId: artifact.nodeId,
+                artifactId: artifact.id,
+                artifactSlotKey: slotKey,
+                payloadRef: reference,
+                payloadInline: payload,
+                inputSnapshot: nil,
+                displayStrategy: .latest,
+                forceNewVersion: false,
+                submittedBy: nil,
+                submittedByKind: .system,
+                metadata: .object([
+                    "title": .string(artifact.title),
+                    "kind": .string(artifact.kind.rawValue),
+                    "status": .string(artifact.status),
+                    "source": .string("approvalChain"),
+                ]),
+                createdAt: now
+            ))
+        }
+    }
+
     private func serviceArtifactRefs(node: PlanningNode) -> [String] {
         var refs = node.artifactRefs ?? []
         // See `artifactRefs(for:)` — synthetic handle only when the done node
@@ -6227,7 +6447,12 @@ enum PlannerBoardBridge {
     ) throws -> PlanProposal {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.approveProposal, access: state.access)
-        return try store.approveProposal(proposalId: proposalId, canvasId: canvasId)
+        // PG-8 · record WHO approved (the gated actor) into the approval chain.
+        return try store.approveProposal(
+            proposalId: proposalId,
+            canvasId: canvasId,
+            actorUserId: state.access.actorId
+        )
     }
 
     static func rejectProposal(
@@ -6238,7 +6463,12 @@ enum PlannerBoardBridge {
     ) throws -> PlanProposal {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.rejectProposal, access: state.access)
-        return try store.rejectProposal(proposalId: proposalId, canvasId: canvasId)
+        // PG-8 · record WHO rejected into the approval chain.
+        return try store.rejectProposal(
+            proposalId: proposalId,
+            canvasId: canvasId,
+            actorUserId: state.access.actorId
+        )
     }
 
     static func applyProposal(
@@ -6249,7 +6479,13 @@ enum PlannerBoardBridge {
     ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.applyProposal, access: state.access)
-        let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
+        // PG-8 · record WHO applied + write the chain back as a node summary.
+        let record = try store.applyProposal(
+            proposalId: proposalId,
+            canvasId: canvasId,
+            service: service,
+            actorUserId: state.access.actorId
+        )
         guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
             throw PlannerCoreError.proposalNotFound(proposalId)
         }

@@ -126,6 +126,14 @@ export interface PlannerNodeData extends Record<string, unknown> {
   /** UI-2: false when ENG-4 RLS would refuse internal edits. */
   canEditInternals?: boolean
   monitorItem?: CanvasNodeMonitorItem | null
+  /**
+   * RT-5 (team-canvas-sharing) — display names of teammates currently editing
+   * this node (short-TTL presence, self excluded). Injected by PlannerGraph
+   * after graph construction from {@link useCanvasRealtime}'s `presenceByNode`.
+   * Empty/absent ⇒ no one else editing; the card renders a presence dot only
+   * when non-empty.
+   */
+  presentEditors?: string[]
 }
 
 export type PlannerGraphNode = Node<PlannerNodeData, 'plannerNode'>

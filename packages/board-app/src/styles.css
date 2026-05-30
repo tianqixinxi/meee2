@@ -5169,6 +5169,69 @@ html.board-empty-omni .canvas-toolbar__context {
   font-weight: 560;
 }
 
+/* UI-7 (team-canvas-sharing) — sub-canvas breadcrumb. Sits inline in the
+   switcher row; only renders when the active canvas has a parent. */
+.canvas-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  overflow: hidden;
+}
+
+.canvas-breadcrumb__icon {
+  flex: none;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.canvas-breadcrumb__segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.canvas-breadcrumb__sep {
+  flex: none;
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+.canvas-breadcrumb__crumb {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  padding: 1px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button.canvas-breadcrumb__crumb:hover {
+  color: var(--text);
+  background: var(--surface-hover, rgba(255, 255, 255, 0.06));
+}
+
+.canvas-breadcrumb__crumb.is-current {
+  color: var(--text);
+  font-weight: 560;
+  cursor: default;
+}
+
+.canvas-breadcrumb__crumb.is-unresolved {
+  color: var(--text-dim);
+  opacity: 0.6;
+  cursor: default;
+}
+
 .canvas-toolbar__badge {
   height: 18px;
   display: inline-flex;
@@ -5462,6 +5525,24 @@ html.board-empty-omni .canvas-toolbar__panel {
   gap: 2px;
   max-height: min(260px, calc(100vh - 286px));
   overflow: auto;
+}
+
+/* API-2 (team-canvas-sharing): "分派给我" / "我的画布" group headers in the
+ * canvas switcher. Non-interactive label rows separating owned vs assigned
+ * sub-canvases. */
+.canvas-toolbar__group-header {
+  padding: 8px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  user-select: none;
+}
+
+.canvas-toolbar__group-header:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.15));
 }
 
 .canvas-toolbar__item {

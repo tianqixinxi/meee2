@@ -24,6 +24,8 @@ import { useI18n } from './lib/i18n'
 import { resolveMonitorItemOpenTarget } from './lib/workspaceNavigation'
 import { useBoardState } from './useBoardState'
 import { useCanvasMonitor } from './lib/canvasMonitor'
+import { useOwnedCanvases } from './hooks/useOwnedCanvases'
+import { useCanvasRealtime } from './hooks/useCanvasRealtime'
 import type {
   CanvasList,
   CanvasKind,
@@ -184,6 +186,7 @@ function canvasListSignature(list: CanvasList): string {
         dirtySince: canvas.dirtySince ?? null,
         lastSyncedAt: canvas.lastSyncedAt ?? null,
         lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt ?? null,
+        reloadedNoticeAt: canvas.reloadedNoticeAt ?? null,
       })),
     memberships: [...list.memberships]
       .sort((a, b) => `${a.canvasId}:${a.sessionId}`.localeCompare(`${b.canvasId}:${b.sessionId}`))
@@ -403,6 +406,33 @@ export default function App() {
   const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
   const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
+  // API-1 (team-canvas-sharing) — pull the sub-canvases assigned to the current
+  // user (owned sub-canvases rooted under someone else's parent canvas) and
+  // merge them into the switcher list under the "分派给我" group. Only fetch
+  // when connected to an online team; a purely local board has no assignments.
+  const { assignedCanvases } = useOwnedCanvases({
+    enabled: userProfile?.connected ?? false,
+    selfDisplayName: userProfile?.displayName ?? null,
+    // Match the desktop owned-canvas sync cadence (Meee2OnlinePusher: 60s).
+    pollIntervalMs: 60_000,
+  })
+  // Merge assigned sub-canvases into the workspace list, deduped by id so a
+  // sub-canvas that already arrived through the local `/api/canvases` list
+  // (e.g. after desktop sync) is not shown twice. Local rows win.
+  const workspaceCanvasesWithAssigned = useMemo(() => {
+    if (assignedCanvases.length === 0) return workspaceCanvases
+    const known = new Set(workspaceCanvases.map((canvas) => canvas.id))
+    const extra = assignedCanvases.filter((canvas) => !known.has(canvas.id))
+    return extra.length === 0 ? workspaceCanvases : [...workspaceCanvases, ...extra]
+  }, [workspaceCanvases, assignedCanvases])
+  // RT-3 + RT-5 (team-canvas-sharing) — node-level invalidation + presence over
+  // the local BoardServer `/api/events` socket. Scoped to the active canvas;
+  // PlannerGraph reads `nodeRevisions` (refetch only this canvas on a node
+  // change) and `presenceByNode` (paint who-is-editing dots).
+  const { nodeRevisions, presenceByNode } = useCanvasRealtime({
+    activeCanvasId: activeWorkspaceCanvasId,
+    selfUserId: userProfile?.userId ?? null,
+  })
   // Session unread dots still drive the compact rail badges.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
@@ -493,6 +523,28 @@ export default function App() {
   }, [])
 
   const toastCtx = useMemo(() => ({ push: pushToast }), [pushToast])
+
+  // RT-4 (team-canvas-sharing) — one-shot "reloaded latest" notice. The desktop
+  // auto-resolves a same-owner VERSION_CONFLICT by reload-and-reapply and stamps
+  // `reloadedNoticeAt` on the canvas (no merge / no picker; DESIGN §6). We track
+  // the last value we toasted per canvas so the notice fires exactly once per
+  // reload, not on every poll that re-reads the same timestamp.
+  const reloadNoticeSeenRef = useRef<Record<string, string>>({})
+  useEffect(() => {
+    if (!canvasList) return
+    for (const canvas of canvasList.canvases) {
+      const ts = canvas.reloadedNoticeAt
+      if (!ts) continue
+      if (reloadNoticeSeenRef.current[canvas.id] === ts) continue
+      const firstObservation = reloadNoticeSeenRef.current[canvas.id] === undefined
+      reloadNoticeSeenRef.current[canvas.id] = ts
+      // Skip the very first observation per canvas (e.g. a stale timestamp
+      // present at app start) — only toast on a genuine advance during the
+      // session so we don't replay an old reload on cold load.
+      if (firstObservation) continue
+      pushToast('info', t('toast.canvasReloaded', { name: canvas.name }))
+    }
+  }, [canvasList, pushToast, t])
 
   const refreshAgentRuntimeStatus = useCallback((showModal: boolean) => {
     fetchMeee2AgentRuntimeStatus()
@@ -961,6 +1013,8 @@ export default function App() {
                 boardState={boardState.state}
                 clearRevision={plannerClearRevision}
                 refreshTick={activeCanvasRefreshTick}
+                nodeRevisions={nodeRevisions}
+                presenceByNode={presenceByNode}
                 onPlannerStateChange={setActivePlannerState}
                 onOpenSubCanvas={handleSetActiveCanvas}
                 onNotify={pushToast}
@@ -1024,7 +1078,7 @@ export default function App() {
           ) : null}
           {workspaceMode === 'planner' && (
             <CanvasToolbar
-              canvases={workspaceCanvases}
+              canvases={workspaceCanvasesWithAssigned}
               activeCanvasId={activeWorkspaceCanvasId}
               canGoBack={canvasHistoryIndex > 0}
               canGoForward={canvasHistoryIndex >= 0 && canvasHistoryIndex < canvasHistory.length - 1}

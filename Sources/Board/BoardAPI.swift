@@ -2448,6 +2448,11 @@ enum BoardAPI {
             }
             routePlannerOutputMessages(result.routes)
             materializeAutoDispatchedSessions(canvasId: canvasId, result: &result)
+            // RT-3 (team-canvas-sharing) — this submit mutated exactly one node,
+            // so emit the fine-grained `node.changed` frame (board-app refetches
+            // only this canvas / re-renders only this node) in addition to the
+            // coarse `state.changed` tick for legacy consumers.
+            BoardServer.shared.broadcastNodeChanged(canvasId: canvasId, nodeId: nodeId)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -2455,6 +2460,40 @@ enum BoardAPI {
         } catch {
             return errorResponse("planner_error", error.localizedDescription, status: 400)
         }
+    }
+
+    /// RT-5 (team-canvas-sharing) — presence beacon. The board-app POSTs when the
+    /// local user starts (`editing: true`) or stops (`editing: false`) editing a
+    /// node on a shared canvas. We relay a short-TTL `presence.update` frame over
+    /// /api/events so any local board-app surface paints the presence dot.
+    ///
+    /// Cross-member fan-out (showing teammate A's beacon on teammate B's board)
+    /// requires a meee2-online presence channel/RPC, which is owned by the
+    /// backend/web workstreams and intentionally NOT added here (Phase-3 desktop
+    /// makes no online edits). This route is the desktop seam: once that channel
+    /// exists, the pusher relays remote beacons through the same frame.
+    static func announcePlannerPresence(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let json = parseJSONBody(req) ?? [:]
+        let editing = (json["editing"] as? Bool) ?? true
+        let nodeId = (json["nodeId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaults = UserDefaults.standard
+        guard let userId = PlannerPermission.currentActorId(), !userId.isEmpty else {
+            // No connected identity ⇒ nothing meaningful to broadcast; succeed
+            // quietly so the board-app's optimistic beacon is a no-op offline.
+            return jsonResponse(OkEnvelope(ok: true))
+        }
+        let displayName = defaults.string(forKey: "meee2UserName")
+        BoardServer.shared.broadcastPresenceUpdate(
+            canvasId: canvasId,
+            nodeId: (nodeId?.isEmpty == false) ? nodeId : nil,
+            userId: userId,
+            displayName: (displayName?.isEmpty == false) ? displayName : nil,
+            gone: !editing
+        )
+        return jsonResponse(OkEnvelope(ok: true))
     }
 
     static func getPlannerArtifactContent(_ req: HttpRequest) -> HttpResponse {
@@ -2552,12 +2591,27 @@ enum BoardAPI {
     // 3) GET  /api/cloud/artifact-versions/recent
     //      → meee2-online `/api/v1/artifact-versions?…`
 
-    /// UI-2 · F1.2 — proxy `assignPlannerNode` from the board-app to the
-    /// `meee2_assign_node` RPC. The web client posts a JSON body with
-    /// `assigneeUserId`, optional `subCanvasName`, and `acceptPrivateUpgrade`;
-    /// we forward those as RPC params and stream the JSON response through.
-    /// Response shape matches `AssignPlannerNodeResult` in the board-app
-    /// `types.ts`.
+    /// UI-2 · F1.2 / AS-1 — proxy `assignPlannerNode` from the board-app up to
+    /// meee2-online's AS-1 route
+    /// `POST /api/v1/team/{teamId}/canvases/{canvasId}/assign-node`.
+    ///
+    /// We deliberately delegate to the AS-1 HTTP route rather than calling the
+    /// `meee2_assign_node` RPC directly (DESIGN §0 "the uniform audited entry
+    /// point", and "do not fork the RPC"). Two reasons this proxy MUST go
+    /// through AS-1, not `OnlineProxy.callRPC`:
+    ///   1. `meee2_assign_node` is SECURITY DEFINER and authorizes on
+    ///      `auth.uid()`. `OnlineProxy.callRPC` sends only the supabase key as
+    ///      bearer (no per-user JWT), so a direct RPC call resolves
+    ///      `auth.uid() = NULL` and is rejected. The AS-1 server route resolves
+    ///      the caller via its own bearer + `createUserScopedClient` and also
+    ///      fans out `canvas.changed` / `canvas.event(node_assigned)`.
+    ///   2. Keeps desktop and web on a single execution-layer path (I-3/I-4).
+    ///
+    /// Body in (board-app): `{ assigneeUserId, subCanvasName?, acceptPrivateUpgrade? }`.
+    /// Body forwarded (AS-1): `{ nodeId, targetUserId, subCanvasName? }`.
+    /// `acceptPrivateUpgrade` has no analogue in the current RPC and is dropped.
+    /// Response (AS-1): `{ subCanvasId, assignmentId }` — streamed through
+    /// unchanged.
     static func proxyAssignPlannerNode(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -2577,17 +2631,20 @@ enum BoardAPI {
         guard let assigneeUserId = body.assigneeUserId, !assigneeUserId.isEmpty else {
             return errorResponse("bad_request", "assigneeUserId is required", status: 400)
         }
-        var payload: [String: Any] = [
-            "p_team_id": settings.teamId,
-            "p_canvas_id": canvasId,
-            "p_node_id": nodeId,
-            "p_assignee_user_id": assigneeUserId,
-            "p_accept_private_upgrade": body.acceptPrivateUpgrade ?? false
+        var forwardBody: [String: Any] = [
+            "nodeId": nodeId,
+            "targetUserId": assigneeUserId
         ]
         if let name = body.subCanvasName, !name.isEmpty {
-            payload["p_sub_canvas_name"] = name
+            forwardBody["subCanvasName"] = name
         }
-        switch OnlineProxy.callRPC(name: "meee2_assign_node", payload: payload, settings: settings) {
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: forwardBody) else {
+            return errorResponse("bad_request", "could not encode assign body", status: 400)
+        }
+        let teamSeg = settings.teamId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? settings.teamId
+        let canvasSeg = canvasId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? canvasId
+        let path = "/api/v1/team/\(teamSeg)/canvases/\(canvasSeg)/assign-node"
+        switch OnlineProxy.callOnlineAPI(method: "POST", path: path, body: bodyData, settings: settings) {
         case .success(let data):
             return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
                 try? writer.write(data)
@@ -2597,7 +2654,16 @@ enum BoardAPI {
         }
     }
 
-    /// UI-2 · proxy `fetchOwnedCanvases` to `meee2_list_owned_canvases`.
+    /// UI-2 / API-1 · proxy `fetchOwnedCanvases` to `meee2_list_owned_canvases`.
+    ///
+    /// The RPC returns snake_case columns (`parent_canvas_id`, `team_id`,
+    /// `frozen_io_contract`, `assignment_id`, `updated_at`), but the board-app
+    /// `OwnedCanvasSummary` consumes camelCase and `jsonRequest` does no key
+    /// conversion. Without remapping, `parentCanvasId`/`teamId`/etc. arrive
+    /// `undefined`, so `ownedSummaryToCanvasInfo`'s `isAssigned` check
+    /// (`!!summary.parentCanvasId`) never fires and no sub-canvas is ever tagged
+    /// `assignmentScope='assigned'` — silently breaking API-1's "分派给我"
+    /// grouping. We map each row to the camelCase summary shape here.
     static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
         guard !settings.teamId.isEmpty else {
@@ -2609,16 +2675,109 @@ enum BoardAPI {
         ]
         switch OnlineProxy.callRPC(name: "meee2_list_owned_canvases", payload: payload, settings: settings) {
         case .success(let data):
-            // RPC returns an array; wrap in `{ canvases: [...] }` to match the
+            // RPC returns an array of snake_case rows; map to camelCase
+            // `OwnedCanvasSummary` and wrap in `{ canvases: [...] }` to match the
             // board-app `fetchOwnedCanvases` envelope.
-            if let arr = try? JSONSerialization.jsonObject(with: data) {
-                let envelope: [String: Any] = ["canvases": arr]
-                if let wrapped = try? JSONSerialization.data(withJSONObject: envelope) {
-                    return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
-                        try? writer.write(wrapped)
-                    }
+            let rows = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] ?? []
+            // Map a snake_case column to its camelCase summary field, defaulting a
+            // missing/null column to JSON null so the field is always present.
+            func value(_ row: [String: Any], _ column: String) -> Any {
+                let v = row[column]
+                if v == nil || v is NSNull { return NSNull() }
+                return v!
+            }
+            let canvases: [[String: Any]] = rows.map { row in
+                [
+                    "id": row["id"] as? String ?? "",
+                    "teamId": value(row, "team_id"),
+                    "name": row["name"] as? String ?? "",
+                    "parentCanvasId": value(row, "parent_canvas_id"),
+                    "parentNodeId": value(row, "parent_node_id"),
+                    "frozenIOContract": value(row, "frozen_io_contract"),
+                    // Carry the active assignment id through so the client can link
+                    // an assigned sub-canvas back to its `meee2_node_assignments`
+                    // row (API-2 / AssignmentDTO). Owned top-level canvases have no
+                    // assignment, so this is null for them.
+                    "assignmentId": value(row, "assignment_id"),
+                    "updatedAt": value(row, "updated_at")
+                ]
+            }
+            let envelope: [String: Any] = ["canvases": canvases]
+            if let wrapped = try? JSONSerialization.data(withJSONObject: envelope) {
+                return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                    try? writer.write(wrapped)
                 }
             }
+            // Fallback: pass the raw array through if re-encoding somehow fails.
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// AS-2 · proxy `fetchCanvasAssignments` to meee2-online's
+    /// `GET /api/v1/team/{teamId}/canvases/{canvasId}/assignments`.
+    ///
+    /// Like {@link proxyAssignPlannerNode}, this goes through the AS-2 HTTP
+    /// route (not a direct RPC) so the per-user JWT authorizes the read and the
+    /// server resolves assignee profiles. The board-app `fetchCanvasAssignments`
+    /// consumes the `{ assignments: AssignmentDTO[] }` envelope the route emits,
+    /// so we pass the response through unchanged. `?includeRevoked=1` is
+    /// forwarded for the AS-6 history view.
+    static func proxyListCanvasAssignments(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let qp = Dictionary(uniqueKeysWithValues: req.queryParams.map { ($0.0, $0.1) })
+        let includeRevoked = qp["includeRevoked"] == "1" || qp["includeRevoked"] == "true"
+        let teamSeg = settings.teamId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? settings.teamId
+        let canvasSeg = canvasId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? canvasId
+        let path = "/api/v1/team/\(teamSeg)/canvases/\(canvasSeg)/assignments"
+        // `callOnlineAPI` builds the URL via `appendingPathComponent` (which
+        // would percent-escape a `?` embedded in `path`), so pass the filter as
+        // a structured query item instead of concatenating onto the path.
+        let query: [URLQueryItem]? = includeRevoked ? [URLQueryItem(name: "includeRevoked", value: "1")] : nil
+        switch OnlineProxy.callOnlineAPI(method: "GET", path: path, query: query, body: nil, settings: settings) {
+        case .success(let data):
+            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
+                try? writer.write(data)
+            }
+        case .failure(let err):
+            return mapOnlineProxyError(err)
+        }
+    }
+
+    /// AS-3 · proxy `revokeNodeAssignment` to meee2-online's
+    /// `DELETE /api/v1/team/{teamId}/canvases/{canvasId}/assignments/{nodeId}`.
+    ///
+    /// Execution-layer reverse-assign (DESIGN §I-3) — the server runs
+    /// `meee2_revoke_assignment` (set `revoked_at`, re-bind sub-canvas sessions
+    /// back to the source node, emit `node_assignment_revoked`) and fans out
+    /// `canvas.changed` / `canvas.event`. Goes through AS-3, not a direct RPC,
+    /// for the same per-user-JWT + audit reasons as assign. The board-app
+    /// `revokeNodeAssignment` consumes the `{ revoked, assignmentId,
+    /// sessionCountRebound }` body unchanged.
+    static func proxyRevokeNodeAssignment(_ req: HttpRequest) -> HttpResponse {
+        guard let canvasId = req.params[":id"], !canvasId.isEmpty,
+              let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
+            return errorResponse("bad_request", "missing canvas id or node id", status: 400)
+        }
+        let settings = OnlineProxy.loadSettings()
+        guard !settings.teamId.isEmpty else {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
+        }
+        let teamSeg = settings.teamId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? settings.teamId
+        let canvasSeg = canvasId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? canvasId
+        let nodeSeg = nodeId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? nodeId
+        let path = "/api/v1/team/\(teamSeg)/canvases/\(canvasSeg)/assignments/\(nodeSeg)"
+        switch OnlineProxy.callOnlineAPI(method: "DELETE", path: path, body: nil, settings: settings) {
+        case .success(let data):
             return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
                 try? writer.write(data)
             }
@@ -2765,6 +2924,8 @@ enum BoardAPI {
                 actorUserId: actor
             )
             routePlannerOutputMessages(result.routes)
+            // RT-3 (team-canvas-sharing) — rerun mutated exactly this node.
+            BoardServer.shared.broadcastNodeChanged(canvasId: canvasId, nodeId: nodeId)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(result, status: 201, reason: "Created")
         } catch let err as PlannerCoreError {
@@ -4057,6 +4218,16 @@ enum BoardAPI {
         }
         let resolvedId = resolveSessionControlId(sid) ?? sid
         let record = SessionControlStore.shared.setState(sessionId: resolvedId, state: state)
+        // SS-4 (team-canvas-sharing) — archive cascade. An archived session is
+        // pulled off every team canvas it was on so it disappears from
+        // teammates' boards once the change syncs; the cascade marks those
+        // canvases dirty and the pusher's next tick propagates the removal.
+        if state == .archived {
+            let affected = BoardLayoutStore.shared.archiveSessionFromTeamCanvases(resolvedId)
+            if !affected.isEmpty {
+                Meee2OnlinePusher.shared.requestImmediateCanvasSync()
+            }
+        }
         BoardServer.shared.broadcastStateChanged()
         struct SessionControlEnvelope: Encodable {
             let ok: Bool
@@ -5454,7 +5625,8 @@ enum BoardAPI {
                 syncStatus: canvas.syncStatus,
                 dirtySince: canvas.dirtySince.map(BoardDTOBuilder.iso),
                 lastSyncedAt: canvas.lastSyncedAt.map(BoardDTOBuilder.iso),
-                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
+                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso),
+                reloadedNoticeAt: canvas.reloadedNoticeAt.map(BoardDTOBuilder.iso)
             )
         }
         let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }

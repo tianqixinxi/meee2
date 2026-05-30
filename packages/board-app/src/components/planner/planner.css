@@ -1890,6 +1890,38 @@
   min-width: 0;
 }
 
+/* RT-5 (team-canvas-sharing) — live presence dot: a teammate is editing this
+   node right now (short-TTL). Sits left of the owner chip in the header. */
+.planner-node__presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 10px;
+  line-height: 1;
+  color: #16a34a;
+  background: rgba(22, 163, 74, 0.14);
+  border: 1px solid rgba(22, 163, 74, 0.3);
+  animation: planner-node-presence-pulse 2s ease-in-out infinite;
+}
+
+.planner-node__presence-count {
+  font-style: normal;
+  font-weight: 600;
+}
+
+@keyframes planner-node-presence-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
 /* nodeKind 视觉分辨 (2026-05-28) — 卡片头部左上小 tag,跟 planner-node--kind-*
    的边框 / 底色微差互相加强。每种 kind 一个低饱和度色调,不抢戏。 */
 .planner-node__kind-tag {

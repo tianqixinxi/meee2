@@ -408,6 +408,10 @@ struct CanvasInfoDTO: Encodable {
     let dirtySince: String?
     let lastSyncedAt: String?
     let lastRemoteUpdatedAt: String?
+    /// RT-4 — ISO timestamp of the last same-owner reload-and-reapply, so the
+    /// board-app can surface a one-shot "reloaded latest" notice. Null when no
+    /// auto-reload has happened.
+    let reloadedNoticeAt: String?
 }
 
 struct CanvasSessionMembershipDTO: Encodable {

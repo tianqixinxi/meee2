@@ -11,6 +11,7 @@ import {
   Settings2,
   Signpost,
   Sparkles,
+  Undo2,
   UserRound,
   X,
 } from 'lucide-react'
@@ -22,6 +23,7 @@ import {
 import { loadSpawnProvider } from '../../preferences'
 import type { TeamMember } from '../../api'
 import type {
+  NodeAssignment,
   NodeContractExternalInput,
   NodeStateSnapshot,
   PlanProposal,
@@ -81,6 +83,20 @@ interface Props {
   onRerunNode?: (nodeId: string, reference?: string) => void
   onChangeStatus?: (nodeId: string, status: PlanningNodeStatus) => void
   canChangeStatus?: boolean
+  /**
+   * AS-3 (team-canvas-sharing) — the active assignment handed out for this
+   * node, if any. When present the inspector shows a "撤回指派" control instead
+   * of treating the node as locally editable; revoking returns the node to the
+   * parent owner. `null`/absent ⇒ the node is not assigned.
+   */
+  assignment?: NodeAssignment | null
+  /**
+   * AS-3 — execute the reverse-assign (DELETE assignment). Resolves once the
+   * server has revoked + re-bound sessions; the caller reloads the graph so the
+   * node stops rendering as a sub-canvas reference chip. Absent ⇒ revoke is not
+   * available (e.g. template variant or non-owner).
+   */
+  onRevokeAssignment?: (nodeId: string) => Promise<unknown>
 }
 
 export function NodeInspectorModal({
@@ -109,10 +125,15 @@ export function NodeInspectorModal({
   onRerunNode,
   onChangeStatus,
   canChangeStatus = false,
+  assignment = null,
+  onRevokeAssignment,
 }: Props) {
   const [assignOpen, setAssignOpen] = useState(false)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [replaceConfirmOpen, setReplaceConfirmOpen] = useState(false)
+  // AS-3 — reverse-assign confirm + in-flight state, scoped to this node.
+  const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false)
+  const [revokeBusy, setRevokeBusy] = useState(false)
   // UI-simplification chunk G — Schedule / Replace session / Assign owner
   // 都属于 advanced action,默认折叠;首次打开 inspector 只显示「Expand sub-canvas」。
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -215,6 +236,26 @@ export function NodeInspectorModal({
       .catch((err) => {
         setActionBusy(false)
         setActionError((err as Error).message || '操作失败')
+      })
+  }
+
+  // AS-3 — revoke the active assignment on this node (reverse-assign). On
+  // success we close the inspector; PlannerGraph reloads the graph so the node
+  // stops rendering as a sub-canvas ref chip and becomes owner-editable again.
+  const canRevokeAssignment = canAssignOwner && !!assignment && !!onRevokeAssignment && !isTemplate
+  const runRevokeAssignment = () => {
+    if (!onRevokeAssignment) return
+    setRevokeBusy(true)
+    setActionError(null)
+    onRevokeAssignment(node.id)
+      .then(() => {
+        setRevokeBusy(false)
+        setRevokeConfirmOpen(false)
+        onClose()
+      })
+      .catch((err) => {
+        setRevokeBusy(false)
+        setActionError((err as Error).message || '撤回指派失败')
       })
   }
 
@@ -689,6 +730,20 @@ export function NodeInspectorModal({
                   <UserRound size={12} aria-hidden /> 指派
                 </button>
               )}
+              {canRevokeAssignment && (
+                <button
+                  type="button"
+                  className="planner-node-actions__danger"
+                  disabled={actionBusy || revokeBusy}
+                  title="撤回指派,把这个子画板收回到本画板(对方将失去编辑权)"
+                  onClick={() => {
+                    setActionError(null)
+                    setRevokeConfirmOpen((value) => !value)
+                  }}
+                >
+                  <Undo2 size={12} aria-hidden /> 撤回指派
+                </button>
+              )}
               <button
                 type="button"
                 disabled={actionBusy || !node.sessionId}
@@ -800,6 +855,34 @@ export function NodeInspectorModal({
                     onClick={() => saveSchedule(true)}
                   >
                     {scheduleEnabled ? '保存定时' : '打开定时'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {canRevokeAssignment && revokeConfirmOpen && assignment && (
+              <div className="planner-node-actions__panel planner-node-actions__panel--danger">
+                <div className="planner-node-actions__warning">
+                  <AlertTriangle size={14} aria-hidden />
+                  <div>
+                    <strong>撤回指派?</strong>
+                    <p>
+                      子画板「{assignment.subCanvasName}」会收回到本画板,
+                      {assignment.assigneeUserId ? '对方' : '受指派人'}将失去对它的编辑权,
+                      迁过去的进展会重新绑回这个节点。这一步可逆 — 之后还能再指派。
+                    </p>
+                  </div>
+                </div>
+                <div className="planner-node-modal__input-editor-actions">
+                  <button type="button" disabled={revokeBusy} onClick={() => setRevokeConfirmOpen(false)}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="primary danger"
+                    disabled={revokeBusy}
+                    onClick={runRevokeAssignment}
+                  >
+                    {revokeBusy ? '撤回中…' : '撤回指派'}
                   </button>
                 </div>
               </div>

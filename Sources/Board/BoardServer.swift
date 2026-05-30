@@ -246,10 +246,54 @@ public final class BoardServer {
 
     /// 广播 state.changed 事件到所有 WS 客户端
     public func broadcastStateChanged() {
-        let payload: [String: Any] = [
+        broadcastFrame([
             "type": "state.changed",
             "timestamp": BoardDTOBuilder.iso(Date())
+        ])
+    }
+
+    /// RT-3 (team-canvas-sharing) — node-level realtime invalidation. Emits a
+    /// fine-grained `node.changed` frame so the board-app can refetch only the
+    /// affected canvas (and re-render just that node) instead of treating every
+    /// change as a full-board `state.changed`. Callers that know exactly which
+    /// node mutated (node-output submit, proposal apply, remote node diff) should
+    /// emit this in addition to / instead of `state.changed`.
+    public func broadcastNodeChanged(canvasId: String, nodeId: String) {
+        broadcastFrame([
+            "type": "node.changed",
+            "canvasId": canvasId,
+            "nodeId": nodeId,
+            "timestamp": BoardDTOBuilder.iso(Date())
+        ])
+    }
+
+    /// RT-5 (team-canvas-sharing) — presence relay. Emits a short-TTL
+    /// `presence.update` frame describing who is currently editing which node so
+    /// the board-app can paint presence dots without opening its own Supabase
+    /// socket (the BoardServer is the single fan-in point). `nodeId == nil`
+    /// means the user is editing the canvas at large. `gone == true` retracts a
+    /// previously announced presence.
+    public func broadcastPresenceUpdate(
+        canvasId: String,
+        nodeId: String?,
+        userId: String,
+        displayName: String?,
+        gone: Bool = false
+    ) {
+        var payload: [String: Any] = [
+            "type": "presence.update",
+            "canvasId": canvasId,
+            "userId": userId,
+            "at": BoardDTOBuilder.iso(Date()),
+            "gone": gone
         ]
+        payload["nodeId"] = nodeId ?? NSNull()
+        payload["displayName"] = displayName ?? NSNull()
+        broadcastFrame(payload)
+    }
+
+    /// 序列化并广播一个 JSON frame 到所有 WS 客户端。
+    private func broadcastFrame(_ payload: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8) else {
             return
@@ -620,11 +664,20 @@ public final class BoardServer {
         // with force_new_version: true. Body: { reference?: string } (optional;
         // defaults to the node's latest version slot).
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/rerun"] = BoardServer.cors(BoardAPI.rerunPlannerNode)
+        // RT-5 (team-canvas-sharing) — presence beacon. The board-app POSTs when
+        // the user starts/stops editing a node; BoardServer relays a short-TTL
+        // `presence.update` frame over /api/events. Body: { editing: bool,
+        // nodeId?: string }. Canvas-level presence omits nodeId.
+        server.POST["/api/planner/canvases/:id/presence"] = BoardServer.cors(BoardAPI.announcePlannerPresence)
         // Wave 1-3 integration — OnlineProxy routes.
         // UI-2: assign a node to a teammate (forwards to meee2_assign_node RPC).
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/assign"] = BoardServer.cors(BoardAPI.proxyAssignPlannerNode)
         // UI-2: list sub-canvases the current user owns.
         server.GET["/api/planner/owned-canvases"] = BoardServer.cors(BoardAPI.proxyListOwnedCanvases)
+        // AS-2: list the assignments a canvas owner has handed out.
+        server.GET["/api/planner/canvases/:id/assignments"] = BoardServer.cors(BoardAPI.proxyListCanvasAssignments)
+        // AS-3: revoke a node assignment (reverse-assign → meee2_revoke_assignment).
+        server.DELETE["/api/planner/canvases/:id/assignments/:nodeId"] = BoardServer.cors(BoardAPI.proxyRevokeNodeAssignment)
         // UI-6: recent artifact versions across the canvas (drives the AI Recap drawer).
         server.GET["/api/cloud/artifact-versions/recent"] = BoardServer.cors(BoardAPI.proxyRecentArtifactVersions)
         server.POST["/api/planner/canvases/:id/artifacts/:artifactId/kanban-items/:itemId/sub-canvas"] = BoardServer.cors(BoardAPI.openKanbanItemSubCanvas)

@@ -116,6 +116,12 @@ function formatDuration(ms: number): string {
   return `${days} 天`
 }
 
+/** RT-5 (team-canvas-sharing) — tooltip for the node presence dot. */
+function presenceTitle(editors: string[]): string {
+  if (editors.length === 1) return `${editors[0]} 正在编辑`
+  return `${editors.join('、')} 正在编辑`
+}
+
 function runStateClass(runState: PlannerWorkflowRunState): string {
   switch (runState) {
     case 'pending':
@@ -507,6 +513,21 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           </span>
         )}
         <div className="planner-node__header-actions">
+          {/* RT-5 (team-canvas-sharing) · live presence dot — teammates
+              currently editing this node (short-TTL, self excluded). Rendered
+              only when someone else is present so it adds no clutter otherwise. */}
+          {Array.isArray(data.presentEditors) && data.presentEditors.length > 0 && (
+            <span
+              className="planner-node__presence nodrag"
+              title={presenceTitle(data.presentEditors)}
+              aria-label={presenceTitle(data.presentEditors)}
+            >
+              <UserRound size={11} aria-hidden />
+              {data.presentEditors.length > 1 && (
+                <em className="planner-node__presence-count">{data.presentEditors.length}</em>
+              )}
+            </span>
+          )}
           {/* ui-simplification §2.11 · schedule chip 已合并进 mode badge,
               不再独立渲染。原 'Scheduled session tick' tooltip 泄露 'session'
               这个 §0 隐藏词,一并移除。*/}

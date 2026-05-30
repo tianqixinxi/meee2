@@ -27,6 +27,7 @@ import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasKind, CanvasScope, PlannerGraphState } from '../types'
 import type { UserProfile } from '../api'
 import { AIRecapDrawer } from './planner/AIRecapDrawer'
+import { CanvasBreadcrumb } from './planner/CanvasBreadcrumb'
 import {
   buildAIRecapPrompt,
   buildCanvasStatusRecap as buildCoreCanvasStatusRecap,
@@ -350,6 +351,11 @@ export function CanvasToolbar({
           <span className="canvas-toolbar__switcher-current">{displayCanvasName(activeCanvas)}</span>
           <ChevronDown size={14} aria-hidden />
         </button>
+        <CanvasBreadcrumb
+          canvases={canvases}
+          activeCanvasId={activeCanvas.id}
+          onNavigate={onActiveCanvasChange}
+        />
         <button
           type="button"
           className="canvas-toolbar__info"
@@ -393,7 +399,19 @@ export function CanvasToolbar({
               </label>
             </div>
             <div className="canvas-toolbar__list">
-              {filteredCanvasEntries.map(({ canvas, depth }) => {
+              {filteredCanvasEntries.map((entry) => {
+                if (entry.kind === 'header') {
+                  return (
+                    <div
+                      key={entry.id}
+                      className="canvas-toolbar__group-header"
+                      role="presentation"
+                    >
+                      {entry.label}
+                    </div>
+                  )
+                }
+                const { canvas, depth } = entry
                 const selected = canvas.id === activeCanvas.id
                 return (
                   <button
@@ -912,17 +930,32 @@ function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
   return t('canvas.type.board')
 }
 
+/**
+ * Switcher list row. Either a clickable canvas (with tree `depth`) or a
+ * non-interactive group header. API-2 (team-canvas-sharing) introduces the
+ * "分派给我" group for sub-canvases the current user received via assignment.
+ */
+export type CanvasListEntry =
+  | { kind: 'canvas'; canvas: CanvasInfo; depth: number }
+  | { kind: 'header'; id: string; label: string }
+
 function buildCanvasListEntries(
   canvases: CanvasInfo[],
   query: string,
   t: ReturnType<typeof useI18n>['t'],
-): Array<{ canvas: CanvasInfo; depth: number }> {
+): CanvasListEntry[] {
   const originalIndex = new Map(canvases.map((canvas, index) => [canvas.id, index]))
-  const byId = new Map(canvases.map((canvas) => [canvas.id, canvas]))
+  // API-2: split assigned sub-canvases out of the owned tree. They are rooted
+  // under a parent owned by someone else, so they never nest under an owned
+  // row — render them flat under a dedicated "分派给我" header instead.
+  const assigned = canvases.filter((canvas) => canvas.assignmentScope === 'assigned')
+  const owned = canvases.filter((canvas) => canvas.assignmentScope !== 'assigned')
+
+  const byId = new Map(owned.map((canvas) => [canvas.id, canvas]))
   const childrenByParent = new Map<string, CanvasInfo[]>()
   const roots: CanvasInfo[] = []
 
-  for (const canvas of canvases) {
+  for (const canvas of owned) {
     const parentId = canvas.parentCanvasId?.trim() || null
     if (parentId && parentId !== canvas.id && byId.has(parentId)) {
       const children = childrenByParent.get(parentId) ?? []
@@ -938,6 +971,7 @@ function buildCanvasListEntries(
   for (const children of childrenByParent.values()) {
     children.sort(byOriginalOrder)
   }
+  assigned.sort(byOriginalOrder)
 
   const normalizedQuery = query.trim().toLowerCase()
   const matches = (canvas: CanvasInfo) => {
@@ -946,20 +980,34 @@ function buildCanvasListEntries(
       .some((value) => value.toLowerCase().includes(normalizedQuery))
   }
 
-  const result: Array<{ canvas: CanvasInfo; depth: number }> = []
+  const ownedEntries: CanvasListEntry[] = []
   const visit = (canvas: CanvasInfo, depth: number, path: Set<string>) => {
     if (path.has(canvas.id)) return
-    if (matches(canvas)) result.push({ canvas, depth })
+    if (matches(canvas)) ownedEntries.push({ kind: 'canvas', canvas, depth })
     const nextPath = new Set(path).add(canvas.id)
     for (const child of childrenByParent.get(canvas.id) ?? []) {
       visit(child, depth + 1, nextPath)
     }
   }
-
   for (const canvas of roots) {
     visit(canvas, 0, new Set())
   }
 
+  const assignedEntries: CanvasListEntry[] = assigned
+    .filter(matches)
+    .map((canvas) => ({ kind: 'canvas' as const, canvas, depth: 0 }))
+
+  // No assigned canvases → flat owned list (preserves the pre-API-2 layout, no
+  // redundant header). Otherwise show both groups under labelled headers.
+  if (assignedEntries.length === 0) return ownedEntries
+
+  const result: CanvasListEntry[] = []
+  if (ownedEntries.length > 0) {
+    result.push({ kind: 'header', id: 'group-owned', label: t('canvas.ownedGroup') })
+    result.push(...ownedEntries)
+  }
+  result.push({ kind: 'header', id: 'group-assigned', label: t('canvas.assignedGroup') })
+  result.push(...assignedEntries)
   return result
 }
 

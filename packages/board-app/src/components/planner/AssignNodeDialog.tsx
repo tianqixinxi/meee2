@@ -269,7 +269,8 @@ function UpgradeConfirmation({ picked, errorMessage }: { picked: TeamMember; err
         </li>
         <li>You will <strong>lose internal-edit rights</strong> on the sub-canvas (you stay an owner of the parent and keep the I/O contract).</li>
         <li>
-          This action is <strong>one-way for MVP</strong> — owner-revoke is not available yet.
+          You can <strong>revoke</strong> this later from the node inspector to pull
+          the sub-canvas back and restore your edit rights.
         </li>
       </ul>
       {errorMessage && (

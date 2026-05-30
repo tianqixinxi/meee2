@@ -294,6 +294,34 @@ export interface CanvasInfo {
   dirtySince?: string | null
   lastSyncedAt?: string | null
   lastRemoteUpdatedAt?: string | null
+  /**
+   * RT-4 (team-canvas-sharing): ISO timestamp of the last same-owner
+   * reload-and-reapply (a VERSION_CONFLICT that the desktop auto-resolved by
+   * rebasing local edits onto the newer remote base — no merge, no picker; see
+   * DESIGN §6). The UI surfaces a one-shot lightweight "已拉取最新版本" toast when
+   * this advances past the value it last observed. Null/absent ⇒ no auto-reload.
+   */
+  reloadedNoticeAt?: string | null
+  /**
+   * API-2 (team-canvas-sharing): how the current user relates to this canvas.
+   * `'owned'` — a top-level canvas this user owns (default; absence ≡ owned).
+   * `'assigned'` — a sub-canvas the user received via `meee2_assign_node`
+   *   (its parent canvas is owned by someone else, so it is surfaced under the
+   *   "分派给我" group in the switcher rather than nested under a parent row).
+   * Absence (back-compat with legacy lists) is treated as `'owned'`.
+   */
+  assignmentScope?: 'owned' | 'assigned' | null
+  /**
+   * API-2: the `meee2_node_assignments.id` that produced this sub-canvas, when
+   * `assignmentScope === 'assigned'`. `null`/absent for owned canvases.
+   */
+  assignmentId?: string | null
+  /**
+   * API-2: display name of the assignee. For an `'assigned'` canvas the
+   * assignee is the current user, so this is the current user's own name (or
+   * `null` when the desktop has no resolved profile).
+   */
+  assigneeDisplayName?: string | null
 }
 
 export interface CanvasSessionMembership {
@@ -704,6 +732,14 @@ export interface PlannerNodeOutput {
   message?: PlannerNodeOutputMessage | null
   artifacts: PlannerNodeOutputArtifact[]
   next: PlannerNodeOutputNext
+  /**
+   * DM-1 (team-canvas-sharing): attribution — the session that produced this
+   * node output, if known. The `nodeId` is already carried (here + in the route
+   * path); `sessionId` adds the second half of the attribution pair so the
+   * team can build a "who did what at this node" timeline. Optional/back-compat:
+   * absent ⇒ no session attribution (e.g. human/manual submit).
+   */
+  sessionId?: string | null
 }
 
 export interface PlannerRouteTarget {
@@ -1353,6 +1389,45 @@ export interface OwnedCanvasSummary {
   parentNodeId: string | null
   frozenIOContract: NodeContractV2 | null
   updatedAt: string | null
+}
+
+/**
+ * AS-2 (team-canvas-sharing) — one row of a canvas's assignment list, mirroring
+ * the DESIGN §3.1 `AssignmentDTO` wire shape. The desktop proxies
+ * `GET /api/v1/team/{teamId}/canvases/{canvasId}/assignments` (which the Swift
+ * `BoardAPI` maps from the server's snake_case rows) and the board-app consumes
+ * this camelCase shape. `revokedAt` is `null` for active assignments and set
+ * once an assignment has been revoked (AS-6 history view).
+ */
+export interface AssignmentDTO {
+  /** `meee2_node_assignments.id`. */
+  assignmentId: string
+  sourceCanvasId: string
+  sourceNodeId: string
+  assigneeUserId: string
+  assigneeDisplayName: string | null
+  assigneeAvatarUrl: string | null
+  subCanvasId: string
+  subCanvasName: string
+  assignedBy: string | null
+  /** ISO timestamp. */
+  assignedAt: string
+  /** `null` = active; set when revoked (AS-3 / AS-6). */
+  revokedAt: string | null
+}
+
+/**
+ * AS-3 (team-canvas-sharing) — result of revoking a node assignment, mirroring
+ * the DESIGN §3.6 `RevokeAssignmentResponse` Swift struct. Returned by
+ * `DELETE /api/v1/team/{teamId}/canvases/{canvasId}/assignments/{nodeId}`,
+ * which the Swift `BoardAPI` proxies through unchanged. `sessionCountRebound`
+ * is how many sub-canvas sessions the `meee2_revoke_assignment` RPC re-bound
+ * back to the source node.
+ */
+export interface RevokeAssignmentResult {
+  revoked: boolean
+  assignmentId: string
+  sessionCountRebound: number
 }
 
 // Selection state — what's picked on the board.

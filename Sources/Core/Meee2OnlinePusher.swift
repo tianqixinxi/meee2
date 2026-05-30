@@ -83,6 +83,25 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private let inboxPendingCacheFreshSeconds: TimeInterval = 1.0
     private var pendingCanvasSyncWorkItem: DispatchWorkItem?
 
+    // RT-6 (team-canvas-sharing) — offline queue + resumable sync.
+    //
+    // Dirty team canvases are already persisted to disk by BoardLayoutStore, so
+    // they survive a restart and are re-attempted on the next sync tick — that
+    // is the "resumable" half. The missing half is *offline awareness*: when a
+    // canvas push fails for a connectivity reason we should not silently wait a
+    // full 60s, nor hammer the server while offline. We track an offline flag
+    // and a capped exponential backoff. On a failure we mark offline and arm a
+    // backoff retry; on the next success we clear it and flush whatever is still
+    // dirty. `pendingCanvasSyncRequested` coalesces immediate-sync requests that
+    // arrive while a push is already in flight.
+    private var canvasSyncInFlight = false
+    private var pendingCanvasSyncRequested = false
+    private var canvasSyncOffline = false
+    private var canvasSyncBackoffSeconds: TimeInterval = 0
+    private let canvasSyncBackoffBaseSeconds: TimeInterval = 4.0
+    private let canvasSyncBackoffMaxSeconds: TimeInterval = 120.0
+    private var canvasSyncRetryWorkItem: DispatchWorkItem?
+
     // MARK: - Activation
 
     /// Start listening to SessionEventBus and periodic heartbeat
@@ -155,6 +174,14 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             self?.pendingSessionUpdateWorkItems.removeAll()
             self?.pendingCanvasSyncWorkItem?.cancel()
             self?.pendingCanvasSyncWorkItem = nil
+            // RT-6 — tear down any armed backoff retry; dirty canvases stay on
+            // disk and resume on the next activation.
+            self?.canvasSyncRetryWorkItem?.cancel()
+            self?.canvasSyncRetryWorkItem = nil
+            self?.canvasSyncInFlight = false
+            self?.pendingCanvasSyncRequested = false
+            self?.canvasSyncBackoffSeconds = 0
+            self?.canvasSyncOffline = false
         }
         MLog("[Meee2OnlinePusher] Deactivated")
     }
@@ -328,6 +355,23 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         perfLog("heartbeat", started: started, extra: "sessions=\(activeSessions.count),plugins=\(PluginManager.shared.sessions.count)")
     }
 
+    /// RT-6 (team-canvas-sharing) — request an out-of-band canvas sync now
+    /// (e.g. after an archive cascade, or on app foreground / reconnect). The
+    /// request is debounced and coalesced: if a push is already in flight it is
+    /// re-armed to run again once that completes, so a burst of requests results
+    /// in at most one extra push.
+    public func requestImmediateCanvasSync() {
+        syncQueue.async { [weak self] in
+            guard let self = self else { return }
+            // Cancel any pending backoff retry — an explicit request supersedes
+            // it (and clears the wait so a reconnect flushes immediately).
+            self.canvasSyncRetryWorkItem?.cancel()
+            self.canvasSyncRetryWorkItem = nil
+            self.canvasSyncBackoffSeconds = 0
+            self.syncTeamCanvases()
+        }
+    }
+
     private func syncTeamCanvases() {
         let currentTeamId = settingsSnapshot().teamId
         guard shouldStayActive,
@@ -337,8 +381,17 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             return
         }
 
+        // RT-6 — coalesce overlapping syncs: if a push is already in flight,
+        // remember that another run is wanted and let the in-flight completion
+        // re-trigger it rather than firing concurrent pushes.
+        if canvasSyncInFlight {
+            pendingCanvasSyncRequested = true
+            return
+        }
+
         let items = BoardLayoutStore.shared.dirtyTeamCanvasPayloads()
         if !items.isEmpty {
+            canvasSyncInFlight = true
             rpcDataRequest(
                 name: "meee2_sync_team_canvases",
                 payload: [
@@ -346,14 +399,9 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                     "p_user_id": userId,
                     "p_items": items
                 ]
-            ) { result in
-                switch result {
-                case .success(let data):
-                    if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                        BoardLayoutStore.shared.markTeamCanvasSyncResults(rows)
-                    }
-                case .failure(let error):
-                    MLog("[Meee2OnlinePusher] canvas push failed: \(error)")
+            ) { [weak self] result in
+                self?.syncQueue.async {
+                    self?.handleCanvasPushResult(result)
                 }
             }
         }
@@ -374,6 +422,55 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
             }
         }
+    }
+
+    /// RT-6 — handle the outcome of a dirty-canvas push. On success: clear the
+    /// offline flag + backoff, then flush again if more became dirty meanwhile
+    /// (the persisted dirty set is the queue — nothing is dropped). On failure:
+    /// the dirty canvases remain dirty on disk (resumable), mark offline and arm
+    /// a capped exponential backoff retry so we don't wait a full tick nor spin
+    /// while disconnected.
+    private func handleCanvasPushResult(_ result: Result<Data, Error>) {
+        canvasSyncInFlight = false
+        switch result {
+        case .success(let data):
+            if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                BoardLayoutStore.shared.markTeamCanvasSyncResults(rows)
+            }
+            if canvasSyncOffline {
+                MLog("[Meee2OnlinePusher] RT-6 canvas sync back online; flushing queue")
+            }
+            canvasSyncOffline = false
+            canvasSyncBackoffSeconds = 0
+            canvasSyncRetryWorkItem?.cancel()
+            canvasSyncRetryWorkItem = nil
+            // Drain: a sync requested while this push was in flight, or more
+            // canvases dirtied since, get flushed now.
+            if pendingCanvasSyncRequested || !BoardLayoutStore.shared.dirtyTeamCanvasPayloads().isEmpty {
+                pendingCanvasSyncRequested = false
+                syncTeamCanvases()
+            }
+        case .failure(let error):
+            canvasSyncOffline = true
+            MLog("[Meee2OnlinePusher] RT-6 canvas push failed (queued for retry): \(error)")
+            scheduleCanvasSyncBackoffRetry()
+        }
+    }
+
+    /// RT-6 — arm the next backoff retry of the dirty-canvas push. Capped
+    /// exponential; a single outstanding retry at a time.
+    private func scheduleCanvasSyncBackoffRetry() {
+        canvasSyncRetryWorkItem?.cancel()
+        let next = canvasSyncBackoffSeconds <= 0
+            ? canvasSyncBackoffBaseSeconds
+            : min(canvasSyncBackoffSeconds * 2, canvasSyncBackoffMaxSeconds)
+        canvasSyncBackoffSeconds = next
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.canvasSyncRetryWorkItem = nil
+            self?.syncTeamCanvases()
+        }
+        canvasSyncRetryWorkItem = workItem
+        syncQueue.asyncAfter(deadline: .now() + next, execute: workItem)
     }
 
     private static func parseRemoteTeamCanvases(data: Data, teamId: String) -> [BoardLayoutStore.RemoteTeamCanvas] {
