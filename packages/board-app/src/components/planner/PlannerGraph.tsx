@@ -622,7 +622,12 @@ function PlannerGraphInner({
               })
             }, (sessionId) => {
               void sessionId
-              void openInternalSessionForNode(nodeId, runner)
+              // openOnly: dispatch already created the surface (backend
+              // createInternalSessionSurface createIfMissing:true). Opening
+              // WITHOUT openOnly makes `ensure` spawn a SECOND surface —
+              // the「两个 internal session」double-dispatch bug. Just open
+              // the one the node is already bound to.
+              void openInternalSessionForNode(nodeId, runner, true)
             })
           })
       })
@@ -657,7 +662,12 @@ function PlannerGraphInner({
               })
             }, (sessionId) => {
               void sessionId
-              void openInternalSessionForNode(nodeId, runner)
+              // openOnly: dispatch already created the surface (backend
+              // createInternalSessionSurface createIfMissing:true). Opening
+              // WITHOUT openOnly makes `ensure` spawn a SECOND surface —
+              // the「两个 internal session」double-dispatch bug. Just open
+              // the one the node is already bound to.
+              void openInternalSessionForNode(nodeId, runner, true)
             })
           })
       })
