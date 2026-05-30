@@ -426,6 +426,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("meee2.openBoardSession"),
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openPlannerItem(_:)),
+            name: NSNotification.Name("meee2.openPlannerItem"),
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -480,6 +487,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         openBoardMenu()
         boardWindowController?.openSession(sessionId: sessionId, surfaceId: surfaceId)
+    }
+
+    @MainActor
+    @objc private func openPlannerItem(_ notification: Notification) {
+        let canvasId = notification.userInfo?["canvasId"] as? String
+        let nodeId = notification.userInfo?["nodeId"] as? String
+        openBoardMenu()
+        boardWindowController?.openPlannerItem(canvasId: canvasId, nodeId: nodeId)
     }
 
     @MainActor

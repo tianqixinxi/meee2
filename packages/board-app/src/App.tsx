@@ -678,6 +678,27 @@ export default function App() {
     }
   }, [handleSetActiveCanvas])
 
+  useEffect(() => {
+    const openPlannerItem = (event: Event) => {
+      const detail = (event as CustomEvent<{ canvasId?: string; nodeId?: string }>).detail
+      const canvasId = detail?.canvasId?.trim()
+      const nodeId = detail?.nodeId?.trim()
+      setWorkspaceMode('planner')
+      if (canvasId) {
+        handleSetActiveCanvas(canvasId)
+        if (nodeId) {
+          window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('meee2:select-node', {
+              detail: { canvasId, nodeId },
+            }))
+          }, 50)
+        }
+      }
+    }
+    window.addEventListener('meee2:open-planner-item', openPlannerItem)
+    return () => window.removeEventListener('meee2:open-planner-item', openPlannerItem)
+  }, [handleSetActiveCanvas])
+
   // Command palette handlers. Switching canvases is async (RTT against the
   // local API), so for node selection we first ensure planner mode + the
   // right active canvas, then dispatch a `meee2:select-node` event which

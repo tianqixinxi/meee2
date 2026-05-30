@@ -226,6 +226,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
     private var pendingOpenSettings = false
     private var pendingOpenSession: (sessionId: String?, surfaceId: String?)?
     private var pendingOpenSessionsWorkspace: (sessionId: String?, surfaceId: String?)?
+    private var pendingOpenPlannerItem: (canvasId: String?, nodeId: String?)?
     var onClose: (() -> Void)?
 
     init(boardURL: URL) {
@@ -388,6 +389,12 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         pendingOpenSessionsWorkspace = (sessionId, surfaceId)
         show()
         dispatchOpenSessionsWorkspaceIfPossible()
+    }
+
+    func openPlannerItem(canvasId: String?, nodeId: String?) {
+        pendingOpenPlannerItem = (canvasId, nodeId)
+        show()
+        dispatchOpenPlannerItemIfPossible()
     }
 
     private func loadIfNeeded() {
@@ -943,6 +950,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
         dispatchOpenSettingsIfPossible()
         dispatchOpenSessionsWorkspaceIfPossible()
         dispatchOpenSessionIfPossible()
+        dispatchOpenPlannerItemIfPossible()
     }
 
     private func dispatchOpenSettingsIfPossible() {
@@ -1016,6 +1024,31 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
                 self?.pendingOpenSessionsWorkspace = pendingOpenSessionsWorkspace
             } else {
                 MInfo("[BoardWebWindow] dispatched open sessions workspace")
+            }
+        }
+    }
+
+    private func dispatchOpenPlannerItemIfPossible() {
+        guard let pendingOpenPlannerItem, webView.url != nil, !webView.isLoading, !isShowingLoadError else { return }
+        var detail: [String: String] = [:]
+        if let canvasId = pendingOpenPlannerItem.canvasId, !canvasId.isEmpty {
+            detail["canvasId"] = canvasId
+        }
+        if let nodeId = pendingOpenPlannerItem.nodeId, !nodeId.isEmpty {
+            detail["nodeId"] = nodeId
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: detail),
+              let json = String(data: data, encoding: .utf8) else {
+            self.pendingOpenPlannerItem = nil
+            return
+        }
+        self.pendingOpenPlannerItem = nil
+        webView.evaluateJavaScript("""
+        window.dispatchEvent(new CustomEvent('meee2:open-planner-item', { detail: \(json) }));
+        """) { [weak self] _, error in
+            if let error {
+                MWarn("[BoardWebWindow] open planner item event failed: \(error.localizedDescription)")
+                self?.pendingOpenPlannerItem = pendingOpenPlannerItem
             }
         }
     }

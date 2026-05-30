@@ -340,7 +340,7 @@ enum BoardAPI {
         // SessionStore 供 history / diagnostic / recovery 使用。
         // 同时过滤 isArchived=true 的 Claude Desktop session：用户已经在
         // desktop 里 archive 的 session，再往 Web UI 上塞会重复污染。
-        let sessions = currentBoardSessions()
+        let sessions = BoardSessionSnapshotProvider.currentBoardSessions()
         var spawnCandidates: [BoardLayoutStore.SpawnCandidate] = []
         for session in sessions where !session.project.isEmpty {
             spawnCandidates.append(BoardLayoutStore.SpawnCandidate(
@@ -1244,7 +1244,7 @@ enum BoardAPI {
             let monitor = try PlannerBoardBridge.workspaceMonitor(
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId(),
-                sessions: currentBoardSessions()
+                sessions: BoardSessionSnapshotProvider.currentBoardSessions()
             )
             return jsonResponse(PlannerMonitorEnvelope(
                 generatedAt: monitor.generatedAt,
@@ -2093,7 +2093,7 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            let liveSessions = currentBoardSessions()
+            let liveSessions = BoardSessionSnapshotProvider.currentBoardSessions()
             let grouped = Dictionary(grouping: state.nodes.compactMap { node -> (String, PlanningNode)? in
                 guard let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !sessionId.isEmpty else { return nil }
@@ -3290,7 +3290,7 @@ enum BoardAPI {
     /// the planner store. Called right before every canvas/graph read so the UI
     /// never shows `running` for a session that died while the app was closed.
     private static func reconcilePlannerRunState(canvasId: String) {
-        let liveSessions = currentBoardSessions()
+        let liveSessions = BoardSessionSnapshotProvider.currentBoardSessions()
         _ = try? PlannerBoardBridge.store.reconcileRunStateAgainstLiveSessions(
             canvasId: canvasId,
             isLive: { sessionId in isPlannerSessionLive(sessionId, in: liveSessions) }
@@ -3372,27 +3372,6 @@ enum BoardAPI {
 
     private static func shellQuote(_ raw: String) -> String {
         "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
-    private static func currentBoardSessions() -> [SessionDTO] {
-        _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
-        let terminalInfos = SessionTerminalStore.shared.getAll()
-        let internalSessions = TerminalSessionBackendRegistry.shared
-            .listSnapshots()
-            .filter { $0.status != "exited" && $0.status != "failed" }
-            .map(BoardDTOBuilder.internalSessionDTO)
-        let staleInternalSessions = SessionStore.shared.listAll()
-            .filter { !$0.status.isHistorical }
-            .filter { BoardDTOBuilder.isInternalTerminalProgram($0.terminalInfo?.termProgram) }
-            .filter { session in
-                !internalSessions.contains { internalSession in
-                    boardSession(internalSession, matches: session.sessionId)
-                }
-            }
-            .map { session in
-                BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
-            }
-        return internalSessions + staleInternalSessions
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {

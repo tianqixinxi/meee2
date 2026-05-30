@@ -164,8 +164,6 @@ export function SettingsView({
         selectedScreenId: settingsToSave.selectedScreenId,
         autoExpandEnabled: settingsToSave.autoExpandEnabled,
         autoCloseInterval: settingsToSave.autoCloseInterval,
-        showSessionInCompact: settingsToSave.showSessionInCompact,
-        carouselInterval: settingsToSave.carouselInterval,
       })
       setAppSettings(normalizeAppSettings(next))
       notify('success', t('toast.settingsSaved'))
@@ -384,17 +382,6 @@ export function SettingsView({
               onChange={(event) => updateAppSettingsDraft({ autoExpandEnabled: event.target.checked })}
             />
           </label>
-          <label className="settings-toggle-row settings-panel">
-            <span>
-              <strong>{t('settings.showCompactSession')}</strong>
-            </span>
-            <input
-              type="checkbox"
-              disabled={!effectiveAppSettings.showIsland}
-              checked={effectiveAppSettings.showSessionInCompact}
-              onChange={(event) => updateAppSettingsDraft({ showSessionInCompact: event.target.checked })}
-            />
-          </label>
           <SettingSlider
             label={t('settings.autoCloseAfter')}
             disabled={!effectiveAppSettings.showIsland}
@@ -403,15 +390,6 @@ export function SettingsView({
             value={effectiveAppSettings.autoCloseInterval}
             valueLabel={t('settings.seconds', { value: effectiveAppSettings.autoCloseInterval })}
             onChange={(value) => updateAppSettingsDraft({ autoCloseInterval: value })}
-          />
-          <SettingSlider
-            label={t('settings.carouselInterval')}
-            disabled={!effectiveAppSettings.showIsland || !effectiveAppSettings.showSessionInCompact}
-            min={3}
-            max={30}
-            value={effectiveAppSettings.carouselInterval}
-            valueLabel={t('settings.seconds', { value: effectiveAppSettings.carouselInterval })}
-            onChange={(value) => updateAppSettingsDraft({ carouselInterval: value })}
           />
         </section>
 

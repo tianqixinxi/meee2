@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import SwiftUI
 import Meee2PluginKit
+import Meee2CommKit
 
 /// 状态管理器 - 聚合所有插件的数据
 /// 作为 UI 的数据源
@@ -19,6 +20,9 @@ public class StatusManager: ObservableObject {
 
     /// 最新的事件消息
     @Published public var latestMessage: String?
+
+    /// Dynamic Island 的高维 attention 聚合状态。
+    @Published var islandAttentionState: IslandAttentionState = .empty()
 
     /// 刘海尺寸 (由 AppDelegate 设置)
     @Published public var notchSize: CGSize = CGSize(width: 150, height: 32)
@@ -111,6 +115,33 @@ public class StatusManager: ObservableObject {
         }
     }
 
+    func openBoard(for item: IslandAttentionItem) {
+        NotificationCenter.default.post(
+            name: NSNotification.Name("meee2.openPlannerItem"),
+            object: nil,
+            userInfo: [
+                "canvasId": item.canvasId ?? "",
+                "nodeId": item.nodeId ?? ""
+            ]
+        )
+    }
+
+    func rejectProposal(for item: IslandAttentionItem) {
+        guard let canvasId = item.canvasId, let proposalId = item.proposalId else { return }
+        do {
+            _ = try PlannerBoardBridge.rejectProposal(
+                proposalId: proposalId,
+                for: canvasId,
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId()
+            )
+            BoardServer.shared.broadcastStateChanged()
+            refreshIslandAttentionState()
+        } catch {
+            MWarn("[StatusManager] failed to reject proposal from Island: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Plugin Info
 
     /// 获取 plugin 信息
@@ -129,6 +160,7 @@ public class StatusManager: ObservableObject {
                 self.sessions = sessions
                     .filter(Self.isManagedIslandSession)
                     .filter { !$0.status.isHistorical || $0.urgentEvent != nil }
+                self.refreshIslandAttentionState(sessions: self.sessions)
                 self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
@@ -144,6 +176,20 @@ public class StatusManager: ObservableObject {
             }
             .receive(on: DispatchQueue.main)
             .assign(to: &$hasUrgentSession)
+
+        SessionEventBus.shared.publisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] event in
+                guard let self = self else { return }
+                switch event {
+                case .boardLayoutChanged, .sessionAdded, .sessionRemoved, .sessionMetadataChanged, .transcriptAppended:
+                    self.refreshIslandAttentionState()
+                    self.updateSystemStatus()
+                case .channelMutated, .messageMutated, .cardTemplateChanged:
+                    break
+                }
+            }
+            .store(in: &cancellables)
     }
 
     private static func isManagedIslandSession(_ session: PluginSession) -> Bool {
@@ -164,6 +210,11 @@ public class StatusManager: ObservableObject {
     }
 
     private func updateSystemStatus() {
+        if islandAttentionState.hasAttention {
+            systemStatus = .needsAttention
+            return
+        }
+
         if sessions.isEmpty {
             systemStatus = .idle
             return
@@ -175,6 +226,18 @@ public class StatusManager: ObservableObject {
         }
 
         systemStatus = .running
+    }
+
+    private func refreshIslandAttentionState(sessions sourceSessions: [PluginSession]? = nil) {
+        let visibleSessions = sourceSessions ?? sessions
+        islandAttentionState = IslandAttentionBuilder.build(sessions: visibleSessions) {
+            let monitor = try PlannerBoardBridge.workspaceMonitor(
+                snapshot: BoardLayoutStore.shared.snapshot(),
+                actorUserId: PlannerPermission.currentActorId(),
+                sessions: BoardSessionSnapshotProvider.currentBoardSessions()
+            )
+            return monitor.items
+        }
     }
 }
 
