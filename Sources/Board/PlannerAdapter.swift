@@ -57,47 +57,71 @@ struct BYOAPlannerAdapter: PlannerAdapter {
         let context = PlannerGraphContext(state: state, goal: goal)
         let userPrompt = PlannerAdapterPromptFactory.generatePrompt(context: context)
 
-        var output = ""
-        let stream = provider.runTurn(
-            systemPrompt: PlannerAdapterPromptFactory.systemPrompt,
-            messages: [ChatMessage(role: .user, content: userPrompt)],
-            tools: [],
-            settings: settings
-        )
-        for try await event in stream {
-            switch event {
-            case .textDelta(let delta):
-                output += delta
-            case .turnDone:
-                break
-            case .toolCall:
-                continue
-            case .error(let message):
-                throw NSError(
-                    domain: "PlannerAdapter",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: message]
+        // meee2 AI is a Claude Code runtime harness — on a rejected proposal we
+        // DON'T silently drop bad changes; we feed the validation error back and
+        // let the model self-correct, then retry.
+        var messages: [ChatMessage] = [ChatMessage(role: .user, content: userPrompt)]
+        let maxAttempts = 2
+        var lastError: Error?
+
+        for attempt in 1...maxAttempts {
+            var output = ""
+            let stream = provider.runTurn(
+                systemPrompt: PlannerAdapterPromptFactory.systemPrompt,
+                messages: messages,
+                tools: [],
+                settings: settings
+            )
+            for try await event in stream {
+                switch event {
+                case .textDelta(let delta):
+                    output += delta
+                case .turnDone:
+                    break
+                case .toolCall:
+                    continue
+                case .error(let message):
+                    throw NSError(
+                        domain: "PlannerAdapter",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: message]
+                    )
+                }
+            }
+
+            NSLog("[PlannerAdapter] attempt %d raw model output (%d chars):\n%@",
+                  attempt, output.count, String(output.prefix(4000)))
+            do {
+                var proposal = try PlannerProposalValidator.decodeProposal(from: output)
+                // State-machine PR-A · validate takes inout so it can fold
+                // deprecated-status warnings into proposal.warnings.
+                try PlannerProposalValidator.validate(
+                    &proposal,
+                    canvas: state.canvas,
+                    nodes: state.nodes
                 )
+                return proposal
+            } catch {
+                lastError = error
+                NSLog("[PlannerAdapter] attempt %d decode/validate failed: %@",
+                      attempt, String(describing: error))
+                guard attempt < maxAttempts else { break }
+                // Self-correction turn: echo the rejected output + the precise
+                // failure, ask for a corrected complete proposal.
+                messages.append(ChatMessage(role: .assistant, content: output))
+                messages.append(ChatMessage(role: .user, content: """
+                Your previous proposal was REJECTED by the validator:
+                \(String(describing: error))
+
+                Re-emit the COMPLETE corrected PlanProposal as strict JSON (no prose, no fences). Common fixes:
+                - Use ONLY change kinds listed in context.allowedChangeKinds.
+                - For "B depends on A", set dependsOnNodeIds:["A"] on B's addNode — do NOT invent edge/connection changes.
+                - Every enum field must use an exact allowed raw value.
+                - canvasId on the proposal and every added node MUST equal context.canvas.id.
+                """))
             }
         }
-
-        NSLog("[PlannerAdapter] raw model output (%d chars):\n%@",
-              output.count, String(output.prefix(4000)))
-        var proposal: PlanProposal
-        do {
-            proposal = try PlannerProposalValidator.decodeProposal(from: output)
-        } catch {
-            NSLog("[PlannerAdapter] decodeProposal failed: %@", String(describing: error))
-            throw error
-        }
-        // State-machine PR-A · validate takes inout so it can fold
-        // deprecated-status warnings into proposal.warnings.
-        try PlannerProposalValidator.validate(
-            &proposal,
-            canvas: state.canvas,
-            nodes: state.nodes
-        )
-        return proposal
+        throw lastError ?? PlannerCoreError.invalidPlannerProposalJSON
     }
 }
 
@@ -214,7 +238,18 @@ struct PlannerGraphContext: Codable, Equatable {
             proposal.status == .pending || proposal.status == .approved
         }.suffix(5))
         self.allowedNodeKinds = PlannerProposalValidator.knownNodeKinds.sorted()
-        self.allowedChangeKinds = PlannerProposalValidator.knownChangeKinds.sorted()
+        // Only expose the change kinds this adapter's PROMPT actually documents.
+        // The contract knows ~18 kinds (addEdge / addDataSource / setMonitorSpec /
+        // …) but this BYOA prompt only teaches addNode / updateNode /
+        // attachArtifact + dependencies-via-dependsOnNodeIds. Exposing the
+        // undocumented kinds made the model GUESS their shape (e.g. an addEdge
+        // missing the required `sourceRef`) → strict decode rejected the whole
+        // proposal → silent "搭建失败". The richer 5-atom changes (Edge /
+        // DataSource / Monitor) are produced by the meee2-online sidecar agent,
+        // which carries the full schema + self-corrects on validation error.
+        self.allowedChangeKinds = ["addNode", "updateNode", "attachArtifact"]
+            .filter(PlannerProposalValidator.knownChangeKinds.contains)
+            .sorted()
         self.allowedExecutionModes = ExecutionMode.allCases.map { $0.rawValue }.sorted()
         self.allowedExecutorTypes = ExecutorType.allCases.map { $0.rawValue }.sorted()
         self.allowedNodeStatuses = PlanningNodeStatus.allCases.map { $0.rawValue }.sorted()

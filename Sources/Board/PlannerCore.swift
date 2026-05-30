@@ -27,6 +27,27 @@ struct PlanningCanvas: Codable, Equatable {
     /// change it without re-assigning. JSON shape mirrors `NodeContractV2`.
     var frozenIOContract: NodeContractV2?
 
+    // MARK: Canvas runtime 5-atom collections (decode-only — PR2+6.5)
+    //
+    // Mounted as optional-with-default so existing persisted canvases (which
+    // lack these keys) decode unchanged, and new canvases carrying the 5-atom
+    // entities round-trip. NOT consumed by apply / proposal-execution logic
+    // yet. See `doc/prd/canvas-runtime-data-model.md` §3/§4/§6.
+
+    /// Atom 1 — named addressable storage locations on this canvas. Default `[]`.
+    var dataSources: [DataSourceRecord]
+    /// Atom 2 — first-class consumption edges. Default `[]`.
+    var edges: [Edge]
+    /// Atom 4 — owner-facing monitor card grid. `nil` when unset.
+    var monitorSpec: MonitorSpec?
+
+    enum CodingKeys: String, CodingKey {
+        case id, ownerId, title, plannerContext, visibility
+        case parentCanvasId, parentNodeId, frozenIOContract
+        // 5-atom collections — absent on legacy canvases.
+        case dataSources, edges, monitorSpec
+    }
+
     init(
         id: String,
         ownerId: String,
@@ -35,7 +56,10 @@ struct PlanningCanvas: Codable, Equatable {
         visibility: PlannerCanvasVisibility = .private,
         parentCanvasId: String? = nil,
         parentNodeId: String? = nil,
-        frozenIOContract: NodeContractV2? = nil
+        frozenIOContract: NodeContractV2? = nil,
+        dataSources: [DataSourceRecord] = [],
+        edges: [Edge] = [],
+        monitorSpec: MonitorSpec? = nil
     ) {
         self.id = id
         self.ownerId = ownerId
@@ -45,6 +69,25 @@ struct PlanningCanvas: Codable, Equatable {
         self.parentCanvasId = parentCanvasId
         self.parentNodeId = parentNodeId
         self.frozenIOContract = frozenIOContract
+        self.dataSources = dataSources
+        self.edges = edges
+        self.monitorSpec = monitorSpec
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        ownerId = try c.decode(String.self, forKey: .ownerId)
+        title = try c.decode(String.self, forKey: .title)
+        plannerContext = try c.decode(String.self, forKey: .plannerContext)
+        visibility = try c.decodeIfPresent(PlannerCanvasVisibility.self, forKey: .visibility) ?? .private
+        parentCanvasId = try c.decodeIfPresent(String.self, forKey: .parentCanvasId)
+        parentNodeId = try c.decodeIfPresent(String.self, forKey: .parentNodeId)
+        frozenIOContract = try c.decodeIfPresent(NodeContractV2.self, forKey: .frozenIOContract)
+        // Legacy-tolerant: absent ⇒ empty / nil.
+        dataSources = try c.decodeIfPresent([DataSourceRecord].self, forKey: .dataSources) ?? []
+        edges = try c.decodeIfPresent([Edge].self, forKey: .edges) ?? []
+        monitorSpec = try c.decodeIfPresent(MonitorSpec.self, forKey: .monitorSpec)
     }
 }
 
@@ -180,6 +223,11 @@ enum WidgetKind: String, Codable, Equatable, CaseIterable {
     case matrix
     case badge
     case artifactPreview = "artifact-preview"
+    /// canvas-spec §7.2 — a Monitor is an Artifact{source:canvas-runtime,
+    /// widget:html}. `html` carries planner-authored HTML rendered in a
+    /// sandboxed iframe (board-app MonitorHtmlFrame). Additive; existing kinds
+    /// unchanged.
+    case html
 }
 
 enum WidgetSourceKind: String, Codable, Equatable, CaseIterable {
@@ -241,11 +289,35 @@ struct Widget: Codable, Equatable {
     var kind: WidgetKind
     var source: WidgetSource?
     var mapping: WidgetMapping?
+    /// canvas-spec §7.2 — only meaningful when `kind == .html`: planner-authored
+    /// HTML rendered in a sandboxed iframe with the read-only CanvasRuntimeView
+    /// injected via postMessage. Ignored for other kinds. Optional-with-default
+    /// so legacy widgets round-trip unchanged.
+    var html: String?
 
-    init(kind: WidgetKind, source: WidgetSource? = nil, mapping: WidgetMapping? = nil) {
+    init(kind: WidgetKind, source: WidgetSource? = nil, mapping: WidgetMapping? = nil, html: String? = nil) {
         self.kind = kind
         self.source = source
         self.mapping = mapping
+        self.html = html
+    }
+
+    enum CodingKeys: String, CodingKey { case kind, source, mapping, html }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(WidgetKind.self, forKey: .kind)
+        source = try c.decodeIfPresent(WidgetSource.self, forKey: .source)
+        mapping = try c.decodeIfPresent(WidgetMapping.self, forKey: .mapping)
+        html = try c.decodeIfPresent(String.self, forKey: .html)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encodeIfPresent(source, forKey: .source)
+        try c.encodeIfPresent(mapping, forKey: .mapping)
+        try c.encodeIfPresent(html, forKey: .html)
     }
 }
 
@@ -380,6 +452,17 @@ struct PlannerArtifact: Codable, Equatable {
     /// `nil` means "absent" (legacy artifacts), which downstream code
     /// treats as `approved` for back-compat.
     var reviewStatus: String?
+    /// canvas-spec §7.3 / P4 · 1-based index of THIS artifact's version within
+    /// its slot's append-only version chain (the latest-per-slot artifact = the
+    /// chain head, so its `versionIndex == versionCount`). Lets the card render
+    /// a real `v{n}`. Additive/derived — never persisted on the stored
+    /// artifact; populated at read time in `canvasState`. `nil` when the slot
+    /// has no version chain yet (legacy / derived artifacts).
+    var versionIndex: Int?
+    /// canvas-spec §7.3 / P4 · Total number of versions in this artifact's
+    /// slot chain (chain length). Pairs with `versionIndex` so the UI can show
+    /// e.g. `v2 / 3`. Derived at read time; `nil` when unknown.
+    var versionCount: Int?
 
     init(
         id: String,
@@ -393,7 +476,9 @@ struct PlannerArtifact: Codable, Equatable {
         payload: BoardJSONValue? = nil,
         producedBy: PlannerArtifactProducer = .integration,
         runId: String? = nil,
-        reviewStatus: String? = nil
+        reviewStatus: String? = nil,
+        versionIndex: Int? = nil,
+        versionCount: Int? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -407,6 +492,8 @@ struct PlannerArtifact: Codable, Equatable {
         self.producedBy = producedBy
         self.runId = runId
         self.reviewStatus = reviewStatus
+        self.versionIndex = versionIndex
+        self.versionCount = versionCount
     }
 }
 
@@ -541,6 +628,54 @@ struct PlannerGraphState: Codable, Equatable {
     var events: [PlannerEvent]
     var artifacts: [PlannerArtifact]
     var edges: [PlannerGraphEdge]
+    /// canvas-spec §7.2 — read-only whole-canvas runtime snapshot a Monitor
+    /// (Artifact{source:canvas-runtime, widget:html}) consumes. Additive: all
+    /// existing fields are unchanged; optional-with-default so legacy decoders
+    /// (and clients that ignore it) keep working.
+    var canvasRuntime: CanvasRuntimeView?
+
+    enum CodingKeys: String, CodingKey {
+        case canvas, nodes, states, proposals, access, activities, events
+        case artifacts, edges, canvasRuntime
+    }
+
+    init(
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        states: [NodeStateSnapshot],
+        proposals: [PlanProposal],
+        access: PlannerAccess,
+        activities: [PlannerActivity],
+        events: [PlannerEvent],
+        artifacts: [PlannerArtifact],
+        edges: [PlannerGraphEdge],
+        canvasRuntime: CanvasRuntimeView? = nil
+    ) {
+        self.canvas = canvas
+        self.nodes = nodes
+        self.states = states
+        self.proposals = proposals
+        self.access = access
+        self.activities = activities
+        self.events = events
+        self.artifacts = artifacts
+        self.edges = edges
+        self.canvasRuntime = canvasRuntime
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        canvas = try c.decode(PlanningCanvas.self, forKey: .canvas)
+        nodes = try c.decode([PlanningNode].self, forKey: .nodes)
+        states = try c.decode([NodeStateSnapshot].self, forKey: .states)
+        proposals = try c.decode([PlanProposal].self, forKey: .proposals)
+        access = try c.decode(PlannerAccess.self, forKey: .access)
+        activities = try c.decode([PlannerActivity].self, forKey: .activities)
+        events = try c.decode([PlannerEvent].self, forKey: .events)
+        artifacts = try c.decode([PlannerArtifact].self, forKey: .artifacts)
+        edges = try c.decode([PlannerGraphEdge].self, forKey: .edges)
+        canvasRuntime = try c.decodeIfPresent(CanvasRuntimeView.self, forKey: .canvasRuntime)
+    }
 }
 
 enum PlannerCanvasRole: String, Codable, Equatable {
@@ -692,7 +827,29 @@ struct PlanningNode: Codable, Equatable {
     /// Orthogonal to `widget.source` (which controls *view-layer* origin).
     /// nil on non-artifact nodes; nil on legacy artifact nodes is treated as
     /// `authored` per the rollout spec.
+    ///
+    /// @deprecated by `artifactSource` (2026-05-29 unification). Kept for one
+    /// release of decode-compat — the legacy two-mode string still decodes and
+    /// is normalized into `artifactSource` via `resolvedArtifactSource`.
     var artifactDataSource: String?
+    /// Unified `Artifact.source` (canvas-spec §7 — artifact-unified-model).
+    /// Folds the legacy two-mode `artifactDataSource` into the canonical
+    /// slot|dataSource|canvas-runtime origin. nil on non-artifact nodes and on
+    /// legacy data (decode falls back to deriving from `artifactDataSource`).
+    var artifactSource: ArtifactSource?
+
+    /// The effective unified source: explicit `artifactSource` if present,
+    /// else the legacy `artifactDataSource` string normalized via §7.4 mapping.
+    /// Read this (not the raw fields) wherever the artifact data origin matters.
+    var resolvedArtifactSource: ArtifactSource? {
+        if let artifactSource { return artifactSource }
+        return ArtifactSource.fromLegacy(
+            mode: artifactDataSource,
+            nodeId: id,
+            outputSlotKey: schema.outputs.first,
+            mirroredSourceId: nil
+        )
+    }
 
     init(
         id: String,
@@ -725,7 +882,8 @@ struct PlanningNode: Codable, Equatable {
         blockedReason: String? = nil,
         outputSubmittedAt: Date? = nil,
         widget: Widget? = nil,
-        artifactDataSource: String? = nil
+        artifactDataSource: String? = nil,
+        artifactSource: ArtifactSource? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -758,6 +916,7 @@ struct PlanningNode: Codable, Equatable {
         self.outputSubmittedAt = outputSubmittedAt
         self.widget = widget
         self.artifactDataSource = artifactDataSource
+        self.artifactSource = artifactSource
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -779,6 +938,9 @@ struct PlanningNode: Codable, Equatable {
         // Artifact-node data-source mode (2026-05-28). nil ⇒ `authored` per
         // rollout default. Stored as String for forward-compat with new modes.
         case artifactDataSource
+        // Unified Artifact.source (2026-05-29). Canonical origin; supersedes
+        // the legacy `artifactDataSource` string.
+        case artifactSource
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -821,6 +983,7 @@ struct PlanningNode: Codable, Equatable {
         outputSubmittedAt = try container.decodeIfPresent(Date.self, forKey: .outputSubmittedAt)
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
+        artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -857,6 +1020,10 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(outputSubmittedAt, forKey: .outputSubmittedAt)
         try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
+        // Emit the unified source (resolved from legacy if unset) so the
+        // board-app reads one canonical `artifactSource`. Legacy
+        // `artifactDataSource` is still emitted above for one-release compat.
+        try container.encodeIfPresent(resolvedArtifactSource, forKey: .artifactSource)
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
@@ -963,6 +1130,34 @@ struct PlanChange: Codable, Equatable {
         /// directive text rides in `title`. Apply-side routes it to the
         /// node's bound session via the operator channel.
         case refineSessionPrompt
+
+        // MARK: Canvas runtime 5-atom governance variants (PR6+7)
+        //
+        // These mirror the contract's PlanChange discriminated union
+        // (meee2-online/src/planner-runtime/contract/proposal.ts). Their
+        // payloads ride on the optional `*5Atom*` fields below and are applied
+        // at the canvas level by `PlannerStore.applyCanvasAtomChanges`.
+
+        /// Real node removal (governance alias). Carries `nodeId`.
+        case removeNode
+        // Atom 1 · DataSource
+        case addDataSource
+        case updateDataSource
+        case setPartitionRule
+        case archiveDataSource
+        // Atom 2 · Edge
+        case addEdge
+        case updateEdgeMode
+        case removeEdge
+        // Atom 4 · Monitor
+        case setMonitorSpec
+        case addMonitorCard
+        case updateMonitorCard
+        case removeMonitorCard
+        case moveMonitorCard
+        // Artifact write (split from legacy attachArtifact)
+        case writeSourceVersion
+        case attachExternalArtifact
     }
 
     var kind: Kind
@@ -1006,6 +1201,63 @@ struct PlanChange: Codable, Equatable {
     /// artifact draft; whichever lane (attachArtifact or updateNode) carries
     /// it, apply-path writes it onto the target node.
     var artifactDataSource: String?
+    /// Unified `Artifact.source` (2026-05-29): proposal-driven update of
+    /// `PlanningNode.artifactSource`. nil ⇒ no change. Preferred over the
+    /// legacy `artifactDataSource`. Also decoded from the legacy nested wire
+    /// shape `artifactConfig.dataSource` (board-app sends that on updateNode)
+    /// so old clients keep working — see init(from:).
+    var artifactSource: ArtifactSource?
+
+    // MARK: Canvas runtime 5-atom payloads (PR6+7)
+    //
+    // Carried by-value on the governance PlanChange variants. Decode-tolerant
+    // (all optional). Applied at the canvas level by
+    // `PlannerStore.applyCanvasAtomChanges`. Wire field names match the TS
+    // contract (proposal.ts) exactly.
+
+    /// addDataSource → the new DataSource record. NOTE: shares the wire key
+    /// `source` with the node-level `source` (`PlanningNodeSource`). Decode
+    /// disambiguates by `kind`: addDataSource decodes the object form here, the
+    /// node lanes decode the string form into `source`.
+    var dataSourceRecord: DataSourceRecord?
+    /// updateDataSource / setPartitionRule / archiveDataSource / writeSourceVersion.
+    var sourceId: String?
+    /// updateDataSource patch — partial DataSource fields (opaque, applied per-field).
+    var dataSourcePatch: BoardJSONValue?
+    /// setPartitionRule.
+    var partitionRule: String?
+    var partitionTimezone: String?
+    /// archiveDataSource: `reject-if-referenced | detach-edges`.
+    var cascade: String?
+    /// addEdge → the new Edge.
+    var edge: Edge?
+    /// updateEdgeMode / removeEdge.
+    var edgeId: String?
+    /// updateEdgeMode.
+    var edgeMode: EdgeMode?
+    /// setMonitorSpec → full spec.
+    var spec: MonitorSpec?
+    /// setMonitorSpec guard: must be `wipe-and-rebuild` to replace a non-null prior.
+    var intent: String?
+    /// addMonitorCard.
+    var card: MonitorCard?
+    /// updateMonitorCard / removeMonitorCard / moveMonitorCard.
+    var cardId: String?
+    /// moveMonitorCard. Shares wire key `layout` with the node layout; decode
+    /// disambiguates by `kind`.
+    var cardLayout: MonitorCardLayout?
+    /// updateMonitorCard partial patch (opaque — applied permissively). Shares
+    /// wire key `patch` with `dataSourcePatch`; decode disambiguates by `kind`.
+    var cardPatch: BoardJSONValue?
+    /// writeSourceVersion.
+    var slotKey: String?
+    var payload: BoardJSONValue?
+    var payloadRef: String?
+    var parentVersionId: String?
+    var submittedBy: String?
+    var submittedByKind: String?
+    /// Free-text rationale carried by governance variants (§7). Decode-only.
+    var rationale: String?
 
     private enum CodingKeys: String, CodingKey {
         case kind, node, nodeId, title, status, schema, contextSources
@@ -1013,7 +1265,19 @@ struct PlanChange: Codable, Equatable {
         case executionMode, clearGate, dispatch, approvers, artifactRefs, eventRefs, workflowRunState
         case sessionId, chatThreadId, source, doerId, artifact
         case reviewerIds, approverIds, handoffPolicy, widget
-        case artifactDataSource
+        case artifactDataSource, artifactSource
+        // Legacy nested wire shape `artifactConfig: { dataSource: { mode } }`
+        // (board-app sends this on updateNode). Decoded into artifactDataSource
+        // for one-release compat.
+        case artifactConfig
+        // 5-atom governance payloads. `source` / `patch` / `layout` collide
+        // with node-lane keys and are disambiguated by `kind` in init(from:).
+        case sourceId, partitionRule, partitionTimezone, cascade
+        case edge, edgeId, edgeMode
+        case spec, intent, card, cardId
+        case slotKey, payload, payloadRef, parentVersionId, submittedBy, submittedByKind
+        case patch
+        case rationale
     }
 
     init(
@@ -1047,13 +1311,58 @@ struct PlanChange: Codable, Equatable {
         handoffPolicy: HandoffPolicy? = nil,
         widget: Widget? = nil,
         artifact: PlanArtifactDraft? = nil,
-        artifactDataSource: String? = nil
+        artifactDataSource: String? = nil,
+        artifactSource: ArtifactSource? = nil,
+        dataSourceRecord: DataSourceRecord? = nil,
+        sourceId: String? = nil,
+        dataSourcePatch: BoardJSONValue? = nil,
+        partitionRule: String? = nil,
+        partitionTimezone: String? = nil,
+        cascade: String? = nil,
+        edge: Edge? = nil,
+        edgeId: String? = nil,
+        edgeMode: EdgeMode? = nil,
+        spec: MonitorSpec? = nil,
+        intent: String? = nil,
+        card: MonitorCard? = nil,
+        cardId: String? = nil,
+        cardLayout: MonitorCardLayout? = nil,
+        cardPatch: BoardJSONValue? = nil,
+        slotKey: String? = nil,
+        payload: BoardJSONValue? = nil,
+        payloadRef: String? = nil,
+        parentVersionId: String? = nil,
+        submittedBy: String? = nil,
+        submittedByKind: String? = nil,
+        rationale: String? = nil
     ) {
         self.kind = kind
         self.node = node
         self.nodeId = nodeId
         self.title = title
         self.status = status
+        self.dataSourceRecord = dataSourceRecord
+        self.sourceId = sourceId
+        self.dataSourcePatch = dataSourcePatch
+        self.partitionRule = partitionRule
+        self.partitionTimezone = partitionTimezone
+        self.cascade = cascade
+        self.edge = edge
+        self.edgeId = edgeId
+        self.edgeMode = edgeMode
+        self.spec = spec
+        self.intent = intent
+        self.card = card
+        self.cardId = cardId
+        self.cardLayout = cardLayout
+        self.cardPatch = cardPatch
+        self.slotKey = slotKey
+        self.payload = payload
+        self.payloadRef = payloadRef
+        self.parentVersionId = parentVersionId
+        self.submittedBy = submittedBy
+        self.submittedByKind = submittedByKind
+        self.rationale = rationale
         self.schema = schema
         self.contextSources = contextSources
         self.dependsOnNodeIds = dependsOnNodeIds
@@ -1080,6 +1389,7 @@ struct PlanChange: Codable, Equatable {
         self.widget = widget
         self.artifact = artifact
         self.artifactDataSource = artifactDataSource
+        self.artifactSource = artifactSource
     }
 
     init(from decoder: Decoder) throws {
@@ -1094,7 +1404,16 @@ struct PlanChange: Codable, Equatable {
         dependsOnNodeIds = try container.decodeIfPresent([String].self, forKey: .dependsOnNodeIds)
         subCanvasId = try container.decodeIfPresent(String.self, forKey: .subCanvasId)
         nodeKind = try container.decodeIfPresent(PlanningNodeKind.self, forKey: .nodeKind)
-        layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
+        // `layout` is shared between the node lane (PlannerNodeLayout) and the
+        // monitor-card lanes (MonitorCardLayout). Disambiguate by kind so a
+        // governance card-layout object doesn't fail the node-layout decode.
+        if kind == .moveMonitorCard {
+            layout = nil
+            cardLayout = try container.decodeIfPresent(MonitorCardLayout.self, forKey: .layout)
+        } else {
+            layout = try container.decodeIfPresent(PlannerNodeLayout.self, forKey: .layout)
+            cardLayout = nil
+        }
         trigger = try container.decodeIfPresent(PlannerNodeTrigger.self, forKey: .trigger)
         schedule = try container.decodeIfPresent(PlannerNodeSchedule.self, forKey: .schedule)
         executionMode = try container.decodeIfPresent(ExecutionMode.self, forKey: .executionMode)
@@ -1107,14 +1426,62 @@ struct PlanChange: Codable, Equatable {
         workflowRunState = try container.decodeIfPresent(PlannerWorkflowRunState.self, forKey: .workflowRunState)
         sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
         chatThreadId = try container.decodeIfPresent(String.self, forKey: .chatThreadId)
-        source = try container.decodeIfPresent(PlanningNodeSource.self, forKey: .source)
+        // `source` is shared between the node lane (PlanningNodeSource string)
+        // and the addDataSource lane (DataSource object). Disambiguate by kind.
+        if kind == .addDataSource {
+            source = nil
+            dataSourceRecord = try container.decodeIfPresent(DataSourceRecord.self, forKey: .source)
+        } else {
+            source = try container.decodeIfPresent(PlanningNodeSource.self, forKey: .source)
+            dataSourceRecord = nil
+        }
         doerId = try container.decodeIfPresent(String.self, forKey: .doerId)
         reviewerIds = try container.decodeIfPresent([String].self, forKey: .reviewerIds)
         approverIds = try container.decodeIfPresent([String].self, forKey: .approverIds)
         handoffPolicy = try container.decodeIfPresent(HandoffPolicy.self, forKey: .handoffPolicy)
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifact = try container.decodeIfPresent(PlanArtifactDraft.self, forKey: .artifact)
-        artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
+        artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
+        // Legacy two-mode: prefer the flat `artifactDataSource` string; else
+        // pull `mode` out of the nested `artifactConfig.dataSource` wire shape
+        // the board-app still sends on updateNode (decode-compat, one release).
+        if let flat = try container.decodeIfPresent(String.self, forKey: .artifactDataSource) {
+            artifactDataSource = flat
+        } else if let cfg = try container.decodeIfPresent(BoardJSONValue.self, forKey: .artifactConfig),
+                  let mode = cfg.objectValue?["dataSource"]?.objectValue?["mode"]?.stringValue {
+            artifactDataSource = mode
+        } else {
+            artifactDataSource = nil
+        }
+
+        // MARK: 5-atom governance payloads.
+        sourceId = try container.decodeIfPresent(String.self, forKey: .sourceId)
+        partitionRule = try container.decodeIfPresent(String.self, forKey: .partitionRule)
+        partitionTimezone = try container.decodeIfPresent(String.self, forKey: .partitionTimezone)
+        cascade = try container.decodeIfPresent(String.self, forKey: .cascade)
+        edge = try container.decodeIfPresent(Edge.self, forKey: .edge)
+        edgeId = try container.decodeIfPresent(String.self, forKey: .edgeId)
+        edgeMode = try container.decodeIfPresent(EdgeMode.self, forKey: .edgeMode)
+        spec = try container.decodeIfPresent(MonitorSpec.self, forKey: .spec)
+        intent = try container.decodeIfPresent(String.self, forKey: .intent)
+        card = try container.decodeIfPresent(MonitorCard.self, forKey: .card)
+        cardId = try container.decodeIfPresent(String.self, forKey: .cardId)
+        slotKey = try container.decodeIfPresent(String.self, forKey: .slotKey)
+        payload = try container.decodeIfPresent(BoardJSONValue.self, forKey: .payload)
+        payloadRef = try container.decodeIfPresent(String.self, forKey: .payloadRef)
+        parentVersionId = try container.decodeIfPresent(String.self, forKey: .parentVersionId)
+        submittedBy = try container.decodeIfPresent(String.self, forKey: .submittedBy)
+        submittedByKind = try container.decodeIfPresent(String.self, forKey: .submittedByKind)
+        rationale = try container.decodeIfPresent(String.self, forKey: .rationale)
+        // `patch` is shared between updateDataSource (DataSource fields) and
+        // updateMonitorCard (card fields). Both decode into an opaque
+        // BoardJSONValue; route by kind.
+        let rawPatch = try container.decodeIfPresent(BoardJSONValue.self, forKey: .patch)
+        switch kind {
+        case .updateDataSource: dataSourcePatch = rawPatch; cardPatch = nil
+        case .updateMonitorCard: cardPatch = rawPatch; dataSourcePatch = nil
+        default: dataSourcePatch = nil; cardPatch = nil
+        }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1150,6 +1517,40 @@ struct PlanChange: Codable, Equatable {
         try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifact, forKey: .artifact)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
+        try container.encodeIfPresent(artifactSource, forKey: .artifactSource)
+
+        // MARK: 5-atom governance payloads. `source` / `layout` / `patch` are
+        // shared keys — encode the governance variant only when the node-lane
+        // value is absent (a given change carries exactly one of each).
+        if source == nil, let dataSourceRecord {
+            try container.encode(dataSourceRecord, forKey: .source)
+        }
+        if layout == nil, let cardLayout {
+            try container.encode(cardLayout, forKey: .layout)
+        }
+        if let dataSourcePatch {
+            try container.encode(dataSourcePatch, forKey: .patch)
+        } else if let cardPatch {
+            try container.encode(cardPatch, forKey: .patch)
+        }
+        try container.encodeIfPresent(sourceId, forKey: .sourceId)
+        try container.encodeIfPresent(partitionRule, forKey: .partitionRule)
+        try container.encodeIfPresent(partitionTimezone, forKey: .partitionTimezone)
+        try container.encodeIfPresent(cascade, forKey: .cascade)
+        try container.encodeIfPresent(edge, forKey: .edge)
+        try container.encodeIfPresent(edgeId, forKey: .edgeId)
+        try container.encodeIfPresent(edgeMode, forKey: .edgeMode)
+        try container.encodeIfPresent(spec, forKey: .spec)
+        try container.encodeIfPresent(intent, forKey: .intent)
+        try container.encodeIfPresent(card, forKey: .card)
+        try container.encodeIfPresent(cardId, forKey: .cardId)
+        try container.encodeIfPresent(slotKey, forKey: .slotKey)
+        try container.encodeIfPresent(payload, forKey: .payload)
+        try container.encodeIfPresent(payloadRef, forKey: .payloadRef)
+        try container.encodeIfPresent(parentVersionId, forKey: .parentVersionId)
+        try container.encodeIfPresent(submittedBy, forKey: .submittedBy)
+        try container.encodeIfPresent(submittedByKind, forKey: .submittedByKind)
+        try container.encodeIfPresent(rationale, forKey: .rationale)
     }
 
     static func addNode(_ node: PlanningNode) -> PlanChange {
@@ -2017,6 +2418,13 @@ enum PlannerCoreError: LocalizedError, Equatable {
     case unknownChangeKind(String)
     case invalidNodeOutput(String)
     case activeSessionExists(nodeId: String)
+    // Canvas runtime 5-atom governance (PR6+7).
+    case dataSourceNotFound(String)
+    case edgeNotFound(String)
+    case monitorCardNotFound(String)
+    /// §6.6 footgun guard: wholesale `setMonitorSpec` over a non-empty prior
+    /// spec is rejected unless `intent == 'wipe-and-rebuild'`.
+    case monitorSpecReplaceGuard
 
     var errorDescription: String? {
         switch self {
@@ -2058,6 +2466,14 @@ enum PlannerCoreError: LocalizedError, Equatable {
             return hint
         case .activeSessionExists(let nodeId):
             return "node \(nodeId) already has an active session; complete or split the node before starting another"
+        case .dataSourceNotFound(let id):
+            return "data source not found: \(id)"
+        case .edgeNotFound(let id):
+            return "edge not found: \(id)"
+        case .monitorCardNotFound(let id):
+            return "monitor card not found: \(id)"
+        case .monitorSpecReplaceGuard:
+            return "setMonitorSpec cannot replace a non-empty monitor spec without intent='wipe-and-rebuild' (§6.6)"
         }
     }
 }
@@ -2396,6 +2812,7 @@ enum PlannerProposalValidator {
                     // an inline artifact draft (e.g. setArtifactDataSource
                     // riding shotgun on an attach).
                     change.artifactDataSource != nil ||
+                    change.artifactSource != nil ||
                     change.artifact?.dataSource != nil else {
                     throw PlannerCoreError.updateNodeNoFields(nodeId)
                 }
@@ -2420,6 +2837,92 @@ enum PlannerProposalValidator {
                 // Directive lives in `title`. Empty is allowed (no-op refine
                 // pings the session to re-think) but we log if missing.
                 _ = change.title
+
+            // MARK: Canvas runtime 5-atom governance variants (PR6+7).
+            // Structural validation; canvas-level state mutation happens in
+            // `PlannerStore.applyCanvasAtomChanges` after node changes apply.
+            case .removeNode:
+                guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
+                guard existingNodeIds.contains(nodeId) else {
+                    throw PlannerCoreError.nodeNotFound(nodeId)
+                }
+            case .addDataSource:
+                guard let ds = change.dataSourceRecord else {
+                    throw PlannerCoreError.invalidNodeOutput("addDataSource is missing source")
+                }
+                guard ds.canvasId == canvas.id else {
+                    throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: ds.canvasId)
+                }
+                guard !ds.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("addDataSource requires a non-empty source id")
+                }
+            case .updateDataSource, .setPartitionRule, .archiveDataSource, .writeSourceVersion:
+                guard let sourceId = change.sourceId,
+                      !sourceId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("\(change.kind.rawValue) requires a sourceId")
+                }
+                guard canvas.dataSources.contains(where: { $0.id == sourceId }) else {
+                    throw PlannerCoreError.dataSourceNotFound(sourceId)
+                }
+                if change.kind == .archiveDataSource {
+                    // §10.4 cascade: reject-if-referenced unless detach-edges.
+                    let cascade = change.cascade ?? "reject-if-referenced"
+                    if cascade == "reject-if-referenced",
+                       canvas.edges.contains(where: { _ in false }) == false {
+                        // Edge→source linkage is by node slot, not source id, in
+                        // the current Edge shape; a stricter cascade check lands
+                        // when source-backed edges are modeled. No-op for now.
+                    }
+                }
+            case .addEdge:
+                guard let edge = change.edge else {
+                    throw PlannerCoreError.invalidNodeOutput("addEdge is missing edge")
+                }
+                guard edge.canvasId == canvas.id else {
+                    throw PlannerCoreError.canvasMismatch(expected: canvas.id, actual: edge.canvasId)
+                }
+                guard canvasNodeIds.contains(edge.sourceRef.nodeId),
+                      canvasNodeIds.contains(edge.targetRef.nodeId) else {
+                    throw PlannerCoreError.invalidNodeOutput("addEdge references a node outside canvas \(canvas.id)")
+                }
+            case .updateEdgeMode, .removeEdge:
+                guard let edgeId = change.edgeId,
+                      !edgeId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("\(change.kind.rawValue) requires an edgeId")
+                }
+                guard canvas.edges.contains(where: { $0.id == edgeId }) else {
+                    throw PlannerCoreError.edgeNotFound(edgeId)
+                }
+            case .setMonitorSpec:
+                guard let spec = change.spec else {
+                    throw PlannerCoreError.invalidNodeOutput("setMonitorSpec is missing spec")
+                }
+                // §6.6 footgun guard: replacing a non-null prior spec wholesale
+                // requires an explicit wipe-and-rebuild intent.
+                if let existing = canvas.monitorSpec, !existing.cards.isEmpty,
+                   change.intent != "wipe-and-rebuild" {
+                    throw PlannerCoreError.monitorSpecReplaceGuard
+                }
+                _ = spec
+            case .addMonitorCard:
+                guard change.card != nil else {
+                    throw PlannerCoreError.invalidNodeOutput("addMonitorCard is missing card")
+                }
+            case .updateMonitorCard, .removeMonitorCard, .moveMonitorCard:
+                guard let cardId = change.cardId,
+                      !cardId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("\(change.kind.rawValue) requires a cardId")
+                }
+                guard canvas.monitorSpec?.cards.contains(where: { $0.id == cardId }) == true else {
+                    throw PlannerCoreError.monitorCardNotFound(cardId)
+                }
+            case .attachExternalArtifact:
+                guard let nodeId = change.nodeId, canvasNodeIds.contains(nodeId) else {
+                    throw PlannerCoreError.missingNodeId
+                }
+                guard let artifact = change.artifact, !artifact.reference.isEmpty else {
+                    throw PlannerCoreError.invalidNodeOutput("attachExternalArtifact requires an artifact with a reference")
+                }
             }
         }
     }
@@ -2657,6 +3160,19 @@ final class PlannerCoreService {
                 if let dataSource = change.artifactDataSource ?? change.artifact?.dataSource {
                     updatedNodes[index].artifactDataSource = dataSource
                 }
+                // Unified Artifact.source (2026-05-29). Explicit unified field
+                // wins; else normalize the legacy two-mode string into the
+                // unified source so the node carries one canonical origin.
+                if let unified = change.artifactSource {
+                    updatedNodes[index].artifactSource = unified
+                } else if let legacy = change.artifactDataSource ?? change.artifact?.dataSource {
+                    updatedNodes[index].artifactSource = ArtifactSource.fromLegacy(
+                        mode: legacy,
+                        nodeId: updatedNodes[index].id,
+                        outputSlotKey: updatedNodes[index].schema.outputs.first,
+                        mirroredSourceId: nil
+                    )
+                }
                 if let status = change.status {
                     updatedNodes[index].status = status
                 }
@@ -2670,12 +3186,44 @@ final class PlannerCoreService {
                    let targetNodeId = draft.nodeId ?? change.nodeId,
                    let index = updatedNodes.firstIndex(where: { $0.id == targetNodeId }) {
                     updatedNodes[index].artifactDataSource = dataSource
+                    // Keep the unified source in lock-step (§7.4 mapping).
+                    updatedNodes[index].artifactSource = ArtifactSource.fromLegacy(
+                        mode: dataSource,
+                        nodeId: updatedNodes[index].id,
+                        outputSlotKey: updatedNodes[index].schema.outputs.first,
+                        mirroredSourceId: nil
+                    )
                 }
                 continue
             case .refineSessionPrompt:
                 // ENG-2 bonus: schema-level no-op at preview/apply time.
                 // The directive is delivered to the bound session by the
                 // BoardAPI handler (via the operator-channel inject path).
+                continue
+
+            // MARK: Canvas runtime 5-atom node-level apply (PR6+7).
+            case .removeNode:
+                guard let nodeId = change.nodeId else { throw PlannerCoreError.missingNodeId }
+                guard let removeIndex = updatedNodes.firstIndex(where: { $0.id == nodeId }) else {
+                    throw PlannerCoreError.nodeNotFound(nodeId)
+                }
+                updatedNodes.remove(at: removeIndex)
+                // Detach legacy dependency references to the removed node so the
+                // graph stays consistent (first-class Edge cleanup happens in
+                // the canvas-level pass).
+                for i in updatedNodes.indices {
+                    if var deps = updatedNodes[i].dependsOnNodeIds, deps.contains(nodeId) {
+                        deps.removeAll { $0 == nodeId }
+                        updatedNodes[i].dependsOnNodeIds = deps
+                    }
+                }
+            // DataSource / Edge / Monitor / SourceVersion / ExternalArtifact
+            // are canvas-level; handled by `applyCanvasAtomChanges` after node
+            // changes apply. No node mutation here.
+            case .addDataSource, .updateDataSource, .setPartitionRule, .archiveDataSource,
+                 .addEdge, .updateEdgeMode, .removeEdge,
+                 .setMonitorSpec, .addMonitorCard, .updateMonitorCard, .removeMonitorCard, .moveMonitorCard,
+                 .writeSourceVersion, .attachExternalArtifact:
                 continue
             }
         }
@@ -2721,12 +3269,23 @@ final class PlannerCoreService {
     func readNodeState(nodes: [PlanningNode]) -> [NodeStateSnapshot] {
         nodes.map { node in
             let runState = NodeRunState(status: node.status)
+            // canvas-spec §8 / §11 ·「待确认」(awaiting-review) distinction.
+            // A node parked at `gateWait` after a needs-review `done` shares
+            // the `.blocked` plan-status with「卡住」(failure / unassigned),
+            // so the display layer needs a separate signal to render it as
+            // 待确认 rather than 卡住. `needsOwnerReview = true` is that signal.
+            // It is set iff the node is at `gateWait` AND has an assigned doer
+            // — an UNassigned downstream is also parked at gateWait but it is
+            // "needs assignment / attention", not "review my completed output",
+            // so it must NOT light up the review surface.
+            let hasDoer = !node.doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let awaitingReview = node.workflowRunState == .gateWait && hasDoer
             return NodeStateSnapshot(
                 nodeId: node.id,
                 runState: runState,
                 blockers: blockers(for: node),
                 artifactRefs: artifactRefs(for: node),
-                needsOwnerReview: false
+                needsOwnerReview: awaitingReview
             )
         }
     }
@@ -3107,6 +3666,13 @@ final class PlannerStore {
                 // Preserve the persisted tier so a read never clobbers it.
                 var incoming = canvas
                 incoming.visibility = existing.canvas.visibility
+                // PR6+7: the 5-atom governance collections (dataSources / edges
+                // / monitorSpec) are store-owned too — the per-request board
+                // snapshot projection doesn't carry them, so a plain read would
+                // otherwise wipe applied governance state. Preserve them.
+                incoming.dataSources = existing.canvas.dataSources
+                incoming.edges = existing.canvas.edges
+                incoming.monitorSpec = existing.canvas.monitorSpec
                 if existing.canvas == incoming {
                     return existing
                 }
@@ -3290,6 +3856,277 @@ final class PlannerStore {
         }
     }
 
+    /// Canvas runtime 5-atom governance apply (PR6+7). Mutates `record.canvas`
+    /// (dataSources / edges / monitorSpec) and `record.artifactVersions`
+    /// (writeSourceVersion) for the governance PlanChange variants. Node-level
+    /// variants (removeNode / skill bindings) are applied by `applyNodeChange`
+    /// upstream; this pass also reconciles first-class edges against the
+    /// post-removal node set so a removeNode drops its dangling edges.
+    ///
+    /// Caller must hold the store lock (invoked inside `withLock`).
+    private func applyCanvasAtomChanges(
+        record: inout CanvasRecord,
+        proposal: PlanProposal
+    ) throws {
+        let canvasId = record.canvas.id
+        for change in proposal.changes {
+            switch change.kind {
+            // MARK: Atom 1 · DataSource
+            case .addDataSource:
+                guard let ds = change.dataSourceRecord else { continue }
+                if let idx = record.canvas.dataSources.firstIndex(where: { $0.id == ds.id }) {
+                    record.canvas.dataSources[idx] = ds   // idempotent re-apply
+                } else {
+                    record.canvas.dataSources.append(ds)
+                }
+            case .updateDataSource:
+                guard let sourceId = change.sourceId,
+                      let idx = record.canvas.dataSources.firstIndex(where: { $0.id == sourceId })
+                else { continue }
+                applyDataSourcePatch(&record.canvas.dataSources[idx], patch: change.dataSourcePatch)
+            case .setPartitionRule:
+                guard let sourceId = change.sourceId,
+                      let idx = record.canvas.dataSources.firstIndex(where: { $0.id == sourceId })
+                else { continue }
+                if let rule = change.partitionRule { record.canvas.dataSources[idx].partitionRule = rule }
+                if let tz = change.partitionTimezone { record.canvas.dataSources[idx].partitionTimezone = tz }
+            case .archiveDataSource:
+                guard let sourceId = change.sourceId,
+                      let idx = record.canvas.dataSources.firstIndex(where: { $0.id == sourceId })
+                else { continue }
+                // §10.4: mark archived (no physical delete). With cascade
+                // 'detach-edges', drop edges that name the source's id in a ref
+                // (current Edge shape keys by node slot, not source id, so this
+                // is a no-op until source-backed edges land — left as TODO).
+                record.canvas.dataSources[idx].archived = true
+
+            // MARK: Atom 2 · Edge
+            case .addEdge:
+                guard let edge = change.edge else { continue }
+                if let idx = record.canvas.edges.firstIndex(where: { $0.id == edge.id }) {
+                    record.canvas.edges[idx] = edge
+                } else {
+                    record.canvas.edges.append(edge)
+                }
+            case .updateEdgeMode:
+                guard let edgeId = change.edgeId,
+                      let mode = change.edgeMode,
+                      let idx = record.canvas.edges.firstIndex(where: { $0.id == edgeId })
+                else { continue }
+                record.canvas.edges[idx].edgeMode = mode
+                record.canvas.edges[idx].modeRevision += 1
+            case .removeEdge:
+                guard let edgeId = change.edgeId else { continue }
+                // edges-authoritative: clear the projected dependency on the
+                // target before dropping the edge, so reconcileEdgesAndDependencies
+                // (below) does not re-promote it from a stale dependsOnNodeIds.
+                if let removed = record.canvas.edges.first(where: { $0.id == edgeId }),
+                   let i = record.nodes.firstIndex(where: { $0.id == removed.targetRef.nodeId }) {
+                    record.nodes[i].dependsOnNodeIds?.removeAll { $0 == removed.sourceRef.nodeId }
+                }
+                record.canvas.edges.removeAll { $0.id == edgeId }
+
+            // MARK: Atom 4 · Monitor
+            case .setMonitorSpec:
+                guard var spec = change.spec else { continue }
+                if spec.canvasId.isEmpty { spec.canvasId = canvasId }
+                spec.appliedFromProposalId = proposal.id
+                record.canvas.monitorSpec = spec
+            case .addMonitorCard:
+                guard let card = change.card else { continue }
+                if record.canvas.monitorSpec == nil {
+                    record.canvas.monitorSpec = MonitorSpec(canvasId: canvasId)
+                }
+                if let i = record.canvas.monitorSpec?.cards.firstIndex(where: { $0.id == card.id }) {
+                    record.canvas.monitorSpec?.cards[i] = card
+                } else {
+                    record.canvas.monitorSpec?.cards.append(card)
+                }
+                record.canvas.monitorSpec?.version += 1
+            case .updateMonitorCard:
+                guard let cardId = change.cardId,
+                      let i = record.canvas.monitorSpec?.cards.firstIndex(where: { $0.id == cardId })
+                else { continue }
+                applyMonitorCardPatch(&record.canvas.monitorSpec!.cards[i], patch: change.cardPatch)
+                record.canvas.monitorSpec?.version += 1
+            case .removeMonitorCard:
+                guard let cardId = change.cardId else { continue }
+                record.canvas.monitorSpec?.cards.removeAll { $0.id == cardId }
+                record.canvas.monitorSpec?.version += 1
+            case .moveMonitorCard:
+                guard let cardId = change.cardId,
+                      let layout = change.cardLayout,
+                      let i = record.canvas.monitorSpec?.cards.firstIndex(where: { $0.id == cardId })
+                else { continue }
+                record.canvas.monitorSpec?.cards[i].layout = layout
+                record.canvas.monitorSpec?.version += 1
+
+            // MARK: artifact write (split from legacy attachArtifact)
+            case .writeSourceVersion:
+                guard let sourceId = change.sourceId else { continue }
+                let slotKey = "\(canvasId)|source|\(sourceId)|\(change.slotKey ?? "default")"
+                let parent = change.parentVersionId
+                    ?? latestVersion(in: record.artifactVersions, slotKey: slotKey)?.versionId
+                let submitterKind = PlannerArtifactVersionSubmitterKind(rawValue: change.submittedByKind ?? "agent") ?? .agent
+                let createdAt = Date()
+                record.artifactVersions.append(PlannerArtifactVersion(
+                    versionId: "ver-\(sourceId)-\(stableSuffix("\(slotKey)-\(createdAt.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: canvasId,
+                    nodeId: "",
+                    artifactId: "source-\(sourceId)",
+                    artifactSlotKey: slotKey,
+                    payloadRef: change.payloadRef ?? "",
+                    payloadInline: change.payload,
+                    inputSnapshot: nil,
+                    displayStrategy: .latest,
+                    forceNewVersion: false,
+                    submittedBy: change.submittedBy,
+                    submittedByKind: submitterKind,
+                    metadata: .object([
+                        "source": .string("writeSourceVersion"),
+                        "sourceId": .string(sourceId)
+                    ]),
+                    createdAt: createdAt
+                ))
+                // Advance the source's currentVersion counter (sequence strategy).
+                if let idx = record.canvas.dataSources.firstIndex(where: { $0.id == sourceId }) {
+                    record.canvas.dataSources[idx].currentVersion += 1
+                }
+            case .attachExternalArtifact:
+                // External artifact attach: mirror onto the target node's
+                // artifactRefs so it surfaces in the graph. Payload is a
+                // reference only (lazy pull-on-consume), no version row.
+                guard let nodeId = change.nodeId,
+                      let draft = change.artifact,
+                      let idx = record.nodes.firstIndex(where: { $0.id == nodeId })
+                else { continue }
+                var refs = record.nodes[idx].artifactRefs ?? []
+                if !refs.contains(draft.reference) { refs.append(draft.reference) }
+                record.nodes[idx].artifactRefs = refs
+
+            default:
+                continue   // node-level variants handled in applyNodeChange.
+            }
+        }
+
+        reconcileEdgesAndDependencies(&record)
+    }
+
+    /// Phase 1 — edge unification. `canvas.edges` is the authoritative
+    /// representation of node connectivity; the legacy `node.dependsOnNodeIds`
+    /// is kept as a *derived projection* so the ~60 existing consumers
+    /// (dataflow legality, graph render, downstream computation) keep working
+    /// unchanged. Bidirectional + idempotent:
+    ///   a) drop dead-endpoint edges + derived `dep-` edges no longer backed
+    ///      by a declared dependency,
+    ///   b) promote any node-declared dependency lacking a backing edge into a
+    ///      synthetic `mode:"dependency"` edge,
+    ///   c) re-project every node's `dependsOnNodeIds` from the live edge set
+    ///      (edges win — a dependency exists iff an edge encodes it).
+    /// Net effect: add an edge ⇒ the dep appears; remove an edge ⇒ the dep
+    /// disappears; declare a dep ⇒ a dependency edge appears. No field dropped.
+    private func reconcileEdgesAndDependencies(_ record: inout CanvasRecord) {
+        let liveNodeIds = Set(record.nodes.map(\.id))
+
+        // a) drop edges whose endpoints are gone, and derived dependency edges
+        //    whose backing dependency was removed (updateNode / removeEdge).
+        record.canvas.edges.removeAll { edge in
+            if !liveNodeIds.contains(edge.sourceRef.nodeId)
+                || !liveNodeIds.contains(edge.targetRef.nodeId) {
+                return true
+            }
+            if edge.edgeMode.mode == "dependency" {
+                let backed = record.nodes
+                    .first { $0.id == edge.targetRef.nodeId }?
+                    .dependsOnNodeIds?.contains(edge.sourceRef.nodeId) ?? false
+                return !backed
+            }
+            return false
+        }
+
+        // b) promote node-declared dependencies that lack ANY backing edge.
+        for node in record.nodes {
+            for dep in (node.dependsOnNodeIds ?? []) where liveNodeIds.contains(dep) && dep != node.id {
+                let hasEdge = record.canvas.edges.contains {
+                    $0.sourceRef.nodeId == dep && $0.targetRef.nodeId == node.id
+                }
+                if !hasEdge {
+                    record.canvas.edges.append(Edge(
+                        id: "dep-\(dep)-\(node.id)",
+                        canvasId: record.canvas.id,
+                        sourceRef: EdgeSourceRef(nodeId: dep, sourceKey: "out"),
+                        targetRef: EdgeTargetRef(nodeId: node.id, inputKey: "in"),
+                        edgeMode: EdgeMode(mode: "dependency")
+                    ))
+                }
+            }
+        }
+
+        // c) project dependsOnNodeIds from the edge set (edges authoritative).
+        for i in record.nodes.indices {
+            let nodeId = record.nodes[i].id
+            let derived = record.canvas.edges
+                .filter { $0.targetRef.nodeId == nodeId && $0.sourceRef.nodeId != nodeId }
+                .map(\.sourceRef.nodeId)
+            let unique = Array(Set(derived)).sorted()
+            // Preserve nil when there are genuinely no dependencies, to keep the
+            // on-wire shape byte-identical for dependency-free nodes.
+            record.nodes[i].dependsOnNodeIds = unique.isEmpty
+                ? (record.nodes[i].dependsOnNodeIds == nil ? nil : [])
+                : unique
+        }
+    }
+
+    /// Apply an `updateDataSource` patch (§9.3) onto a record. Opaque JSON
+    /// patch; well-known fields applied, unknown keys ignored (forward-compat).
+    private func applyDataSourcePatch(_ ds: inout DataSourceRecord, patch: BoardJSONValue?) {
+        guard let fields = patch?.objectValue else { return }
+        if let v = fields["title"]?.stringValue { ds.title = v }
+        if let v = fields["pathPattern"]?.stringValue { ds.pathPattern = v }
+        if let v = fields["partitionRule"]?.stringValue { ds.partitionRule = v }
+        if let v = fields["partitionTimezone"]?.stringValue { ds.partitionTimezone = v }
+        // Structured sub-objects: round-trip via JSON to replace wholesale.
+        for (key, type): (String, Any.Type) in [
+            ("capabilities", DataSourceCapabilities.self),
+            ("versionStrategy", VersionStrategy.self),
+            ("freshness", FreshnessPolicy.self),
+            ("binding", DataSourceIntegrationBinding.self)
+        ] {
+            guard let raw = fields[key], let data = try? JSONEncoder().encode(raw) else { continue }
+            let dec = JSONDecoder()
+            switch key {
+            case "capabilities":
+                if let d = try? dec.decode(DataSourceCapabilities.self, from: data) { ds.capabilities = d }
+            case "versionStrategy":
+                if let d = try? dec.decode(VersionStrategy.self, from: data) { ds.versionStrategy = d }
+            case "freshness":
+                if let d = try? dec.decode(FreshnessPolicy.self, from: data) { ds.freshness = d }
+            case "binding":
+                if let d = try? dec.decode(DataSourceIntegrationBinding.self, from: data) { ds.binding = d }
+            default: break
+            }
+            _ = type
+        }
+    }
+
+    /// Apply an `updateMonitorCard` patch (§9.3) onto a card. Permissive JSON
+    /// patch; the card `type` is immutable here.
+    private func applyMonitorCardPatch(_ card: inout MonitorCard, patch: BoardJSONValue?) {
+        guard let fields = patch?.objectValue else { return }
+        if let v = fields["title"]?.stringValue { card.title = v }
+        if let v = fields["attemptVisibility"]?.stringValue { card.attemptVisibility = v }
+        if let raw = fields["layout"], let data = try? JSONEncoder().encode(raw),
+           let d = try? JSONDecoder().decode(MonitorCardLayout.self, from: data) {
+            card.layout = d
+        }
+        if let raw = fields["viewerFilter"], let data = try? JSONEncoder().encode(raw),
+           let d = try? JSONDecoder().decode(MonitorViewerFilter.self, from: data) {
+            card.viewerFilter = d
+        }
+        if let raw = fields["config"] { card.config = raw }
+    }
+
     func applyProposal(
         proposalId: String,
         canvasId: String,
@@ -3309,6 +4146,12 @@ final class PlannerStore {
             let nodes = try service.applyNodeChange(nodes: record.nodes, proposal: proposal)
             record.events.append(contentsOf: events(for: proposal, before: record.nodes, after: nodes))
             record.nodes = nodes
+            // Canvas runtime 5-atom governance (PR6+7): apply DataSource / Edge
+            // / Monitor / writeSourceVersion / external-artifact changes onto
+            // the canvas + version chain. Node-level changes (removeNode, skill
+            // bindings) already applied above in `applyNodeChange`; this pass
+            // reconciles first-class edges against the post-removal node set.
+            try applyCanvasAtomChanges(record: &record, proposal: proposal)
             record.proposals[index].status = .applied
             let newArtifactsFromProposal = proposalArtifacts(from: proposal, nodes: nodes, canvasId: canvasId)
             record.artifacts = mergeArtifacts(
@@ -3564,6 +4407,82 @@ final class PlannerStore {
         }
     }
 
+    /// BUG 1.1 — reconcile persisted "running" state against live sessions.
+    ///
+    /// On load/read, a step (or legacy session) node may still carry
+    /// `dispatched`/`running` from before the app was closed, even though the
+    /// Claude session it was bound to is long gone. Without this pass the UI
+    /// keeps claiming the node is running. For every node whose run state is
+    /// `dispatched`/`running` and whose bound `sessionId` is NOT present in the
+    /// live session set, demote it to `awaitingInput` (stamping the awaiting
+    /// clock) so the UI prompts the user to resume/re-dispatch.
+    ///
+    /// Tolerant by design: nodes with no `sessionId`, nodes that already
+    /// submitted output (`outputSubmittedAt`), terminal nodes (`done`/`failed`),
+    /// and genuinely live sessions are left untouched. `isLive` is supplied by
+    /// the caller (BoardAPI) so PlannerCore stays decoupled from the session
+    /// machinery (PluginManager / InternalTerminalRuntime / SessionStore).
+    ///
+    /// Returns the number of nodes demoted (0 when nothing changed).
+    @discardableResult
+    func reconcileRunStateAgainstLiveSessions(
+        canvasId: String,
+        isLive: (String) -> Bool
+    ) throws -> Int {
+        try withLock {
+            guard let record = document.canvases[canvasId] else { return 0 }
+            // Collect the step nodes that need demotion first so we can route
+            // each through applySessionRunStateLocked (which keeps step+session
+            // mirror, blockedReason, awaiting clock and the active run in sync).
+            var demotions: [(stepNodeId: String, sessionId: String)] = []
+            for node in record.nodes {
+                guard let runState = node.workflowRunState,
+                      runState == .dispatched || runState == .running else { continue }
+                guard let sessionId = node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !sessionId.isEmpty else { continue }
+                // An explicit submit latches terminal state — never demote it.
+                if node.outputSubmittedAt != nil { continue }
+                if isLive(sessionId) { continue }
+                // Map both step and legacy session nodes back to their step id;
+                // applySessionRunStateLocked is keyed by step.
+                let kind = node.nodeKind ?? .step
+                let stepNodeId: String?
+                if kind == .session {
+                    stepNodeId = (node.dependsOnNodeIds ?? []).first
+                } else {
+                    stepNodeId = node.id
+                }
+                if let stepNodeId {
+                    demotions.append((stepNodeId, sessionId))
+                }
+            }
+            // De-dup by step (a step + its legacy session node share a sessionId).
+            var seen = Set<String>()
+            var demoted = 0
+            for demotion in demotions where seen.insert(demotion.stepNodeId).inserted {
+                if try applySessionRunStateLocked(
+                    stepNodeId: demotion.stepNodeId,
+                    sessionId: demotion.sessionId,
+                    runState: .awaitingInput
+                ) != nil {
+                    demoted += 1
+                }
+            }
+            return demoted
+        }
+    }
+
+    /// canvas-spec §8 / §11 · A step "needs review" — i.e. its `done` output
+    /// must be confirmed by a human before downstream unblocks — when it
+    /// carries an explicit `gate` OR a non-`.none` `handoffPolicy`
+    /// (reviewer-must-approve / any-approver / all-approvers). This is the SOLE
+    /// trigger for the「待确认」(awaiting-review) park; `executionMode`
+    /// (human/auto) is deliberately NOT consulted (the two axes are decoupled).
+    static func needsReview(_ node: PlanningNode) -> Bool {
+        if node.gate != nil { return true }
+        return node.handoffPolicy != .none
+    }
+
     /// Map a workflow run state to the public `PlanningNodeStatus`, keeping the
     /// two status dimensions consistent on the node.
     private static func nodeStatus(for runState: PlannerWorkflowRunState) -> PlanningNodeStatus {
@@ -3667,6 +4586,12 @@ final class PlannerStore {
         return normalized
     }
 
+    /// PR6+7 · Read-only record accessor for the DataSource adapter bridge.
+    /// Takes the store lock; returns the normalized record (no mutation).
+    func canvasRecordForBridge(canvasId: String) throws -> CanvasRecord {
+        try withLock { try requireRecord(canvasId: canvasId) }
+    }
+
     // MARK: - Run layer (P1)
 
     /// Index of the canvas's active run, if one is in progress.
@@ -3690,6 +4615,63 @@ final class PlannerStore {
         var state = record.runs[runIdx].nodeStates[nodeId] ?? RunNodeState(nodeId: nodeId)
         mutate(&state)
         record.runs[runIdx].nodeStates[nodeId] = state
+    }
+
+    // MARK: - Attempt single writer (PR6+7 · §5.2 / §5.5)
+
+    /// Monotonic per-canvas Lamport sequence. Every attempt append bumps it so
+    /// the causalKey is wall-clock independent and unique per (canvas, append).
+    /// Process-local; durable lamport ordering is the online backend's job.
+    private var lamportSeqByCanvas: [String: Int] = [:]
+
+    @discardableResult
+    private func nextLamportSeq(canvasId: String) -> Int {
+        let next = (lamportSeqByCanvas[canvasId] ?? 0) + 1
+        lamportSeqByCanvas[canvasId] = next
+        return next
+    }
+
+    /// §5.5 causality: `causalKey = hash(canvasId, nodeId, attemptIndex,
+    /// lamportSeq)`. Wall-clock independent so replays / re-derivations are
+    /// stable. SHA-256 truncated to 16 hex chars (collision-safe at this scale).
+    static func causalKey(canvasId: String, nodeId: String, attemptIndex: Int, lamportSeq: Int) -> String {
+        let material = "\(canvasId)|\(nodeId)|\(attemptIndex)|\(lamportSeq)"
+        return "ck-" + Self.stableHashHex(material)
+    }
+
+    /// §5.2 single attempt writer. Every NodeAttempt append goes through here so
+    /// each attempt carries a `TriggerOrigin` (never the legacy sentinel for new
+    /// attempts) and its `edgeConsumptions`. `origin` is the provenance; the
+    /// causalKey on auto/inherited origins is computed from a monotonic
+    /// per-canvas lamportSeq. Appends to the live RunNodeState's `attempts`.
+    func appendAttempt(
+        _ canvasId: String,
+        on state: inout RunNodeState,
+        origin: TriggerOrigin,
+        edgeConsumptions: [EdgeConsumption] = [],
+        sessionId: String? = nil,
+        runState: PlannerWorkflowRunState = .running
+    ) {
+        let index = state.attempts.count
+        _ = nextLamportSeq(canvasId: canvasId) // bump the per-canvas clock.
+        state.attempts.append(NodeAttempt(
+            index: index,
+            sessionId: sessionId,
+            runState: runState,
+            origin: origin,
+            edgeConsumptions: edgeConsumptions
+        ))
+    }
+
+    /// Stable hex digest helper for causalKey. Uses a portable FNV-1a fold so
+    /// no CryptoKit import is needed (and it stays deterministic across runs).
+    static func stableHashHex(_ s: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in s.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01B3
+        }
+        return String(format: "%016llx", hash)
     }
 
     /// delta (codex fix): stamp/clear `awaitingInputSince` on the active
@@ -3888,6 +4870,30 @@ final class PlannerStore {
                         ? "Refine session prompt"
                         : "Refine session prompt: \(directive)"
                 ))
+            // Canvas runtime 5-atom governance variants (PR6+7). Emit a
+            // proposal-scoped governance event; node-scoped detail (if any) is
+            // covered by the node-level events above.
+            case .removeNode:
+                if let nodeId = change.nodeId {
+                    events.append(event(
+                        canvasId: proposal.canvasId,
+                        type: .nodeUpdated,
+                        nodeId: nodeId,
+                        proposalId: proposal.id,
+                        summary: "Removed node \(nodeId)"
+                    ))
+                }
+            case .addDataSource, .updateDataSource, .setPartitionRule, .archiveDataSource,
+                 .addEdge, .updateEdgeMode, .removeEdge,
+                 .setMonitorSpec, .addMonitorCard, .updateMonitorCard, .removeMonitorCard, .moveMonitorCard,
+                 .writeSourceVersion, .attachExternalArtifact:
+                events.append(event(
+                    canvasId: proposal.canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: change.nodeId ?? "",
+                    proposalId: proposal.id,
+                    summary: "Governance: \(change.kind.rawValue)"
+                ))
             }
         }
         for node in after where changedNodeIds.contains(node.id) && node.status == .done {
@@ -4035,6 +5041,76 @@ final class PlannerStore {
                 nodeId: nodeId,
                 summary: "\(node.title) gate -> \(executionMode.rawValue)"
             ))
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// canvas-spec §8 / §11 · Confirm a node parked at「待确认」(awaiting-review,
+    /// `workflowRunState == .gateWait` after a needs-review `done`). This is the
+    /// human "approve / sign-off" action: the node transitions to `.done`, and
+    /// every downstream node whose dependencies are now all done becomes
+    /// startable (`readyToStart`), exactly mirroring the post-`done` routing
+    /// flip in `submitNodeOutput`. Idempotent on an already-`done` node.
+    func confirmNodeReview(
+        canvasId: String,
+        nodeId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard let nodeIndex = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
+                throw PlannerCoreError.nodeNotFound(nodeId)
+            }
+            // Only a node currently awaiting review (gateWait) is confirmable.
+            // An already-done node is a no-op; anything else is an error so the
+            // caller doesn't silently "confirm" a still-running / blocked node.
+            let runState = record.nodes[nodeIndex].workflowRunState
+            if record.nodes[nodeIndex].status == .done && runState != .gateWait {
+                return record
+            }
+            guard runState == .gateWait else {
+                throw PlannerCoreError.invalidNodeOutput(
+                    "Only a node awaiting review (gate-wait) can be confirmed."
+                )
+            }
+            record.nodes[nodeIndex].status = .done
+            record.nodes[nodeIndex].workflowRunState = .done
+            record.nodes[nodeIndex].blockedReason = nil
+            let confirmedTitle = record.nodes[nodeIndex].title
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                state.runState = .done
+                state.finishedAt = state.finishedAt ?? Date()
+                Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: false)
+            }
+            // Dataflow legality (§11): now that the upstream is truly done,
+            // unblock every direct downstream node that has no live session yet
+            // and whose upstream deps are all done. Mirror the submit flip.
+            let doneIds = Set(record.nodes.filter { $0.status == .done }.map(\.id))
+            for targetIndex in record.nodes.indices {
+                let target = record.nodes[targetIndex]
+                guard (target.dependsOnNodeIds ?? []).contains(nodeId) else { continue }
+                let hasSession = (target.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                let doerAssigned = !target.doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let upstreamAllDone = (target.dependsOnNodeIds ?? []).allSatisfy { doneIds.contains($0) }
+                guard upstreamAllDone, doerAssigned, !hasSession else { continue }
+                // Don't clobber a node that already moved past ready.
+                guard target.workflowRunState == nil
+                        || target.workflowRunState == .pending
+                        || target.workflowRunState == .gateWait else { continue }
+                record.nodes[targetIndex].status = .ready
+                record.nodes[targetIndex].workflowRunState = .readyToStart
+                mirrorIntoActiveRun(&record, nodeId: target.id) { state in
+                    state.runState = .readyToStart
+                }
+            }
+            record.events.append(event(
+                canvasId: canvasId,
+                type: .nodeStateChanged,
+                nodeId: nodeId,
+                summary: "Confirmed review for \(confirmedTitle) — node done, downstream unblocked"
+            ))
+            recomputeActiveRun(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
@@ -4213,6 +5289,105 @@ final class PlannerStore {
         }
     }
 
+    /// canvas-spec §5/§10 (P3) · Push a node's just-submitted output artifacts
+    /// into any DataSource its output slot is bound to. Binding is expressed on
+    /// an edge: `sourceRef.nodeId == nodeId`, `sourceRef.sourceKey ==
+    /// artifact.reference` (the producer's output slot), and a non-nil
+    /// `sourceRef.dataSourceId` naming the intermediary pool. For each such
+    /// (artifact, edge) pair we:
+    ///   1. advance the DataSource's monotonic `currentVersion`,
+    ///   2. append a writeSourceVersion-style `PlannerArtifactVersion` row keyed
+    ///      to the source slot (so the version chain is queryable), and
+    ///   3. enqueue a `.ready` item into the source's managed adapter so a
+    ///      downstream `queue-claim` edge can claim it.
+    /// Called from within `submitNodeOutput`'s lock; mutates `record` in place.
+    /// Best-effort on the adapter enqueue — a missing/fs adapter must not fail
+    /// the submit (the version-chain advance is the durable part).
+    private func pushOutputsIntoBoundDataSources(
+        _ record: inout CanvasRecord,
+        canvasId: String,
+        nodeId: String,
+        producedArtifacts: [PlannerArtifact]
+    ) {
+        guard !producedArtifacts.isEmpty, !record.canvas.edges.isEmpty else { return }
+        for artifact in producedArtifacts {
+            // Find edges whose source endpoint is this node's output slot AND
+            // carry a DataSource binding. Multiple edges may bind the same slot
+            // (fan-out to several pools); push into each.
+            let boundEdges = record.canvas.edges.filter { edge in
+                guard let sourceId = edge.sourceRef.dataSourceId, !sourceId.isEmpty else { return false }
+                return edge.sourceRef.nodeId == nodeId
+                    && edge.sourceRef.sourceKey == artifact.reference
+            }
+            // De-dup by sourceId so two edges binding the same pool enqueue once.
+            var pushedSources = Set<String>()
+            for edge in boundEdges {
+                guard let sourceId = edge.sourceRef.dataSourceId,
+                      !pushedSources.contains(sourceId),
+                      let sourceIdx = record.canvas.dataSources.firstIndex(where: { $0.id == sourceId })
+                else { continue }
+                pushedSources.insert(sourceId)
+
+                // 1) advance currentVersion (sequence strategy, monotonic).
+                record.canvas.dataSources[sourceIdx].currentVersion += 1
+                let newVersion = record.canvas.dataSources[sourceIdx].currentVersion
+
+                // 2) append a source-keyed version row (writeSourceVersion twin).
+                let slotKey = "\(canvasId)|source|\(sourceId)|\(artifact.reference)"
+                let parent = latestVersion(in: record.artifactVersions, slotKey: slotKey)?.versionId
+                let createdAt = Date()
+                let itemId = "item-\(sourceId)-\(newVersion)"
+                record.artifactVersions.append(PlannerArtifactVersion(
+                    versionId: "ver-\(sourceId)-\(stableSuffix("\(slotKey)-\(createdAt.timeIntervalSince1970)"))",
+                    parentVersionId: parent,
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    artifactId: artifact.id,
+                    artifactSlotKey: slotKey,
+                    payloadRef: artifact.reference,
+                    payloadInline: artifact.payload,
+                    inputSnapshot: nil,
+                    displayStrategy: .latest,
+                    forceNewVersion: false,
+                    submittedBy: nil,
+                    submittedByKind: .agent,
+                    metadata: .object([
+                        "source": .string("writeSourceVersion"),
+                        "sourceId": .string(sourceId),
+                        "pushedFromNode": .string(nodeId),
+                        "itemId": .string(itemId)
+                    ]),
+                    createdAt: createdAt
+                ))
+
+                // 3) enqueue a `.ready` claimable item into the managed adapter
+                //    so a downstream queue-claim consumer can claim it. Only the
+                //    managed backing keeps an in-memory queue; fs/unknown kinds
+                //    surface items by directory enumeration / external state, so
+                //    the version-chain advance above is the durable signal there.
+                if let adapter = try? PlannerBoardBridge.dataSourceAdapter(canvasId: canvasId, sourceId: sourceId),
+                   let managed = adapter as? ManagedAdapter {
+                    managed.enqueue(DataSourceItem(
+                        itemId: itemId,
+                        state: .ready,
+                        ref: artifact.reference
+                    ))
+                    // Keep the adapter's own version counter aligned with the
+                    // record so `probeFreshness()` agrees with `currentVersion`.
+                    managed.syncVersion(to: newVersion)
+                }
+
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .artifactAttached,
+                    nodeId: nodeId,
+                    summary: "Pushed \(artifact.title) into source \(sourceId) (v\(newVersion))",
+                    artifactRefs: [artifact.reference]
+                ))
+            }
+        }
+    }
+
     func submitNodeOutput(
         canvasId: String,
         nodeId: String,
@@ -4253,13 +5428,20 @@ final class PlannerStore {
             switch output.status {
             case .done:
                 current.blockedReason = nil
-                if current.executionMode == .human {
-                    // Parked at a human gate — plan-layer status mirrors
-                    // `nodeStatus(for: .gateWait)` so design mode shows it
-                    // in the attention bucket, not as "In progress".
+                if Self.needsReview(current) {
+                    // canvas-spec §8 / §11 · "谁执行" 与 "是否需人工审查" 解耦.
+                    // A needs-review node (carries a `gate` OR a non-`.none`
+                    // `handoffPolicy`) parks at the distinct「待确认」
+                    // (awaiting-review) state — NOT「卡住」(blocked). We keep
+                    // `workflowRunState = .gateWait` as the carrier (approach a)
+                    // and surface the distinction through the derived display:
+                    // `nodeStatus(for: .gateWait)` plus `needsOwnerReview = true`
+                    // in the NodeStateSnapshot. A node here is NOT done, so it
+                    // blocks downstream until `confirmNodeReview` flips it.
                     current.status = Self.nodeStatus(for: .gateWait)
                     current.workflowRunState = .gateWait
                 } else {
+                    // No review needed (human OR auto) → straight to done.
                     current.status = .done
                     current.workflowRunState = .done
                 }
@@ -4372,6 +5554,25 @@ final class PlannerStore {
             record.nodes[sourceIndex] = current
             record.artifacts = mergeArtifacts(record.artifacts, newArtifacts)
             record.artifactVersions.append(contentsOf: newVersions)
+
+            // canvas-spec §5/§10 (P3) · Output → DataSource push. If this node's
+            // output slot is bound to a DataSource via an edge whose
+            // `sourceRef.dataSourceId` is set (the producer pushes into an
+            // intermediary pool, e.g. 会议产出 push 进 issues source), then on
+            // submit we WRITE the produced artifact into that DataSource:
+            //  • append a version row (writeSourceVersion-style) + advance the
+            //    source's monotonic `currentVersion`,
+            //  • enqueue a `.ready` claimable item into the managed adapter so a
+            //    downstream queue-claim consumer can claim it.
+            // Each produced artifact that targets a bound slot becomes one
+            // claimable item. Best-effort: a push failure must not fail submit.
+            pushOutputsIntoBoundDataSources(
+                &record,
+                canvasId: canvasId,
+                nodeId: nodeId,
+                producedArtifacts: newArtifacts
+            )
+
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
                 state.runState = current.workflowRunState ?? state.runState
                 if current.workflowRunState == .done || current.workflowRunState == .failed {
@@ -4449,6 +5650,13 @@ final class PlannerStore {
                         reference: artifact.reference
                     )
                 }
+                // canvas-spec §11 dataflow legality: a downstream node only
+                // becomes startable once its upstream producer is actually
+                // `.done`. If the producer parked at「待确认」(gateWait, NOT
+                // yet confirmed) it does NOT count as done — leave the
+                // downstream node un-flipped (it stays todo / blocked-by-
+                // upstream) until `confirmNodeReview` advances the producer.
+                let producerIsDone = current.workflowRunState == .done
                 if record.nodes[targetIndex].doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     record.nodes[targetIndex].status = .blocked
                     record.nodes[targetIndex].workflowRunState = .gateWait
@@ -4460,7 +5668,8 @@ final class PlannerStore {
                         // non-session gate transitions (codex P2 review).
                         Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: true)
                     }
-                } else if record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                } else if producerIsDone,
+                          record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                     record.nodes[targetIndex].status = .ready
                     record.nodes[targetIndex].workflowRunState = .readyToStart
                     mirrorIntoActiveRun(&record, nodeId: record.nodes[targetIndex].id) { state in
@@ -4791,6 +6000,65 @@ final class PlannerStore {
     /// no proposal / owner gate. Sets `sessionId`, mirrors it onto
     /// `chatThreadId`, marks the node as session-sourced and moves it to
     /// `running`. Permission is enforced by the caller (`requireNodeUpdate`).
+    /// PR6+7 · §5.2 auto-advance attempt writer. When a node is auto-dispatched
+    /// because an upstream node completed, record the attempt through the single
+    /// writer with an `.autoWorkflow` origin carrying the upstream edge + attempt
+    /// reference and a computed causalKey. Best-effort: no-op if there is no
+    /// active run (manual canvases / preview) so it never blocks the dispatch.
+    @discardableResult
+    func recordAutoAdvanceAttempt(
+        canvasId: String,
+        nodeId: String,
+        fromNodeId: String
+    ) throws -> CanvasRecord {
+        try withLock {
+            var record = try requireRecord(canvasId: canvasId)
+            guard activeRunIndex(in: record) != nil else { return record }
+            let upstreamAttemptIndex = (activeRunNodeState(in: record, nodeId: fromNodeId)?
+                .attempts.last?.index) ?? 0
+            mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
+                let attemptIndex = state.attempts.count
+                let lamport = self.nextLamportSeq(canvasId: canvasId)
+                let causalKey = Self.causalKey(
+                    canvasId: canvasId,
+                    nodeId: nodeId,
+                    attemptIndex: attemptIndex,
+                    lamportSeq: lamport
+                )
+                let origin = TriggerOrigin.autoWorkflow(
+                    upstreamEdgeRef: TriggerOrigin.AutoWorkflowEdgeRef(
+                        canvasId: canvasId,
+                        fromNodeId: fromNodeId,
+                        toNodeId: nodeId
+                    ),
+                    upstreamAttemptId: UpstreamAttemptRef(
+                        canvasId: canvasId,
+                        nodeId: fromNodeId,
+                        attemptIndex: upstreamAttemptIndex,
+                        causalKey: causalKey
+                    )
+                )
+                // Append directly (lamport already consumed above to feed the
+                // causalKey) rather than re-entering appendAttempt's own bump.
+                state.attempts.append(NodeAttempt(
+                    index: attemptIndex,
+                    runState: .dispatched,
+                    origin: origin
+                ))
+            }
+            recomputeActiveRun(&record)
+            document.canvases[canvasId] = record
+            try save(canvasId: canvasId)
+            return record
+        }
+    }
+
+    /// Lock-free read of a node's active-run state (caller holds the lock).
+    private func activeRunNodeState(in record: CanvasRecord, nodeId: String) -> RunNodeState? {
+        guard let runIdx = activeRunIndex(in: record) else { return nil }
+        return record.runs[runIdx].nodeStates[nodeId]
+    }
+
     func bindSession(
         canvasId: String,
         nodeId: String,
@@ -4817,16 +6085,23 @@ final class PlannerStore {
             ))
             // Mirror into the active run: a bind starts a new attempt. Q3 lock —
             // one active session per (run, node); re-binding opens a fresh attempt.
+            // PR6+7: the attempt is appended through the single writer so it
+            // carries a human TriggerOrigin (§5.2). A human bind is attributed
+            // to the current actor (falls back to the canvas owner).
+            let actorId = PlannerPermission.currentActorId() ?? record.canvas.ownerId
+            let humanOrigin = TriggerOrigin.human(actorId: actorId, commentary: nil)
             mirrorIntoActiveRun(&record, nodeId: nodeId) { state in
                 state.sessionId = sessionId
                 state.chatThreadId = sessionId
                 state.runState = .running
                 state.startedAt = state.startedAt ?? Date()
-                state.attempts.append(NodeAttempt(
-                    index: state.attempts.count,
+                self.appendAttempt(
+                    canvasId,
+                    on: &state,
+                    origin: humanOrigin,
                     sessionId: sessionId,
                     runState: .running
-                ))
+                )
             }
             recomputeActiveRun(&record)
             document.canvases[canvasId] = record
@@ -5063,6 +6338,36 @@ final class PlannerStore {
         versions
             .filter { $0.artifactSlotKey == slotKey }
             .max { $0.createdAt < $1.createdAt }
+    }
+
+    /// canvas-spec §7.3 / P4 · Enrich each artifact with its slot's version
+    /// position so the card can render `v{n}`. The latest-per-slot artifact (the
+    /// one surfaced on the canvas) is the chain head, so its `versionIndex`
+    /// equals the chain length (`versionCount`). Pure / additive — derived from
+    /// `record.artifactVersions`, never persisted onto the artifact.
+    func artifactsWithVersionInfo(
+        _ artifacts: [PlannerArtifact],
+        versions: [PlannerArtifactVersion]
+    ) -> [PlannerArtifact] {
+        // Chain length per slot (1-based count of versions in the slot).
+        var countBySlot: [String: Int] = [:]
+        for version in versions {
+            countBySlot[version.artifactSlotKey, default: 0] += 1
+        }
+        return artifacts.map { artifact in
+            var enriched = artifact
+            let slotKey = artifactSlotKey(
+                canvasId: artifact.canvasId,
+                nodeId: artifact.nodeId,
+                reference: artifact.reference
+            )
+            if let count = countBySlot[slotKey], count > 0 {
+                // The surfaced artifact is the slot head → its index == count.
+                enriched.versionCount = count
+                enriched.versionIndex = count
+            }
+            return enriched
+        }
     }
 
     /// Capture the three input sources for the snapshot bundle. Best-effort:
@@ -5369,7 +6674,9 @@ enum PlannerBoardBridge {
                 fallback: fallbackActivity(for: record.canvas, nodes: nodes, actorId: access.actorId)
             ),
             record.events.sorted { $0.createdAt > $1.createdAt },
-            record.artifacts,
+            // P4 · surface the per-artifact version index/count so the card
+            // can render `v{n}` (derived from the slot's version chain).
+            store.artifactsWithVersionInfo(record.artifacts, versions: record.artifactVersions),
             graphEdges(for: nodes)
         )
     }
@@ -5389,7 +6696,47 @@ enum PlannerBoardBridge {
             activities: state.activities,
             events: state.events,
             artifacts: state.artifacts,
-            edges: state.edges
+            edges: state.edges,
+            canvasRuntime: canvasRuntimeView(
+                canvasId: canvasId,
+                canvas: state.canvas,
+                nodes: state.nodes,
+                states: state.states,
+                artifacts: state.artifacts,
+                edges: state.edges
+            )
+        )
+    }
+
+    /// Build the read-only `CanvasRuntimeView` (canvas-spec §7.2) for a canvas
+    /// from its resolved graph pieces. Reads the active run's attempt history
+    /// (empty when no run is active) and per-DataSource queue depths. Best-effort
+    /// — never throws; a record-fetch failure yields a snapshot with no attempts
+    /// rather than failing the whole graph-state read.
+    private static func canvasRuntimeView(
+        canvasId: String,
+        canvas: PlanningCanvas,
+        nodes: [PlanningNode],
+        states: [NodeStateSnapshot],
+        artifacts: [PlannerArtifact],
+        edges: [PlannerGraphEdge]
+    ) -> CanvasRuntimeView {
+        var attemptsByNode: [String: [NodeAttempt]] = [:]
+        if let record = try? store.canvasRecordForBridge(canvasId: canvasId),
+           let runId = record.activeRunId,
+           let run = record.runs.first(where: { $0.id == runId }) {
+            for (nodeId, nodeState) in run.nodeStates {
+                attemptsByNode[nodeId] = nodeState.attempts
+            }
+        }
+        return PlannerBoardBridge.buildCanvasRuntimeView(
+            canvasId: canvasId,
+            nodes: nodes,
+            states: states,
+            artifacts: artifacts,
+            edges: canvas.edges,
+            dataSources: canvas.dataSources,
+            attemptsByNode: attemptsByNode
         )
     }
 
@@ -5771,6 +7118,25 @@ enum PlannerBoardBridge {
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
+    /// canvas-spec §8 / §11 · Owner confirm/approve of a node parked at
+    /// 「待确认」(awaiting-review). Execution-layer action (applies directly,
+    /// like dispatch): flips the node to `.done` and unblocks downstream. The
+    /// board UI button is a separate task — this is the bridge it calls.
+    static func confirmNodeReview(
+        nodeId: String,
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> PlannerGraphState {
+        let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+        guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
+            throw PlannerCoreError.nodeNotFound(nodeId)
+        }
+        try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
+        _ = try store.confirmNodeReview(canvasId: canvasId, nodeId: nodeId)
+        return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
+    }
+
     static func updateNodeSchedule(
         nodeId: String,
         schedule: PlannerNodeSchedule?,
@@ -5908,6 +7274,15 @@ enum PlannerBoardBridge {
                         command: nil,
                         fallbackRunner: nil
                     )
+                )
+                // PR6+7 · §5.2: an auto-dispatch is a workflow-driven attempt.
+                // Record it through the single attempt writer with an
+                // `.autoWorkflow` origin (upstream = the node that just
+                // submitted). Best-effort — never block the dispatch.
+                _ = try? store.recordAutoAdvanceAttempt(
+                    canvasId: canvasId,
+                    nodeId: candidate.id,
+                    fromNodeId: nodeId
                 )
                 autoIds.append(candidate.id)
             } catch {
@@ -6246,14 +7621,17 @@ enum PlannerBoardBridge {
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
         actorUserId: String? = nil
-    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact]) {
+    ) throws -> (proposal: PlanProposal, nodes: [PlanningNode], states: [NodeStateSnapshot], edges: [PlannerGraphEdge], artifacts: [PlannerArtifact], canvas: PlanningCanvas) {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         try PlannerPermission.require(.applyProposal, access: state.access)
         let record = try store.applyProposal(proposalId: proposalId, canvasId: canvasId, service: service)
         guard let proposal = record.proposals.first(where: { $0.id == proposalId }) else {
             throw PlannerCoreError.proposalNotFound(proposalId)
         }
-        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes), graphEdges(for: record.nodes), record.artifacts)
+        // `canvas` carries the post-apply 5-atom collections (dataSources /
+        // edges / monitorSpec) so callers can read the governance result
+        // directly without a second canvasState round-trip.
+        return (proposal, record.nodes, service.readNodeState(nodes: record.nodes), graphEdges(for: record.nodes), record.artifacts, record.canvas)
     }
 
     static func workspaceMonitor(

@@ -232,9 +232,10 @@ public final class InternalTerminalRuntime {
             throw error
         }
         if let prompt = initialPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.2) {
-                surface.writeInput(prompt + "\n")
-            }
+            // BUG 1.3 — readiness-gated delivery instead of a blind 1.2s write.
+            // The agent TUI is not ready to accept input that early, so the old
+            // path dropped the prompt and the session sat idle.
+            surface.deliverInitialPromptWhenReady(prompt)
         }
         return surface.snapshot()
     }
@@ -459,6 +460,12 @@ final class InternalTerminalSurface {
     private var exitCode: Int?
     private var errorMessage: String?
     private var updatedAt: Date
+    /// Wall-clock of the last PTY *output* chunk (distinct from `updatedAt`,
+    /// which `touch()` also bumps on input). Used by readiness-gated initial
+    /// prompt delivery to detect when the agent TUI has finished rendering.
+    private var lastOutputAt: Date?
+    /// Guards against delivering the spawn `initialPrompt` more than once.
+    private var initialPromptDelivered = false
 
     init(surfaceId: String, sessionId: String, provider: String, cwd: String, command: String, canvasId: String?, nodeId: String?) {
         self.surfaceId = surfaceId
@@ -560,6 +567,66 @@ final class InternalTerminalSurface {
             _ = Darwin.write(primaryFD, base, rawBuffer.count)
         }
         touch()
+    }
+
+    /// BUG 1.3 — robustly submit the spawn `initialPrompt` once the agent TUI is
+    /// actually ready to accept it.
+    ///
+    /// The previous implementation blind-wrote the prompt 1.2s after spawn. The
+    /// Claude/Codex TUI takes several seconds to boot (config load, trust
+    /// prompt, input box render), so the keystrokes were dropped or swallowed by
+    /// a dialog and the session sat idle. Instead we poll the PTY output: wait
+    /// until the surface has produced output AND that output has been quiet for a
+    /// short settle window (TUI finished its initial render → input box is live),
+    /// then write `prompt + \r` to submit it. A hard ceiling guarantees delivery
+    /// even if the TUI never goes quiet; we abort if the process exits first.
+    ///
+    /// `\r` (carriage return) is used rather than `\n`: the agent TUIs treat
+    /// Enter as submit, and a bare `\n` can be interpreted as a soft newline in
+    /// some input widgets.
+    func deliverInitialPromptWhenReady(_ rawPrompt: String) {
+        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        lock.lock()
+        if initialPromptDelivered { lock.unlock(); return }
+        lock.unlock()
+
+        let queue = DispatchQueue.global(qos: .utility)
+        // Don't even begin probing before the shell+exec has had a moment.
+        let firstProbe: DispatchTime = .now() + 0.6
+        // Output must be quiet this long before we treat the TUI as "ready".
+        let settleWindow: TimeInterval = 0.8
+        // Absolute ceiling — deliver anyway past this even if never quiet.
+        let deadline = Date().addingTimeInterval(20.0)
+
+        func probe() {
+            lock.lock()
+            if initialPromptDelivered { lock.unlock(); return }
+            let currentStatus = status
+            let bytes = totalOutputBytes
+            let lastOut = lastOutputAt
+            lock.unlock()
+
+            // Process gone — nothing to deliver into.
+            guard currentStatus == .running, primaryFD >= 0 else { return }
+
+            let now = Date()
+            let pastDeadline = now >= deadline
+            let hasOutput = bytes > 0
+            let quietFor = lastOut.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+            let settled = hasOutput && quietFor >= settleWindow
+
+            if settled || pastDeadline {
+                lock.lock()
+                if initialPromptDelivered { lock.unlock(); return }
+                initialPromptDelivered = true
+                lock.unlock()
+                writeInput(prompt + "\r")
+                return
+            }
+            queue.asyncAfter(deadline: .now() + 0.3) { probe() }
+        }
+        queue.asyncAfter(deadline: firstProbe) { probe() }
     }
 
     func addClient(
@@ -735,6 +802,7 @@ final class InternalTerminalSurface {
         var immediateClients: [InternalTerminalSurfaceClient] = []
         var shouldScheduleFlush = false
         lock.lock()
+        lastOutputAt = Date()
         appendScrollbackLocked(data)
         let hasOutputClients = hasNativeOutputClientsLocked()
         if hasOutputClients {

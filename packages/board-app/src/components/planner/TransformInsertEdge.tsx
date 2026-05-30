@@ -28,6 +28,17 @@ export interface TransformInsertEdgeData extends Record<string, unknown> {
    * inserting a transform makes no sense).
    */
   suppressInsert?: boolean
+  /**
+   * Atom 2 — non-dependency first-class edge consumption mode. When present,
+   * a compact badge ("队列" / "快照") renders at the edge midpoint. Plain
+   * dependency / legacy edges leave this undefined and render unchanged.
+   */
+  edgeMode?: 'queue-claim' | 'document-snapshot'
+}
+
+const EDGE_MODE_BADGE: Record<NonNullable<TransformInsertEdgeData['edgeMode']>, string> = {
+  'queue-claim': '队列',
+  'document-snapshot': '快照',
 }
 
 export function TransformInsertEdge(props: EdgeProps) {
@@ -56,10 +67,26 @@ export function TransformInsertEdge(props: EdgeProps) {
   const edgeData = (data ?? {}) as TransformInsertEdgeData
   const handler = edgeData.onInsertTransform
   const suppressed = edgeData.suppressInsert === true || edgeData.preview === true
+  const modeBadge = edgeData.edgeMode ? EDGE_MODE_BADGE[edgeData.edgeMode] : null
 
   return (
     <>
       <BaseEdge id={id} path={path} style={style} markerEnd={markerEnd} />
+      {modeBadge && (
+        <EdgeLabelRenderer>
+          <div
+            className={`planner-edge-mode planner-edge-mode--${edgeData.edgeMode}`}
+            style={{
+              position: 'absolute',
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: 'none',
+            }}
+            title={edgeData.edgeMode === 'queue-claim' ? '队列消费 (queue-claim)' : '快照消费 (document-snapshot)'}
+          >
+            {modeBadge}
+          </div>
+        </EdgeLabelRenderer>
+      )}
       {!suppressed && handler && (
         <EdgeLabelRenderer>
           <div

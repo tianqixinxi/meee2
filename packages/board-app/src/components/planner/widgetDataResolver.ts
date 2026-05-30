@@ -94,8 +94,14 @@ interface ArtifactConfigShape {
 }
 
 function readArtifactDataSourceMode(node: PlanningNode): ArtifactDataSourceMode {
-  // 优先读 canonical top-level `artifactDataSource` (Swift 后端写的字段),
-  // 退回 loose `artifact.dataSource` / `artifactConfig.dataSource` (旧 wave-3 兼容)。
+  // canvas-spec §7 unification: prefer the canonical unified `artifactSource`.
+  //   - dataSource-kind          ⇒ external (legacy 'mirrored')
+  //   - slot / canvas-runtime    ⇒ self     (legacy 'authored')
+  // Fall back to the legacy loose lookup (`artifactDataSource` flat string /
+  // `artifact.dataSource` / `artifactConfig.dataSource`) for old data.
+  if (node.artifactSource) {
+    return node.artifactSource.kind === 'dataSource' ? 'external' : 'self'
+  }
   const cfg = (node as unknown as { artifactDataSource?: string; artifact?: ArtifactConfigShape; artifactConfig?: ArtifactConfigShape })
   const raw = cfg.artifactDataSource ?? cfg.artifact?.dataSource ?? cfg.artifactConfig?.dataSource
   const value = typeof raw === 'string' ? raw : raw?.mode

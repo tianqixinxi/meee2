@@ -77,15 +77,11 @@ export function InputCardSections({
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      {variant === 'modal' && (
-        <div className="planner-input-card__title">Input</div>
-      )}
-
       {/* Upstream row */}
       <section className="planner-input-card__section planner-input-card__section--upstream">
         <div className="planner-input-card__section-head">
           <span className="planner-input-card__badge planner-input-card__badge--upstream">
-            Upstream
+            上游
           </span>
         </div>
         <div className="planner-input-card__upstream-row">
@@ -98,10 +94,10 @@ export function InputCardSections({
               <span>{upstreamLabel || upstream.source_node}</span>
             </span>
           ) : (
-            <span className="planner-input-card__muted">Canvas root entry</span>
+            <span className="planner-input-card__muted">画板入口</span>
           )}
           <em className="planner-input-card__upstream-mode">
-            {upstream.mode === 'item_scoped' ? 'item-scoped' : 'passthrough'}
+            {upstream.mode === 'item_scoped' ? '按项隔离' : '全量传入'}
           </em>
         </div>
       </section>
@@ -110,7 +106,7 @@ export function InputCardSections({
       <section className="planner-input-card__section planner-input-card__section--external">
         <div className="planner-input-card__section-head">
           <span className="planner-input-card__badge planner-input-card__badge--external">
-            External sources
+            外部源
           </span>
           {external.length > 0 && (
             <em className="planner-input-card__section-count">{external.length}</em>
@@ -120,8 +116,8 @@ export function InputCardSections({
           <ul className="planner-input-card__external-list">
             {external.map((row, index) => {
               const lastSync = row.sync_session
-                ? `Updated · synced via ${shortRef(row.sync_session)}`
-                : 'Not yet synced'
+                ? `已同步 · 来自 ${shortRef(row.sync_session)}`
+                : '尚未同步'
               return (
                 <li
                   key={`${row.connector}:${row.ref}:${index}`}
@@ -135,8 +131,8 @@ export function InputCardSections({
                   <button
                     type="button"
                     className="planner-input-card__refresh nodrag"
-                    title="Refresh this external source now"
-                    aria-label={`Refresh ${row.connector} ${row.ref}`}
+                    title="立即刷新这个外部源"
+                    aria-label={`刷新 ${row.connector} ${row.ref}`}
                     disabled={!interactive}
                     onClick={(event) => {
                       event.stopPropagation()
@@ -163,7 +159,7 @@ export function InputCardSections({
           }}
         >
           <Plus size={11} aria-hidden />
-          Attach data source
+          接入数据源
         </button>
       </section>
 

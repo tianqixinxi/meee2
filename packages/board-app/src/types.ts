@@ -400,6 +400,60 @@ export interface PlanningCanvas {
   parentNodeId?: string | null
   /** ENG-4: frozen Node Contract v2 snapshot, written at assign time. */
   frozenIOContract?: NodeContractV2 | null
+  /**
+   * Canvas runtime 5-atom model (canvas-runtime-data-model.md). Store-owned,
+   * decode-tolerant — absent on legacy canvases. Surfaced by the Swift
+   * PlannerGraphStateEnvelope.canvas once a proposal creates it. Drives the
+   * MonitorGrid.
+   */
+  monitorSpec?: MonitorSpec | null
+  /**
+   * Atom 1 — named addressable storage locations on this canvas. Rendered as a
+   * read-only "数据源" rail on the canvas. Absent / `[]` on legacy canvases.
+   * Twin of Zod contract/datasource.ts `DataSource` (only the fields we render
+   * are mirrored). */
+  dataSources?: DataSourceRecord[]
+  /**
+   * Atom 2 — first-class consumption edges. AUTHORITATIVE: includes both real
+   * mode edges (queue-claim / document-snapshot) AND synthetic
+   * `edgeMode.mode === "dependency"` edges (id prefix `dep-`) mirroring node
+   * dependencies. Twin of Zod contract/edge.ts `Edge` (rendered fields only).
+   * Named `CanvasEdge` to avoid clashing with the legacy projected
+   * `PlannerGraphEdge` / ReactFlow `Edge`. */
+  edges?: CanvasEdge[]
+}
+
+/**
+ * Twin of Zod contract/datasource.ts `DataSource` — only the fields the canvas
+ * rail renders are mirrored. `partitionRule` is an open-ish enum; we accept the
+ * known set plus `string` forward-compat. */
+export type DataSourcePartitionRule =
+  | 'none'
+  | 'iso-week'
+  | 'day'
+  | 'month'
+  | 'fiscal-quarter'
+  | 'custom'
+
+export interface DataSourceRecord {
+  id: string
+  title: string
+  kind: string
+  partitionRule?: DataSourcePartitionRule | string
+  partitionTimezone?: string
+  currentVersion: number
+}
+
+/**
+ * Twin of Zod contract/edge.ts `Edge` — only the fields edge-mode badging needs
+ * are mirrored. `edgeMode.mode` is the discriminator: `"queue-claim"`,
+ * `"document-snapshot"`, the synthetic `"dependency"`, or a forward-compat
+ * string. */
+export interface CanvasEdge {
+  id: string
+  sourceRef: { nodeId: string }
+  targetRef: { nodeId: string }
+  edgeMode: { mode: 'queue-claim' | 'document-snapshot' | 'dependency' | string }
 }
 
 export interface NodeSchema {
@@ -915,7 +969,7 @@ export type HandoffPolicy =
  * state). Presence = render as the declared kind, backed by `source` (with
  * optional `mapping` overrides on top of integration view-schema defaults).
  */
-export type WidgetKind = 'kanban' | 'inbox' | 'matrix' | 'badge' | 'artifact-preview'
+export type WidgetKind = 'kanban' | 'inbox' | 'matrix' | 'badge' | 'artifact-preview' | 'html'
 export type WidgetSourceKind = 'external' | 'upstream' | 'subcanvas-aggregate'
 export interface WidgetSource {
   inputKind: WidgetSourceKind
@@ -935,6 +989,13 @@ export interface Widget {
   kind: WidgetKind
   source?: WidgetSource
   mapping?: WidgetMapping
+  /**
+   * canvas-spec §7.2 — only meaningful when `kind === 'html'` (a Monitor:
+   * Artifact{source:canvas-runtime, widget:html}). Planner-authored HTML string
+   * rendered SAFELY in a sandboxed iframe (MonitorHtmlFrame) with the read-only
+   * CanvasRuntimeView injected via postMessage. Ignored for other kinds.
+   */
+  html?: string
 }
 
 export interface PlanningNode {
@@ -985,7 +1046,24 @@ export interface PlanningNode {
    * badge / artifact-preview backed by widget.source. See `Widget` above.
    */
   widget?: Widget | null
+  /**
+   * Unified `Artifact.source` (canvas-spec §7 — artifact-unified-model). The
+   * canonical data origin, written server-side. Folds the legacy two-mode
+   * `artifactConfig.dataSource` (authored | mirrored) into one shape:
+   *   - `slot`           a node input/output slot (authored seed = output)
+   *   - `dataSource`     a managed/integration DataSource (legacy `mirrored`)
+   *   - `canvas-runtime` whole-canvas runtime snapshot (Monitor)
+   * Absent on legacy data — readers fall back to the loose
+   * `artifactDataSource` / `artifactConfig.dataSource` lookup.
+   */
+  artifactSource?: ArtifactSource | null
 }
+
+/** Unified artifact data origin (canvas-spec §7). Mirrors the Zod + Swift twins. */
+export type ArtifactSource =
+  | { kind: 'slot'; nodeId: string; slotKey: string; direction: 'input' | 'output' }
+  | { kind: 'dataSource'; sourceId: string }
+  | { kind: 'canvas-runtime' }
 
 export type PlanProposalStatus = 'pending' | 'approved' | 'applied' | 'rejected'
 export type PlanChangeKind = 'addNode' | 'updateNode' | 'attachArtifact'
@@ -1132,9 +1210,68 @@ export interface PlannerCanvasState {
   canEditInternals?: boolean
 }
 
+// -- canvas-spec §7.2: CanvasRuntimeView (Monitor read-only snapshot) ---------
+//
+// The read-only whole-canvas runtime snapshot a Monitor (Artifact{source:
+// canvas-runtime, widget:html}) consumes. Surfaced additively on
+// PlannerGraphState.canvasRuntime; the board injects it into the sandboxed
+// monitor iframe via postMessage. Twin: meee2-online contract/canvas-runtime-view.ts
+// + Swift CanvasRuntimeView.swift.
+
+export interface CanvasRuntimeNode {
+  id: string
+  title: string
+  status: string
+  workflowRunState?: string | null
+  doerId: string
+  awaitingInputSince?: string | null
+}
+export interface CanvasRuntimeAttempt {
+  nodeId: string
+  index: number
+  originKind?: string | null
+  runState: string
+  startedAt?: string | null
+  finishedAt?: string | null
+}
+export interface CanvasRuntimeArtifact {
+  nodeId: string
+  reference: string
+  title: string
+  versionIndex?: number | null
+  versionCount?: number | null
+  positionTag?: string | null
+}
+export interface CanvasRuntimeEdge {
+  sourceRef: string
+  targetRef: string
+  mode: string
+}
+export interface CanvasRuntimeDataSource {
+  id: string
+  title: string
+  partitionRule: string
+  currentVersion: number
+  queueReadyDepth?: number | null
+}
+export interface CanvasRuntimeView {
+  canvasId: string
+  generatedAt: string
+  nodes: CanvasRuntimeNode[]
+  attempts: CanvasRuntimeAttempt[]
+  artifacts: CanvasRuntimeArtifact[]
+  edges: CanvasRuntimeEdge[]
+  dataSources: CanvasRuntimeDataSource[]
+}
+
 export type PlannerGraphState = PlannerCanvasState & {
   artifacts: PlannerArtifact[]
   edges: PlannerGraphEdge[]
+  /**
+   * canvas-spec §7.2 — read-only whole-canvas runtime snapshot consumed by a
+   * Monitor html widget. Additive; absent on legacy backends.
+   */
+  canvasRuntime?: CanvasRuntimeView | null
   /**
    * Integration entity pool (P3.0). Backend provides entities for nodes that
    * have a widget with `source.inputKind === 'external'`. Widget resolver
@@ -1360,3 +1497,173 @@ export type Selection =
   | { kind: 'none' }
   | { kind: 'session'; sessionId: string }
   | { kind: 'channel'; channelName: string }
+
+// ===========================================================================
+// Atom 4 — MonitorSpec + Card Registry (canvas-runtime-data-model.md §6).
+//
+// Mirror of the Zod schemas at
+//   meee2-online/src/planner-runtime/contract/monitor.ts
+//   meee2-online/src/planner-runtime/contract/monitor-cards.ts
+// (contract version 3). board-app keeps its own structural twin rather than
+// importing from meee2-online — same convention as `Widget` / `PlanningNode`
+// above. Keep field names byte-identical to the Zod source so the wire shape
+// decodes without a translation layer. These types are read-only renderer
+// inputs; all *edits* to a MonitorSpec go through the proposal pipeline
+// (governance), never direct mutation — see §6.5.
+// ===========================================================================
+
+/** §6.1 — which trigger origins a card surfaces. `hidden` keeps auto-attempts
+ *  in the audit log while removing them from the owner's grid. */
+export type AttemptVisibility = 'all' | 'human-only' | 'auto-only' | 'hidden'
+
+/** §6.1 — render-time projection: filter rows against the viewer's identity. */
+export type ViewerFilter =
+  | { kind: 'none' }
+  | { kind: 'assignee-is-viewer' }
+  | { kind: 'owner-is-viewer' }
+  | { kind: 'field-equals-viewer'; fieldPath: string }
+
+/** §6.1 — points a card at a node's DataSource (+ optional slot). The 5-atom
+ *  data model's universal "where does this card read from" reference. */
+export interface DataSourceRef {
+  nodeId: string
+  slotKey?: string
+}
+
+/** §6.1 — 12-col grid placement. `collapsed` defaults to false; the live
+ *  collapsed state is local UI (localStorage), this is only the default. */
+export interface CardLayout {
+  col: number
+  row: number
+  width: number
+  height: number
+  collapsed?: boolean
+}
+
+/** §6.1 + addendum §5 — discriminator for the card registry. 8 core ledger
+ *  cards (the 7 original + `integration-health`) plus the PM-addon
+ *  `cadence-reminder`. Unknown values from a newer planner fall through to
+ *  UnknownCardFallback — never crash. */
+export type MonitorCardKind =
+  | 'period-selector'
+  | 'producer-status-grid'
+  | 'meeting-checklist'
+  | 'queue-depth'
+  | 'snapshot-timeline'
+  | 'downstream-drill'
+  | 'continuous-backlog'
+  | 'integration-health'
+  // PM-addon (Principle 15) — renderable only when the canvas PM addon is on.
+  | 'cadence-reminder'
+
+// -- §6.2 card config shapes -------------------------------------------------
+
+export interface PeriodSelectorConfig {
+  source: DataSourceRef
+  defaultPeriod?: string
+  visibleCount?: number
+  controlsCardIds?: string[]
+}
+
+export type ProducerCellShow = 'runState' | 'awaitingSince' | 'artifactPreviewLink'
+
+export interface ProducerStatusGridConfig {
+  producerNodeIds: string[]
+  periodSource?: DataSourceRef
+  columnCount?: number
+  cellShows?: ProducerCellShow[]
+}
+
+export interface MeetingChecklistDecisionSlot {
+  slotKey: string
+  label: string
+  requiredBefore?: 'meeting-start' | 'meeting-end'
+}
+
+export interface MeetingChecklistConfig {
+  meetingNodeId: string
+  agendaArtifactSlot: DataSourceRef
+  decisionSlots: MeetingChecklistDecisionSlot[]
+  showDownstreamBlockers?: boolean
+}
+
+export type QueueDepthBinding =
+  | { kind: 'edge'; upstreamNodeId: string; downstreamNodeId: string }
+  | { kind: 'source'; source: DataSourceRef }
+
+export interface QueueDepthConfig {
+  binding: QueueDepthBinding
+  thresholds?: { warnAt: number; blockAt: number }
+  showClaimedByBreakdown?: boolean
+}
+
+export interface SnapshotTimelineConfig {
+  source: DataSourceRef
+  visibleVersionCount?: number
+  pinnedVersionIds?: string[]
+  showDiffPreview?: boolean
+}
+
+export interface DownstreamDrillConfig {
+  parentNodeId: string
+  stalenessMinutes?: number
+  showRolledUpStatus?: boolean
+}
+
+export type CadenceExpectation =
+  | { kind: 'every-period' }
+  | { kind: 'every-n-days'; n: number }
+  | { kind: 'before-date'; isoDate: string }
+
+export interface CadenceReminderConfig {
+  nodeId: string
+  expectedCadence: CadenceExpectation
+  reminderCopy?: string
+}
+
+export interface ContinuousBacklogConfig {
+  nodeId: string
+  backlogSource: DataSourceRef
+  rateWindow?: '1h' | '24h' | '7d'
+  topStuckCount?: number
+}
+
+/** addendum §5 — core ledger card recording observed health of bound
+ *  integrations (last probe, auth state, circuit-breaker). 待后端接入. */
+export interface IntegrationHealthConfig {
+  /** IntegrationRef ids to watch; empty = every integration bound on canvas. */
+  integrationIds?: string[]
+  showCredentialActor?: boolean
+}
+
+// -- §6.1 discriminated MonitorCard ------------------------------------------
+
+interface MonitorCardBase {
+  id: string
+  layout: CardLayout
+  title?: string
+  attemptVisibility?: AttemptVisibility
+  viewerFilter?: ViewerFilter
+}
+
+export type MonitorCard =
+  | (MonitorCardBase & { type: 'period-selector'; config: PeriodSelectorConfig })
+  | (MonitorCardBase & { type: 'producer-status-grid'; config: ProducerStatusGridConfig })
+  | (MonitorCardBase & { type: 'meeting-checklist'; config: MeetingChecklistConfig })
+  | (MonitorCardBase & { type: 'queue-depth'; config: QueueDepthConfig })
+  | (MonitorCardBase & { type: 'snapshot-timeline'; config: SnapshotTimelineConfig })
+  | (MonitorCardBase & { type: 'downstream-drill'; config: DownstreamDrillConfig })
+  | (MonitorCardBase & { type: 'continuous-backlog'; config: ContinuousBacklogConfig })
+  | (MonitorCardBase & { type: 'integration-health'; config: IntegrationHealthConfig })
+  | (MonitorCardBase & { type: 'cadence-reminder'; config: CadenceReminderConfig })
+
+export interface MonitorSpec {
+  canvasId: string
+  version: number
+  globalFilters?: {
+    statusIn?: PlanningNodeStatus[]
+    assigneeIn?: string[]
+  }
+  cards: MonitorCard[]
+  appliedFromProposalId?: string
+}

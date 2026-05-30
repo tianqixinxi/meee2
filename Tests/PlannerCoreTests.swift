@@ -1680,6 +1680,526 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(applied.artifacts.contains { $0.nodeId == downstream.id && $0.reference == "verification-notes" })
     }
 
+    // MARK: - Canvas runtime 5-atom governance apply (PR6+7)
+
+    /// E2E keystone: a single proposal that creates a DataSource + a first-class
+    /// queue-claim Edge + a MonitorSpec must, once applied, surface those atoms
+    /// on the persisted canvas (and round-trip through the graph-state API).
+    func testApplyProposalPopulatesDataSourceEdgeAndMonitorSpec() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodeA = try XCTUnwrap(record.nodes.first)
+        let nodeB = try XCTUnwrap(record.nodes.dropFirst().first)
+
+        let dataSource = DataSourceRecord(
+            id: "src-queue-1",
+            canvasId: "canvas-a",
+            kind: "managed",
+            title: "Work Queue",
+            pathPattern: "queue/*",
+            capabilities: DataSourceCapabilities(queueClaimable: true, appendOnly: true)
+        )
+        let edge = Edge(
+            id: "edge-1",
+            canvasId: "canvas-a",
+            sourceRef: EdgeSourceRef(nodeId: nodeA.id, sourceKey: "out"),
+            targetRef: EdgeTargetRef(nodeId: nodeB.id, inputKey: "in"),
+            edgeMode: EdgeMode(
+                mode: "queue-claim",
+                ordering: "fifo",
+                lock: EdgeModeLock()
+            )
+        )
+        let spec = MonitorSpec(
+            canvasId: "canvas-a",
+            version: 1,
+            cards: [MonitorCard(id: "card-1", type: "producer-status-grid", title: "Status")]
+        )
+
+        let proposal = PlanProposal(
+            id: "proposal-5atom",
+            canvasId: "canvas-a",
+            summary: "Add data source + queue-claim edge + monitor spec",
+            changes: [
+                PlanChange(kind: .addDataSource, node: nil, nodeId: nil, title: nil, status: nil,
+                           dataSourceRecord: dataSource),
+                PlanChange(kind: .addEdge, node: nil, nodeId: nil, title: nil, status: nil, edge: edge),
+                PlanChange(kind: .setMonitorSpec, node: nil, nodeId: nil, title: nil, status: nil, spec: spec)
+            ],
+            status: .pending
+        )
+
+        // Round-trip the proposal through Codable so the kind-disambiguated
+        // decode path (shared `source`/`layout`/`patch` keys) is exercised too.
+        let encoded = try JSONEncoder().encode(proposal)
+        let decoded = try JSONDecoder().decode(PlanProposal.self, from: encoded)
+        XCTAssertEqual(decoded.changes[0].kind, .addDataSource)
+        XCTAssertEqual(decoded.changes[0].dataSourceRecord?.id, "src-queue-1")
+        XCTAssertEqual(decoded.changes[1].edge?.edgeMode.mode, "queue-claim")
+        XCTAssertEqual(decoded.changes[2].spec?.cards.first?.id, "card-1")
+
+        _ = try PlannerBoardBridge.store.saveProposal(
+            decoded,
+            canvas: record.canvas,
+            seedNodes: record.nodes
+        )
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id,
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // The applied graph-state envelope's canvas must carry the atoms.
+        XCTAssertEqual(applied.canvas.dataSources.count, 1)
+        XCTAssertEqual(applied.canvas.dataSources.first?.id, "src-queue-1")
+        XCTAssertTrue(applied.canvas.dataSources.first?.capabilities.queueClaimable == true)
+        // Phase 1 edge unification: `edges` now also carries the dependency
+        // edges promoted from the seeded nodes' dependsOnNodeIds, so assert the
+        // explicit queue-claim edge by id rather than a brittle total count.
+        let queueEdge = applied.canvas.edges.first { $0.id == "edge-1" }
+        XCTAssertNotNil(queueEdge, "explicit queue-claim edge present")
+        XCTAssertEqual(queueEdge?.edgeMode.mode, "queue-claim")
+        XCTAssertEqual(applied.canvas.monitorSpec?.cards.count, 1)
+        XCTAssertEqual(applied.canvas.monitorSpec?.cards.first?.id, "card-1")
+        XCTAssertEqual(applied.canvas.monitorSpec?.appliedFromProposalId, "proposal-5atom")
+
+        // And it must survive a fresh store instance (persisted to disk).
+        PlannerBoardBridge.store = PlannerStore(fileURL: plannerStoreURL)
+        let reloaded = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertEqual(reloaded.canvas.dataSources.first?.id, "src-queue-1")
+        XCTAssertEqual(reloaded.canvas.edges.first?.id, "edge-1")
+        XCTAssertEqual(reloaded.canvas.monitorSpec?.cards.first?.id, "card-1")
+    }
+
+    /// Phase 1 edge unification — `canvas.edges` is authoritative and the legacy
+    /// `dependsOnNodeIds` is a derived projection. Adding an edge surfaces the
+    /// dependency; removing it clears the dependency.
+    func testEdgeDependencyBidirectionalSync() throws {
+        let canvasId = "cv-edge-sync"
+        let ownerId = "owner-e"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        let a = PlanningNode(
+            id: "n-a", canvasId: canvasId, title: "A",
+            schema: NodeSchema(inputs: [], outputs: ["out"], goal: "a"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready, nodeKind: .step
+        )
+        let b = PlanningNode(
+            id: "n-b", canvasId: canvasId, title: "B",
+            schema: NodeSchema(inputs: ["in"], outputs: ["out"], goal: "b"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready, nodeKind: .step
+        )
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: ownerId, title: "Edge Sync", plannerContext: "canvas:\(canvasId)"),
+            seedNodes: [a, b]
+        )
+        // add an edge A → B → dependency on B appears
+        let edge = Edge(
+            id: "e-ab", canvasId: canvasId,
+            sourceRef: EdgeSourceRef(nodeId: "n-a", sourceKey: "out"),
+            targetRef: EdgeTargetRef(nodeId: "n-b", inputKey: "in"),
+            edgeMode: EdgeMode(mode: "queue-claim", ordering: "fifo", lock: EdgeModeLock())
+        )
+        let addP = PlanProposal(
+            id: "p-add-edge", canvasId: canvasId, summary: "add edge",
+            changes: [PlanChange(kind: .addEdge, node: nil, nodeId: nil, title: nil, status: nil, edge: edge)],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(addP, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(proposalId: addP.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let afterAdd = try PlannerBoardBridge.applyProposal(proposalId: addP.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let bAfterAdd = try XCTUnwrap(afterAdd.nodes.first { $0.id == "n-b" })
+        XCTAssertEqual(bAfterAdd.dependsOnNodeIds, ["n-a"], "addEdge → dependency projected onto target")
+
+        // remove the edge → dependency clears
+        let rmP = PlanProposal(
+            id: "p-rm-edge", canvasId: canvasId, summary: "remove edge",
+            changes: [PlanChange(kind: .removeEdge, node: nil, nodeId: nil, title: nil, status: nil, edgeId: "e-ab")],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(rmP, canvas: afterAdd.canvas, seedNodes: afterAdd.nodes)
+        _ = try PlannerBoardBridge.approveProposal(proposalId: rmP.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let afterRm = try PlannerBoardBridge.applyProposal(proposalId: rmP.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let bAfterRm = try XCTUnwrap(afterRm.nodes.first { $0.id == "n-b" })
+        XCTAssertTrue((bAfterRm.dependsOnNodeIds ?? []).isEmpty, "removeEdge → dependency cleared")
+        XCTAssertFalse(afterRm.canvas.edges.contains { $0.id == "e-ab" }, "edge gone")
+    }
+
+    /// Weekly-PRD-pipeline E2E (code level, state-machine).
+    /// Covers the four acceptance criteria end to end on one canvas:
+    ///   1. monitor + flow match requirements (DataSource + queue-claim edge +
+    ///      MonitorSpec applied and readable).
+    ///   2. dispatch ("开干") puts the node into a running run-state AND a
+    ///      non-empty default prompt carrying the node protocol is generated.
+    ///   3. a session update surfaces in the node's progress, and a stop /
+    ///      blocked submit flips the node into an attention state.
+    ///   4. a produced artifact is consumed downstream and the monitor's source
+    ///      of truth (node run-state + artifacts + queue source) updates.
+    func testPRDPipelineE2E_FourCriteria() throws {
+        let canvasId = "cv-prd-e2e"
+        let ownerId = "owner-prd"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        // Two explicit auto worker nodes: producer (e.g. the PM agent that
+        // emits an artifact and completes) → consumer (downstream claimant).
+        // Auto mode matters — a `.human` node parks its done-output at a human
+        // gate (workflowRunState=.gateWait, plan status = attention/blocked),
+        // verified at PlannerCore submitNodeOutput; only `.auto` goes straight
+        // to .done. The PRD reviewers ARE human (they'd park at a gate for
+        // sign-off); this test exercises the auto-worker completion path.
+        let producer = PlanningNode(
+            id: "n-producer", canvasId: canvasId, title: "PM · 出 PR",
+            schema: NodeSchema(inputs: ["issue"], outputs: ["pr"], goal: "open a PR"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready, nodeKind: .step
+        )
+        let consumer = PlanningNode(
+            id: "n-consumer", canvasId: canvasId, title: "PR 验证",
+            schema: NodeSchema(inputs: ["pr"], outputs: ["verdict"], goal: "verify the PR"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready,
+            dependsOnNodeIds: ["n-producer"], nodeKind: .step
+        )
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: ownerId, title: "PRD E2E", plannerContext: "canvas:\(canvasId)"),
+            seedNodes: [producer, consumer]
+        )
+
+        // ---- Criterion 1: build the flow + monitor, apply, read back --------
+        let issuesSource = DataSourceRecord(
+            id: "src-issues",
+            canvasId: canvasId,
+            kind: "github",
+            title: "GitHub issues",
+            pathPattern: "gh://repo/issues/",
+            capabilities: DataSourceCapabilities(
+                documentReadable: true, listEnumerable: true,
+                queueClaimable: true, appendOnly: true
+            )
+        )
+        let queueEdge = Edge(
+            id: "edge-issues-pm",
+            canvasId: canvasId,
+            sourceRef: EdgeSourceRef(nodeId: producer.id, sourceKey: "issues"),
+            targetRef: EdgeTargetRef(nodeId: consumer.id, inputKey: "task"),
+            edgeMode: EdgeMode(mode: "queue-claim", ordering: "fifo", lock: EdgeModeLock())
+        )
+        let spec = MonitorSpec(
+            canvasId: canvasId,
+            version: 1,
+            cards: [
+                MonitorCard(id: "c-producers", type: "producer-status-grid", title: "交稿进度"),
+                MonitorCard(id: "c-queue", type: "queue-depth", title: "issue 队列深度")
+            ]
+        )
+        let proposal = PlanProposal(
+            id: "prop-prd-e2e",
+            canvasId: canvasId,
+            summary: "PRD pipeline: issues DataSource + queue-claim edge + monitor",
+            changes: [
+                PlanChange(kind: .addDataSource, node: nil, nodeId: nil, title: nil, status: nil,
+                           dataSourceRecord: issuesSource),
+                PlanChange(kind: .addEdge, node: nil, nodeId: nil, title: nil, status: nil, edge: queueEdge),
+                PlanChange(kind: .setMonitorSpec, node: nil, nodeId: nil, title: nil, status: nil, spec: spec)
+            ],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let applied = try PlannerBoardBridge.applyProposal(proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        XCTAssertEqual(applied.canvas.dataSources.first?.id, "src-issues", "C1: DataSource applied")
+        XCTAssertEqual(applied.canvas.edges.first?.edgeMode.mode, "queue-claim", "C1: queue-claim edge applied")
+        XCTAssertEqual(applied.canvas.monitorSpec?.cards.count, 2, "C1: monitor cards applied")
+
+        // ---- Criterion 2: 开干 → running + default prompt -------------------
+        let dispatched = try PlannerBoardBridge.dispatchNode(
+            nodeId: producer.id, runner: .claude, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        XCTAssertNotNil(dispatched.dispatchedNode.dispatch, "C2: dispatch recorded on node")
+        let prompt = BoardAPI.plannerDispatchPrompt(for: dispatched.dispatchedNode, canvasId: canvasId, cwd: "/tmp/ws")
+        XCTAssertFalse(prompt.isEmpty, "C2: default prompt generated")
+        XCTAssertTrue(prompt.contains("read_node_contract"), "C2: prompt carries the node protocol")
+        XCTAssertTrue(prompt.contains("submit_node_output"), "C2: prompt instructs writeback")
+
+        // ---- Criterion 4: artifact produced → consumed downstream → monitor -
+        // producer (root) completes with an artifact — a clean dispatch→done.
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: producer.id,
+            output: PlannerNodeOutput(
+                nodeId: producer.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "PRD 草稿完成", routeTo: []),
+                // reference MUST match the node's declared output slot, else the
+                // engine treats the contract as unsatisfied and keeps the node
+                // incomplete (verified behavior — see
+                // testSubmitNodeOutputHintsWhenArtifactsDoNotSatisfyContract).
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .prd,
+                    title: "张三 PRD",
+                    reference: producer.schema.outputs.first ?? "out",
+                    payload: .object(["type": .string("markdown"), "data": .string("# PRD")]),
+                    routeTo: []
+                )],
+                next: .complete,
+                forceNewVersion: false
+            ),
+            for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        // produced artifact is on the canvas (monitor source of truth #1)
+        XCTAssertTrue(
+            done.graph.artifacts.contains(where: { $0.nodeId == producer.id }),
+            "C4: produced artifact present on canvas (monitor reads it)"
+        )
+        // producer run-state is terminal-done (producer-status-grid cell flips)
+        let doneNode = try XCTUnwrap(done.graph.nodes.first(where: { $0.id == producer.id }))
+        XCTAssertEqual(doneNode.status, .done, "C4: auto producer done → monitor producer-grid recomputes")
+        // downstream consumer is no longer upstream-blocked once producer is done
+        // (dataflow legality: upstream ∈ done ⇒ downstream becomes startable).
+        let consumerAfter = try XCTUnwrap(done.graph.nodes.first(where: { $0.id == consumer.id }))
+        XCTAssertNotEqual(consumerAfter.status, .blocked, "C4: downstream consumes — no longer blocked by upstream")
+        // the monitor spec + queue source are still intact and queryable live
+        let live = try PlannerBoardBridge.graphState(for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        XCTAssertEqual(live.canvas.monitorSpec?.cards.count, 2, "C4: monitor still serves after state change")
+        XCTAssertNotNil(live.canvas.dataSources.first(where: { $0.id == "src-issues" }), "C4: queue source live")
+
+        // ---- Criterion 3: a stopped/blocked session surfaces as attention ---
+        // downstream node is now startable; dispatch it ("开干"), then the
+        // session stops needing input → blocked submit flips it to 卡住, the
+        // signal the UI turns into a "needs your reply" prompt.
+        _ = try PlannerBoardBridge.dispatchNode(
+            nodeId: consumer.id, runner: .claude, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        let blocked = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: consumer.id,
+            output: PlannerNodeOutput(
+                nodeId: consumer.id,
+                status: .blocked,
+                message: PlannerNodeOutputMessage(summary: "等待用户确认实现方案", routeTo: []),
+                artifacts: [],
+                next: .blocked,
+                forceNewVersion: false
+            ),
+            for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        let blockedNode = try XCTUnwrap(blocked.graph.nodes.first(where: { $0.id == consumer.id }))
+        XCTAssertEqual(blockedNode.status, .blocked, "C3: stopped/blocked session surfaces as 卡住 (user prompted)")
+    }
+
+    /// The DataSource adapter's queue-claim state machine (§3.8) must drive a
+    /// seeded managed source through ready → claimed → done.
+    func testManagedAdapterQueueClaimStateMachine() throws {
+        let source = DataSourceRecord(
+            id: "src-managed-1",
+            canvasId: "canvas-a",
+            kind: "managed",
+            title: "Queue",
+            capabilities: DataSourceCapabilities(queueClaimable: true)
+        )
+        let adapter = ManagedAdapter(source: source, seedItems: [
+            DataSourceItem(itemId: "a", ref: "ref-a"),
+            DataSourceItem(itemId: "b", ref: "ref-b")
+        ])
+        let claimed = try adapter.claim(n: 1, claimant: "ck-test")
+        XCTAssertEqual(claimed.count, 1)
+        XCTAssertEqual(claimed.first?.state, .claimed)
+        let itemId = try XCTUnwrap(claimed.first?.itemId)
+        try adapter.markInProgress(itemId: itemId, claimant: "ck-test")
+        try adapter.markDone(itemId: itemId, claimant: "ck-test")
+        // A different claimant cannot complete an item it never claimed.
+        let second = try adapter.claim(n: 1, claimant: "ck-other")
+        XCTAssertThrowsError(try adapter.markDone(itemId: try XCTUnwrap(second.first?.itemId), claimant: "ck-test"))
+    }
+
+    /// canvas-spec §5/§10 (P3) · Output → DataSource → queue-claim, end to end.
+    /// A producer node submits an output whose slot is bound to a queue-claimable
+    /// DataSource (via an edge carrying `sourceRef.dataSourceId`); on submit the
+    /// artifact is PUSHED into that source — `currentVersion` advances and a
+    /// claimable item is enqueued. A downstream queue-claim consumer then CLAIMS
+    /// from that source (ready→claimed→done), and the source's queue depth
+    /// reflects the claim. Regression for the gap where a produced output never
+    /// fed the connected DataSource (issues currentVersion stayed 0).
+    func testOutputPushesIntoDataSourceThenConsumerClaims() throws {
+        let canvasId = "cv-p3-push-claim"
+        let ownerId = "owner-p3"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        // 会议产出 push 进 issues source; PM 从 issues source queue-claim.
+        let meeting = PlanningNode(
+            id: "n-meeting", canvasId: canvasId, title: "会议 · 产出 issues",
+            schema: NodeSchema(inputs: [], outputs: ["issues"], goal: "produce issues"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready, nodeKind: .step
+        )
+        let pm = PlanningNode(
+            id: "n-pm", canvasId: canvasId, title: "PM · claim issue",
+            schema: NodeSchema(inputs: ["task"], outputs: ["pr"], goal: "claim + implement"),
+            contextSources: [], executionMode: .auto, executorType: .claude,
+            doerId: ownerId, status: .ready,
+            dependsOnNodeIds: ["n-meeting"], nodeKind: .step
+        )
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: ownerId, title: "P3", plannerContext: "canvas:\(canvasId)"),
+            seedNodes: [meeting, pm]
+        )
+
+        let issuesSource = DataSourceRecord(
+            id: "src-issues-p3",
+            canvasId: canvasId,
+            kind: "managed",
+            title: "issues",
+            pathPattern: "gh://repo/issues/",
+            capabilities: DataSourceCapabilities(
+                documentReadable: true, listEnumerable: true,
+                queueClaimable: true, appendOnly: true
+            )
+        )
+        // The queue-claim edge: meeting output slot `issues` → PM input `task`,
+        // routed through the issues DataSource pool (`sourceRef.dataSourceId`).
+        let queueEdge = Edge(
+            id: "edge-issues-pm-p3",
+            canvasId: canvasId,
+            sourceRef: EdgeSourceRef(nodeId: meeting.id, sourceKey: "issues", dataSourceId: issuesSource.id),
+            targetRef: EdgeTargetRef(nodeId: pm.id, inputKey: "task"),
+            edgeMode: EdgeMode(mode: "queue-claim",
+                               strategy: EdgeModeStrategy(kind: "claim-one"),
+                               ordering: "fifo", lock: EdgeModeLock())
+        )
+        let proposal = PlanProposal(
+            id: "prop-p3", canvasId: canvasId,
+            summary: "issues source + output→source queue-claim edge",
+            changes: [
+                PlanChange(kind: .addDataSource, node: nil, nodeId: nil, title: nil, status: nil,
+                           dataSourceRecord: issuesSource),
+                PlanChange(kind: .addEdge, node: nil, nodeId: nil, title: nil, status: nil, edge: queueEdge)
+            ],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        let applied = try PlannerBoardBridge.applyProposal(proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId)
+        // The DataSource binding survived apply on the edge.
+        let appliedEdge = try XCTUnwrap(applied.canvas.edges.first { $0.id == "edge-issues-pm-p3" })
+        XCTAssertEqual(appliedEdge.sourceRef.dataSourceId, "src-issues-p3", "edge carries the DataSource binding")
+        XCTAssertEqual(applied.canvas.dataSources.first { $0.id == "src-issues-p3" }?.currentVersion, 0,
+                       "precondition: source starts at version 0 (nothing produced yet)")
+
+        // ---- Producer submits output bound to the source slot --------------
+        let done = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: meeting.id,
+            output: PlannerNodeOutput(
+                nodeId: meeting.id,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "会议产出一个 issue", routeTo: []),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .prd,
+                    title: "Issue #1",
+                    reference: "issues", // matches meeting's output slot == edge sourceKey
+                    payload: .object(["type": .string("markdown"), "data": .string("# do the thing")]),
+                    routeTo: []
+                )],
+                next: .complete,
+                forceNewVersion: false
+            ),
+            for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        // 1) currentVersion advanced 0 → 1 (the push happened).
+        let srcAfterPush = try XCTUnwrap(done.graph.canvas.dataSources.first { $0.id == "src-issues-p3" })
+        XCTAssertEqual(srcAfterPush.currentVersion, 1, "P3: output push advanced source currentVersion")
+        // 2) a source-keyed version row was appended (writeSourceVersion twin).
+        let sourceSlotKey = "\(canvasId)|source|src-issues-p3|issues"
+        let recordAfterPush = try PlannerBoardBridge.store.canvasRecordForBridge(canvasId: canvasId)
+        XCTAssertTrue(
+            recordAfterPush.artifactVersions.contains { $0.artifactSlotKey == sourceSlotKey },
+            "P3: a version row keyed to the source slot was appended"
+        )
+        // 3) a claimable item is enqueued (ready depth == 1).
+        let adapter = try XCTUnwrap(
+            PlannerBoardBridge.dataSourceAdapter(canvasId: canvasId, sourceId: "src-issues-p3") as? ManagedAdapter
+        )
+        XCTAssertEqual(adapter.readyDepth(), 1, "P3: produced output enqueued one claimable item")
+
+        // ---- Consumer claims from the source -------------------------------
+        let claimant = "ck-pm-attempt-1"
+        let (claimedSourceId, claimed) = try PlannerBoardBridge.claimFromSourceForConsumer(
+            canvasId: canvasId, consumerNodeId: pm.id, claimant: claimant
+        )
+        XCTAssertEqual(claimedSourceId, "src-issues-p3")
+        XCTAssertEqual(claimed.count, 1, "P3: claim-one pulled exactly one item")
+        let claimedItemId = try XCTUnwrap(claimed.first?.itemId)
+        XCTAssertEqual(claimed.first?.state, .claimed, "P3: claimed item is in .claimed state")
+        // queue depth now reflects the claim (no more ready items).
+        XCTAssertEqual(adapter.readyDepth(), 0, "P3: claimed item left the ready queue")
+        XCTAssertEqual(adapter.item(claimedItemId)?.state, .claimed)
+
+        // ---- Complete the item: claimed → in-progress → done ---------------
+        try PlannerBoardBridge.dataSourceMarkInProgress(
+            canvasId: canvasId, sourceId: claimedSourceId, itemId: claimedItemId, claimant: claimant
+        )
+        XCTAssertEqual(adapter.item(claimedItemId)?.state, .inProgress)
+        try PlannerBoardBridge.dataSourceMarkDone(
+            canvasId: canvasId, sourceId: claimedSourceId, itemId: claimedItemId, claimant: claimant
+        )
+        XCTAssertEqual(adapter.item(claimedItemId)?.state, .done, "P3: item reached terminal .done")
+        // A second claim finds nothing left.
+        let secondClaim = try PlannerBoardBridge.dataSourceClaim(
+            canvasId: canvasId, sourceId: claimedSourceId, n: 1, claimant: "ck-other"
+        )
+        XCTAssertTrue(secondClaim.isEmpty, "P3: queue drained — nothing left to claim")
+    }
+
+    /// §6.6 footgun guard: replacing a non-empty monitor spec wholesale without
+    /// `intent='wipe-and-rebuild'` must be rejected.
+    func testSetMonitorSpecReplaceGuardRejectsWholesaleReplace() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let firstSpec = MonitorSpec(canvasId: "canvas-a", cards: [
+            MonitorCard(id: "card-1", type: "producer-status-grid")
+        ])
+        let p1 = PlanProposal(
+            id: "p-monitor-1", canvasId: "canvas-a", summary: "set monitor",
+            changes: [PlanChange(kind: .setMonitorSpec, node: nil, nodeId: nil, title: nil, status: nil, spec: firstSpec)],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(p1, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(proposalId: p1.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        _ = try PlannerBoardBridge.applyProposal(proposalId: p1.id, for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+
+        // Read back the live canvas (now carrying the applied monitor spec) so
+        // the guard validates against the real prior state.
+        let live = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot)
+        XCTAssertEqual(live.canvas.monitorSpec?.cards.count, 1)
+
+        // A second wholesale setMonitorSpec without intent must be rejected at save.
+        let secondSpec = MonitorSpec(canvasId: "canvas-a", cards: [
+            MonitorCard(id: "card-2", type: "period-selector")
+        ])
+        let p2 = PlanProposal(
+            id: "p-monitor-2", canvasId: "canvas-a", summary: "replace monitor",
+            changes: [PlanChange(kind: .setMonitorSpec, node: nil, nodeId: nil, title: nil, status: nil, spec: secondSpec)],
+            status: .pending
+        )
+        XCTAssertThrowsError(try PlannerBoardBridge.store.saveProposal(p2, canvas: live.canvas, seedNodes: live.nodes)) { error in
+            guard case PlannerCoreError.monitorSpecReplaceGuard = error else {
+                return XCTFail("expected monitorSpecReplaceGuard, got \(error)")
+            }
+        }
+
+        // The same replace WITH intent='wipe-and-rebuild' must be accepted.
+        let p3 = PlanProposal(
+            id: "p-monitor-3", canvasId: "canvas-a", summary: "wipe and rebuild monitor",
+            changes: [PlanChange(kind: .setMonitorSpec, node: nil, nodeId: nil, title: nil, status: nil,
+                                 spec: secondSpec, intent: "wipe-and-rebuild")],
+            status: .pending
+        )
+        XCTAssertNoThrow(try PlannerBoardBridge.store.saveProposal(p3, canvas: live.canvas, seedNodes: live.nodes))
+    }
+
     func testPlannerStorePersistsStateAcrossInstances() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         let proposal = try PlannerBoardBridge.generateProposal(
@@ -2608,6 +3128,17 @@ final class PlannerCoreTests: XCTestCase {
                         "Input snapshot must be captured on every version.")
         XCTAssertEqual(versions.first?.displayStrategy, .latest,
                        "Default display_strategy is `latest` per ENG-3 F4.3 fix.")
+
+        // P4 · the surfaced (latest-per-slot) artifact carries a derived
+        // version index/count so the card can render `v{n}`. The head == count.
+        let graph = try PlannerBoardBridge.graphState(
+            for: canvas.id, snapshot: snapshot, actorUserId: "owner-a"
+        )
+        let surfaced = try XCTUnwrap(
+            graph.artifacts.first { $0.reference == "idea_list_kanban" }
+        )
+        XCTAssertEqual(surfaced.versionCount, 2, "P4: slot chain length surfaced")
+        XCTAssertEqual(surfaced.versionIndex, 2, "P4: surfaced artifact is the chain head → v2")
     }
 
     func testNodeContractListsOnlyDownstreamAndOwnerRouteTargets() throws {
@@ -2814,7 +3345,11 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNoThrow(try NodeContractValidator.validateRawContract(raw))
     }
 
-    func testSubmitNodeOutputRoutesArtifactAndParksHumanCompletionAtGate() throws {
+    /// canvas-spec §8 / §11 · A human node with NO gate / NO handoffPolicy does
+    /// NOT need review, so submit `done` goes straight to `.done` (the old
+    /// "every human node parks at gateWait" behavior is gone — gate is decided
+    /// by needs-review, not executionMode). Downstream unblocks immediately.
+    func testSubmitNodeOutputNoReviewHumanCompletesDirectly() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
 
@@ -2842,14 +3377,150 @@ final class PlannerCoreTests: XCTestCase {
             actorUserId: "owner-a"
         )
 
-        let gated = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-1" })
-        XCTAssertEqual(gated.workflowRunState, .gateWait)
-        XCTAssertEqual(gated.status, .blocked, "a node parked at a human gate is not 'In progress'")
+        // node-1 is human but carries no gate / handoffPolicy → no review → done.
+        let producer = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-1" })
+        XCTAssertEqual(producer.workflowRunState, .done, "no-review human node → done directly")
+        XCTAssertEqual(producer.status, .done)
+        // Not awaiting review (distinct from the 待确认 case).
+        XCTAssertEqual(
+            result.graph.states.first { $0.nodeId == producer.id }?.needsOwnerReview, false
+        )
+        // Producer is truly done → downstream becomes startable.
         let downstream = try XCTUnwrap(result.graph.nodes.first { $0.id == "canvas-a-node-2" })
         XCTAssertEqual(downstream.workflowRunState, .readyToStart)
         XCTAssertTrue(downstream.contextSources.contains { $0.reference == "lark://doc/idea" })
         XCTAssertTrue(result.graph.artifacts.contains { $0.reference == "lark://doc/idea" })
         XCTAssertTrue(result.routes.contains { $0.targetNodeId == "canvas-a-node-2" })
+    }
+
+    // MARK: - canvas-spec §8 / §11 · 待确认 (awaiting-review) state machine
+
+    /// Seed a producer→consumer flow where the producer needs review
+    /// (`handoffPolicy` non-`.none`). Returns (canvasId, snapshot, ownerId).
+    private func seedReviewFlow(
+        canvasId: String = "cv-review",
+        ownerId: String = "owner-review",
+        producerNeedsReview: Bool = true
+    ) throws -> (canvasId: String, snapshot: BoardLayoutStore.Snapshot, ownerId: String) {
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        let producer = PlanningNode(
+            id: "n-prod", canvasId: canvasId, title: "Reviewer 草稿",
+            schema: NodeSchema(inputs: ["goal"], outputs: ["draft"], goal: "draft a PRD"),
+            contextSources: [], executionMode: .human, executorType: .human,
+            doerId: ownerId, status: .ready,
+            // needs-review iff a non-.none handoffPolicy is set.
+            handoffPolicy: producerNeedsReview ? .reviewerMustApprove : .none,
+            nodeKind: .step
+        )
+        // Consumer starts blocked-by-upstream (pending) — it only becomes
+        // startable once n-prod is actually done.
+        let consumer = PlanningNode(
+            id: "n-cons", canvasId: canvasId, title: "选题会",
+            schema: NodeSchema(inputs: ["draft"], outputs: ["picks"], goal: "pick topics"),
+            contextSources: [], executionMode: .human, executorType: .human,
+            doerId: ownerId, status: .blocked,
+            dependsOnNodeIds: ["n-prod"], nodeKind: .step,
+            workflowRunState: .pending
+        )
+        _ = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: ownerId, title: "Review flow",
+                                plannerContext: "canvas:\(canvasId)"),
+            seedNodes: [producer, consumer]
+        )
+        return (canvasId, snapshot, ownerId)
+    }
+
+    private func submitDraftDone(
+        nodeId: String, canvasId: String, snapshot: BoardLayoutStore.Snapshot, ownerId: String
+    ) throws -> PlannerNodeOutputResult {
+        try PlannerBoardBridge.submitNodeOutput(
+            nodeId: nodeId,
+            output: PlannerNodeOutput(
+                nodeId: nodeId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "draft ready", routeTo: ["n-cons"]),
+                artifacts: [PlannerNodeOutputArtifact(
+                    kind: .prd, title: "Draft", reference: "draft", routeTo: ["n-cons"]
+                )],
+                next: .complete
+            ),
+            for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+    }
+
+    /// (a) A needs-review node submit `done` → parks at 待确认 (gateWait,
+    /// distinct from done AND from blocked), and downstream is NOT startable.
+    func testNeedsReviewNodeDoneParksAwaitingReviewAndBlocksDownstream() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow()
+
+        let result = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+
+        let producer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-prod" })
+        // 待确认: gateWait carrier, NOT .done.
+        XCTAssertEqual(producer.workflowRunState, .gateWait, "needs-review done → awaiting-review, not done")
+        XCTAssertNotEqual(producer.status, .done)
+        // Distinct from 卡住: surfaced via needsOwnerReview (not just .blocked).
+        let prodState = try XCTUnwrap(result.graph.states.first { $0.nodeId == "n-prod" })
+        XCTAssertTrue(prodState.needsOwnerReview, "待确认 must be distinct from blocked via needsOwnerReview")
+        // Downstream is NOT startable while upstream is only 待确认 (not done).
+        let consumer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-cons" })
+        XCTAssertNotEqual(consumer.workflowRunState, .readyToStart, "downstream stays blocked-by-upstream")
+        XCTAssertEqual(consumer.workflowRunState, .pending, "downstream unchanged: upstream not done")
+    }
+
+    /// (b) Confirming a 待确认 node → it goes `.done` and downstream becomes
+    /// startable (`readyToStart`).
+    func testConfirmNodeReviewMarksDoneAndUnblocksDownstream() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow()
+        _ = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+
+        let confirmed = try PlannerBoardBridge.confirmNodeReview(
+            nodeId: "n-prod", for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+
+        let producer = try XCTUnwrap(confirmed.nodes.first { $0.id == "n-prod" })
+        XCTAssertEqual(producer.workflowRunState, .done, "confirm → done")
+        XCTAssertEqual(producer.status, .done)
+        XCTAssertEqual(confirmed.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
+        // Downstream now startable.
+        let consumer = try XCTUnwrap(confirmed.nodes.first { $0.id == "n-cons" })
+        XCTAssertEqual(consumer.workflowRunState, .readyToStart, "confirm unblocks downstream")
+        XCTAssertEqual(consumer.status, .ready)
+    }
+
+    /// (c) A no-review node (human, no gate / no handoffPolicy) submit `done` →
+    /// `.done` directly; downstream startable immediately.
+    func testNoReviewNodeDoneCompletesDirectly() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-noreview", ownerId: "owner-noreview", producerNeedsReview: false
+        )
+
+        let result = try submitDraftDone(
+            nodeId: "n-prod", canvasId: canvasId, snapshot: snapshot, ownerId: ownerId
+        )
+
+        let producer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-prod" })
+        XCTAssertEqual(producer.workflowRunState, .done, "no-review done → done directly")
+        XCTAssertEqual(producer.status, .done)
+        XCTAssertEqual(result.graph.states.first { $0.nodeId == "n-prod" }?.needsOwnerReview, false)
+        let consumer = try XCTUnwrap(result.graph.nodes.first { $0.id == "n-cons" })
+        XCTAssertEqual(consumer.workflowRunState, .readyToStart, "downstream startable once upstream truly done")
+    }
+
+    /// Confirming a node that is NOT awaiting review is rejected (guards against
+    /// silently "confirming" a running / blocked node).
+    func testConfirmNodeReviewRejectsNodeNotAwaitingReview() throws {
+        let (canvasId, snapshot, ownerId) = try seedReviewFlow(
+            canvasId: "cv-confirm-guard", ownerId: "owner-cg"
+        )
+        // n-prod is still .ready (never submitted) → not confirmable.
+        XCTAssertThrowsError(try PlannerBoardBridge.confirmNodeReview(
+            nodeId: "n-prod", for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        ))
     }
 
     func testSubmitNodeOutputRejectsInvalidRouteWithoutMutation() throws {
@@ -3076,6 +3747,92 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNotNil(node.outputSubmittedAt, "submit latch should remain set until re-dispatch")
     }
 
+    /// BUG 1.1 regression — after a restart, a node bound to a session that is
+    /// no longer live must NOT keep showing `running`/`dispatched`. The
+    /// liveness reconcile pass demotes it to `awaitingInput` (status `.blocked`)
+    /// and stamps the awaiting clock so the UI surfaces "needs attention".
+    /// Tolerant: a genuinely live session is left untouched.
+    func testReconcileDemotesNodeBoundToDeadSession() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+
+        // Bind a session and drive it to running, as it would be before the app
+        // closed.
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-dead",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: .running
+        )
+
+        // Sanity: the node is running before reconciliation.
+        let preState = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let preNode = try XCTUnwrap(preState.nodes.first { $0.id == stepId })
+        XCTAssertEqual(preNode.workflowRunState, .running)
+
+        // Reconcile against a live session set that does NOT contain the bound
+        // session (it died while the app was closed).
+        let demoted = try PlannerBoardBridge.store.reconcileRunStateAgainstLiveSessions(
+            canvasId: "canvas-a",
+            isLive: { _ in false }
+        )
+        XCTAssertEqual(demoted, 1, "the stale running node should be demoted")
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertNotEqual(node.workflowRunState, .running, "must not still report running")
+        XCTAssertNotEqual(node.workflowRunState, .dispatched, "must not still report dispatched")
+        XCTAssertEqual(node.workflowRunState, .awaitingInput, "demoted to awaiting input")
+        XCTAssertEqual(node.status, .blocked)
+        // The demoted node carries a "needs attention" reason for the UI. The
+        // awaiting-clock timestamp itself is stamped onto the active run's live
+        // attempt by applySessionRunStateLocked (the shared path this routes
+        // through, covered by the session-feedback tests); the demotion here is
+        // the load-time reconciliation that fixes the stale `running` state.
+        XCTAssertNotNil(node.blockedReason, "needs-attention reason surfaced to UI")
+        XCTAssertTrue(
+            node.blockedReason?.contains(String("claude-dead".prefix(8))) ?? false,
+            "reason should name the dead session"
+        )
+    }
+
+    /// BUG 1.1 tolerance — a node whose bound session is still live must be left
+    /// untouched by the reconcile pass.
+    func testReconcileLeavesNodeBoundToLiveSessionRunning() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-live",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-live",
+            runState: .running
+        )
+
+        let demoted = try PlannerBoardBridge.store.reconcileRunStateAgainstLiveSessions(
+            canvasId: "canvas-a",
+            isLive: { $0 == "claude-live" }
+        )
+        XCTAssertEqual(demoted, 0, "a live session must not be demoted")
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertEqual(node.workflowRunState, .running, "live node stays running")
+    }
+
     /// Counterpart: re-dispatching a blocked node must release the latch and
     /// let session-status mirror resume — otherwise the node would be stuck
     /// blocked forever even after the owner asked the agent to try again.
@@ -3130,6 +3887,180 @@ final class PlannerCoreTests: XCTestCase {
         let afterRun = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let runningNode = try XCTUnwrap(afterRun.nodes.first { $0.id == stepId })
         XCTAssertEqual(runningNode.workflowRunState, .running, "session mirror must work again after re-dispatch")
+    }
+
+    // MARK: - Effective session status (planner mirror) — permission-gate bug
+
+    /// Build a minimal `SessionDTO` for planner-mirror tests. Only the fields
+    /// the mirror reads (`id`, `status`, `pendingPermissionTool`) are meaningful;
+    /// everything else is defaulted to neutral values.
+    private func makeSessionDTO(
+        id: String,
+        status: SessionStatus,
+        pendingPermissionTool: String? = nil,
+        terminalKind: String = "external"
+    ) -> SessionDTO {
+        SessionDTO(
+            id: id,
+            title: id,
+            project: "/tmp/fake-project",
+            pluginId: "com.meee2.plugin.claude",
+            pluginDisplayName: "Claude Code",
+            pluginColor: "#FF9500",
+            status: status.rawValue,
+            inboxPending: 0,
+            recentMessages: [],
+            currentTool: nil,
+            startedAt: nil,
+            lastActivity: nil,
+            usageStats: nil,
+            tasks: [],
+            currentTask: nil,
+            pendingPermissionTool: pendingPermissionTool,
+            pendingPermissionMessage: pendingPermissionTool == nil ? nil : "Allow \(pendingPermissionTool!)?",
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: nil,
+            terminalKind: terminalKind,
+            surfaceId: nil,
+            surfaceStatus: nil,
+            canOpenExternal: true,
+            terminalBackend: "external",
+            nativeWorkspaceAvailable: false,
+            openTarget: "external",
+            controlState: "active",
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: "cli",
+            syncEnabled: false,
+            syncTeamId: nil,
+            syncTeamName: nil
+        )
+    }
+
+    /// Root-cause unit: a session can carry a pending permission prompt
+    /// (`pendingPermissionTool`) while its coarse `status` still resolves to a
+    /// working state (e.g. `.active`/`.thinking` for a fresh-assistant tail).
+    /// `effectiveSessionStatus` must promote that to `.permissionRequired` so the
+    /// planner mirror flips the node to `gateWait`, instead of leaving it
+    /// "running". A genuinely working session with no pending permission keeps
+    /// its working status; a `.waitingForUser` status is preserved.
+    func testEffectiveSessionStatusPromotesPendingPermission() {
+        // Permission pending while status string says active → permissionRequired.
+        let pendingActive = makeSessionDTO(id: "ghost-1", status: .active, pendingPermissionTool: "Bash")
+        XCTAssertEqual(BoardAPI.effectiveSessionStatus(for: pendingActive), .permissionRequired)
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .permissionRequired), .gateWait)
+
+        // Same for thinking — pending permission dominates.
+        let pendingThinking = makeSessionDTO(id: "ghost-2", status: .thinking, pendingPermissionTool: "Edit")
+        XCTAssertEqual(BoardAPI.effectiveSessionStatus(for: pendingThinking), .permissionRequired)
+
+        // No pending permission + thinking → stays thinking (→ running).
+        let thinking = makeSessionDTO(id: "ghost-3", status: .thinking)
+        XCTAssertEqual(BoardAPI.effectiveSessionStatus(for: thinking), .thinking)
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .thinking), .running)
+
+        // waitingForUser status (Claude finished, ball in human's court) is
+        // preserved → awaitingInput.
+        let waiting = makeSessionDTO(id: "ghost-4", status: .waitingForUser)
+        XCTAssertEqual(BoardAPI.effectiveSessionStatus(for: waiting), .waitingForUser)
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .waitingForUser), .awaitingInput)
+
+        // Empty/whitespace pendingPermissionTool is treated as "no pending".
+        let blankPending = makeSessionDTO(id: "ghost-5", status: .active, pendingPermissionTool: "   ")
+        XCTAssertEqual(BoardAPI.effectiveSessionStatus(for: blankPending), .active)
+    }
+
+    /// End-to-end mirror: a bound node observing a permission-gated session
+    /// (derived status `.permissionRequired`) flips to `gateWait` ("待审核/
+    /// 等反馈"), NOT `running` — the original bug. A thinking session stays
+    /// running.
+    func testPermissionGatedSessionFlipsBoundNodeToGateWait() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-ghostty-1",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // A thinking session (no pending permission) → node running.
+        let thinking = makeSessionDTO(id: "claude-ghostty-1", status: .thinking)
+        _ = PlannerSessionRunStateBridge.observeBound(
+            sessionId: thinking.id,
+            status: BoardAPI.effectiveSessionStatus(for: thinking)
+        )
+        var node = try XCTUnwrap(
+            try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+                .nodes.first { $0.id == stepId }
+        )
+        XCTAssertEqual(node.workflowRunState, .running, "a thinking session keeps the node running")
+
+        // Now the same session has a permission prompt pending while its coarse
+        // status STILL reads as a working state (the ghostty gap). The node must
+        // flip off running → gateWait.
+        let gated = makeSessionDTO(id: "claude-ghostty-1", status: .active, pendingPermissionTool: "Bash")
+        _ = PlannerSessionRunStateBridge.observeBound(
+            sessionId: gated.id,
+            status: BoardAPI.effectiveSessionStatus(for: gated)
+        )
+        node = try XCTUnwrap(
+            try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+                .nodes.first { $0.id == stepId }
+        )
+        XCTAssertNotEqual(node.workflowRunState, .running, "must not keep showing 运行中 while a permission gate is pending")
+        XCTAssertEqual(node.workflowRunState, .gateWait, "permission-pending session → 待审核/等反馈")
+        XCTAssertEqual(node.status, .blocked)
+    }
+
+    /// Regression guard: the permission-gate promotion must NOT override an
+    /// agent that has explicitly submitted output (the `outputSubmittedAt`
+    /// latch). Even if a stray permission-pending observation arrives after a
+    /// `submit_node_output done`, the latched terminal state survives.
+    func testPermissionGatedObservationDoesNotOverrideSubmittedLatch() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+        _ = try PlannerBoardBridge.store.updateNodeGate(canvasId: "canvas-a", nodeId: stepId, executionMode: .auto)
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-submit",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.submitNodeOutput(
+            nodeId: stepId,
+            output: PlannerNodeOutput(
+                nodeId: stepId,
+                status: .done,
+                message: PlannerNodeOutputMessage(summary: "Output submitted", routeTo: []),
+                artifacts: [],
+                next: .complete
+            ),
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // A late permission-pending observation arrives for the same session.
+        let gated = makeSessionDTO(id: "claude-submit", status: .active, pendingPermissionTool: "Bash")
+        _ = PlannerSessionRunStateBridge.observeBound(
+            sessionId: gated.id,
+            status: BoardAPI.effectiveSessionStatus(for: gated)
+        )
+
+        let node = try XCTUnwrap(
+            try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+                .nodes.first { $0.id == stepId }
+        )
+        XCTAssertEqual(node.workflowRunState, .done, "submitted latch must survive the permission-gate observation")
+        XCTAssertEqual(node.status, .done)
+        XCTAssertNotNil(node.outputSubmittedAt)
     }
 
     func testSessionFailureBeforeOutputStoresBlockedReason() throws {
@@ -4012,5 +4943,146 @@ final class PlannerCoreTests: XCTestCase {
             ]),
             "items": .array([.object(item)])
         ])
+    }
+
+    // MARK: - Unified Artifact.source (canvas-spec §7 — artifact-unified-model)
+
+    /// Legacy `authored` ⇒ seed/authored OUTPUT slot, authorable per §7.4.
+    func testArtifactSourceFromLegacyAuthoredIsAuthorableOutputSlot() throws {
+        let src = try XCTUnwrap(
+            ArtifactSource.fromLegacy(
+                mode: "authored",
+                nodeId: "node-1",
+                outputSlotKey: "prd",
+                mirroredSourceId: nil
+            )
+        )
+        guard case let .slot(nodeId, slotKey, direction) = src else {
+            return XCTFail("expected .slot, got \(src)")
+        }
+        XCTAssertEqual(nodeId, "node-1")
+        XCTAssertEqual(slotKey, "prd")
+        XCTAssertEqual(direction, .output)
+        XCTAssertTrue(src.defaultAuthorable, "an authored seed output slot must be authorable (§7.4)")
+    }
+
+    /// Legacy `mirrored` ⇒ dataSource-kind source, NOT authorable per §7.4.
+    func testArtifactSourceFromLegacyMirroredIsDataSourceNotAuthorable() throws {
+        let src = try XCTUnwrap(
+            ArtifactSource.fromLegacy(
+                mode: "mirrored",
+                nodeId: "node-1",
+                outputSlotKey: "out",
+                mirroredSourceId: "notion:doc:abc"
+            )
+        )
+        guard case let .dataSource(sourceId) = src else {
+            return XCTFail("expected .dataSource, got \(src)")
+        }
+        XCTAssertEqual(sourceId, "notion:doc:abc")
+        XCTAssertFalse(src.defaultAuthorable, "a mirrored/dataSource source is NOT hand-fillable (§7.4)")
+    }
+
+    /// The unified `ArtifactSource` round-trips through Codec and an unknown
+    /// discriminator decodes to forward-compat rather than throwing.
+    func testArtifactSourceCodecRoundTripAndForwardCompat() throws {
+        let cases: [ArtifactSource] = [
+            .slot(nodeId: "n", slotKey: "k", direction: .input),
+            .slot(nodeId: "n", slotKey: "k", direction: .output),
+            .dataSource(sourceId: "ds-1"),
+            .canvasRuntime
+        ]
+        for c in cases {
+            let data = try JSONEncoder().encode(c)
+            let decoded = try JSONDecoder().decode(ArtifactSource.self, from: data)
+            XCTAssertEqual(decoded, c)
+        }
+        // canvas-runtime is read-only (not authorable).
+        XCTAssertFalse(ArtifactSource.canvasRuntime.defaultAuthorable)
+        // Unknown kind → forward-compat, preserves the raw discriminator.
+        let unknown = #"{"kind":"future-kind"}"#.data(using: .utf8)!
+        let fc = try JSONDecoder().decode(ArtifactSource.self, from: unknown)
+        XCTAssertEqual(fc, .forwardCompat(rawKind: "future-kind"))
+    }
+
+    /// A node carrying only the legacy `artifactDataSource` string resolves the
+    /// unified source on demand and emits it on encode (one-release compat).
+    func testPlanningNodeResolvesAndEncodesUnifiedSourceFromLegacy() throws {
+        let node = PlanningNode(
+            id: "art-node",
+            canvasId: "canvas-a",
+            title: "Mirror",
+            schema: NodeSchema(inputs: [], outputs: ["doc"], goal: "mirror"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .mock,
+            doerId: "A",
+            status: .ready,
+            nodeKind: .artifact,
+            artifactDataSource: "authored"
+        )
+        // resolved on demand from the legacy string.
+        XCTAssertEqual(
+            node.resolvedArtifactSource,
+            .slot(nodeId: "art-node", slotKey: "doc", direction: .output)
+        )
+        // encoder emits the unified field so board-app reads one canonical origin.
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)) as? [String: Any]
+        )
+        let srcObj = try XCTUnwrap(json["artifactSource"] as? [String: Any])
+        XCTAssertEqual(srcObj["kind"] as? String, "slot")
+        XCTAssertEqual(srcObj["direction"] as? String, "output")
+    }
+
+    /// updateNode carrying the legacy nested `artifactConfig.dataSource.mode`
+    /// (the shape the board-app still sends) decodes + applies into the unified
+    /// `artifactSource` (mirrored ⇒ dataSource), keeping decode-compat green.
+    func testUpdateNodeWithLegacyNestedArtifactConfigSetsUnifiedSource() throws {
+        let canvasId = "canvas-art"
+        let ownerId = "owner-art"
+        let snapshot = boardSnapshot(canvasId: canvasId, ownerId: ownerId)
+        let node = PlanningNode(
+            id: "art-1",
+            canvasId: canvasId,
+            title: "Artifact",
+            schema: NodeSchema(inputs: [], outputs: ["out"], goal: "hold"),
+            contextSources: [],
+            executionMode: .auto,
+            executorType: .mock,
+            doerId: ownerId,
+            status: .ready,
+            nodeKind: .artifact
+        )
+        let record = try PlannerBoardBridge.store.record(
+            for: PlanningCanvas(id: canvasId, ownerId: ownerId, title: "C", plannerContext: "canvas:\(canvasId)"),
+            seedNodes: [node]
+        )
+        // Decode the wire shape exactly as the board-app emits it.
+        let wire = """
+        {"kind":"updateNode","nodeId":"art-1","artifactConfig":{"dataSource":{"mode":"mirrored"}}}
+        """.data(using: .utf8)!
+        let change = try JSONDecoder().decode(PlanChange.self, from: wire)
+        XCTAssertEqual(change.artifactDataSource, "mirrored", "nested artifactConfig.dataSource.mode must decode to the legacy string")
+
+        let proposal = PlanProposal(
+            id: "proposal-art-mirror",
+            canvasId: canvasId,
+            summary: "set mirrored",
+            changes: [change],
+            status: .pending
+        )
+        _ = try PlannerBoardBridge.store.saveProposal(proposal, canvas: record.canvas, seedNodes: record.nodes)
+        _ = try PlannerBoardBridge.approveProposal(
+            proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        let applied = try PlannerBoardBridge.applyProposal(
+            proposalId: proposal.id, for: canvasId, snapshot: snapshot, actorUserId: ownerId
+        )
+        let updated = try XCTUnwrap(applied.nodes.first(where: { $0.id == "art-1" }))
+        XCTAssertEqual(updated.artifactDataSource, "mirrored")
+        guard case .dataSource = try XCTUnwrap(updated.resolvedArtifactSource) else {
+            return XCTFail("expected unified .dataSource source after applying mirrored")
+        }
     }
 }

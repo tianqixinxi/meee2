@@ -1006,9 +1006,16 @@
   height: 100vh;
   max-height: 100vh;
   overflow: auto;
-  display: grid;
-  gap: 12px;
-  padding: 24px 22px 28px;
+  /* flex-column, NOT grid: a grid with auto rows in a 100vh container
+     distributes the surplus height into the row tracks (align-content /
+     align-items stretch), inflating every gap. flex column packs items at
+     the top, content-height, with a uniform gap — no stretching. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 22px 22px 28px;
   border: none;
   border-left: 1px solid rgba(168, 165, 155, 0.22);
   border-radius: 0;
@@ -1036,18 +1043,19 @@
 
 .planner-node-modal__header {
   display: grid;
-  gap: 7px;
+  gap: 4px;
   padding-right: 34px;
 }
 
-/* UI-simplification §2.9 — three-section group labels inside inspector. */
+/* UI-simplification §2.9 — three-section group labels inside inspector.
+   Tightened vertical rhythm — the panel reads dense, not sparse. */
 .planner-node-modal__group-label {
   position: relative;
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  margin: 18px 0 4px;
-  padding-bottom: 6px;
+  gap: 8px;
+  margin: 3px 0 0;
+  padding-bottom: 4px;
   border-bottom: 1px solid rgba(168, 165, 155, 0.16);
 }
 /* UI-simplification inspector-three-section — widget settings toggle + popover
@@ -1087,22 +1095,12 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
-.planner-node-modal__group-label:first-of-type { margin-top: 6px; }
-
-/* UI-simplification — 进展 段单行替代之前的 5-tile info grid + 独立 next-action 块 */
-.planner-node-modal__progress-line {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin: 4px 0 6px;
-}
-.planner-node-modal__progress-next {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--text-dim);
+.planner-node-modal__group-label:first-of-type { margin-top: 0; }
+/* A section directly under a group-label shouldn't draw its own top rule —
+   the label's underline already separates it (avoids the double-line look). */
+.planner-node-modal__group-label + .planner-node-modal__section {
+  border-top: none;
+  padding-top: 2px;
 }
 
 /* UI-simplification §2.6 — 进展 段次级动作行(从节点卡片 footer 搬过来) */
@@ -1162,12 +1160,19 @@
   gap: 6px;
 }
 
+/* Compact status chip — small tag above the title, not a big pill blob.
+   (was padding 2px 8px / font 11px / pill 999px → felt oversized in header) */
 .planner-node-modal__state {
-  padding: 2px 8px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
   background: rgba(245, 244, 239, 0.08);
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
   text-transform: uppercase;
 }
 
@@ -1214,8 +1219,8 @@
 
 .planner-node-modal__section {
   display: grid;
-  gap: 7px;
-  padding-top: 12px;
+  gap: 6px;
+  padding-top: 8px;
   border-top: 1px solid rgba(168, 165, 155, 0.12);
 }
 
@@ -1352,8 +1357,9 @@
 .planner-node-modal__progress-runtime {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 4px;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 6px;
 }
 .planner-node-modal__progress-runtime-state {
   display: inline-flex;
@@ -1393,6 +1399,46 @@
   background: var(--bg-muted, rgba(0, 0, 0, 0.05));
   border-radius: 3px;
 }
+
+/* 进展 live block — 绑定会话此刻在干什么(任务 / 工具 / 最近消息 / 多久前)。
+   小号、低对比、紧凑的 icon+text 行,挂在状态行下面,缩进对齐状态点。 */
+.planner-node-modal__progress-runtime-live {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-left: 16px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.planner-node-modal__progress-runtime-live-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.planner-node-modal__progress-runtime-live-row svg {
+  flex: none;
+  margin-top: 2px;
+  opacity: 0.6;
+}
+.planner-node-modal__progress-runtime-live-muted {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.planner-node-modal__progress-runtime-live-role {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 4px;
+  margin-top: 1px;
+  border: 1px solid rgba(168, 165, 155, 0.24);
+  border-radius: 3px;
+  line-height: 1.5;
+}
 .planner-node-modal__progress-runtime-action {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; font-size: 13px;
@@ -1407,7 +1453,14 @@
 }
 .planner-node-modal__progress-runtime-action.is-primary:hover { background: #b86c3d; border-color: #b86c3d; }
 .planner-node-modal__progress-runtime-action.is-attention { font-weight: 600; }
-.planner-node-modal__progress-runtime-hint { font-size: 12px; color: var(--text-faint); margin: 0; }
+.planner-node-modal__progress-runtime-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0;
+}
 
 /* AuthoredFirstArtifactEditor — 内嵌"写第一份产物"编辑器(2026-05-29) */
 .planner-node-modal__empty-editor {
@@ -2321,6 +2374,49 @@
   background: rgba(204, 120, 92, 0.10);
   border-color: rgba(204, 120, 92, 0.32);
   color: var(--accent);
+}
+
+/* canvas-spec §7.3 — step/session 成果块:每个 output 槽展示最新版本预览 + 版本标记。
+ *  block = 「成果」标题行 + 「查看输出」按钮,下面是每个槽一行(标题+版本+预览)。*/
+.planner-node__output-block {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 8px; padding: 6px 9px;
+  background: rgba(168, 165, 155, 0.06);
+  border: 1px solid rgba(168, 165, 155, 0.14);
+  border-radius: 5px;
+  font-size: 11.5px;
+}
+.planner-node__output-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.planner-node__output-slot {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.planner-node__output-slot-head {
+  display: flex; align-items: center; gap: 6px;
+}
+.planner-node__output-version {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center;
+  padding: 1px 6px; border-radius: 999px;
+  background: rgba(204, 120, 92, 0.14);
+  border: 1px solid rgba(204, 120, 92, 0.30);
+  color: var(--accent);
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.planner-node__output-preview {
+  margin: 0;
+  color: var(--text-muted, var(--text-faint));
+  font-size: 11px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.planner-node__output-preview--empty {
+  color: var(--text-faint); font-style: italic;
+}
+.planner-node__output-more {
+  color: var(--text-faint); font-size: 10.5px;
 }
 
 /* PR4 — artifact 节点 version chip strip。横向小行，左边一个「版本」标签，
@@ -7818,6 +7914,7 @@
 :root[data-theme="light"] .planner-node__artifact-pre,
 :root[data-theme="light"] .planner-node__kanban-column,
 :root[data-theme="light"] .planner-node__output-row,
+:root[data-theme="light"] .planner-node__output-block,
 :root[data-theme="light"] .planner-node__io-item,
 :root[data-theme="light"] .planner-input-card {
   background: var(--bg-paper);
@@ -8752,4 +8849,283 @@
 
 .widget-artifact--error {
   color: var(--w-color-blocked);
+}
+
+/* ============================================================
+ * Canvas runtime Atom 4 — MonitorGrid (canvas-runtime-data-model §6.7)
+ * Bottom-anchored collapsible panel inside .planner-flow, above the ReactFlow
+ * canvas. The bar always shows; the card grid folds away (default folded) so
+ * it never eats canvas space. Renders nothing without a monitorSpec, so legacy
+ * canvases are visually unchanged.
+ * ============================================================ */
+.monitor-panel {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius, 12px);
+  background: color-mix(in srgb, var(--panel-bg, var(--bg-elevated, #fff)) 92%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  box-shadow: 0 -6px 28px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+.monitor-panel__bar {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 12px;
+  border: none; background: transparent; cursor: pointer;
+  font: inherit; color: inherit; text-align: left;
+}
+.monitor-panel__bar:hover { background: var(--bg-muted, rgba(0, 0, 0, 0.04)); }
+.monitor-panel__chevron { opacity: 0.6; font-size: 11px; width: 12px; }
+.monitor-panel__title { font-weight: 600; }
+.monitor-panel__count {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.06)); opacity: 0.8;
+}
+.monitor-panel--collapsed { box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.06); }
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  grid-auto-rows: minmax(38px, auto);
+  gap: 8px;
+  max-height: 38vh;
+  overflow: auto;
+  padding: 4px 10px 10px;
+  border-top: 1px solid var(--border-subtle, var(--border, rgba(0, 0, 0, 0.08)));
+}
+.monitor-grid__cell { min-width: 0; min-height: 0; display: flex; }
+
+.monitor-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elevated, var(--bg-paper, #fff));
+  border: 1px solid var(--border-subtle, var(--border, rgba(0, 0, 0, 0.08)));
+  border-radius: 10px;
+  overflow: hidden;
+}
+.monitor-card__header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.monitor-card__title { font-weight: 600; font-size: 12px; }
+.monitor-card__badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.06)); color: inherit; opacity: 0.8;
+}
+.monitor-card__collapse {
+  border: none; background: transparent; cursor: pointer; opacity: 0.6;
+  padding: 2px 4px; border-radius: 4px; font-size: 12px;
+}
+.monitor-card__collapse:hover { background: var(--bg-muted, rgba(0, 0, 0, 0.06)); opacity: 1; }
+.monitor-card__body { min-width: 0; }
+.monitor-card__pending,
+.monitor-card__empty {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border: 1px dashed var(--border, rgba(0, 0, 0, 0.15));
+  border-radius: 8px; opacity: 0.85;
+}
+.monitor-card__pending-what { font-size: 12px; }
+.monitor-card__pending-hint, .monitor-card__empty { font-size: 11px; opacity: 0.7; }
+
+/* Producer status grid */
+.monitor-producer-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px;
+}
+.monitor-producer-cell {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 7px 8px; border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 8px; background: var(--bg, rgba(0, 0, 0, 0.015));
+}
+.monitor-producer-cell__title { font-weight: 600; font-size: 11px; }
+.monitor-producer-cell__state { font-size: 11px; display: inline-flex; align-items: center; gap: 4px; }
+.monitor-producer-cell__awaiting, .monitor-producer-cell__artifact { font-size: 10px; opacity: 0.65; }
+
+/* Meeting checklist / lists / timelines */
+.monitor-meeting-checklist__list,
+.monitor-snapshot-timeline__list {
+  display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none;
+}
+.monitor-meeting-checklist__meeting,
+.monitor-checklist-item__when,
+.monitor-snapshot-row__time,
+.monitor-continuous-backlog__window,
+.monitor-skill-usage__window,
+.monitor-downstream-drill__staleness,
+.monitor-queue-depth__binding,
+.monitor-integration-health__scope,
+.monitor-skill-usage__scope,
+.monitor-period-selector__source { font-size: 11px; opacity: 0.7; }
+.monitor-snapshot-row__title { font-size: 12px; }
+
+/* Queue depth / continuous backlog numeric emphasis */
+.monitor-queue-depth, .monitor-continuous-backlog,
+.monitor-skill-usage, .monitor-integration-health,
+.monitor-downstream-drill, .monitor-period-selector,
+.monitor-meeting-checklist, .monitor-snapshot-timeline {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+
+/* Period chip bar */
+.period-chip-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.period-chip-bar__more { font-size: 11px; opacity: 0.6; }
+.period-chip-bar--empty, .period-chip-bar--pending { font-size: 11px; opacity: 0.6; }
+
+/* Cadence reminder (PM-addon) */
+.monitor-cadence-chip {
+  display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border-radius: 999px; background: var(--bg-muted, rgba(0, 0, 0, 0.05)); font-size: 11px;
+}
+.monitor-cadence-chip__addon { font-size: 9px; padding: 0 5px; border-radius: 999px;
+  background: var(--info, #3b82f6); color: #fff; opacity: 0.85; }
+
+/* ============================================================
+ * Canvas runtime Atom 1 — DataSource rail.
+ *
+ * A left-anchored, collapsible read-only rail listing the canvas's named
+ * addressable storage locations as compact cylinder chips (title + partition
+ * badge + version). Follows the .monitor-panel style conventions (blurred
+ * elevated surface, foldable bar, count pill). Renders nothing without
+ * dataSources, so legacy canvases are visually unchanged.
+ * ============================================================ */
+.datasource-rail {
+  position: absolute;
+  left: 10px;
+  top: 14px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-width: 240px;
+  border-radius: var(--radius, 12px);
+  background: color-mix(in srgb, var(--panel-bg, var(--bg-elevated, #fff)) 92%, transparent);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+.datasource-rail__bar {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; padding: 7px 10px;
+  border: none; background: transparent; cursor: pointer;
+  font: inherit; color: inherit; text-align: left;
+}
+.datasource-rail__bar:hover { background: var(--bg-muted, rgba(0, 0, 0, 0.04)); }
+.datasource-rail__title { font-weight: 600; }
+.datasource-rail__count {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.06)); opacity: 0.8;
+}
+.datasource-rail__chevron { margin-left: auto; opacity: 0.6; font-size: 11px; }
+.datasource-rail--collapsed { box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06); }
+
+.datasource-rail__list {
+  list-style: none; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 46vh; overflow: auto;
+  padding: 2px 8px 9px;
+  border-top: 1px solid var(--border-subtle, var(--border, rgba(0, 0, 0, 0.08)));
+}
+.datasource-chip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-elevated, var(--bg-paper, #fff));
+  border: 1px solid var(--border-subtle, var(--border, rgba(0, 0, 0, 0.08)));
+  border-radius: 8px;
+  min-width: 0;
+}
+.datasource-chip__cylinder {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--info, #3b82f6) 14%, transparent);
+  color: var(--info, #3b82f6);
+}
+.datasource-chip__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.datasource-chip__title {
+  font-weight: 600; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.datasource-chip__meta { display: flex; align-items: center; gap: 5px; }
+.datasource-chip__partition {
+  font-size: 10px; padding: 0 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--info, #3b82f6) 16%, transparent);
+  color: var(--info, #3b82f6); font-weight: 600;
+}
+.datasource-chip__version {
+  font-size: 10px; padding: 0 6px; border-radius: 999px;
+  background: var(--bg-muted, rgba(0, 0, 0, 0.06)); opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+ * Canvas runtime Atom 2 — first-class edge-mode badges.
+ *
+ * Non-dependency consumption edges (queue-claim / document-snapshot) get a
+ * dashed stroke + a compact midpoint badge ("队列" / "快照"). Plain dependency
+ * (mode "dependency") and legacy derived edges are untouched.
+ * ============================================================ */
+.planner-flow__edge--mode-queue-claim .react-flow__edge-path,
+.planner-flow__edge--mode-document-snapshot .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+  stroke-width: 2;
+}
+.planner-flow__edge--mode-queue-claim .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--warning, #d97706) 78%, transparent);
+}
+.planner-flow__edge--mode-document-snapshot .react-flow__edge-path {
+  stroke: color-mix(in srgb, var(--info, #3b82f6) 78%, transparent);
+}
+
+.planner-edge-mode {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.planner-edge-mode--queue-claim {
+  background: color-mix(in srgb, var(--warning, #d97706) 16%, var(--bg-elevated, #fff));
+  color: var(--warning, #b45309);
+  border-color: color-mix(in srgb, var(--warning, #d97706) 36%, transparent);
+}
+.planner-edge-mode--document-snapshot {
+  background: color-mix(in srgb, var(--info, #3b82f6) 16%, var(--bg-elevated, #fff));
+  color: var(--info, #2563eb);
+  border-color: color-mix(in srgb, var(--info, #3b82f6) 36%, transparent);
+}
+
+/* canvas-spec §7.2 — planner-authored HTML Monitor (sandboxed). The frame is a
+   hard-sandboxed iframe (allow-scripts, no allow-same-origin) fed the read-only
+   CanvasRuntimeView via postMessage; see MonitorHtmlFrame.tsx. */
+.planner-monitor-html {
+  margin: 0 0 12px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.12));
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-elevated, rgba(0, 0, 0, 0.2));
+}
+.planner-monitor-html-frame {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  border: 0;
+  background: transparent;
 }
