@@ -156,7 +156,7 @@ enum SessionInputMerge {
         externalFetched: [ExternalFetchResult],
         dialogueTurns: [String]?
     ) -> Result {
-        var lines: [String] = []
+        let lines: [String] = []
         var mergeLog: [String] = []
         var preamble: [String] = []
 

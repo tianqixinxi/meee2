@@ -2000,6 +2000,9 @@ export interface AppSettings {
   autoCloseInterval: number
   showSessionInCompact: boolean
   carouselInterval: number
+  quickOpenShortcut: string
+  quickOpenShortcutLabel?: string
+  quickOpenShortcutConflict?: string | null
 }
 
 export type AppSettingsPatch = Partial<Omit<AppSettings, 'availableScreens'>>
@@ -2017,6 +2020,9 @@ export function fetchAppSettings(): Promise<AppSettings> {
       autoCloseInterval: 8,
       showSessionInCompact: true,
       carouselInterval: 10,
+      quickOpenShortcut: 'cmd+option+KeyP',
+      quickOpenShortcutLabel: '⌘⌥P',
+      quickOpenShortcutConflict: null,
     })
   }
   return jsonRequest<AppSettings>('/api/app-settings')

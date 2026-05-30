@@ -369,7 +369,7 @@ function PlannerGraphInner({
 
     if (detail.openInspector !== false) {
       setSelectedNodeId(nodeId)
-      setInitialInspectorArtifactId(null)
+      setInitialInspectorArtifactId(detail.artifactId?.trim() || null)
       setNodeModalOpen(true)
     }
 
@@ -430,6 +430,7 @@ function PlannerGraphInner({
       const detail: PlannerNodeSelectionDetail = {
         canvasId: target.canvasId,
         nodeId: target.nodeId,
+        artifactId: undefined,
         guide: true,
         source: target.source,
         title: target.title,

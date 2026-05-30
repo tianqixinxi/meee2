@@ -3,6 +3,7 @@ export type GuideSource = 'island' | 'monitor' | 'palette' | 'system'
 export interface PlannerNodeSelectionDetail {
   canvasId?: string
   nodeId?: string
+  artifactId?: string
   guide?: boolean
   source?: GuideSource
   title?: string

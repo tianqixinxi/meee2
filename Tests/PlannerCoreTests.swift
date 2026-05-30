@@ -5,6 +5,7 @@ import Meee2PluginKit
 final class PlannerCoreTests: XCTestCase {
     private let service = PlannerCoreService()
     private var plannerStoreURL: URL!
+    private let legacyDraftStatus = PlanningNodeStatus(rawValue: "draft")!
 
     private struct FakePlannerTextClient: PlannerTextClient {
         var output: String
@@ -81,7 +82,7 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertGreaterThanOrEqual(nodes.count, 3)
         XCTAssertTrue(nodes.allSatisfy { $0.canvasId == "canvas-a" })
-        XCTAssertTrue(nodes.contains { $0.status == .working })
+        XCTAssertTrue(nodes.contains { $0.status == .ready })
         XCTAssertTrue(nodes.contains { $0.status == .blocked })
         XCTAssertTrue(nodes.contains { $0.status == .done })
     }
@@ -159,8 +160,8 @@ final class PlannerCoreTests: XCTestCase {
 
         let updated = try service.applyNodeChange(nodes: nodes, proposal: proposal)
 
-        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-1" }?.status, .working)
-        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-2" }?.status, .draft)
+        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-1" }?.status, .ready)
+        XCTAssertEqual(updated.first { $0.id == "canvas-a-node-2" }?.status, .ready)
         XCTAssertEqual(updated.first { $0.id == "canvas-a-node-3" }?.status, .blocked)
     }
 
@@ -194,7 +195,7 @@ final class PlannerCoreTests: XCTestCase {
 
     func testReadNodeStateTreatsDraftAsNonBlockingDesignState() {
         var nodes = service.nodeMock(canvasId: "canvas-a")
-        nodes[1].status = .draft
+        nodes[1].status = legacyDraftStatus
 
         let draft = service.readNodeState(nodes: nodes).first { $0.nodeId == nodes[1].id }
 
@@ -498,7 +499,7 @@ final class PlannerCoreTests: XCTestCase {
         """
 
         XCTAssertEqual(try PlannerProposalValidator.decodeProposal(from: raw).id, "proposal-a")
-        XCTAssertEqual(try PlannerProposalValidator.decodeProposal(from: fenced).changes.first?.status, .draft)
+        XCTAssertEqual(try PlannerProposalValidator.decodeProposal(from: fenced).changes.first?.status, legacyDraftStatus)
     }
 
     func testPlannerProposalValidatorRejectsInvalidJSON() {
@@ -820,7 +821,7 @@ final class PlannerCoreTests: XCTestCase {
             executionMode: .human,
             executorType: .mock,
             doerId: "owner-a",
-            status: .draft,
+            status: .ready,
             nodeKind: .step
         )
         let pendingNode = PlanningNode(
@@ -832,7 +833,7 @@ final class PlannerCoreTests: XCTestCase {
             executionMode: .human,
             executorType: .mock,
             doerId: "owner-a",
-            status: .draft,
+            status: .ready,
             dependsOnNodeIds: ["canvas-a-existing"],
             nodeKind: .step
         )
@@ -1176,13 +1177,13 @@ final class PlannerCoreTests: XCTestCase {
 
         XCTAssertEqual(proposal?.summary, "Split \(nodes[0].title) because repeated failure after two retries")
         XCTAssertEqual(proposal?.changes.map(\.kind), [.updateNode, .addNode])
-        XCTAssertEqual(proposal?.changes.last?.node?.status, .draft)
+        XCTAssertEqual(proposal?.changes.last?.node?.status, .ready)
     }
 
     func testMockPlannerInspectDriftReturnsRepairProposalForDraftState() async throws {
         let planner = MockPlannerAgent()
         var nodes = service.nodeMock(canvasId: "canvas-a")
-        nodes[1].status = .draft
+        nodes[1].status = legacyDraftStatus
         let states = service.readNodeState(nodes: nodes)
 
         let proposal = try await planner.inspectDrift(nodes: nodes, states: states.filter { $0.runState == .draft })
@@ -2388,7 +2389,7 @@ final class PlannerCoreTests: XCTestCase {
             startedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
 
-        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: running, canvasId: "c", doerId: "d").status, .working)
+        XCTAssertEqual(SessionToPlanningNodeMapper.map(session: running, canvasId: "c", doerId: "d").status, .ready)
         XCTAssertEqual(SessionToPlanningNodeMapper.map(session: running, canvasId: "c", doerId: "d").executorType, .claude)
         XCTAssertEqual(SessionToPlanningNodeMapper.map(session: done, canvasId: "c", doerId: "d").status, .done)
         XCTAssertEqual(SessionToPlanningNodeMapper.map(session: done, canvasId: "c", doerId: "d").executorType, .cursor)
@@ -2690,7 +2691,7 @@ final class PlannerCoreTests: XCTestCase {
             executionMode: .auto,
             executorType: .codex,
             doerId: "owner-a",
-            status: .draft,
+            status: .ready,
             dependsOnNodeIds: ["prd"],
             nodeKind: .step
         )
@@ -3506,7 +3507,7 @@ final class PlannerCoreTests: XCTestCase {
         }
 
         let reloaded = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
-        XCTAssertEqual(reloaded.nodes.first { $0.id == "canvas-a-node-1" }?.status, .working)
+        XCTAssertEqual(reloaded.nodes.first { $0.id == "canvas-a-node-1" }?.status, .ready)
         XCTAssertFalse(reloaded.nodes.first { $0.id == "canvas-a-node-3" }?.contextSources.contains {
             $0.reference.hasPrefix("planner-output://")
         } == true)
@@ -3604,7 +3605,7 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertFalse(result.graph.nodes.contains { $0.nodeKind == .session })
         let dispatchedStep = try XCTUnwrap(result.graph.nodes.first { $0.id == step.id })
         XCTAssertEqual(dispatchedStep.workflowRunState, .running)
-        XCTAssertEqual(dispatchedStep.status, .working)
+        XCTAssertEqual(dispatchedStep.status, .ready)
     }
 
     func testSessionFailureDoesNotOverrideCompletedNode() throws {
@@ -3834,7 +3835,7 @@ final class PlannerCoreTests: XCTestCase {
         let afterDispatch = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
         let dispatchedNode = try XCTUnwrap(afterDispatch.nodes.first { $0.id == stepId })
         XCTAssertEqual(dispatchedNode.workflowRunState, .dispatched)
-        XCTAssertEqual(dispatchedNode.status, .working)
+        XCTAssertEqual(dispatchedNode.status, .ready)
         XCTAssertNil(dispatchedNode.outputSubmittedAt, "dispatch must clear the submit latch")
         XCTAssertNil(dispatchedNode.blockedReason, "dispatch must clear stale blocker text")
 

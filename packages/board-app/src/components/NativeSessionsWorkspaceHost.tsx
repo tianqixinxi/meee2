@@ -27,6 +27,8 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [openErrorId, setOpenErrorId] = useState<string | null>(null)
   const [pendingNativeTarget, setPendingNativeTarget] = useState<{ sessionId?: string; surfaceId?: string } | null>(null)
+  const [olderOpen, setOlderOpen] = useState(false)
+  const [endedOpen, setEndedOpen] = useState(false)
   const sessions = state?.sessions ?? []
   const normalizedQuery = query.trim().toLowerCase()
   const visibleSessions = useMemo(() => (
@@ -52,12 +54,22 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
     () => visibleSessions.filter(isEndedSession),
     [visibleSessions],
   )
+  const displayedSessions = useMemo(() => [
+    ...recentSessions,
+    ...(olderOpen ? olderSessions : []),
+    ...(endedOpen ? endedSessions : []),
+  ], [endedOpen, endedSessions, olderOpen, olderSessions, recentSessions])
   const selectedSession = useMemo(() => {
     const id = (selectedSessionId || localSelectedId || '').trim()
     if (!id) return null
     return sessions.find((session) => session.id === id || session.surfaceId === id) ?? null
   }, [localSelectedId, selectedSessionId, sessions])
-  const pendingSelectedSessionId = selectedSessionId?.trim() && !selectedSession
+  const selectionExists = useMemo(() => {
+    const id = (selectedSessionId || localSelectedId || '').trim()
+    if (!id) return false
+    return sessions.some((session) => session.id === id || session.surfaceId === id)
+  }, [localSelectedId, selectedSessionId, sessions])
+  const pendingSelectedSessionId = selectedSessionId?.trim() && !selectedSession && !selectionExists
     ? selectedSessionId.trim()
     : null
   const terminalTarget = useMemo(() => {
@@ -74,19 +86,40 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
   }, [selectedSessionId])
 
   useEffect(() => {
+    if (normalizedQuery) {
+      setOlderOpen(true)
+      setEndedOpen(true)
+    }
+  }, [normalizedQuery])
+
+  useEffect(() => {
+    if (statusFilter === 'exited') setEndedOpen(true)
+  }, [statusFilter])
+
+  useEffect(() => {
+    if (!selectedSession) return
+    if (olderSessions.some((session) => session.id === selectedSession.id)) {
+      setOlderOpen(true)
+    }
+    if (endedSessions.some((session) => session.id === selectedSession.id)) {
+      setEndedOpen(true)
+    }
+  }, [endedSessions, olderSessions, selectedSession])
+
+  useEffect(() => {
     if (pendingSelectedSessionId) return
     if (pendingNativeTarget?.sessionId && localSelectedId === pendingNativeTarget.sessionId) return
     if (selectedSession) return
-    const nextId = visibleSessions[0]?.id ?? null
+    const nextId = displayedSessions[0]?.id ?? null
     setLocalSelectedId(nextId)
     onSelectedSessionChange?.(nextId)
   }, [
+    displayedSessions,
     localSelectedId,
     onSelectedSessionChange,
     pendingNativeTarget,
     pendingSelectedSessionId,
     selectedSession,
-    visibleSessions,
   ])
 
   useEffect(() => {
@@ -272,7 +305,8 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
                 onOpen={openSession}
                 t={t}
                 collapsible
-                defaultOpen={Boolean(normalizedQuery)}
+                open={olderOpen}
+                onOpenChange={setOlderOpen}
               />
               <SessionGroup
                 title={t('sessions.endedSessions')}
@@ -282,7 +316,8 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
                 onOpen={openSession}
                 t={t}
                 collapsible
-                defaultOpen={Boolean(normalizedQuery) || statusFilter === 'exited'}
+                open={endedOpen}
+                onOpenChange={setEndedOpen}
               />
             </>
           )}
@@ -329,7 +364,8 @@ const SessionGroup = memo(function SessionGroup({
   onOpen,
   t,
   collapsible = false,
-  defaultOpen = true,
+  open = true,
+  onOpenChange,
 }: {
   title: string
   sessions: Session[]
@@ -338,7 +374,8 @@ const SessionGroup = memo(function SessionGroup({
   onOpen: (session: Session) => void
   t: ReturnType<typeof useI18n>['t']
   collapsible?: boolean
-  defaultOpen?: boolean
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   if (sessions.length === 0) return null
   const body = (
@@ -357,7 +394,11 @@ const SessionGroup = memo(function SessionGroup({
   )
   if (collapsible) {
     return (
-      <details className="sessions-web-group sessions-web-group--collapsible" open={defaultOpen || undefined}>
+      <details
+        className="sessions-web-group sessions-web-group--collapsible"
+        open={open}
+        onToggle={(event) => onOpenChange?.(event.currentTarget.open)}
+      >
         <summary className="sessions-web-group__heading">
           <span>{title}</span>
           <em>{sessions.length}</em>
