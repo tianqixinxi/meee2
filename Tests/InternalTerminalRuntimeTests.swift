@@ -2,6 +2,45 @@ import XCTest
 @testable import meee2Kit
 
 final class InternalTerminalRuntimeTests: XCTestCase {
+    func testWorkspaceTrustPromptDetectorMatchesClaudeFolderPrompt() {
+        let prompt = """
+        Do you trust the files in this folder?
+        1. Yes, proceed
+        2. No, exit
+        """
+
+        XCTAssertTrue(InternalWorkspaceTrustPromptDetector.shouldAutoAccept(
+            provider: "claude",
+            command: "claude --dangerously-skip-permissions",
+            output: prompt
+        ))
+        XCTAssertEqual(InternalWorkspaceTrustPromptDetector.response(for: prompt), "1\r")
+    }
+
+    func testWorkspaceTrustPromptDetectorUsesYForYesNoPrompts() {
+        let prompt = "Do you trust the files in this folder? [y/n]"
+
+        XCTAssertTrue(InternalWorkspaceTrustPromptDetector.shouldAutoAccept(
+            provider: "claude",
+            command: "claude",
+            output: prompt
+        ))
+        XCTAssertEqual(InternalWorkspaceTrustPromptDetector.response(for: prompt), "y\r")
+    }
+
+    func testWorkspaceTrustPromptDetectorIgnoresNonClaudeAndTrustErrors() {
+        XCTAssertFalse(InternalWorkspaceTrustPromptDetector.shouldAutoAccept(
+            provider: "codex",
+            command: "codex",
+            output: "Do you trust the files in this folder?"
+        ))
+        XCTAssertFalse(InternalWorkspaceTrustPromptDetector.shouldAutoAccept(
+            provider: "claude",
+            command: "claude",
+            output: "/goal is only available in trusted workspaces. Restart, accept the trust dialog, and try again."
+        ))
+    }
+
     @MainActor
     func testPausedClientReceivesReplayWhenProcessExits() async throws {
         let sawInitialOutput = expectation(description: "saw initial output")

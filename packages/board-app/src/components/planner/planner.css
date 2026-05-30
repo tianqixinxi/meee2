@@ -4386,13 +4386,15 @@
 }
 
 .planner-monitor__body {
+  width: 100%;
+  box-sizing: border-box;
   min-width: 0;
   overflow: hidden;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   align-content: start;
   gap: 10px;
-  padding: 14px 148px 18px 240px;
+  padding: 14px clamp(14px, 2.2vw, 32px) 18px;
 }
 
 .planner-monitor__tools {
@@ -4504,6 +4506,7 @@
 
 .planner-monitor__kanban {
   min-height: 0;
+  min-width: min(100%, 1120px);
   overflow-x: auto;
   overflow-y: hidden;
   display: grid;

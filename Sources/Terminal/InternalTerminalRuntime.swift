@@ -62,6 +62,56 @@ final class WeakInternalTerminalSurfaceClient {
     }
 }
 
+enum InternalWorkspaceTrustPromptDetector {
+    static func shouldAutoAccept(provider: String, command: String, output: String) -> Bool {
+        let normalizedProvider = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedProvider == "claude" || normalizedCommand.hasPrefix("claude ") || normalizedCommand == "claude" else {
+            return false
+        }
+
+        let normalizedOutput = stripTerminalControls(output).lowercased()
+        guard normalizedOutput.contains("trust") else { return false }
+
+        return normalizedOutput.contains("do you trust the files")
+            || normalizedOutput.contains("trust this workspace")
+            || normalizedOutput.contains("trust this folder")
+            || normalizedOutput.contains("trust this project")
+    }
+
+    static func response(for output: String) -> String {
+        let normalizedOutput = stripTerminalControls(output).lowercased()
+        if normalizedOutput.contains("[y/n]")
+            || normalizedOutput.contains("(y/n)")
+            || normalizedOutput.contains("y/n")
+            || normalizedOutput.contains("yes/no") {
+            return "y\r"
+        }
+        return "1\r"
+    }
+
+    private static func stripTerminalControls(_ text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var iterator = text.makeIterator()
+        while let character = iterator.next() {
+            if character == "\u{1B}" {
+                while let next = iterator.next() {
+                    if next.isLetter || next == "~" {
+                        break
+                    }
+                }
+                continue
+            }
+            if character.unicodeScalars.allSatisfy({ $0.value < 32 && $0 != "\n" && $0 != "\r" && $0 != "\t" }) {
+                continue
+            }
+            result.append(character)
+        }
+        return result
+    }
+}
+
 public final class InternalTerminalRuntime {
     public static let shared = InternalTerminalRuntime()
 
@@ -354,7 +404,7 @@ public final class InternalTerminalRuntime {
             return Self.freshCommand(for: info, command: nil)
         }
         if sessionId.lowercased().contains("codex") {
-            return "codex --dangerously-bypass-approvals-and-sandbox resume \(Self.shellQuote(sessionId))"
+            return "codex \(AgentLaunchCommand.codexAutomationFlags) resume \(Self.shellQuote(sessionId))"
         }
         return "claude --resume \(Self.shellQuote(sessionId)) --dangerously-skip-permissions"
     }
@@ -414,7 +464,7 @@ public final class InternalTerminalRuntime {
     private static func resumeCommand(for info: SessionTerminalInfo, resumeSessionId: String) -> String {
         let provider = restoreProvider(for: info, command: info.command ?? "")
         if provider == "codex" {
-            return "codex --dangerously-bypass-approvals-and-sandbox resume \(shellQuote(resumeSessionId))"
+            return "codex \(AgentLaunchCommand.codexAutomationFlags) resume \(shellQuote(resumeSessionId))"
         }
         return "claude --resume \(shellQuote(resumeSessionId)) --dangerously-skip-permissions"
     }
@@ -422,7 +472,7 @@ public final class InternalTerminalRuntime {
     private static func freshCommand(for info: SessionTerminalInfo, command: String?) -> String {
         let provider = restoreProvider(for: info, command: command ?? "")
         if provider == "codex" {
-            return "codex --dangerously-bypass-approvals-and-sandbox"
+            return "codex \(AgentLaunchCommand.codexAutomationFlags)"
         }
         return "claude --dangerously-skip-permissions"
     }
@@ -454,6 +504,8 @@ final class InternalTerminalSurface {
     private var totalOutputBytes: Int64 = 0
     private var pendingNativeClientOutput = Data()
     private var nativeClientOutputFlushScheduled = false
+    private var workspaceTrustPromptBuffer = ""
+    private var didAutoAcceptWorkspaceTrustPrompt = false
     private var status: InternalTerminalLifecycle = .starting
     private var pid: Int?
     private var exitCode: Int?
@@ -731,6 +783,7 @@ final class InternalTerminalSurface {
 
     private func emitOutput(_ data: Data) {
         touch()
+        maybeAutoAcceptWorkspaceTrustPrompt(data)
         var immediateOutput: Data?
         var immediateClients: [InternalTerminalSurfaceClient] = []
         var shouldScheduleFlush = false
@@ -762,6 +815,34 @@ final class InternalTerminalSurface {
                 self?.flushNativeClientOutput()
             }
         }
+    }
+
+    private func maybeAutoAcceptWorkspaceTrustPrompt(_ data: Data) {
+        guard provider == "claude", primaryFD >= 0, !data.isEmpty else { return }
+        guard let chunk = String(bytes: data, encoding: .utf8), !chunk.isEmpty else { return }
+
+        let response: String?
+        lock.lock()
+        if didAutoAcceptWorkspaceTrustPrompt {
+            lock.unlock()
+            return
+        }
+        workspaceTrustPromptBuffer = String((workspaceTrustPromptBuffer + chunk).suffix(4_096))
+        if InternalWorkspaceTrustPromptDetector.shouldAutoAccept(
+            provider: provider,
+            command: command,
+            output: workspaceTrustPromptBuffer
+        ) {
+            didAutoAcceptWorkspaceTrustPrompt = true
+            response = InternalWorkspaceTrustPromptDetector.response(for: workspaceTrustPromptBuffer)
+        } else {
+            response = nil
+        }
+        lock.unlock()
+
+        guard let response else { return }
+        MInfo("[InternalTerminalRuntime] auto-accepting Claude workspace trust prompt sid=\(sessionId.prefix(8))")
+        writeInput(response)
     }
 
     private func flushNativeClientOutput() {

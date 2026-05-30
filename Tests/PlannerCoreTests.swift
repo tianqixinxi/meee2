@@ -64,7 +64,7 @@ final class PlannerCoreTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentLaunchCommand.fullAccessCommand(forProvider: "codex"),
-            "codex --dangerously-bypass-approvals-and-sandbox"
+            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
         )
         XCTAssertEqual(
             AgentLaunchCommand.normalize(command: "claude").command,
@@ -72,7 +72,7 @@ final class PlannerCoreTests: XCTestCase {
         )
         XCTAssertEqual(
             AgentLaunchCommand.normalize(command: "codex").command,
-            "codex --dangerously-bypass-approvals-and-sandbox"
+            "codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust"
         )
     }
 
@@ -1587,6 +1587,54 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertTrue(monitor.items.allSatisfy { item in
             item.kind == .node && item.doerId == "B"
         })
+    }
+
+    func testPlannerWorkspaceMonitorMarksExternalSessionItems() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodes = record.nodes
+        let states = Dictionary(uniqueKeysWithValues: service.readNodeState(nodes: nodes).map { ($0.nodeId, $0) })
+        let index = try XCTUnwrap(nodes.firstIndex { states[$0.id]?.runState != .done })
+        _ = try PlannerBoardBridge.store.bindSession(
+            canvasId: "canvas-a",
+            nodeId: nodes[index].id,
+            sessionId: "external-session-a"
+        )
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(
+            snapshot: snapshot,
+            actorUserId: "owner-a",
+            sessions: [
+                monitorSession(id: "external-session-a", terminalKind: "external")
+            ]
+        )
+
+        let item = try XCTUnwrap(monitor.items.first { $0.sessionId == "external-session-a" })
+        XCTAssertEqual(item.kind, .session)
+        XCTAssertEqual(item.nodeId, nodes[index].id)
+    }
+
+    func testPlannerWorkspaceMonitorHidesInternalSessionItems() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        let record = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let nodes = record.nodes
+        let states = Dictionary(uniqueKeysWithValues: service.readNodeState(nodes: nodes).map { ($0.nodeId, $0) })
+        let index = try XCTUnwrap(nodes.firstIndex { states[$0.id]?.runState != .done })
+        _ = try PlannerBoardBridge.store.bindSession(
+            canvasId: "canvas-a",
+            nodeId: nodes[index].id,
+            sessionId: "internal-session-a"
+        )
+
+        let monitor = try PlannerBoardBridge.workspaceMonitor(
+            snapshot: snapshot,
+            actorUserId: "owner-a",
+            sessions: [
+                monitorSession(id: "internal-session-a", terminalKind: "internal", surfaceId: "surface-a")
+            ]
+        )
+
+        XCTAssertFalse(monitor.items.contains { $0.sessionId == "internal-session-a" })
     }
 
     func testPlannerBoardBridgeApplyPreviewApprovesAndReturnsUpdatedState() throws {
@@ -3972,6 +4020,49 @@ final class PlannerCoreTests: XCTestCase {
             activeCanvasId: canvasId,
             canvases: [canvas],
             memberships: memberships
+        )
+    }
+
+    private func monitorSession(
+        id: String,
+        terminalKind: String,
+        surfaceId: String? = nil
+    ) -> SessionDTO {
+        SessionDTO(
+            id: id,
+            title: id,
+            project: "fixture",
+            pluginId: "com.meee2.plugin.claude",
+            pluginDisplayName: "Claude Code",
+            pluginColor: "#FF9230",
+            status: "active",
+            inboxPending: 0,
+            recentMessages: [],
+            currentTool: nil,
+            startedAt: nil,
+            lastActivity: nil,
+            usageStats: nil,
+            tasks: [],
+            currentTask: nil,
+            pendingPermissionTool: nil,
+            pendingPermissionMessage: nil,
+            ghosttyTerminalId: nil,
+            tty: nil,
+            termProgram: nil,
+            terminalKind: terminalKind,
+            surfaceId: surfaceId,
+            surfaceStatus: nil,
+            canOpenExternal: terminalKind == "external",
+            terminalBackend: terminalKind,
+            nativeWorkspaceAvailable: terminalKind == "internal",
+            openTarget: terminalKind == "internal" ? "native-workspace" : "external",
+            controlState: "active",
+            backgroundAgents: [],
+            latestRecap: nil,
+            clientKind: "cli",
+            syncEnabled: false,
+            syncTeamId: nil,
+            syncTeamName: nil
         )
     }
 
