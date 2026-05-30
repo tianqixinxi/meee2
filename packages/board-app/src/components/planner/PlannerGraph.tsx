@@ -11,7 +11,6 @@ import { AlertTriangle, PanelLeftClose, PanelLeftOpen, PlayCircle, RefreshCw } f
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import {
-  activateSession,
   applyPlannerProposal,
   approvePlannerProposal,
   abandonPlannerNodeSession,
@@ -478,19 +477,12 @@ function PlannerGraphInner({
     })
       .then((result) => {
         handleGraphStateChanged(result.graph)
-        if (result.action === 'focus-external' || result.openTarget === 'external') {
-          // The bound session is a LIVE ghostty/external terminal. Focus it via
-          // the same path Island uses (TerminalJumper) instead of opening an
-          // internal workspace surface.
-          void activateSession(result.sessionId)
-        } else {
-          window.dispatchEvent(new CustomEvent('meee2:open-session', {
-            detail: {
-              sessionId: result.sessionId,
-              surfaceId: result.surfaceId,
-            },
-          }))
-        }
+        window.dispatchEvent(new CustomEvent('meee2:open-session', {
+          detail: {
+            sessionId: result.sessionId,
+            surfaceId: result.surfaceId,
+          },
+        }))
         void fetchState().then(setSessionHealthBoardState).catch(() => undefined)
         return true
       })
@@ -580,26 +572,10 @@ function PlannerGraphInner({
     if (!trimmed) return
     setBusy(true)
     setError(null)
-    // Route by backend: a node dispatched with a ghostty/external spawn-provider
-    // binds an EXTERNAL terminal session. /internal-session can't open those (it
-    // only tracks internal surfaces), so focus the live external terminal via the
-    // same path Island uses (activateSession → TerminalJumper). Only internal
-    // surfaces go through /internal-session.
-    const boundLive = (boardState?.sessions ?? []).find((session) => sessionMatchesBoundId(session.id, trimmed))
-    if (boundLive && boundLive.terminalKind !== 'internal') {
-      void activateSession(boundLive.id)
-        .then((ok) => {
-          if (!ok) notifyError('Failed to focus the bound terminal session.')
-        })
-        .finally(() => setBusy(false))
-      return
-    }
     // BUG 1.2 — "open progress": open the ALREADY-bound session only. If it has
     // genuinely died (not a reusable internal surface AND not live in the board
     // sessions), the server reports `session_ended` (handled in
     // openInternalSessionForNode) instead of silently spawning a replacement.
-    // If it's a live external session the server didn't expose in boardState yet,
-    // the backend returns action=focus-external and we focus it there too.
     openInternalSessionForNode(nodeId, undefined, true)
       .then((ok) => {
         if (ok) {
@@ -610,7 +586,7 @@ function PlannerGraphInner({
         }
       })
       .finally(() => setBusy(false))
-  }, [boardState?.sessions, notifyError, onNotify, openInternalSessionForNode])
+  }, [boardState?.sessions, onNotify, openInternalSessionForNode])
 
   const handleCancelNodeSessionCreation = useCallback((nodeId: string) => {
     setBusy(true)

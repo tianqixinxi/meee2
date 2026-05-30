@@ -658,9 +658,8 @@ public final class BoardServer {
         server.GET["/api/integrations/github/repos/:owner/:repo/issues"] = BoardServer.cors(IntegrationsAPI.getGithubIssues)
         server.GET["/api/integrations/lark/docs"] = BoardServer.cors(IntegrationsAPI.getLarkDocs)
 
-        // External chat session push (browser extension content scripts at
-        // chatgpt.com / claude.ai). All CORS-wrapped — they hit localhost
-        // from a different origin.
+        // Retired external chat session push endpoints. Keep CORS-wrapped
+        // handlers so older browser extensions receive a clear 410 response.
         server.POST["/api/external-sessions/upsert"] = BoardServer.cors(BoardAPI.upsertExternalSession)
         server.POST["/api/external-sessions/:sid/append-message"] = BoardServer.cors(BoardAPI.appendExternalMessage)
         server.DELETE["/api/external-sessions/:sid"] = BoardServer.cors(BoardAPI.deleteExternalSession)

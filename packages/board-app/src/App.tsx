@@ -50,7 +50,6 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-  activateSession,
   applyCanvasTemplate,
   createCanvas,
   clearPlannerCanvasContent,
@@ -667,15 +666,7 @@ export default function App() {
   }, [applyCanvasList, pushToast])
 
   const handleOpenMonitorItem = useCallback((item: PlannerMonitorItem) => {
-    const target = resolveMonitorItemOpenTarget(item, boardState.state?.sessions)
-    if (target.kind === 'external-session') {
-      activateSession(target.sessionId)
-        .then((ok) => {
-          if (!ok) pushToast('error', 'Failed to open external session')
-        })
-        .finally(() => boardState.refresh())
-      return
-    }
+    const target = resolveMonitorItemOpenTarget(item)
     handleSetActiveCanvas(target.canvasId)
     setWorkspaceMode('planner')
     if (target.nodeId) {
@@ -685,7 +676,7 @@ export default function App() {
         }))
       }, 50)
     }
-  }, [boardState, handleSetActiveCanvas, pushToast])
+  }, [handleSetActiveCanvas])
 
   // Command palette handlers. Switching canvases is async (RTT against the
   // local API), so for node selection we first ensure planner mode + the

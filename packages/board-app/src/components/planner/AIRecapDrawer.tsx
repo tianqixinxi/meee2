@@ -40,7 +40,7 @@ import {
 } from 'lucide-react'
 import type { BoardState, PlannerGraphState } from '../../types'
 import type { CanvasMonitor, CanvasNodeMonitorItem } from '@meee1/recap-core'
-import { activateSession, fetchRecentArtifactVersions, type ArtifactVersionSummary, type UserProfile } from '../../api'
+import { fetchRecentArtifactVersions, type ArtifactVersionSummary, type UserProfile } from '../../api'
 import './planner.css'
 
 interface Props {
@@ -173,9 +173,6 @@ export function AIRecapDrawer({
   }
 
   const handleMonitorJump = (item: CanvasNodeMonitorItem) => {
-    if (item.sessionId) {
-      void activateSession(item.sessionId)
-    }
     handleJump(item.nodeId)
   }
 

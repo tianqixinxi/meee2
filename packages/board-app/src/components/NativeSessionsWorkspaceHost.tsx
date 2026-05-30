@@ -1,6 +1,6 @@
 import { AlertCircle, ExternalLink, Search, Terminal as TerminalIcon } from 'lucide-react'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { activateSession, createSessionSurface, syncNativeSessionsWorkspace, type NativeTerminalRect } from '../api'
+import { createSessionSurface, syncNativeSessionsWorkspace, type NativeTerminalRect } from '../api'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, Session } from '../types'
 
@@ -189,12 +189,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
     setOpenErrorId(null)
     try {
       if (!isInternalSession(session)) {
-        if (session.canOpenExternal === false) {
-          setOpenErrorId(session.id)
-          return
-        }
-        const ok = await activateSession(session.id)
-        if (!ok) setOpenErrorId(session.id)
+        setOpenErrorId(session.id)
         return
       }
       if (isLiveInternalSession(session)) return
@@ -306,7 +301,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
             {selectedSession && !isInternalSession(selectedSession) ? (
               <>
                 <ExternalLink size={18} aria-hidden />
-                <span>{selectedSession.canOpenExternal === false ? t('sessions.externalEndedSummary') : t('sessions.externalSummary')}</span>
+                <span>{t('sessions.unmanagedSummary')}</span>
               </>
             ) : selectedSession ? (
               <>
@@ -447,7 +442,7 @@ function SessionSummary({
   const recent = sessionSummaryText(session)
   const internal = isInternalSession(session)
   const liveInternal = internal && isLiveInternalSession(session)
-  const canOpen = internal ? !liveInternal : session.canOpenExternal !== false
+  const canOpen = internal ? !liveInternal : false
   return (
     <section className="sessions-web-summary">
       <div className="sessions-web-summary__header">

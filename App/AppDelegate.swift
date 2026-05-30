@@ -192,12 +192,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 还是 nil，所有查询返回 fallback（空数组 / nil），plugin 自治逻辑被静默废掉。
         Meee2PluginKit.A2AContext.shared.register(A2AContextHostProvider())
 
-        // Register builtin in-process plugins. ExternalChatPlugin receives
-        // browser-extension pushed sessions (ChatGPT / Claude.ai web chats)
-        // via /api/external-sessions/* — must register *before* startAll so
-        // PluginManager wires up onSessionsUpdated callbacks.
-        PluginManager.shared.register(ExternalChatPlugin.shared)
-
         // Claude Desktop session metadata 索引器：扫
         // ~/Library/Application Support/Claude/claude-code-sessions/
         // 把 desktop 起的 session（cliSessionId / title / model / isArchived）

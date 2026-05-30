@@ -73,90 +73,13 @@ public final class SessionPaletteSearchEngine {
         internalSurfaces: [TerminalSessionSnapshot] = []
     ) -> [SessionPaletteEntry] {
         var results: [SessionPaletteEntry] = []
+        _ = sessions
         let queryLower = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var storeBySessionId: [String: SessionData] = [:]
         for storeSession in storeSessions {
             storeBySessionId[storeSession.sessionId] = storeSession
         }
-        let internalSessionIds = Set(
-            internalSurfaces
-                .filter { $0.status != "exited" && $0.status != "failed" }
-                .map(\.sessionId)
-        )
         var seenSessionIds = Set<String>()
-
-        for s in sessions where !s.status.isHistorical {
-            let realSid = Self.realSessionId(for: s)
-            if internalSessionIds.contains(realSid) {
-                continue
-            }
-            guard seenSessionIds.insert(realSid).inserted else { continue }
-
-            // Status filter
-            if statusFilter != .all {
-                let statusName = statusName(for: s.status)
-                if statusName != statusFilter.rawValue {
-                    continue
-                }
-            }
-
-            // Plugin filter
-            if let pf = pluginFilter, s.pluginId != pf {
-                continue
-            }
-
-            let storeSession = storeBySessionId[realSid]
-            let cwd = storeSession?.cwd ?? s.cwd ?? s.title
-            let project = cwd.split(separator: "/").last.map(String.init) ?? cwd
-            let currentTool = storeSession?.currentTool
-            let pendingPermission = storeSession?.pendingPermissionTool
-            let lastMessage = storeSession?.lastMessage
-            let model = s.usageStats?.model ?? ""
-            let pluginDisplayName = PluginManager.shared.getPluginInfo(for: s.pluginId)?.displayName ?? s.pluginId
-
-            // Text query filter —— 在所有可见字段上做子串匹配
-            if !queryLower.isEmpty {
-                let searchable = [
-                    s.title, s.pluginId, pluginDisplayName,
-                    project, cwd, statusName(for: s.status),
-                    model, currentTool ?? "", pendingPermission ?? "",
-                    lastMessage ?? ""
-                ].joined(separator: " ").lowercased()
-                if !searchable.contains(queryLower) {
-                    continue
-                }
-            }
-
-            let statusName = statusName(for: s.status)
-
-            // Terminal jumpable if we have a terminal info
-            let isTerminalJumpable = s.terminalInfo?.tty != nil
-                || s.terminalInfo?.termProgram != nil
-                || storeSession?.ghosttyTerminalId != nil
-                || storeSession?.iTermSessionId != nil
-                || storeSession?.appleTerminalSessionId != nil
-
-            results.append(SessionPaletteEntry(
-                id: s.id,
-                sessionId: realSid,
-                title: s.title,
-                project: project,
-                cwd: cwd,
-                pluginId: s.pluginId,
-                pluginDisplayName: pluginDisplayName,
-                status: statusName,
-                statusRaw: s.status,
-                model: model,
-                startedAt: s.startedAt,
-                lastActivity: s.lastUpdated ?? s.startedAt,
-                currentTool: currentTool,
-                pendingPermissionTool: pendingPermission,
-                lastMessage: lastMessage,
-                isTerminalJumpable: isTerminalJumpable,
-                terminalKind: "external",
-                surfaceId: nil
-            ))
-        }
 
         for surface in internalSurfaces where surface.status != "exited" && surface.status != "failed" {
             guard seenSessionIds.insert(surface.sessionId).inserted else { continue }
@@ -232,22 +155,8 @@ public final class SessionPaletteSearchEngine {
         internalSurfaces: [TerminalSessionSnapshot] = []
     ) -> [(id: String, displayName: String, count: Int)] {
         var counts: [String: (displayName: String, count: Int)] = [:]
-        let internalSessionIds = Set(
-            internalSurfaces
-                .filter { $0.status != "exited" && $0.status != "failed" }
-                .map(\.sessionId)
-        )
+        _ = sessions
         var countedSessionIds = Set<String>()
-        for s in sessions where !s.status.isHistorical {
-            let realSid = Self.realSessionId(for: s)
-            if internalSessionIds.contains(realSid) { continue }
-            guard countedSessionIds.insert(realSid).inserted else { continue }
-            if let existing = counts[s.pluginId] {
-                counts[s.pluginId] = (existing.displayName, existing.count + 1)
-            } else {
-                counts[s.pluginId] = (PluginManager.shared.getPluginInfo(for: s.pluginId)?.displayName ?? s.pluginId, 1)
-            }
-        }
         for surface in internalSurfaces where surface.status != "exited" && surface.status != "failed" {
             guard countedSessionIds.insert(surface.sessionId).inserted else { continue }
             let pluginId = surface.provider.lowercased() == "codex"
@@ -263,11 +172,6 @@ public final class SessionPaletteSearchEngine {
         }
         return counts.sorted { $0.value.count > $1.value.count }
             .map { (id: $0.key, displayName: $0.value.displayName, count: $0.value.count) }
-    }
-
-    private static func realSessionId(for session: PluginSession) -> String {
-        let prefix = "\(session.pluginId)-"
-        return session.id.hasPrefix(prefix) ? String(session.id.dropFirst(prefix.count)) : session.id
     }
 
     private func internalSurfaceTitle(_ surface: TerminalSessionSnapshot) -> String {

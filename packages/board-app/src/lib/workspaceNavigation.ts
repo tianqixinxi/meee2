@@ -1,25 +1,14 @@
-import type { PlannerMonitorItem, Session } from '../types'
+import type { PlannerMonitorItem } from '../types'
 
 export type MonitorItemOpenTarget =
   | { kind: 'canvas'; canvasId: string; nodeId?: string | null }
-  | { kind: 'external-session'; sessionId: string }
 
 export type MonitorItemOpenLabel = 'item' | 'canvas' | 'session'
 export type MonitorItemSourceKind = 'canvas' | 'node' | 'approval' | 'live'
 
 export function resolveMonitorItemOpenTarget(
   item: PlannerMonitorItem,
-  sessions: Session[] | null | undefined,
 ): MonitorItemOpenTarget {
-  const sessionId = item.sessionId?.trim()
-  if (sessionId && !isCanvasScopedMonitorItem(item)) {
-    const session = sessions?.find((candidate) => (
-      candidate.id === sessionId || candidate.surfaceId === sessionId
-    ))
-    if (session && isExternalMonitorSession(session)) {
-      return { kind: 'external-session', sessionId: session.id }
-    }
-  }
   return {
     kind: 'canvas',
     canvasId: item.canvasId,
@@ -60,12 +49,4 @@ export function isCanvasScopedMonitorItem(item: PlannerMonitorItem): boolean {
       || item.deliveryId?.trim()
       || item.proposalId?.trim(),
   )
-}
-
-export function isExternalMonitorSession(
-  session: Pick<Session, 'terminalKind' | 'surfaceId' | 'canOpenExternal'>,
-): boolean {
-  return session.terminalKind !== 'internal'
-    && !session.surfaceId?.trim()
-    && session.canOpenExternal !== false
 }

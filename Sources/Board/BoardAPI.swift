@@ -1848,9 +1848,8 @@ enum BoardAPI {
             let cwd: String
             let command: String
             let terminalKind: String
-            // "native-workspace" for internal surfaces; "external" when the bound
-            // session is a live ghostty/external terminal the frontend must focus
-            // via /activate rather than open an internal surface for.
+            // "native-workspace" for internal surfaces; stale or external
+            // bindings are reported as session_ended instead of focused.
             let openTarget: String
             let action: String
             let graph: PlannerGraphStateEnvelope
@@ -1879,35 +1878,10 @@ enum BoardAPI {
                    isReusableInternalSurface(existingSurface) {
                     surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
                 } else if body?.openOnly == true {
-                    // BUG 1.2 — the caller only asked to OPEN the already-bound
-                    // session (not create one). The session is not a reusable
-                    // INTERNAL surface, but it may still be a LIVE ghostty/external
-                    // session (InternalTerminalRuntime only tracks internal
-                    // surfaces, so its snapshot is nil for those). Before declaring
-                    // the session dead, check broad liveness against the board
-                    // session list (covers ghostty/external + surfaceStatus).
-                    let liveSessions = currentBoardSessions()
-                    if isPlannerSessionLive(sessionId, in: liveSessions),
-                       let live = liveSessions.first(where: { boardSession($0, matches: sessionId) }) {
-                        // The bound session is alive in an external/ghostty terminal.
-                        // Do NOT 409 and do NOT spawn a replacement — tell the
-                        // frontend to FOCUS the existing live terminal via /activate.
-                        return jsonResponse(EnsureResponse(
-                            ok: true,
-                            sessionId: live.id,
-                            surfaceId: live.surfaceId ?? "",
-                            cwd: (try? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)) ?? "",
-                            command: "",
-                            terminalKind: live.terminalKind,
-                            openTarget: live.openTarget,
-                            action: "focus-external",
-                            graph: graphEnvelope(state)
-                        ), status: 200, reason: "OK")
-                    }
-                    // Genuinely dead across ALL backends — not a reusable internal
-                    // surface AND not live in the board sessions. Surface that the
-                    // session ended so the user can re-dispatch; do not silently
-                    // spawn a replacement.
+                    // The caller only asked to open the already-bound managed
+                    // session. External terminal sessions are no longer managed
+                    // by meee2, so any non-reusable internal binding is treated
+                    // as ended and the user can re-dispatch into a managed surface.
                     return errorResponse(
                         "session_ended",
                         "The session bound to this node has ended. Re-dispatch the node to start a new one.",
@@ -3403,16 +3377,6 @@ enum BoardAPI {
     private static func currentBoardSessions() -> [SessionDTO] {
         _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
         let terminalInfos = SessionTerminalStore.shared.getAll()
-        let archivedDesktopSids: Set<String> = {
-            var set = Set<String>()
-            for sid in ClaudeDesktopMetadataReader.shared.allCliSessionIds() {
-                if let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: sid),
-                   m.isArchived {
-                    set.insert(sid)
-                }
-            }
-            return set
-        }()
         let internalSessions = TerminalSessionBackendRegistry.shared
             .listSnapshots()
             .filter { $0.status != "exited" && $0.status != "failed" }
@@ -3428,57 +3392,7 @@ enum BoardAPI {
             .map { session in
                 BoardDTOBuilder.staleInternalSessionDTO(session, terminalInfo: terminalInfos[session.sessionId])
             }
-        let allInternalSessions = internalSessions + staleInternalSessions
-        let activeInternalManagedWorkspaceCwds = Set(
-            internalSessions.compactMap { InternalSessionIdentity.normalizedManagedWorkspacePath($0.project) }
-        )
-        let internalProviderResumeIds = Set(allInternalSessions.compactMap {
-            terminalInfos[$0.id]?.providerResumeSessionId?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }.filter { !$0.isEmpty })
-        let realSessions = PluginManager.shared.sessions
-            .filter { PluginManager.shared.isPluginEnabled($0.pluginId) }
-            .filter { !$0.status.isHistorical }
-            .filter { session in
-                let realSid = session.id.hasPrefix("\(session.pluginId)-")
-                    ? String(session.id.dropFirst("\(session.pluginId)-".count))
-                    : session.id
-                return !archivedDesktopSids.contains(realSid)
-            }
-            .map { BoardDTOBuilder.sessionDTO($0) }
-            .filter {
-                !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
-                    cwd: $0.project,
-                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
-                )
-            }
-            .filter { !internalProviderResumeIds.contains($0.id) }
-            .filter { external in
-                !allInternalSessions.contains { internalSession in
-                    boardSession(internalSession, matches: external.id)
-                        || boardSession(external, matches: internalSession.id)
-                }
-            }
-
-        // Desktop 的 session 生命周期是"请求级"，所以用 metadata 合成持久展示。
-        let realSids: Set<String> = Set(realSessions.map { $0.id })
-        let syntheticDesktopSessions: [SessionDTO] = ClaudeDesktopMetadataReader.shared
-            .allCliSessionIds()
-            .compactMap { cliSid -> SessionDTO? in
-                guard PluginManager.shared.isPluginEnabled("com.meee2.plugin.claude") else { return nil }
-                guard let m = ClaudeDesktopMetadataReader.shared.lookup(cliSessionId: cliSid),
-                      !m.isArchived,
-                      !realSids.contains(cliSid),
-                      !internalProviderResumeIds.contains(cliSid),
-                      !allInternalSessions.contains(where: { boardSession($0, matches: cliSid) }) else { return nil }
-                let dto = BoardDTOBuilder.syntheticDesktopSessionDTO(metadata: m)
-                guard !InternalSessionIdentity.externalManagedWorkspaceMatchesInternal(
-                    cwd: dto.project,
-                    internalManagedWorkspaceCwds: activeInternalManagedWorkspaceCwds
-                ) else { return nil }
-                return dto
-        }
-        return internalSessions + staleInternalSessions + realSessions + syntheticDesktopSessions
+        return internalSessions + staleInternalSessions
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {
@@ -4109,15 +4023,7 @@ enum BoardAPI {
                 openTarget: "native-workspace"
             ))
         }
-        if let metadataSid = resolveDesktopMetadataSid(sid) {
-            ClaudeDesktopActivator.activate(sid: metadataSid)
-            return jsonResponse(OkEnvelope(ok: true))
-        }
-        guard let session = resolvePluginSession(sid) else {
-            return errorResponse("not_found", "session not found: \(sid)", status: 404)
-        }
-        PluginManager.shared.activateTerminal(for: session)
-        return jsonResponse(OkEnvelope(ok: true))
+        return errorResponse("not_found", "managed session not found: \(sid)", status: 404)
     }
 
     /// DELETE /api/sessions/:id
@@ -5664,89 +5570,25 @@ enum BoardAPI {
 
     // MARK: - External Chat Sessions (browser extension push)
 
-    /// POST /api/external-sessions/upsert
-    /// Body: {
-    ///   source: "chatgpt-web" | "claude-web" | "external",
-    ///   externalId: string (browser-side conversation id),
-    ///   title: string,
-    ///   url?: string,
-    ///   status: "idle" | "thinking" | "active" | ...,
-    ///   recentMessages?: [{role, text, timestamp?}]
-    /// }
-    /// → { sid, isNew }
     static func upsertExternalSession(_ req: HttpRequest) -> HttpResponse {
-        guard let json = parseJSONBody(req) else {
-            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
-        }
-        guard let source = json["source"] as? String, !source.isEmpty,
-              let externalId = json["externalId"] as? String, !externalId.isEmpty else {
-            return errorResponse("bad_request", "missing source / externalId", status: 400)
-        }
-        let title = (json["title"] as? String) ?? ""
-        let url = json["url"] as? String
-        let status = (json["status"] as? String) ?? "idle"
-
-        var msgs: [(role: String, text: String, timestamp: Date?)] = []
-        if let rawMsgs = json["recentMessages"] as? [[String: Any]] {
-            for m in rawMsgs {
-                guard let role = m["role"] as? String,
-                      let text = m["text"] as? String else { continue }
-                let ts = (m["timestamp"] as? String).flatMap(ISO8601DateFormatter().date(from:))
-                msgs.append((role: role, text: text, timestamp: ts))
-            }
-        }
-
-        let result = ExternalChatPlugin.shared.upsert(
-            source: source,
-            externalId: externalId,
-            title: title,
-            url: url,
-            status: status,
-            recentMessages: msgs
-        )
-        BoardServer.shared.broadcastStateChanged()
-        return jsonResponse(ExternalSessionUpsertEnvelope(sid: result.sid, isNew: result.isNew))
+        return retiredExternalSessionResponse(req)
     }
 
-    /// POST /api/external-sessions/:sid/append-message
-    /// Body: { role, text, timestamp? }
     static func appendExternalMessage(_ req: HttpRequest) -> HttpResponse {
-        guard let sid = req.params[":sid"] else {
-            return errorResponse("bad_request", "missing sid", status: 400)
-        }
-        guard let json = parseJSONBody(req) else {
-            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
-        }
-        guard let role = json["role"] as? String,
-              let text = json["text"] as? String else {
-            return errorResponse("bad_request", "missing role / text", status: 400)
-        }
-        let ts = (json["timestamp"] as? String).flatMap(ISO8601DateFormatter().date(from:))
-        let ok = ExternalChatPlugin.shared.appendMessage(sid: sid, role: role, text: text, timestamp: ts)
-        if !ok {
-            return errorResponse("not_found", "external session not found: \(sid)", status: 404)
-        }
-        BoardServer.shared.broadcastStateChanged()
-        return jsonResponse(OkEnvelope(ok: true))
+        return retiredExternalSessionResponse(req)
     }
 
-    /// DELETE /api/external-sessions/:sid
-    /// Browser tab closed → drop the session card.
     static func deleteExternalSession(_ req: HttpRequest) -> HttpResponse {
-        guard let sid = req.params[":sid"] else {
-            return errorResponse("bad_request", "missing sid", status: 400)
-        }
-        let removed = ExternalChatPlugin.shared.remove(sid: sid)
-        if !removed {
-            return errorResponse("not_found", "external session not found: \(sid)", status: 404)
-        }
-        BoardServer.shared.broadcastStateChanged()
-        return jsonResponse(OkEnvelope(ok: true))
+        return retiredExternalSessionResponse(req)
     }
 
-    private struct ExternalSessionUpsertEnvelope: Encodable {
-        let sid: String
-        let isNew: Bool
+    private static func retiredExternalSessionResponse(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        return errorResponse(
+            "external_sessions_retired",
+            "External session ingestion has been retired. meee2 now manages only sessions it creates.",
+            status: 410
+        )
     }
 
     /// `{key: {x,y}}` → `[key: Point]`，容错解析：未知 shape 视为空。

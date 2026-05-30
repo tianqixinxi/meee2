@@ -1,7 +1,6 @@
 import Cocoa
 import Combine
 import SwiftUI
-import Meee2PluginKit
 
 // MARK: - Session Palette Manager
 
@@ -82,35 +81,7 @@ public final class SessionPaletteManager: ObservableObject {
     /// 选择并跳转到某个 session
     public func selectAndJump(to entry: SessionPaletteEntry) {
         hide()
-
-        if entry.terminalKind == "internal" {
-            selectOnBoard(sessionId: entry.sessionId, surfaceId: entry.surfaceId)
-            return
-        }
-
-        // 尝试终端跳转
-        if entry.isTerminalJumpable {
-            Task {
-                let session = PluginManager.shared.sessions.first { $0.id == entry.id }
-                if let s = session {
-                    let jumpResult = await TerminalJumper.shared.jump(to: convertToAISession(entry, pluginSession: s))
-                    if case .success = jumpResult {
-                        return
-                    } else {
-                        // 跳转失败，fallback 到 Board 选中
-                        await MainActor.run {
-                            selectOnBoard(sessionId: entry.sessionId, surfaceId: entry.surfaceId)
-                        }
-                    }
-                } else {
-                    await MainActor.run {
-                        selectOnBoard(sessionId: entry.sessionId, surfaceId: entry.surfaceId)
-                    }
-                }
-            }
-        } else {
-            selectOnBoard(sessionId: entry.sessionId, surfaceId: entry.surfaceId)
-        }
+        selectOnBoard(sessionId: entry.sessionId, surfaceId: entry.surfaceId)
     }
 
     private func selectOnBoard(sessionId: String, surfaceId: String?) {
@@ -126,23 +97,4 @@ public final class SessionPaletteManager: ObservableObject {
         )
     }
 
-    private func convertToAISession(_ entry: SessionPaletteEntry, pluginSession: PluginSession) -> AISession {
-        var session = AISession(
-            id: entry.sessionId,
-            pid: 0,
-            cwd: entry.cwd,
-            startedAt: entry.startedAt,
-            status: entry.statusRaw,
-            currentTask: entry.currentTool,
-            toolName: entry.currentTool
-        )
-        session.termProgram = pluginSession.terminalInfo?.termProgram
-        session.tty = pluginSession.terminalInfo?.tty
-        session.termBundleId = pluginSession.terminalInfo?.termBundleId
-        session.cmuxSocketPath = pluginSession.terminalInfo?.cmuxSocketPath
-        session.cmuxSurfaceId = pluginSession.terminalInfo?.cmuxSurfaceId
-        session.ghosttyTerminalId = SessionStore.shared.get(entry.sessionId)?.ghosttyTerminalId
-        session.lastActivityTimestamp = entry.lastActivity.timeIntervalSince1970
-        return session
-    }
 }

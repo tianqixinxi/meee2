@@ -126,7 +126,9 @@ public class StatusManager: ObservableObject {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] sessions in
                 guard let self = self else { return }
-                self.sessions = sessions.filter { !$0.status.isHistorical || $0.urgentEvent != nil }
+                self.sessions = sessions
+                    .filter(Self.isManagedIslandSession)
+                    .filter { !$0.status.isHistorical || $0.urgentEvent != nil }
                 self.updateSystemStatus()
                 // 通知 AppDelegate 更新状态栏图标
                 NotificationCenter.default.post(name: NSNotification.Name("SessionsDidChange"), object: nil)
@@ -135,9 +137,30 @@ public class StatusManager: ObservableObject {
 
         // 检测 urgent 状态
         pluginManager.$sessions
-            .map { $0.contains { !$0.status.isHistorical && $0.urgentEvent != nil } }
+            .map {
+                $0.contains {
+                    Self.isManagedIslandSession($0) && !$0.status.isHistorical && $0.urgentEvent != nil
+                }
+            }
             .receive(on: DispatchQueue.main)
             .assign(to: &$hasUrgentSession)
+    }
+
+    private static func isManagedIslandSession(_ session: PluginSession) -> Bool {
+        let realId = session.id.hasPrefix("\(session.pluginId)-")
+            ? String(session.id.dropFirst("\(session.pluginId)-".count))
+            : session.id
+        if TerminalSessionBackendRegistry.shared.isManagedSession(session.id)
+            || TerminalSessionBackendRegistry.shared.isManagedSession(realId) {
+            return true
+        }
+        let termProgram = (
+            SessionStore.shared.get(session.id)?.terminalInfo?.termProgram
+                ?? SessionStore.shared.get(realId)?.terminalInfo?.termProgram
+                ?? session.terminalInfo?.termProgram
+                ?? ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return termProgram == "meee2-internal" || termProgram == "meee2-ghostty-surface"
     }
 
     private func updateSystemStatus() {
