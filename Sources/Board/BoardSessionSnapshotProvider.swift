@@ -25,7 +25,12 @@ enum BoardSessionSnapshotProvider {
                   dto.recentMessages.isEmpty,
                   let cli = InternalSessionIdentity.correlatedCliSession(
                     forWorkspaceCwd: dto.project,
-                    among: cliCorrelationCandidates
+                    among: cliCorrelationCandidates,
+                    // BUG B: gate out a stale prior-run CLI in a reused workspace.
+                    // A freshly-dispatched surface must not adopt a dead/completed
+                    // CLI that predates it — that would flip the live node
+                    // running→failed. dto.startedAt is ISO8601 (iso8601.string).
+                    surfaceStartedAt: dto.startedAt.flatMap { ISO8601DateFormatter().date(from: $0) }
                   ),
                   cli.sessionId != dto.id else {
                 return dto

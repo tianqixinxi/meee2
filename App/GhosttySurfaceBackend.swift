@@ -223,6 +223,24 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var didSendInitialPrompt = false
     private var detached = false
 
+    // BUG A — ready-gated initialPrompt delivery (mirrors InternalTerminalRuntime
+    // `deliverInitialPromptWhenReady`). Ghostty exec surfaces do NOT expose
+    // stdout, so we can't poll PTY bytes; instead we treat any surface signal
+    // (grid resize / title / pwd / progress / command-finished) as "the TUI is
+    // rendering" and update `lastSurfaceActivityAt`. The poller waits until the
+    // surface has produced activity AND gone quiet for a settle window (TUI
+    // finished booting its input box), then submits `prompt + \r`. A hard
+    // ceiling guarantees delivery even if signals never arrive; abort on exit.
+    private var lastSurfaceActivityAt: Date?
+    private var promptDeliveryStartedAt: Date?
+
+    // BUG A (P1) — when a workspace-trust auto-accept Enter is scheduled, the
+    // ready-gated prompt MUST NOT be submitted before that Enter lands, or the
+    // prompt gets typed into the trust dialog and lost. `trustAutoAcceptPending`
+    // blocks the poller from delivering until `trustAutoAcceptSentAt` is set.
+    private var trustAutoAcceptPending = false
+    private var trustAutoAcceptSentAt: Date?
+
     var isReusable: Bool {
         status != InternalTerminalLifecycle.exited.rawValue && status != InternalTerminalLifecycle.failed.rawValue
     }
@@ -356,20 +374,74 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         touch()
         onStatusChange(surfaceId, "running")
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        var scheduledTrustAutoAccept = false
         if shouldSendLaunchCommand(trimmedCommand) {
             let startedAt = Date()
             terminalView.sendText(trimmedCommand + "\n")
             logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
-            scheduledTrustAutoAccept = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
+            _ = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
         }
-        guard let initialPrompt, !initialPrompt.isEmpty, !didSendInitialPrompt else { return }
-        didSendInitialPrompt = true
-        let promptDelay: DispatchTimeInterval = scheduledTrustAutoAccept ? .milliseconds(2_300) : .milliseconds(1_200)
-        DispatchQueue.main.asyncAfter(deadline: .now() + promptDelay) { [weak self] in
+        guard let initialPrompt, !initialPrompt.isEmpty else { return }
+        scheduleInitialPromptDeliveryWhenReady(initialPrompt)
+    }
+
+    /// Record that the surface produced a signal (resize / title / pwd /
+    /// progress / command-finished). Drives the ready-gated prompt delivery:
+    /// "ready" = produced activity AND quiet for a settle window.
+    private func noteSurfaceActivity() {
+        lastSurfaceActivityAt = Date()
+    }
+
+    /// Submit the dispatched node's initialPrompt once the agent TUI is actually
+    /// ready, retrying until then. Replaces the old blind fixed-delay write that
+    /// dropped the prompt on a fresh canvas (TUI not yet rendered at 1.2s).
+    private func scheduleInitialPromptDeliveryWhenReady(_ rawPrompt: String) {
+        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, !didSendInitialPrompt, promptDeliveryStartedAt == nil else { return }
+        promptDeliveryStartedAt = Date()
+
+        // Output (here: surface signals) must be quiet this long before we treat
+        // the TUI as "ready". Hard ceiling delivers anyway even if no signal ever
+        // arrives. Both mirror InternalTerminalRuntime.deliverInitialPromptWhenReady.
+        let settleWindow: TimeInterval = 0.8
+        let ceiling: TimeInterval = 20.0
+        let firstProbe: DispatchTimeInterval = .milliseconds(700)
+
+        func probe() {
+            guard !detached, !didSendInitialPrompt else { return }
+            // Surface gone / never started → nothing to deliver into.
+            guard isReusable else { return }
+
+            let now = Date()
+            let elapsed = promptDeliveryStartedAt.map { now.timeIntervalSince($0) } ?? 0
+            let pastCeiling = elapsed >= ceiling
+            let hadActivity = lastSurfaceActivityAt != nil
+            let quietFor = lastSurfaceActivityAt.map { now.timeIntervalSince($0) } ?? .greatestFiniteMagnitude
+            let settled = hadActivity && quietFor >= settleWindow
+
+            // P1: never submit while a trust auto-accept Enter is still pending —
+            // the prompt would land in the trust dialog. Once the Enter has been
+            // sent, `trustAutoAcceptSentAt` is set and delivery may proceed (the
+            // Enter also refreshed `lastSurfaceActivityAt`, so the settle window
+            // now measures quiet time after the dialog was dismissed).
+            let trustReady = !trustAutoAcceptPending || trustAutoAcceptSentAt != nil
+
+            if trustReady, settled || pastCeiling {
+                didSendInitialPrompt = true
+                let startedAt = Date()
+                terminalView.sendText(prompt + "\r")
+                touch()
+                logPerf("initial_prompt", startedAt: startedAt,
+                        extra: "bytes=\(prompt.utf8.count) reason=\(pastCeiling ? "ceiling" : "settled")")
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) { [weak self] in
+                guard let self, !self.detached else { return }
+                MainActor.assumeIsolated { probe() }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + firstProbe) { [weak self] in
             guard let self, !self.detached else { return }
-            self.terminalView.sendText(initialPrompt + "\n")
-            self.touch()
+            MainActor.assumeIsolated { probe() }
         }
     }
 
@@ -383,12 +455,20 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
             return false
         }
 
+        // Block the prompt poller from delivering until the trust Enter lands —
+        // otherwise the prompt is typed into the trust dialog and lost (P1).
+        trustAutoAcceptPending = true
+
         // Ghostty exec surfaces do not expose stdout, so trusted meee2 workspaces get a narrow startup Enter.
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(1_100)) { [weak self] in
             guard let self, !self.detached else { return }
             let startedAt = Date()
             self.terminalView.sendText("\r")
             self.touch()
+            self.trustAutoAcceptSentAt = Date()
+            // The Enter itself counts as surface activity → the poller's settle
+            // window now measures quiet time AFTER the trust dialog was dismissed.
+            self.noteSurfaceActivity()
             self.logPerf("auto_accept_workspace_trust", startedAt: startedAt, extra: "mode=enter")
         }
         return true
@@ -453,10 +533,35 @@ extension GhosttySurfaceSession:
     TerminalSurfaceGridResizeDelegate,
     TerminalSurfaceCloseDelegate,
     TerminalSurfaceFocusDelegate,
+    TerminalSurfaceTitleDelegate,
+    TerminalSurfacePwdDelegate,
+    TerminalSurfaceProgressReportDelegate,
     TerminalSurfaceCommandFinishedDelegate {
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         logPerf("first_attach", startedAt: createdAt)
+        // The surface backing store is now live → start the ready-gated prompt
+        // poller. Attach itself counts as the first activity signal.
+        noteSurfaceActivity()
         bootstrapIfNeeded()
+    }
+
+    func terminalDidChangeTitle(_ title: String) {
+        _ = title
+        noteSurfaceActivity()
+        touch()
+    }
+
+    func terminalDidChangeWorkingDirectory(_ path: String) {
+        _ = path
+        noteSurfaceActivity()
+        touch()
+    }
+
+    func terminalDidReportProgress(state: TerminalProgressState, percent: Int?) {
+        _ = state
+        _ = percent
+        noteSurfaceActivity()
+        touch()
     }
 
     func terminalDidDetachSurface() {
@@ -466,12 +571,14 @@ extension GhosttySurfaceSession:
 
     func terminalDidResize(_ size: TerminalGridMetrics) {
         _ = size
+        noteSurfaceActivity()
         touch()
     }
 
     func terminalDidResize(columns: Int, rows: Int) {
         _ = columns
         _ = rows
+        noteSurfaceActivity()
         touch()
     }
 
@@ -488,6 +595,7 @@ extension GhosttySurfaceSession:
 
     func terminalDidFinishCommand(exitCode: Int?, durationNanos: UInt64) {
         _ = exitCode
+        noteSurfaceActivity()
         touch()
         let durationMs = Double(durationNanos) / 1_000_000
         MInfo(String(format: "[TerminalPerf][ghostty-surface] event=command_finished session=%@ surface=%@ duration_ms=%.1f",
