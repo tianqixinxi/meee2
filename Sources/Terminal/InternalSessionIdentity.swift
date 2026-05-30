@@ -114,11 +114,35 @@ public enum InternalSessionIdentity {
     /// Returns `nil` when no such CLI session exists (e.g. it has genuinely
     /// exited *and* left no transcript) — callers must leave the surface DTO
     /// untouched in that case.
+    ///
+    /// `surfaceStartedAt` (when provided) gates against adopting a CLI session
+    /// that PREDATES this surface — the prior-run-staleness regression (BUG B).
+    /// On a REUSED workspace, a dead/`completed` CLI from an earlier run shares
+    /// the same cwd; a freshly-dispatched live surface must NOT adopt its dead
+    /// status (which would flip the node running→failed).
+    ///
+    /// The discriminator is `lastActivity`: this surface's OWN CLI is spawned
+    /// just after the surface and keeps writing its transcript, so its
+    /// `lastActivity` is at/after the surface's `startedAt`. A prior run — even
+    /// one that ended only ~30s before the new dispatch (the quick-rerun window)
+    /// — has its LAST activity strictly before the surface started, so it is
+    /// rejected. We allow only a few seconds of backward skew for clock
+    /// granularity / spawn ordering, NOT the previous 120s window (which let a
+    /// quick-rerun's just-ended stale CLI through and reintroduced BUG B). A
+    /// fresh surface whose own CLI hasn't written a transcript yet → no
+    /// candidate → keeps its own (running) status; once its own CLI starts
+    /// writing, `lastActivity` advances past the surface start and it's adopted.
     public static func correlatedCliSession(
         forWorkspaceCwd rawCwd: String?,
-        among candidates: [SessionData]
+        among candidates: [SessionData],
+        surfaceStartedAt: Date? = nil
     ) -> SessionData? {
         guard let target = normalizedManagedWorkspacePath(rawCwd) else { return nil }
+
+        // Only absorb genuine spawn-ordering / clock-granularity skew (the CLI is
+        // created a beat after its surface). Anything older than this is a prior
+        // run, not this surface's session.
+        let skewToleranceSeconds: TimeInterval = 5
 
         // Step 1 — filter to transcript-bearing, non-surface, same-cwd CLI
         // candidates. This MUST come before any ranking so a substantive
@@ -129,7 +153,15 @@ public enum InternalSessionIdentity {
             guard !isSurface(candidate) else { return false }
             let transcript = (candidate.transcriptPath ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            return !transcript.isEmpty
+            guard !transcript.isEmpty else { return false }
+            // BUG B temporal guard: a candidate whose LAST activity is before this
+            // surface started is by definition a prior run in this reused cwd —
+            // reject it (covers the quick-rerun window, not just hour-old runs).
+            if let surfaceStartedAt {
+                let cutoff = surfaceStartedAt.addingTimeInterval(-skewToleranceSeconds)
+                guard candidate.lastActivity >= cutoff else { return false }
+            }
+            return true
         }
         guard !matches.isEmpty else { return nil }
 

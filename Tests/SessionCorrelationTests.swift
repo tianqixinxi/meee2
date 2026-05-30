@@ -37,7 +37,12 @@ final class SessionCorrelationTests: XCTestCase {
         return file.path
     }
 
-    private func surfaceSnapshot(sessionId: String, surfaceId: String, cwd: String) -> TerminalSessionSnapshot {
+    private func surfaceSnapshot(
+        sessionId: String,
+        surfaceId: String,
+        cwd: String,
+        createdAt: Date = Date(timeIntervalSince1970: 1_000)
+    ) -> TerminalSessionSnapshot {
         TerminalSessionSnapshot(
             sessionId: sessionId,
             surfaceId: surfaceId,
@@ -49,8 +54,8 @@ final class SessionCorrelationTests: XCTestCase {
             provider: "claude",
             canvasId: "canvas-corr",
             nodeId: "node-corr",
-            createdAt: Date(timeIntervalSince1970: 1_000),
-            updatedAt: Date(timeIntervalSince1970: 1_000)
+            createdAt: createdAt,
+            updatedAt: createdAt
         )
     }
 
@@ -422,5 +427,179 @@ final class SessionCorrelationTests: XCTestCase {
                        "Large CJK CLI transcript must still surface recentMessages (was 0 live).")
         XCTAssertTrue(enriched.recentMessages.contains { $0.text.contains(marker) },
                       "The latest CJK assistant message must be recovered past the tail cut.")
+    }
+
+    // MARK: - 5. BUG B — temporal guard: don't adopt a CLI that predates the surface
+
+    /// A freshly-dispatched surface (startedAt = T) in a REUSED workspace that
+    /// already contains an OLDER dead/completed CLI from a prior run must NOT
+    /// adopt that stale CLI — doing so flipped the live node running→failed.
+    func testCorrelation_rejectsStalePriorRunCli() {
+        let cwd = managedWorkspaceCwd()
+        let surfaceStart = Date(timeIntervalSince1970: 10_000)
+
+        // Prior-run CLI: started AND last active well before this surface.
+        let stalePriorRun = SessionData(
+            sessionId: "prior-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/prior.jsonl",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 2_000), // long before surfaceStart
+            status: .completed,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        // No own CLI yet → must resolve to nil (keep own running status).
+        XCTAssertNil(
+            InternalSessionIdentity.correlatedCliSession(
+                forWorkspaceCwd: cwd, among: [stalePriorRun], surfaceStartedAt: surfaceStart
+            ),
+            "A surface must NOT adopt a CLI session that predates its own lifetime."
+        )
+
+        // Once THIS surface's own CLI appears (started at/after the surface), adopt it.
+        let ownCli = SessionData(
+            sessionId: "own-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/own.jsonl",
+            startedAt: surfaceStart.addingTimeInterval(2), // spawned just after the surface
+            lastActivity: surfaceStart.addingTimeInterval(5),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        let resolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: cwd, among: [stalePriorRun, ownCli], surfaceStartedAt: surfaceStart
+        )
+        XCTAssertEqual(resolved?.sessionId, ownCli.sessionId,
+                       "A surface MUST adopt its own CLI (startedAt >= surface), not the stale prior run.")
+    }
+
+    /// P2 regression: the QUICK-RERUN window. A reused workspace where the
+    /// previous CLI ended only ~30s before the new dispatch. Its `lastActivity`
+    /// is still recent, but it is STILL a prior run (ended before this surface
+    /// started) and must NOT be adopted. The old 120s backward tolerance let
+    /// this through and reintroduced BUG B for the normal quick-retry flow.
+    func testCorrelation_rejectsQuickRerunPriorCli() {
+        let cwd = managedWorkspaceCwd()
+        let surfaceStart = Date(timeIntervalSince1970: 10_000)
+
+        // Prior run that ENDED ~30s before the new surface started.
+        let quickPrior = SessionData(
+            sessionId: "quick-prior-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/quick-prior.jsonl",
+            startedAt: surfaceStart.addingTimeInterval(-90),
+            lastActivity: surfaceStart.addingTimeInterval(-30), // 30s before — within old 120s window
+            status: .completed,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        XCTAssertNil(
+            InternalSessionIdentity.correlatedCliSession(
+                forWorkspaceCwd: cwd, among: [quickPrior], surfaceStartedAt: surfaceStart
+            ),
+            "A CLI that last-activity'd before the surface started is a prior run — even a 30s-old one — and must not be adopted."
+        )
+
+        // Sanity: a CLI active just after the surface (its own) is still adopted,
+        // and the small skew tolerance (a few seconds) is honored.
+        let ownWithinSkew = SessionData(
+            sessionId: "own-skew-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/own-skew.jsonl",
+            startedAt: surfaceStart.addingTimeInterval(-2),
+            lastActivity: surfaceStart.addingTimeInterval(-2), // within 5s skew tolerance
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        XCTAssertEqual(
+            InternalSessionIdentity.correlatedCliSession(
+                forWorkspaceCwd: cwd, among: [quickPrior, ownWithinSkew], surfaceStartedAt: surfaceStart
+            )?.sessionId,
+            ownWithinSkew.sessionId,
+            "A CLI within the small spawn-skew tolerance is this surface's own and must be adopted over the quick-rerun prior."
+        )
+    }
+
+    /// Observability invariant preserved: a surface DOES still adopt its own
+    /// `completed` CLI (the prior PR's behavior) — the guard only rejects CLIs
+    /// that predate the surface, not historical-but-own ones.
+    func testCorrelation_stillAdoptsOwnCompletedCli() {
+        let cwd = managedWorkspaceCwd()
+        let surfaceStart = Date(timeIntervalSince1970: 10_000)
+        let ownCompleted = SessionData(
+            sessionId: "own-done-\(UUID().uuidString)", project: cwd, cwd: cwd,
+            transcriptPath: "/tmp/own-done.jsonl",
+            startedAt: surfaceStart.addingTimeInterval(3),
+            lastActivity: surfaceStart.addingTimeInterval(40),
+            status: .completed, // own, finished — still adopted for observability
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        let resolved = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: cwd, among: [ownCompleted], surfaceStartedAt: surfaceStart
+        )
+        XCTAssertEqual(resolved?.sessionId, ownCompleted.sessionId,
+                       "A surface must still adopt its OWN completed CLI (observability preserved).")
+    }
+
+    /// End-to-end via the run-state mirror: a live freshly-dispatched surface in
+    /// a workspace whose ONLY CLI is an older dead prior-run keeps runState
+    /// `.running`, not `.failed`. Pre-fix, the surface adopted the dead CLI's
+    /// status (→ dead → `.failed`).
+    func testDispatchedSurfaceKeepsRunningDespiteOlderDeadCli() throws {
+        let cwd = managedWorkspaceCwd()
+        let store = SessionStore.shared
+        let surfaceStart = Date()
+
+        // Older dead prior-run CLI (reused workspace).
+        let deadCliId = "dead-\(UUID().uuidString)"
+        let deadCli = SessionData(
+            sessionId: deadCliId, project: "prd-e2e", cwd: cwd,
+            transcriptPath: "/tmp/dead-prior-\(UUID().uuidString).jsonl",
+            startedAt: surfaceStart.addingTimeInterval(-3_600), // an hour earlier
+            lastActivity: surfaceStart.addingTimeInterval(-3_000),
+            status: .dead,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+
+        // Freshly-dispatched live surface, started now.
+        let surfaceId = "claude-ghostty-\(UUID().uuidString)"
+        let surfaceData = SessionData(
+            sessionId: surfaceId, project: cwd, cwd: cwd, transcriptPath: nil,
+            startedAt: surfaceStart, lastActivity: surfaceStart,
+            status: .active,
+            terminalInfo: PluginTerminalInfo(
+                termProgram: "meee2-ghostty-surface", termBundleId: "meee2-ghostty-surface"
+            )
+        )
+        store.create(deadCli)
+        store.create(surfaceData)
+        defer { store.delete(deadCliId); store.delete(surfaceId) }
+
+        let surfaceDTO = BoardDTOBuilder.internalSessionDTO(
+            surfaceSnapshot(sessionId: surfaceId, surfaceId: surfaceId, cwd: cwd, createdAt: surfaceStart)
+        )
+
+        // Temporal guard rejects the older dead CLI → no candidate.
+        let cli = InternalSessionIdentity.correlatedCliSession(
+            forWorkspaceCwd: surfaceDTO.project,
+            among: store.listAll(),
+            surfaceStartedAt: parseISODateForTest(surfaceDTO.startedAt)
+        )
+        XCTAssertNil(cli, "fresh surface must not correlate to an older dead prior-run CLI")
+
+        // Run-state mirror sees the surface's OWN (running) status, not failed.
+        let status = BoardAPI.effectiveSessionStatus(for: surfaceDTO)
+        let runState = PlannerSessionRunStateBridge.runState(for: status)
+        XCTAssertNotEqual(runState, .failed,
+                          "a just-dispatched live surface must not be marked failed by a stale CLI")
+        XCTAssertEqual(runState, .running,
+                       "the live surface keeps running until its OWN CLI starts writing a transcript")
+    }
+
+    /// Mirror of BoardAPI.parseISODate (private there) for the test.
+    private func parseISODateForTest(_ raw: String?) -> Date? {
+        guard let raw, !raw.isEmpty else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: raw) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: raw)
     }
 }
