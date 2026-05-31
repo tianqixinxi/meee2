@@ -65,8 +65,10 @@ import {
   fetchMeee2AgentRuntimeStatus,
   fetchReadiness,
   fetchUserProfile,
+  importClaudeWorkflow,
   installMeee2AgentRuntime,
   repairReadiness,
+  uploadClaudeWorkflow,
   updateCanvas,
   type UserProfile,
 } from './api'
@@ -730,6 +732,23 @@ export default function App() {
       return
     }
 
+    if (target.kind === 'planner-artifact') {
+      window.setTimeout(() => {
+        requestPlannerNodeSelection({
+          canvasId: target.canvasId,
+          nodeId: target.nodeId,
+          artifactId: target.artifactId,
+          guide: target.guide?.enabled ?? true,
+          source: target.source,
+          title: target.guide?.title ?? 'Opened artifact',
+          body: target.guide?.body,
+          durationMs: target.guide?.durationMs,
+          openInspector: true,
+        })
+      }, 50)
+      return
+    }
+
     window.setTimeout(() => {
       requestPlannerNodeSelection({
         canvasId: target.canvasId,
@@ -939,6 +958,30 @@ export default function App() {
     [applyCanvasList, handleSetActiveCanvas],
   )
 
+  const handleImportClaudeWorkflow = useCallback(
+    (workflowId: string, name: string, scope: CanvasScope) => {
+      return importClaudeWorkflow(workflowId, { name, scope }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
+
+  const handleUploadClaudeWorkflow = useCallback(
+    (filename: string, source: string, name: string, scope: CanvasScope) => {
+      return uploadClaudeWorkflow({ filename, source, name, scope }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
+
   const handleRenameCanvas = useCallback((canvasId: string, name: string) => {
     return updateCanvas(canvasId, { name })
       .then((list) => {
@@ -1104,6 +1147,8 @@ export default function App() {
               onOpenCanvas={handleSetActiveCanvas}
               onCreateTemplate={handleCreateTemplate}
               onApplyTemplate={handleApplyTemplate}
+              onImportClaudeWorkflow={handleImportClaudeWorkflow}
+              onUploadClaudeWorkflow={handleUploadClaudeWorkflow}
             />
           ) : workspaceMode === 'sessions' ? (
             <NativeSessionsWorkspaceHost

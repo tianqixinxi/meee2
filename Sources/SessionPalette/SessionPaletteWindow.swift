@@ -1,8 +1,26 @@
 import Cocoa
 import Combine
+import Meee2PluginKit
 import SwiftUI
 
-/// Session Palette 窗口 —— 轻量无边框窗口，包含搜索框和结果列表
+private enum SessionPaletteStyle {
+    static let windowRadius: CGFloat = 26
+    static let searchRadius: CGFloat = 18
+    static let rowRadius: CGFloat = 16
+    static let chipRadius: CGFloat = 14
+    static let statusRadius: CGFloat = 8
+
+    static let background = Color(red: 0.149, green: 0.149, blue: 0.141)
+    static let paper = Color(red: 0.173, green: 0.169, blue: 0.161)
+    static let surface = Color(red: 0.188, green: 0.188, blue: 0.180)
+    static let surfaceRaised = Color(red: 0.227, green: 0.227, blue: 0.220)
+    static let accent = Color(red: 0.800, green: 0.471, blue: 0.361)
+    static let text = Color(red: 0.961, green: 0.957, blue: 0.937)
+    static let textDim = Color(red: 0.659, green: 0.647, blue: 0.608)
+    static let border = Color(red: 0.290, green: 0.286, blue: 0.271)
+}
+
+/// Quick Open 窗口 —— 轻量无边框窗口，包含搜索框和结果列表
 public class SessionPaletteWindow: NSWindow {
     public var onDidHide: (() -> Void)?
 
@@ -18,6 +36,10 @@ public class SessionPaletteWindow: NSWindow {
 
         let hostingView = NSHostingView(rootView: SessionPaletteRootView(manager: .shared))
         hostingView.frame = NSRect(x: 0, y: 0, width: 680, height: 420)
+        hostingView.wantsLayer = true
+        hostingView.layer?.cornerRadius = SessionPaletteStyle.windowRadius
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
         contentView = hostingView
     }
 
@@ -26,7 +48,7 @@ public class SessionPaletteWindow: NSWindow {
         alphaValue = 0.97
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
-        backgroundColor = NSColor.windowBackgroundColor
+        backgroundColor = .clear
 
         collectionBehavior = [.transient, .fullScreenAuxiliary]
         level = .floating
@@ -45,6 +67,16 @@ public class SessionPaletteWindow: NSWindow {
         SessionPaletteManager.shared.hide()
     }
 
+    public override func resignKey() {
+        super.resignKey()
+        guard isVisible else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isVisible, !self.isKeyWindow else { return }
+            self.orderOut(nil)
+        }
+    }
+
     public override func orderOut(_ sender: Any?) {
         super.orderOut(sender)
         onDidHide?()
@@ -58,19 +90,18 @@ private struct SessionPaletteRootView: View {
     @FocusState private var searchFocused: Bool
     @State private var query = ""
     @State private var selectedIndex = 0
-    @State private var statusFilter: SessionPaletteSearchEngine.StatusFilter = .all
-    @State private var pluginFilter: String?
-    @State private var sortBy: SessionPaletteSearchEngine.SortBy = .lastActivity
+    @State private var domainFilter: SessionPaletteSearchEngine.DomainFilter = .all
     @State private var refreshTick = 0
     private let refreshTimer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        let entries = currentEntries()
-        let plugins = currentPlugins()
+        let data = currentSearchData()
+        let entries = currentEntries(data: data)
+        let counts = currentCounts(data: data)
         let safeSelectedIndex = clampedSelectedIndex(for: entries)
         VStack(spacing: 0) {
             header
-            filterBar(plugins: plugins)
+            filterBar(counts: counts)
             Divider().opacity(0.25)
             if entries.isEmpty {
                 emptyState
@@ -102,16 +133,18 @@ private struct SessionPaletteRootView: View {
         }
         .frame(width: 680, height: 420)
         .background(SessionPaletteBackground())
-        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: SessionPaletteStyle.windowRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: SessionPaletteStyle.windowRadius, style: .continuous)
+                .stroke(SessionPaletteStyle.border.opacity(0.92), lineWidth: 1)
+        )
         .onAppear {
             searchFocused = true
             selectedIndex = 0
         }
         .onReceive(refreshTimer) { _ in refreshTick += 1 }
         .onChange(of: query) { _ in selectedIndex = 0 }
-        .onChange(of: statusFilter) { _ in selectedIndex = 0 }
-        .onChange(of: pluginFilter ?? "") { _ in selectedIndex = 0 }
-        .onChange(of: sortBy) { _ in selectedIndex = 0 }
+        .onChange(of: domainFilter) { _ in selectedIndex = 0 }
         .onMoveCommand { direction in
             guard !entries.isEmpty else { return }
             switch direction {
@@ -142,12 +175,12 @@ private struct SessionPaletteRootView: View {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search sessions, project, status, tool, message", text: $query)
+                TextField("Meee2 search sessions, canvases, artifacts", text: $query)
                     .textFieldStyle(.plain)
                     .focused($searchFocused)
                     .font(.system(size: 17, weight: .medium))
                     .onSubmit {
-                        let entries = currentEntries()
+                        let entries = currentEntries(data: currentSearchData())
                         let index = clampedSelectedIndex(for: entries)
                         if entries.indices.contains(index) {
                             select(entries[index])
@@ -165,62 +198,32 @@ private struct SessionPaletteRootView: View {
             }
             .padding(.horizontal, 14)
             .frame(height: 42)
-            .background(Color.white.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .background(SessionPaletteStyle.surface.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: SessionPaletteStyle.searchRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: SessionPaletteStyle.searchRadius, style: .continuous)
+                    .stroke(SessionPaletteStyle.border.opacity(0.9), lineWidth: 1)
+            )
 
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Session Palette")
+                    Text("Quick Open")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Search live sessions, then open the right terminal or Board detail")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(SessionPaletteStyle.text)
                 }
                 Spacer()
-                Button {
-                    manager.hide()
-                } label: {
-                    Image(systemName: "xmark")
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
         }
         .padding(14)
     }
 
-    private func filterBar(plugins: [(id: String, displayName: String, count: Int)]) -> some View {
+    private func filterBar(counts: [SessionPaletteSearchEngine.DomainFilter: Int]) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                FilterChip(title: "All", count: nil, active: statusFilter == .all && pluginFilter == nil) {
-                    statusFilter = .all
-                    pluginFilter = nil
-                }
-                ForEach([SessionPaletteSearchEngine.StatusFilter.active, .thinking, .tooling, .waitingForUser, .permissionRequired], id: \.self) { status in
-                    FilterChip(title: statusLabel(status), count: nil, active: statusFilter == status) {
-                        statusFilter = status
+                ForEach(SessionPaletteSearchEngine.DomainFilter.allCases, id: \.self) { domain in
+                    FilterChip(title: domainLabel(domain), count: counts[domain], active: domainFilter == domain) {
+                        domainFilter = domain
                     }
-                }
-                Divider()
-                    .frame(height: 18)
-                    .opacity(0.35)
-                ForEach(plugins, id: \.id) { plugin in
-                    FilterChip(title: plugin.displayName, count: plugin.count, active: pluginFilter == plugin.id) {
-                        pluginFilter = plugin.id
-                    }
-                }
-                Divider()
-                    .frame(height: 18)
-                    .opacity(0.35)
-                SortChip(title: "Recent", active: sortBy == .lastActivity) {
-                    sortBy = .lastActivity
-                }
-                SortChip(title: "Started", active: sortBy == .startedAt) {
-                    sortBy = .startedAt
-                }
-                SortChip(title: "Project", active: sortBy == .project) {
-                    sortBy = .project
                 }
             }
             .padding(.horizontal, 14)
@@ -233,9 +236,9 @@ private struct SessionPaletteRootView: View {
             Image(systemName: "terminal")
                 .font(.system(size: 28))
                 .foregroundStyle(.secondary)
-            Text("No matching live sessions")
+            Text("No matching items")
                 .font(.system(size: 14, weight: .semibold))
-            Text(hasActiveFilters ? "Clear filters or search another project." : "Start Claude or Codex and it will appear here.")
+            Text(hasActiveFilters ? "Clear filters or search another term." : "Sessions, canvases, and artifacts will appear here.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             if hasActiveFilters {
@@ -252,28 +255,55 @@ private struct SessionPaletteRootView: View {
 
     private func footer(count: Int) -> some View {
         HStack {
-            Text("\(count) live session\(count == 1 ? "" : "s")")
+            Text("\(count) result\(count == 1 ? "" : "s") · sorted by updated")
             Spacer()
             Text("↑↓ select · Return open · Esc close")
         }
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
+        .foregroundStyle(SessionPaletteStyle.textDim)
         .padding(.horizontal, 14)
         .frame(height: 34)
-        .background(Color.black.opacity(0.16))
+        .background(SessionPaletteStyle.paper.opacity(0.9))
     }
 
-    private func currentEntries() -> [SessionPaletteEntry] {
+    private struct SearchData {
+        var sessions: [PluginSession]
+        var storeSessions: [SessionData]
+        var internalSurfaces: [TerminalSessionSnapshot]
+        var canvases: [BoardLayoutStore.Canvas]
+        var artifacts: [PlannerArtifact]
+    }
+
+    private func currentSearchData() -> SearchData {
         _ = refreshTick
-        let engine = manager.searchEngine
-        engine.query = query
-        engine.statusFilter = statusFilter
-        engine.pluginFilter = pluginFilter
-        engine.sortBy = sortBy
-        let entries = engine.search(
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        let artifacts = snapshot.canvases.flatMap { canvas -> [PlannerArtifact] in
+            (try? PlannerBoardBridge.canvasState(
+                for: canvas.id,
+                snapshot: snapshot,
+                actorUserId: PlannerPermission.currentActorId()
+            ).artifacts) ?? []
+        }
+        return SearchData(
             sessions: pluginManager.sessions,
             storeSessions: sessionStore.sessions,
-            internalSurfaces: TerminalSessionBackendRegistry.shared.listSnapshots()
+            internalSurfaces: TerminalSessionBackendRegistry.shared.listSnapshots(),
+            canvases: snapshot.canvases,
+            artifacts: artifacts
+        )
+    }
+
+    private func currentEntries(data: SearchData) -> [SessionPaletteEntry] {
+        let engine = manager.searchEngine
+        engine.query = query
+        engine.domainFilter = domainFilter
+        engine.sortBy = query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .lastActivity : .relevance
+        let entries = engine.search(
+            sessions: data.sessions,
+            storeSessions: data.storeSessions,
+            internalSurfaces: data.internalSurfaces,
+            canvases: data.canvases,
+            artifacts: data.artifacts
         )
         if selectedIndex >= entries.count {
             DispatchQueue.main.async {
@@ -283,24 +313,24 @@ private struct SessionPaletteRootView: View {
         return entries
     }
 
-    private func currentPlugins() -> [(id: String, displayName: String, count: Int)] {
-        _ = refreshTick
-        return manager.searchEngine.distinctPlugins(
-            sessions: pluginManager.sessions,
-            internalSurfaces: TerminalSessionBackendRegistry.shared.listSnapshots()
+    private func currentCounts(data: SearchData) -> [SessionPaletteSearchEngine.DomainFilter: Int] {
+        manager.searchEngine.counts(
+            sessions: data.sessions,
+            storeSessions: data.storeSessions,
+            internalSurfaces: data.internalSurfaces,
+            canvases: data.canvases,
+            artifacts: data.artifacts
         )
     }
 
     private var hasActiveFilters: Bool {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || statusFilter != .all
-            || pluginFilter != nil
+            || domainFilter != .all
     }
 
     private func clearFilters() {
         query = ""
-        statusFilter = .all
-        pluginFilter = nil
+        domainFilter = .all
         selectedIndex = 0
         searchFocused = true
     }
@@ -314,17 +344,12 @@ private struct SessionPaletteRootView: View {
         manager.selectAndJump(to: entry)
     }
 
-    private func statusLabel(_ status: SessionPaletteSearchEngine.StatusFilter) -> String {
-        switch status {
+    private func domainLabel(_ domain: SessionPaletteSearchEngine.DomainFilter) -> String {
+        switch domain {
         case .all: return "All"
-        case .active: return "Active"
-        case .thinking: return "Thinking"
-        case .tooling: return "Tooling"
-        case .idle: return "Idle"
-        case .waitingForUser: return "Waiting"
-        case .permissionRequired: return "Permission"
-        case .completed: return "Done"
-        case .dead: return "Dead"
+        case .sessions: return "Sessions"
+        case .canvases: return "Canvases"
+        case .artifacts: return "Artifacts"
         }
     }
 }
@@ -340,7 +365,7 @@ private struct SessionPaletteRow: View {
                 ZStack {
                     Circle()
                         .fill(statusColor.opacity(0.18))
-                    Image(systemName: entry.terminalKind == "internal" ? "terminal.fill" : "arrow.up.right.square")
+                    Image(systemName: iconName)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(statusColor)
                 }
@@ -356,61 +381,80 @@ private struct SessionPaletteRow: View {
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
                             .background(statusColor.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .clipShape(RoundedRectangle(cornerRadius: SessionPaletteStyle.statusRadius, style: .continuous))
                     }
                     HStack(spacing: 6) {
-                        Text(entry.pluginDisplayName)
-                        Text(entry.project)
-                        if let tool = entry.currentTool, !tool.isEmpty {
-                            Text(tool)
-                        }
-                        if let permission = entry.pendingPermissionTool, !permission.isEmpty {
-                            Text("Permission: \(permission)")
+                        Text(kindLabel)
+                        Text(entry.subtitle)
+                        if let detail = entry.detail, !detail.isEmpty {
+                            Text(detail)
                         }
                     }
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(SessionPaletteStyle.textDim)
                     .lineLimit(1)
-                    if let message = entry.lastMessage, !message.isEmpty {
-                        Text(message)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary.opacity(0.85))
-                            .lineLimit(1)
-                    }
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(relativeTime(entry.lastActivity))
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Text(entry.terminalKind == "internal" ? "Board" : (entry.isTerminalJumpable ? "Jump" : "Open"))
+                        .foregroundStyle(SessionPaletteStyle.textDim)
+                    Text(actionLabel)
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(SessionPaletteStyle.textDim)
                 }
             }
             .contentShape(Rectangle())
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(selected ? Color.white.opacity(0.12) : Color.white.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .background(selected ? SessionPaletteStyle.accent.opacity(0.18) : SessionPaletteStyle.surface.opacity(0.82))
+            .clipShape(RoundedRectangle(cornerRadius: SessionPaletteStyle.rowRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(selected ? Color.white.opacity(0.22) : Color.white.opacity(0.06), lineWidth: 1)
+                RoundedRectangle(cornerRadius: SessionPaletteStyle.rowRadius, style: .continuous)
+                    .stroke(selected ? SessionPaletteStyle.accent.opacity(0.42) : SessionPaletteStyle.border.opacity(0.78), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
         .onTapGesture(count: 2, perform: onOpen)
     }
 
+    private var iconName: String {
+        switch entry.kind {
+        case .session:
+            return entry.terminalKind == "internal" ? "terminal.fill" : "arrow.up.right.square"
+        case .canvas:
+            return "rectangle.3.group"
+        case .artifact:
+            return "doc.text.fill"
+        }
+    }
+
+    private var kindLabel: String {
+        switch entry.kind {
+        case .session: return "Session"
+        case .canvas: return "Canvas"
+        case .artifact: return "Artifact"
+        }
+    }
+
+    private var actionLabel: String {
+        switch entry.kind {
+        case .session:
+            return entry.terminalKind == "external" ? "Jump" : "Board"
+        case .canvas, .artifact:
+            return "Open"
+        }
+    }
+
     private var statusColor: Color {
         switch entry.statusRaw {
-        case .permissionRequired:
+        case .some(.permissionRequired):
             return Color(red: 0.95, green: 0.62, blue: 0.34)
-        case .thinking, .tooling, .active, .compacting:
+        case .some(.thinking), .some(.tooling), .some(.active), .some(.compacting):
             return Color(red: 0.55, green: 0.72, blue: 0.88)
-        case .dead:
+        case .some(.dead):
             return Color(red: 0.84, green: 0.36, blue: 0.32)
-        case .idle, .waitingForUser, .completed:
+        case .some(.idle), .some(.waitingForUser), .some(.completed), .none:
             return Color(red: 0.67, green: 0.65, blue: 0.60)
         }
     }
@@ -436,38 +480,19 @@ private struct FilterChip: View {
                 Text(title)
                 if let count {
                     Text(String(count))
-                        .foregroundStyle(active ? Color.black.opacity(0.7) : .secondary)
+                        .foregroundStyle(active ? SessionPaletteStyle.text : SessionPaletteStyle.textDim)
                 }
             }
             .font(.system(size: 11, weight: .semibold))
             .padding(.horizontal, 8)
             .frame(height: 24)
-            .background(active ? Color.white.opacity(0.82) : Color.white.opacity(0.06))
-            .foregroundStyle(active ? Color.black : Color.white.opacity(0.84))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct SortChip: View {
-    let title: String
-    let active: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: active ? "arrow.down.circle.fill" : "arrow.up.arrow.down")
-                    .font(.system(size: 10, weight: .semibold))
-                Text(title)
-            }
-            .font(.system(size: 11, weight: .semibold))
-            .padding(.horizontal, 8)
-            .frame(height: 24)
-            .background(active ? Color.white.opacity(0.16) : Color.white.opacity(0.06))
-            .foregroundStyle(active ? Color.white : Color.white.opacity(0.72))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .background(active ? SessionPaletteStyle.accent.opacity(0.22) : SessionPaletteStyle.surface.opacity(0.8))
+            .foregroundStyle(active ? SessionPaletteStyle.text : SessionPaletteStyle.text.opacity(0.84))
+            .clipShape(RoundedRectangle(cornerRadius: SessionPaletteStyle.chipRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: SessionPaletteStyle.chipRadius, style: .continuous)
+                    .stroke(active ? SessionPaletteStyle.accent.opacity(0.36) : SessionPaletteStyle.border.opacity(0.65), lineWidth: 1)
+            )
         }
         .buttonStyle(.plain)
     }
@@ -476,8 +501,8 @@ private struct SortChip: View {
 private struct SessionPaletteBackground: View {
     var body: some View {
         ZStack {
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-            Color(red: 0.12, green: 0.12, blue: 0.11).opacity(0.78)
+            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow)
+            SessionPaletteStyle.background.opacity(0.92)
         }
     }
 }

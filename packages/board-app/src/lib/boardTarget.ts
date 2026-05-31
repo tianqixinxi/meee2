@@ -23,6 +23,14 @@ export type BoardOpenTarget =
     guide?: BoardTargetGuide
   }
   | {
+    kind: 'planner-artifact'
+    canvasId: string
+    nodeId: string
+    artifactId: string
+    source?: GuideSource
+    guide?: BoardTargetGuide
+  }
+  | {
     kind: 'planner-proposal'
     canvasId: string
     proposalId: string

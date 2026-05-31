@@ -62,7 +62,6 @@ class ClaudePlugin: SessionPlugin {
 
     private let cwdRemapSkipLogInterval: TimeInterval = 60
     private var cwdRemapSkipLogTimes: [String: Date] = [:]
-    private var pidJsonKeepLogTimes: [String: Date] = [:]
 
     /// Combine 订阅
     private var cancellables = Set<AnyCancellable>()
@@ -961,8 +960,6 @@ class ClaudePlugin: SessionPlugin {
                         NSLog("[ClaudePlugin] Remapped stale session ID via cwd: \(candidate.prefix(8)) (PID.json had \(aiSession.id.prefix(8)))")
                         break
                     }
-                } else {
-                    logKeptPidJson(aiSession)
                 }
             }
 
@@ -1104,17 +1101,6 @@ class ClaudePlugin: SessionPlugin {
         }
         cwdRemapSkipLogTimes[key] = now
         NSLog("[ClaudePlugin] skip cwd-remap to \(candidate.prefix(8)): claimed by another alive PID (pid=\(aiSession.pid), stale=\(aiSession.id.prefix(8)))")
-    }
-
-    private func logKeptPidJson(_ aiSession: AISession) {
-        let key = "\(aiSession.pid)|\(aiSession.id)"
-        let now = Date()
-        if let previous = pidJsonKeepLogTimes[key],
-           now.timeIntervalSince(previous) < cwdRemapSkipLogInterval {
-            return
-        }
-        pidJsonKeepLogTimes[key] = now
-        NSLog("[ClaudePlugin] keep PID.json sid=\(aiSession.id.prefix(8)): transcript exists, not stale")
     }
 
     private func markRuntimeEndedIfProcessGone(_ storeSession: SessionData) {

@@ -44,6 +44,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Board WebUI shell window controller (strong ref, otherwise NSWindowController is released).
     private var boardWindowController: BoardWebWindowController?
+    private var quickOpenMenuItems: [NSMenuItem] = []
 
     /// 状态管理器
     private let statusManager = StatusManager()
@@ -347,10 +348,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
         sessionsItem.target = self
         menu.addItem(sessionsItem)
-        let paletteItem = NSMenuItem(title: "Session Palette", action: #selector(openSessionPalette), keyEquivalent: "p")
-        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+        let paletteItem = NSMenuItem(title: "Quick Open", action: #selector(openSessionPalette), keyEquivalent: "")
         paletteItem.target = self
         menu.addItem(paletteItem)
+        quickOpenMenuItems.append(paletteItem)
+        configureQuickOpenMenuItems()
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -433,6 +435,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSNotification.Name("meee2.openPlannerItem"),
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(quickOpenShortcutChanged),
+            name: QuickOpenShortcut.didChangeNotification,
+            object: nil
+        )
     }
 
     private func updateStatusBarIcon(hasActiveSessions: Bool) {
@@ -477,6 +486,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         SessionPaletteManager.shared.toggle()
     }
 
+    @objc private func quickOpenShortcutChanged() {
+        configureQuickOpenMenuItems()
+    }
+
+    private func configureQuickOpenMenuItems() {
+        let shortcut = QuickOpenShortcut.current
+        for item in quickOpenMenuItems {
+            item.title = "Quick Open"
+            item.keyEquivalent = shortcut.keyEquivalent
+            item.keyEquivalentModifierMask = shortcut.modifierMask
+        }
+    }
+
     @MainActor
     @objc private func openBoardSession(_ notification: Notification) {
         let sessionId = notification.userInfo?["sessionId"] as? String
@@ -493,12 +515,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openPlannerItem(_ notification: Notification) {
         let canvasId = notification.userInfo?["canvasId"] as? String
         let nodeId = notification.userInfo?["nodeId"] as? String
+        let artifactId = notification.userInfo?["artifactId"] as? String
         let deliveryId = notification.userInfo?["deliveryId"] as? String
         let proposalId = notification.userInfo?["proposalId"] as? String
         openBoardMenu()
         boardWindowController?.openPlannerItem(
             canvasId: canvasId,
             nodeId: nodeId,
+            artifactId: artifactId,
             deliveryId: deliveryId,
             proposalId: proposalId
         )
@@ -634,11 +658,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                                             keyEquivalent: "s")
         sessionsItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .option])
         sessionsItem.target = self
-        let paletteItem = fileMenu.addItem(withTitle: "Session Palette",
+        let paletteItem = fileMenu.addItem(withTitle: "Quick Open",
                                            action: #selector(openSessionPalette),
-                                           keyEquivalent: "p")
-        paletteItem.keyEquivalentModifierMask = [.command, .shift]
+                                           keyEquivalent: "")
         paletteItem.target = self
+        quickOpenMenuItems.append(paletteItem)
+        configureQuickOpenMenuItems()
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window",
                          action: #selector(NSWindow.performClose(_:)),
