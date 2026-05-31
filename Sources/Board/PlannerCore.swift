@@ -3761,6 +3761,12 @@ final class PlannerStore {
                 return record
             }
             record.nodes = seedNodes
+            // Seed nodes may declare `dependsOnNodeIds` (e.g. orchestration
+            // templates). Run the same edge↔dependency reconciliation the rest
+            // of the engine uses so those dependencies are persisted/rendered as
+            // dependency EDGES on the applied canvas — without this, a template's
+            // declared flow would have node-level deps but no edges on the graph.
+            reconcileEdgesAndDependencies(&record)
             document.canvases[canvasId] = record
             try save(canvasId: canvasId)
             return record
