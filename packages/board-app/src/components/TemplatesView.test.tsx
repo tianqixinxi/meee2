@@ -6,6 +6,7 @@ import { TemplatesView } from './TemplatesView'
 
 const apiMocks = vi.hoisted(() => ({
   fetchCanvasTemplates: vi.fn(),
+  fetchTemplateCatalog: vi.fn(),
   fetchClaudeWorkflows: vi.fn(),
   fetchTeamMembers: vi.fn(),
 }))
@@ -15,6 +16,7 @@ vi.mock('../api', async () => {
   return {
     ...actual,
     fetchCanvasTemplates: apiMocks.fetchCanvasTemplates,
+    fetchTemplateCatalog: apiMocks.fetchTemplateCatalog,
     fetchClaudeWorkflows: apiMocks.fetchClaudeWorkflows,
     fetchTeamMembers: apiMocks.fetchTeamMembers,
   }
@@ -33,6 +35,10 @@ function renderView(overrides: Partial<ComponentProps<typeof TemplatesView>> = {
     onOpenCanvas: vi.fn(),
     onCreateTemplate: vi.fn(),
     onApplyTemplate: vi.fn(),
+    onSaveCanvasAsTemplate: vi.fn().mockResolvedValue('template-canvas'),
+    onCreateTemplateDraft: vi.fn().mockResolvedValue('draft-canvas'),
+    onReplaceTemplate: vi.fn().mockResolvedValue('template-canvas'),
+    onUpdateTemplateMetadata: vi.fn().mockResolvedValue('template-canvas'),
     onImportClaudeWorkflow: vi.fn().mockResolvedValue('imported-canvas'),
     onUploadClaudeWorkflow: vi.fn().mockResolvedValue('uploaded-canvas'),
     ...overrides,
@@ -49,6 +55,7 @@ describe('TemplatesView Claude Code workflow imports', () => {
   beforeEach(() => {
     apiMocks.fetchTeamMembers.mockResolvedValue({ members: [] })
     apiMocks.fetchCanvasTemplates.mockResolvedValue([])
+    apiMocks.fetchTemplateCatalog.mockResolvedValue({ templates: [], tags: ['engineering', 'release', 'ops'] })
     apiMocks.fetchClaudeWorkflows.mockResolvedValue({
       root: '/Users/kai/.claude/workflows',
       workflows: [],
@@ -127,6 +134,125 @@ describe('TemplatesView Claude Code workflow imports', () => {
         'export default async () => {}',
         'uploaded-flow',
         'personal',
+      )
+    })
+  })
+
+  it('filters catalog templates by source and tags', async () => {
+    apiMocks.fetchTemplateCatalog.mockResolvedValue({
+      tags: ['engineering', 'release', 'ops'],
+      templates: [
+        {
+          id: 'official-release',
+          name: 'Release Checklist',
+          description: 'Ship safely',
+          icon: 'rocket',
+          source: 'official',
+          kind: 'board',
+          defaultCanvasKind: 'board',
+          category: 'official',
+          tags: ['engineering', 'release'],
+          ownerUserId: null,
+          ownerName: 'meee2',
+          version: 1,
+          readOnly: true,
+          canEdit: false,
+          canReplace: false,
+          defaultNodesCount: 3,
+          updatedAt: null,
+          defaultNodes: [],
+        },
+        {
+          id: 'team-ops',
+          name: 'Ops Tower',
+          description: 'Team view',
+          icon: 'users',
+          source: 'team',
+          kind: 'template',
+          defaultCanvasKind: 'board',
+          category: 'team',
+          tags: ['ops'],
+          ownerUserId: 'owner-a',
+          ownerName: 'Alice',
+          version: 2,
+          readOnly: false,
+          canEdit: false,
+          canReplace: false,
+          defaultNodesCount: 1,
+          updatedAt: null,
+          defaultNodes: [],
+        },
+      ],
+    })
+    renderView()
+
+    expect(await screen.findByText('Release Checklist')).toBeInTheDocument()
+    expect(screen.queryByText('Ops Tower')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: /Team/ }))
+    expect(await screen.findByText('Ops Tower')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'ops' }))
+    expect(screen.getByText('Ops Tower')).toBeInTheDocument()
+  })
+
+  it('shows owner-gated team template editing', async () => {
+    apiMocks.fetchTemplateCatalog.mockResolvedValue({
+      tags: ['ops'],
+      templates: [
+        {
+          id: 'team-ops',
+          name: 'Ops Tower',
+          description: 'Team view',
+          icon: 'users',
+          source: 'team',
+          kind: 'template',
+          defaultCanvasKind: 'board',
+          category: 'team',
+          tags: ['ops'],
+          ownerUserId: 'owner-a',
+          ownerName: 'Alice',
+          version: 2,
+          readOnly: false,
+          canEdit: false,
+          canReplace: false,
+          defaultNodesCount: 1,
+          updatedAt: null,
+          defaultNodes: [],
+        },
+      ],
+    })
+    renderView()
+
+    fireEvent.click(await screen.findByRole('tab', { name: /Team/ }))
+    expect(await screen.findByText('Ops Tower')).toBeInTheDocument()
+    expect(screen.getByText('Alice')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit draft' })).toBeDisabled()
+  })
+
+  it('preserves active canvas kind when saving as template', async () => {
+    const onSaveCanvasAsTemplate = vi.fn().mockResolvedValue('template-canvas')
+    renderView({
+      canvases: [{
+        id: 'monitor-canvas',
+        name: 'Monitor',
+        scope: 'personal',
+        kind: 'monitor',
+        isDefault: false,
+        workspacePath: '',
+        ownerUserId: 'local-user',
+        teamId: null,
+      }],
+      activeCanvasId: 'monitor-canvas',
+      onSaveCanvasAsTemplate,
+    })
+
+    await screen.findByText('Claude Code workflows')
+    fireEvent.click(screen.getByRole('button', { name: 'Save current' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(onSaveCanvasAsTemplate).toHaveBeenCalledWith(
+        'monitor-canvas',
+        expect.objectContaining({ defaultCanvasKind: 'monitor' }),
       )
     })
   })

@@ -3767,6 +3767,87 @@ final class PlannerStore {
         }
     }
 
+    func cloneReusableTemplateContent(
+        from sourceCanvasId: String,
+        to targetCanvas: PlanningCanvas
+    ) throws -> CanvasRecord {
+        try withLock {
+            let source = try requireRecord(canvasId: sourceCanvasId)
+            let record = sanitizedReusableRecord(from: source, targetCanvas: targetCanvas)
+            document.canvases[targetCanvas.id] = record
+            try save(canvasId: targetCanvas.id)
+            return record
+        }
+    }
+
+    func replaceReusableTemplateContent(
+        templateCanvasId: String,
+        from sourceCanvasId: String,
+        targetCanvas: PlanningCanvas
+    ) throws -> CanvasRecord {
+        try withLock {
+            let source = try requireRecord(canvasId: sourceCanvasId)
+            let record = sanitizedReusableRecord(from: source, targetCanvas: targetCanvas)
+            document.canvases[templateCanvasId] = record
+            try save(canvasId: templateCanvasId)
+            return record
+        }
+    }
+
+    func reusableNodeCount(canvasId: String) -> Int {
+        withLock {
+            (try? requireRecord(canvasId: canvasId).nodes.count) ?? 0
+        }
+    }
+
+    private func sanitizedReusableRecord(
+        from source: CanvasRecord,
+        targetCanvas: PlanningCanvas
+    ) -> CanvasRecord {
+        let targetCanvasId = targetCanvas.id
+        var canvas = targetCanvas
+        canvas.visibility = source.canvas.visibility
+        canvas.dataSources = source.canvas.dataSources.map { dataSource in
+            var next = dataSource
+            next.canvasId = targetCanvasId
+            return next
+        }
+        canvas.edges = source.canvas.edges.map { edge in
+            var next = edge
+            next.canvasId = targetCanvasId
+            return next
+        }
+        if var monitorSpec = source.canvas.monitorSpec {
+            monitorSpec.canvasId = targetCanvasId
+            canvas.monitorSpec = monitorSpec
+        }
+
+        let nodes = source.nodes.map { node -> PlanningNode in
+            var next = node
+            next.canvasId = targetCanvasId
+            next.sessionId = nil
+            next.chatThreadId = nil
+            next.source = .planner
+            next.workflowRunState = nil
+            next.blockedReason = nil
+            next.outputSubmittedAt = nil
+            next.eventRefs = nil
+            return next
+        }
+
+        return CanvasRecord(
+            canvas: canvas,
+            nodes: nodes,
+            proposals: [],
+            events: [],
+            artifacts: [],
+            artifactVersions: [],
+            runs: [],
+            activeRunId: nil,
+            nodeVersions: []
+        )
+    }
+
     func clearCanvasContent(canvasId: String) throws -> CanvasRecord {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)

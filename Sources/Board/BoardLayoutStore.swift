@@ -103,6 +103,68 @@ public final class BoardLayoutStore {
         }
     }
 
+    public struct TemplateRevision: Codable, Equatable {
+        public var version: Int
+        public var name: String
+        public var description: String
+        public var replacedFromCanvasId: String?
+        public var replacedAt: Date
+        public var replacedBy: String?
+
+        public init(
+            version: Int,
+            name: String,
+            description: String,
+            replacedFromCanvasId: String?,
+            replacedAt: Date,
+            replacedBy: String?
+        ) {
+            self.version = version
+            self.name = name
+            self.description = description
+            self.replacedFromCanvasId = replacedFromCanvasId
+            self.replacedAt = replacedAt
+            self.replacedBy = replacedBy
+        }
+    }
+
+    public struct TemplateMetadata: Codable, Equatable {
+        public var description: String
+        public var icon: String
+        public var tags: [String]
+        public var defaultCanvasKind: CanvasKind
+        public var version: Int
+        public var createdFromCanvasId: String?
+        public var replacedFromCanvasId: String?
+        public var updatedBy: String?
+        public var updatedAt: Date
+        public var revisions: [TemplateRevision]
+
+        public init(
+            description: String = "",
+            icon: String = "sparkles",
+            tags: [String] = [],
+            defaultCanvasKind: CanvasKind = .board,
+            version: Int = 1,
+            createdFromCanvasId: String? = nil,
+            replacedFromCanvasId: String? = nil,
+            updatedBy: String? = nil,
+            updatedAt: Date = Date(),
+            revisions: [TemplateRevision] = []
+        ) {
+            self.description = description
+            self.icon = icon
+            self.tags = tags
+            self.defaultCanvasKind = defaultCanvasKind
+            self.version = max(1, version)
+            self.createdFromCanvasId = createdFromCanvasId
+            self.replacedFromCanvasId = replacedFromCanvasId
+            self.updatedBy = updatedBy
+            self.updatedAt = updatedAt
+            self.revisions = revisions
+        }
+    }
+
     public struct Viewport: Codable, Equatable {
         public let scrollX: Double
         public let scrollY: Double
@@ -185,6 +247,8 @@ public final class BoardLayoutStore {
         public var conflictRemoteVersion: Int?
         public var conflictRemoteState: BoardJSONValue?
         public var conflictRemoteDeleted: Bool?
+        public var templateMetadata: TemplateMetadata?
+        public var draftOfTemplateId: String?
         public var createdAt: Date
         public var updatedAt: Date
 
@@ -207,6 +271,8 @@ public final class BoardLayoutStore {
             conflictRemoteVersion: Int? = nil,
             conflictRemoteState: BoardJSONValue? = nil,
             conflictRemoteDeleted: Bool? = nil,
+            templateMetadata: TemplateMetadata? = nil,
+            draftOfTemplateId: String? = nil,
             createdAt: Date,
             updatedAt: Date
         ) {
@@ -228,6 +294,8 @@ public final class BoardLayoutStore {
             self.conflictRemoteVersion = conflictRemoteVersion
             self.conflictRemoteState = conflictRemoteState
             self.conflictRemoteDeleted = conflictRemoteDeleted
+            self.templateMetadata = templateMetadata
+            self.draftOfTemplateId = draftOfTemplateId
             self.createdAt = createdAt
             self.updatedAt = updatedAt
         }
@@ -800,7 +868,13 @@ public final class BoardLayoutStore {
     }
 
     @discardableResult
-    public func createCanvas(name rawName: String, scope: CanvasScope, kind: CanvasKind = .board) throws -> Snapshot {
+    public func createCanvas(
+        name rawName: String,
+        scope: CanvasScope,
+        kind: CanvasKind = .board,
+        templateMetadata: TemplateMetadata? = nil,
+        draftOfTemplateId: String? = nil
+    ) throws -> Snapshot {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
             throw storeError("canvas name is required")
@@ -828,6 +902,8 @@ public final class BoardLayoutStore {
                 remoteVersion: scope == .team ? 0 : nil,
                 dirtySince: scope == .team ? now : nil,
                 syncStatus: scope == .team ? "pending" : nil,
+                templateMetadata: templateMetadata,
+                draftOfTemplateId: draftOfTemplateId,
                 createdAt: now,
                 updatedAt: now
             )
@@ -843,6 +919,60 @@ public final class BoardLayoutStore {
             SessionEventBus.shared.publish(.boardLayoutChanged)
             return snapshotLocked(store)
         }
+    }
+
+    @discardableResult
+    public func updateTemplateMetadata(
+        id: String,
+        name rawName: String?,
+        scope rawScope: CanvasScope?,
+        metadata rawMetadata: TemplateMetadata
+    ) throws -> Snapshot {
+        try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard let idx = store.canvases.firstIndex(where: { $0.id == id }) else {
+                throw storeError("canvas not found: \(id)")
+            }
+            guard (store.canvases[idx].kind ?? .board) == .template else {
+                throw storeError("canvas is not a template: \(id)")
+            }
+            let context = currentContext()
+            if let rawScope, rawScope == .team && context.teamId.isEmpty {
+                throw storeError("team template requires meee2 Online connection")
+            }
+            let now = Date()
+            if let rawName {
+                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { throw storeError("template name is required") }
+                store.canvases[idx].name = name
+            }
+            if let rawScope, rawScope != store.canvases[idx].scope {
+                store.canvases[idx].scope = rawScope
+                store.canvases[idx].teamId = rawScope == .team ? context.teamId : nil
+                store.canvases[idx].ownerUserId = rawScope == .personal
+                    ? (store.canvases[idx].ownerUserId ?? store.canvases[idx].createdBy ?? context.userId)
+                    : store.canvases[idx].ownerUserId ?? store.canvases[idx].createdBy ?? context.userId
+                store.canvases[idx].remoteId = rawScope == .team ? (store.canvases[idx].remoteId ?? id) : nil
+                store.canvases[idx].remoteVersion = rawScope == .team ? (store.canvases[idx].remoteVersion ?? 0) : nil
+                store.canvases[idx].dirtySince = rawScope == .team ? now : nil
+                store.canvases[idx].syncStatus = rawScope == .team ? "pending" : nil
+            }
+            store.canvases[idx].templateMetadata = rawMetadata
+            store.canvases[idx].updatedAt = now
+            markTeamCanvasDirtyLocked(&store, canvasId: id)
+            try writeToDiskLocked(store)
+            cached = store
+            if store.canvases[idx].scope == .team {
+                Meee2OnlinePusher.shared.refreshActivation()
+            }
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+    }
+
+    public func currentActorContext() -> (userId: String, teamId: String) {
+        currentContext()
     }
 
     @discardableResult
