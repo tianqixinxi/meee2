@@ -137,6 +137,10 @@ export function CanvasToolbar({
     () => buildCanvasListEntries(canvases, canvasQuery, t),
     [canvasQuery, canvases, t],
   )
+  const groupedCanvasEntries = useMemo(
+    () => groupCanvasEntries(filteredCanvasEntries, userProfile?.userId ?? ''),
+    [filteredCanvasEntries, userProfile?.userId],
+  )
   // ui-simplification §1: kind 是隐藏词,switcher 不暴露 board/monitor/template
   // 文案。scope (private/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
   // 只有当列表里同时存在 team 和 personal 时才渲染一个 icon 来快速辨识。
@@ -393,56 +397,68 @@ export function CanvasToolbar({
               </label>
             </div>
             <div className="canvas-toolbar__list">
-              {filteredCanvasEntries.map(({ canvas, depth }) => {
-                const selected = canvas.id === activeCanvas.id
-                return (
-                  <button
-                    key={canvas.id}
-                    type="button"
-                    className={[
-                      'canvas-toolbar__item',
-                      selected ? 'is-selected' : '',
-                      depth > 0 ? 'is-subcanvas' : '',
-                    ].filter(Boolean).join(' ')}
-                    style={{ paddingLeft: 8 + Math.min(depth, 4) * 16 }}
-                    onClick={() => {
-                      closePanels()
-                      setMenuOpen(false)
-                      onActiveCanvasChange(canvas.id)
-                    }}
-                    onMouseEnter={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect()
-                      setHoveredCanvasId(canvas.id)
-                      setHoverAnchor({ top: rect.top, right: rect.right })
-                    }}
-                    onMouseLeave={() => {
-                      setHoveredCanvasId(null)
-                      setHoverAnchor(null)
-                    }}
-                  >
-                    <span className="canvas-toolbar__check">
-                      {selected && <Check size={13} aria-hidden />}
-                    </span>
-                      <span className="canvas-toolbar__item-text">
-                        <span>{displayCanvasName(canvas)}</span>
-                        {canvas.isDefault && (
-                          <span className="canvas-toolbar__default-badge" title={t('canvas.cannotDelete')} aria-label="Default">
-                            Default
-                          </span>
-                        )}
-                        {showScopeIcon && (
-                          <span
-                            className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}
-                            title={visibilityLabel(canvas, t)}
-                            aria-label={visibilityLabel(canvas, t)}
-                          >
-                            {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
-                          </span>
-                        )}
-                      </span>
-                  </button>
-                )
-              })}
+              {groupedCanvasEntries.map((group) => (
+                <div className="canvas-toolbar__group" key={group.id}>
+                  {groupedCanvasEntries.length > 1 && (
+                    <div className="canvas-toolbar__group-label">{group.label}</div>
+                  )}
+                  {group.entries.map(({ canvas, depth }) => {
+                    const selected = canvas.id === activeCanvas.id
+                    const readOnly = isReadOnlyTeamCanvas(canvas, userProfile?.userId ?? '')
+                    return (
+                      <button
+                        key={canvas.id}
+                        type="button"
+                        className={[
+                          'canvas-toolbar__item',
+                          selected ? 'is-selected' : '',
+                          depth > 0 ? 'is-subcanvas' : '',
+                          readOnly ? 'is-readonly' : '',
+                        ].filter(Boolean).join(' ')}
+                        style={{ paddingLeft: 8 + Math.min(depth, 4) * 16 }}
+                        onClick={() => {
+                          closePanels()
+                          setMenuOpen(false)
+                          onActiveCanvasChange(canvas.id)
+                        }}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect()
+                          setHoveredCanvasId(canvas.id)
+                          setHoverAnchor({ top: rect.top, right: rect.right })
+                        }}
+                        onMouseLeave={() => {
+                          setHoveredCanvasId(null)
+                          setHoverAnchor(null)
+                        }}
+                      >
+                        <span className="canvas-toolbar__check">
+                          {selected && <Check size={13} aria-hidden />}
+                        </span>
+                        <span className="canvas-toolbar__item-text">
+                          <span>{displayCanvasName(canvas)}</span>
+                          {canvas.isDefault && (
+                            <span className="canvas-toolbar__default-badge" title={t('canvas.cannotDelete')} aria-label="Default">
+                              Default
+                            </span>
+                          )}
+                          {readOnly && (
+                            <span className="canvas-toolbar__default-badge">Read-only</span>
+                          )}
+                          {showScopeIcon && (
+                            <span
+                              className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}
+                              title={visibilityLabel(canvas, t)}
+                              aria-label={visibilityLabel(canvas, t)}
+                            >
+                              {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ))}
               {filteredCanvasEntries.length === 0 && (
                 <div className="canvas-toolbar__empty">{t('canvas.noMatch')}</div>
               )}
@@ -895,11 +911,36 @@ export function CanvasToolbar({
 }
 
 function visibilityTone(canvas: CanvasInfo): 'private' | 'public' {
-  return canvas.scope === 'team' ? 'public' : 'private'
+  return canvas.visibility === 'public' || canvas.scope === 'team' ? 'public' : 'private'
 }
 
 function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
-  return canvas.scope === 'team' ? t('templates.public') : t('templates.private')
+  return canvas.visibility === 'public' || canvas.scope === 'team' ? t('templates.public') : t('templates.private')
+}
+
+function isReadOnlyTeamCanvas(canvas: CanvasInfo, userId: string): boolean {
+  if (canvas.scope !== 'team') return false
+  if (!userId) return false
+  return Boolean(canvas.ownerUserId && canvas.ownerUserId !== userId)
+}
+
+function groupCanvasEntries(
+  entries: Array<{ canvas: CanvasInfo; depth: number }>,
+  userId: string,
+): Array<{ id: 'my' | 'team'; label: string; entries: Array<{ canvas: CanvasInfo; depth: number }> }> {
+  const myEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
+  const teamEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
+  for (const entry of entries) {
+    if (isReadOnlyTeamCanvas(entry.canvas, userId)) {
+      teamEntries.push(entry)
+    } else {
+      myEntries.push(entry)
+    }
+  }
+  return [
+    { id: 'my' as const, label: 'My Canvases', entries: myEntries },
+    { id: 'team' as const, label: 'Team Canvases', entries: teamEntries },
+  ].filter((group) => group.entries.length > 0)
 }
 
 function displayCanvasName(canvas: CanvasInfo): string {

@@ -36,6 +36,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         var userId: String
         var normalizedSupabaseUrl: String
         var supabaseKey: String
+        var onlineBaseUrl: String
+        var accessToken: String
         var machineId: String
     }
 
@@ -172,8 +174,7 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         let settings = settingsSnapshot()
         return settings.isConnected
             && !settings.teamId.isEmpty
-            && !settings.normalizedSupabaseUrl.isEmpty
-            && !settings.supabaseKey.isEmpty
+            && (!settings.accessToken.isEmpty || (!settings.normalizedSupabaseUrl.isEmpty && !settings.supabaseKey.isEmpty))
     }
 
     private var userId: String { settingsSnapshot().userId }
@@ -208,6 +209,10 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
             supabaseKey: defaults.string(forKey: "meee2SupabaseKey") ?? "",
+            onlineBaseUrl: (defaults.string(forKey: "meee2OnlineBaseUrl") ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+            accessToken: defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
             machineId: Meee2Identity.machineId
         )
         cachedSettings = snapshot
@@ -331,25 +336,22 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private func syncTeamCanvases() {
         let currentTeamId = settingsSnapshot().teamId
         guard shouldStayActive,
-              !currentTeamId.isEmpty,
-              !normalizedSupabaseUrl.isEmpty,
-              !supabaseKey.isEmpty else {
+              !currentTeamId.isEmpty else {
             return
         }
 
         let items = BoardLayoutStore.shared.dirtyTeamCanvasPayloads()
         if !items.isEmpty {
-            rpcDataRequest(
-                name: "meee2_sync_team_canvases",
-                payload: [
-                    "p_team_id": currentTeamId,
-                    "p_user_id": userId,
-                    "p_items": items
-                ]
-            ) { result in
-                switch result {
+            let payload: [String: Any] = ["items": items]
+            if let body = try? JSONSerialization.data(withJSONObject: payload) {
+                switch OnlineProxy.callOnlineAPI(
+                    method: "POST",
+                    path: "/api/v1/team/\(currentTeamId)/canvases/sync",
+                    body: body
+                ) {
                 case .success(let data):
-                    if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let rows = object["results"] as? [[String: Any]] {
                         BoardLayoutStore.shared.markTeamCanvasSyncResults(rows)
                     }
                 case .failure(let error):
@@ -358,26 +360,28 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             }
         }
 
-        rpcDataRequest(
-            name: "meee2_list_team_canvases",
-            payload: [
-                "p_team_id": currentTeamId,
-                "p_user_id": userId,
-                "p_include_deleted": true
-            ]
-        ) { result in
-            switch result {
-            case .success(let data):
-                let canvases = Self.parseRemoteTeamCanvases(data: data, teamId: currentTeamId)
-                BoardLayoutStore.shared.applyRemoteTeamCanvases(canvases)
-            case .failure(let error):
-                MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
-            }
+        switch OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/team/\(currentTeamId)/canvases",
+            query: [URLQueryItem(name: "includeDeleted", value: "true")]
+        ) {
+        case .success(let data):
+            let canvases = Self.parseRemoteTeamCanvases(data: data, teamId: currentTeamId)
+            BoardLayoutStore.shared.applyRemoteTeamCanvases(canvases)
+        case .failure(let error):
+            MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
         }
     }
 
     private static func parseRemoteTeamCanvases(data: Data, teamId: String) -> [BoardLayoutStore.RemoteTeamCanvas] {
-        guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        let decoded = try? JSONSerialization.jsonObject(with: data)
+        let rows: [[String: Any]]
+        if let object = decoded as? [String: Any],
+           let canvases = object["canvases"] as? [[String: Any]] {
+            rows = canvases
+        } else if let array = decoded as? [[String: Any]] {
+            rows = array
+        } else {
             return []
         }
         let formatter = ISO8601DateFormatter()
@@ -395,9 +399,17 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             } else {
                 version = 0
             }
-            let state = row["state"] as? [String: Any] ?? [:]
-            let updatedAt = (row["updated_at"] as? String).flatMap { formatter.date(from: $0) }
-            let deletedAt = (row["deleted_at"] as? String).flatMap { formatter.date(from: $0) }
+            var state = row["state"] as? [String: Any] ?? [:]
+            if state["ownerUserId"] == nil {
+                state["ownerUserId"] = row["ownerUserId"] ?? row["owner_user_id"]
+            }
+            if state["kind"] == nil {
+                state["kind"] = "board"
+            }
+            let updatedAtRaw = (row["updated_at"] as? String) ?? (row["updatedAt"] as? String)
+            let deletedAtRaw = (row["deleted_at"] as? String) ?? (row["deletedAt"] as? String)
+            let updatedAt = updatedAtRaw.flatMap { formatter.date(from: $0) }
+            let deletedAt = deletedAtRaw.flatMap { formatter.date(from: $0) }
             return BoardLayoutStore.RemoteTeamCanvas(
                 id: id,
                 name: name,

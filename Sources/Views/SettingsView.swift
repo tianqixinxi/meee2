@@ -74,6 +74,13 @@ public struct SettingsView: View {
     /// Supabase Key
     @AppStorage("meee2SupabaseKey") private var meee2SupabaseKey: String = ""
 
+    /// meee2 Online API base URL + user-scoped token. Supabase fields above
+    /// remain for backward compatibility while desktop traffic moves to the
+    /// Next.js control plane.
+    @AppStorage("meee2OnlineBaseUrl") private var meee2OnlineBaseUrl: String = ""
+    @AppStorage("meee2OnlineAccessToken") private var meee2OnlineAccessToken: String = ""
+    @AppStorage("meee2OnlineRefreshToken") private var meee2OnlineRefreshToken: String = ""
+
     /// Machine ID (auto-generated)
     private var meee2MachineId: String {
         Meee2Identity.machineId
@@ -399,6 +406,9 @@ public struct SettingsView: View {
                 meee2UserAvatarUrl = userInfo["userAvatarUrl"] as? String ?? ""
                 meee2SupabaseUrl = normalizedMeee2OnlineSupabaseUrl(userInfo["supabaseUrl"] as? String ?? "")
                 meee2SupabaseKey = userInfo["supabaseKey"] as? String ?? ""
+                meee2OnlineBaseUrl = userInfo["onlineBaseUrl"] as? String ?? ""
+                meee2OnlineAccessToken = userInfo["accessToken"] as? String ?? ""
+                meee2OnlineRefreshToken = userInfo["refreshToken"] as? String ?? ""
                 if let teamsData = userInfo["teamsData"] as? Data {
                     meee2TeamsData = teamsData
                 }
@@ -426,6 +436,9 @@ public struct SettingsView: View {
                 meee2UserAvatarUrl = result.user.avatar_url ?? ""
                 meee2SupabaseUrl = normalizedMeee2OnlineSupabaseUrl(result.supabase_url)
                 meee2SupabaseKey = result.supabase_key
+                meee2OnlineBaseUrl = result.online_base_url ?? ""
+                meee2OnlineAccessToken = result.access_token ?? ""
+                meee2OnlineRefreshToken = result.refresh_token ?? ""
                 storeMeee2OnlineTeams(result.teams ?? [result.team])
                 meee2Online = true
                 updateMeee2OnlineSyncActivation()
@@ -468,6 +481,9 @@ public struct SettingsView: View {
         meee2UserAvatarUrl = ""
         meee2SupabaseUrl = ""
         meee2SupabaseKey = ""
+        meee2OnlineBaseUrl = ""
+        meee2OnlineAccessToken = ""
+        meee2OnlineRefreshToken = ""
         meee2TeamsData = Data()
         meee2SessionTeamIdsData = Data()
         meee2EnabledSessionIdsData = Data()
@@ -539,6 +555,9 @@ public struct SettingsView: View {
                 "online": meee2Online,
                 "supabaseUrl": normalizedSupabaseUrl,
                 "supabaseKey": meee2SupabaseKey,
+                "onlineBaseUrl": meee2OnlineBaseUrl,
+                "accessToken": meee2OnlineAccessToken,
+                "refreshToken": meee2OnlineRefreshToken,
                 "teamId": meee2TeamId,
                 "userId": meee2UserId,
                 "userName": meee2UserName,
@@ -1448,6 +1467,9 @@ struct Meee2OnlineConnectResult: Codable {
     let user: Meee2OnlineUser
     let supabase_url: String
     let supabase_key: String
+    let online_base_url: String?
+    let access_token: String?
+    let refresh_token: String?
 }
 
 struct Meee2OnlineTeam: Codable, Identifiable {

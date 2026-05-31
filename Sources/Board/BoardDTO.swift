@@ -330,6 +330,8 @@ struct PlannerGraphStateEnvelope: Encodable {
     let events: [PlannerEvent]
     let artifacts: [PlannerArtifact]
     let edges: [PlannerGraphEdge]
+    let nodeAssignments: [NodeAssignmentDTO]
+    let canEditInternals: Bool
     /// P3.0 widget data — present when any node has a kanban/inbox/matrix
     /// widget with source.inputKind == external. nil otherwise.
     let integrationEntities: [IntegrationEntityDTO]?
@@ -344,6 +346,8 @@ struct PlannerGraphStateEnvelope: Encodable {
         events: [PlannerEvent],
         artifacts: [PlannerArtifact],
         edges: [PlannerGraphEdge],
+        nodeAssignments: [NodeAssignmentDTO] = [],
+        canEditInternals: Bool = true,
         integrationEntities: [IntegrationEntityDTO]? = nil
     ) {
         self.canvas = canvas
@@ -355,8 +359,41 @@ struct PlannerGraphStateEnvelope: Encodable {
         self.events = events
         self.artifacts = artifacts
         self.edges = edges
+        self.nodeAssignments = nodeAssignments
+        self.canEditInternals = canEditInternals
         self.integrationEntities = integrationEntities
     }
+}
+
+struct NodeAssignmentDTO: Encodable {
+    let sourceCanvasId: String
+    let sourceNodeId: String
+    let assigneeUserId: String
+    let subCanvasId: String
+    let subCanvasName: String
+    let frozenIOContract: NodeContractV2?
+    let billingTeamId: String
+    let sessionCountRebound: Int?
+    let assignedAt: String?
+}
+
+struct AssignPlannerNodeResultEnvelope: Encodable {
+    let assignment: NodeAssignmentDTO
+    let visibilityUpgraded: Bool
+    let parentCanvas: RemoteAssignedCanvasDTO?
+    let subCanvas: RemoteAssignedCanvasDTO?
+    let graph: PlannerGraphStateEnvelope
+}
+
+struct RemoteAssignedCanvasDTO: Encodable {
+    let id: String
+    let teamId: String
+    let name: String?
+    let visibility: String?
+    let ownerUserId: String?
+    let parentCanvasId: String?
+    let parentNodeId: String?
+    let frozenIOContract: NodeContractV2?
 }
 struct PlannerProposalEnvelope: Encodable {
     let proposal: PlanProposal?
@@ -398,6 +435,7 @@ struct CanvasInfoDTO: Encodable {
     let id: String
     let name: String
     let scope: String
+    let visibility: String
     let kind: String
     let isDefault: Bool
     let workspacePath: String

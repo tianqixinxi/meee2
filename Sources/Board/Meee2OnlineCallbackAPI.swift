@@ -27,6 +27,9 @@ public struct Meee2OnlineCallbackAPI {
         let userAvatarUrl = decode("user_avatar_url")
         let supabaseUrl = decode("supabase_url")
         let supabaseKey = decode("supabase_key")
+        let onlineBaseUrl = decode("online_base_url")
+        let accessToken = decode("access_token")
+        let refreshToken = decode("refresh_token")
         let teamsJSON = decode("teams")
         let apiUrlParam = decode("api_url")
 
@@ -39,7 +42,7 @@ public struct Meee2OnlineCallbackAPI {
         // MCP-server writes back through /api/v1/* (M1). Persisted only after
         // required-param validation succeeds, so a malformed callback cannot
         // poison meee2ApiUrl with a stray host.
-        Meee2Identity.setApiUrlIfProvided(apiUrlParam)
+        Meee2Identity.setApiUrlIfProvided(apiUrlParam.isEmpty ? onlineBaseUrl : apiUrlParam)
         let teams = parseTeams(
             teamsJSON: teamsJSON,
             fallbackTeamId: teamId,
@@ -57,6 +60,9 @@ public struct Meee2OnlineCallbackAPI {
             userAvatarUrl: userAvatarUrl,
             supabaseUrl: supabaseUrl,
             supabaseKey: supabaseKey,
+            onlineBaseUrl: onlineBaseUrl,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
             teams: teams,
             teamsData: teamsData
         )
@@ -71,7 +77,10 @@ public struct Meee2OnlineCallbackAPI {
                 "userEmail": userEmail,
                 "userAvatarUrl": userAvatarUrl,
                 "supabaseUrl": supabaseUrl,
-                "supabaseKey": supabaseKey
+                "supabaseKey": supabaseKey,
+                "onlineBaseUrl": onlineBaseUrl,
+                "accessToken": accessToken,
+                "refreshToken": refreshToken
             ]
             if let teamsData {
                 userInfo["teamsData"] = teamsData
@@ -98,6 +107,9 @@ public struct Meee2OnlineCallbackAPI {
         userAvatarUrl: String,
         supabaseUrl: String,
         supabaseKey: String,
+        onlineBaseUrl: String,
+        accessToken: String,
+        refreshToken: String,
         teams: [[String: String]],
         teamsData: Data?
     ) -> Bool {
@@ -112,6 +124,9 @@ public struct Meee2OnlineCallbackAPI {
         defaults.set(userAvatarUrl, forKey: "meee2UserAvatarUrl")
         defaults.set(supabaseUrl, forKey: "meee2SupabaseUrl")
         defaults.set(supabaseKey, forKey: "meee2SupabaseKey")
+        defaults.set(onlineBaseUrl, forKey: "meee2OnlineBaseUrl")
+        defaults.set(accessToken, forKey: "meee2OnlineAccessToken")
+        defaults.set(refreshToken, forKey: "meee2OnlineRefreshToken")
         if let teamsData {
             defaults.set(teamsData, forKey: "meee2Teams")
         }
@@ -128,6 +143,9 @@ public struct Meee2OnlineCallbackAPI {
                 "userAvatarUrl": userAvatarUrl,
                 "supabaseUrl": supabaseUrl,
                 "supabaseKey": supabaseKey,
+                "onlineBaseUrl": onlineBaseUrl,
+                "accessToken": accessToken,
+                "refreshToken": refreshToken,
                 "teams": teams,
                 "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"

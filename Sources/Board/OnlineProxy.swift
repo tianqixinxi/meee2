@@ -23,6 +23,8 @@ enum OnlineProxy {
     struct Settings {
         let supabaseUrl: String
         let supabaseKey: String
+        let onlineBaseUrl: String
+        let accessToken: String
         let teamId: String
         let userId: String
     }
@@ -34,12 +36,17 @@ enum OnlineProxy {
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         var supabaseKey = (defaults.string(forKey: "meee2SupabaseKey") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        var onlineBaseUrl = (defaults.string(forKey: "meee2OnlineBaseUrl") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var accessToken = (defaults.string(forKey: "meee2OnlineAccessToken") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         var teamId = (defaults.string(forKey: "meee2TeamId") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var userId = (defaults.string(forKey: "meee2UserId") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if supabaseUrl.isEmpty || supabaseKey.isEmpty || teamId.isEmpty || userId.isEmpty {
+        if supabaseUrl.isEmpty || supabaseKey.isEmpty || onlineBaseUrl.isEmpty || accessToken.isEmpty || teamId.isEmpty || userId.isEmpty {
             let file = URL(fileURLWithPath: NSHomeDirectory())
                 .appendingPathComponent(".meee2/settings.json")
             if let data = try? Data(contentsOf: file),
@@ -52,6 +59,14 @@ enum OnlineProxy {
                 if supabaseKey.isEmpty,
                    let v = (meee2["supabaseKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
                     supabaseKey = v
+                }
+                if onlineBaseUrl.isEmpty,
+                   let v = (meee2["onlineBaseUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    onlineBaseUrl = v.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                }
+                if accessToken.isEmpty,
+                   let v = (meee2["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    accessToken = v
                 }
                 if teamId.isEmpty,
                    let v = (meee2["teamId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -67,6 +82,8 @@ enum OnlineProxy {
         return Settings(
             supabaseUrl: supabaseUrl,
             supabaseKey: supabaseKey,
+            onlineBaseUrl: onlineBaseUrl,
+            accessToken: accessToken,
             teamId: teamId,
             userId: userId
         )
@@ -109,7 +126,7 @@ enum OnlineProxy {
         settings: Settings? = nil
     ) -> Result<Data, ProxyError> {
         let s = settings ?? loadSettings()
-        let baseURL = Meee2OnlineConfig.appBaseURL
+        let baseURL = URL(string: s.onlineBaseUrl) ?? Meee2OnlineConfig.appBaseURL
         var components = URLComponents(
             url: baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
             resolvingAgainstBaseURL: false
@@ -121,9 +138,12 @@ enum OnlineProxy {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Pass the anon key in both headers — the Next.js route uses it via
-        // the same Supabase client.
-        if !s.supabaseKey.isEmpty {
+        // Prefer the user-scoped meee2-online token. Keep anon-key headers as
+        // compatibility fallback for older local installs until connect is
+        // refreshed.
+        if !s.accessToken.isEmpty {
+            request.setValue("Bearer \(s.accessToken)", forHTTPHeaderField: "Authorization")
+        } else if !s.supabaseKey.isEmpty {
             request.setValue("Bearer \(s.supabaseKey)", forHTTPHeaderField: "Authorization")
             request.setValue(s.supabaseKey, forHTTPHeaderField: "apikey")
         }

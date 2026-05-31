@@ -3448,6 +3448,14 @@ textarea {
   white-space: nowrap;
 }
 
+.team-member-card__subtle {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .team-member-card__meta {
   display: grid;
   justify-items: end;
@@ -5820,6 +5828,20 @@ html.board-empty-omni .canvas-toolbar__panel {
   overflow: auto;
 }
 
+.canvas-toolbar__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canvas-toolbar__group-label {
+  padding: 8px 8px 4px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
 .canvas-toolbar__item {
   width: 100%;
   display: grid;
@@ -5833,6 +5855,10 @@ html.board-empty-omni .canvas-toolbar__panel {
   padding: 7px 8px;
   text-align: left;
   cursor: pointer;
+}
+
+.canvas-toolbar__item.is-readonly {
+  color: color-mix(in srgb, var(--text-dim) 82%, transparent);
 }
 
 .canvas-toolbar__item:hover,

@@ -819,7 +819,7 @@ public final class BoardLayoutStore {
                 name: name,
                 scope: scope,
                 kind: kind,
-                ownerUserId: scope == .personal ? context.userId : nil,
+                ownerUserId: context.userId,
                 teamId: scope == .team ? context.teamId : nil,
                 isDefault: false,
                 workspaceFolderName: nil,

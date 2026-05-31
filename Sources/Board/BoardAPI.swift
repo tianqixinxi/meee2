@@ -516,7 +516,78 @@ enum BoardAPI {
             activities: state.activities,
             events: state.events,
             artifacts: state.artifacts,
-            edges: state.edges
+            edges: state.edges,
+            nodeAssignments: nodeAssignments(for: state),
+            canEditInternals: state.access.role == .owner
+        )
+    }
+
+    private static func nodeAssignments(for state: PlannerGraphState) -> [NodeAssignmentDTO] {
+        let teamId = UserDefaults.standard.string(forKey: "meee2TeamId") ?? ""
+        return state.nodes.compactMap { node in
+            guard let subCanvasId = node.subCanvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !subCanvasId.isEmpty else {
+                return nil
+            }
+            let contract = NodeContractV2.derive(from: node).contract
+            return NodeAssignmentDTO(
+                sourceCanvasId: state.canvas.id,
+                sourceNodeId: node.id,
+                assigneeUserId: node.doerId,
+                subCanvasId: subCanvasId,
+                subCanvasName: subCanvasId,
+                frozenIOContract: contract,
+                billingTeamId: teamId,
+                sessionCountRebound: nil,
+                assignedAt: nil
+            )
+        }
+    }
+
+    private static func jsonObject<T: Encodable>(_ value: T) -> Any? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(value) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func urlPath(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? value
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        if let string = value as? String, !string.isEmpty { return string }
+        return nil
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let number = value as? NSNumber { return number.intValue }
+        if let string = value as? String { return Int(string) }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool? {
+        if let bool = value as? Bool { return bool }
+        if let number = value as? NSNumber { return number.boolValue }
+        if let string = value as? String {
+            if string == "true" { return true }
+            if string == "false" { return false }
+        }
+        return nil
+    }
+
+    private static func remoteCanvasDTO(_ raw: [String: Any]?) -> RemoteAssignedCanvasDTO? {
+        guard let raw, let id = stringValue(raw["id"]) else { return nil }
+        return RemoteAssignedCanvasDTO(
+            id: id,
+            teamId: stringValue(raw["teamId"]) ?? "",
+            name: stringValue(raw["name"]),
+            visibility: stringValue(raw["visibility"]),
+            ownerUserId: stringValue(raw["ownerUserId"]),
+            parentCanvasId: stringValue(raw["parentCanvasId"]),
+            parentNodeId: stringValue(raw["parentNodeId"]),
+            frozenIOContract: nil
         )
     }
 
@@ -2608,24 +2679,21 @@ enum BoardAPI {
 
     // MARK: - Wave 1-3 integration · OnlineProxy routes
     //
-    // These three proxy the desktop board-app's UI-2 and UI-6 calls to
+    // These proxy the desktop board-app's UI-2 and UI-6 calls to
     // meee2-online. They share `OnlineProxy.loadSettings()` for the
-    // supabase URL + anon key + teamId/userId stored in
-    // `~/.meee2/settings.json` (also mirrored to UserDefaults).
+    // online API token + teamId/userId stored in `~/.meee2/settings.json`
+    // (also mirrored to UserDefaults).
     //
     // 1) POST /api/planner/canvases/:id/nodes/:nodeId/assign
-    //      → Supabase RPC `meee2_assign_node`
+    //      → meee2-online API `.../assign`
     // 2) GET  /api/planner/owned-canvases
-    //      → Supabase RPC `meee2_list_owned_canvases`
+    //      → meee2-online API `.../owned-canvases`
     // 3) GET  /api/cloud/artifact-versions/recent
     //      → meee2-online `/api/v1/artifact-versions?…`
 
-    /// UI-2 · F1.2 — proxy `assignPlannerNode` from the board-app to the
-    /// `meee2_assign_node` RPC. The web client posts a JSON body with
-    /// `assigneeUserId`, optional `subCanvasName`, and `acceptPrivateUpgrade`;
-    /// we forward those as RPC params and stream the JSON response through.
-    /// Response shape matches `AssignPlannerNodeResult` in the board-app
-    /// `types.ts`.
+    /// UI-2 · F1.2 — assign a node through meee2-online's user-scoped API.
+    /// The local graph is updated only after the online transaction succeeds
+    /// so the desktop stays aligned with the server's single-owner contract.
     static func proxyAssignPlannerNode(_ req: HttpRequest) -> HttpResponse {
         guard let canvasId = req.params[":id"], !canvasId.isEmpty,
               let nodeId = req.params[":nodeId"], !nodeId.isEmpty else {
@@ -2645,48 +2713,120 @@ enum BoardAPI {
         guard let assigneeUserId = body.assigneeUserId, !assigneeUserId.isEmpty else {
             return errorResponse("bad_request", "assigneeUserId is required", status: 400)
         }
+
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+
+        let state: PlannerGraphState
+        let node: PlanningNode
+        do {
+            state = try PlannerBoardBridge.graphState(
+                for: canvasId,
+                snapshot: snapshot,
+                actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+            )
+            guard let found = state.nodes.first(where: { $0.id == nodeId }) else {
+                return errorResponse("not_found", "node not found", status: 404)
+            }
+            node = found
+            guard state.access.role == .owner else {
+                return errorResponse("forbidden", "only the canvas owner can assign nodes", status: 403)
+            }
+        } catch let err as PlannerCoreError {
+            return mapPlannerCoreError(err)
+        } catch {
+            return errorResponse("planner_error", error.localizedDescription, status: 400)
+        }
+
+        let frozenContract = NodeContractV2.derive(from: node).contract
+        let frozenContractObject = jsonObject(frozenContract) ?? [:]
         var payload: [String: Any] = [
-            "p_team_id": settings.teamId,
-            "p_canvas_id": canvasId,
-            "p_node_id": nodeId,
-            "p_assignee_user_id": assigneeUserId,
-            "p_accept_private_upgrade": body.acceptPrivateUpgrade ?? false
+            "assigneeUserId": assigneeUserId,
+            "acceptPrivateUpgrade": body.acceptPrivateUpgrade ?? false,
+            "frozenIOContract": frozenContractObject
         ]
         if let name = body.subCanvasName, !name.isEmpty {
-            payload["p_sub_canvas_name"] = name
+            payload["subCanvasName"] = name
         }
-        switch OnlineProxy.callRPC(name: "meee2_assign_node", payload: payload, settings: settings) {
+        let remoteCanvasId = boardCanvas.remoteId ?? canvasId
+        let path = "/api/v1/team/\(urlPath(settings.teamId))/planner/canvases/\(urlPath(remoteCanvasId))/nodes/\(urlPath(nodeId))/assign"
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else {
+            return errorResponse("bad_request", "failed to encode assign payload", status: 400)
+        }
+        switch OnlineProxy.callOnlineAPI(method: "POST", path: path, body: bodyData, settings: settings) {
         case .success(let data):
-            return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
-                try? writer.write(data)
+            guard let remote = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let assignmentObject = remote["assignment"] as? [String: Any],
+                  let subCanvasId = stringValue(assignmentObject["subCanvasId"]) else {
+                return errorResponse("bad_gateway", "meee2-online assign response missing assignment", status: 502)
+            }
+            do {
+                if state.canvas.visibility == .private {
+                    _ = try PlannerBoardBridge.setCanvasVisibility(
+                        .public,
+                        for: canvasId,
+                        snapshot: BoardLayoutStore.shared.snapshot(),
+                        actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+                    )
+                }
+                let proposal = try PlannerBoardBridge.createSubCanvasProposal(
+                    nodeId: nodeId,
+                    subCanvasId: subCanvasId,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+                )
+                _ = try PlannerBoardBridge.applyProposal(
+                    proposalId: proposal.id,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+                )
+                let graph = try PlannerBoardBridge.graphState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+                )
+                BoardServer.shared.broadcastStateChanged()
+                let assignment = NodeAssignmentDTO(
+                    sourceCanvasId: canvasId,
+                    sourceNodeId: nodeId,
+                    assigneeUserId: assigneeUserId,
+                    subCanvasId: subCanvasId,
+                    subCanvasName: stringValue(assignmentObject["subCanvasName"]) ?? subCanvasId,
+                    frozenIOContract: frozenContract,
+                    billingTeamId: settings.teamId,
+                    sessionCountRebound: intValue(assignmentObject["sessionCountRebound"]),
+                    assignedAt: stringValue(assignmentObject["assignedAt"])
+                )
+                return jsonResponse(AssignPlannerNodeResultEnvelope(
+                    assignment: assignment,
+                    visibilityUpgraded: boolValue(remote["visibilityUpgraded"]) ?? (state.canvas.visibility == .private),
+                    parentCanvas: remoteCanvasDTO(remote["parentCanvas"] as? [String: Any]),
+                    subCanvas: remoteCanvasDTO(remote["subCanvas"] as? [String: Any]),
+                    graph: graphEnvelope(graph)
+                ))
+            } catch let err as PlannerCoreError {
+                return mapPlannerCoreError(err)
+            } catch {
+                return errorResponse("planner_error", error.localizedDescription, status: 400)
             }
         case .failure(let err):
             return mapOnlineProxyError(err)
         }
     }
 
-    /// UI-2 · proxy `fetchOwnedCanvases` to `meee2_list_owned_canvases`.
+    /// UI-2 · proxy `fetchOwnedCanvases` to the meee2-online team API.
     static func proxyListOwnedCanvases(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
         guard !settings.teamId.isEmpty else {
             return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
         }
-        let payload: [String: Any] = [
-            "p_team_id": settings.teamId,
-            "p_user_id": settings.userId
-        ]
-        switch OnlineProxy.callRPC(name: "meee2_list_owned_canvases", payload: payload, settings: settings) {
+        let path = "/api/v1/team/\(urlPath(settings.teamId))/planner/owned-canvases"
+        switch OnlineProxy.callOnlineAPI(method: "GET", path: path, settings: settings) {
         case .success(let data):
-            // RPC returns an array; wrap in `{ canvases: [...] }` to match the
-            // board-app `fetchOwnedCanvases` envelope.
-            if let arr = try? JSONSerialization.jsonObject(with: data) {
-                let envelope: [String: Any] = ["canvases": arr]
-                if let wrapped = try? JSONSerialization.data(withJSONObject: envelope) {
-                    return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
-                        try? writer.write(wrapped)
-                    }
-                }
-            }
             return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
                 try? writer.write(data)
             }
@@ -2720,7 +2860,11 @@ enum BoardAPI {
             URLQueryItem(name: "since", value: isoFormatter.string(from: sinceDate))
         ]
         if let limit = qp["limit"] { items.append(URLQueryItem(name: "limit", value: limit)) }
-        switch OnlineProxy.callOnlineAPI(method: "GET", path: "/api/v1/artifact-versions", query: items) {
+        switch OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/team/\(urlPath(teamId))/artifact-versions/recent",
+            query: items.filter { $0.name != "teamId" }
+        ) {
         case .success(let data):
             return HttpResponse.raw(200, "OK", ["Content-Type": "application/json"]) { writer in
                 try? writer.write(data)
@@ -3466,6 +3610,25 @@ enum BoardAPI {
     /// remote source exists, merge its `{userId, displayName, avatarUrl, role}`
     /// rows here as the highest-priority layer; the DTO contract is final.
     static func getTeamMembers(_ req: HttpRequest) -> HttpResponse {
+        let settings = OnlineProxy.loadSettings()
+        if !settings.teamId.isEmpty {
+            let path = "/api/v1/team/\(urlPath(settings.teamId))/members"
+            if case .success(let data) = OnlineProxy.callOnlineAPI(method: "GET", path: path, settings: settings),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let rows = object["members"] as? [[String: Any]] {
+                let members = rows.compactMap { row -> TeamMemberDTO? in
+                    guard let userId = stringValue(row["userId"]) else { return nil }
+                    return TeamMemberDTO(
+                        userId: userId,
+                        displayName: stringValue(row["displayName"]) ?? userId,
+                        avatarUrl: stringValue(row["avatarUrl"]),
+                        role: stringValue(row["role"])
+                    )
+                }
+                return jsonResponse(TeamMembersEnvelope(members: members))
+            }
+        }
+
         var byUserId: [String: TeamMemberDTO] = [:]
 
         // (1) The connected meee2 Online user.
@@ -3772,6 +3935,9 @@ enum BoardAPI {
             "meee2UserAvatarUrl",
             "meee2SupabaseUrl",
             "meee2SupabaseKey",
+            "meee2OnlineBaseUrl",
+            "meee2OnlineAccessToken",
+            "meee2OnlineRefreshToken",
             "meee2EnabledSessionIds",
             "meee2DisabledSessionIds"
         ] {
@@ -3868,6 +4034,9 @@ enum BoardAPI {
             "online": defaults.bool(forKey: "meee2Online"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
+            "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
+            "accessToken": defaults.string(forKey: "meee2OnlineAccessToken") ?? "",
+            "refreshToken": defaults.string(forKey: "meee2OnlineRefreshToken") ?? "",
             "teamId": defaults.string(forKey: "meee2TeamId") ?? "",
             "userId": defaults.string(forKey: "meee2UserId") ?? "",
             "userName": defaults.string(forKey: "meee2UserName") ?? "",
@@ -5597,6 +5766,7 @@ enum BoardAPI {
                 id: canvas.id,
                 name: canvas.name,
                 scope: canvas.scope.rawValue,
+                visibility: plannerCanvasVisibility(canvas, snapshot: snapshot),
                 kind: (canvas.kind ?? .board).rawValue,
                 isDefault: canvas.isDefault,
                 workspacePath: workspacePaths[canvas.id] ?? "",
@@ -5628,6 +5798,23 @@ enum BoardAPI {
             defaultCanvasIds: defaultIds,
             memberships: memberships
         )
+    }
+
+    private static func plannerCanvasVisibility(
+        _ canvas: BoardLayoutStore.Canvas,
+        snapshot: BoardLayoutStore.Snapshot
+    ) -> String {
+        guard (canvas.kind ?? .board) != .monitor else {
+            return canvas.scope == .team ? "public" : "private"
+        }
+        if let state = try? PlannerBoardBridge.graphState(
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: PlannerPermission.currentActorId()
+        ) {
+            return state.canvas.visibility.rawValue
+        }
+        return canvas.scope == .team ? "public" : "private"
     }
 
     private static func canvasId(from req: HttpRequest) -> String? {

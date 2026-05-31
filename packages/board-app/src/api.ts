@@ -1611,8 +1611,8 @@ export function bindPlannerNodeInput(
 }
 
 /**
- * UI-2: Assign a node to a teammate. Server proxies to the SECURITY DEFINER
- * `meee2_assign_node` RPC (ENG-4). The call is atomic — on failure no
+ * UI-2: Assign a node to a teammate. The desktop bridge calls meee2-online's
+ * team API, which performs the server-side transaction. On failure no
  * sub-canvas, no session re-bind, no event row is committed.
  *
  * If the source canvas was `private`, the server is expected to upgrade it
@@ -1649,7 +1649,7 @@ export function assignPlannerNode(
   )
 }
 
-/** UI-2: List sub-canvases the current user owns (proxy for `meee2_list_owned_canvases`). */
+/** UI-2: List sub-canvases the current user owns. */
 export function fetchOwnedCanvases(): Promise<{ canvases: OwnedCanvasSummary[] }> {
   return jsonRequest<{ canvases: OwnedCanvasSummary[] }>('/api/planner/owned-canvases')
 }
@@ -1968,9 +1968,12 @@ export function fetchUserProfile(): Promise<UserProfile> {
 export interface TeamMember {
   userId: string
   displayName: string
+  email?: string | null
   avatarUrl?: string | null
   /** Team-level membership role, or null when known only from local signals. */
   role?: string | null
+  publicCanvasCount?: number
+  lastCanvasUpdatedAt?: string | null
 }
 
 /**

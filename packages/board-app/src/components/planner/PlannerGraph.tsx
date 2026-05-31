@@ -1014,7 +1014,7 @@ function PlannerGraphInner({
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
       nodeAssignmentsByNodeId,
-      onRequestAssign: handleRequestAssign,
+      onRequestAssign: (plannerState?.canEditInternals ?? true) ? handleRequestAssign : undefined,
       onOpenAssignedSubCanvas: handleOpenAssignedSubCanvas,
       canEditInternals: plannerState?.canEditInternals ?? true,
       monitorItemsByNodeId,

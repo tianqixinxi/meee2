@@ -281,6 +281,7 @@ export interface CanvasInfo {
   id: string
   name: string
   scope: CanvasScope
+  visibility?: 'private' | 'public'
   kind?: CanvasKind
   isDefault: boolean
   workspacePath: string

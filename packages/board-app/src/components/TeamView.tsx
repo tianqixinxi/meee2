@@ -236,8 +236,14 @@ function TeamMemberCard({
       <div className="team-member-card__main">
         <div className="team-member-card__title">
           <strong>{member.displayName || member.userId}</strong>
-          <span>{member.userId}</span>
+          <span>{member.email || member.userId}</span>
         </div>
+        {typeof member.publicCanvasCount === 'number' && (
+          <span className="team-member-card__subtle">
+            {member.publicCanvasCount} public canvases
+            {member.lastCanvasUpdatedAt ? ` · ${relativeDateLabel(member.lastCanvasUpdatedAt)}` : ''}
+          </span>
+        )}
       </div>
       <div className="team-member-card__meta">
         {current && <span>{currentLabel}</span>}
@@ -245,6 +251,19 @@ function TeamMemberCard({
       </div>
     </article>
   )
+}
+
+function relativeDateLabel(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  const diffMs = Date.now() - date.getTime()
+  const minutes = Math.max(0, Math.floor(diffMs / 60_000))
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
 }
 
 function TeamSettingRow({ label, value }: { label: string; value: string }) {
