@@ -5871,6 +5871,62 @@ html.board-empty-omni .canvas-toolbar__panel {
   text-align: center;
 }
 
+.canvas-toolbar__tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+  margin-bottom: 7px;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 56%, transparent);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.canvas-toolbar__tabs button {
+  min-width: 0;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.canvas-toolbar__tabs button:hover {
+  color: var(--text);
+}
+
+.canvas-toolbar__tabs button.is-active {
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text);
+}
+
+.canvas-toolbar__tabs small {
+  min-width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.075);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.canvas-toolbar__tabs button.is-active small {
+  background: color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.08));
+  color: color-mix(in srgb, var(--accent-hover) 78%, var(--text));
+}
+
 .canvas-toolbar__list {
   display: flex;
   flex-direction: column;

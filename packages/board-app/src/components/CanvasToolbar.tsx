@@ -86,6 +86,8 @@ type OwnerIdentity = {
   avatarUrl: string | null
 }
 
+type CanvasListTab = 'my' | 'team'
+
 const DEFAULT_TEMPLATE_TAGS = ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo']
 
 // 用户只能创建 board canvas。
@@ -154,6 +156,7 @@ export function CanvasToolbar({
   const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
   const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
   const [ownerDirectory, setOwnerDirectory] = useState<Record<string, OwnerIdentity>>({})
+  const [canvasListTab, setCanvasListTab] = useState<CanvasListTab>('my')
   // ui-simplification §1 — failed/permission-pending sessions 转译成「需关注的
   // 进展」。多条时点击 pill 展开 dropdown 让用户挑一条跳过去。
   const [attentionMenuOpen, setAttentionMenuOpen] = useState(false)
@@ -179,6 +182,15 @@ export function CanvasToolbar({
     () => groupCanvasEntries(filteredCanvasEntries, userProfile?.userId ?? ''),
     [filteredCanvasEntries, userProfile?.userId],
   )
+  const canvasEntryGroups = useMemo(
+    () => groupCanvasEntries(buildCanvasListEntries(canvases, '', t), userProfile?.userId ?? ''),
+    [canvases, t, userProfile?.userId],
+  )
+  const showCanvasTabs = canvasEntryGroups.length > 1
+  const selectedCanvasGroup = groupedCanvasEntries.find((group) => group.id === canvasListTab)
+    ?? (showCanvasTabs
+      ? { id: canvasListTab, label: canvasListTab === 'my' ? 'My Canvases' : 'Team Canvases', entries: [] }
+      : groupedCanvasEntries[0])
   // ui-simplification §1: kind 是隐藏词,switcher 不暴露 board/monitor/template
   // 文案。scope (own/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
   // 只有当列表里同时存在 team 和 personal 时才渲染一个 icon 来快速辨识。
@@ -194,6 +206,12 @@ export function CanvasToolbar({
     userProfile?.connected &&
     onSetCanvasVisibility,
   )
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const activeGroup = canvasEntryGroups.find((group) => group.entries.some((entry) => entry.canvas.id === activeCanvasId))
+    if (activeGroup) setCanvasListTab(activeGroup.id)
+  }, [activeCanvasId, canvasEntryGroups, menuOpen])
 
   const closePanels = () => {
     setCreating(false)
@@ -556,17 +574,31 @@ export function CanvasToolbar({
                 />
               </label>
             </div>
+            {showCanvasTabs && (
+              <div className="canvas-toolbar__tabs" role="tablist" aria-label="Canvas groups">
+                {canvasEntryGroups.map((group) => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    role="tab"
+                    className={canvasListTab === group.id ? 'is-active' : ''}
+                    aria-selected={canvasListTab === group.id}
+                    onClick={() => setCanvasListTab(group.id)}
+                  >
+                    <span>{group.id === 'my' ? 'My' : 'Team'}</span>
+                    <small>{group.entries.length}</small>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="canvas-toolbar__list">
-              {groupedCanvasEntries.map((group) => (
-                <div className="canvas-toolbar__group" key={group.id}>
-                  {groupedCanvasEntries.length > 1 && (
-                    <div className="canvas-toolbar__group-label">{group.label}</div>
-                  )}
-                  {group.entries.map(({ canvas, depth }) => {
+              {selectedCanvasGroup ? (
+                <div className="canvas-toolbar__group" key={selectedCanvasGroup.id}>
+                  {selectedCanvasGroup.entries.map(({ canvas, depth }) => {
                     const selected = canvas.id === activeCanvas.id
                     const readOnly = isReadOnlyTeamCanvas(canvas, userProfile?.userId ?? '')
                     const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
-                    const showOwnerAvatar = group.id === 'team' && canvas.scope === 'team'
+                    const showOwnerAvatar = selectedCanvasGroup.id === 'team' && canvas.scope === 'team'
                     return (
                       <button
                         key={canvas.id}
@@ -630,8 +662,8 @@ export function CanvasToolbar({
                     )
                   })}
                 </div>
-              ))}
-              {filteredCanvasEntries.length === 0 && (
+              ) : null}
+              {(!selectedCanvasGroup || selectedCanvasGroup.entries.length === 0) && (
                 <div className="canvas-toolbar__empty">{t('canvas.noMatch')}</div>
               )}
             </div>
