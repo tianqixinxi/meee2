@@ -1,8 +1,8 @@
 // Meee2OnlinePusher - 推送 session 状态和 transcript 消息到 meee2 cloud dashboard
 //
 // 监听 SessionEventBus，当 transcriptAppended / sessionMetadataChanged 时，
-// 调用 meee2 REST API 同步数据。默认同步打开，或至少一个 session 被
-// 单独 opt-in 时同步 session；team canvas 只要已连接 team 就会同步。
+// 调用 meee2 REST API 同步数据。Team Canvas 文档层独立同步；session
+// runtime 只在被 Team Canvas 节点引用时同步，避免暴露普通本地会话。
 
 import Foundation
 import Combine
@@ -21,21 +21,20 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private var canvasSyncTimer: Timer?
     private let syncQueue = DispatchQueue(label: "com.meee2.meee2-pusher", qos: .utility)
     private let heartbeatInterval: TimeInterval = 60.0
-    private let canvasSyncInterval: TimeInterval = 60.0
+    private let canvasSyncInterval: TimeInterval = 30.0
     private let canvasDebounceInterval: TimeInterval = 2.0
     private let metadataDebounceInterval: TimeInterval = 0.5
     private let settingsCacheFreshSeconds: TimeInterval = 1.0
 
     private struct SettingsSnapshot {
         var isConnected: Bool
-        var defaultSyncEnabled: Bool
-        var disabledSessionIds: Set<String>
-        var enabledSessionIds: Set<String>
         var sessionTeamIds: [String: String]
         var teamId: String
         var userId: String
         var normalizedSupabaseUrl: String
         var supabaseKey: String
+        var onlineBaseUrl: String
+        var accessToken: String
         var machineId: String
     }
 
@@ -168,12 +167,121 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         }
     }
 
+    @discardableResult
+    public func syncTeamCanvasesForE2E(timeout: TimeInterval = 20) -> Bool {
+        guard ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1" else {
+            return false
+        }
+        let sema = DispatchSemaphore(value: 0)
+        syncQueue.async { [weak self] in
+            self?.syncTeamCanvases()
+            sema.signal()
+        }
+        return sema.wait(timeout: .now() + timeout) == .success
+    }
+
+    @discardableResult
+    public func syncSessionForE2E(sessionId: String, timeout: TimeInterval = 20) -> String? {
+        guard ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1" else {
+            return "E2E routes are disabled"
+        }
+        let sema = DispatchSemaphore(value: 0)
+        var result = false
+        var failure = "session sync did not finish"
+        syncQueue.async { [weak self] in
+            defer { sema.signal() }
+            guard let self,
+                  let session = SessionStore.shared.get(sessionId) else {
+                failure = "session not found in SessionStore"
+                return
+            }
+            self.pushSessionUpsert(session: session, force: true)
+            self.pushNewMessage(sessionId: sessionId)
+            let summary: [String: Any] = [
+                "title": String(session.project.prefix(100)),
+                "project": session.cwd ?? "",
+                "currentTool": session.currentTool ?? "",
+                "currentTask": session.currentTask ?? "",
+                "startedAt": self.iso8601String(session.startedAt),
+                "lastActivity": self.iso8601String(session.lastActivity),
+                "pluginDisplayName": "Claude Code"
+            ].filter { _, value in
+                if let string = value as? String { return !string.isEmpty }
+                return true
+            }
+            let payload: [String: Any] = [
+                "machine_id": self.machineId,
+                "session_key": session.sessionId,
+                "session_type": "claude",
+                "status": self.mapStatus(session.status),
+                "summary": summary
+            ]
+            var upsertSucceeded = false
+            self.post(endpoint: "/api/v1/sessions/upsert", payload: payload) { result in
+                switch result {
+                case .success:
+                    upsertSucceeded = true
+                case .failure(let error):
+                    failure = "upsert failed: \(self.describeOnlineError(error))"
+                }
+            }
+            guard upsertSucceeded else { return }
+            guard let transcriptPath = session.transcriptPath else {
+                result = true
+                return
+            }
+            let messages = TranscriptParser.loadMessages(transcriptPath: transcriptPath, count: 1)
+            guard let latest = messages.last else {
+                result = true
+                return
+            }
+            var messageSucceeded = false
+            self.post(endpoint: "/api/v1/sessions/append-message", payload: [
+                "machine_id": self.machineId,
+                "session_key": session.sessionId,
+                "message": [
+                    "role": latest.role,
+                    "text": String(latest.text.prefix(64_000)),
+                    "content": ["text": String(latest.text.prefix(64_000))]
+                ]
+            ]) { appendResult in
+                switch appendResult {
+                case .success:
+                    messageSucceeded = true
+                case .failure(let error):
+                    failure = "append-message failed: \(self.describeOnlineError(error))"
+                }
+            }
+            result = messageSucceeded
+        }
+        if sema.wait(timeout: .now() + timeout) != .success {
+            return "session sync timed out"
+        }
+        return result ? nil : failure
+    }
+
+    private func describeOnlineError(_ error: Error) -> String {
+        if let proxyError = error as? OnlineProxy.ProxyError {
+            switch proxyError {
+            case .missingSettings(let message):
+                return "missingSettings(\(message))"
+            case .badURL:
+                return "badURL"
+            case .transport(let underlying):
+                return "transport(\(underlying.localizedDescription))"
+            case .http(let status, let body):
+                let text = String(data: body, encoding: .utf8) ?? "\(body.count) bytes"
+                return "http(\(status), \(text))"
+            }
+        }
+        return String(describing: error)
+    }
+
     private var shouldStayActive: Bool {
         let settings = settingsSnapshot()
         return settings.isConnected
             && !settings.teamId.isEmpty
-            && !settings.normalizedSupabaseUrl.isEmpty
-            && !settings.supabaseKey.isEmpty
+            && (!settings.accessToken.isEmpty || (!settings.normalizedSupabaseUrl.isEmpty && !settings.supabaseKey.isEmpty))
     }
 
     private var userId: String { settingsSnapshot().userId }
@@ -194,20 +302,28 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         }
 
         let defaults = UserDefaults.standard
+        let onlineSettings = OnlineProxy.loadSettings()
         let rawSupabaseUrl = defaults.string(forKey: "meee2SupabaseUrl") ?? ""
         let decodedSupabaseUrl = rawSupabaseUrl.removingPercentEncoding ?? rawSupabaseUrl
+        let preferOnlineSettings = OnlineProxy.hasEnvironmentOverride
+        let defaultsTeamId = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2TeamId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultsUserId = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2UserId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultsSupabaseKey = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2SupabaseKey") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultsOnlineBaseUrl = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2OnlineBaseUrl") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultsAccessToken = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2OnlineAccessToken") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = SettingsSnapshot(
-            isConnected: defaults.bool(forKey: "meee2Connected"),
-            defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
-            disabledSessionIds: Self.sessionIdSet(forKey: "meee2DisabledSessionIds"),
-            enabledSessionIds: Self.sessionIdSet(forKey: "meee2EnabledSessionIds"),
+            isConnected: defaults.bool(forKey: "meee2Connected") || (!onlineSettings.teamId.isEmpty && !onlineSettings.onlineBaseUrl.isEmpty),
             sessionTeamIds: Self.sessionIdMap(forKey: "meee2SessionTeamIds"),
-            teamId: defaults.string(forKey: "meee2TeamId") ?? "",
-            userId: defaults.string(forKey: "meee2UserId") ?? "",
-            normalizedSupabaseUrl: decodedSupabaseUrl
+            teamId: defaultsTeamId.isEmpty ? onlineSettings.teamId : defaultsTeamId,
+            userId: defaultsUserId.isEmpty ? onlineSettings.userId : defaultsUserId,
+            normalizedSupabaseUrl: (decodedSupabaseUrl.isEmpty ? onlineSettings.supabaseUrl : decodedSupabaseUrl)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
-            supabaseKey: defaults.string(forKey: "meee2SupabaseKey") ?? "",
+            supabaseKey: defaultsSupabaseKey.isEmpty ? onlineSettings.supabaseKey : defaultsSupabaseKey,
+            onlineBaseUrl: (defaultsOnlineBaseUrl.isEmpty ? onlineSettings.onlineBaseUrl : defaultsOnlineBaseUrl)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+            accessToken: defaultsAccessToken.isEmpty ? onlineSettings.accessToken : defaultsAccessToken,
             machineId: Meee2Identity.machineId
         )
         cachedSettings = snapshot
@@ -235,6 +351,9 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 self?.pushSessionCreate(sessionId: sid)
             }
         case .boardLayoutChanged:
+            scheduleCanvasSync()
+        case .plannerCanvasChanged(canvasId: let canvasId):
+            BoardLayoutStore.shared.markTeamCanvasDirty(canvasId: canvasId)
             scheduleCanvasSync()
         default:
             break
@@ -291,7 +410,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             "session_key": sessionId,
             "message": [
                 "role": latest.role,
-                "text": String(latest.text.prefix(200))
+                "text": String(latest.text.prefix(64_000)),
+                "content": ["text": String(latest.text.prefix(64_000))]
             ]
         ]
 
@@ -331,53 +451,59 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private func syncTeamCanvases() {
         let currentTeamId = settingsSnapshot().teamId
         guard shouldStayActive,
-              !currentTeamId.isEmpty,
-              !normalizedSupabaseUrl.isEmpty,
-              !supabaseKey.isEmpty else {
+              !currentTeamId.isEmpty else {
             return
         }
 
         let items = BoardLayoutStore.shared.dirtyTeamCanvasPayloads()
         if !items.isEmpty {
-            rpcDataRequest(
-                name: "meee2_sync_team_canvases",
-                payload: [
-                    "p_team_id": currentTeamId,
-                    "p_user_id": userId,
-                    "p_items": items
-                ]
-            ) { result in
-                switch result {
+            let remoteIds = items.compactMap { item -> String? in
+                item["id"] as? String
+            }
+            BoardLayoutStore.shared.markTeamCanvasSyncing(remoteIds: remoteIds)
+            let payload: [String: Any] = ["items": items]
+            if let body = try? JSONSerialization.data(withJSONObject: payload) {
+                switch OnlineProxy.callOnlineAPI(
+                    method: "POST",
+                    path: "/api/v1/team/\(currentTeamId)/canvases/sync",
+                    body: body
+                ) {
                 case .success(let data):
-                    if let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let rows = object["results"] as? [[String: Any]] {
                         BoardLayoutStore.shared.markTeamCanvasSyncResults(rows)
                     }
                 case .failure(let error):
                     MLog("[Meee2OnlinePusher] canvas push failed: \(error)")
+                    BoardLayoutStore.shared.markTeamCanvasSyncFailed(remoteIds: remoteIds)
                 }
+            } else {
+                BoardLayoutStore.shared.markTeamCanvasSyncFailed(remoteIds: remoteIds)
             }
         }
 
-        rpcDataRequest(
-            name: "meee2_list_team_canvases",
-            payload: [
-                "p_team_id": currentTeamId,
-                "p_user_id": userId,
-                "p_include_deleted": true
-            ]
-        ) { result in
-            switch result {
-            case .success(let data):
-                let canvases = Self.parseRemoteTeamCanvases(data: data, teamId: currentTeamId)
-                BoardLayoutStore.shared.applyRemoteTeamCanvases(canvases)
-            case .failure(let error):
-                MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
-            }
+        switch OnlineProxy.callOnlineAPI(
+            method: "GET",
+            path: "/api/v1/team/\(currentTeamId)/canvases",
+            query: [URLQueryItem(name: "includeDeleted", value: "true")]
+        ) {
+        case .success(let data):
+            let canvases = Self.parseRemoteTeamCanvases(data: data, teamId: currentTeamId)
+            BoardLayoutStore.shared.applyRemoteTeamCanvases(canvases)
+        case .failure(let error):
+            MLog("[Meee2OnlinePusher] canvas pull failed: \(error)")
         }
     }
 
     private static func parseRemoteTeamCanvases(data: Data, teamId: String) -> [BoardLayoutStore.RemoteTeamCanvas] {
-        guard let rows = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+        let decoded = try? JSONSerialization.jsonObject(with: data)
+        let rows: [[String: Any]]
+        if let object = decoded as? [String: Any],
+           let canvases = object["canvases"] as? [[String: Any]] {
+            rows = canvases
+        } else if let array = decoded as? [[String: Any]] {
+            rows = array
+        } else {
             return []
         }
         let formatter = ISO8601DateFormatter()
@@ -395,9 +521,17 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
             } else {
                 version = 0
             }
-            let state = row["state"] as? [String: Any] ?? [:]
-            let updatedAt = (row["updated_at"] as? String).flatMap { formatter.date(from: $0) }
-            let deletedAt = (row["deleted_at"] as? String).flatMap { formatter.date(from: $0) }
+            var state = row["state"] as? [String: Any] ?? [:]
+            if state["ownerUserId"] == nil {
+                state["ownerUserId"] = row["ownerUserId"] ?? row["owner_user_id"]
+            }
+            if state["kind"] == nil {
+                state["kind"] = "board"
+            }
+            let updatedAtRaw = (row["updated_at"] as? String) ?? (row["updatedAt"] as? String)
+            let deletedAtRaw = (row["deleted_at"] as? String) ?? (row["deletedAt"] as? String)
+            let updatedAt = updatedAtRaw.flatMap { formatter.date(from: $0) }
+            let deletedAt = deletedAtRaw.flatMap { formatter.date(from: $0) }
             return BoardLayoutStore.RemoteTeamCanvas(
                 id: id,
                 name: name,
@@ -442,13 +576,18 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
         // Current tool from transcript
         if hydrateTranscriptFields, let transcriptPath = session.transcriptPath {
-            let currentTool = TranscriptStatusResolver.resolveCurrentTool(
+            if let resolvedTool = TranscriptStatusResolver.resolveCurrentTool(
                 transcriptPath: transcriptPath,
                 currentTool: session.currentTool
-            )
-            if let tool = currentTool {
+            ) {
+                if let tool = resolvedTool {
+                    summary["currentTool"] = tool
+                }
+            } else if let tool = session.currentTool {
                 summary["currentTool"] = tool
             }
+        } else if let tool = session.currentTool {
+            summary["currentTool"] = tool
         }
 
         // Usage stats
@@ -582,16 +721,36 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {
         let settings = settingsSnapshot()
+        guard settings.isConnected, !settings.teamId.isEmpty else { return false }
+        return isSessionReferencedByTeamCanvas(sessionId, settings: settings)
+    }
+
+    private func isSessionReferencedByTeamCanvas(_ sessionId: String, settings: SettingsSnapshot) -> Bool {
         let aliases = Self.sessionIdAliases(sessionId)
-        if !aliases.isDisjoint(with: settings.disabledSessionIds) {
-            return false
+        let teamCanvasIds = BoardLayoutStore.shared.snapshot().canvases.compactMap { canvas -> String? in
+            guard canvas.scope == .team else { return nil }
+            let canvasTeamId = (canvas.teamId ?? settings.teamId).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard canvasTeamId == settings.teamId else { return nil }
+            return canvas.id
         }
+        guard !teamCanvasIds.isEmpty else { return false }
 
-        if settings.defaultSyncEnabled {
-            return true
+        for canvasId in teamCanvasIds {
+            guard let record = try? PlannerStore.shared.canvasRecordForBridge(canvasId: canvasId) else {
+                continue
+            }
+            if record.nodes.contains(where: { node in
+                let candidates = [node.sessionId, node.chatThreadId]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                return candidates.contains { candidate in
+                    !aliases.isDisjoint(with: Self.sessionIdAliases(candidate))
+                }
+            }) {
+                return true
+            }
         }
-
-        return !aliases.isDisjoint(with: settings.enabledSessionIds)
+        return false
     }
 
     private func teamIdForSession(_ sessionId: String) -> String {
@@ -602,8 +761,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 return mapped
             }
         }
-        // `meee2TeamId` is the explicit default sync team selected in
-        // Settings. New sessions use it unless a per-session override exists.
+        // Legacy per-session routing wins when present. Otherwise, node runtime
+        // sessions inherit the currently connected Team Canvas team.
         return settings.teamId
     }
 
@@ -1201,39 +1360,25 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func post(endpoint: String, payload: [String: Any], completion: @escaping (Result<Void, Error>) -> Void) {
-        let baseUrl = normalizedSupabaseUrl
-        guard let rpc = supabaseRPCRequest(endpoint: endpoint, payload: payload),
-              !baseUrl.isEmpty,
-              let url = URL(string: "\(baseUrl)/rest/v1/rpc/\(rpc.name)") else {
-            completion(.failure(URLError(.badURL)))
-            return
+        var nextPayload = payload
+        if let sessionKey = payload["session_key"] as? String {
+            let targetTeamId = teamIdForSession(sessionKey)
+            if !targetTeamId.isEmpty {
+                nextPayload["team_id"] = targetTeamId
+            }
         }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(supabaseKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseKey)", forHTTPHeaderField: "Authorization")
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: rpc.payload)
+            let body = try JSONSerialization.data(withJSONObject: nextPayload)
+            switch OnlineProxy.callOnlineAPI(method: "POST", path: endpoint, body: body) {
+            case .success:
+                completion(.success(()))
+            case .failure(let error):
+                completion(.failure(error))
+            }
         } catch {
             completion(.failure(error))
-            return
         }
-
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
-                completion(.failure(URLError(.badServerResponse)))
-                return
-            }
-            completion(.success(()))
-        }.resume()
     }
 
     private func supabaseRPCRequest(endpoint: String, payload: [String: Any]) -> (name: String, payload: [String: Any])? {

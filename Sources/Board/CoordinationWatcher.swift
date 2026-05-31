@@ -47,7 +47,8 @@ public final class CoordinationWatcher {
              .channelMutated,
              .messageMutated,
              .cardTemplateChanged,
-             .boardLayoutChanged:
+             .boardLayoutChanged,
+             .plannerCanvasChanged:
             break
         }
     }

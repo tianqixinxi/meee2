@@ -39,7 +39,6 @@ import {
   openMeee2OnlineDashboard,
   requestDeleteLocalDataToken,
   updateAppSettings,
-  updateUserProfile,
   type AppSettings,
   type StorageStats,
   type UserProfile,
@@ -455,22 +454,6 @@ export function SettingsView({
     }
   }, [applyQuickOpenShortcut, handleQuickOpenShortcutKey, recordingQuickOpenShortcut])
 
-  const setDefaultSync = async (enabled: boolean) => {
-    try {
-      setProfile(await updateUserProfile({ defaultSyncEnabled: enabled }))
-    } catch (err) {
-      notify('error', (err as Error).message || 'Failed to update sync setting')
-    }
-  }
-
-  const setSessionSync = async (sessionId: string, enabled: boolean) => {
-    try {
-      setProfile(await updateUserProfile({ sessionSync: { sessionId, enabled } }))
-    } catch (err) {
-      notify('error', (err as Error).message || 'Failed to update session sync')
-    }
-  }
-
   const connectOnline = async () => {
     try {
       await openMeee2OnlineConnect()
@@ -497,7 +480,7 @@ export function SettingsView({
     }
   }
 
-  const sessionSync = profile?.sessionSync ?? []
+  const currentTeam = currentTeamForProfile(profile)
 
   return (
     <main className="settings-page" aria-label={t('settings.title')}>
@@ -684,7 +667,7 @@ export function SettingsView({
                 </strong>
                 <span className="muted truncate" style={{ fontSize: 11 }}>
                   {profile?.connected
-                    ? (profile.userEmail || profile.defaultSyncTeamName || 'meee2 Online')
+                    ? (profile.userEmail || currentTeam?.name || 'meee2 Online')
                     : t('settings.connectOnlineHelp')}
                 </span>
               </div>
@@ -705,40 +688,13 @@ export function SettingsView({
             </div>
             {profile?.connected && (
               <div className="col" style={{ gap: 8, marginTop: 10 }}>
-                {profile.defaultSyncTeamName && (
+                {currentTeam && (
                   <div className="settings-meta-row">
                     <span>{t('settings.team')}</span>
-                    <strong>{profile.defaultSyncTeamName}</strong>
+                    <strong>{currentTeam.name}</strong>
                   </div>
                 )}
-                <label className="settings-toggle-row">
-                  <span>
-                    <strong>{t('settings.syncNewDefault')}</strong>
-                    <small>{t('settings.syncNewDefaultHelp')}</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={profile.defaultSyncEnabled}
-                    onChange={(event) => void setDefaultSync(event.target.checked)}
-                  />
-                </label>
-                {sessionSync.length > 0 && (
-                  <div className="settings-session-sync-list">
-                    {sessionSync.map((session) => (
-                      <label key={session.sessionId} className="settings-session-sync-row">
-                        <span>
-                          <strong>{session.title}</strong>
-                          <small>{session.pluginDisplayName}{session.project ? ` · ${session.project}` : ''}</small>
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={session.enabled}
-                          onChange={(event) => void setSessionSync(session.sessionId, event.target.checked)}
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
+                <small className="muted">{t('settings.teamCanvasRuntimeSync')}</small>
               </div>
             )}
           </div>
@@ -1074,6 +1030,11 @@ function normalizeAppSettings(settings: AppSettings | null | undefined): AppSett
       ? settings.availableScreens
       : DEFAULT_APP_SETTINGS.availableScreens,
   }
+}
+
+function currentTeamForProfile(profile: UserProfile | null): UserProfile['teams'][number] | null {
+  if (!profile?.connected) return null
+  return profile.teams.find((team) => team.isDefault) ?? profile.teams[0] ?? null
 }
 
 function SettingSlider({

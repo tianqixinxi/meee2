@@ -563,6 +563,9 @@ public final class BoardServer {
         server.POST["/api/update/check-in-background"] = BoardServer.cors(BoardAPI.checkUpdateInBackground)
         server.POST["/api/_dev/override-latest"] = BoardServer.cors(BoardAPI.devOverrideLatest)
         server.GET["/api/_dev/pill-click-plan"] = BoardServer.cors(BoardAPI.devPillClickPlan)
+        server.POST["/api/_e2e/team-sync"] = BoardServer.cors(BoardAPI.e2eSyncTeamCanvases)
+        server.POST["/api/_e2e/sessions/:id"] = BoardServer.cors(BoardAPI.e2eUpsertSession)
+        server.POST["/api/_e2e/sessions/:id/messages"] = BoardServer.cors(BoardAPI.e2eAppendSessionMessage)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)
@@ -628,7 +631,7 @@ public final class BoardServer {
         // defaults to the node's latest version slot).
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/rerun"] = BoardServer.cors(BoardAPI.rerunPlannerNode)
         // Wave 1-3 integration — OnlineProxy routes.
-        // UI-2: assign a node to a teammate (forwards to meee2_assign_node RPC).
+        // UI-2: assign a node to a teammate through meee2-online.
         server.POST["/api/planner/canvases/:id/nodes/:nodeId/assign"] = BoardServer.cors(BoardAPI.proxyAssignPlannerNode)
         // UI-2: list sub-canvases the current user owns.
         server.GET["/api/planner/owned-canvases"] = BoardServer.cors(BoardAPI.proxyListOwnedCanvases)

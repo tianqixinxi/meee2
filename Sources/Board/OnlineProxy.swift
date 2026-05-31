@@ -23,25 +23,50 @@ enum OnlineProxy {
     struct Settings {
         let supabaseUrl: String
         let supabaseKey: String
+        let onlineBaseUrl: String
+        let accessToken: String
+        let refreshToken: String
         let teamId: String
         let userId: String
     }
 
+    static var hasEnvironmentOverride: Bool {
+        let env = ProcessInfo.processInfo.environment
+        return [
+            "MEEE2_SUPABASE_URL",
+            "MEEE2_SUPABASE_ANON_KEY",
+            "MEEE2_ONLINE_BASE_URL",
+            "MEEE2_ONLINE_ACCESS_TOKEN",
+            "MEEE2_ONLINE_REFRESH_TOKEN",
+            "MEEE2_ONLINE_TEAM_ID",
+            "MEEE2_ONLINE_USER_ID"
+        ].contains { key in
+            !(env[key]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }
+    }
+
     static func loadSettings() -> Settings {
         let defaults = UserDefaults.standard
-        var supabaseUrl = (defaults.string(forKey: "meee2SupabaseUrl") ?? "")
+        let env = ProcessInfo.processInfo.environment
+        var supabaseUrl = firstNonEmpty(env["MEEE2_SUPABASE_URL"], defaults.string(forKey: "meee2SupabaseUrl"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        var supabaseKey = (defaults.string(forKey: "meee2SupabaseKey") ?? "")
+        var supabaseKey = firstNonEmpty(env["MEEE2_SUPABASE_ANON_KEY"], defaults.string(forKey: "meee2SupabaseKey"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        var teamId = (defaults.string(forKey: "meee2TeamId") ?? "")
+        var onlineBaseUrl = firstNonEmpty(env["MEEE2_ONLINE_BASE_URL"], defaults.string(forKey: "meee2OnlineBaseUrl"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        var userId = (defaults.string(forKey: "meee2UserId") ?? "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var accessToken = firstNonEmpty(env["MEEE2_ONLINE_ACCESS_TOKEN"], defaults.string(forKey: "meee2OnlineAccessToken"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var refreshToken = firstNonEmpty(env["MEEE2_ONLINE_REFRESH_TOKEN"], defaults.string(forKey: "meee2OnlineRefreshToken"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var teamId = firstNonEmpty(env["MEEE2_ONLINE_TEAM_ID"], defaults.string(forKey: "meee2TeamId"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var userId = firstNonEmpty(env["MEEE2_ONLINE_USER_ID"], defaults.string(forKey: "meee2UserId"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if supabaseUrl.isEmpty || supabaseKey.isEmpty || teamId.isEmpty || userId.isEmpty {
-            let file = URL(fileURLWithPath: NSHomeDirectory())
-                .appendingPathComponent(".meee2/settings.json")
+        if supabaseUrl.isEmpty || supabaseKey.isEmpty || onlineBaseUrl.isEmpty || accessToken.isEmpty || refreshToken.isEmpty || teamId.isEmpty || userId.isEmpty {
+            let file = settingsFileURL()
             if let data = try? Data(contentsOf: file),
                let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let meee2 = root["meee2"] as? [String: Any] {
@@ -52,6 +77,18 @@ enum OnlineProxy {
                 if supabaseKey.isEmpty,
                    let v = (meee2["supabaseKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
                     supabaseKey = v
+                }
+                if onlineBaseUrl.isEmpty,
+                   let v = (meee2["onlineBaseUrl"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    onlineBaseUrl = v.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                }
+                if accessToken.isEmpty,
+                   let v = (meee2["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    accessToken = v
+                }
+                if refreshToken.isEmpty,
+                   let v = (meee2["refreshToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                    refreshToken = v
                 }
                 if teamId.isEmpty,
                    let v = (meee2["teamId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -67,9 +104,22 @@ enum OnlineProxy {
         return Settings(
             supabaseUrl: supabaseUrl,
             supabaseKey: supabaseKey,
+            onlineBaseUrl: onlineBaseUrl,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
             teamId: teamId,
             userId: userId
         )
+    }
+
+    private static func firstNonEmpty(_ values: String?...) -> String {
+        for value in values {
+            let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return ""
     }
 
     /// Forward to a Supabase RPC. Body is the raw payload (will be serialized
@@ -109,7 +159,7 @@ enum OnlineProxy {
         settings: Settings? = nil
     ) -> Result<Data, ProxyError> {
         let s = settings ?? loadSettings()
-        let baseURL = Meee2OnlineConfig.appBaseURL
+        let baseURL = URL(string: s.onlineBaseUrl) ?? Meee2OnlineConfig.appBaseURL
         var components = URLComponents(
             url: baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))),
             resolvingAgainstBaseURL: false
@@ -118,17 +168,85 @@ enum OnlineProxy {
             components?.queryItems = query
         }
         guard let url = components?.url else { return .failure(.badURL) }
+        let request = onlineRequest(url: url, method: method, body: body, settings: s)
+        let result = performSync(request: request)
+        if case .failure(.http(status: 401, body: _)) = result,
+           !s.refreshToken.isEmpty,
+           let refreshed = refreshAccessToken(settings: s) {
+            return performSync(request: onlineRequest(url: url, method: method, body: body, settings: refreshed))
+        }
+        return result
+    }
+
+    private static func onlineRequest(url: URL, method: String, body: Data?, settings: Settings) -> URLRequest {
         var request = URLRequest(url: url, timeoutInterval: 30)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Pass the anon key in both headers — the Next.js route uses it via
-        // the same Supabase client.
-        if !s.supabaseKey.isEmpty {
-            request.setValue("Bearer \(s.supabaseKey)", forHTTPHeaderField: "Authorization")
-            request.setValue(s.supabaseKey, forHTTPHeaderField: "apikey")
+        if !settings.accessToken.isEmpty {
+            request.setValue("Bearer \(settings.accessToken)", forHTTPHeaderField: "Authorization")
+        } else if !settings.supabaseKey.isEmpty {
+            request.setValue("Bearer \(settings.supabaseKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(settings.supabaseKey, forHTTPHeaderField: "apikey")
         }
-        if let body { request.httpBody = body }
-        return performSync(request: request)
+        request.httpBody = body
+        return request
+    }
+
+    private static func refreshAccessToken(settings: Settings) -> Settings? {
+        let baseURL = URL(string: settings.onlineBaseUrl) ?? Meee2OnlineConfig.appBaseURL
+        let url = baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("connect")
+            .appendingPathComponent("refresh")
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "refreshToken": settings.refreshToken
+        ])
+        guard let body = try? performSync(request: request).get(),
+              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let accessToken = object["access_token"] as? String else {
+            return nil
+        }
+        let refreshToken = (object["refresh_token"] as? String) ?? settings.refreshToken
+        persistTokens(accessToken: accessToken, refreshToken: refreshToken)
+        return Settings(
+            supabaseUrl: settings.supabaseUrl,
+            supabaseKey: settings.supabaseKey,
+            onlineBaseUrl: settings.onlineBaseUrl,
+            accessToken: accessToken,
+            refreshToken: refreshToken,
+            teamId: settings.teamId,
+            userId: settings.userId
+        )
+    }
+
+    private static func persistTokens(accessToken: String, refreshToken: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(accessToken, forKey: "meee2OnlineAccessToken")
+        defaults.set(refreshToken, forKey: "meee2OnlineRefreshToken")
+
+        let file = settingsFileURL()
+        guard let data = try? Data(contentsOf: file),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return
+        }
+        var meee2 = (root["meee2"] as? [String: Any]) ?? [:]
+        meee2["accessToken"] = accessToken
+        meee2["refreshToken"] = refreshToken
+        root["meee2"] = meee2
+        guard JSONSerialization.isValidJSONObject(root),
+              let nextData = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+        try? nextData.write(to: file, options: .atomic)
+    }
+
+    private static func settingsFileURL() -> URL {
+        URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".meee2/settings.json")
     }
 
     private static func performSync(request: URLRequest) -> Result<Data, ProxyError> {

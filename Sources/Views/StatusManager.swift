@@ -196,7 +196,7 @@ public class StatusManager: ObservableObject {
         switch event {
         case .boardLayoutChanged, .sessionAdded, .sessionRemoved, .sessionMetadataChanged:
             return true
-        case .transcriptAppended, .channelMutated, .messageMutated, .cardTemplateChanged:
+        case .transcriptAppended, .channelMutated, .messageMutated, .cardTemplateChanged, .plannerCanvasChanged:
             return false
         }
     }

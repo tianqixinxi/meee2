@@ -1746,22 +1746,20 @@ export function bindPlannerNodeInput(
 }
 
 /**
- * UI-2: Assign a node to a teammate. Server proxies to the SECURITY DEFINER
- * `meee2_assign_node` RPC (ENG-4). The call is atomic — on failure no
+ * UI-2: Assign a node to a teammate. The desktop bridge calls meee2-online's
+ * team API, which performs the server-side transaction. On failure no
  * sub-canvas, no session re-bind, no event row is committed.
  *
- * If the source canvas was `private`, the server is expected to upgrade it
- * to `public` as part of the same transaction so the assignee can see it;
- * the returned `visibilityUpgraded` flag tells the UI whether the
- * private→public modal's promise was kept.
+ * Assign only operates on Team Canvases. The legacy `acceptPrivateUpgrade`
+ * field is still sent for older servers, but the current model has no
+ * team-private parent or subcanvas state.
  */
 export interface AssignPlannerNodeInput {
   /** Optional override for the new sub-canvas's display name. */
   subCanvasName?: string | null
   /**
-   * Acknowledgement that the source canvas was private and the user accepted
-   * the upgrade. Server refuses the call without it when the canvas is
-   * private — protects against accidentally publishing a private board.
+   * Legacy acknowledgement for older servers; ignored by the current Team
+   * Canvas model.
    */
   acceptPrivateUpgrade?: boolean
 }
@@ -1784,7 +1782,7 @@ export function assignPlannerNode(
   )
 }
 
-/** UI-2: List sub-canvases the current user owns (proxy for `meee2_list_owned_canvases`). */
+/** UI-2: List sub-canvases the current user owns. */
 export function fetchOwnedCanvases(): Promise<{ canvases: OwnedCanvasSummary[] }> {
   return jsonRequest<{ canvases: OwnedCanvasSummary[] }>('/api/planner/owned-canvases')
 }
@@ -1985,9 +1983,9 @@ export async function createPlannerSubCanvasFromNode(
 }
 
 /**
- * PATCH …/canvases/:id/visibility — owner-only public/private toggle. This is
- * canvas metadata, not a graph proposal, so it applies immediately and returns
- * the updated canvas record.
+ * PATCH …/canvases/:id/visibility — compatibility facade for owner-only Team
+ * publishing. `public` means publish/sync as a Team Canvas; `private` means
+ * remove from Team sync and return to an own canvas.
  */
 export async function setPlannerCanvasVisibility(
   canvasId: string,
@@ -2059,21 +2057,11 @@ export interface UserProfile {
   initials: string
   dashboardUrl: string
   connectUrl: string
-  defaultSyncEnabled: boolean
-  defaultSyncTeamId: string
-  defaultSyncTeamName: string
   teams: Array<{
     id: string
     name: string
     role: string | null
     isDefault: boolean
-  }>
-  sessionSync: Array<{
-    sessionId: string
-    title: string
-    pluginDisplayName: string
-    project: string
-    enabled: boolean
   }>
 }
 
@@ -2089,11 +2077,7 @@ export function fetchUserProfile(): Promise<UserProfile> {
       initials: 'DU',
       dashboardUrl: '',
       connectUrl: '',
-      defaultSyncEnabled: false,
-      defaultSyncTeamId: '',
-      defaultSyncTeamName: '',
       teams: [],
-      sessionSync: [],
     })
   }
   return jsonRequest<UserProfile>('/api/user-profile')
@@ -2103,9 +2087,12 @@ export function fetchUserProfile(): Promise<UserProfile> {
 export interface TeamMember {
   userId: string
   displayName: string
+  email?: string | null
   avatarUrl?: string | null
   /** Team-level membership role, or null when known only from local signals. */
   role?: string | null
+  publicCanvasCount?: number
+  lastCanvasUpdatedAt?: string | null
 }
 
 /**
@@ -2150,16 +2137,6 @@ export function openMeee2OnlineDashboard(): Promise<{ ok: boolean }> {
 
 export function openMeee2Settings(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/settings', { method: 'POST' })
-}
-
-export function updateUserProfile(input: {
-  defaultSyncEnabled?: boolean
-  sessionSync?: { sessionId: string; enabled: boolean }
-}): Promise<UserProfile> {
-  return jsonRequest<UserProfile>('/api/user-profile', {
-    method: 'PATCH',
-    body: JSON.stringify(input),
-  })
 }
 
 export function disconnectMeee2Online(): Promise<{ ok: boolean }> {

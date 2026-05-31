@@ -281,6 +281,7 @@ export interface CanvasInfo {
   id: string
   name: string
   scope: CanvasScope
+  visibility?: 'private' | 'public'
   kind?: CanvasKind
   isDefault: boolean
   workspacePath: string
@@ -294,6 +295,8 @@ export interface CanvasInfo {
   dirtySince?: string | null
   lastSyncedAt?: string | null
   lastRemoteUpdatedAt?: string | null
+  conflictRemoteVersion?: number | null
+  conflictRemoteDeleted?: boolean | null
   draftOfTemplateId?: string | null
 }
 
@@ -1475,8 +1478,8 @@ export interface NodeAssignment {
 export interface AssignPlannerNodeResult {
   assignment: NodeAssignment
   /**
-   * Whether the source canvas was upgraded from `private` to `public` as part
-   * of this assign. UI-2 surfaces a different success toast when this happens.
+   * Legacy compatibility field. Team Mode now requires the parent to already
+   * be a Team Canvas; assign no longer creates a distinct team-private state.
    */
   visibilityUpgraded: boolean
   graph: PlannerGraphState

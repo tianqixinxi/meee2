@@ -57,26 +57,28 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-	  applyCanvasTemplate,
-	  createCanvas,
-	  createTemplateEditDraft,
-	  createTemplateFromCanvas,
-	  clearPlannerCanvasContent,
-	  deleteCanvas,
+  applyCanvasTemplate,
+  createCanvas,
+  createTemplateEditDraft,
+  createTemplateFromCanvas,
+  clearPlannerCanvasContent,
+  deleteCanvas,
   fetchCanvases,
   fetchMeee2AgentRuntimeStatus,
   fetchReadiness,
   fetchUserProfile,
   importClaudeWorkflow,
   installMeee2AgentRuntime,
-	  repairReadiness,
-	  replaceTemplateFromCanvas,
-	  uploadClaudeWorkflow,
-	  updateCanvas,
-	  updateTemplateMetadata,
-	  type UserProfile,
-	  type TemplateMetadataInput,
-	} from './api'
+  repairReadiness,
+  replaceTemplateFromCanvas,
+  resolveCanvasConflict,
+  setPlannerCanvasVisibility,
+  uploadClaudeWorkflow,
+  updateCanvas,
+  updateTemplateMetadata,
+  type UserProfile,
+  type TemplateMetadataInput,
+} from './api'
 
 declare global {
   interface Window {
@@ -197,6 +199,8 @@ function canvasListSignature(list: CanvasList): string {
         dirtySince: canvas.dirtySince ?? null,
         lastSyncedAt: canvas.lastSyncedAt ?? null,
         lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt ?? null,
+        conflictRemoteVersion: canvas.conflictRemoteVersion ?? null,
+        conflictRemoteDeleted: canvas.conflictRemoteDeleted ?? null,
       })),
     memberships: [...list.memberships]
       .sort((a, b) => `${a.canvasId}:${a.sessionId}`.localeCompare(`${b.canvasId}:${b.sessionId}`))
@@ -416,7 +420,7 @@ export default function App() {
   const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
   const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  // Session unread dots still drive the compact rail badges.
+  // Session unread state still drives session list ordering and rail attention tone.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     if (hydrated) setUnreadSids(hydrated.unreadSids)
@@ -677,6 +681,24 @@ export default function App() {
         applyCanvasList(list)
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
+  }, [applyCanvasList, pushToast])
+
+  const handleResolveCanvasConflict = useCallback((canvasId: string, choice: 'current' | 'remote') => {
+    return resolveCanvasConflict(canvasId, choice)
+      .then((list) => {
+        applyCanvasList(list)
+        setActiveCanvasRefreshTick((value) => value + 1)
+        pushToast(
+          'success',
+          choice === 'current'
+            ? 'Keeping local canvas; publishing will retry shortly'
+            : 'Updated this canvas from the team version',
+        )
+      })
+      .catch((err) => {
+        pushToast('error', (err as Error).message || 'Failed to resolve canvas conflict')
+        throw err
+      })
   }, [applyCanvasList, pushToast])
 
   const handleOpenBoardTarget = useCallback((target: BoardOpenTarget) => {
@@ -1053,6 +1075,18 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to clear canvas'))
   }, [pushToast])
 
+  const handleSetCanvasVisibility = useCallback((canvasId: string, visibility: 'private' | 'public') => {
+    return setPlannerCanvasVisibility(canvasId, visibility)
+      .then(() => {
+        setActiveCanvasRefreshTick((value) => value + 1)
+        return refreshCanvases()
+      })
+      .then(() => {
+        pushToast('success', visibility === 'public' ? 'Canvas published to Team' : 'Canvas removed from Team')
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update Team sharing'))
+  }, [pushToast, refreshCanvases])
+
   const boardSessionSignature = useMemo(() => {
     if (!boardState.state) return ''
     return boardState.state.sessions.map((s) => s.id).sort().join('|')
@@ -1253,8 +1287,10 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              onSetCanvasVisibility={handleSetCanvasVisibility}
               onSaveCanvasAsTemplate={handleSaveCanvasAsTemplate}
               onReplaceTemplate={handleReplaceTemplate}
+              onResolveCanvasConflict={handleResolveCanvasConflict}
               userProfile={userProfile}
               boardState={boardState.state}
               plannerState={currentPlannerState}

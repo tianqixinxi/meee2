@@ -92,6 +92,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         A2AIdentity.resolver = SessionStoreIdentityResolver()
         TerminalSessionBackendRegistry.shared.register(GhosttySurfaceBackend.shared)
 
+        if ProcessInfo.processInfo.environment["MEEE2_E2E_HEADLESS"] == "1" {
+            NSApp.setActivationPolicy(.prohibited)
+            startBoardServer()
+            Meee2OnlinePusher.shared.activate()
+            MInfo("[Startup] E2E headless mode active")
+            return
+        }
+
         // 设置为 accessory 应用 (不显示在 Dock，只有状态栏)
         NSApp.setActivationPolicy(.accessory)
 

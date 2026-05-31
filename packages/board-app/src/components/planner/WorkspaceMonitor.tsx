@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
-  Filter,
   GitPullRequestArrow,
   LayoutGrid,
   List,
@@ -64,7 +63,6 @@ export function WorkspaceMonitor({
   const [query, setQuery] = useState('')
   const [laneFilter, setLaneFilter] = useState<MonitorLaneKey | 'all'>('all')
   const [sourceFilter, setSourceFilter] = useState<MonitorSourceFilter>('all')
-  const [evidenceOnly, setEvidenceOnly] = useState(false)
   const [density, setDensity] = useState<MonitorDensity>('compact')
   const [sortMode, setSortMode] = useState<MonitorSort>('severity')
   const [collapsedLanes, setCollapsedLanes] = useState<MonitorLaneKey[]>([])
@@ -87,7 +85,6 @@ export function WorkspaceMonitor({
       .filter((item) => matchesSearch(item, term))
       .filter((item) => laneFilter === 'all' || laneForItem(item) === laneFilter)
       .filter((item) => sourceMatches(item, sourceFilter))
-      .filter((item) => !evidenceOnly || evidenceCount(item) > 0)
       .sort((a, b) => sortMonitorItems(a, b, sortMode))
 
     const itemLanes: MonitorLane[] = [
@@ -102,7 +99,7 @@ export function WorkspaceMonitor({
       byKey.get(laneForItem(item))?.items.push(item)
     }
     return itemLanes
-  }, [evidenceOnly, laneFilter, monitor, query, sortMode, sourceFilter, t])
+  }, [laneFilter, monitor, query, sortMode, sourceFilter, t])
 
   const totalItems = lanes.reduce((count, lane) => count + lane.items.length, 0)
 
@@ -110,10 +107,6 @@ export function WorkspaceMonitor({
     setCollapsedLanes((current) => (
       current.includes(lane) ? current.filter((key) => key !== lane) : [...current, lane]
     ))
-  }
-
-  const setQuickLane = (lane: MonitorLaneKey) => {
-    setLaneFilter((current) => current === lane ? 'all' : lane)
   }
 
   return (
@@ -129,32 +122,6 @@ export function WorkspaceMonitor({
               placeholder={t('monitor.searchPlaceholder')}
               aria-label={t('monitor.searchLabel')}
             />
-          </div>
-          <div className="planner-monitor__tool-group" role="group" aria-label={t('monitor.quickFilters')}>
-            <button
-              type="button"
-              className={laneFilter === 'blocked' ? 'is-active' : ''}
-              onClick={() => setQuickLane('blocked')}
-            >
-              <ShieldAlert size={12} aria-hidden />
-              <span>{t('monitor.blockedOnly')}</span>
-            </button>
-            <button
-              type="button"
-              className={laneFilter === 'approval' ? 'is-active' : ''}
-              onClick={() => setQuickLane('approval')}
-            >
-              <GitPullRequestArrow size={12} aria-hidden />
-              <span>{t('monitor.approvalOnly')}</span>
-            </button>
-            <button
-              type="button"
-              className={evidenceOnly ? 'is-active' : ''}
-              onClick={() => setEvidenceOnly((value) => !value)}
-            >
-              <Filter size={12} aria-hidden />
-              <span>{t('monitor.evidenceOnly')}</span>
-            </button>
           </div>
           <button
             type="button"
@@ -248,6 +215,7 @@ export function WorkspaceMonitor({
                         <MonitorCard
                           key={item.id}
                           item={item}
+                          density={density}
                           generatedAt={monitor?.generatedAt}
                           onOpenItem={onOpenItem}
                           t={t}
@@ -270,11 +238,13 @@ export function WorkspaceMonitor({
 
 function MonitorCard({
   item,
+  density,
   generatedAt,
   onOpenItem,
   t,
 }: {
   item: PlannerMonitorItem
+  density: MonitorDensity
   generatedAt?: string
   onOpenItem: (item: PlannerMonitorItem) => void
   t: Translator
@@ -288,13 +258,21 @@ function MonitorCard({
         ? Route
         : stateIcons[item.runState ?? 'ready'] ?? Clock3
   const evidence = evidenceCount(item)
+  const title = item.nodeTitle ?? item.summary
+  const summary = item.summary.trim()
+  const showSummary = density === 'comfortable' && summary.length > 0 && summary !== title
+  const blockers = item.blockers.filter((blocker) => blocker.trim().length > 0)
+  const attention = blockers.length > 0 ? blockers.join('; ') : item.nextAction?.trim()
+  const progress = item.nextAction?.trim()
+  const awaiting = formatAwaitingDuration(item.awaitingInputSince, t)
+  const openLabel = monitorOpenLabel(item, t)
   return (
     <button
       type="button"
-      className={`planner-monitor-card planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
+      className={`planner-monitor-card planner-monitor-card--${density} planner-monitor-card--${laneForItem(item)} planner-monitor-card--rank-${item.riskRank}`}
       onClick={() => onOpenItem(item)}
-      aria-label={`${monitorOpenLabel(item, t)}: ${item.nodeTitle ?? item.summary}`}
-      title={`${monitorOpenLabel(item, t)}: ${item.canvasTitle}`}
+      aria-label={`${openLabel}: ${title}`}
+      title={`${openLabel}: ${item.canvasTitle}`}
     >
       <div className="planner-monitor-card__top">
         <span className="planner-monitor-card__source">
@@ -303,25 +281,43 @@ function MonitorCard({
         </span>
         <span className="planner-monitor-card__time">{formatRelativeTimestamp(item.updatedAt ?? generatedAt)}</span>
       </div>
-      <h3>{item.nodeTitle ?? item.summary}</h3>
+      <h3>{title}</h3>
       <div className="planner-monitor-card__meta">
         <span>{monitorCanvasName(item.canvasTitle)}</span>
-        <span>{item.doerId || t('monitor.unassigned')}</span>
+        {density === 'comfortable' && <span>{item.doerId || t('monitor.unassigned')}</span>}
         <span>{statusLabel(item, t)}</span>
       </div>
-      {(item.blockers.length > 0 || item.nextAction) && (
-        <p className={item.blockers.length > 0 ? 'is-blocker' : ''}>
-          {item.blockers.length > 0 ? item.blockers.join('; ') : item.nextAction}
+      {showSummary && (
+        <p className="planner-monitor-card__summary">
+          <strong>{t('monitor.recap')}</strong>
+          {summary}
+        </p>
+      )}
+      {density === 'comfortable' && attention && (
+        <p className={`planner-monitor-card__attention${blockers.length > 0 ? ' is-blocker' : ''}`}>
+          <strong>{blockers.length > 0 ? t('monitor.attention') : t('monitor.progress')}</strong>
+          {attention}
         </p>
       )}
       <div className="planner-monitor-card__footer">
         <span className={evidence > 0 ? 'has-evidence' : ''}>
           {t('monitor.evidenceCount', { count: String(evidence) })}
         </span>
-        {item.nextAction && item.blockers.length > 0 && (
+        {progress && (density === 'compact' || blockers.length > 0) && (
           <span className="planner-monitor-card__next">
             <Signpost size={11} aria-hidden />
-            {item.nextAction}
+            {progress}
+          </span>
+        )}
+        {density === 'comfortable' && awaiting && (
+          <span className="planner-monitor-card__wait">
+            <Clock3 size={11} aria-hidden />
+            {awaiting}
+          </span>
+        )}
+        {density === 'comfortable' && (
+          <span className="planner-monitor-card__open-target">
+            {openLabel}
           </span>
         )}
       </div>
@@ -456,6 +452,21 @@ function formatRelativeTimestamp(value?: string | null): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h`
   return `${Math.round(hours / 24)}d`
+}
+
+function formatAwaitingDuration(value: string | null | undefined, t: Translator): string {
+  if (!value) return ''
+  const timestamp = Date.parse(value)
+  if (Number.isNaN(timestamp)) return ''
+  const minutes = Math.max(1, Math.round((Date.now() - timestamp) / (1000 * 60)))
+  if (minutes < 60) {
+    return t('monitor.waiting', { duration: `${minutes}m` })
+  }
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) {
+    return t('monitor.waiting', { duration: `${hours}h` })
+  }
+  return t('monitor.waiting', { duration: `${Math.round(hours / 24)}d` })
 }
 
 function monitorCanvasName(name: string): string {

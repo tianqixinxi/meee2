@@ -73,17 +73,9 @@ export function WorkspaceRail({
     : ''
   const showFallbackUserIcon = !avatarUrl && !avatarInitials
 
-  const counts = useMemo(() => {
+  const hasSessionAttention = useMemo(() => {
     const sessions = state?.sessions ?? []
-    const actionableSessionIds = new Set<string>()
-    for (const session of sessions) {
-      if (sessionNeedsAttention(session) || unreadSids.has(session.id)) {
-        actionableSessionIds.add(session.id)
-      }
-    }
-    return {
-      sessions: actionableSessionIds.size,
-    }
+    return sessions.some((session) => sessionNeedsAttention(session) || unreadSids.has(session.id))
   }, [state?.sessions, unreadSids])
 
   return (
@@ -127,8 +119,7 @@ export function WorkspaceRail({
           label={t('rail.sessions')}
           active={mode === 'sessions'}
           onClick={() => onModeChange('sessions')}
-          badge={counts.sessions > 0 ? counts.sessions : undefined}
-          tone={counts.sessions > 0 ? 'attention' : 'default'}
+          tone={hasSessionAttention ? 'attention' : 'default'}
         >
           <List size={20} />
         </RailButton>
@@ -183,7 +174,6 @@ function initialsFor(value: string): string {
 interface RailButtonProps {
   label: string
   active?: boolean
-  badge?: number
   tone?: 'default' | 'attention' | 'danger'
   onClick: () => void
   children: ReactNode
@@ -192,7 +182,6 @@ interface RailButtonProps {
 function RailButton({
   label,
   active = false,
-  badge,
   tone = 'default',
   onClick,
   children,
@@ -209,9 +198,6 @@ function RailButton({
     >
       {children}
       <span className="workspace-rail__label">{label}</span>
-      {badge !== undefined && badge > 0 && (
-        <span className="workspace-rail__badge">{badge > 99 ? '99+' : badge}</span>
-      )}
     </button>
   )
 }

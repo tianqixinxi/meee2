@@ -70,6 +70,10 @@ import {
 } from '../../teamDirectory'
 import { classifyPlannerIntent } from '../../lib/plannerIntent'
 import {
+  buildConfirmedPlanGraphChanges,
+  parseConfirmedPlanDraft,
+} from '../../lib/plannerPlanDraft'
+import {
   indexNodes,
   loadNotificationToggles,
   runPlannerApprovalNotifications,
@@ -298,7 +302,7 @@ function PlannerGraphInner({
         setMCPStatus(null)
         setMCPStatusError((err as Error).message || 'Failed to check Meee2 MCP status')
       })
-  }, [])
+  }, [userProfile?.teams, userProfile?.userId])
 
   useEffect(() => {
     refreshMCPStatus()
@@ -331,7 +335,7 @@ function PlannerGraphInner({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userProfile?.teams, userProfile?.userId])
 
   const handleOpenNodeDetails = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId)
@@ -804,9 +808,13 @@ function PlannerGraphInner({
 
   // UI-2 · F1.1 — open the assign dialog from a node's owner chip.
   const handleRequestAssign = useCallback((nodeId: string) => {
+    if (plannerState?.canvas.visibility !== 'public') {
+      onNotify?.('error', 'Publish this canvas to Team before assigning a node.')
+      return
+    }
     setAssignError(null)
     setAssignDialogNodeId(nodeId)
-  }, [])
+  }, [onNotify, plannerState?.canvas.visibility])
 
   const handleCancelAssign = useCallback(() => {
     if (assignBusy) return
@@ -1014,7 +1022,7 @@ function PlannerGraphInner({
       creatingSessionNodeIds,
       showResponsibleInfo: plannerState?.canvas.visibility !== 'private',
       nodeAssignmentsByNodeId,
-      onRequestAssign: handleRequestAssign,
+      onRequestAssign: (plannerState?.canEditInternals ?? true) ? handleRequestAssign : undefined,
       onOpenAssignedSubCanvas: handleOpenAssignedSubCanvas,
       canEditInternals: plannerState?.canEditInternals ?? true,
       monitorItemsByNodeId,
@@ -1477,12 +1485,44 @@ function PlannerGraphInner({
           emitPlannerEvent('planner.canvas_mutated', { canvasId, message: goal, intent: 'edit' })
         }
       })
-      .catch((err) => setError((err as Error).message || 'Failed to generate meee2 AI proposal'))
+      .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to generate meee2 AI proposal')))
       .finally(() => setBusy(false))
-  }, [canvasId, plannerState, proposal])
+  }, [canvasId, notifyError, plannerState, proposal])
 
   const handlePlannerSubmit = useCallback((message: string) => {
     const trimmed = message.trim()
+    const confirmedPlan = parseConfirmedPlanDraft(trimmed)
+    if (confirmedPlan) {
+      setBusy(true)
+      setError(null)
+      const actorId = plannerState?.access.actorId
+        ?? plannerState?.canvas.ownerId
+        ?? userProfile?.userId
+        ?? 'local-owner'
+      const changes = buildConfirmedPlanGraphChanges({
+        canvasId,
+        actorId,
+        draft: confirmedPlan,
+        existingNodeIds: plannerState?.nodes.map((node) => node.id) ?? [],
+      })
+      proposePlannerGraphChange(canvasId, {
+        summary: `Draft canvas: ${confirmedPlan.title}`,
+        changes,
+      })
+        .then((next) => {
+          setProposal(next)
+          setPlannerState((current) => current && next
+            ? { ...current, proposals: upsertProposal(current.proposals, next) }
+            : current)
+          if (next) {
+            setReviewRequestTick((tick) => tick + 1)
+            emitPlannerEvent('planner.canvas_mutated', { canvasId, message: confirmedPlan.title, intent: 'edit', reason: 'confirmed-plan' })
+          }
+        })
+        .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to draft canvas')))
+        .finally(() => setBusy(false))
+      return
+    }
     const shouldInspect = shouldInspectDrift(trimmed, plannerState, hasActionableDrift)
     if (shouldInspect) {
       setBusy(true)
@@ -1513,7 +1553,7 @@ function PlannerGraphInner({
           emitPlannerEvent('planner.canvas_mutated', { canvasId, message: trimmed || '(drift)', intent: 'inspect' })
           return undefined
         })
-        .catch((err) => setError((err as Error).message || 'Failed to inspect meee2 AI drift'))
+        .catch((err) => notifyError(formatPlannerProposalError(err, 'Failed to inspect meee2 AI drift')))
         .finally(() => setBusy(false))
       return
     }
@@ -1576,7 +1616,7 @@ function PlannerGraphInner({
     }
 
     handleGenerate(trimmed)
-  }, [canvasId, handleGenerate, hasActionableDrift, plannerState, proposal, selectedNode])
+  }, [canvasId, handleGenerate, hasActionableDrift, notifyError, plannerState, proposal, selectedNode, userProfile?.userId])
 
   const handleUseRecommendedTemplate = useCallback(() => {
     setBusy(true)
@@ -2005,7 +2045,6 @@ function PlannerGraphInner({
       {assignDialogNodeId && assignDialogNode && (
         <AssignNodeDialog
           node={assignDialogNode}
-          sourceVisibility={plannerState?.canvas.visibility === 'private' ? 'private' : 'public'}
           frozenIOContract={
             // Prefer the frozen contract already attached to the parent canvas
             // (set when a previous assign happened); fall back to deriving a
@@ -2630,6 +2669,17 @@ function isPlannerCanvasEmptyForOnboarding(state: PlannerCanvasState): boolean {
     && (state.artifacts ?? []).length === 0
     && activeProposals.length === 0
   )
+}
+
+function formatPlannerProposalError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error || '')
+  if (/proposal output is not valid JSON/i.test(message)) {
+    const prefix = /draft canvas/i.test(fallback)
+      ? 'Draft canvas failed'
+      : fallback
+    return `${prefix}: meee2 AI returned an invalid proposal format. Your canvas was not changed.`
+  }
+  return message || fallback
 }
 
 function buildStarterSuggestions(

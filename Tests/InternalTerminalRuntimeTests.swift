@@ -115,6 +115,10 @@ final class InternalTerminalRuntimeTests: XCTestCase {
         let sawInitialOutput = expectation(description: "saw initial output")
         let sawPausedReplay = expectation(description: "saw paused replay")
         let sawExit = expectation(description: "saw exit")
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("meee2-paused-replay-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        let script = "printf before; while [ ! -f \(shellQuote(marker.path)) ]; do sleep 0.05; done; printf after"
         let client = RuntimeCaptureClient(
             initialNeedle: "before",
             replayNeedle: "after",
@@ -127,7 +131,7 @@ final class InternalTerminalRuntimeTests: XCTestCase {
         let snapshot = try InternalTerminalRuntime.shared.createSurface(
             provider: "claude",
             cwd: FileManager.default.temporaryDirectory.path,
-            command: "/bin/sh -c 'printf before; sleep 0.3; printf after'",
+            command: "/bin/sh -c \(shellQuote(script))",
             canvasId: nil,
             nodeId: nil,
             initialPrompt: nil,
@@ -151,9 +155,14 @@ final class InternalTerminalRuntimeTests: XCTestCase {
             client,
             surfaceOrSessionId: snapshot.surfaceId
         ))
+        _ = FileManager.default.createFile(atPath: marker.path, contents: Data())
 
-        await fulfillment(of: [sawPausedReplay, sawExit], timeout: 3)
+        await fulfillment(of: [sawPausedReplay, sawExit], timeout: 5)
         XCTAssertTrue(client.replayedText.contains("after"))
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
