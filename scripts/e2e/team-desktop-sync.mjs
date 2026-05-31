@@ -335,13 +335,6 @@ async function startDesktop(binary, env, onlineBaseUrl, world, user, label, base
     }, `${label} desktop BoardServer`, 45_000),
     new Promise((_, reject) => proc.child.once('exit', () => reject(new Error(proc.output())))),
   ])
-  requireOk(
-    await jsonFetch(`${baseUrl}/api/user-profile`, {
-      method: 'PATCH',
-      body: JSON.stringify({ defaultSyncEnabled: true }),
-    }),
-    `${label} enable default session sync`,
-  )
   return { label, baseUrl, home, stop: proc.stop, output: proc.output }
 }
 
@@ -368,6 +361,34 @@ async function forceTeamSync(desktop) {
     await desktopJson(desktop, '/api/_e2e/team-sync', { method: 'POST', body: '{}' }),
     `${desktop.label} force team sync`,
   )
+}
+
+async function teamMembers(desktop) {
+  return requireOk(
+    await desktopJson(desktop, '/api/team/members'),
+    `${desktop.label} list team members`,
+  ).members || []
+}
+
+async function assignPlannerNode(desktop, canvasId, nodeId, assigneeUserId, subCanvasName) {
+  return requireOk(
+    await desktopJson(desktop, `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({
+        assigneeUserId,
+        subCanvasName,
+        acceptPrivateUpgrade: false,
+      }),
+    }),
+    `${desktop.label} assign planner node`,
+  )
+}
+
+async function ownedCanvases(desktop) {
+  return requireOk(
+    await desktopJson(desktop, '/api/planner/owned-canvases'),
+    `${desktop.label} list owned canvases`,
+  ).canvases || []
 }
 
 async function createTeamCanvas(ownerDesktop, name) {
@@ -447,16 +468,6 @@ async function e2eUpsertSession(desktop, sessionId, payload) {
   )
 }
 
-async function enableSessionSync(desktop, sessionId) {
-  return requireOk(
-    await desktopJson(desktop, '/api/user-profile', {
-      method: 'PATCH',
-      body: JSON.stringify({ sessionSync: { sessionId, enabled: true } }),
-    }),
-    `${desktop.label} enable session sync ${sessionId}`,
-  )
-}
-
 async function e2eAppendSessionMessage(desktop, sessionId, role, text) {
   return requireOk(
     await desktopJson(desktop, `/api/_e2e/sessions/${encodeURIComponent(sessionId)}/messages`, {
@@ -528,7 +539,57 @@ async function main() {
     assert((memberGraph.nodes || []).some((node) => node.id === nodeId && node.sessionId === runtimeSessionId), 'member graph missed bound sessionId')
     console.log('✓ member desktop pulled owner canvas as read-only')
 
-    await enableSessionSync(ownerDesktop, runtimeSessionId)
+    const members = await teamMembers(ownerDesktop)
+    assert(members.some((member) => member.userId === world.owner.id && member.role === 'owner'), 'team members missed owner')
+    assert(members.some((member) => member.userId === world.member.id && member.role === 'member'), 'team members missed real member')
+    assert(
+      !members.some((member) => ['any-member', 'external', 'local-user', 'pipeline-owner', 'tech-reviewer'].includes(member.userId)),
+      'team members should not include planner pseudo identities',
+    )
+    console.log('✓ desktop team members endpoint returns only real team members')
+
+    const subCanvasName = `Assigned Subcanvas ${world.runId}`
+    const assigned = await assignPlannerNode(ownerDesktop, canvasId, nodeId, world.member.id, subCanvasName)
+    const subCanvasId = assigned.assignment?.subCanvasId
+    assert(assigned.assignment?.sourceCanvasId === canvasId, 'assign response sourceCanvasId mismatch')
+    assert(assigned.assignment?.sourceNodeId === nodeId, 'assign response sourceNodeId mismatch')
+    assert(assigned.assignment?.assigneeUserId === world.member.id, 'assign response assignee mismatch')
+    assert(typeof subCanvasId === 'string' && subCanvasId.length > 0, 'assign response missing subCanvasId')
+    assert(assigned.subCanvas?.ownerUserId === world.member.id, 'assign response subCanvas owner mismatch')
+    const assignedGraphNode = (assigned.graph?.nodes || []).find((node) => node.id === nodeId)
+    assert(assignedGraphNode?.subCanvasId === subCanvasId, 'owner graph did not turn assigned node into subcanvas ref')
+    assert(assignedGraphNode?.nodeKind === 'subCanvas', `assigned node kind should be subCanvas, got ${assignedGraphNode?.nodeKind}`)
+    assert(
+      (assigned.graph?.nodeAssignments || []).some((item) => item.sourceNodeId === nodeId && item.subCanvasId === subCanvasId),
+      'assign response graph missed nodeAssignments entry',
+    )
+    console.log('✓ owner desktop assigned node to member and created subcanvas ref')
+
+    const duplicateAssign = await desktopJson(ownerDesktop, `/api/planner/canvases/${encodeURIComponent(canvasId)}/nodes/${encodeURIComponent(nodeId)}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ assigneeUserId: world.member.id, subCanvasName }),
+    })
+    assert(duplicateAssign.status >= 400, `duplicate assign should be rejected, got HTTP ${duplicateAssign.status}`)
+    console.log('✓ duplicate assign is rejected')
+
+    await forceTeamSync(ownerDesktop)
+    await forceTeamSync(memberDesktop)
+    const memberAssignedGraph = await graph(memberDesktop, canvasId)
+    const memberAssignedNode = (memberAssignedGraph.nodes || []).find((node) => node.id === nodeId)
+    assert(memberAssignedNode?.subCanvasId === subCanvasId, 'member graph missed assigned subcanvas ref')
+    assert(
+      (memberAssignedGraph.nodeAssignments || []).some((item) => item.sourceNodeId === nodeId && item.subCanvasId === subCanvasId),
+      'member graph missed assignment metadata',
+    )
+    const memberOwned = await ownedCanvases(memberDesktop)
+    assert(
+      memberOwned.some((item) => item.id === subCanvasId && item.parentCanvasId === canvasId && item.parentNodeId === nodeId),
+      'member owned-canvases missed assigned subcanvas',
+    )
+    const memberSubGraph = await graph(memberDesktop, subCanvasId)
+    assert(memberSubGraph.access?.role === 'owner', `member should own assigned subcanvas, got ${memberSubGraph.access?.role}`)
+    console.log('✓ member desktop sees assigned subcanvas as owned work')
+
     await e2eUpsertSession(ownerDesktop, runtimeSessionId, {
       status: 'active',
       project: 'Meee2舆情洞察',

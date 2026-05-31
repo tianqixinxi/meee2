@@ -115,7 +115,9 @@ public struct Meee2OnlineCallbackAPI {
     ) -> Bool {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: "meee2Connected")
-        defaults.set(true, forKey: "meee2Online")
+        defaults.removeObject(forKey: "meee2Online")
+        defaults.removeObject(forKey: "meee2EnabledSessionIds")
+        defaults.removeObject(forKey: "meee2DisabledSessionIds")
         defaults.set(teamId, forKey: "meee2TeamId")
         defaults.set(teamName, forKey: "meee2TeamName")
         defaults.set(userId, forKey: "meee2UserId")
@@ -147,6 +149,9 @@ public struct Meee2OnlineCallbackAPI {
                 "accessToken": accessToken,
                 "refreshToken": refreshToken,
                 "teams": teams,
+                "defaultSyncEnabled": false,
+                "enabledSessionIds": [],
+                "disabledSessionIds": [],
                 "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]

@@ -1031,24 +1031,6 @@ textarea {
   color: #ff8a7b;
 }
 
-.workspace-rail__badge {
-  display: inline-flex;
-  min-width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  padding: 0 4px;
-  border: 1px solid rgba(37, 31, 29, 0.9);
-  border-radius: 999px;
-  background: #e25f4f;
-  color: #fff;
-  font-size: 9px;
-  font-weight: 800;
-  line-height: 1;
-}
-
 .workspace-rail__status {
   display: none;
   width: 42px;
@@ -1116,13 +1098,6 @@ textarea {
 
 .workspace-rail.is-collapsed .workspace-rail__label {
   display: none;
-}
-
-.workspace-rail.is-collapsed .workspace-rail__badge {
-  position: absolute;
-  top: 2px;
-  right: 1px;
-  margin-left: 0;
 }
 
 .workspace-rail.is-collapsed .workspace-rail__button.is-active::before {
@@ -3612,6 +3587,31 @@ textarea {
   font-size: 12px;
 }
 
+.team-view__inline-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 5px 8px;
+  border: 1px solid rgba(168, 165, 155, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 244, 239, 0.06);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.team-view__inline-action:hover,
+.team-view__inline-action:focus-visible {
+  border-color: rgba(236, 208, 132, 0.38);
+  background: rgba(236, 208, 132, 0.12);
+  outline: none;
+}
+
+.team-view__inline-action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .team-view__gate {
   display: flex;
   align-items: center;
@@ -5319,13 +5319,6 @@ textarea {
 
   .workspace-rail__label {
     display: none;
-  }
-
-  .workspace-rail__badge {
-    position: absolute;
-    top: 2px;
-    right: 1px;
-    margin-left: 0;
   }
 
   .workspace-rail__button.is-active::before {

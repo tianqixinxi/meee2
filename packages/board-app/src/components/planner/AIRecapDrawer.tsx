@@ -93,7 +93,7 @@ export function AIRecapDrawer({
   const [versionsError, setVersionsError] = useState<string | null>(null)
   const [versionsLoading, setVersionsLoading] = useState(false)
 
-  const teamId = userProfile?.defaultSyncTeamId ?? userProfile?.teams?.[0]?.id ?? null
+  const teamId = userProfile?.teams?.find((team) => team.isDefault)?.id ?? userProfile?.teams?.[0]?.id ?? null
 
   // ── ENG-3 live data: recent artifact versions ──────────────────────────
   // Polls every minute; will be replaced by a Supabase realtime subscription

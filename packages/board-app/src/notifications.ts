@@ -3,7 +3,7 @@
 // Two layers in this file:
 //
 // 1) `WORKING_STATUSES` / `RESTING_STATUSES` — used by the per-session
-//    "未读小红点" state machine in App.tsx and WorkspaceRail. Unrelated to
+//    unread state machine in App.tsx and WorkspaceRail. Unrelated to
 //    OS-level notifications; kept here for historical reasons.
 //
 // 2) OS-level notifications (the rest of the file). Five trigger kinds:
@@ -20,7 +20,7 @@
 
 import type { PlanningNode, Session } from './types'
 
-// ---- legacy unread-dot state machine (kept for App.tsx / WorkspaceRail) ----
+// ---- legacy unread state machine (kept for App.tsx / WorkspaceRail) ----
 
 export const WORKING_STATUSES = new Set([
   'active', 'tooling', 'thinking', 'compacting',

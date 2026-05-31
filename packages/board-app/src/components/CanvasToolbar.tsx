@@ -359,7 +359,7 @@ export function CanvasToolbar({
     return () => {
       cancelled = true
     }
-  }, [userProfile?.connected, userProfile?.defaultSyncTeamId, userProfile?.userId])
+  }, [userProfile?.connected, userProfile?.teams, userProfile?.userId])
 
   useEffect(() => {
     const timer = window.setInterval(() => setRecapAgeNow(Date.now()), 60 * 1000)

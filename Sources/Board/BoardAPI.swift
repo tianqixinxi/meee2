@@ -518,7 +518,8 @@ enum BoardAPI {
             artifacts: state.artifacts,
             edges: state.edges,
             nodeAssignments: nodeAssignments(for: state),
-            canEditInternals: state.access.role == .owner
+            canEditInternals: state.access.role == .owner,
+            integrationEntities: integrationEntitiesFor(nodes: state.nodes)
         )
     }
 
@@ -1181,18 +1182,7 @@ enum BoardAPI {
                 snapshot: BoardLayoutStore.shared.snapshot(),
                 actorUserId: PlannerPermission.currentActorId()
             )
-            return jsonResponse(PlannerGraphStateEnvelope(
-                canvas: state.canvas,
-                nodes: state.nodes,
-                states: state.states,
-                proposals: state.proposals,
-                access: state.access,
-                activities: state.activities,
-                events: state.events,
-                artifacts: state.artifacts,
-                edges: state.edges,
-                integrationEntities: integrationEntitiesFor(nodes: state.nodes)
-            ))
+            return jsonResponse(graphEnvelope(state))
         } catch let err as PlannerCoreError {
             return mapPlannerCoreError(err)
         } catch {
@@ -2788,6 +2778,12 @@ enum BoardAPI {
                     snapshot: BoardLayoutStore.shared.snapshot(),
                     actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
                 )
+                _ = try PlannerBoardBridge.approveProposal(
+                    proposalId: proposal.id,
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+                )
                 _ = try PlannerBoardBridge.applyProposal(
                     proposalId: proposal.id,
                     for: canvasId,
@@ -3593,122 +3589,44 @@ enum BoardAPI {
             initials: initials(for: displayName, connected: connected),
             dashboardUrl: Meee2OnlineConfig.appURL(path: "dashboard").absoluteString,
             connectUrl: meee2ConnectUrl().absoluteString,
-            defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
-            defaultSyncTeamId: defaults.string(forKey: "meee2TeamId") ?? "",
-            defaultSyncTeamName: BoardDTOBuilder.meee2DefaultSyncTeamName(),
-            teams: BoardDTOBuilder.meee2OnlineTeams(),
-            sessionSync: meee2OnlineSessionSyncList()
+            teams: BoardDTOBuilder.meee2OnlineTeams()
         ))
     }
 
     // MARK: - GET /api/team/members
 
-    /// Team member directory — the authoritative identity source the planner
-    /// graph keys `ownerAvatarUrlByUserId` / doer avatar lookups by `userId`.
-    ///
-    /// Data sources, in priority order:
-    ///   1. The connected meee2 Online user (current actor) — name + avatar.
-    ///   2. Doer ids referenced by planner nodes across every local canvas.
-    ///   3. Other users seen via planner activity heartbeats.
-    ///
-    /// TODO(team): backfill from meee2 Online team members API once available.
-    /// meee2 Online DOES expose `GET /api/v1/team/members`, but that route is
-    /// cookie/session authenticated (`createClient()` + `auth.getUser()`); the
-    /// desktop app only holds the Supabase anon key + a stored `userId`, which
-    /// cannot satisfy that route nor read the RLS-protected `meee2_members`
-    /// table directly. There is no `meee2_list_team_members` RPC. When such a
-    /// remote source exists, merge its `{userId, displayName, avatarUrl, role}`
-    /// rows here as the highest-priority layer; the DTO contract is final.
+    /// Team member directory for assignment and Team UI. This endpoint must
+    /// only expose real meee2 Online team members; planner doer/activity ids
+    /// are local execution identities and are not assignable people.
     static func getTeamMembers(_ req: HttpRequest) -> HttpResponse {
         let settings = OnlineProxy.loadSettings()
-        if !settings.teamId.isEmpty {
-            let path = "/api/v1/team/\(urlPath(settings.teamId))/members"
-            if case .success(let data) = OnlineProxy.callOnlineAPI(method: "GET", path: path, settings: settings),
-               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let rows = object["members"] as? [[String: Any]] {
-                let members = rows.compactMap { row -> TeamMemberDTO? in
-                    guard let userId = stringValue(row["userId"]) else { return nil }
-                    return TeamMemberDTO(
-                        userId: userId,
-                        displayName: stringValue(row["displayName"]) ?? userId,
-                        avatarUrl: stringValue(row["avatarUrl"]),
-                        role: stringValue(row["role"])
-                    )
-                }
-                return jsonResponse(TeamMembersEnvelope(members: members))
-            }
+        guard !settings.teamId.isEmpty else {
+            return jsonResponse(TeamMembersEnvelope(members: []))
         }
 
-        var byUserId: [String: TeamMemberDTO] = [:]
-
-        // (1) The connected meee2 Online user.
-        let defaults = UserDefaults.standard
-        let connected = defaults.bool(forKey: "meee2Connected")
-        let currentUserId = defaults.string(forKey: "meee2UserId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if connected, !currentUserId.isEmpty {
-            let userName = defaultString(defaults, key: "meee2UserName", fallback: nil)
-            let userEmail = defaultString(defaults, key: "meee2UserEmail", fallback: nil)
-            let avatarUrl = defaultString(defaults, key: "meee2UserAvatarUrl", fallback: nil)
-            let displayName: String
-            if !userName.isEmpty {
-                displayName = userName
-            } else if !userEmail.isEmpty {
-                displayName = userEmail.components(separatedBy: "@").first ?? userEmail
-            } else {
-                displayName = "meee2 user"
+        let path = "/api/v1/team/\(urlPath(settings.teamId))/members"
+        switch OnlineProxy.callOnlineAPI(method: "GET", path: path, settings: settings) {
+        case .success(let data):
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rows = object["members"] as? [[String: Any]] else {
+                return errorResponse("bad_gateway", "meee2-online team members response is invalid", status: 502)
             }
-            let teamRole = BoardDTOBuilder.meee2OnlineTeams().first?.role
-            byUserId[currentUserId] = TeamMemberDTO(
-                userId: currentUserId,
-                displayName: displayName,
-                avatarUrl: avatarUrl.isEmpty ? nil : avatarUrl,
-                role: teamRole
-            )
-        }
-
-        // (2) Planner-node doers across every local canvas. Identity here is
-        // partial (no avatar / no membership role) until the remote source
-        // above is wired up.
-        let snapshot = BoardLayoutStore.shared.snapshot()
-        let actorId = PlannerPermission.currentActorId()
-        for canvas in snapshot.canvases {
-            guard let state = try? PlannerBoardBridge.canvasState(
-                for: canvas.id,
-                snapshot: snapshot,
-                actorUserId: actorId
-            ) else { continue }
-            for node in state.nodes {
-                let doerId = node.doerId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !doerId.isEmpty, byUserId[doerId] == nil else { continue }
-                byUserId[doerId] = TeamMemberDTO(
-                    userId: doerId,
-                    displayName: doerId,
-                    avatarUrl: nil,
-                    role: nil
+            let members = rows.compactMap { row -> TeamMemberDTO? in
+                guard let userId = stringValue(row["userId"]) else { return nil }
+                return TeamMemberDTO(
+                    userId: userId,
+                    displayName: stringValue(row["displayName"]) ?? userId,
+                    email: stringValue(row["email"]),
+                    avatarUrl: stringValue(row["avatarUrl"]),
+                    role: stringValue(row["role"]),
+                    publicCanvasCount: intValue(row["publicCanvasCount"]),
+                    lastCanvasUpdatedAt: stringValue(row["lastCanvasUpdatedAt"])
                 )
             }
-            // (3) Other users seen via planner activity heartbeats.
-            for activity in state.activities {
-                let uid = activity.userId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !uid.isEmpty, byUserId[uid] == nil else { continue }
-                let name = activity.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-                byUserId[uid] = TeamMemberDTO(
-                    userId: uid,
-                    displayName: name.isEmpty ? uid : name,
-                    avatarUrl: nil,
-                    role: nil
-                )
-            }
+            return jsonResponse(TeamMembersEnvelope(members: members))
+        case .failure(let err):
+            return mapOnlineProxyError(err)
         }
-
-        let members = byUserId.values.sorted { lhs, rhs in
-            // Connected user first, then alphabetically by display name.
-            if lhs.userId == currentUserId { return true }
-            if rhs.userId == currentUserId { return false }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-        }
-        return jsonResponse(TeamMembersEnvelope(members: members))
     }
 
     static func openMeee2OnlineConnect(_ req: HttpRequest) -> HttpResponse {
@@ -3932,17 +3850,10 @@ enum BoardAPI {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
         }
 
-        let defaults = UserDefaults.standard
-        if let defaultSyncEnabled = json["defaultSyncEnabled"] as? Bool {
-            defaults.set(defaultSyncEnabled, forKey: "meee2Online")
+        let ignoredLegacyKeys = ["defaultSyncEnabled", "sessionSync"]
+        if ignoredLegacyKeys.contains(where: { json.keys.contains($0) }) {
+            MWarn("[BoardAPI] Ignored legacy user-profile session sync patch")
         }
-
-        if let sync = json["sessionSync"] as? [String: Any],
-           let sessionId = sync["sessionId"] as? String,
-           let enabled = sync["enabled"] as? Bool {
-            setMeee2OnlineSession(sessionId, enabled: enabled)
-        }
-
         persistMeee2OnlineSettings()
         Meee2OnlinePusher.shared.refreshActivation()
         return getUserProfile(req)
@@ -4105,55 +4016,6 @@ enum BoardAPI {
         }
     }
 
-    private static func meee2OnlineSessionSyncList() -> [UserProfileSessionSyncDTO] {
-        PluginManager.shared.sessions.sorted {
-            if $0.pluginId != $1.pluginId {
-                return $0.pluginId < $1.pluginId
-            }
-            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-        }.map { session in
-            let plugin = PluginManager.shared.getPluginInfo(for: session.pluginId)
-            return UserProfileSessionSyncDTO(
-                sessionId: session.id,
-                title: session.title,
-                pluginDisplayName: plugin?.displayName ?? session.pluginId,
-                project: session.cwd ?? "",
-                enabled: isMeee2OnlineSessionEnabled(session.id)
-            )
-        }
-    }
-
-    private static func isMeee2OnlineSessionEnabled(_ sessionId: String) -> Bool {
-        let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: "meee2Connected") else { return false }
-
-        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        if !aliases.isDisjoint(with: disabled) { return false }
-
-        if defaults.bool(forKey: "meee2Online") { return true }
-
-        let enabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        return !aliases.isDisjoint(with: enabled)
-    }
-
-    private static func setMeee2OnlineSession(_ sessionId: String, enabled: Bool) {
-        var disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        var explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-
-        if enabled {
-            disabled.subtract(aliases)
-            explicitlyEnabled.formUnion(aliases)
-        } else {
-            disabled.formUnion(aliases)
-            explicitlyEnabled.subtract(aliases)
-        }
-
-        Meee2OnlinePusher.storeSessionIdSet(disabled, forKey: "meee2DisabledSessionIds")
-        Meee2OnlinePusher.storeSessionIdSet(explicitlyEnabled, forKey: "meee2EnabledSessionIds")
-    }
-
     private static func persistMeee2OnlineSettings() {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "meee2Connected") else { return }
@@ -4167,11 +4029,9 @@ enum BoardAPI {
                 "role": team.role ?? ""
             ]
         }
-        let enabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds"))
-        let disabledSessionIds = Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds"))
         let meee2Settings: [String: Any] = [
             "enabled": true,
-            "online": defaults.bool(forKey: "meee2Online"),
+            "online": defaults.bool(forKey: "meee2Connected"),
             "supabaseUrl": normalizedSupabaseUrl,
             "supabaseKey": defaults.string(forKey: "meee2SupabaseKey") ?? "",
             "onlineBaseUrl": defaults.string(forKey: "meee2OnlineBaseUrl") ?? "",
@@ -4184,9 +4044,9 @@ enum BoardAPI {
             "userAvatarUrl": defaults.string(forKey: "meee2UserAvatarUrl") ?? "",
             "teams": teams,
             "sessionTeamIds": [String: String](),
-            "defaultSyncEnabled": defaults.bool(forKey: "meee2Online"),
-            "enabledSessionIds": enabledSessionIds,
-            "disabledSessionIds": disabledSessionIds,
+            "defaultSyncEnabled": false,
+            "enabledSessionIds": [],
+            "disabledSessionIds": [],
             "machineId": Host.current().name ?? "unknown",
             "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
         ]

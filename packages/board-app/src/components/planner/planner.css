@@ -4680,6 +4680,7 @@
 }
 
 .planner-monitor__body {
+  --monitor-page-inset: 16px;
   width: 100%;
   box-sizing: border-box;
   min-width: 0;
@@ -4688,7 +4689,7 @@
   grid-template-rows: auto auto auto minmax(0, 1fr);
   align-content: start;
   gap: 10px;
-  padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) clamp(14px, 2.2vw, 32px) 18px;
+  padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) var(--monitor-page-inset) 18px;
 }
 
 .planner-monitor__tools {
@@ -7036,9 +7037,26 @@
   object-fit: cover;
 }
 
-.planner-assign-dialog__member-name {
+.planner-assign-dialog__member-main {
   flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.planner-assign-dialog__member-name {
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planner-assign-dialog__member-email {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .planner-assign-dialog__member-role {

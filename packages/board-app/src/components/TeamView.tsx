@@ -2,12 +2,13 @@ import {
   Copy,
   ExternalLink,
   LockKeyhole,
+  RefreshCw,
   Settings,
   ShieldCheck,
   User,
   UsersRound,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   fetchTeamMembers,
   openMeee2OnlineDashboard,
@@ -27,35 +28,38 @@ export function TeamView({ userProfile }: Props) {
   const { t } = useI18n()
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [loadingMembers, setLoadingMembers] = useState(false)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
   const connected = Boolean(userProfile?.connected)
   const currentTeam = useMemo(() => currentTeamFor(userProfile), [userProfile])
   const currentRole = currentTeam?.role ?? memberRoleFor(teamMembers, userProfile?.userId) ?? null
   const isOwner = currentRole === 'owner'
+  const membersUnavailable = Boolean(error)
 
-  useEffect(() => {
+  const loadTeamMembers = useCallback(() => {
     if (!connected) {
       setTeamMembers([])
+      setError(null)
+      setLoadingMembers(false)
       return
     }
 
-    let cancelled = false
     setError(null)
+    setLoadingMembers(true)
     fetchTeamMembers()
       .then((res) => {
-        if (!cancelled) setTeamMembers(res.members)
+        setTeamMembers(res.members)
       })
       .catch((err) => {
-        if (!cancelled) {
-          setTeamMembers([])
-          setError((err as Error).message || t('team.loadFailed'))
-        }
+        setError((err as Error).message || t('team.loadFailed'))
       })
-    return () => {
-      cancelled = true
-    }
+      .finally(() => setLoadingMembers(false))
   }, [connected, t])
+
+  useEffect(() => {
+    loadTeamMembers()
+  }, [loadTeamMembers])
 
   const members = useMemo(() => {
     if (!connected) return []
@@ -97,12 +101,14 @@ export function TeamView({ userProfile }: Props) {
         <div className="team-view__header">
           <div>
             <span>{t('team.title')}</span>
-            <h1>{currentTeam?.name || userProfile?.defaultSyncTeamName || t('team.currentTeam')}</h1>
+            <h1>{currentTeam?.name || t('team.currentTeam')}</h1>
             <p>{t('team.subtitle')}</p>
           </div>
           <div className="team-view__summary">
             <UsersRound size={15} aria-hidden />
-            {t('team.summary', { count: members.length, role: currentRole ? ` · ${currentRole}` : '' })}
+            {membersUnavailable
+              ? t('team.summaryUnavailable', { role: currentRole ? ` · ${currentRole}` : '' })
+              : t('team.summary', { count: members.length, role: currentRole ? ` · ${currentRole}` : '' })}
           </div>
         </div>
 
@@ -115,12 +121,21 @@ export function TeamView({ userProfile }: Props) {
                 <span>{t('team.members')}</span>
                 <h2>{t('team.people')}</h2>
               </div>
-              <strong>{members.length}</strong>
+              <strong>{membersUnavailable ? '—' : members.length}</strong>
             </div>
-            {members.length === 0 ? (
+            {membersUnavailable && members.length === 0 ? (
               <div className="team-view__empty">
                 <User size={16} aria-hidden />
-                <span>{t('team.noMembers')}</span>
+                <span>{t('team.membersUnavailable')}</span>
+                <button type="button" className="team-view__inline-action" onClick={loadTeamMembers} disabled={loadingMembers}>
+                  <RefreshCw size={13} aria-hidden />
+                  {loadingMembers ? t('common.loading') : t('common.retry')}
+                </button>
+              </div>
+            ) : members.length === 0 ? (
+              <div className="team-view__empty">
+                <User size={16} aria-hidden />
+                <span>{loadingMembers ? t('team.loadingMembers') : t('team.noMembers')}</span>
               </div>
             ) : (
               <div className="team-view__grid">
@@ -182,8 +197,7 @@ export function TeamView({ userProfile }: Props) {
                 <ShieldCheck size={16} aria-hidden />
               </div>
               <div className="team-settings-list">
-                <TeamSettingRow label={t('team.teamId')} value={currentTeam?.id || userProfile?.defaultSyncTeamId || t('team.notSet')} />
-                <TeamSettingRow label={t('team.defaultSync')} value={userProfile?.defaultSyncEnabled ? t('team.enabled') : t('team.disabled')} />
+                <TeamSettingRow label={t('team.teamId')} value={currentTeam?.id || t('team.notSet')} />
                 <TeamSettingRow label={t('team.role')} value={currentRole ?? t('team.unknown')} />
               </div>
               <div className="team-view__actions">
@@ -278,7 +292,6 @@ function TeamSettingRow({ label, value }: { label: string; value: string }) {
 function currentTeamFor(userProfile: UserProfile | null): TeamInfo | null {
   if (!userProfile?.connected) return null
   return userProfile.teams.find((team) => team.isDefault)
-    ?? userProfile.teams.find((team) => team.id === userProfile.defaultSyncTeamId)
     ?? userProfile.teams[0]
     ?? null
 }

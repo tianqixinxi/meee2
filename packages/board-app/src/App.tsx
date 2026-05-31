@@ -420,7 +420,7 @@ export default function App() {
   const [readinessRepairError, setReadinessRepairError] = useState<string | null>(null)
   const [readinessRepairLogs, setReadinessRepairLogs] = useState<string[]>([])
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null)
-  // Session unread dots still drive the compact rail badges.
+  // Session unread state still drives session list ordering and rail attention tone.
   const [unreadSids, setUnreadSids] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     if (hydrated) setUnreadSids(hydrated.unreadSids)

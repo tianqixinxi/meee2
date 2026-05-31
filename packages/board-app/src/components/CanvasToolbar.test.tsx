@@ -184,11 +184,7 @@ describe('CanvasToolbar template save flow', () => {
             initials: 'LU',
             dashboardUrl: '',
             connectUrl: '',
-            defaultSyncEnabled: true,
-            defaultSyncTeamId: 'team-1',
-            defaultSyncTeamName: 'Demo Team',
             teams: [],
-            sessionSync: [],
           }}
         />
       </I18nProvider>,
@@ -251,11 +247,7 @@ describe('CanvasToolbar template save flow', () => {
             initials: 'LU',
             dashboardUrl: '',
             connectUrl: '',
-            defaultSyncEnabled: true,
-            defaultSyncTeamId: 'team-1',
-            defaultSyncTeamName: 'Demo Team',
             teams: [],
-            sessionSync: [],
           }}
         />
       </I18nProvider>,

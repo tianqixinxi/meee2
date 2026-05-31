@@ -39,9 +39,6 @@ public struct SettingsView: View {
     /// meee2 是否已连接
     @AppStorage("meee2Connected") private var meee2Connected: Bool = false
 
-    /// meee2 是否在线（同步到云端）
-    @AppStorage("meee2Online") private var meee2Online: Bool = false
-
     /// Team ID
     @AppStorage("meee2TeamId") private var meee2TeamId: String = ""
 
@@ -61,12 +58,6 @@ public struct SettingsView: View {
     @AppStorage("meee2UserName") private var meee2UserName: String = ""
     @AppStorage("meee2UserEmail") private var meee2UserEmail: String = ""
     @AppStorage("meee2UserAvatarUrl") private var meee2UserAvatarUrl: String = ""
-
-    /// Per-session sync controls. Empty means no sessions have been disabled.
-    @AppStorage("meee2DisabledSessionIds") private var meee2DisabledSessionIdsData: Data = Data()
-
-    /// Per-session opt-in controls used when default meee2 sync is off.
-    @AppStorage("meee2EnabledSessionIds") private var meee2EnabledSessionIdsData: Data = Data()
 
     /// Supabase URL
     @AppStorage("meee2SupabaseUrl") private var meee2SupabaseUrl: String = ""
@@ -142,7 +133,6 @@ public struct SettingsView: View {
         .background(SettingsTheme.background)
         .preferredColorScheme(.dark)
         .onChange(of: meee2Connected) { _ in updateMeee2OnlineSyncActivation() }
-        .onChange(of: meee2Online) { _ in updateMeee2OnlineSyncActivation() }
         .onChange(of: meee2SupabaseUrl) { _ in writeMeee2OnlineSettings() }
         .onChange(of: meee2SupabaseKey) { _ in writeMeee2OnlineSettings() }
         .onChange(of: meee2TeamId) { _ in writeMeee2OnlineSettings() }
@@ -150,8 +140,6 @@ public struct SettingsView: View {
         .onChange(of: meee2TeamsData) { _ in writeMeee2OnlineSettings() }
         .onChange(of: meee2UserId) { _ in writeMeee2OnlineSettings() }
         .onChange(of: meee2SessionTeamIdsData) { _ in writeMeee2OnlineSettings() }
-        .onChange(of: meee2EnabledSessionIdsData) { _ in updateMeee2OnlineSyncActivation() }
-        .onChange(of: meee2DisabledSessionIdsData) { _ in updateMeee2OnlineSyncActivation() }
     }
 
     // MARK: - General Settings (合并 Display + Behavior)
@@ -322,44 +310,12 @@ public struct SettingsView: View {
                         }
                     }
 
-                    Toggle("Sync to meee2 by default", isOn: $meee2Online)
-
                     if !meee2DefaultTeamDisplayName.isEmpty {
                         LabeledContent("Team", value: meee2DefaultTeamDisplayName)
 
-                        Text("A meee2 account belongs to one team. New local sessions sync to that team when default sync is on.")
+                        Text("Team Canvas runtime sync is automatic for sessions attached to Team Canvas nodes.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    }
-
-                    Text(meee2Online
-                         ? "New sessions sync unless you turn off a row below."
-                         : "Default is No sync. Turn on a row below to sync only that session.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-
-                    if meee2SyncSessions.isEmpty {
-                        Text("No local sessions")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    } else {
-                        ForEach(meee2SyncSessions) { session in
-                            HStack(alignment: .center, spacing: 12) {
-                                meee2SessionSyncRow(session)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                                Toggle("Sync", isOn: meee2SessionSyncBinding(for: session.id))
-                                    .labelsHidden()
-                                    .toggleStyle(.switch)
-                            }
-                            .padding(8)
-                            .background(meee2SessionRowBackground(session))
-                            .overlay(alignment: .leading) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(isMeee2OnlineSessionEnabled(session.id) ? Color.green : Color.secondary.opacity(0.45))
-                                    .frame(width: 3)
-                            }
-                        }
                     }
                 } else {
                     // Not connected state
@@ -412,7 +368,6 @@ public struct SettingsView: View {
                 if let teamsData = userInfo["teamsData"] as? Data {
                     meee2TeamsData = teamsData
                 }
-                meee2Online = true
             }
         }
     }
@@ -440,7 +395,6 @@ public struct SettingsView: View {
                 meee2OnlineAccessToken = result.access_token ?? ""
                 meee2OnlineRefreshToken = result.refresh_token ?? ""
                 storeMeee2OnlineTeams(result.teams ?? [result.team])
-                meee2Online = true
                 updateMeee2OnlineSyncActivation()
 
                 connectionCode = ""
@@ -472,7 +426,6 @@ public struct SettingsView: View {
 
     private func disconnectMeee2Online() {
         meee2Connected = false
-        meee2Online = false
         meee2TeamId = ""
         meee2TeamName = ""
         meee2UserId = ""
@@ -486,8 +439,9 @@ public struct SettingsView: View {
         meee2OnlineRefreshToken = ""
         meee2TeamsData = Data()
         meee2SessionTeamIdsData = Data()
-        meee2EnabledSessionIdsData = Data()
-        meee2DisabledSessionIdsData = Data()
+        UserDefaults.standard.removeObject(forKey: "meee2Online")
+        UserDefaults.standard.removeObject(forKey: "meee2EnabledSessionIds")
+        UserDefaults.standard.removeObject(forKey: "meee2DisabledSessionIds")
         updateMeee2OnlineSyncActivation()
     }
 
@@ -550,9 +504,9 @@ public struct SettingsView: View {
         let normalizedSupabaseUrl = normalizedMeee2OnlineSupabaseUrl(meee2SupabaseUrl)
 
         let settings: [String: Any] = [
-            "meee2": [
+                "meee2": [
                 "enabled": meee2Connected,
-                "online": meee2Online,
+                "online": meee2Connected,
                 "supabaseUrl": normalizedSupabaseUrl,
                 "supabaseKey": meee2SupabaseKey,
                 "onlineBaseUrl": meee2OnlineBaseUrl,
@@ -571,9 +525,9 @@ public struct SettingsView: View {
                     ]
                 },
                 "sessionTeamIds": [:],
-                "defaultSyncEnabled": meee2Online,
-                "enabledSessionIds": Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")),
-                "disabledSessionIds": Array(Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")),
+                "defaultSyncEnabled": false,
+                "enabledSessionIds": [],
+                "disabledSessionIds": [],
                 "machineId": Meee2Identity.machineId,
                 "sessionKey": "claude-\(ProcessInfo.processInfo.processIdentifier)"
             ]
@@ -637,51 +591,6 @@ public struct SettingsView: View {
         }
     }
 
-    private var meee2SyncSessions: [PluginSession] {
-        pluginManager.sessions.sorted {
-            if $0.pluginId != $1.pluginId {
-                return $0.pluginId < $1.pluginId
-            }
-            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-        }
-    }
-
-    private func isMeee2OnlineSessionEnabled(_ sessionId: String) -> Bool {
-        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        if !aliases.isDisjoint(with: disabled) {
-            return false
-        }
-
-        if meee2Online {
-            return true
-        }
-
-        let enabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        return !aliases.isDisjoint(with: enabled)
-    }
-
-    private func setMeee2OnlineSession(_ sessionId: String, enabled: Bool) {
-        var disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        var explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-
-        if enabled {
-            disabled.subtract(aliases)
-            explicitlyEnabled.formUnion(aliases)
-        } else {
-            disabled.formUnion(aliases)
-            explicitlyEnabled.subtract(aliases)
-        }
-
-        Meee2OnlinePusher.storeSessionIdSet(disabled, forKey: "meee2DisabledSessionIds")
-        Meee2OnlinePusher.storeSessionIdSet(explicitlyEnabled, forKey: "meee2EnabledSessionIds")
-        meee2DisabledSessionIdsData = UserDefaults.standard.data(forKey: "meee2DisabledSessionIds") ?? Data()
-        meee2EnabledSessionIdsData = UserDefaults.standard.data(forKey: "meee2EnabledSessionIds") ?? Data()
-        writeMeee2OnlineSettings()
-        Meee2OnlinePusher.shared.refreshActivation()
-    }
-
     private var meee2Teams: [Meee2OnlineTeam] {
         if let teams = try? JSONDecoder().decode([Meee2OnlineTeam].self, from: meee2TeamsData),
            let first = teams.first {
@@ -710,59 +619,6 @@ public struct SettingsView: View {
             return team.name
         }
         return meee2TeamName
-    }
-
-    private func meee2SessionSyncBinding(for sessionId: String) -> Binding<Bool> {
-        Binding(
-            get: { isMeee2OnlineSessionEnabled(sessionId) },
-            set: { setMeee2OnlineSession(sessionId, enabled: $0) }
-        )
-    }
-
-    @ViewBuilder
-    private func meee2SessionSyncRow(_ session: PluginSession) -> some View {
-        let plugin = pluginManager.getPluginInfo(for: session.pluginId)
-        let syncing = isMeee2OnlineSessionEnabled(session.id)
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(session.title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                Text(plugin?.displayName ?? session.pluginId)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                Text(syncing ? "Syncing" : "No sync")
-                    .font(.caption2.bold())
-                    .foregroundColor(syncing ? .green : .secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule()
-                            .fill(syncing ? Color.green.opacity(0.15) : Color.secondary.opacity(0.12))
-                    )
-            }
-
-            Text(meee2SessionSubtitle(session))
-                .font(.caption)
-                .foregroundColor(syncing ? .secondary : .secondary.opacity(0.7))
-                .lineLimit(1)
-        }
-    }
-
-    private func meee2SessionRowBackground(_ session: PluginSession) -> some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(isMeee2OnlineSessionEnabled(session.id) ? Color.green.opacity(0.08) : Color.secondary.opacity(0.06))
-    }
-
-    private func meee2SessionSubtitle(_ session: PluginSession) -> String {
-        if let subtitle = session.subtitle, !subtitle.isEmpty {
-            return subtitle
-        }
-        if let cwd = session.cwd, !cwd.isEmpty {
-            return cwd
-        }
-        return "\(session.status.rawValue) · \(session.id.prefix(8))"
     }
 
     // MARK: - Plugins Settings

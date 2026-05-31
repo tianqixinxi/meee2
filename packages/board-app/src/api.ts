@@ -2057,21 +2057,11 @@ export interface UserProfile {
   initials: string
   dashboardUrl: string
   connectUrl: string
-  defaultSyncEnabled: boolean
-  defaultSyncTeamId: string
-  defaultSyncTeamName: string
   teams: Array<{
     id: string
     name: string
     role: string | null
     isDefault: boolean
-  }>
-  sessionSync: Array<{
-    sessionId: string
-    title: string
-    pluginDisplayName: string
-    project: string
-    enabled: boolean
   }>
 }
 
@@ -2087,11 +2077,7 @@ export function fetchUserProfile(): Promise<UserProfile> {
       initials: 'DU',
       dashboardUrl: '',
       connectUrl: '',
-      defaultSyncEnabled: false,
-      defaultSyncTeamId: '',
-      defaultSyncTeamName: '',
       teams: [],
-      sessionSync: [],
     })
   }
   return jsonRequest<UserProfile>('/api/user-profile')
@@ -2151,16 +2137,6 @@ export function openMeee2OnlineDashboard(): Promise<{ ok: boolean }> {
 
 export function openMeee2Settings(): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>('/api/user-profile/settings', { method: 'POST' })
-}
-
-export function updateUserProfile(input: {
-  defaultSyncEnabled?: boolean
-  sessionSync?: { sessionId: string; enabled: boolean }
-}): Promise<UserProfile> {
-  return jsonRequest<UserProfile>('/api/user-profile', {
-    method: 'PATCH',
-    body: JSON.stringify(input),
-  })
 }
 
 export function disconnectMeee2Online(): Promise<{ ok: boolean }> {

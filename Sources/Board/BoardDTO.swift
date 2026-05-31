@@ -218,19 +218,7 @@ struct UserProfileDTO: Encodable {
     let initials: String
     let dashboardUrl: String
     let connectUrl: String
-    let defaultSyncEnabled: Bool
-    let defaultSyncTeamId: String
-    let defaultSyncTeamName: String
     let teams: [SyncTeamDTO]
-    let sessionSync: [UserProfileSessionSyncDTO]
-}
-
-struct UserProfileSessionSyncDTO: Encodable {
-    let sessionId: String
-    let title: String
-    let pluginDisplayName: String
-    let project: String
-    let enabled: Bool
 }
 
 struct AppSettingsScreenDTO: Encodable {
@@ -260,11 +248,13 @@ struct AppSettingsDTO: Encodable {
 struct TeamMemberDTO: Encodable {
     let userId: String
     let displayName: String
+    let email: String?
     let avatarUrl: String?
     /// Team-level role from meee2 Online membership (`owner` / `admin` /
-    /// `member`). `nil` when the member was discovered only locally (e.g. a
-    /// planner-node doer) and no membership role is known.
+    /// `member`).
     let role: String?
+    let publicCanvasCount: Int?
+    let lastCanvasUpdatedAt: String?
 }
 
 /// `GET /api/team/members` body.
@@ -682,15 +672,6 @@ enum BoardDTOBuilder {
         ]
     }
 
-    static func meee2DefaultSyncTeamName() -> String {
-        let defaults = UserDefaults.standard
-        let defaultTeamId = defaults.string(forKey: "meee2TeamId") ?? ""
-        guard !defaultTeamId.isEmpty else { return "" }
-        return meee2OnlineTeams().first(where: { $0.id == defaultTeamId })?.name
-            ?? defaults.string(forKey: "meee2TeamName")
-            ?? ""
-    }
-
     private static func syncInfo(forSessionId sessionId: String) -> SyncInfo {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "meee2Connected") else {
@@ -698,20 +679,28 @@ enum BoardDTOBuilder {
         }
 
         let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        if !aliases.isDisjoint(with: disabled) {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
-        }
-
-        let enabledByDefault = defaults.bool(forKey: "meee2Online")
-        let explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        guard enabledByDefault || !aliases.isDisjoint(with: explicitlyEnabled) else {
-            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
-        }
-
         let teams = meee2OnlineTeams()
         let teamId = teams.first?.id ?? defaults.string(forKey: "meee2TeamId") ?? ""
         guard !teamId.isEmpty else {
+            return SyncInfo(enabled: false, teamId: nil, teamName: nil)
+        }
+        let teamCanvasIds = BoardLayoutStore.shared.snapshot().canvases.compactMap { canvas -> String? in
+            guard canvas.scope == .team, (canvas.teamId ?? teamId) == teamId else { return nil }
+            return canvas.id
+        }
+        guard teamCanvasIds.contains(where: { canvasId in
+            guard let record = try? PlannerStore.shared.canvasRecordForBridge(canvasId: canvasId) else {
+                return false
+            }
+            return record.nodes.contains { node in
+                let candidates = [node.sessionId, node.chatThreadId]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                return candidates.contains { candidate in
+                    !aliases.isDisjoint(with: Meee2OnlinePusher.sessionIdAliases(candidate))
+                }
+            }
+        }) else {
             return SyncInfo(enabled: false, teamId: nil, teamName: nil)
         }
         let teamName = teams.first(where: { $0.id == teamId })?.name

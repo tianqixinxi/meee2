@@ -1833,7 +1833,7 @@ public final class BoardLayoutStore {
             return
         }
         guard let teamId = canvas.teamId, canSessionJoinTeamCanvas(canvasTeamId: teamId, sessionId: sessionId) else {
-            throw storeError("sync this session to the team before adding it to a team canvas")
+            throw storeError("only connected team sessions can be added to a team canvas")
         }
     }
 
@@ -1844,17 +1844,6 @@ public final class BoardLayoutStore {
         }
 
         let aliases = Meee2OnlinePusher.sessionIdAliases(sessionId)
-        let disabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2DisabledSessionIds")
-        if !aliases.isDisjoint(with: disabled) {
-            return false
-        }
-
-        let enabledByDefault = defaults.bool(forKey: "meee2Online")
-        let explicitlyEnabled = Meee2OnlinePusher.sessionIdSet(forKey: "meee2EnabledSessionIds")
-        guard enabledByDefault || !aliases.isDisjoint(with: explicitlyEnabled) else {
-            return false
-        }
-
         let sessionTeamIds = Meee2OnlinePusher.sessionIdMap(forKey: "meee2SessionTeamIds")
         let targetTeamId = aliases.compactMap { sessionTeamIds[$0] }.first { !$0.isEmpty }
             ?? defaults.string(forKey: "meee2TeamId")

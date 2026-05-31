@@ -1,8 +1,8 @@
 // Meee2OnlinePusher - 推送 session 状态和 transcript 消息到 meee2 cloud dashboard
 //
 // 监听 SessionEventBus，当 transcriptAppended / sessionMetadataChanged 时，
-// 调用 meee2 REST API 同步数据。默认同步打开，或至少一个 session 被
-// 单独 opt-in 时同步 session；team canvas 只要已连接 team 就会同步。
+// 调用 meee2 REST API 同步数据。Team Canvas 文档层独立同步；session
+// runtime 只在被 Team Canvas 节点引用时同步，避免暴露普通本地会话。
 
 import Foundation
 import Combine
@@ -28,9 +28,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private struct SettingsSnapshot {
         var isConnected: Bool
-        var defaultSyncEnabled: Bool
-        var disabledSessionIds: Set<String>
-        var enabledSessionIds: Set<String>
         var sessionTeamIds: [String: String]
         var teamId: String
         var userId: String
@@ -316,9 +313,6 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
         let defaultsAccessToken = preferOnlineSettings ? "" : (defaults.string(forKey: "meee2OnlineAccessToken") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = SettingsSnapshot(
             isConnected: defaults.bool(forKey: "meee2Connected") || (!onlineSettings.teamId.isEmpty && !onlineSettings.onlineBaseUrl.isEmpty),
-            defaultSyncEnabled: defaults.bool(forKey: "meee2Online"),
-            disabledSessionIds: Self.sessionIdSet(forKey: "meee2DisabledSessionIds"),
-            enabledSessionIds: Self.sessionIdSet(forKey: "meee2EnabledSessionIds"),
             sessionTeamIds: Self.sessionIdMap(forKey: "meee2SessionTeamIds"),
             teamId: defaultsTeamId.isEmpty ? onlineSettings.teamId : defaultsTeamId,
             userId: defaultsUserId.isEmpty ? onlineSettings.userId : defaultsUserId,
@@ -727,16 +721,36 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
 
     private func shouldSyncSessionId(_ sessionId: String) -> Bool {
         let settings = settingsSnapshot()
+        guard settings.isConnected, !settings.teamId.isEmpty else { return false }
+        return isSessionReferencedByTeamCanvas(sessionId, settings: settings)
+    }
+
+    private func isSessionReferencedByTeamCanvas(_ sessionId: String, settings: SettingsSnapshot) -> Bool {
         let aliases = Self.sessionIdAliases(sessionId)
-        if !aliases.isDisjoint(with: settings.disabledSessionIds) {
-            return false
+        let teamCanvasIds = BoardLayoutStore.shared.snapshot().canvases.compactMap { canvas -> String? in
+            guard canvas.scope == .team else { return nil }
+            let canvasTeamId = (canvas.teamId ?? settings.teamId).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard canvasTeamId == settings.teamId else { return nil }
+            return canvas.id
         }
+        guard !teamCanvasIds.isEmpty else { return false }
 
-        if settings.defaultSyncEnabled {
-            return true
+        for canvasId in teamCanvasIds {
+            guard let record = try? PlannerStore.shared.canvasRecordForBridge(canvasId: canvasId) else {
+                continue
+            }
+            if record.nodes.contains(where: { node in
+                let candidates = [node.sessionId, node.chatThreadId]
+                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                return candidates.contains { candidate in
+                    !aliases.isDisjoint(with: Self.sessionIdAliases(candidate))
+                }
+            }) {
+                return true
+            }
         }
-
-        return !aliases.isDisjoint(with: settings.enabledSessionIds)
+        return false
     }
 
     private func teamIdForSession(_ sessionId: String) -> String {
@@ -747,8 +761,8 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
                 return mapped
             }
         }
-        // `meee2TeamId` is the explicit default sync team selected in
-        // Settings. New sessions use it unless a per-session override exists.
+        // Legacy per-session routing wins when present. Otherwise, node runtime
+        // sessions inherit the currently connected Team Canvas team.
         return settings.teamId
     }
 

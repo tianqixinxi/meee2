@@ -302,7 +302,7 @@ function PlannerGraphInner({
         setMCPStatus(null)
         setMCPStatusError((err as Error).message || 'Failed to check Meee2 MCP status')
       })
-  }, [])
+  }, [userProfile?.teams, userProfile?.userId])
 
   useEffect(() => {
     refreshMCPStatus()
@@ -335,7 +335,7 @@ function PlannerGraphInner({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [userProfile?.teams, userProfile?.userId])
 
   const handleOpenNodeDetails = useCallback((nodeId: string) => {
     setSelectedNodeId(nodeId)

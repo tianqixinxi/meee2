@@ -64,6 +64,7 @@ export function AssignNodeDialog({
         if (!q) return true
         return (
           member.displayName.toLowerCase().includes(q)
+          || (member.email ?? '').toLowerCase().includes(q)
           || member.userId.toLowerCase().includes(q)
         )
       })
@@ -146,8 +147,15 @@ export function AssignNodeDialog({
                             ? <img src={member.avatarUrl} alt="" />
                             : <UserRound size={14} />}
                         </span>
-                        <span className="planner-assign-dialog__member-name">
-                          {member.displayName || member.userId}
+                        <span className="planner-assign-dialog__member-main">
+                          <span className="planner-assign-dialog__member-name">
+                            {member.displayName || member.userId}
+                          </span>
+                          {member.email && member.email !== member.userId && (
+                            <span className="planner-assign-dialog__member-email">
+                              {member.email}
+                            </span>
+                          )}
                         </span>
                         {member.role && (
                           <span className="planner-assign-dialog__member-role">{member.role}</span>
