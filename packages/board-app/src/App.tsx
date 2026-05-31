@@ -1069,9 +1069,9 @@ export default function App() {
         return refreshCanvases()
       })
       .then(() => {
-        pushToast('success', visibility === 'public' ? 'Canvas published to Team' : 'Canvas is private')
+        pushToast('success', visibility === 'public' ? 'Canvas published to Team' : 'Canvas removed from Team')
       })
-      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update visibility'))
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update Team sharing'))
   }, [pushToast, refreshCanvases])
 
   const boardSessionSignature = useMemo(() => {

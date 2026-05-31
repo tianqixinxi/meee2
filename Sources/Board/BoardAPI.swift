@@ -1262,31 +1262,21 @@ enum BoardAPI {
                 status: 400
             )
         }
-        let snapshot = BoardLayoutStore.shared.snapshot()
         let settings = OnlineProxy.loadSettings()
-        var actorUserId = PlannerPermission.currentActorId()
-        if let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }),
-           boardCanvas.scope == .team {
-            actorUserId = settings.userId.isEmpty ? actorUserId : settings.userId
-            if let ownerUserId = boardCanvas.ownerUserId ?? boardCanvas.createdBy,
-               !ownerUserId.isEmpty,
-               ownerUserId != actorUserId {
-                return errorResponse("forbidden", "only the canvas owner can change visibility", status: 403)
-            }
-            guard !settings.teamId.isEmpty else {
-                return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
-            }
-            let remoteCanvasId = boardCanvas.remoteId ?? canvasId
-            let path = "/api/v1/team/\(urlPath(settings.teamId))/canvases/\(urlPath(remoteCanvasId))/visibility"
-            guard let bodyData = try? JSONSerialization.data(withJSONObject: ["visibility": body.visibility.rawValue]) else {
-                return errorResponse("bad_request", "failed to encode visibility payload", status: 400)
-            }
-            switch OnlineProxy.callOnlineAPI(method: "PATCH", path: path, body: bodyData, settings: settings) {
-            case .success:
-                break
-            case .failure(let err):
-                return mapOnlineProxyError(err)
-            }
+        let actorUserId = settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
+        let nextScope: BoardLayoutStore.CanvasScope = body.visibility == .public ? .team : .personal
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+            return errorResponse("not_found", "canvas not found", status: 404)
+        }
+        guard boardCanvas.scope == .team else {
+            return errorResponse("conflict", "publish this canvas to Team before assigning nodes", status: 409)
+        }
+        guard !boardCanvas.isDefault else {
+            return errorResponse("forbidden", "default canvas cannot be published", status: 403)
+        }
+        if nextScope == .team && settings.teamId.isEmpty {
+            return errorResponse("not_connected", "meee2-online not configured (missing teamId)", status: 412)
         }
         do {
             let canvas = try PlannerBoardBridge.setCanvasVisibility(
@@ -1295,6 +1285,7 @@ enum BoardAPI {
                 snapshot: snapshot,
                 actorUserId: actorUserId
             )
+            _ = try BoardLayoutStore.shared.setCanvasScope(id: canvasId, scope: nextScope)
             BoardServer.shared.broadcastStateChanged()
             return jsonResponse(PlannerCanvasVisibilityEnvelope(canvas: canvas))
         } catch let err as PlannerCoreError {
@@ -2790,14 +2781,6 @@ enum BoardAPI {
                 return errorResponse("bad_gateway", "meee2-online assign response missing assignment", status: 502)
             }
             do {
-                if state.canvas.visibility == .private {
-                    _ = try PlannerBoardBridge.setCanvasVisibility(
-                        .public,
-                        for: canvasId,
-                        snapshot: BoardLayoutStore.shared.snapshot(),
-                        actorUserId: settings.userId.isEmpty ? PlannerPermission.currentActorId() : settings.userId
-                    )
-                }
                 let proposal = try PlannerBoardBridge.createSubCanvasProposal(
                     nodeId: nodeId,
                     subCanvasId: subCanvasId,
@@ -5760,7 +5743,8 @@ enum BoardAPI {
             id: canvas.id,
             ownerId: canvas.ownerUserId ?? canvas.createdBy ?? "local-user",
             title: title ?? canvas.name,
-            plannerContext: context ?? "canvas:\(canvas.id)"
+            plannerContext: context ?? "canvas:\(canvas.id)",
+            visibility: canvas.scope == .team ? .public : .private
         )
     }
 
@@ -6239,13 +6223,6 @@ enum BoardAPI {
     ) -> String {
         guard (canvas.kind ?? .board) != .monitor else {
             return canvas.scope == .team ? "public" : "private"
-        }
-        if let state = try? PlannerBoardBridge.graphState(
-            for: canvas.id,
-            snapshot: snapshot,
-            actorUserId: PlannerPermission.currentActorId()
-        ) {
-            return state.canvas.visibility.rawValue
         }
         return canvas.scope == .team ? "public" : "private"
     }

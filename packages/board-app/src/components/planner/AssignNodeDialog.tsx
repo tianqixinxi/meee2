@@ -1,24 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Lock, Search, UserRound, X } from 'lucide-react'
+import { AlertTriangle, Search, UserRound, X } from 'lucide-react'
 import type { NodeContractV2, PlanningNode } from '../../types'
 import type { TeamMember } from '../../api'
 
 /**
  * UI-2 · F1.1–F1.3 + U2.2 — assign a node to a teammate. Two phases:
  *   1. Picker — choose a person; show what the assignee will own.
- *   2. Confirm — if the source canvas is `private`, this becomes a blocking
- *      private→public upgrade modal that has to be accepted before the
- *      assign RPC fires.
+ *   2. Confirm — assign only runs from an already-published Team Canvas.
  *
  * F1.4 (flow-vs-item mode) is UX待验 and intentionally not surfaced; we
  * always treat the action as "assign the whole node as a sub-canvas".
  */
-type AssignPhase = 'pick' | 'confirm-upgrade' | 'confirm-public'
+type AssignPhase = 'pick' | 'confirm-public'
 
 export interface AssignNodeDialogProps {
   node: PlanningNode
-  /** Visibility of the *source* canvas — drives whether U2.2 modal blocks. */
-  sourceVisibility: 'public' | 'private'
   /** Frozen contract snapshot — what the assignee owes back upstream. */
   frozenIOContract: NodeContractV2 | null
   /** Team member directory (already filtered to candidates). */
@@ -33,7 +29,6 @@ export interface AssignNodeDialogProps {
 
 export function AssignNodeDialog({
   node,
-  sourceVisibility,
   frozenIOContract,
   teamMembers,
   excludedUserIds,
@@ -78,14 +73,14 @@ export function AssignNodeDialog({
 
   const handleNextFromPicker = () => {
     if (!picked) return
-    setPhase(sourceVisibility === 'private' ? 'confirm-upgrade' : 'confirm-public')
+    setPhase('confirm-public')
   }
 
   const handleFinalConfirm = () => {
     if (!picked) return
     onConfirm({
       assigneeUserId: picked.userId,
-      acceptPrivateUpgrade: phase === 'confirm-upgrade',
+      acceptPrivateUpgrade: false,
     })
   }
 
@@ -187,13 +182,6 @@ export function AssignNodeDialog({
           </div>
         )}
 
-        {phase === 'confirm-upgrade' && picked && (
-          <UpgradeConfirmation
-            picked={picked}
-            errorMessage={errorMessage}
-          />
-        )}
-
         {phase === 'confirm-public' && picked && (
           <PublicConfirmation picked={picked} errorMessage={errorMessage} />
         )}
@@ -234,50 +222,14 @@ export function AssignNodeDialog({
                 type="button"
                 onClick={handleFinalConfirm}
                 disabled={busy}
-                className={`planner-assign-dialog__primary${phase === 'confirm-upgrade' ? ' is-destructive' : ''}`}
+                className="planner-assign-dialog__primary"
               >
-                {busy
-                  ? 'Assigning…'
-                  : phase === 'confirm-upgrade'
-                    ? 'Publish and assign'
-                    : 'Assign'}
+                {busy ? 'Assigning…' : 'Assign'}
               </button>
             </>
           )}
         </footer>
       </div>
-    </div>
-  )
-}
-
-function UpgradeConfirmation({ picked, errorMessage }: { picked: TeamMember; errorMessage?: string | null }) {
-  return (
-    <div className="planner-assign-dialog__body planner-assign-dialog__body--upgrade">
-      <div className="planner-assign-dialog__warning-icon" aria-hidden>
-        <Lock size={22} />
-      </div>
-      <h3>Publish this canvas to assign work?</h3>
-      <p className="planner-assign-dialog__warning-lead">
-        Assign will publish the current canvas so{' '}
-        <strong>{picked.displayName || picked.userId}</strong> can access the assigned
-        work. Confirm to make this canvas <strong>public</strong> and continue.
-      </p>
-      <ul className="planner-assign-dialog__warning-list">
-        <li>
-          <strong>{picked.displayName || picked.userId}</strong> will be able to read
-          this canvas and own the new sub-canvas internally.
-        </li>
-        <li>You will <strong>lose internal-edit rights</strong> on the sub-canvas (you stay an owner of the parent and keep the I/O contract).</li>
-        <li>
-          This action is <strong>one-way for MVP</strong> — owner-revoke is not available yet.
-        </li>
-      </ul>
-      {errorMessage && (
-        <div className="planner-assign-dialog__error" role="alert">
-          <AlertTriangle size={14} aria-hidden />
-          <span>{errorMessage}</span>
-        </div>
-      )}
     </div>
   )
 }

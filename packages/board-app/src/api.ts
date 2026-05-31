@@ -1750,18 +1750,16 @@ export function bindPlannerNodeInput(
  * team API, which performs the server-side transaction. On failure no
  * sub-canvas, no session re-bind, no event row is committed.
  *
- * If the source canvas was `private`, the server is expected to upgrade it
- * to `public` as part of the same transaction so the assignee can see it;
- * the returned `visibilityUpgraded` flag tells the UI whether the
- * private→public modal's promise was kept.
+ * Assign only operates on Team Canvases. The legacy `acceptPrivateUpgrade`
+ * field is still sent for older servers, but the current model has no
+ * team-private parent or subcanvas state.
  */
 export interface AssignPlannerNodeInput {
   /** Optional override for the new sub-canvas's display name. */
   subCanvasName?: string | null
   /**
-   * Acknowledgement that the source canvas was private and the user accepted
-   * the upgrade. Server refuses the call without it when the canvas is
-   * private — protects against accidentally publishing a private board.
+   * Legacy acknowledgement for older servers; ignored by the current Team
+   * Canvas model.
    */
   acceptPrivateUpgrade?: boolean
 }
@@ -1985,9 +1983,9 @@ export async function createPlannerSubCanvasFromNode(
 }
 
 /**
- * PATCH …/canvases/:id/visibility — owner-only public/private toggle. This is
- * canvas metadata, not a graph proposal, so it applies immediately and returns
- * the updated canvas record.
+ * PATCH …/canvases/:id/visibility — compatibility facade for owner-only Team
+ * publishing. `public` means publish/sync as a Team Canvas; `private` means
+ * remove from Team sync and return to an own canvas.
  */
 export async function setPlannerCanvasVisibility(
   canvasId: string,

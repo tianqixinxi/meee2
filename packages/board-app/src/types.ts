@@ -1476,8 +1476,8 @@ export interface NodeAssignment {
 export interface AssignPlannerNodeResult {
   assignment: NodeAssignment
   /**
-   * Whether the source canvas was upgraded from `private` to `public` as part
-   * of this assign. UI-2 surfaces a different success toast when this happens.
+   * Legacy compatibility field. Team Mode now requires the parent to already
+   * be a Team Canvas; assign no longer creates a distinct team-private state.
    */
   visibilityUpgraded: boolean
   graph: PlannerGraphState

@@ -1007,6 +1007,78 @@ public final class BoardLayoutStore {
     }
 
     @discardableResult
+    public func setCanvasScope(id: String, scope: CanvasScope) throws -> Snapshot {
+        var shouldRefreshOnline = false
+        let snapshot = try queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            guard let idx = store.canvases.firstIndex(where: { $0.id == id }) else {
+                throw storeError("canvas not found: \(id)")
+            }
+            guard visibleCanvasesLocked(store).contains(where: { $0.id == id }) else {
+                throw storeError("canvas not accessible: \(id)")
+            }
+            guard !store.canvases[idx].isDefault else {
+                throw storeError("default canvas cannot be published")
+            }
+            let context = currentContext()
+            if scope == .team && context.teamId.isEmpty {
+                throw storeError("team canvas requires meee2 Online connection")
+            }
+            let now = Date()
+            let previous = store.canvases[idx]
+            guard previous.scope != scope else {
+                return snapshotLocked(store)
+            }
+
+            if previous.scope == .team,
+               let remoteId = previous.remoteId,
+               let teamId = previous.teamId {
+                var deleted = store.deletedTeamCanvases ?? []
+                deleted.removeAll { $0.remoteId == remoteId }
+                deleted.append(DeletedCanvas(
+                    id: previous.id,
+                    remoteId: remoteId,
+                    teamId: teamId,
+                    baseVersion: previous.remoteVersion ?? 0,
+                    deletedAt: now
+                ))
+                store.deletedTeamCanvases = deleted
+                shouldRefreshOnline = true
+            }
+
+            store.canvases[idx].scope = scope
+            store.canvases[idx].teamId = scope == .team ? context.teamId : nil
+            store.canvases[idx].ownerUserId = previous.ownerUserId ?? previous.createdBy ?? context.userId
+            store.canvases[idx].remoteId = scope == .team ? (previous.remoteId ?? id) : nil
+            store.canvases[idx].remoteVersion = scope == .team ? (previous.remoteVersion ?? 0) : nil
+            store.canvases[idx].lastSyncedAt = scope == .team ? previous.lastSyncedAt : nil
+            store.canvases[idx].dirtySince = scope == .team ? now : nil
+            store.canvases[idx].syncStatus = scope == .team ? "pending" : nil
+            store.canvases[idx].lastRemoteUpdatedAt = scope == .team ? previous.lastRemoteUpdatedAt : nil
+            store.canvases[idx].conflictRemoteVersion = nil
+            store.canvases[idx].conflictRemoteState = nil
+            store.canvases[idx].conflictRemoteDeleted = nil
+            store.canvases[idx].updatedAt = now
+            if scope == .team {
+                var deleted = store.deletedTeamCanvases ?? []
+                deleted.removeAll { $0.remoteId == (previous.remoteId ?? id) }
+                store.deletedTeamCanvases = deleted
+                shouldRefreshOnline = true
+            }
+
+            try writeToDiskLocked(store)
+            cached = store
+            SessionEventBus.shared.publish(.boardLayoutChanged)
+            return snapshotLocked(store)
+        }
+        if shouldRefreshOnline {
+            Meee2OnlinePusher.shared.refreshActivation()
+        }
+        return snapshot
+    }
+
+    @discardableResult
     public func deleteCanvas(id: String) throws -> Snapshot {
         try queue.sync {
             var store = cached ?? loadFromDiskLocked()

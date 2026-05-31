@@ -3670,11 +3670,7 @@ final class PlannerStore {
     ) throws -> CanvasRecord {
         try withLock {
             if let existing = document.canvases[canvas.id] {
-                // `visibility` is owned by the store, not by the per-request
-                // `PlanningCanvas` projection (which defaults to `.private`).
-                // Preserve the persisted tier so a read never clobbers it.
                 var incoming = canvas
-                incoming.visibility = existing.canvas.visibility
                 // PR6+7: the 5-atom governance collections (dataSources / edges
                 // / monitorSpec) are store-owned too — the per-request board
                 // snapshot projection doesn't carry them, so a plain read would
@@ -8073,7 +8069,8 @@ enum PlannerBoardBridge {
             id: canvas.id,
             ownerId: ownerId,
             title: canvas.name,
-            plannerContext: "canvas:\(canvas.id)"
+            plannerContext: "canvas:\(canvas.id)",
+            visibility: canvas.scope == .team ? .public : .private
         )
     }
 

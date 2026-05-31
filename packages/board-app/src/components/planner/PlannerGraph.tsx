@@ -804,9 +804,13 @@ function PlannerGraphInner({
 
   // UI-2 · F1.1 — open the assign dialog from a node's owner chip.
   const handleRequestAssign = useCallback((nodeId: string) => {
+    if (plannerState?.canvas.visibility !== 'public') {
+      onNotify?.('error', 'Publish this canvas to Team before assigning a node.')
+      return
+    }
     setAssignError(null)
     setAssignDialogNodeId(nodeId)
-  }, [])
+  }, [onNotify, plannerState?.canvas.visibility])
 
   const handleCancelAssign = useCallback(() => {
     if (assignBusy) return
@@ -2005,7 +2009,6 @@ function PlannerGraphInner({
       {assignDialogNodeId && assignDialogNode && (
         <AssignNodeDialog
           node={assignDialogNode}
-          sourceVisibility={plannerState?.canvas.visibility === 'private' ? 'private' : 'public'}
           frozenIOContract={
             // Prefer the frozen contract already attached to the parent canvas
             // (set when a previous assign happened); fall back to deriving a

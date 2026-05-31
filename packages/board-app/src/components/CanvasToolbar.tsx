@@ -162,18 +162,18 @@ export function CanvasToolbar({
     [filteredCanvasEntries, userProfile?.userId],
   )
   // ui-simplification §1: kind 是隐藏词,switcher 不暴露 board/monitor/template
-  // 文案。scope (private/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
+  // 文案。scope (own/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
   // 只有当列表里同时存在 team 和 personal 时才渲染一个 icon 来快速辨识。
   const showScopeIcon = useMemo(() => {
     const hasTeam = canvases.some((c) => c.scope === 'team')
     const hasPersonal = canvases.some((c) => c.scope !== 'team')
     return hasTeam && hasPersonal
   }, [canvases])
-  const canManageTeamVisibility = Boolean(
+  const canManageTeamSharing = Boolean(
     activeCanvas &&
-    activeCanvas.scope === 'team' &&
     !activeCanvas.isDefault &&
     ownsCanvas(activeCanvas, userProfile?.userId ?? '') &&
+    userProfile?.connected &&
     onSetCanvasVisibility,
   )
 
@@ -342,7 +342,7 @@ export function CanvasToolbar({
       .finally(() => setCanvasDescriptionSaving(false))
   }
 
-  const submitVisibility = (visibility: 'private' | 'public') => {
+  const submitSharing = (visibility: 'private' | 'public') => {
     if (!activeCanvas || !onSetCanvasVisibility) return
     if (canvasVisibilitySaving || visibilityTone(activeCanvas) === visibility) return
     setCanvasVisibilitySaving(true)
@@ -845,7 +845,7 @@ export function CanvasToolbar({
                   >
                     {canvasDescriptionSaving ? t('canvas.saving') : t('canvas.saveDescription')}
                   </button>
-                  {canManageTeamVisibility && (
+                  {canManageTeamSharing && (
                     <div className="canvas-info-modal__visibility">
                       <UserRound size={15} aria-hidden />
                       <div>
@@ -853,24 +853,28 @@ export function CanvasToolbar({
                         <p>{t('canvas.teamSharingHelp')}</p>
                       </div>
                       <div className="canvas-info-modal__visibility-actions">
-                        <button
-                          type="button"
-                          className="primary"
-                          onClick={() => submitVisibility('public')}
-                          disabled={canvasVisibilitySaving || visibilityTone(activeCanvas) === 'public'}
-                        >
-                          <Share2 size={13} aria-hidden />
-                          {canvasVisibilitySaving ? t('canvas.visibilitySaving') : t('canvas.publishToTeam')}
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => submitVisibility('private')}
-                          disabled={canvasVisibilitySaving || visibilityTone(activeCanvas) === 'private'}
-                        >
-                          <LockKeyhole size={13} aria-hidden />
-                          {t('canvas.makePrivate')}
-                        </button>
+                        {activeCanvas.scope !== 'team' && (
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() => submitSharing('public')}
+                            disabled={canvasVisibilitySaving}
+                          >
+                            <Share2 size={13} aria-hidden />
+                            {canvasVisibilitySaving ? t('canvas.visibilitySaving') : t('canvas.publishToTeam')}
+                          </button>
+                        )}
+                        {activeCanvas.scope === 'team' && (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => submitSharing('private')}
+                            disabled={canvasVisibilitySaving}
+                          >
+                            <LockKeyhole size={13} aria-hidden />
+                            {t('canvas.removeFromTeam')}
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
@@ -976,7 +980,7 @@ export function CanvasToolbar({
                   placeholder={t('canvas.namePlaceholder')}
                 />
                 {/* Scope toggle 已移除 — ui-simplification §1「藏起来的词」: 创建瞬间用户只面对画板+名字,
-                 *  scope 默认 personal,可见性变更走 Canvas Info modal。Kind selector 同样隐藏。 */}
+                 *  scope 默认 personal,发布到 Team 走 Canvas Info modal。Kind selector 同样隐藏。 */}
               </div>
             </div>
             <div className="modal-footer">
@@ -1080,11 +1084,11 @@ function visibilityTone(canvas: CanvasInfo): 'private' | 'public' {
 }
 
 function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
-  return isTeamReadable(canvas) ? t('templates.public') : t('templates.private')
+  return isTeamReadable(canvas) ? t('canvas.teamCanvas') : t('canvas.ownCanvas')
 }
 
 function isTeamReadable(canvas: CanvasInfo): boolean {
-  return canvas.visibility === 'public' || (canvas.scope === 'team' && !canvas.visibility)
+  return canvas.scope === 'team'
 }
 
 function ownsCanvas(canvas: CanvasInfo, userId: string): boolean {
