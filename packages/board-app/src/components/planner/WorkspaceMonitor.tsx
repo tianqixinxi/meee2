@@ -118,8 +118,8 @@ export function WorkspaceMonitor({
 
   return (
     <section className="planner-monitor" aria-label={t('monitor.title')}>
-      <CanvasKindHint kind="monitor" />
       <div className="planner-monitor__body">
+        <CanvasKindHint kind="monitor" />
         <div className="planner-monitor__tools">
           <div className="planner-monitor__search">
             <Search size={13} aria-hidden />

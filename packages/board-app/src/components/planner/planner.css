@@ -4584,6 +4584,8 @@
   position: absolute;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  align-content: start;
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(47, 48, 45, 0.48), rgba(31, 33, 31, 0.96)),
@@ -4596,10 +4598,10 @@
   min-width: 0;
   overflow: hidden;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   align-content: start;
   gap: 10px;
-  padding: 14px clamp(14px, 2.2vw, 32px) 18px;
+  padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) clamp(14px, 2.2vw, 32px) 18px;
 }
 
 .planner-monitor__tools {
@@ -4960,7 +4962,7 @@
   }
 
   .planner-monitor__body {
-    padding: 14px 12px 24px;
+    padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 14px) 12px 24px;
   }
 
   .planner-monitor__tools {
@@ -5169,8 +5171,8 @@
   }
 
   .planner-monitor__body {
-    grid-template-rows: auto auto minmax(0, 1fr);
-    padding: 10px;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    padding: calc(var(--monitor-toolbar-reserved-top, 0px) + 10px) 10px 10px;
   }
 
   .planner-monitor__tool-group,
