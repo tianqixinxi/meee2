@@ -11,6 +11,7 @@ import {
 } from '../../api'
 import { useI18n } from '../../lib/i18n'
 import { readLlmSettings } from '../../lib/llmSettings'
+import { serializeConfirmedPlanDraft } from '../../lib/plannerPlanDraft'
 import type { PlanProposal, PlannerAccess } from '../../types'
 import { PlannerNodeCard } from './PlannerNodeCard'
 import type { PlannerGraphEdge, PlannerGraphNode } from './plannerGraphAdapter'
@@ -463,6 +464,10 @@ export function PlannerProposalPanel({
     onSubmit(prompt)
   }
 
+  const buildConfirmedPlanCard = (plan: PlannerPlanCard) => {
+    buildConfirmedPlan(serializeConfirmedPlanDraft(plan))
+  }
+
   return (
     <aside className={`planner-proposal-panel planner-proposal-panel--${layout}${emptyMode ? ' is-empty-mode' : ''}${showOmniConversation ? ' has-omni-conversation' : ''}`}>
       <div className="planner-dialog">
@@ -526,7 +531,7 @@ export function PlannerProposalPanel({
                   proposal={proposal}
                   busy={busy || thinking}
                   onReview={() => setReviewOpen(true)}
-                  onBuildPlan={buildConfirmedPlan}
+                  onBuildPlan={buildConfirmedPlanCard}
                   onChoice={(value) => {
                     if (!value.trim() || busy || thinking) return
                     submitEmptyIntakeTurn(value)
@@ -559,7 +564,7 @@ export function PlannerProposalPanel({
                   proposal={proposal}
                   busy={busy}
                   onReview={() => setReviewOpen(true)}
-                  onBuildPlan={buildConfirmedPlan}
+                  onBuildPlan={buildConfirmedPlanCard}
                   onChoice={(value) => {
                     setMessage(value)
                     window.requestAnimationFrame(() => textareaRef.current?.focus())
@@ -899,7 +904,7 @@ function PlannerChatMessageRow({
   proposal: PlanProposal | null
   busy: boolean
   onReview: () => void
-  onBuildPlan: (prompt: string) => void
+  onBuildPlan: (plan: PlannerPlanCard) => void
   onChoice: (value: string) => void
 }) {
   const { t } = useI18n()
@@ -965,7 +970,7 @@ function PlannerPlanCardView({
 }: {
   plan: PlannerPlanCard
   busy: boolean
-  onBuild: (prompt: string) => void
+  onBuild: (plan: PlannerPlanCard) => void
 }) {
   const { t } = useI18n()
   return (
@@ -993,7 +998,7 @@ function PlannerPlanCardView({
           className="primary"
           disabled={busy}
           aria-busy={busy}
-          onClick={() => onBuild(plan.prompt)}
+          onClick={() => onBuild(plan)}
         >
           {busy && (
             <span className="planner-thinking-dots" aria-hidden>

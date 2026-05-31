@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { I18nProvider } from '../../lib/i18n'
+import { parseConfirmedPlanDraft } from '../../lib/plannerPlanDraft'
 import { PlannerProposalPanel } from './PlannerProposalPanel'
 
 const apiMocks = vi.hoisted(() => ({
@@ -129,6 +130,62 @@ describe('PlannerProposalPanel empty canvas intake', () => {
     expect(screen.getByText('收集公开舆情来源')).toBeInTheDocument()
     expect(screen.getByText('生成飞书文档草稿')).toBeInTheDocument()
     expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
+  })
+
+  it('submits a confirmed plan payload when drafting from a plan card', async () => {
+    const onSubmit = vi.fn()
+    apiMocks.streamAssistantChat.mockImplementation(() => streamText(JSON.stringify({
+      action: 'ask',
+      message: '我来帮你规划舆情收集和飞书文档输出的节点流程。以下是执行计划：',
+      question: 'What should I optimize for?',
+      choices: [],
+    })))
+
+    render(
+      <I18nProvider>
+        <PlannerProposalPanel
+          canvasId="empty-canvas-build-plan-test"
+          canvasName="Meee2舆情洞察"
+          proposal={null}
+          previewGraph={{ nodes: [], edges: [] }}
+          busy={false}
+          error={null}
+          access={{
+            actorId: 'local-user',
+            role: 'owner',
+            canCreateProposal: true,
+            canApproveProposal: true,
+            canApplyProposal: true,
+            canRejectProposal: true,
+            canUpdateAssignedNode: true,
+          }}
+          nodeCount={0}
+          hasActionableDrift={false}
+          onSubmit={onSubmit}
+          onApproveAndApply={vi.fn()}
+          onReject={vi.fn()}
+          initialIntakeMessage={{ id: 3, text: '收集互联网关于Meee2产品的舆情，并总结分析，输出飞书文档' }}
+          emptyMode
+          layout="omni"
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('heading', { name: '舆情分析与飞书输出计划' })).toBeInTheDocument()
+    const draftButton = screen.getAllByRole('button', { name: 'Draft canvas' })
+      .find((button) => !(button as HTMLButtonElement).disabled)
+    expect(draftButton).toBeTruthy()
+    fireEvent.click(draftButton!)
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    const draft = parseConfirmedPlanDraft(String(onSubmit.mock.calls[0][0]))
+    expect(draft?.title).toBe('舆情分析与飞书输出计划')
+    expect(draft?.steps.map((step) => step.title)).toEqual([
+      '确认目标与输入',
+      '收集公开舆情来源',
+      '分析舆情主题与倾向',
+      '生成飞书文档草稿',
+    ])
   })
 
   it('repairs persisted generic optimization questions into the latest plan card', async () => {
