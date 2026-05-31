@@ -5484,6 +5484,22 @@ final class PlannerStore {
         }
     }
 
+    /// Fan-in gate: is EVERY `dependsOnNodeIds` of `node` in a done state?
+    ///
+    /// A node with multiple upstreams (e.g. the orchestration 集成 node that
+    /// dependsOn 前端/后端/重构) must not auto-start when only the producer that
+    /// just routed to it is done — all of its upstreams must be done first.
+    /// `gateWait`/`failed`/`running` upstreams do NOT count as done, mirroring
+    /// the per-route `producerIsDone` check (a parked「待确认」producer is not
+    /// done until `confirmNodeReview`). A node with no deps is trivially ready.
+    private func allDependenciesDone(_ node: PlanningNode, in record: CanvasRecord) -> Bool {
+        let deps = node.dependsOnNodeIds ?? []
+        guard !deps.isEmpty else { return true }
+        return deps.allSatisfy { depId in
+            record.nodes.first { $0.id == depId }?.workflowRunState == .done
+        }
+    }
+
     func submitNodeOutput(
         canvasId: String,
         nodeId: String,
@@ -5752,7 +5768,17 @@ final class PlannerStore {
                 // yet confirmed) it does NOT count as done — leave the
                 // downstream node un-flipped (it stays todo / blocked-by-
                 // upstream) until `confirmNodeReview` advances the producer.
+                //
+                // FAN-IN gate (P1, PR #109): for a node with MULTIPLE upstreams
+                // (e.g. 集成 dependsOn 前端/后端/重构), the producer that just
+                // routed here being done is NOT enough — flipping to
+                // readyToStart now would let the FIRST branch to finish
+                // auto-start 集成 before the other branches produced their
+                // outputs. Require EVERY dependsOnNodeIds to be done. A
+                // single-dep (linear ENG-2) chain is unaffected: its one dep is
+                // the producer, so `allDependenciesDone` ≡ `producerIsDone`.
                 let producerIsDone = current.workflowRunState == .done
+                let targetDepsAllDone = allDependenciesDone(record.nodes[targetIndex], in: record)
                 if record.nodes[targetIndex].doerId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     record.nodes[targetIndex].status = .blocked
                     record.nodes[targetIndex].workflowRunState = .gateWait
@@ -5764,7 +5790,7 @@ final class PlannerStore {
                         // non-session gate transitions (codex P2 review).
                         Self.stampAwaitingClockOnActiveAttempt(&state, isAwaiting: true)
                     }
-                } else if producerIsDone,
+                } else if producerIsDone, targetDepsAllDone,
                           record.nodes[targetIndex].sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                     record.nodes[targetIndex].status = .ready
                     record.nodes[targetIndex].workflowRunState = .readyToStart
@@ -5849,6 +5875,11 @@ final class PlannerStore {
             let candidates: [PlanningNode] = record.nodes.filter { node in
                 guard routeTargets.contains(node.id) else { return false }
                 guard node.workflowRunState == .readyToStart else { return false }
+                // FAN-IN gate (P1): never auto-dispatch a node until ALL of its
+                // upstreams are done. Belt-and-suspenders with the readyToStart
+                // flip above — a node must not auto-spawn a session on the first
+                // upstream's completion.
+                guard allDependenciesDone(node, in: record) else { return false }
                 let hasSession = (node.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
                 if hasSession { return false }
                 return node.executionMode == .auto
