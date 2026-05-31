@@ -15,7 +15,12 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react'
-import { setPlannerCanvasDescription, streamAssistantChat } from '../api'
+import {
+  fetchTemplateCatalog,
+  setPlannerCanvasDescription,
+  streamAssistantChat,
+  type TemplateMetadataInput,
+} from '../api'
 import {
   ALLOW_CLOUD_PREFERENCES_CHANGED,
   CANVAS_RECAP_PREFERENCES_CHANGED,
@@ -50,6 +55,7 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
+  onSaveCanvasAsTemplate?: (canvasId: string, input: TemplateMetadataInput) => Promise<void | string> | void
   onReplaceTemplate?: (
     templateId: string,
     canvasId: string,
@@ -71,6 +77,8 @@ type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
 }
 
+const DEFAULT_TEMPLATE_TAGS = ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo']
+
 // 用户只能创建 board canvas。
 //  - monitor 是系统预置的默认首页(isDefault + 唯一),不暴露给用户创建,否则会
 //    出现「我新建一个 monitor,它默认监控所有 canvas」的行为错位
@@ -89,6 +97,7 @@ export function CanvasToolbar({
   onRenameCanvas,
   onClearCanvas,
   onDeleteCanvas,
+  onSaveCanvasAsTemplate,
   onReplaceTemplate,
   userProfile = null,
   boardState = null,
@@ -110,6 +119,14 @@ export function CanvasToolbar({
   const [replaceTemplateConfirming, setReplaceTemplateConfirming] = useState(false)
   const [replaceTemplateSaving, setReplaceTemplateSaving] = useState(false)
   const [replaceTemplateError, setReplaceTemplateError] = useState<string | null>(null)
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false)
+  const [saveTemplateName, setSaveTemplateName] = useState('')
+  const [saveTemplateDescription, setSaveTemplateDescription] = useState('')
+  const [saveTemplateScope, setSaveTemplateScope] = useState<CanvasScope>('personal')
+  const [saveTemplateTags, setSaveTemplateTags] = useState<string[]>([])
+  const [saveTemplateAvailableTags, setSaveTemplateAvailableTags] = useState<string[]>(DEFAULT_TEMPLATE_TAGS)
+  const [saveTemplateSaving, setSaveTemplateSaving] = useState(false)
+  const [saveTemplateError, setSaveTemplateError] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [infoTab, setInfoTab] = useState<'overview' | 'settings' | 'danger'>('overview')
   const [canvasQuery, setCanvasQuery] = useState('')
@@ -319,6 +336,53 @@ export function CanvasToolbar({
     })
   }
 
+  const openSaveTemplate = () => {
+    if (!activeCanvas || activeCanvas.kind === 'template') return
+    setSaveTemplateName(`${displayCanvasName(activeCanvas)} template`)
+    setSaveTemplateDescription(recap?.description ?? '')
+    setSaveTemplateScope('personal')
+    setSaveTemplateTags([])
+    setSaveTemplateError(null)
+    setSaveTemplateOpen(true)
+    setInfoOpen(false)
+    fetchTemplateCatalog()
+      .then((catalog) => setSaveTemplateAvailableTags(catalog.tags.length > 0 ? catalog.tags : DEFAULT_TEMPLATE_TAGS))
+      .catch(() => setSaveTemplateAvailableTags(DEFAULT_TEMPLATE_TAGS))
+  }
+
+  const closeSaveTemplate = () => {
+    if (saveTemplateSaving) return
+    setSaveTemplateOpen(false)
+    setSaveTemplateError(null)
+  }
+
+  const submitSaveTemplate = () => {
+    if (!activeCanvas || !onSaveCanvasAsTemplate) return
+    const name = saveTemplateName.trim()
+    if (!name) {
+      setSaveTemplateError('Template name is required')
+      return
+    }
+    setSaveTemplateSaving(true)
+    setSaveTemplateError(null)
+    Promise.resolve(onSaveCanvasAsTemplate(activeCanvas.id, {
+      name,
+      description: saveTemplateDescription.trim(),
+      scope: saveTemplateScope,
+      tags: saveTemplateTags,
+      icon: 'sparkles',
+      defaultCanvasKind: templateKindForCanvas(activeCanvas),
+    }))
+      .then(() => {
+        setSaveTemplateSaving(false)
+        setSaveTemplateOpen(false)
+      })
+      .catch((err) => {
+        setSaveTemplateSaving(false)
+        setSaveTemplateError((err as Error).message || 'Failed to save template')
+      })
+  }
+
   const submitReplaceTemplate = () => {
     if (!activeCanvas?.draftOfTemplateId || !onReplaceTemplate) return
     setReplaceTemplateSaving(true)
@@ -338,11 +402,12 @@ export function CanvasToolbar({
   }
 
   if (!activeCanvas) return null
+  const isMonitorCanvas = activeCanvas.kind === 'monitor'
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
 
   return (
-    <div className="canvas-toolbar" ref={rootRef}>
+    <div className={`canvas-toolbar${isMonitorCanvas ? ' canvas-toolbar--monitor' : ''}`} ref={rootRef}>
       {activeCanvas.draftOfTemplateId && (
         <div className="canvas-toolbar__draft-banner">
           <span>
@@ -496,49 +561,51 @@ export function CanvasToolbar({
           </div>
         )}
       </div>
-      <div className="canvas-toolbar__context" aria-live="polite">
-        <div className="canvas-toolbar__recap">
-          <button
-            type="button"
-            className="canvas-toolbar__recap-trigger"
-            aria-label={t('canvas.openRecap')}
-            aria-expanded={recapDrawerOpen}
-            title={recap?.headline ?? t('canvas.readingState')}
-            onClick={() => setRecapDrawerOpen((value) => !value)}
-          >
-            <Sparkles size={13} aria-hidden />
-            <span className="canvas-toolbar__recap-copy">
-              <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
-              {recapError ? (
-                <small>{recapError}</small>
-              ) : recap?.updatedAt ? (
-                <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
-              ) : null}
-            </span>
-            <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
-              {monitorBadge.label}
-            </span>
-          </button>
-          <button
-            type="button"
-            className="canvas-toolbar__recap-refresh"
-            aria-label={t('canvas.refreshRecap')}
-            title={t('canvas.refreshRecap')}
-            onClick={() => void refreshRecap()}
-            disabled={recapLoading}
-          >
-            <RefreshCw size={13} aria-hidden />
-          </button>
-        </div>
-        {recap?.details && recap.details.length > 0 && (
-          <div className="canvas-toolbar__recap-details">
-            {recap.details.map((line) => (
-              <p key={line}>{line}</p>
-            ))}
+      {!isMonitorCanvas && (
+        <div className="canvas-toolbar__context" aria-live="polite">
+          <div className="canvas-toolbar__recap">
+            <button
+              type="button"
+              className="canvas-toolbar__recap-trigger"
+              aria-label={t('canvas.openRecap')}
+              aria-expanded={recapDrawerOpen}
+              title={recap?.headline ?? t('canvas.readingState')}
+              onClick={() => setRecapDrawerOpen((value) => !value)}
+            >
+              <Sparkles size={13} aria-hidden />
+              <span className="canvas-toolbar__recap-copy">
+                <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
+                {recapError ? (
+                  <small>{recapError}</small>
+                ) : recap?.updatedAt ? (
+                  <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
+                ) : null}
+              </span>
+              <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
+                {monitorBadge.label}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="canvas-toolbar__recap-refresh"
+              aria-label={t('canvas.refreshRecap')}
+              title={t('canvas.refreshRecap')}
+              onClick={() => void refreshRecap()}
+              disabled={recapLoading}
+            >
+              <RefreshCw size={13} aria-hidden />
+            </button>
           </div>
-        )}
-      </div>
-      {recap?.mode !== 'empty' && recap?.statuses && (
+          {recap?.details && recap.details.length > 0 && (
+            <div className="canvas-toolbar__recap-details">
+              {recap.details.map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {!isMonitorCanvas && recap?.mode !== 'empty' && recap?.statuses && (
         <div className="canvas-toolbar__status-strip" aria-label={t('canvas.statusOverview')}>
           {recap.statuses.map((item) => (
             <span key={item.label} className={`canvas-toolbar__status-pill is-${item.tone}`}>
@@ -767,6 +834,17 @@ export function CanvasToolbar({
                   >
                     {canvasDescriptionSaving ? t('canvas.saving') : t('canvas.saveDescription')}
                   </button>
+                  {activeCanvas.kind !== 'template' && onSaveCanvasAsTemplate && (
+                    <div className="canvas-info-modal__template-action">
+                      <div>
+                        <strong>Template</strong>
+                        <p>Turn this tuned canvas into a reusable template.</p>
+                      </div>
+                      <button type="button" className="ghost" onClick={openSaveTemplate}>
+                        Save as template
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
               {infoTab === 'danger' && (
@@ -815,6 +893,78 @@ export function CanvasToolbar({
             </div>
             <div className="modal-footer">
               <button className="primary" type="button" onClick={() => setInfoOpen(false)}>{t('common.done')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {saveTemplateOpen && activeCanvas.kind !== 'template' && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeSaveTemplate()
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Save as template">
+            <div className="modal-header">
+              <div className="modal-title">Save as template</div>
+              <div className="modal-subtitle">Creates a reusable template from this canvas after stripping live runtime state.</div>
+            </div>
+            <div className="modal-body col canvas-toolbar__template-form">
+              <input
+                value={saveTemplateName}
+                onChange={(event) => setSaveTemplateName(event.target.value)}
+                placeholder="Template name"
+                autoFocus
+                disabled={saveTemplateSaving}
+              />
+              <textarea
+                value={saveTemplateDescription}
+                onChange={(event) => setSaveTemplateDescription(event.target.value)}
+                placeholder="Description"
+                rows={3}
+                disabled={saveTemplateSaving}
+              />
+              <div className="canvas-toolbar__scope-toggle" role="group" aria-label="Template visibility">
+                {(['personal', 'team'] as CanvasScope[]).map((scope) => (
+                  <button
+                    key={scope}
+                    type="button"
+                    className={saveTemplateScope === scope ? 'is-selected' : ''}
+                    aria-pressed={saveTemplateScope === scope}
+                    disabled={saveTemplateSaving}
+                    onClick={() => setSaveTemplateScope(scope)}
+                  >
+                    {scope === 'team' ? 'Team' : 'Private'}
+                  </button>
+                ))}
+              </div>
+              <div className="canvas-toolbar__template-tags" aria-label="Template tags">
+                {saveTemplateAvailableTags.map((tag) => {
+                  const active = saveTemplateTags.includes(tag)
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      className={active ? 'is-active' : ''}
+                      aria-pressed={active}
+                      disabled={saveTemplateSaving}
+                      onClick={() => setSaveTemplateTags((current) => (
+                        active ? current.filter((item) => item !== tag) : [...current, tag]
+                      ))}
+                    >
+                      {tag}
+                    </button>
+                  )
+                })}
+              </div>
+              {saveTemplateError && <div className="inline-error">{saveTemplateError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={closeSaveTemplate} disabled={saveTemplateSaving}>{t('common.cancel')}</button>
+              <button className="primary" type="button" onClick={submitSaveTemplate} disabled={saveTemplateSaving || !saveTemplateName.trim()}>
+                {saveTemplateSaving ? 'Saving...' : 'Save template'}
+              </button>
             </div>
           </div>
         </div>
@@ -984,6 +1134,10 @@ function canvasTypeLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t'])
   if (canvas.kind === 'monitor') return t('canvas.type.monitor')
   if (canvas.kind === 'template') return t('canvas.type.template')
   return t('canvas.type.board')
+}
+
+function templateKindForCanvas(canvas: CanvasInfo): TemplateMetadataInput['defaultCanvasKind'] {
+  return canvas.kind === 'monitor' ? 'monitor' : 'board'
 }
 
 function buildCanvasListEntries(

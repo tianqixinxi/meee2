@@ -5,7 +5,6 @@ import {
   Globe2,
   LockKeyhole,
   Moon,
-  Plus,
   RefreshCw,
   Rocket,
   Search,
@@ -41,9 +40,7 @@ interface TemplatesViewProps {
   userProfile: UserProfile | null
   boardState: BoardState | null
   onOpenCanvas: (canvasId: string) => void
-  onCreateTemplate: (name: string, scope: CanvasScope) => Promise<string>
   onApplyTemplate: (templateId: string, name: string, scope: CanvasScope) => Promise<string>
-  onSaveCanvasAsTemplate: (canvasId: string, input: TemplateMetadataInput) => Promise<string>
   onCreateTemplateDraft: (templateId: string) => Promise<string>
   onReplaceTemplate: (templateId: string, canvasId: string, input: TemplateMetadataInput) => Promise<string>
   onUpdateTemplateMetadata: (templateId: string, input: TemplateMetadataInput) => Promise<string>
@@ -54,8 +51,6 @@ interface TemplatesViewProps {
 type WorkflowImportTarget =
   | { kind: 'library'; id: string; name: string; commandName: string; path: string }
   | { kind: 'upload'; filename: string; source: string; name: string; commandName: string; path: string }
-
-type MetadataMode = 'save' | 'edit'
 
 const SOURCE_ORDER: CanvasTemplateSource[] = ['official', 'team', 'private']
 const SOURCE_LABEL: Record<CanvasTemplateSource, string> = {
@@ -81,9 +76,7 @@ export function TemplatesView({
   userProfile,
   boardState: _boardState,
   onOpenCanvas: _onOpenCanvas,
-  onCreateTemplate,
   onApplyTemplate,
-  onSaveCanvasAsTemplate,
   onCreateTemplateDraft,
   onReplaceTemplate: _onReplaceTemplate,
   onUpdateTemplateMetadata,
@@ -100,16 +93,12 @@ export function TemplatesView({
   const [availableTags, setAvailableTags] = useState<string[]>([])
   const [catalogError, setCatalogError] = useState<string | null>(null)
   const [ownersById, setOwnersById] = useState<Record<string, OwnerIdentity>>({})
-  const [creatingBlank, setCreatingBlank] = useState(false)
-  const [blankName, setBlankName] = useState('')
-  const [blankScope, setBlankScope] = useState<CanvasScope>('personal')
-  const [blankError, setBlankError] = useState<string | null>(null)
   const [applyTarget, setApplyTarget] = useState<CanvasTemplate | null>(null)
   const [applyNameDraft, setApplyNameDraft] = useState('')
   const [applyScopeDraft, setApplyScopeDraft] = useState<CanvasScope>('personal')
   const [applyError, setApplyError] = useState<string | null>(null)
   const [applying, setApplying] = useState(false)
-  const [metadataMode, setMetadataMode] = useState<MetadataMode | null>(null)
+  const [metadataMode, setMetadataMode] = useState<'edit' | null>(null)
   const [metadataTarget, setMetadataTarget] = useState<CanvasTemplate | null>(null)
   const [metadataName, setMetadataName] = useState('')
   const [metadataDescription, setMetadataDescription] = useState('')
@@ -126,8 +115,8 @@ export function TemplatesView({
   const [workflowImportError, setWorkflowImportError] = useState<string | null>(null)
   const [workflowImporting, setWorkflowImporting] = useState(false)
   const [workflowUploadError, setWorkflowUploadError] = useState<string | null>(null)
-
-  const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0] ?? null
+  void canvases
+  void activeCanvasId
 
   const refreshCatalog = () => {
     fetchTemplateCatalog()
@@ -226,17 +215,6 @@ export function TemplatesView({
       })
   }
 
-  const openSaveCurrentDialog = () => {
-    if (!activeCanvas) return
-    setMetadataMode('save')
-    setMetadataTarget(null)
-    setMetadataName(`${displayCanvasName(activeCanvas)} template`)
-    setMetadataDescription('')
-    setMetadataScope('personal')
-    setMetadataTags([])
-    setMetadataError(null)
-  }
-
   const openMetadataDialog = (template: CanvasTemplate) => {
     setMetadataMode('edit')
     setMetadataTarget(template)
@@ -260,24 +238,19 @@ export function TemplatesView({
       setMetadataError('Template name is required')
       return
     }
-    const defaultCanvasKind = metadataMode === 'edit'
-      ? metadataTarget?.defaultCanvasKind
-      : reusableCanvasKind(activeCanvas)
     const input: TemplateMetadataInput = {
       name,
       description: metadataDescription.trim(),
       scope: metadataScope,
       tags: metadataTags,
       icon: metadataTarget?.icon ?? 'sparkles',
-      ...(defaultCanvasKind ? { defaultCanvasKind } : {}),
+      defaultCanvasKind: metadataTarget?.defaultCanvasKind,
     }
     setMetadataSaving(true)
     setMetadataError(null)
-    const request = metadataMode === 'edit' && metadataTarget
+    const request = metadataTarget
       ? onUpdateTemplateMetadata(metadataTarget.id, input)
-      : activeCanvas
-        ? onSaveCanvasAsTemplate(activeCanvas.id, input)
-        : Promise.reject(new Error('No active canvas selected'))
+      : Promise.reject(new Error('No template selected'))
     request
       .then(() => {
         closeMetadataDialog()
@@ -287,20 +260,6 @@ export function TemplatesView({
         setMetadataError((err as Error).message || 'Failed to save template')
         setMetadataSaving(false)
       })
-  }
-
-  const submitBlankTemplate = () => {
-    const name = blankName.trim()
-    if (!name) return
-    setBlankError(null)
-    onCreateTemplate(name, blankScope)
-      .then(() => {
-        setBlankName('')
-        setBlankScope('personal')
-        setCreatingBlank(false)
-        refreshCatalog()
-      })
-      .catch((err) => setBlankError((err as Error).message || 'Failed to create template'))
   }
 
   const openWorkflowImportDialog = (workflow: ClaudeWorkflow) => {
@@ -378,20 +337,13 @@ export function TemplatesView({
           <div>
             <span>Templates</span>
             <h1>Canvas templates</h1>
+            <p className="templates-workspace__hint">Templates are created from tuned canvases. Open or create a canvas, then save it from Canvas settings.</p>
           </div>
           <div className="templates-workspace__tools">
             <label className="templates-search">
               <Search size={14} aria-hidden />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find template" />
             </label>
-            <button type="button" className="ghost templates-new-button" onClick={() => setCreatingBlank(true)}>
-              <Plus size={14} aria-hidden />
-              Blank template
-            </button>
-            <button type="button" className="primary templates-new-button" onClick={openSaveCurrentDialog} disabled={!activeCanvas || activeCanvas.kind === 'template'}>
-              <Sparkles size={14} aria-hidden />
-              Save current
-            </button>
           </div>
         </header>
 
@@ -439,7 +391,9 @@ export function TemplatesView({
           {catalogError ? (
             <div className="inline-error template-gallery__error">{catalogError}</div>
           ) : visibleTemplates.length === 0 ? (
-            <div className="template-gallery__empty">No templates match this view.</div>
+            <div className="template-gallery__empty">
+              No templates match this view. To create one, open or create a canvas, tune it, then save it from Canvas settings.
+            </div>
           ) : (
             <div className="template-gallery__grid">
               {visibleTemplates.map((template) => (
@@ -499,15 +453,6 @@ export function TemplatesView({
         </section>
       </div>
 
-      {creatingBlank && (
-        <TemplateModal title="New blank template" subtitle="Create an empty template canvas." onClose={() => setCreatingBlank(false)}>
-          <input value={blankName} onChange={(event) => setBlankName(event.target.value)} placeholder="Template name" autoFocus />
-          <ScopeToggle value={blankScope} onChange={setBlankScope} disabled={false} />
-          {blankError && <div className="inline-error">{blankError}</div>}
-          <ModalFooter onCancel={() => setCreatingBlank(false)} onSubmit={submitBlankTemplate} submitLabel="Create" disabled={!blankName.trim()} />
-        </TemplateModal>
-      )}
-
       {applyTarget && (
         <TemplateModal title={`Use template - ${applyTarget.name}`} subtitle={`Creates a new canvas from v${applyTarget.version}.`} onClose={() => !applying && setApplyTarget(null)}>
           <input value={applyNameDraft} onChange={(event) => setApplyNameDraft(event.target.value)} placeholder="Canvas name" autoFocus disabled={applying} />
@@ -519,8 +464,8 @@ export function TemplatesView({
 
       {metadataMode && (
         <TemplateModal
-          title={metadataMode === 'edit' ? 'Edit template details' : 'Save current canvas as template'}
-          subtitle={metadataMode === 'edit' ? 'Only the owner can change Team template metadata.' : 'The saved template will strip live session runtime state.'}
+          title="Edit template details"
+          subtitle="Only the owner can change Team template metadata."
           onClose={() => !metadataSaving && closeMetadataDialog()}
         >
           <input value={metadataName} onChange={(event) => setMetadataName(event.target.value)} placeholder="Template name" autoFocus disabled={metadataSaving} />
@@ -694,15 +639,6 @@ function ownerIdentityForTemplate(
 
 function ownerMatchesProfile(ownerId: string, userProfile: UserProfile): boolean {
   return [userProfile.userId, userProfile.userName, userProfile.userEmail].filter(Boolean).includes(ownerId)
-}
-
-function displayCanvasName(canvas: CanvasInfo): string {
-  return canvas.name === 'Default canvas' ? 'My' : canvas.name
-}
-
-function reusableCanvasKind(canvas: CanvasInfo | null): TemplateMetadataInput['defaultCanvasKind'] {
-  if (canvas?.kind && canvas.kind !== 'template') return canvas.kind
-  return undefined
 }
 
 function initialsFor(name: string): string {
