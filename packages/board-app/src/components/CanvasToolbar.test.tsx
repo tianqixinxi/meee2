@@ -34,16 +34,16 @@ describe('CanvasToolbar template save flow', () => {
       <I18nProvider>
         <CanvasToolbar
           canvases={[{
-            id: 'monitor-canvas',
-            name: 'Monitor',
+            id: 'board-canvas',
+            name: 'Launch Plan',
             scope: 'personal',
-            kind: 'monitor',
-            isDefault: true,
+            kind: 'board',
+            isDefault: false,
             workspacePath: '',
             ownerUserId: 'local-user',
             teamId: null,
           }]}
-          activeCanvasId="monitor-canvas"
+          activeCanvasId="board-canvas"
           onActiveCanvasChange={vi.fn()}
           onCreateCanvas={vi.fn()}
           onRenameCanvas={vi.fn()}
@@ -62,13 +62,43 @@ describe('CanvasToolbar template save flow', () => {
 
     await waitFor(() => {
       expect(onSaveCanvasAsTemplate).toHaveBeenCalledWith(
-        'monitor-canvas',
+        'board-canvas',
         expect.objectContaining({
-          defaultCanvasKind: 'monitor',
-          name: 'Monitor template',
+          defaultCanvasKind: 'board',
+          name: 'Launch Plan template',
           scope: 'personal',
         }),
       )
     })
+  })
+
+  it('does not offer template saving for monitor canvases', () => {
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'monitor-canvas',
+            name: 'Monitor',
+            scope: 'personal',
+            kind: 'monitor',
+            isDefault: true,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="monitor-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+          onSaveCanvasAsTemplate={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas info' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.queryByRole('button', { name: 'Save as template' })).not.toBeInTheDocument()
   })
 })

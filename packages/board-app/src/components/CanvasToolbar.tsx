@@ -337,7 +337,7 @@ export function CanvasToolbar({
   }
 
   const openSaveTemplate = () => {
-    if (!activeCanvas || activeCanvas.kind === 'template') return
+    if (!activeCanvas || activeCanvas.kind === 'template' || activeCanvas.kind === 'monitor') return
     setSaveTemplateName(`${displayCanvasName(activeCanvas)} template`)
     setSaveTemplateDescription(recap?.description ?? '')
     setSaveTemplateScope('personal')
@@ -357,7 +357,7 @@ export function CanvasToolbar({
   }
 
   const submitSaveTemplate = () => {
-    if (!activeCanvas || !onSaveCanvasAsTemplate) return
+    if (!activeCanvas || !onSaveCanvasAsTemplate || activeCanvas.kind === 'monitor') return
     const name = saveTemplateName.trim()
     if (!name) {
       setSaveTemplateError('Template name is required')
@@ -405,6 +405,9 @@ export function CanvasToolbar({
   const isMonitorCanvas = activeCanvas.kind === 'monitor'
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
+  const canSaveActiveCanvasAsTemplate = Boolean(
+    onSaveCanvasAsTemplate && activeCanvas.kind !== 'template' && activeCanvas.kind !== 'monitor',
+  )
 
   return (
     <div className={`canvas-toolbar${isMonitorCanvas ? ' canvas-toolbar--monitor' : ''}`} ref={rootRef}>
@@ -834,7 +837,7 @@ export function CanvasToolbar({
                   >
                     {canvasDescriptionSaving ? t('canvas.saving') : t('canvas.saveDescription')}
                   </button>
-                  {activeCanvas.kind !== 'template' && onSaveCanvasAsTemplate && (
+                  {canSaveActiveCanvasAsTemplate && (
                     <div className="canvas-info-modal__template-action">
                       <div>
                         <strong>Template</strong>
@@ -898,7 +901,7 @@ export function CanvasToolbar({
         </div>
       )}
 
-      {saveTemplateOpen && activeCanvas.kind !== 'template' && (
+      {saveTemplateOpen && canSaveActiveCanvasAsTemplate && (
         <div
           className="modal-backdrop"
           onMouseDown={(event) => {
