@@ -5943,6 +5943,10 @@ html.board-empty-omni .canvas-toolbar__panel {
   flex-shrink: 0;
 }
 
+.canvas-toolbar__item-text .canvas-toolbar__owner-avatar {
+  flex-shrink: 0;
+}
+
 /* ui-simplification §1: switcher row 里 visibility 已降权为 icon-only,
  * 没有 padding/border/背景,只用 opacity 区分;kind 文案已彻底删除。 */
 .canvas-toolbar__visibility {
@@ -5970,6 +5974,28 @@ html.board-empty-omni .canvas-toolbar__panel {
   font-size: 10px;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+.canvas-toolbar__owner-avatar {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(125, 211, 252, 0.36);
+  background: rgba(125, 211, 252, 0.12);
+  color: #D8F3FF;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.canvas-toolbar__owner-avatar.has-image {
+  background-position: center;
+  background-size: cover;
+  color: transparent;
 }
 
 .canvas-toolbar__actions {
@@ -6376,6 +6402,47 @@ html.board-empty-omni .canvas-toolbar__panel {
 
 .canvas-info-modal__settings button {
   justify-self: start;
+}
+
+.canvas-info-modal__visibility {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(125, 211, 252, 0.08);
+}
+
+.canvas-info-modal__visibility svg {
+  color: #BAE6FD;
+}
+
+.canvas-info-modal__visibility strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 13px;
+}
+
+.canvas-info-modal__visibility p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.canvas-info-modal__visibility-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.canvas-info-modal__visibility-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .canvas-info-modal__danger {

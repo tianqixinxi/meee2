@@ -57,26 +57,27 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-	  applyCanvasTemplate,
-	  createCanvas,
-	  createTemplateEditDraft,
-	  createTemplateFromCanvas,
-	  clearPlannerCanvasContent,
-	  deleteCanvas,
+  applyCanvasTemplate,
+  createCanvas,
+  createTemplateEditDraft,
+  createTemplateFromCanvas,
+  clearPlannerCanvasContent,
+  deleteCanvas,
   fetchCanvases,
   fetchMeee2AgentRuntimeStatus,
   fetchReadiness,
   fetchUserProfile,
   importClaudeWorkflow,
   installMeee2AgentRuntime,
-	  repairReadiness,
-	  replaceTemplateFromCanvas,
-	  uploadClaudeWorkflow,
-	  updateCanvas,
-	  updateTemplateMetadata,
-	  type UserProfile,
-	  type TemplateMetadataInput,
-	} from './api'
+  repairReadiness,
+  replaceTemplateFromCanvas,
+  setPlannerCanvasVisibility,
+  uploadClaudeWorkflow,
+  updateCanvas,
+  updateTemplateMetadata,
+  type UserProfile,
+  type TemplateMetadataInput,
+} from './api'
 
 declare global {
   interface Window {
@@ -1061,6 +1062,18 @@ export default function App() {
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to clear canvas'))
   }, [pushToast])
 
+  const handleSetCanvasVisibility = useCallback((canvasId: string, visibility: 'private' | 'public') => {
+    return setPlannerCanvasVisibility(canvasId, visibility)
+      .then(() => {
+        setActiveCanvasRefreshTick((value) => value + 1)
+        return refreshCanvases()
+      })
+      .then(() => {
+        pushToast('success', visibility === 'public' ? 'Canvas published to Team' : 'Canvas is private')
+      })
+      .catch((err) => pushToast('error', (err as Error).message || 'Failed to update visibility'))
+  }, [pushToast, refreshCanvases])
+
   const boardSessionSignature = useMemo(() => {
     if (!boardState.state) return ''
     return boardState.state.sessions.map((s) => s.id).sort().join('|')
@@ -1263,6 +1276,7 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              onSetCanvasVisibility={handleSetCanvasVisibility}
               onReplaceTemplate={handleReplaceTemplate}
               userProfile={userProfile}
               boardState={boardState.state}

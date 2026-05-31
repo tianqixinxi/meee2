@@ -12,10 +12,12 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Share2,
   Sparkles,
   Trash2,
+  UserRound,
 } from 'lucide-react'
-import { setPlannerCanvasDescription, streamAssistantChat } from '../api'
+import { fetchTeamMembers, setPlannerCanvasDescription, streamAssistantChat } from '../api'
 import {
   ALLOW_CLOUD_PREFERENCES_CHANGED,
   CANVAS_RECAP_PREFERENCES_CHANGED,
@@ -25,7 +27,7 @@ import {
 import { readLlmSettings } from '../lib/llmSettings'
 import { useI18n } from '../lib/i18n'
 import type { BoardState, CanvasInfo, CanvasKind, CanvasScope, PlannerGraphState } from '../types'
-import type { UserProfile } from '../api'
+import type { TeamMember, UserProfile } from '../api'
 import { AIRecapDrawer } from './planner/AIRecapDrawer'
 import {
   buildAIRecapPrompt,
@@ -50,6 +52,7 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
+  onSetCanvasVisibility?: (canvasId: string, visibility: 'private' | 'public') => Promise<void> | void
   onReplaceTemplate?: (
     templateId: string,
     canvasId: string,
@@ -71,6 +74,11 @@ type CanvasRecap = CoreCanvasStatusRecap & {
   mode: 'ai' | 'empty'
 }
 
+type OwnerIdentity = {
+  displayName: string
+  avatarUrl: string | null
+}
+
 // 用户只能创建 board canvas。
 //  - monitor 是系统预置的默认首页(isDefault + 唯一),不暴露给用户创建,否则会
 //    出现「我新建一个 monitor,它默认监控所有 canvas」的行为错位
@@ -89,6 +97,7 @@ export function CanvasToolbar({
   onRenameCanvas,
   onClearCanvas,
   onDeleteCanvas,
+  onSetCanvasVisibility,
   onReplaceTemplate,
   userProfile = null,
   boardState = null,
@@ -116,6 +125,7 @@ export function CanvasToolbar({
   const [canvasNameDraft, setCanvasNameDraft] = useState('')
   const [canvasDescriptionDraft, setCanvasDescriptionDraft] = useState('')
   const [canvasDescriptionSaving, setCanvasDescriptionSaving] = useState(false)
+  const [canvasVisibilitySaving, setCanvasVisibilitySaving] = useState(false)
   const [canvasScopeDraft, setCanvasScopeDraft] = useState<CanvasScope>('personal')
   const [recapIntervalMinutes, setRecapIntervalMinutes] = useState(loadCanvasRecapIntervalMinutes)
   const [recap, setRecap] = useState<CanvasRecap | null>(null)
@@ -125,6 +135,7 @@ export function CanvasToolbar({
   const [recapDrawerOpen, setRecapDrawerOpen] = useState(false)
   const [hoveredCanvasId, setHoveredCanvasId] = useState<string | null>(null)
   const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
+  const [ownerDirectory, setOwnerDirectory] = useState<Record<string, OwnerIdentity>>({})
   // ui-simplification §1 — failed/permission-pending sessions 转译成「需关注的
   // 进展」。多条时点击 pill 展开 dropdown 让用户挑一条跳过去。
   const [attentionMenuOpen, setAttentionMenuOpen] = useState(false)
@@ -158,6 +169,13 @@ export function CanvasToolbar({
     const hasPersonal = canvases.some((c) => c.scope !== 'team')
     return hasTeam && hasPersonal
   }, [canvases])
+  const canManageTeamVisibility = Boolean(
+    activeCanvas &&
+    activeCanvas.scope === 'team' &&
+    !activeCanvas.isDefault &&
+    ownsCanvas(activeCanvas, userProfile?.userId ?? '') &&
+    onSetCanvasVisibility,
+  )
 
   const closePanels = () => {
     setCreating(false)
@@ -261,6 +279,25 @@ export function CanvasToolbar({
   }, [activeCanvas?.id, plannerState?.canvas.id, refreshRecap])
 
   useEffect(() => {
+    if (!userProfile?.connected) {
+      setOwnerDirectory({})
+      return
+    }
+    let cancelled = false
+    fetchTeamMembers()
+      .then(({ members }) => {
+        if (cancelled) return
+        setOwnerDirectory(buildOwnerDirectory(members, userProfile))
+      })
+      .catch(() => {
+        if (!cancelled) setOwnerDirectory(buildOwnerDirectory([], userProfile))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [userProfile?.connected, userProfile?.defaultSyncTeamId, userProfile?.userId])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setRecapAgeNow(Date.now()), 60 * 1000)
     return () => window.clearInterval(timer)
   }, [])
@@ -303,6 +340,14 @@ export function CanvasToolbar({
       })
       .catch((err) => setRecapError((err as Error).message || 'Failed to save description'))
       .finally(() => setCanvasDescriptionSaving(false))
+  }
+
+  const submitVisibility = (visibility: 'private' | 'public') => {
+    if (!activeCanvas || !onSetCanvasVisibility) return
+    if (canvasVisibilitySaving || visibilityTone(activeCanvas) === visibility) return
+    setCanvasVisibilitySaving(true)
+    Promise.resolve(onSetCanvasVisibility(activeCanvas.id, visibility))
+      .finally(() => setCanvasVisibilitySaving(false))
   }
 
   const submitDelete = () => {
@@ -451,6 +496,7 @@ export function CanvasToolbar({
                   {group.entries.map(({ canvas, depth }) => {
                     const selected = canvas.id === activeCanvas.id
                     const readOnly = isReadOnlyTeamCanvas(canvas, userProfile?.userId ?? '')
+                    const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
                     return (
                       <button
                         key={canvas.id}
@@ -497,6 +543,16 @@ export function CanvasToolbar({
                               aria-label={visibilityLabel(canvas, t)}
                             >
                               {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
+                            </span>
+                          )}
+                          {canvas.scope === 'team' && (
+                            <span
+                              className={`canvas-toolbar__owner-avatar ${avatarUrl ? 'has-image' : ''}`}
+                              style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
+                              title={ownerLabel(canvas, userProfile?.userId ?? '', ownerDirectory)}
+                              aria-label={ownerLabel(canvas, userProfile?.userId ?? '', ownerDirectory)}
+                            >
+                              {avatarUrl ? null : ownerInitials(canvas, userProfile?.userId ?? '', ownerDirectory)}
                             </span>
                           )}
                         </span>
@@ -732,6 +788,12 @@ export function CanvasToolbar({
                     <span>{t('canvas.visibility')}</span>
                     <strong>{visibilityLabel(activeCanvas, t)}</strong>
                   </div>
+                  {activeCanvas.scope === 'team' && (
+                    <div className="canvas-info-modal__row">
+                      <span>{t('canvas.owner')}</span>
+                      <strong className="is-mono">{ownerLabel(activeCanvas, userProfile?.userId ?? '', ownerDirectory)}</strong>
+                    </div>
+                  )}
                   <p>
                     {t('canvas.scopedHelp')}
                   </p>
@@ -783,6 +845,35 @@ export function CanvasToolbar({
                   >
                     {canvasDescriptionSaving ? t('canvas.saving') : t('canvas.saveDescription')}
                   </button>
+                  {canManageTeamVisibility && (
+                    <div className="canvas-info-modal__visibility">
+                      <UserRound size={15} aria-hidden />
+                      <div>
+                        <strong>{t('canvas.teamSharing')}</strong>
+                        <p>{t('canvas.teamSharingHelp')}</p>
+                      </div>
+                      <div className="canvas-info-modal__visibility-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => submitVisibility('public')}
+                          disabled={canvasVisibilitySaving || visibilityTone(activeCanvas) === 'public'}
+                        >
+                          <Share2 size={13} aria-hidden />
+                          {canvasVisibilitySaving ? t('canvas.visibilitySaving') : t('canvas.publishToTeam')}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => submitVisibility('private')}
+                          disabled={canvasVisibilitySaving || visibilityTone(activeCanvas) === 'private'}
+                        >
+                          <LockKeyhole size={13} aria-hidden />
+                          {t('canvas.makePrivate')}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               {infoTab === 'danger' && (
@@ -985,17 +1076,87 @@ export function CanvasToolbar({
 }
 
 function visibilityTone(canvas: CanvasInfo): 'private' | 'public' {
-  return canvas.visibility === 'public' || canvas.scope === 'team' ? 'public' : 'private'
+  return isTeamReadable(canvas) ? 'public' : 'private'
 }
 
 function visibilityLabel(canvas: CanvasInfo, t: ReturnType<typeof useI18n>['t']): string {
-  return canvas.visibility === 'public' || canvas.scope === 'team' ? t('templates.public') : t('templates.private')
+  return isTeamReadable(canvas) ? t('templates.public') : t('templates.private')
+}
+
+function isTeamReadable(canvas: CanvasInfo): boolean {
+  return canvas.visibility === 'public' || (canvas.scope === 'team' && !canvas.visibility)
+}
+
+function ownsCanvas(canvas: CanvasInfo, userId: string): boolean {
+  if (!userId) return false
+  return (canvas.ownerUserId ?? '') === userId
 }
 
 function isReadOnlyTeamCanvas(canvas: CanvasInfo, userId: string): boolean {
   if (canvas.scope !== 'team') return false
   if (!userId) return false
   return Boolean(canvas.ownerUserId && canvas.ownerUserId !== userId)
+}
+
+function ownerInitials(
+  canvas: CanvasInfo,
+  userId: string,
+  ownerDirectory: Record<string, OwnerIdentity>,
+): string {
+  const ownerId = (canvas.ownerUserId ?? '').trim()
+  if (ownerId && ownerId === userId) return 'ME'
+  const displayName = ownerId ? ownerDirectory[ownerId]?.displayName : ''
+  if (displayName) return initialsFor(displayName)
+  if (!ownerId) return '??'
+  const [first, second] = ownerId.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+  return `${first ?? '?'}${second ?? ''}`.padEnd(2, '?')
+}
+
+function ownerLabel(
+  canvas: CanvasInfo,
+  userId: string,
+  ownerDirectory: Record<string, OwnerIdentity>,
+): string {
+  const ownerId = (canvas.ownerUserId ?? '').trim()
+  if (!ownerId) return 'Owner unknown'
+  const displayName = ownerDirectory[ownerId]?.displayName
+  if (ownerId === userId) return displayName ? `Owner: you (${displayName})` : 'Owner: you'
+  return `Owner: ${displayName || ownerId}`
+}
+
+function ownerAvatarUrl(
+  canvas: CanvasInfo,
+  userProfile: UserProfile | null,
+  ownerDirectory: Record<string, OwnerIdentity>,
+): string | null {
+  const ownerId = (canvas.ownerUserId ?? '').trim()
+  if (!ownerId) return null
+  if (userProfile?.userId === ownerId) return userProfile.userAvatarUrl || ownerDirectory[ownerId]?.avatarUrl || null
+  return ownerDirectory[ownerId]?.avatarUrl || null
+}
+
+function buildOwnerDirectory(members: TeamMember[], userProfile: UserProfile | null): Record<string, OwnerIdentity> {
+  const directory: Record<string, OwnerIdentity> = {}
+  for (const member of members) {
+    if (!member.userId) continue
+    directory[member.userId] = {
+      displayName: member.displayName || member.email || member.userId,
+      avatarUrl: member.avatarUrl || null,
+    }
+  }
+  if (userProfile?.userId) {
+    directory[userProfile.userId] = {
+      displayName: userProfile.displayName || userProfile.userName || userProfile.userEmail || userProfile.userId,
+      avatarUrl: userProfile.userAvatarUrl || directory[userProfile.userId]?.avatarUrl || null,
+    }
+  }
+  return directory
+}
+
+function initialsFor(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean)
+  if (parts.length >= 2) return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase()
+  return value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase().padEnd(2, '?')
 }
 
 function groupCanvasEntries(
