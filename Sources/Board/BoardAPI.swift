@@ -5674,6 +5674,8 @@ enum BoardAPI {
             tags.formUnion(["team", "monitor", "ops"])
         case "engineering-refactor":
             tags.formUnion(["engineering", "workflow"])
+        case "coding-orchestration":
+            tags.formUnion(["engineering", "workflow"])
         case "npc-canvas":
             tags.formUnion(["demo", "design"])
         default:
