@@ -906,7 +906,7 @@ function PlannerChatMessageRow({
   const choiceBlocks = parseChoiceBlocks(item.markdown)
   return (
     <div
-      className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}`}
+      className={`planner-dialog__message planner-dialog__message--${item.role === 'user' ? 'user' : item.role === 'injected' ? 'injected' : 'planner'}${item.planCard ? ' has-plan-card' : ''}`}
     >
       {item.meta && item.meta.length > 0 && (
         <div className="planner-dialog__message-meta">
@@ -1226,6 +1226,16 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
     const choices = normalizeAIChoices(parsed.choices)
     const message = stringValue(parsed.message) ?? 'I need one more detail before I can draft the plan.'
     const question = stringValue(parsed.question) ?? 'What should I optimize for?'
+    const fallbackPlan = fallbackPlanForGenericOptimizationAsk(message, question, history)
+    if (fallbackPlan) {
+      return {
+        id: `planner:plan:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        role: 'planner',
+        markdown: fallbackPlan.intro,
+        meta: ['plan'],
+        planCard: fallbackPlan,
+      }
+    }
     return {
       id: `planner:intake:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       role: 'planner',
@@ -1271,6 +1281,116 @@ function normalizeEmptyCanvasAIReply(parsed: Record<string, unknown> | null): Re
     return { ...parsed, action: 'ask' }
   }
   return parsed
+}
+
+function fallbackPlanForGenericOptimizationAsk(
+  message: string,
+  question: string,
+  history: PlannerChatMessage[],
+): PlannerPlanCard | null {
+  if (!isGenericOptimizationQuestion(question)) return null
+  const request = latestSubstantiveUserRequest(history)
+  if (!request || !requestLooksReadyForPlan(request)) return null
+  return buildFallbackPlanCardFromRequest(request, message)
+}
+
+function isGenericOptimizationQuestion(value: string): boolean {
+  return /what should i optimize for\??/i.test(value.trim())
+}
+
+function latestSubstantiveUserRequest(history: PlannerChatMessage[]): string {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i]
+    if (item.role !== 'user') continue
+    const text = item.markdown.trim()
+    if (!text || isPlanRetryRequest(text)) continue
+    return text
+  }
+  return ''
+}
+
+function isPlanRetryRequest(value: string): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return false
+  return (
+    /计划/.test(normalized) && /(重新|再|输出|生成|给|列)/.test(normalized)
+  ) || (
+    /\b(plan|draft|generate|show|retry|again)\b/.test(normalized) && normalized.length <= 80
+  )
+}
+
+function requestLooksReadyForPlan(value: string): boolean {
+  const text = value.trim()
+  if (text.length < 16) return false
+  return /(收集|分析|总结|输出|生成|整理|创建|调研|文档|报告|build|create|collect|research|analy[sz]e|summari[sz]e|generate|document|report)/i.test(text)
+}
+
+function buildFallbackPlanCardFromRequest(request: string, introHint?: string): PlannerPlanCard {
+  const chinese = containsCJK(request)
+  const sentiment = /(舆情|sentiment|feedback|mention|评论|讨论)/i.test(request)
+  const feishu = /(飞书|lark|feishu)/i.test(request)
+  const title = chinese
+    ? sentiment && feishu
+      ? '舆情分析与飞书输出计划'
+      : 'Canvas 执行计划'
+    : sentiment && feishu
+      ? 'Sentiment Analysis and Feishu Delivery Plan'
+      : 'Canvas Execution Plan'
+  const intro = chinese
+    ? '我会按你的目标拆成可执行节点。下面是可生成 canvas 的计划，请确认。'
+    : 'I will turn your goal into executable canvas nodes. Confirm this plan to draft the canvas.'
+  const sourceBody = chinese
+    ? `输入原始需求「${compactRequestForPlan(request)}」，确认关键词、数据来源、输出格式和成功标准。`
+    : `Use the original request "${compactRequestForPlan(request)}" to confirm keywords, sources, output format, and success criteria.`
+  const collectBody = chinese
+    ? sentiment
+      ? '从公开互联网来源收集相关讨论、文章、评论和引用链接，输出去重后的来源清单。'
+      : '收集完成任务所需的资料、上下文和输入，输出可追踪的资料清单。'
+    : sentiment
+      ? 'Collect public web discussions, articles, comments, and source links, then output a deduplicated source list.'
+      : 'Gather the materials, context, and inputs needed for the task, then output a traceable source list.'
+  const analyzeBody = chinese
+    ? sentiment
+      ? '对来源做主题归类、情绪倾向、风险点和机会点分析，输出结构化洞察。'
+      : '对收集到的信息做归类、判断和优先级排序，输出结构化结论。'
+    : sentiment
+      ? 'Classify themes, sentiment, risks, and opportunities from the sources, then output structured insights.'
+      : 'Classify, judge, and prioritize the collected information, then output structured conclusions.'
+  const deliverBody = chinese
+    ? feishu
+      ? '把分析结论、关键证据和建议整理成飞书文档草稿，并保留引用来源。'
+      : '把结论、证据和建议整理成可审阅交付物，并保留引用来源。'
+    : feishu
+      ? 'Turn findings, evidence, and recommendations into a Feishu document draft with citations preserved.'
+      : 'Turn conclusions, evidence, and recommendations into a reviewable deliverable with citations preserved.'
+  const steps = chinese
+    ? [
+        { title: '确认目标与输入', body: sourceBody },
+        { title: sentiment ? '收集公开舆情来源' : '收集资料与上下文', body: collectBody },
+        { title: sentiment ? '分析舆情主题与倾向' : '分析并提炼结论', body: analyzeBody },
+        { title: feishu ? '生成飞书文档草稿' : '生成最终交付物', body: deliverBody },
+      ]
+    : [
+        { title: 'Confirm goal and inputs', body: sourceBody },
+        { title: sentiment ? 'Collect public sentiment sources' : 'Collect sources and context', body: collectBody },
+        { title: sentiment ? 'Analyze sentiment themes' : 'Analyze and synthesize findings', body: analyzeBody },
+        { title: feishu ? 'Draft the Feishu document' : 'Produce the final deliverable', body: deliverBody },
+      ]
+  const prompt = [
+    'Create a concrete meee2 canvas proposal from this confirmed plan.',
+    'Represent each step as an executable node card with dependencies.',
+    `Original request: ${request}`,
+    introHint?.trim() ? `Assistant context: ${introHint.trim()}` : '',
+    '',
+    'Nodes:',
+    ...steps.map((step, index) => `${index + 1}. ${step.title}: ${step.body}`),
+  ].filter(Boolean).join('\n')
+  return { title, intro, steps, prompt }
+}
+
+function compactRequestForPlan(value: string): string {
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length > 90 ? `${text.slice(0, 87)}...` : text
 }
 
 function normalizedEmptyCanvasAction(raw: unknown): 'ask' | 'plan' | null {
@@ -1469,10 +1589,46 @@ function readChatHistory(canvasId: string): PlannerChatMessage[] {
         }
       })
       .filter((item): item is PlannerChatMessage => Boolean(item))
-    return normalizeChatHistoryOrder(history).slice(-PERSISTED_CHAT_LIMIT)
+    return repairGenericOptimizationAskHistory(normalizeChatHistoryOrder(history)).slice(-PERSISTED_CHAT_LIMIT)
   } catch {
     return []
   }
+}
+
+function repairGenericOptimizationAskHistory(history: PlannerChatMessage[]): PlannerChatMessage[] {
+  let targetIndex = -1
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index]
+    if (item.role !== 'planner' || item.planCard || !isGenericOptimizationAskMessage(item.markdown)) continue
+    if (!fallbackPlanForGenericOptimizationAsk(item.markdown, 'What should I optimize for?', history.slice(0, index))) continue
+    targetIndex = index
+    break
+  }
+  if (targetIndex < 0) return history
+  const repaired = history.filter((item, index) => (
+    index === targetIndex
+      || item.role !== 'planner'
+      || !isGenericOptimizationAskMessage(item.markdown)
+  ))
+  const nextIndex = repaired.findIndex((item) => history[targetIndex]?.id === item.id)
+  if (nextIndex < 0) return history
+  const planCard = fallbackPlanForGenericOptimizationAsk(
+    history[targetIndex].markdown,
+    'What should I optimize for?',
+    history.slice(0, targetIndex),
+  )
+  if (!planCard) return history
+  repaired[nextIndex] = {
+    ...repaired[nextIndex],
+    markdown: planCard.intro,
+    meta: ['plan'],
+    planCard,
+  }
+  return repaired
+}
+
+function isGenericOptimizationAskMessage(markdown: string): boolean {
+  return isGenericOptimizationQuestion(markdown)
 }
 
 function isLocalFallbackHistoryItem(id: string, markdown: string, meta?: string[]): boolean {

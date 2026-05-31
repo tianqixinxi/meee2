@@ -3474,7 +3474,7 @@
 }
 
 .planner-dialog__history--omni-chat {
-  gap: 22px;
+  gap: 24px;
 }
 
 .planner-dialog__history-toggle {
@@ -3544,13 +3544,13 @@
 }
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message--user {
-  max-width: min(640px, 78%);
-  padding: 20px 22px;
-  border: 1px solid rgba(204, 120, 92, 0.24);
-  border-radius: 18px 18px 4px 18px;
-  background: rgba(204, 120, 92, 0.2);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.2);
-  line-height: 1.6;
+  max-width: min(620px, 68%);
+  padding: 14px 18px;
+  border: 1px solid rgba(204, 120, 92, 0.26);
+  border-radius: 16px 16px 5px 16px;
+  background: linear-gradient(180deg, rgba(116, 75, 61, 0.5), rgba(91, 61, 51, 0.48));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.16);
+  line-height: 1.55;
 }
 
 .planner-dialog__message--planner {
@@ -3559,6 +3559,15 @@
 }
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message--planner {
+  width: min(820px, 100%);
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message--planner:not(.has-plan-card) {
+  padding-left: 18px;
+  border-left: 2px solid rgba(168, 165, 155, 0.18);
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message--planner.has-plan-card {
   width: min(900px, 100%);
 }
 
@@ -3641,8 +3650,8 @@
 }
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message-meta {
-  margin-bottom: 2px;
-  font-size: 11px;
+  margin-bottom: 4px;
+  font-size: 10px;
   line-height: 1.2;
 }
 
@@ -3658,7 +3667,8 @@
 }
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message-meta span {
-  padding: 3px 8px;
+  padding: 2px 7px;
+  background: rgba(245, 244, 239, 0.035);
 }
 
 .planner-dialog__message h3 {
