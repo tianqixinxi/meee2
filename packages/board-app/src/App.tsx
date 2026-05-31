@@ -942,14 +942,6 @@ export default function App() {
       })
   }, [applyCanvasList])
 
-  const handleCreateTemplate = useCallback((name: string, scope: CanvasScope) => {
-    return createCanvas({ name, scope, kind: 'template' })
-      .then((list) => {
-        applyCanvasList(list)
-        return list.activeCanvasId
-      })
-  }, [applyCanvasList])
-
   // Chunk F: spawn a canvas from a builtin gallery template, then jump to it.
   const handleApplyTemplate = useCallback(
     (templateId: string, name: string, scope: CanvasScope) => {
@@ -1152,7 +1144,7 @@ export default function App() {
           onCollapsedChange={handleWorkspaceRailCollapsedChange}
           onModeChange={handleWorkspaceModeChange}
         />
-        <div className="board-area">
+        <div className={`board-area${workspaceMode === 'planner' && activeWorkspaceCanvasKind === 'monitor' ? ' board-area--monitor' : ''}`}>
           {readinessReport && !readinessReport.ready && (
             <div className="readiness-banner" role="status">
               <div>
@@ -1192,13 +1184,11 @@ export default function App() {
             <TemplatesView
               canvases={canvasList.canvases}
               activeCanvasId={activeCanvasId}
-              userProfile={userProfile}
-              boardState={boardState.state}
-	              onOpenCanvas={handleSetActiveCanvas}
-	              onCreateTemplate={handleCreateTemplate}
-	              onApplyTemplate={handleApplyTemplate}
-	              onSaveCanvasAsTemplate={handleSaveCanvasAsTemplate}
-	              onCreateTemplateDraft={handleCreateTemplateDraft}
+	              userProfile={userProfile}
+	              boardState={boardState.state}
+		              onOpenCanvas={handleSetActiveCanvas}
+		              onApplyTemplate={handleApplyTemplate}
+		              onCreateTemplateDraft={handleCreateTemplateDraft}
 	              onReplaceTemplate={handleReplaceTemplate}
 	              onUpdateTemplateMetadata={handleUpdateTemplateMetadata}
 	              onImportClaudeWorkflow={handleImportClaudeWorkflow}
@@ -1263,6 +1253,7 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              onSaveCanvasAsTemplate={handleSaveCanvasAsTemplate}
               onReplaceTemplate={handleReplaceTemplate}
               userProfile={userProfile}
               boardState={boardState.state}

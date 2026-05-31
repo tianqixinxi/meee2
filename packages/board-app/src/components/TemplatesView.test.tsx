@@ -33,9 +33,7 @@ function renderView(overrides: Partial<ComponentProps<typeof TemplatesView>> = {
     userProfile: null,
     boardState: null,
     onOpenCanvas: vi.fn(),
-    onCreateTemplate: vi.fn(),
     onApplyTemplate: vi.fn(),
-    onSaveCanvasAsTemplate: vi.fn().mockResolvedValue('template-canvas'),
     onCreateTemplateDraft: vi.fn().mockResolvedValue('draft-canvas'),
     onReplaceTemplate: vi.fn().mockResolvedValue('template-canvas'),
     onUpdateTemplateMetadata: vi.fn().mockResolvedValue('template-canvas'),
@@ -228,32 +226,11 @@ describe('TemplatesView Claude Code workflow imports', () => {
     expect(screen.getByRole('button', { name: 'Edit draft' })).toBeDisabled()
   })
 
-  it('preserves active canvas kind when saving as template', async () => {
-    const onSaveCanvasAsTemplate = vi.fn().mockResolvedValue('template-canvas')
-    renderView({
-      canvases: [{
-        id: 'monitor-canvas',
-        name: 'Monitor',
-        scope: 'personal',
-        kind: 'monitor',
-        isDefault: false,
-        workspacePath: '',
-        ownerUserId: 'local-user',
-        teamId: null,
-      }],
-      activeCanvasId: 'monitor-canvas',
-      onSaveCanvasAsTemplate,
-    })
+  it('keeps template creation out of the catalog header', async () => {
+    renderView()
 
     await screen.findByText('Claude Code workflows')
-    fireEvent.click(screen.getByRole('button', { name: 'Save current' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => {
-      expect(onSaveCanvasAsTemplate).toHaveBeenCalledWith(
-        'monitor-canvas',
-        expect.objectContaining({ defaultCanvasKind: 'monitor' }),
-      )
-    })
+    expect(screen.queryByRole('button', { name: 'Save current' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Blank template' })).not.toBeInTheDocument()
   })
 })
