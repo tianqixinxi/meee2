@@ -57,21 +57,26 @@ import type {
 } from '@meee1/board-core'
 import { HttpCanvasPersistence } from '@meee1/board-persistence-http'
 import {
-  applyCanvasTemplate,
-  createCanvas,
-  clearPlannerCanvasContent,
-  deleteCanvas,
+	  applyCanvasTemplate,
+	  createCanvas,
+	  createTemplateEditDraft,
+	  createTemplateFromCanvas,
+	  clearPlannerCanvasContent,
+	  deleteCanvas,
   fetchCanvases,
   fetchMeee2AgentRuntimeStatus,
   fetchReadiness,
   fetchUserProfile,
   importClaudeWorkflow,
   installMeee2AgentRuntime,
-  repairReadiness,
-  uploadClaudeWorkflow,
-  updateCanvas,
-  type UserProfile,
-} from './api'
+	  repairReadiness,
+	  replaceTemplateFromCanvas,
+	  uploadClaudeWorkflow,
+	  updateCanvas,
+	  updateTemplateMetadata,
+	  type UserProfile,
+	  type TemplateMetadataInput,
+	} from './api'
 
 declare global {
   interface Window {
@@ -958,6 +963,51 @@ export default function App() {
     [applyCanvasList, handleSetActiveCanvas],
   )
 
+  const handleSaveCanvasAsTemplate = useCallback(
+    (canvasId: string, input: TemplateMetadataInput) => {
+      return createTemplateFromCanvas({ ...input, canvasId }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('templates')
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList],
+  )
+
+  const handleCreateTemplateDraft = useCallback(
+    (templateId: string) => {
+      return createTemplateEditDraft(templateId).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('planner')
+        handleSetActiveCanvas(list.activeCanvasId)
+        return list.activeCanvasId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
+
+  const handleReplaceTemplate = useCallback(
+    (templateId: string, canvasId: string, input: TemplateMetadataInput) => {
+      return replaceTemplateFromCanvas(templateId, { ...input, canvasId }).then((list) => {
+        applyCanvasList(list)
+        setWorkspaceMode('templates')
+        handleSetActiveCanvas(templateId)
+        return templateId
+      })
+    },
+    [applyCanvasList, handleSetActiveCanvas],
+  )
+
+  const handleUpdateTemplateMetadata = useCallback(
+    (templateId: string, input: TemplateMetadataInput) => {
+      return updateTemplateMetadata(templateId, input).then((list) => {
+        applyCanvasList(list)
+        return templateId
+      })
+    },
+    [applyCanvasList],
+  )
+
   const handleImportClaudeWorkflow = useCallback(
     (workflowId: string, name: string, scope: CanvasScope) => {
       return importClaudeWorkflow(workflowId, { name, scope }).then((list) => {
@@ -1144,12 +1194,16 @@ export default function App() {
               activeCanvasId={activeCanvasId}
               userProfile={userProfile}
               boardState={boardState.state}
-              onOpenCanvas={handleSetActiveCanvas}
-              onCreateTemplate={handleCreateTemplate}
-              onApplyTemplate={handleApplyTemplate}
-              onImportClaudeWorkflow={handleImportClaudeWorkflow}
-              onUploadClaudeWorkflow={handleUploadClaudeWorkflow}
-            />
+	              onOpenCanvas={handleSetActiveCanvas}
+	              onCreateTemplate={handleCreateTemplate}
+	              onApplyTemplate={handleApplyTemplate}
+	              onSaveCanvasAsTemplate={handleSaveCanvasAsTemplate}
+	              onCreateTemplateDraft={handleCreateTemplateDraft}
+	              onReplaceTemplate={handleReplaceTemplate}
+	              onUpdateTemplateMetadata={handleUpdateTemplateMetadata}
+	              onImportClaudeWorkflow={handleImportClaudeWorkflow}
+	              onUploadClaudeWorkflow={handleUploadClaudeWorkflow}
+	            />
           ) : workspaceMode === 'sessions' ? (
             <NativeSessionsWorkspaceHost
               state={boardState.state}
@@ -1209,6 +1263,7 @@ export default function App() {
               onRenameCanvas={handleRenameCanvas}
               onClearCanvas={handleClearCanvas}
               onDeleteCanvas={handleDeleteCanvas}
+              onReplaceTemplate={handleReplaceTemplate}
               userProfile={userProfile}
               boardState={boardState.state}
               plannerState={currentPlannerState}

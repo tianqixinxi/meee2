@@ -5388,89 +5388,487 @@ enum BoardAPI {
 
     // MARK: - Canvas templates (Chunk F · Official templates / Demo canvases)
 
-    /// GET /api/templates — returns the static builtin gallery
-    /// (see `CanvasTemplateRegistry.all`). Order matches PRD priority.
+    static let canvasTemplateTags = [
+        "engineering", "code-review", "release", "monitor", "workflow",
+        "recap", "research", "design", "ops", "demo"
+    ]
+
+    /// GET /api/templates — returns the unified template catalog:
+    /// official builtin templates plus visible team/private template canvases.
     static func listCanvasTemplates(_ req: HttpRequest) -> HttpResponse {
         _ = req
-        let dtos = CanvasTemplateRegistry.all.map { template -> CanvasTemplateDTO in
-            CanvasTemplateDTO(
-                id: template.id,
-                name: template.name,
-                description: template.description,
-                icon: template.icon,
-                kind: template.kind.rawValue,
-                category: template.category,
-                defaultNodes: template.defaultNodes.map { spec in
-                    CanvasTemplateNodeSpecDTO(
-                        title: spec.title,
-                        description: spec.description,
-                        status: spec.status,
-                        doerId: spec.doerId,
-                        positionHint: spec.positionHint,
-                        widget: spec.widget
-                    )
-                }
-            )
+        let actor = BoardLayoutStore.shared.currentActorContext()
+        let official = CanvasTemplateRegistry.all.map { template -> CanvasTemplateDTO in
+            officialTemplateDTO(template)
         }
-        return jsonResponse(CanvasTemplatesEnvelope(templates: dtos))
+        let custom = BoardLayoutStore.shared.snapshot().canvases
+            .filter { ($0.kind ?? .board) == .template }
+            .compactMap { canvas -> CanvasTemplateDTO? in
+                customTemplateDTO(canvas, actor: actor)
+            }
+        return jsonResponse(CanvasTemplatesEnvelope(
+            templates: official + custom,
+            tags: canvasTemplateTags
+        ))
+    }
+
+    private static func officialTemplateDTO(_ template: CanvasTemplate) -> CanvasTemplateDTO {
+        CanvasTemplateDTO(
+            id: template.id,
+            name: template.name,
+            description: template.description,
+            icon: template.icon,
+            source: "official",
+            kind: template.kind.rawValue,
+            defaultCanvasKind: template.kind.rawValue,
+            category: "official",
+            tags: tagsForOfficialTemplate(template),
+            ownerUserId: nil,
+            ownerName: "meee2",
+            version: 1,
+            readOnly: true,
+            canEdit: false,
+            canReplace: false,
+            defaultNodesCount: template.defaultNodes.count,
+            updatedAt: nil,
+            defaultNodes: template.defaultNodes.map(templateNodeDTO(_:))
+        )
+    }
+
+    private static func customTemplateDTO(
+        _ canvas: BoardLayoutStore.Canvas,
+        actor: (userId: String, teamId: String)
+    ) -> CanvasTemplateDTO? {
+        let ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-user"
+        if canvas.scope == .personal && ownerId != actor.userId {
+            return nil
+        }
+        if canvas.scope == .team,
+           let teamId = canvas.teamId,
+           !teamId.isEmpty,
+           actor.teamId != teamId {
+            return nil
+        }
+        let metadata = templateMetadata(for: canvas)
+        let canEdit = ownerId == actor.userId
+        let count = PlannerBoardBridge.store.reusableNodeCount(canvasId: canvas.id)
+        return CanvasTemplateDTO(
+            id: canvas.id,
+            name: canvas.name,
+            description: metadata.description,
+            icon: metadata.icon,
+            source: canvas.scope == .team ? "team" : "private",
+            kind: (canvas.kind ?? .template).rawValue,
+            defaultCanvasKind: metadata.defaultCanvasKind.rawValue,
+            category: canvas.scope == .team ? "team" : "private",
+            tags: metadata.tags,
+            ownerUserId: ownerId,
+            ownerName: displayName(forUserId: ownerId),
+            version: metadata.version,
+            readOnly: false,
+            canEdit: canEdit,
+            canReplace: canEdit,
+            defaultNodesCount: count,
+            updatedAt: metadata.updatedAt,
+            defaultNodes: []
+        )
+    }
+
+    private static func templateNodeDTO(_ spec: TemplateNodeSpec) -> CanvasTemplateNodeSpecDTO {
+        CanvasTemplateNodeSpecDTO(
+            title: spec.title,
+            description: spec.description,
+            status: spec.status,
+            doerId: spec.doerId,
+            positionHint: spec.positionHint,
+            widget: spec.widget
+        )
+    }
+
+    private static func tagsForOfficialTemplate(_ template: CanvasTemplate) -> [String] {
+        var tags = Set([template.category])
+        switch template.id {
+        case "code-review":
+            tags.formUnion(["engineering", "code-review", "workflow"])
+        case "release-checklist":
+            tags.formUnion(["engineering", "release", "workflow"])
+        case "overnight-recap":
+            tags.formUnion(["team", "recap", "ops"])
+        case "team-control-tower":
+            tags.formUnion(["team", "monitor", "ops"])
+        case "engineering-refactor":
+            tags.formUnion(["engineering", "workflow"])
+        case "npc-canvas":
+            tags.formUnion(["demo", "design"])
+        default:
+            tags.insert("workflow")
+        }
+        return canvasTemplateTags.filter { tags.contains($0) }
+    }
+
+    private static func templateMetadata(for canvas: BoardLayoutStore.Canvas) -> BoardLayoutStore.TemplateMetadata {
+        canvas.templateMetadata ?? BoardLayoutStore.TemplateMetadata(
+            description: "",
+            icon: "sparkles",
+            tags: ["workflow"],
+            defaultCanvasKind: .board,
+            version: 1,
+            createdFromCanvasId: nil,
+            updatedBy: canvas.createdBy,
+            updatedAt: canvas.updatedAt
+        )
+    }
+
+    private static func displayName(forUserId ownerId: String) -> String {
+        let defaults = UserDefaults.standard
+        let currentId = defaults.string(forKey: "meee2UserId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if ownerId == currentId || (ownerId == "local-user" && currentId.isEmpty) {
+            let name = defaultString(defaults, key: "meee2UserName", fallback: nil)
+            if !name.isEmpty { return name }
+            let email = defaultString(defaults, key: "meee2UserEmail", fallback: nil)
+            if !email.isEmpty { return email.components(separatedBy: "@").first ?? email }
+            return "You"
+        }
+        return ownerId
+    }
+
+    private static func requireEditableTemplate(
+        _ templateId: String
+    ) throws -> (canvas: BoardLayoutStore.Canvas, metadata: BoardLayoutStore.TemplateMetadata, actor: (userId: String, teamId: String)) {
+        let actor = BoardLayoutStore.shared.currentActorContext()
+        guard let canvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
+              (canvas.kind ?? .board) == .template else {
+            throw NSError(domain: "BoardAPI", code: 404, userInfo: [NSLocalizedDescriptionKey: "template not found: \(templateId)"])
+        }
+        let ownerId = canvas.ownerUserId ?? canvas.createdBy ?? "local-user"
+        guard ownerId == actor.userId else {
+            throw NSError(domain: "BoardAPI", code: 403, userInfo: [NSLocalizedDescriptionKey: "only the template owner can edit this template"])
+        }
+        return (canvas, templateMetadata(for: canvas), actor)
+    }
+
+    private static func planningCanvas(
+        for canvas: BoardLayoutStore.Canvas,
+        title: String? = nil,
+        context: String? = nil
+    ) -> PlanningCanvas {
+        PlanningCanvas(
+            id: canvas.id,
+            ownerId: canvas.ownerUserId ?? canvas.createdBy ?? "local-user",
+            title: title ?? canvas.name,
+            plannerContext: context ?? "canvas:\(canvas.id)"
+        )
+    }
+
+    private static func normalizedTemplateTags(_ raw: [String]?) -> [String] {
+        let allowed = Set(canvasTemplateTags)
+        let tags = (raw ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { allowed.contains($0) }
+        return Array(NSOrderedSet(array: tags)) as? [String] ?? []
+    }
+
+    private static func normalizedTemplateIcon(_ raw: String?) -> String {
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? "sparkles" : value
+    }
+
+    private static func normalizedTemplateDescription(_ raw: String?) -> String {
+        raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private static func canvasKind(from raw: String?, fallback: BoardLayoutStore.CanvasKind = .board) -> BoardLayoutStore.CanvasKind {
+        guard let raw,
+              let kind = BoardLayoutStore.CanvasKind(rawValue: raw),
+              kind != .template else {
+            return fallback
+        }
+        return kind
+    }
+
+    private struct TemplateCreateRequest: Decodable {
+        let canvasId: String?
+        let name: String?
+        let description: String?
+        let scope: String?
+        let tags: [String]?
+        let icon: String?
+        let defaultCanvasKind: String?
+    }
+
+    private struct TemplateApplyRequest: Decodable {
+        let name: String?
+        let scope: String?
+    }
+
+    private struct TemplateReplaceRequest: Decodable {
+        let canvasId: String?
+        let name: String?
+        let description: String?
+        let scope: String?
+        let tags: [String]?
+        let icon: String?
+        let defaultCanvasKind: String?
     }
 
     /// POST /api/templates/:id/apply — body `{ name, scope }`.
-    /// Materialize a canvas from the template, seed its default nodes, and
-    /// return the same `CanvasListEnvelope` shape as `createCanvas` so the
-    /// caller can drop the result straight into `applyCanvasList`.
+    /// Materialize a canvas from either an official builtin template or a user
+    /// template canvas.
     static func applyCanvasTemplate(_ req: HttpRequest) -> HttpResponse {
-        guard let templateId = req.params[":id"] else {
+        guard let templateId = req.params[":id"]?.removingPercentEncoding else {
             return errorResponse("bad_request", "missing template id", status: 400)
         }
-        guard let template = CanvasTemplateRegistry.get(templateId) else {
-            return errorResponse("not_found", "template not found: \(templateId)", status: 404)
-        }
-        guard let json = parseJSONBody(req) else {
+        guard let body = decodeJSONBody(req, as: TemplateApplyRequest.self) else {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
         }
-        guard let name = (json["name"] as? String).flatMap({ s in
-            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }) else {
+        guard let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !name.isEmpty else {
             return errorResponse("bad_request", "missing canvas name", status: 400)
         }
-        let rawScope = (json["scope"] as? String) ?? "personal"
+        let rawScope = body.scope ?? "personal"
         guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
             return errorResponse("bad_request", "scope must be personal or team", status: 400)
         }
+
+        if let template = CanvasTemplateRegistry.get(templateId) {
+            return applyOfficialCanvasTemplate(template, name: name, scope: scope)
+        }
+        return applyCustomCanvasTemplate(templateId, name: name, scope: scope)
+    }
+
+    private static func applyOfficialCanvasTemplate(
+        _ template: CanvasTemplate,
+        name: String,
+        scope: BoardLayoutStore.CanvasScope
+    ) -> HttpResponse {
         do {
-            // 1) Create the canvas itself with the template-declared kind.
             let snapshot = try BoardLayoutStore.shared.createCanvas(
                 name: name,
                 scope: scope,
                 kind: template.kind
             )
-            // 2) Resolve the freshly-created canvas (active is set by createCanvas).
             let canvasId = snapshot.activeCanvasId
             guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
                 return errorResponse("internal", "freshly created canvas missing from snapshot", status: 500)
             }
-            // 3) Seed nodes. We talk to PlannerStore directly through
-            //    `PlannerBoardBridge.store` — same pattern as the existing
-            //    delivery-pipeline template path in `canvasState(for:)`.
             let ownerId = boardCanvas.ownerUserId ?? boardCanvas.createdBy ?? "local-owner"
-            let planningCanvas = PlanningCanvas(
+            let planning = PlanningCanvas(
                 id: boardCanvas.id,
                 ownerId: ownerId,
                 title: boardCanvas.name,
-                plannerContext: "canvas:\(boardCanvas.id)"
+                plannerContext: "template:\(template.id)"
             )
             let seedNodes = CanvasTemplateRegistry.materializeNodes(
                 template: template,
                 canvasId: canvasId,
                 ownerId: ownerId
             )
-            _ = try PlannerBoardBridge.store.record(for: planningCanvas, seedNodes: [])
+            _ = try PlannerBoardBridge.store.record(for: planning, seedNodes: [])
             _ = try PlannerBoardBridge.store.seedNodesIfEmpty(canvasId: canvasId, seedNodes: seedNodes)
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    private static func applyCustomCanvasTemplate(
+        _ templateId: String,
+        name: String,
+        scope: BoardLayoutStore.CanvasScope
+    ) -> HttpResponse {
+        let actor = BoardLayoutStore.shared.currentActorContext()
+        guard let templateCanvas = BoardLayoutStore.shared.snapshot().canvases.first(where: { $0.id == templateId }),
+              (templateCanvas.kind ?? .board) == .template,
+              customTemplateDTO(templateCanvas, actor: actor) != nil else {
+            return errorResponse("not_found", "template not found: \(templateId)", status: 404)
+        }
+        let metadata = templateMetadata(for: templateCanvas)
+        do {
+            let snapshot = try BoardLayoutStore.shared.createCanvas(
+                name: name,
+                scope: scope,
+                kind: metadata.defaultCanvasKind
+            )
+            let canvasId = snapshot.activeCanvasId
+            guard let boardCanvas = snapshot.canvases.first(where: { $0.id == canvasId }) else {
+                return errorResponse("internal", "freshly created canvas missing from snapshot", status: 500)
+            }
+            _ = try PlannerBoardBridge.store.cloneReusableTemplateContent(
+                from: templateId,
+                to: planningCanvas(
+                    for: boardCanvas,
+                    context: "template:\(templateId):version:\(metadata.version)"
+                )
+            )
+            return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createTemplateFromCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let body = decodeJSONBody(req, as: TemplateCreateRequest.self) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let sourceCanvasId = body.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceCanvasId.isEmpty else {
+            return errorResponse("bad_request", "canvasId is required", status: 400)
+        }
+        let snapshot = BoardLayoutStore.shared.snapshot()
+        guard let source = snapshot.canvases.first(where: { $0.id == sourceCanvasId }) else {
+            return errorResponse("not_found", "canvas not found: \(sourceCanvasId)", status: 404)
+        }
+        let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !name.isEmpty else {
+            return errorResponse("bad_request", "template name is required", status: 400)
+        }
+        let rawScope = body.scope ?? "personal"
+        guard let scope = BoardLayoutStore.CanvasScope(rawValue: rawScope) else {
+            return errorResponse("bad_request", "scope must be personal or team", status: 400)
+        }
+        let actor = BoardLayoutStore.shared.currentActorContext()
+        let metadata = BoardLayoutStore.TemplateMetadata(
+            description: normalizedTemplateDescription(body.description),
+            icon: normalizedTemplateIcon(body.icon),
+            tags: normalizedTemplateTags(body.tags),
+            defaultCanvasKind: canvasKind(from: body.defaultCanvasKind, fallback: source.kind ?? .board),
+            version: 1,
+            createdFromCanvasId: sourceCanvasId,
+            updatedBy: actor.userId,
+            updatedAt: Date()
+        )
+        do {
+            let created = try BoardLayoutStore.shared.createCanvas(
+                name: name,
+                scope: scope,
+                kind: .template,
+                templateMetadata: metadata
+            )
+            let templateId = created.activeCanvasId
+            guard let templateCanvas = created.canvases.first(where: { $0.id == templateId }) else {
+                return errorResponse("internal", "freshly created template missing from snapshot", status: 500)
+            }
+            _ = try PlannerBoardBridge.store.cloneReusableTemplateContent(
+                from: sourceCanvasId,
+                to: planningCanvas(for: templateCanvas, context: "template:\(templateId):version:1")
+            )
+            return jsonResponse(canvasEnvelope(created), status: 201, reason: "Created")
+        } catch {
+            return errorResponse("bad_request", error.localizedDescription, status: 400)
+        }
+    }
+
+    static func createTemplateEditDraft(_ req: HttpRequest) -> HttpResponse {
+        guard let templateId = req.params[":id"]?.removingPercentEncoding else {
+            return errorResponse("bad_request", "missing template id", status: 400)
+        }
+        do {
+            let editable = try requireEditableTemplate(templateId)
+            let draftName = "\(editable.canvas.name) draft"
+            let created = try BoardLayoutStore.shared.createCanvas(
+                name: draftName,
+                scope: .personal,
+                kind: editable.metadata.defaultCanvasKind,
+                draftOfTemplateId: templateId
+            )
+            let draftId = created.activeCanvasId
+            guard let draftCanvas = created.canvases.first(where: { $0.id == draftId }) else {
+                return errorResponse("internal", "freshly created draft missing from snapshot", status: 500)
+            }
+            _ = try PlannerBoardBridge.store.cloneReusableTemplateContent(
+                from: templateId,
+                to: planningCanvas(for: draftCanvas, context: "template-draft:\(templateId):version:\(editable.metadata.version)")
+            )
+            return jsonResponse(canvasEnvelope(created), status: 201, reason: "Created")
+        } catch {
+            let status = (error as NSError).code == 403 ? 403 : 400
+            return errorResponse(status == 403 ? "forbidden" : "bad_request", error.localizedDescription, status: status)
+        }
+    }
+
+    static func replaceTemplateFromCanvas(_ req: HttpRequest) -> HttpResponse {
+        guard let templateId = req.params[":id"]?.removingPercentEncoding else {
+            return errorResponse("bad_request", "missing template id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: TemplateReplaceRequest.self) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        guard let sourceCanvasId = body.canvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceCanvasId.isEmpty else {
+            return errorResponse("bad_request", "canvasId is required", status: 400)
+        }
+        do {
+            let editable = try requireEditableTemplate(templateId)
+            var metadata = editable.metadata
+            let previous = BoardLayoutStore.TemplateRevision(
+                version: metadata.version,
+                name: editable.canvas.name,
+                description: metadata.description,
+                replacedFromCanvasId: metadata.replacedFromCanvasId,
+                replacedAt: Date(),
+                replacedBy: editable.actor.userId
+            )
+            metadata.description = body.description.map { normalizedTemplateDescription($0) } ?? metadata.description
+            metadata.icon = body.icon.map { normalizedTemplateIcon($0) } ?? metadata.icon
+            if body.tags != nil { metadata.tags = normalizedTemplateTags(body.tags) }
+            metadata.defaultCanvasKind = canvasKind(from: body.defaultCanvasKind, fallback: metadata.defaultCanvasKind)
+            metadata.version += 1
+            metadata.replacedFromCanvasId = sourceCanvasId
+            metadata.updatedBy = editable.actor.userId
+            metadata.updatedAt = Date()
+            metadata.revisions.append(previous)
+
+            let nextName = body.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let updated = try BoardLayoutStore.shared.updateTemplateMetadata(
+                id: templateId,
+                name: nextName?.isEmpty == false ? nextName : nil,
+                scope: body.scope.flatMap(BoardLayoutStore.CanvasScope.init(rawValue:)),
+                metadata: metadata
+            )
+            guard let templateCanvas = updated.canvases.first(where: { $0.id == templateId }) else {
+                return errorResponse("internal", "template missing after metadata update", status: 500)
+            }
+            _ = try PlannerBoardBridge.store.replaceReusableTemplateContent(
+                templateCanvasId: templateId,
+                from: sourceCanvasId,
+                targetCanvas: planningCanvas(for: templateCanvas, context: "template:\(templateId):version:\(metadata.version)")
+            )
+            return jsonResponse(canvasEnvelope(BoardLayoutStore.shared.snapshot()))
+        } catch {
+            let status = (error as NSError).code == 403 ? 403 : 400
+            return errorResponse(status == 403 ? "forbidden" : "bad_request", error.localizedDescription, status: status)
+        }
+    }
+
+    static func updateTemplateMetadata(_ req: HttpRequest) -> HttpResponse {
+        guard let templateId = req.params[":id"]?.removingPercentEncoding else {
+            return errorResponse("bad_request", "missing template id", status: 400)
+        }
+        guard let body = decodeJSONBody(req, as: TemplateReplaceRequest.self) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        do {
+            let editable = try requireEditableTemplate(templateId)
+            var metadata = editable.metadata
+            metadata.description = body.description.map { normalizedTemplateDescription($0) } ?? metadata.description
+            metadata.icon = body.icon.map { normalizedTemplateIcon($0) } ?? metadata.icon
+            if body.tags != nil { metadata.tags = normalizedTemplateTags(body.tags) }
+            metadata.defaultCanvasKind = canvasKind(from: body.defaultCanvasKind, fallback: metadata.defaultCanvasKind)
+            metadata.updatedBy = editable.actor.userId
+            metadata.updatedAt = Date()
+            let name = body.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let scope = body.scope.flatMap(BoardLayoutStore.CanvasScope.init(rawValue:))
+            let snapshot = try BoardLayoutStore.shared.updateTemplateMetadata(
+                id: templateId,
+                name: name?.isEmpty == false ? name : nil,
+                scope: scope,
+                metadata: metadata
+            )
+            return jsonResponse(canvasEnvelope(snapshot))
+        } catch {
+            let status = (error as NSError).code == 403 ? 403 : 400
+            return errorResponse(status == 403 ? "forbidden" : "bad_request", error.localizedDescription, status: status)
         }
     }
 
@@ -5609,7 +6007,8 @@ enum BoardAPI {
                 syncStatus: canvas.syncStatus,
                 dirtySince: canvas.dirtySince.map(BoardDTOBuilder.iso),
                 lastSyncedAt: canvas.lastSyncedAt.map(BoardDTOBuilder.iso),
-                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso)
+                lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso),
+                draftOfTemplateId: canvas.draftOfTemplateId
             )
         }
         let defaultIds = snapshot.canvases.filter { $0.isDefault }.map { $0.id }

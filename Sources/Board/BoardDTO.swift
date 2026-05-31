@@ -411,6 +411,7 @@ struct CanvasInfoDTO: Encodable {
     let dirtySince: String?
     let lastSyncedAt: String?
     let lastRemoteUpdatedAt: String?
+    let draftOfTemplateId: String?
 }
 
 struct CanvasSessionMembershipDTO: Encodable {
@@ -446,13 +447,25 @@ struct CanvasTemplateDTO: Encodable {
     let name: String
     let description: String
     let icon: String
+    let source: String
     let kind: String
+    let defaultCanvasKind: String
     let category: String
+    let tags: [String]
+    let ownerUserId: String?
+    let ownerName: String?
+    let version: Int
+    let readOnly: Bool
+    let canEdit: Bool
+    let canReplace: Bool
+    let defaultNodesCount: Int
+    let updatedAt: Date?
     let defaultNodes: [CanvasTemplateNodeSpecDTO]
 }
 
 struct CanvasTemplatesEnvelope: Encodable {
     let templates: [CanvasTemplateDTO]
+    let tags: [String]
 }
 
 // MARK: - Claude Code workflows

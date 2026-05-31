@@ -50,6 +50,11 @@ interface Props {
   onRenameCanvas: (canvasId: string, name: string) => Promise<void> | void
   onClearCanvas?: (canvasId: string) => Promise<void> | void
   onDeleteCanvas: (canvasId: string) => Promise<void> | void
+  onReplaceTemplate?: (
+    templateId: string,
+    canvasId: string,
+    input: { name?: string; description?: string; tags?: string[]; defaultCanvasKind?: Exclude<CanvasKind, 'template'> },
+  ) => Promise<void | string> | void
   // AI Recap Drawer needs richer context. Optional so narrower callers can
   // still render the toolbar without canvas monitor wiring.
   userProfile?: UserProfile | null
@@ -84,6 +89,7 @@ export function CanvasToolbar({
   onRenameCanvas,
   onClearCanvas,
   onDeleteCanvas,
+  onReplaceTemplate,
   userProfile = null,
   boardState = null,
   plannerState = null,
@@ -101,6 +107,9 @@ export function CanvasToolbar({
   // 创建路径只产 board kind canvas;视图变化走节点级 widget,见 PlanningNode.widget
   const [clearConfirming, setClearConfirming] = useState(false)
   const [deleteConfirming, setDeleteConfirming] = useState(false)
+  const [replaceTemplateConfirming, setReplaceTemplateConfirming] = useState(false)
+  const [replaceTemplateSaving, setReplaceTemplateSaving] = useState(false)
+  const [replaceTemplateError, setReplaceTemplateError] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
   const [infoTab, setInfoTab] = useState<'overview' | 'settings' | 'danger'>('overview')
   const [canvasQuery, setCanvasQuery] = useState('')
@@ -310,12 +319,49 @@ export function CanvasToolbar({
     })
   }
 
+  const submitReplaceTemplate = () => {
+    if (!activeCanvas?.draftOfTemplateId || !onReplaceTemplate) return
+    setReplaceTemplateSaving(true)
+    setReplaceTemplateError(null)
+    Promise.resolve(onReplaceTemplate(activeCanvas.draftOfTemplateId, activeCanvas.id, {
+      name: activeCanvas.name.replace(/\s+draft$/i, ''),
+      defaultCanvasKind: activeCanvas.kind === 'monitor' ? 'monitor' : 'board',
+    }))
+      .then(() => {
+        setReplaceTemplateSaving(false)
+        setReplaceTemplateConfirming(false)
+      })
+      .catch((err) => {
+        setReplaceTemplateSaving(false)
+        setReplaceTemplateError((err as Error).message || 'Failed to replace template')
+      })
+  }
+
   if (!activeCanvas) return null
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
   const canClearCanvas = Boolean(onClearCanvas && activeCanvas.kind !== 'monitor')
 
   return (
     <div className="canvas-toolbar" ref={rootRef}>
+      {activeCanvas.draftOfTemplateId && (
+        <div className="canvas-toolbar__draft-banner">
+          <span>
+            <strong>Editing template draft</strong>
+            <small>Replace the original template when this canvas is tuned.</small>
+          </span>
+          <button
+            type="button"
+            className="primary"
+            onClick={() => {
+              setReplaceTemplateError(null)
+              setReplaceTemplateConfirming(true)
+            }}
+            disabled={!onReplaceTemplate}
+          >
+            Replace template
+          </button>
+        </div>
+      )}
       <div className="canvas-toolbar__switcher">
         <button
           type="button"
@@ -861,6 +907,34 @@ export function CanvasToolbar({
             <div className="modal-footer">
               <button className="ghost" type="button" onClick={() => setClearConfirming(false)}>{t('common.cancel')}</button>
               <button className="danger" type="button" onClick={submitClear}>{t('common.clear')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {replaceTemplateConfirming && activeCanvas.draftOfTemplateId && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !replaceTemplateSaving) setReplaceTemplateConfirming(false)
+          }}
+        >
+          <div className="modal canvas-confirm-modal" role="dialog" aria-modal="true" aria-label="Replace template">
+            <div className="modal-header">
+              <div className="modal-title">Replace template</div>
+              <div className="modal-subtitle">
+                The original template keeps its id and version history. Live session state from this draft will be stripped.
+              </div>
+            </div>
+            <div className="modal-body col" style={{ gap: 8 }}>
+              <strong>{activeCanvas.name}</strong>
+              <code>{activeCanvas.draftOfTemplateId}</code>
+              {replaceTemplateError && <div className="inline-error">{replaceTemplateError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button className="ghost" type="button" onClick={() => setReplaceTemplateConfirming(false)} disabled={replaceTemplateSaving}>{t('common.cancel')}</button>
+              <button className="primary" type="button" onClick={submitReplaceTemplate} disabled={replaceTemplateSaving}>
+                {replaceTemplateSaving ? 'Replacing...' : 'Replace template'}
+              </button>
             </div>
           </div>
         </div>

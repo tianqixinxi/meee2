@@ -11,6 +11,7 @@ import type {
   ReadinessReport,
   SessionIntakeDiagnostics,
   CanvasList,
+  CanvasKind,
   CanvasScope,
   SelectedCanvasElementContext,
   SpawnProvider,
@@ -664,20 +665,38 @@ export interface CanvasTemplateNodeSpec {
   positionHint?: Record<string, number> | null
 }
 
+export type CanvasTemplateSource = 'official' | 'team' | 'private'
+
 export interface CanvasTemplate {
   id: string
   name: string
   description: string
   icon: string
+  source: CanvasTemplateSource
   /**
    * Mirrors `BoardLayoutStore.CanvasKind` raw values. Always present in the
    * server response (unlike `CanvasInfo.kind` which can be missing on legacy
    * canvases), so we declare it non-optional here.
    */
   kind: NonNullable<CanvasList['canvases'][number]['kind']>
-  /** 'engineering' / 'team' / 'demo' (free-form for future categories). */
+  defaultCanvasKind: NonNullable<CanvasList['canvases'][number]['kind']>
+  /** Legacy bucket retained for older callers; source is the catalog grouping. */
   category: string
+  tags: string[]
+  ownerUserId?: string | null
+  ownerName?: string | null
+  version: number
+  readOnly: boolean
+  canEdit: boolean
+  canReplace: boolean
+  defaultNodesCount: number
+  updatedAt?: string | null
   defaultNodes: CanvasTemplateNodeSpec[]
+}
+
+export interface CanvasTemplateCatalog {
+  templates: CanvasTemplate[]
+  tags: string[]
 }
 
 export interface ClaudeWorkflow {
@@ -706,8 +725,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'Code Review Kanban',
     description: '围绕 GitHub PR 的代码评审看板',
     icon: 'git-pull-request',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'engineering',
+    tags: ['engineering', 'code-review', 'workflow'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 1,
+    updatedAt: null,
     defaultNodes: [{ title: 'PR 评审看板', status: 'ready' }],
   },
   {
@@ -715,8 +745,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'Release Checklist',
     description: 'Release 前的 gate + smoke + tag + notify 流程',
     icon: 'rocket',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'engineering',
+    tags: ['engineering', 'release', 'workflow'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 5,
+    updatedAt: null,
     defaultNodes: [
       { title: '[Gate] Feature freeze', status: 'blocked' },
       { title: 'Run CI suite', status: 'ready' },
@@ -730,8 +771,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'Overnight Recap',
     description: '夜间 AI 跑完后，早晨 5 分钟翻完 recap 决定哪些 follow up',
     icon: 'moon',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'team',
+    tags: ['recap', 'ops'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 1,
+    updatedAt: null,
     defaultNodes: [{ title: '隔夜 Recap 收件箱', status: 'ready' }],
   },
   {
@@ -739,8 +791,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'Team Control Tower',
     description: '团队跨工作流总览，看每个人在哪个 status',
     icon: 'users',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'team',
+    tags: ['monitor', 'ops'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 1,
+    updatedAt: null,
     defaultNodes: [{ title: '团队 Owner × Status 矩阵', status: 'ready' }],
   },
   {
@@ -748,8 +811,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'Engineering Refactor',
     description: '工程重构 — 拆 scope、下钻 subcanvas、跟踪 blocked',
     icon: 'tool',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'engineering',
+    tags: ['engineering', 'workflow'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 4,
+    updatedAt: null,
     defaultNodes: [
       { title: '重构 PRD 预览', status: 'ready' },
       { title: 'Scope: PluginManager dylib reload', status: 'ready' },
@@ -762,8 +836,19 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
     name: 'NPC Canvas',
     description: '游戏 NPC 编排画板（demo）',
     icon: 'gamepad-2',
+    source: 'official',
     kind: 'board',
+    defaultCanvasKind: 'board',
     category: 'demo',
+    tags: ['design', 'demo'],
+    ownerUserId: null,
+    ownerName: 'meee2',
+    version: 1,
+    readOnly: true,
+    canEdit: false,
+    canReplace: false,
+    defaultNodesCount: 4,
+    updatedAt: null,
     defaultNodes: [
       { title: 'Quest giver: village elder', status: 'ready' },
       { title: 'Combat NPC: forest wolf', status: 'ready' },
@@ -773,11 +858,18 @@ const DEMO_CANVAS_TEMPLATES: CanvasTemplate[] = [
   },
 ]
 
+export function fetchTemplateCatalog(): Promise<CanvasTemplateCatalog> {
+  if (PLANNER_DEMO_MODE) {
+    return Promise.resolve({
+      templates: DEMO_CANVAS_TEMPLATES,
+      tags: ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo'],
+    })
+  }
+  return jsonRequest<CanvasTemplateCatalog>('/api/templates')
+}
+
 export function fetchCanvasTemplates(): Promise<CanvasTemplate[]> {
-  if (PLANNER_DEMO_MODE) return Promise.resolve(DEMO_CANVAS_TEMPLATES)
-  return jsonRequest<{ templates: CanvasTemplate[] }>('/api/templates').then(
-    (envelope) => envelope.templates,
-  )
+  return fetchTemplateCatalog().then((envelope) => envelope.templates)
 }
 
 export function applyCanvasTemplate(
@@ -786,6 +878,49 @@ export function applyCanvasTemplate(
 ): Promise<CanvasList> {
   return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(id)}/apply`, {
     method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface TemplateMetadataInput {
+  name?: string
+  description?: string
+  scope?: CanvasScope
+  tags?: string[]
+  icon?: string
+  defaultCanvasKind?: Exclude<CanvasKind, 'template'>
+}
+
+export function createTemplateFromCanvas(input: TemplateMetadataInput & { canvasId: string }): Promise<CanvasList> {
+  return jsonRequest<CanvasList>('/api/templates/from-canvas', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function createTemplateEditDraft(templateId: string): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(templateId)}/edit-draft`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function replaceTemplateFromCanvas(
+  templateId: string,
+  input: TemplateMetadataInput & { canvasId: string },
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(templateId)}/replace-from-canvas`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateTemplateMetadata(
+  templateId: string,
+  input: TemplateMetadataInput,
+): Promise<CanvasList> {
+  return jsonRequest<CanvasList>(`/api/templates/${encodeURIComponent(templateId)}/metadata`, {
+    method: 'PATCH',
     body: JSON.stringify(input),
   })
 }
