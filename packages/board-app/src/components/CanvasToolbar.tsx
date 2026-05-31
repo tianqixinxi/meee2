@@ -589,6 +589,7 @@ export function CanvasToolbar({
                     const selected = canvas.id === activeCanvas.id
                     const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
                     const showOwnerAvatar = selectedCanvasGroup.id === 'team' && canvas.scope === 'team'
+                    const showMinePill = selectedCanvasGroup.id === 'team' && ownsCanvas(canvas, userProfile?.userId ?? '')
                     const statusTone = canvasStatusTone(canvas)
                     return (
                       <button
@@ -636,6 +637,9 @@ export function CanvasToolbar({
                             <span className="canvas-toolbar__default-badge" title={t('canvas.cannotDelete')} aria-label="Default">
                               Default
                             </span>
+                          )}
+                          {showMinePill && (
+                            <span className="canvas-toolbar__mine-pill">Mine</span>
                           )}
                           {showOwnerAvatar && (
                             <span

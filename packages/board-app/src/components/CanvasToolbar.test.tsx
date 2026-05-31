@@ -183,6 +183,8 @@ describe('CanvasToolbar template save flow', () => {
     expect(screen.getByRole('tab', { name: /Team\s+2/ })).toHaveAttribute('aria-selected', 'true')
     expect(within(list as HTMLElement).getByRole('button', { name: /Team Canvas/ })).toBeInTheDocument()
     expect(within(list as HTMLElement).getByRole('button', { name: /Published Mine/ })).toBeInTheDocument()
+    expect(within(within(list as HTMLElement).getByRole('button', { name: /Published Mine/ })).getByText('Mine')).toBeInTheDocument()
+    expect(within(within(list as HTMLElement).getByRole('button', { name: /Team Canvas/ })).queryByText('Mine')).not.toBeInTheDocument()
     expect(within(list as HTMLElement).queryByRole('button', { name: /Own Canvas/ })).not.toBeInTheDocument()
   })
 })
