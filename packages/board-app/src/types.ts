@@ -294,6 +294,7 @@ export interface CanvasInfo {
   dirtySince?: string | null
   lastSyncedAt?: string | null
   lastRemoteUpdatedAt?: string | null
+  draftOfTemplateId?: string | null
 }
 
 export interface CanvasSessionMembership {
