@@ -497,6 +497,7 @@ export function CanvasToolbar({
                     const selected = canvas.id === activeCanvas.id
                     const readOnly = isReadOnlyTeamCanvas(canvas, userProfile?.userId ?? '')
                     const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
+                    const showOwnerAvatar = group.id === 'team' && canvas.scope === 'team'
                     return (
                       <button
                         key={canvas.id}
@@ -545,7 +546,7 @@ export function CanvasToolbar({
                               {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
                             </span>
                           )}
-                          {canvas.scope === 'team' && (
+                          {showOwnerAvatar && (
                             <span
                               className={`canvas-toolbar__owner-avatar ${avatarUrl ? 'has-image' : ''}`}
                               style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}
