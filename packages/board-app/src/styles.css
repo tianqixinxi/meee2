@@ -1134,7 +1134,7 @@ textarea {
 }
 
 .board-area--monitor {
-  --monitor-toolbar-reserved-top: 64px;
+  --monitor-toolbar-reserved-top: 116px;
 }
 
 .workspace-surface-error {
@@ -5415,7 +5415,7 @@ textarea {
   top: 16px;
   left: calc(var(--planner-chat-width, 0px) + 16px);
   z-index: 240;
-  width: min(520px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  width: min(420px, calc(100% - var(--planner-chat-width, 0px) - 32px));
   min-width: 0;
   display: grid;
   gap: 8px;
@@ -5424,7 +5424,7 @@ textarea {
 }
 
 .canvas-toolbar--monitor {
-  width: min(640px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  width: min(420px, calc(100% - var(--planner-chat-width, 0px) - 32px));
 }
 
 .canvas-toolbar__draft-banner {
@@ -5463,12 +5463,12 @@ textarea {
 }
 
 html.meee2-board-shell.board-sidebar-collapsed .canvas-toolbar {
-  width: min(520px, calc(100% - var(--planner-chat-width, 0px) - 32px));
+  width: min(420px, calc(100% - var(--planner-chat-width, 0px) - 32px));
 }
 
 html.board-planner-chat-collapsed .canvas-toolbar {
   left: 16px;
-  width: min(520px, calc(100% - 32px));
+  width: min(420px, calc(100% - 32px));
 }
 
 html.board-empty-omni .canvas-toolbar {

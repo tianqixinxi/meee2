@@ -664,50 +664,48 @@ export function CanvasToolbar({
           </div>
         )}
       </div>
-      {!isMonitorCanvas && (
-        <div className="canvas-toolbar__context" aria-live="polite">
-          <div className="canvas-toolbar__recap">
-            <button
-              type="button"
-              className="canvas-toolbar__recap-trigger"
-              aria-label={t('canvas.openRecap')}
-              aria-expanded={recapDrawerOpen}
-              title={recap?.headline ?? t('canvas.readingState')}
-              onClick={() => setRecapDrawerOpen((value) => !value)}
-            >
-              <Sparkles size={13} aria-hidden />
-              <span className="canvas-toolbar__recap-copy">
-                <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
-                {recapError ? (
-                  <small>{recapError}</small>
-                ) : recap?.updatedAt ? (
-                  <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
-                ) : null}
-              </span>
-              <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
-                {monitorBadge.label}
-              </span>
-            </button>
-            <button
-              type="button"
-              className="canvas-toolbar__recap-refresh"
-              aria-label={t('canvas.refreshRecap')}
-              title={t('canvas.refreshRecap')}
-              onClick={() => void refreshRecap()}
-              disabled={recapLoading}
-            >
-              <RefreshCw size={13} aria-hidden />
-            </button>
-          </div>
-          {recap?.details && recap.details.length > 0 && (
-            <div className="canvas-toolbar__recap-details">
-              {recap.details.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
-          )}
+      <div className="canvas-toolbar__context" aria-live="polite">
+        <div className="canvas-toolbar__recap">
+          <button
+            type="button"
+            className="canvas-toolbar__recap-trigger"
+            aria-label={t('canvas.openRecap')}
+            aria-expanded={recapDrawerOpen}
+            title={recap?.headline ?? t('canvas.readingState')}
+            onClick={() => setRecapDrawerOpen((value) => !value)}
+          >
+            <Sparkles size={13} aria-hidden />
+            <span className="canvas-toolbar__recap-copy">
+              <strong>{recapLoading ? t('canvas.refreshingRecap') : (recap?.headline ?? t('canvas.readingState'))}</strong>
+              {recapError ? (
+                <small>{recapError}</small>
+              ) : recap?.updatedAt ? (
+                <small className="canvas-toolbar__recap-age">{formatRecapAge(recap.updatedAt, recapAgeNow)}</small>
+              ) : null}
+            </span>
+            <span className={`canvas-toolbar__monitor-badge is-${monitorBadge.tone}`}>
+              {monitorBadge.label}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="canvas-toolbar__recap-refresh"
+            aria-label={t('canvas.refreshRecap')}
+            title={t('canvas.refreshRecap')}
+            onClick={() => void refreshRecap()}
+            disabled={recapLoading}
+          >
+            <RefreshCw size={13} aria-hidden />
+          </button>
         </div>
-      )}
+        {recap?.details && recap.details.length > 0 && (
+          <div className="canvas-toolbar__recap-details">
+            {recap.details.map((line) => (
+              <p key={line}>{line}</p>
+            ))}
+          </div>
+        )}
+      </div>
       {!isMonitorCanvas && recap?.mode !== 'empty' && recap?.statuses && (
         <div className="canvas-toolbar__status-strip" aria-label={t('canvas.statusOverview')}>
           {recap.statuses.map((item) => (

@@ -4,7 +4,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
-  Filter,
   GitPullRequestArrow,
   LayoutGrid,
   List,
@@ -64,7 +63,6 @@ export function WorkspaceMonitor({
   const [query, setQuery] = useState('')
   const [laneFilter, setLaneFilter] = useState<MonitorLaneKey | 'all'>('all')
   const [sourceFilter, setSourceFilter] = useState<MonitorSourceFilter>('all')
-  const [evidenceOnly, setEvidenceOnly] = useState(false)
   const [density, setDensity] = useState<MonitorDensity>('compact')
   const [sortMode, setSortMode] = useState<MonitorSort>('severity')
   const [collapsedLanes, setCollapsedLanes] = useState<MonitorLaneKey[]>([])
@@ -87,7 +85,6 @@ export function WorkspaceMonitor({
       .filter((item) => matchesSearch(item, term))
       .filter((item) => laneFilter === 'all' || laneForItem(item) === laneFilter)
       .filter((item) => sourceMatches(item, sourceFilter))
-      .filter((item) => !evidenceOnly || evidenceCount(item) > 0)
       .sort((a, b) => sortMonitorItems(a, b, sortMode))
 
     const itemLanes: MonitorLane[] = [
@@ -102,7 +99,7 @@ export function WorkspaceMonitor({
       byKey.get(laneForItem(item))?.items.push(item)
     }
     return itemLanes
-  }, [evidenceOnly, laneFilter, monitor, query, sortMode, sourceFilter, t])
+  }, [laneFilter, monitor, query, sortMode, sourceFilter, t])
 
   const totalItems = lanes.reduce((count, lane) => count + lane.items.length, 0)
 
@@ -110,10 +107,6 @@ export function WorkspaceMonitor({
     setCollapsedLanes((current) => (
       current.includes(lane) ? current.filter((key) => key !== lane) : [...current, lane]
     ))
-  }
-
-  const setQuickLane = (lane: MonitorLaneKey) => {
-    setLaneFilter((current) => current === lane ? 'all' : lane)
   }
 
   return (
@@ -129,32 +122,6 @@ export function WorkspaceMonitor({
               placeholder={t('monitor.searchPlaceholder')}
               aria-label={t('monitor.searchLabel')}
             />
-          </div>
-          <div className="planner-monitor__tool-group" role="group" aria-label={t('monitor.quickFilters')}>
-            <button
-              type="button"
-              className={laneFilter === 'blocked' ? 'is-active' : ''}
-              onClick={() => setQuickLane('blocked')}
-            >
-              <ShieldAlert size={12} aria-hidden />
-              <span>{t('monitor.blockedOnly')}</span>
-            </button>
-            <button
-              type="button"
-              className={laneFilter === 'approval' ? 'is-active' : ''}
-              onClick={() => setQuickLane('approval')}
-            >
-              <GitPullRequestArrow size={12} aria-hidden />
-              <span>{t('monitor.approvalOnly')}</span>
-            </button>
-            <button
-              type="button"
-              className={evidenceOnly ? 'is-active' : ''}
-              onClick={() => setEvidenceOnly((value) => !value)}
-            >
-              <Filter size={12} aria-hidden />
-              <span>{t('monitor.evidenceOnly')}</span>
-            </button>
           </div>
           <button
             type="button"

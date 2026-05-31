@@ -105,6 +105,33 @@ describe('CanvasToolbar template save flow', () => {
     expect(screen.queryByRole('button', { name: 'Save as template' })).not.toBeInTheDocument()
   })
 
+  it('keeps AI recap available on monitor canvases', () => {
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'monitor-canvas',
+            name: 'Monitor',
+            scope: 'personal',
+            kind: 'monitor',
+            isDefault: true,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="monitor-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+        />
+      </I18nProvider>,
+    )
+
+    expect(screen.getByRole('button', { name: 'Open AI recap' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh canvas recap' })).toBeInTheDocument()
+  })
+
   it('switches between My and Team canvas tabs in the canvas menu', async () => {
     render(
       <I18nProvider>
