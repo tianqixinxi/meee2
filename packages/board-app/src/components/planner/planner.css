@@ -3140,7 +3140,7 @@
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__messages {
   align-content: start;
-  gap: 22px;
+  gap: 26px;
   padding: 0 0 22px;
 }
 
@@ -3532,6 +3532,8 @@
   padding: 0;
   border: 0;
   background: transparent;
+  font-size: 16px;
+  line-height: 1.65;
 }
 
 .planner-dialog__message--user {
@@ -3543,11 +3545,12 @@
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message--user {
   max-width: min(640px, 78%);
-  padding: 18px 20px;
+  padding: 20px 22px;
   border: 1px solid rgba(204, 120, 92, 0.24);
   border-radius: 18px 18px 4px 18px;
   background: rgba(204, 120, 92, 0.2);
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.2);
+  line-height: 1.6;
 }
 
 .planner-dialog__message--planner {
@@ -3581,7 +3584,7 @@
   border: 0;
   background: transparent;
   color: color-mix(in srgb, var(--accent-hover) 72%, var(--text));
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .planner-thinking-dots {
@@ -3638,7 +3641,9 @@
 }
 
 .planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message-meta {
-  margin-bottom: -4px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .planner-dialog__message-meta span {
@@ -3650,6 +3655,10 @@
   background: rgba(245, 244, 239, 0.04);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__message-meta span {
+  padding: 3px 8px;
 }
 
 .planner-dialog__message h3 {
@@ -3758,6 +3767,53 @@
   font-weight: 650;
 }
 
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown {
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown p,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown ul,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown ol,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown blockquote,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown pre,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown table {
+  margin: 0 0 14px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h1,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h2,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h3,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h4 {
+  margin: 16px 0 8px;
+  line-height: 1.28;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h1 {
+  font-size: 22px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h2 {
+  font-size: 19px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h3,
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown h4 {
+  font-size: 17px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown li {
+  margin: 5px 0;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown pre code {
+  font-size: 13px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-markdown table {
+  font-size: 13px;
+}
+
 .planner-markdown.is-collapsible {
   position: relative;
 }
@@ -3817,6 +3873,15 @@
   gap: 8px;
 }
 
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__choice-group {
+  gap: 10px;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__choice-group > strong {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
 .planner-dialog__choice-list button {
   display: grid;
   justify-items: start;
@@ -3830,6 +3895,13 @@
   text-align: left;
 }
 
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__choice-list button {
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
 .planner-dialog__choice-list button:hover {
   border-color: rgba(204, 120, 92, 0.44);
   background: rgba(204, 120, 92, 0.14);
@@ -3839,6 +3911,11 @@
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.3;
+}
+
+.planner-proposal-panel--omni.has-omni-conversation .planner-dialog__choice-list small {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .planner-plan-card {
@@ -4142,8 +4219,8 @@
   border: 0;
   background: transparent;
   box-shadow: none;
-  font-size: 16px;
-  line-height: 1.5;
+  font-size: 18px;
+  line-height: 1.55;
 }
 
 .planner-proposal-panel.is-empty-mode .planner-proposal-panel__buttons button {
