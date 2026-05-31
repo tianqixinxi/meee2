@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   Eraser,
-  Globe2,
   Info,
   Layers,
   LockKeyhole,
@@ -179,26 +178,18 @@ export function CanvasToolbar({
     [canvasQuery, canvases, t],
   )
   const groupedCanvasEntries = useMemo(
-    () => groupCanvasEntries(filteredCanvasEntries, userProfile?.userId ?? ''),
-    [filteredCanvasEntries, userProfile?.userId],
+    () => groupCanvasEntries(filteredCanvasEntries),
+    [filteredCanvasEntries],
   )
   const canvasEntryGroups = useMemo(
-    () => groupCanvasEntries(buildCanvasListEntries(canvases, '', t), userProfile?.userId ?? ''),
-    [canvases, t, userProfile?.userId],
+    () => groupCanvasEntries(buildCanvasListEntries(canvases, '', t)),
+    [canvases, t],
   )
   const showCanvasTabs = canvasEntryGroups.length > 1
   const selectedCanvasGroup = groupedCanvasEntries.find((group) => group.id === canvasListTab)
     ?? (showCanvasTabs
       ? { id: canvasListTab, label: canvasListTab === 'my' ? 'My Canvases' : 'Team Canvases', entries: [] }
       : groupedCanvasEntries[0])
-  // ui-simplification §1: kind 是隐藏词,switcher 不暴露 board/monitor/template
-  // 文案。scope (own/team) 不在隐藏词清单里但在单一 scope 列表里纯噪音 —
-  // 只有当列表里同时存在 team 和 personal 时才渲染一个 icon 来快速辨识。
-  const showScopeIcon = useMemo(() => {
-    const hasTeam = canvases.some((c) => c.scope === 'team')
-    const hasPersonal = canvases.some((c) => c.scope !== 'team')
-    return hasTeam && hasPersonal
-  }, [canvases])
   const canManageTeamSharing = Boolean(
     activeCanvas &&
     !activeCanvas.isDefault &&
@@ -596,9 +587,9 @@ export function CanvasToolbar({
                 <div className="canvas-toolbar__group" key={selectedCanvasGroup.id}>
                   {selectedCanvasGroup.entries.map(({ canvas, depth }) => {
                     const selected = canvas.id === activeCanvas.id
-                    const readOnly = isReadOnlyTeamCanvas(canvas, userProfile?.userId ?? '')
                     const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
                     const showOwnerAvatar = selectedCanvasGroup.id === 'team' && canvas.scope === 'team'
+                    const statusTone = canvasStatusTone(canvas)
                     return (
                       <button
                         key={canvas.id}
@@ -607,7 +598,6 @@ export function CanvasToolbar({
                           'canvas-toolbar__item',
                           selected ? 'is-selected' : '',
                           depth > 0 ? 'is-subcanvas' : '',
-                          readOnly ? 'is-readonly' : '',
                         ].filter(Boolean).join(' ')}
                         style={{ paddingLeft: 8 + Math.min(depth, 4) * 16 }}
                         onClick={() => {
@@ -628,23 +618,23 @@ export function CanvasToolbar({
                         <span className="canvas-toolbar__check">
                           {selected && <Check size={13} aria-hidden />}
                         </span>
-                        <span className="canvas-toolbar__item-text">
-                          <span>{displayCanvasName(canvas)}</span>
+                        <span className="canvas-toolbar__item-main">
+                          <span className="canvas-toolbar__item-title-row">
+                            <span
+                              className={`canvas-toolbar__status-dot canvas-toolbar__status-dot--${statusTone}`}
+                              title={canvasStatusLabel(canvas)}
+                              aria-label={canvasStatusLabel(canvas)}
+                            />
+                            <span className="canvas-toolbar__item-title">{displayCanvasName(canvas)}</span>
+                          </span>
+                          <span className="canvas-toolbar__item-subtitle">
+                            {canvasListSubtitle(canvas, selectedCanvasGroup.id, userProfile?.userId ?? '', ownerDirectory)}
+                          </span>
+                        </span>
+                        <span className="canvas-toolbar__item-side">
                           {canvas.isDefault && (
                             <span className="canvas-toolbar__default-badge" title={t('canvas.cannotDelete')} aria-label="Default">
                               Default
-                            </span>
-                          )}
-                          {readOnly && (
-                            <span className="canvas-toolbar__default-badge">Read-only</span>
-                          )}
-                          {showScopeIcon && (
-                            <span
-                              className={`canvas-toolbar__visibility canvas-toolbar__visibility--${visibilityTone(canvas)}`}
-                              title={visibilityLabel(canvas, t)}
-                              aria-label={visibilityLabel(canvas, t)}
-                            >
-                              {canvas.scope === 'team' ? <Globe2 size={10} aria-hidden /> : <LockKeyhole size={10} aria-hidden />}
                             </span>
                           )}
                           {showOwnerAvatar && (
@@ -808,7 +798,6 @@ export function CanvasToolbar({
       {hoveredCanvasId && hoverAnchor && (() => {
         const hovered = canvases.find((c) => c.id === hoveredCanvasId)
         if (!hovered) return null
-        const cached = recapCacheRef.current[hoveredCanvasId]
         return (
           <div
             className="canvas-toolbar__hover-recap"
@@ -830,19 +819,24 @@ export function CanvasToolbar({
             }}
           >
             <div className="canvas-toolbar__hover-recap-title">{displayCanvasName(hovered)}</div>
-            {cached ? (
-              <>
-                {cached.updatedAt && (
-                  <div className="canvas-toolbar__hover-recap-meta" data-mode={cached.mode}>
-                    {formatRecapAge(cached.updatedAt, Date.now())}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="canvas-toolbar__hover-recap-empty">
-                还没有进展摘要,首次进入画板会自动生成
+            <dl className="canvas-toolbar__hover-meta">
+              <div>
+                <dt>Owner</dt>
+                <dd>{canvasOwnerDisplay(hovered, userProfile?.userId ?? '', ownerDirectory)}</dd>
               </div>
-            )}
+              <div>
+                <dt>Access</dt>
+                <dd>{canvasAccessLabel(hovered, userProfile?.userId ?? '')}</dd>
+              </div>
+              <div>
+                <dt>Sync</dt>
+                <dd>{canvasStatusLabel(hovered)}</dd>
+              </div>
+              <div>
+                <dt>Updated</dt>
+                <dd>{canvasUpdatedLabel(hovered)}</dd>
+              </div>
+            </dl>
           </div>
         )
       })()}
@@ -1283,12 +1277,6 @@ function ownsCanvas(canvas: CanvasInfo, userId: string): boolean {
   return (canvas.ownerUserId ?? '') === userId
 }
 
-function isReadOnlyTeamCanvas(canvas: CanvasInfo, userId: string): boolean {
-  if (canvas.scope !== 'team') return false
-  if (!userId) return false
-  return Boolean(canvas.ownerUserId && canvas.ownerUserId !== userId)
-}
-
 function ownerInitials(
   canvas: CanvasInfo,
   userId: string,
@@ -1313,6 +1301,17 @@ function ownerLabel(
   const displayName = ownerDirectory[ownerId]?.displayName
   if (ownerId === userId) return displayName ? `Owner: you (${displayName})` : 'Owner: you'
   return `Owner: ${displayName || ownerId}`
+}
+
+function canvasOwnerDisplay(
+  canvas: CanvasInfo,
+  userId: string,
+  ownerDirectory: Record<string, OwnerIdentity>,
+): string {
+  const ownerId = (canvas.ownerUserId ?? '').trim()
+  if (!ownerId) return 'Unknown'
+  if (ownerId === userId) return 'You'
+  return ownerDirectory[ownerId]?.displayName || ownerId
 }
 
 function ownerAvatarUrl(
@@ -1350,14 +1349,59 @@ function initialsFor(value: string): string {
   return value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase().padEnd(2, '?')
 }
 
+function canvasStatusTone(canvas: CanvasInfo): 'local' | 'synced' | 'pending' | 'error' {
+  const syncStatus = (canvas.syncStatus ?? '').toLowerCase()
+  if (syncStatus.includes('conflict') || syncStatus.includes('fail') || syncStatus.includes('error')) return 'error'
+  if (canvas.scope !== 'team') return 'local'
+  if (canvas.dirtySince || syncStatus.includes('pending') || syncStatus.includes('force')) return 'pending'
+  return 'synced'
+}
+
+function canvasStatusLabel(canvas: CanvasInfo): string {
+  switch (canvasStatusTone(canvas)) {
+    case 'error':
+      return 'Sync needs attention'
+    case 'pending':
+      return 'Sync pending'
+    case 'synced':
+      return 'Synced to team'
+    case 'local':
+    default:
+      return 'Local only'
+  }
+}
+
+function canvasUpdatedLabel(canvas: CanvasInfo): string {
+  const timestamp = canvas.lastRemoteUpdatedAt || canvas.lastSyncedAt || canvas.dirtySince
+  if (!timestamp) return canvas.scope === 'team' ? 'No sync timestamp' : 'Local'
+  return formatRecapAge(timestamp, Date.now())
+}
+
+function canvasAccessLabel(canvas: CanvasInfo, userId: string): string {
+  if (canvas.scope !== 'team') return 'Editable'
+  return ownsCanvas(canvas, userId) ? 'Editable' : 'View only'
+}
+
+function canvasListSubtitle(
+  canvas: CanvasInfo,
+  groupId: CanvasListTab,
+  userId: string,
+  ownerDirectory: Record<string, OwnerIdentity>,
+): string {
+  if (groupId === 'my') return canvas.parentCanvasId ? 'Local subcanvas' : 'Local canvas'
+  const owner = canvasOwnerDisplay(canvas, userId, ownerDirectory)
+  if (canvas.parentCanvasId && ownsCanvas(canvas, userId)) return 'Assigned to you'
+  if (ownsCanvas(canvas, userId)) return 'Owned by you'
+  return owner
+}
+
 function groupCanvasEntries(
   entries: Array<{ canvas: CanvasInfo; depth: number }>,
-  userId: string,
-): Array<{ id: 'my' | 'team'; label: string; entries: Array<{ canvas: CanvasInfo; depth: number }> }> {
+): Array<{ id: CanvasListTab; label: string; entries: Array<{ canvas: CanvasInfo; depth: number }> }> {
   const myEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
   const teamEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
   for (const entry of entries) {
-    if (isReadOnlyTeamCanvas(entry.canvas, userId)) {
+    if (entry.canvas.scope === 'team') {
       teamEntries.push(entry)
     } else {
       myEntries.push(entry)
