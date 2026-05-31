@@ -214,4 +214,67 @@ describe('CanvasToolbar template save flow', () => {
     expect(within(within(list as HTMLElement).getByRole('button', { name: /Team Canvas/ })).queryByText('Mine')).not.toBeInTheDocument()
     expect(within(list as HTMLElement).queryByRole('button', { name: /Own Canvas/ })).not.toBeInTheDocument()
   })
+
+  it('lets the team canvas owner resolve a sync conflict from the menu hover', async () => {
+    const onResolveCanvasConflict = vi.fn().mockResolvedValue(undefined)
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[
+            {
+              id: 'conflict-canvas',
+              name: 'Published Mine',
+              scope: 'team',
+              kind: 'board',
+              isDefault: false,
+              workspacePath: '',
+              ownerUserId: 'local-user',
+              teamId: 'team-1',
+              remoteVersion: 1,
+              conflictRemoteVersion: 2,
+              syncStatus: 'conflict',
+            },
+          ]}
+          activeCanvasId="conflict-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+          onResolveCanvasConflict={onResolveCanvasConflict}
+          userProfile={{
+            connected: true,
+            userId: 'local-user',
+            userEmail: 'local@example.com',
+            userName: 'Local User',
+            displayName: 'Local User',
+            userAvatarUrl: '',
+            initials: 'LU',
+            dashboardUrl: '',
+            connectUrl: '',
+            defaultSyncEnabled: true,
+            defaultSyncTeamId: 'team-1',
+            defaultSyncTeamName: 'Demo Team',
+            teams: [],
+            sessionSync: [],
+          }}
+        />
+      </I18nProvider>,
+    )
+
+    fireEvent.click(screen.getByText('Published Mine'))
+    const list = document.querySelector('.canvas-toolbar__list')
+    expect(list).toBeInstanceOf(HTMLElement)
+    fireEvent.mouseEnter(within(list as HTMLElement).getByRole('button', { name: /Published Mine/ }))
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Sync conflict').length).toBeGreaterThan(0)
+    })
+    expect(screen.getByText('local v1 / team v2')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep local' }))
+
+    await waitFor(() => {
+      expect(onResolveCanvasConflict).toHaveBeenCalledWith('conflict-canvas', 'current')
+    })
+  })
 })

@@ -1220,14 +1220,24 @@ public final class BoardLayoutStore {
 
             var out: [[String: Any]] = []
 
+            let snapshot = snapshotLocked(store)
             for canvas in store.canvases where canvas.scope == .team && canvas.teamId == context.teamId {
                 guard canvas.dirtySince != nil else { continue }
+                let ownerUserId = canvas.ownerUserId ?? canvas.createdBy ?? ""
+                if !ownerUserId.isEmpty && ownerUserId != context.userId {
+                    continue
+                }
                 let force = canvas.syncStatus == "force-pending"
                 if canvas.syncStatus == "conflict" && !force { continue }
-                let memberships = Array((store.memberships[canvas.id] ?? [:]).values)
-                    .filter(\.visible)
-                    .sorted { $0.sessionId < $1.sessionId }
-                let layout = store.layouts[canvas.id] ?? .empty
+                guard let state = localTeamCanvasStateObjectLocked(
+                    store,
+                    canvas: canvas,
+                    snapshot: snapshot,
+                    context: context
+                ) else {
+                    MWarn("[BoardLayoutStore] failed to build team sync graph for \(canvas.id)")
+                    continue
+                }
                 out.append([
                     "id": canvas.remoteId ?? canvas.id,
                     "localId": canvas.id,
@@ -1235,13 +1245,8 @@ public final class BoardLayoutStore {
                     "baseVersion": canvas.remoteVersion ?? 0,
                     "force": force,
                     "deleted": false,
-                    "sessionKeys": memberships.map(\.sessionId),
-                    "state": [
-                        "kind": (canvas.kind ?? .board).rawValue,
-                        "ownerUserId": canvas.ownerUserId ?? canvas.createdBy ?? "",
-                        "layout": jsonObject(layout) ?? [:],
-                        "memberships": jsonObject(memberships) ?? []
-                    ]
+                    "sessionKeys": sessionKeys(fromState: state),
+                    "state": state
                 ])
             }
 
@@ -1258,6 +1263,97 @@ public final class BoardLayoutStore {
                 ])
             }
             return out
+        }
+    }
+
+    private func localTeamCanvasStateObjectLocked(
+        _ store: StoreData,
+        canvas: Canvas,
+        snapshot: Snapshot,
+        context: (userId: String, teamId: String)
+    ) -> [String: Any]? {
+        let ownerUserId = canvas.ownerUserId ?? canvas.createdBy ?? context.userId
+        let memberships = Array((store.memberships[canvas.id] ?? [:]).values)
+            .filter(\.visible)
+            .sorted { $0.sessionId < $1.sessionId }
+        let layout = store.layouts[canvas.id] ?? .empty
+        guard let graph = try? PlannerBoardBridge.teamSyncGraphPayload(
+            for: canvas.id,
+            snapshot: snapshot,
+            actorUserId: context.userId
+        ) else {
+            return nil
+        }
+        return [
+            "schemaVersion": 2,
+            "kind": (canvas.kind ?? .board).rawValue,
+            "ownerUserId": ownerUserId,
+            "visibility": "public",
+            "graph": graph,
+            "layout": jsonObject(layout) ?? [:],
+            "memberships": jsonObject(memberships) ?? []
+        ]
+    }
+
+    private func sessionKeys(fromState state: [String: Any]) -> [String] {
+        guard let memberships = state["memberships"] as? [[String: Any]] else { return [] }
+        return memberships.compactMap { item in
+            item["sessionId"] as? String
+        }
+    }
+
+    private func remoteStateMatchesLocalTeamCanvasLocked(
+        _ store: StoreData,
+        canvas: Canvas,
+        remoteState: Any
+    ) -> Bool {
+        let context = currentContext()
+        guard canvas.scope == .team,
+              canvas.teamId == context.teamId else {
+            return false
+        }
+        guard let localState = localTeamCanvasStateObjectLocked(
+            store,
+            canvas: canvas,
+            snapshot: snapshotLocked(store),
+            context: context
+        ) else {
+            return false
+        }
+        guard let localData = canonicalJSONData(localState),
+              let remoteData = canonicalJSONData(remoteState) else {
+            return false
+        }
+        return localData == remoteData
+    }
+
+    private func canonicalJSONData(_ value: Any) -> Data? {
+        guard JSONSerialization.isValidJSONObject(value) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    }
+
+    public func markTeamCanvasDirty(canvasId: String) {
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            ensureDefaultCanvasesLocked(&store, sessionIds: [])
+            let context = currentContext()
+            guard let canvas = store.canvases.first(where: { $0.id == canvasId }),
+                  canvas.scope == .team,
+                  canvas.teamId == context.teamId else {
+                return
+            }
+            let ownerUserId = canvas.ownerUserId ?? canvas.createdBy ?? ""
+            guard ownerUserId.isEmpty || ownerUserId == context.userId else {
+                return
+            }
+            markTeamCanvasDirtyLocked(&store, canvasId: canvasId)
+            do {
+                try writeToDiskLocked(store)
+                cached = store
+            } catch {
+                MWarn("[BoardLayoutStore] failed to persist team canvas dirty mark: \(error)")
+            }
+            SessionEventBus.shared.publish(.boardLayoutChanged)
         }
     }
 
@@ -1294,12 +1390,29 @@ public final class BoardLayoutStore {
                     store.canvases[idx].conflictRemoteDeleted = nil
                     changed = true
                 } else if status == "conflict" {
-                    store.canvases[idx].syncStatus = "conflict"
-                    store.canvases[idx].conflictRemoteVersion = intValue(result["version"])
-                    if let state = result["state"], let value = BoardJSONValue.fromAny(state) {
-                        store.canvases[idx].conflictRemoteState = value
+                    let now = Date()
+                    let remoteVersion = intValue(result["version"])
+                    if let state = result["state"],
+                       remoteStateMatchesLocalTeamCanvasLocked(store, canvas: store.canvases[idx], remoteState: state) {
+                        store.canvases[idx].remoteVersion = remoteVersion ?? store.canvases[idx].remoteVersion
+                        store.canvases[idx].dirtySince = nil
+                        store.canvases[idx].syncStatus = "synced"
+                        store.canvases[idx].lastSyncedAt = now
+                        store.canvases[idx].lastRemoteUpdatedAt = dateValue(result["updated_at"]) ?? now
+                        store.canvases[idx].conflictRemoteVersion = nil
+                        store.canvases[idx].conflictRemoteState = nil
+                        store.canvases[idx].conflictRemoteDeleted = nil
+                    } else {
+                        store.canvases[idx].syncStatus = "conflict"
+                        store.canvases[idx].conflictRemoteVersion = remoteVersion
+                        if let state = result["state"], let value = BoardJSONValue.fromAny(state) {
+                            store.canvases[idx].conflictRemoteState = value
+                        }
+                        store.canvases[idx].conflictRemoteDeleted = false
                     }
-                    store.canvases[idx].conflictRemoteDeleted = false
+                    changed = true
+                } else if status == "forbidden" || status == "error" {
+                    store.canvases[idx].syncStatus = status == "forbidden" ? "read-only-refreshing" : "pending"
                     changed = true
                 }
             }
@@ -1309,6 +1422,61 @@ public final class BoardLayoutStore {
                     cached = store
                 } catch {
                     MWarn("[BoardLayoutStore] failed to persist sync results: \(error)")
+                }
+                SessionEventBus.shared.publish(.boardLayoutChanged)
+            }
+        }
+    }
+
+    public func markTeamCanvasSyncing(remoteIds: [String]) {
+        let idSet = Set(remoteIds)
+        guard !idSet.isEmpty else { return }
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            var changed = false
+            for idx in store.canvases.indices {
+                let remoteId = store.canvases[idx].remoteId ?? store.canvases[idx].id
+                guard idSet.contains(remoteId),
+                      store.canvases[idx].dirtySince != nil,
+                      store.canvases[idx].syncStatus != "conflict" else {
+                    continue
+                }
+                store.canvases[idx].syncStatus = "syncing"
+                changed = true
+            }
+            if changed {
+                do {
+                    try writeToDiskLocked(store)
+                    cached = store
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist syncing status: \(error)")
+                }
+                SessionEventBus.shared.publish(.boardLayoutChanged)
+            }
+        }
+    }
+
+    public func markTeamCanvasSyncFailed(remoteIds: [String]) {
+        let idSet = Set(remoteIds)
+        guard !idSet.isEmpty else { return }
+        queue.sync {
+            var store = cached ?? loadFromDiskLocked()
+            var changed = false
+            for idx in store.canvases.indices {
+                let remoteId = store.canvases[idx].remoteId ?? store.canvases[idx].id
+                guard idSet.contains(remoteId),
+                      store.canvases[idx].syncStatus == "syncing" else {
+                    continue
+                }
+                store.canvases[idx].syncStatus = "pending"
+                changed = true
+            }
+            if changed {
+                do {
+                    try writeToDiskLocked(store)
+                    cached = store
+                } catch {
+                    MWarn("[BoardLayoutStore] failed to persist sync failure status: \(error)")
                 }
                 SessionEventBus.shared.publish(.boardLayoutChanged)
             }
@@ -1343,11 +1511,22 @@ public final class BoardLayoutStore {
                         continue
                     }
                     if local.dirtySince != nil && remote.version > localVersion {
-                        store.canvases[idx].syncStatus = "conflict"
-                        store.canvases[idx].conflictRemoteVersion = remote.version
-                        store.canvases[idx].conflictRemoteState = BoardJSONValue.fromAny(remote.state)
-                        store.canvases[idx].conflictRemoteDeleted = false
-                        store.canvases[idx].lastRemoteUpdatedAt = remote.updatedAt
+                        if remoteStateMatchesLocalTeamCanvasLocked(store, canvas: local, remoteState: remote.state) {
+                            store.canvases[idx].remoteVersion = remote.version
+                            store.canvases[idx].dirtySince = nil
+                            store.canvases[idx].syncStatus = "synced"
+                            store.canvases[idx].lastSyncedAt = now
+                            store.canvases[idx].lastRemoteUpdatedAt = remote.updatedAt
+                            store.canvases[idx].conflictRemoteVersion = nil
+                            store.canvases[idx].conflictRemoteState = nil
+                            store.canvases[idx].conflictRemoteDeleted = nil
+                        } else {
+                            store.canvases[idx].syncStatus = "conflict"
+                            store.canvases[idx].conflictRemoteVersion = remote.version
+                            store.canvases[idx].conflictRemoteState = BoardJSONValue.fromAny(remote.state)
+                            store.canvases[idx].conflictRemoteDeleted = false
+                            store.canvases[idx].lastRemoteUpdatedAt = remote.updatedAt
+                        }
                         changed = true
                     } else if local.dirtySince == nil && remote.version > localVersion {
                         applyRemoteStateLocked(&store, canvasId: local.id, remote: remote, now: now)
@@ -1774,6 +1953,9 @@ public final class BoardLayoutStore {
         } else {
             store.memberships[canvasId] = store.memberships[canvasId] ?? [:]
         }
+        if let graph = object["graph"] {
+            _ = PlannerBoardBridge.importRemoteGraph(graph, localCanvasId: canvasId)
+        }
     }
 
     private func parsedCanvasKind(from object: [String: Any]) -> CanvasKind? {
@@ -1829,12 +2011,16 @@ public final class BoardLayoutStore {
 
     private func currentContext() -> (userId: String, teamId: String) {
         let defaults = UserDefaults.standard
+        let onlineSettings = OnlineProxy.loadSettings()
         let connected = defaults.bool(forKey: "meee2Connected")
+            || (!onlineSettings.teamId.isEmpty && !onlineSettings.userId.isEmpty)
+        let defaultsUserId = OnlineProxy.hasEnvironmentOverride ? "" : (defaults.string(forKey: "meee2UserId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let defaultsTeamId = OnlineProxy.hasEnvironmentOverride ? "" : (defaults.string(forKey: "meee2TeamId") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let userId = connected
-            ? (defaults.string(forKey: "meee2UserId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            ? (defaultsUserId.isEmpty ? onlineSettings.userId : defaultsUserId)
             : ""
         let teamId = connected
-            ? (defaults.string(forKey: "meee2TeamId")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+            ? (defaultsTeamId.isEmpty ? onlineSettings.teamId : defaultsTeamId)
             : ""
         return (userId.isEmpty ? "local-user" : userId, teamId)
     }

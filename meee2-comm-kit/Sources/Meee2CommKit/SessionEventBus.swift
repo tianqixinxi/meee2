@@ -22,6 +22,8 @@ public enum SessionEvent: Sendable {
     case cardTemplateChanged(id: String)
     /// 看板坐标（session 卡片位置 + channel hub 位置）整体写入成功
     case boardLayoutChanged
+    /// Planner canvas 文档层 graph 发生变更，需要触发 Team Canvas dirty-sync。
+    case plannerCanvasChanged(canvasId: String)
 }
 
 /// 事件总线单例。`publish` 线程安全（PassthroughSubject.send 可从任意线程调用），

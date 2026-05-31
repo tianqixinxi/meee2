@@ -449,6 +449,8 @@ struct CanvasInfoDTO: Encodable {
     let dirtySince: String?
     let lastSyncedAt: String?
     let lastRemoteUpdatedAt: String?
+    let conflictRemoteVersion: Int?
+    let conflictRemoteDeleted: Bool?
     let draftOfTemplateId: String?
 }
 

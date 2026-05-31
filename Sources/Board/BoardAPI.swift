@@ -3797,6 +3797,136 @@ enum BoardAPI {
         return jsonResponse(OkEnvelope(ok: true))
     }
 
+    static func e2eSyncTeamCanvases(_ req: HttpRequest) -> HttpResponse {
+        _ = req
+        guard ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1" else {
+            return errorResponse("not_found", "E2E routes are disabled", status: 404)
+        }
+        let ok = Meee2OnlinePusher.shared.syncTeamCanvasesForE2E()
+        guard ok else {
+            return errorResponse("sync_timeout", "team canvas sync did not finish before timeout", status: 503)
+        }
+        return jsonResponse(canvasEnvelope(BoardLayoutStore.shared.snapshot()))
+    }
+
+    static func e2eUpsertSession(_ req: HttpRequest) -> HttpResponse {
+        guard ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1" else {
+            return errorResponse("not_found", "E2E routes are disabled", status: 404)
+        }
+        guard let sessionId = req.params[":id"], !sessionId.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+
+        let now = Date()
+        let status = SessionStatus.from(rawString: (json["status"] as? String) ?? "active")
+        let transcriptPath = e2eTranscriptPath(sessionId: sessionId)
+        var session = SessionStore.shared.get(sessionId) ?? SessionData(
+            sessionId: sessionId,
+            project: (json["project"] as? String) ?? "E2E Session",
+            cwd: (json["cwd"] as? String) ?? FileManager.default.currentDirectoryPath,
+            transcriptPath: transcriptPath,
+            startedAt: now,
+            lastActivity: now,
+            status: status
+        )
+        session.project = (json["project"] as? String) ?? session.project
+        session.cwd = (json["cwd"] as? String) ?? session.cwd
+        session.transcriptPath = transcriptPath
+        session.status = status
+        session.currentTool = json["currentTool"] as? String
+        session.currentTask = json["currentTask"] as? String
+        session.lastMessage = json["lastMessage"] as? String
+        session.lastActivity = now
+
+        SessionStore.shared.upsert(session)
+        if let syncError = Meee2OnlinePusher.shared.syncSessionForE2E(sessionId: sessionId) {
+            return errorResponse("sync_failed", syncError, status: 503)
+        }
+        return jsonResponse(OkEnvelope(ok: true))
+    }
+
+    static func e2eAppendSessionMessage(_ req: HttpRequest) -> HttpResponse {
+        guard ProcessInfo.processInfo.environment["MEEE2_E2E"] == "1" else {
+            return errorResponse("not_found", "E2E routes are disabled", status: 404)
+        }
+        guard let sessionId = req.params[":id"], !sessionId.isEmpty else {
+            return errorResponse("bad_request", "missing session id", status: 400)
+        }
+        guard let json = parseJSONBody(req) else {
+            return errorResponse("invalid_json", "body is not valid JSON", status: 400)
+        }
+        let role = (json["role"] as? String) ?? "assistant"
+        let text = (json["text"] as? String) ?? ""
+        guard !text.isEmpty else {
+            return errorResponse("bad_request", "missing text", status: 400)
+        }
+
+        do {
+            try appendE2ETranscriptLine(sessionId: sessionId, role: role, text: text)
+            if SessionStore.shared.get(sessionId) == nil {
+                let now = Date()
+                SessionStore.shared.upsert(SessionData(
+                    sessionId: sessionId,
+                    project: "E2E Session",
+                    cwd: FileManager.default.currentDirectoryPath,
+                    transcriptPath: e2eTranscriptPath(sessionId: sessionId),
+                    startedAt: now,
+                    lastActivity: now,
+                    status: .active,
+                    lastMessage: text
+                ))
+            } else {
+                SessionStore.shared.update(sessionId) { session in
+                    session.transcriptPath = e2eTranscriptPath(sessionId: sessionId)
+                    session.lastMessage = text
+                    session.lastActivity = Date()
+                }
+            }
+            SessionEventBus.shared.publish(.transcriptAppended(sessionId: sessionId))
+            if let syncError = Meee2OnlinePusher.shared.syncSessionForE2E(sessionId: sessionId) {
+                return errorResponse("sync_failed", syncError, status: 503)
+            }
+            return jsonResponse(OkEnvelope(ok: true))
+        } catch {
+            return errorResponse("internal_error", error.localizedDescription, status: 500)
+        }
+    }
+
+    private static func e2eTranscriptPath(sessionId: String) -> String {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meee2", isDirectory: true)
+            .appendingPathComponent("e2e-transcripts", isDirectory: true)
+        return base.appendingPathComponent("\(sessionId).jsonl").path
+    }
+
+    private static func appendE2ETranscriptLine(sessionId: String, role: String, text: String) throws {
+        let path = e2eTranscriptPath(sessionId: sessionId)
+        let url = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let payload: [String: Any] = [
+            "type": role,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "message": [
+                "role": role,
+                "content": [["type": "text", "text": text]]
+            ]
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        var line = Data(data)
+        line.append(0x0A)
+        if FileManager.default.fileExists(atPath: path) {
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: line)
+        } else {
+            try line.write(to: url, options: .atomic)
+        }
+    }
+
     static func updateUserProfile(_ req: HttpRequest) -> HttpResponse {
         guard let json = parseJSONBody(req) else {
             return errorResponse("invalid_json", "body is not valid JSON", status: 400)
@@ -6196,6 +6326,8 @@ enum BoardAPI {
                 dirtySince: canvas.dirtySince.map(BoardDTOBuilder.iso),
                 lastSyncedAt: canvas.lastSyncedAt.map(BoardDTOBuilder.iso),
                 lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt.map(BoardDTOBuilder.iso),
+                conflictRemoteVersion: canvas.conflictRemoteVersion,
+                conflictRemoteDeleted: canvas.conflictRemoteDeleted,
                 draftOfTemplateId: canvas.draftOfTemplateId
             )
         }

@@ -71,6 +71,7 @@ import {
   installMeee2AgentRuntime,
   repairReadiness,
   replaceTemplateFromCanvas,
+  resolveCanvasConflict,
   setPlannerCanvasVisibility,
   uploadClaudeWorkflow,
   updateCanvas,
@@ -198,6 +199,8 @@ function canvasListSignature(list: CanvasList): string {
         dirtySince: canvas.dirtySince ?? null,
         lastSyncedAt: canvas.lastSyncedAt ?? null,
         lastRemoteUpdatedAt: canvas.lastRemoteUpdatedAt ?? null,
+        conflictRemoteVersion: canvas.conflictRemoteVersion ?? null,
+        conflictRemoteDeleted: canvas.conflictRemoteDeleted ?? null,
       })),
     memberships: [...list.memberships]
       .sort((a, b) => `${a.canvasId}:${a.sessionId}`.localeCompare(`${b.canvasId}:${b.sessionId}`))
@@ -678,6 +681,24 @@ export default function App() {
         applyCanvasList(list)
       })
       .catch((err) => pushToast('error', (err as Error).message || 'Failed to switch canvas'))
+  }, [applyCanvasList, pushToast])
+
+  const handleResolveCanvasConflict = useCallback((canvasId: string, choice: 'current' | 'remote') => {
+    return resolveCanvasConflict(canvasId, choice)
+      .then((list) => {
+        applyCanvasList(list)
+        setActiveCanvasRefreshTick((value) => value + 1)
+        pushToast(
+          'success',
+          choice === 'current'
+            ? 'Keeping local canvas; publishing will retry shortly'
+            : 'Updated this canvas from the team version',
+        )
+      })
+      .catch((err) => {
+        pushToast('error', (err as Error).message || 'Failed to resolve canvas conflict')
+        throw err
+      })
   }, [applyCanvasList, pushToast])
 
   const handleOpenBoardTarget = useCallback((target: BoardOpenTarget) => {
@@ -1269,6 +1290,7 @@ export default function App() {
               onSetCanvasVisibility={handleSetCanvasVisibility}
               onSaveCanvasAsTemplate={handleSaveCanvasAsTemplate}
               onReplaceTemplate={handleReplaceTemplate}
+              onResolveCanvasConflict={handleResolveCanvasConflict}
               userProfile={userProfile}
               boardState={boardState.state}
               plannerState={currentPlannerState}

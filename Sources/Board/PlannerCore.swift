@@ -1,4 +1,5 @@
 import Foundation
+import Meee2CommKit
 import Meee2PluginKit
 
 /// Who can see a planning canvas. `private` (the default) restricts the canvas
@@ -2498,9 +2499,13 @@ enum PlannerPermissionAction: String {
 enum PlannerPermission {
     static func currentActorId() -> String? {
         let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: "meee2Connected") else { return nil }
-        let actorId = defaults.string(forKey: "meee2UserId")?
+        let onlineSettings = OnlineProxy.loadSettings()
+        let connected = defaults.bool(forKey: "meee2Connected")
+            || (!onlineSettings.teamId.isEmpty && !onlineSettings.userId.isEmpty)
+        guard connected else { return nil }
+        let defaultsActorId = OnlineProxy.hasEnvironmentOverride ? "" : defaults.string(forKey: "meee2UserId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let actorId = defaultsActorId.isEmpty ? onlineSettings.userId : defaultsActorId
         return actorId.isEmpty ? nil : actorId
     }
 
@@ -3675,6 +3680,10 @@ final class PlannerStore {
                 // / monitorSpec) are store-owned too — the per-request board
                 // snapshot projection doesn't carry them, so a plain read would
                 // otherwise wipe applied governance state. Preserve them.
+                incoming.visibility = existing.canvas.visibility
+                incoming.parentCanvasId = existing.canvas.parentCanvasId
+                incoming.parentNodeId = existing.canvas.parentNodeId
+                incoming.frozenIOContract = existing.canvas.frozenIOContract
                 incoming.dataSources = existing.canvas.dataSources
                 incoming.edges = existing.canvas.edges
                 incoming.monitorSpec = existing.canvas.monitorSpec
@@ -4678,6 +4687,30 @@ final class PlannerStore {
         try withLock { try requireRecord(canvasId: canvasId) }
     }
 
+    func importGraphState(_ graph: PlannerGraphState, localCanvasId: String) throws {
+        try withLock {
+            let existing = document.canvases[localCanvasId]
+            var canvas = graph.canvas
+            canvas.id = localCanvasId
+            var artifacts = graph.artifacts
+            for idx in artifacts.indices {
+                artifacts[idx].payload = nil
+            }
+            document.canvases[localCanvasId] = CanvasRecord(
+                canvas: canvas,
+                nodes: graph.nodes,
+                proposals: graph.proposals,
+                events: graph.events,
+                artifacts: artifacts,
+                artifactVersions: existing?.artifactVersions ?? [],
+                runs: existing?.runs ?? [],
+                activeRunId: existing?.activeRunId,
+                nodeVersions: existing?.nodeVersions ?? []
+            )
+            try save(canvasId: localCanvasId, emitChange: false)
+        }
+    }
+
     // MARK: - Run layer (P1)
 
     /// Index of the canvas's active run, if one is in progress.
@@ -4864,7 +4897,7 @@ final class PlannerStore {
         }
     }
 
-    private func save(canvasId: String) throws {
+    private func save(canvasId: String, emitChange: Bool = true) throws {
         guard let record = document.canvases[canvasId] else {
             throw PlannerCoreError.canvasNotFound(canvasId)
         }
@@ -4873,6 +4906,9 @@ final class PlannerStore {
         let data = try encoder.encode(record)
         try data.write(to: directory.appendingPathComponent("state.json"), options: .atomic)
         try saveIndex()
+        if emitChange {
+            SessionEventBus.shared.publish(.plannerCanvasChanged(canvasId: canvasId))
+        }
     }
 
     private func saveIndex() throws {
@@ -6792,6 +6828,99 @@ enum PlannerBoardBridge {
                 edges: state.edges
             )
         )
+    }
+
+    static func teamSyncGraphPayload(
+        for canvasId: String,
+        snapshot: BoardLayoutStore.Snapshot,
+        actorUserId: String? = nil
+    ) throws -> Any {
+        _ = try requireCanvas(canvasId, in: snapshot)
+        let record = try store.canvasRecordForBridge(canvasId: canvasId)
+        let access = PlannerPermission.access(for: record.canvas, nodes: record.nodes, actorId: actorUserId)
+        try requireCanvasVisible(record.canvas, access: access)
+        var artifacts = store.artifactsWithVersionInfo(record.artifacts, versions: record.artifactVersions)
+        for idx in artifacts.indices {
+            artifacts[idx].payload = nil
+        }
+        let state = PlannerGraphState(
+            canvas: record.canvas,
+            nodes: record.nodes,
+            states: service.readNodeState(nodes: record.nodes),
+            proposals: record.proposals,
+            access: access,
+            activities: PlannerActivityStore.shared.activities(
+                for: record.canvas.id,
+                fallback: fallbackActivity(for: record.canvas, nodes: record.nodes, actorId: access.actorId)
+            ),
+            events: record.events.sorted { $0.createdAt > $1.createdAt },
+            artifacts: artifacts,
+            edges: graphEdges(for: record.nodes),
+            canvasRuntime: nil
+        )
+        let envelope = PlannerGraphStateEnvelope(
+            canvas: state.canvas,
+            nodes: state.nodes,
+            states: state.states,
+            proposals: state.proposals,
+            access: state.access,
+            activities: state.activities,
+            events: state.events,
+            artifacts: state.artifacts,
+            edges: state.edges,
+            nodeAssignments: nodeAssignments(for: state),
+            canEditInternals: state.access.role == .owner
+        )
+        return try jsonObject(envelope)
+    }
+
+    @discardableResult
+    static func importRemoteGraph(_ raw: Any, localCanvasId: String) -> Bool {
+        guard JSONSerialization.isValidJSONObject(raw),
+              let data = try? JSONSerialization.data(withJSONObject: raw) else {
+            return false
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let graph = try? decoder.decode(PlannerGraphState.self, from: data) else {
+            return false
+        }
+        do {
+            try store.importGraphState(graph, localCanvasId: localCanvasId)
+            return true
+        } catch {
+            MWarn("[PlannerBoardBridge] failed to import remote graph for \(localCanvasId): \(error)")
+            return false
+        }
+    }
+
+    private static func nodeAssignments(for state: PlannerGraphState) -> [NodeAssignmentDTO] {
+        let teamId = UserDefaults.standard.string(forKey: "meee2TeamId") ?? ""
+        return state.nodes.compactMap { node in
+            guard let subCanvasId = node.subCanvasId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !subCanvasId.isEmpty else {
+                return nil
+            }
+            let contract = NodeContractV2.derive(from: node).contract
+            return NodeAssignmentDTO(
+                sourceCanvasId: state.canvas.id,
+                sourceNodeId: node.id,
+                assigneeUserId: node.doerId,
+                subCanvasId: subCanvasId,
+                subCanvasName: subCanvasId,
+                frozenIOContract: contract,
+                billingTeamId: teamId,
+                sessionCountRebound: nil,
+                assignedAt: nil
+            )
+        }
+    }
+
+    private static func jsonObject<T: Encodable>(_ value: T) throws -> Any {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        return try JSONSerialization.jsonObject(with: data)
     }
 
     /// Build the read-only `CanvasRuntimeView` (canvas-spec §7.2) for a canvas

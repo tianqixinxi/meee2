@@ -563,6 +563,9 @@ public final class BoardServer {
         server.POST["/api/update/check-in-background"] = BoardServer.cors(BoardAPI.checkUpdateInBackground)
         server.POST["/api/_dev/override-latest"] = BoardServer.cors(BoardAPI.devOverrideLatest)
         server.GET["/api/_dev/pill-click-plan"] = BoardServer.cors(BoardAPI.devPillClickPlan)
+        server.POST["/api/_e2e/team-sync"] = BoardServer.cors(BoardAPI.e2eSyncTeamCanvases)
+        server.POST["/api/_e2e/sessions/:id"] = BoardServer.cors(BoardAPI.e2eUpsertSession)
+        server.POST["/api/_e2e/sessions/:id/messages"] = BoardServer.cors(BoardAPI.e2eAppendSessionMessage)
         server.POST["/api/sessions/:id/attachments"] = AttachmentsAPI.upload
         server.GET["/api/sessions/:id/inbox"] = BoardServer.cors(BoardAPI.getSessionInbox)
         server.GET["/api/sessions/:id/transcript"] = BoardServer.cors(BoardAPI.getTranscript)

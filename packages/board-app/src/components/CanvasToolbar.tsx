@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -64,6 +65,7 @@ interface Props {
     canvasId: string,
     input: { name?: string; description?: string; tags?: string[]; defaultCanvasKind?: Exclude<CanvasKind, 'template'> },
   ) => Promise<void | string> | void
+  onResolveCanvasConflict?: (canvasId: string, choice: 'current' | 'remote') => Promise<void> | void
   // AI Recap Drawer needs richer context. Optional so narrower callers can
   // still render the toolbar without canvas monitor wiring.
   userProfile?: UserProfile | null
@@ -110,6 +112,7 @@ export function CanvasToolbar({
   onSetCanvasVisibility,
   onSaveCanvasAsTemplate,
   onReplaceTemplate,
+  onResolveCanvasConflict,
   userProfile = null,
   boardState = null,
   plannerState = null,
@@ -122,6 +125,7 @@ export function CanvasToolbar({
   const recapCacheRef = useRef<Record<string, CanvasRecap>>({})
   const plannerStateRef = useRef<PlannerGraphState | null>(plannerState)
   const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
+  const hoverHideTimerRef = useRef<number | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   // 创建路径只产 board kind canvas;视图变化走节点级 widget,见 PlanningNode.widget
@@ -156,6 +160,8 @@ export function CanvasToolbar({
   const [hoverAnchor, setHoverAnchor] = useState<{ top: number; right: number } | null>(null)
   const [ownerDirectory, setOwnerDirectory] = useState<Record<string, OwnerIdentity>>({})
   const [canvasListTab, setCanvasListTab] = useState<CanvasListTab>('my')
+  const [resolvingConflictCanvasId, setResolvingConflictCanvasId] = useState<string | null>(null)
+  const [conflictResolveError, setConflictResolveError] = useState<string | null>(null)
   // ui-simplification §1 — failed/permission-pending sessions 转译成「需关注的
   // 进展」。多条时点击 pill 展开 dropdown 让用户挑一条跳过去。
   const [attentionMenuOpen, setAttentionMenuOpen] = useState(false)
@@ -209,6 +215,37 @@ export function CanvasToolbar({
     setClearConfirming(false)
     setDeleteConfirming(false)
   }
+
+  const cancelHoverHide = () => {
+    if (hoverHideTimerRef.current !== null) {
+      window.clearTimeout(hoverHideTimerRef.current)
+      hoverHideTimerRef.current = null
+    }
+  }
+
+  const hideCanvasHoverSoon = () => {
+    cancelHoverHide()
+    hoverHideTimerRef.current = window.setTimeout(() => {
+      setHoveredCanvasId(null)
+      setHoverAnchor(null)
+      hoverHideTimerRef.current = null
+    }, 140)
+  }
+
+  const showCanvasHover = (canvasId: string, rect: DOMRect) => {
+    cancelHoverHide()
+    if (canvasId !== hoveredCanvasId) setConflictResolveError(null)
+    setHoveredCanvasId(canvasId)
+    setHoverAnchor({ top: rect.top, right: rect.right })
+  }
+
+  useEffect(() => {
+    return () => {
+      if (hoverHideTimerRef.current !== null) {
+        window.clearTimeout(hoverHideTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     plannerStateRef.current = plannerState
@@ -460,6 +497,24 @@ export function CanvasToolbar({
       })
   }
 
+  const resolveConflict = (canvas: CanvasInfo, choice: 'current' | 'remote') => {
+    if (!onResolveCanvasConflict || resolvingConflictCanvasId) return
+    setResolvingConflictCanvasId(canvas.id)
+    setConflictResolveError(null)
+    Promise.resolve(onResolveCanvasConflict(canvas.id, choice))
+      .then(() => {
+        setHoveredCanvasId(null)
+        setHoverAnchor(null)
+        if (choice === 'remote' && activeCanvas?.id === canvas.id) void refreshRecap()
+      })
+      .catch((err) => {
+        setConflictResolveError((err as Error).message || 'Failed to resolve sync conflict')
+      })
+      .finally(() => {
+        setResolvingConflictCanvasId(null)
+      })
+  }
+
   if (!activeCanvas) return null
   const isMonitorCanvas = activeCanvas.kind === 'monitor'
   const monitorBadge = monitorBadgeFor(canvasMonitor, t)
@@ -590,7 +645,8 @@ export function CanvasToolbar({
                     const avatarUrl = ownerAvatarUrl(canvas, userProfile, ownerDirectory)
                     const showOwnerAvatar = selectedCanvasGroup.id === 'team' && canvas.scope === 'team'
                     const showMinePill = selectedCanvasGroup.id === 'team' && ownsCanvas(canvas, userProfile?.userId ?? '')
-                    const statusTone = canvasStatusTone(canvas)
+                    const statusTone = canvasStatusTone(canvas, userProfile?.userId ?? '')
+                    const statusLabel = canvasStatusLabel(canvas, userProfile?.userId ?? '')
                     return (
                       <button
                         key={canvas.id}
@@ -608,13 +664,9 @@ export function CanvasToolbar({
                         }}
                         onMouseEnter={(e) => {
                           const rect = e.currentTarget.getBoundingClientRect()
-                          setHoveredCanvasId(canvas.id)
-                          setHoverAnchor({ top: rect.top, right: rect.right })
+                          showCanvasHover(canvas.id, rect)
                         }}
-                        onMouseLeave={() => {
-                          setHoveredCanvasId(null)
-                          setHoverAnchor(null)
-                        }}
+                        onMouseLeave={hideCanvasHoverSoon}
                       >
                         <span className="canvas-toolbar__check">
                           {selected && <Check size={13} aria-hidden />}
@@ -623,8 +675,8 @@ export function CanvasToolbar({
                           <span className="canvas-toolbar__item-title-row">
                             <span
                               className={`canvas-toolbar__status-dot canvas-toolbar__status-dot--${statusTone}`}
-                              title={canvasStatusLabel(canvas)}
-                              aria-label={canvasStatusLabel(canvas)}
+                              title={statusLabel}
+                              aria-label={statusLabel}
                             />
                             <span className="canvas-toolbar__item-title">{displayCanvasName(canvas)}</span>
                           </span>
@@ -800,6 +852,9 @@ export function CanvasToolbar({
       {hoveredCanvasId && hoverAnchor && (() => {
         const hovered = canvases.find((c) => c.id === hoveredCanvasId)
         if (!hovered) return null
+        const userId = userProfile?.userId ?? ''
+        const ownerCanResolveConflict = isCanvasConflict(hovered) && ownsCanvas(hovered, userId) && Boolean(onResolveCanvasConflict)
+        const resolvingConflict = resolvingConflictCanvasId === hovered.id
         return (
           <div
             className="canvas-toolbar__hover-recap"
@@ -809,16 +864,11 @@ export function CanvasToolbar({
               left: hoverAnchor.right + 8,
             }}
             onMouseEnter={() => {
-              // Cursor entered the popover itself; the underlying row's
-              // onMouseLeave already cleared state. Re-pin so the popover
-              // stays visible (and scroll/text-select works).
+              cancelHoverHide()
               setHoveredCanvasId(hoveredCanvasId)
               setHoverAnchor(hoverAnchor)
             }}
-            onMouseLeave={() => {
-              setHoveredCanvasId(null)
-              setHoverAnchor(null)
-            }}
+            onMouseLeave={hideCanvasHoverSoon}
           >
             <div className="canvas-toolbar__hover-recap-title">{displayCanvasName(hovered)}</div>
             <dl className="canvas-toolbar__hover-meta">
@@ -828,17 +878,55 @@ export function CanvasToolbar({
               </div>
               <div>
                 <dt>Access</dt>
-                <dd>{canvasAccessLabel(hovered, userProfile?.userId ?? '')}</dd>
+                <dd>{canvasAccessLabel(hovered, userId)}</dd>
               </div>
               <div>
                 <dt>Sync</dt>
-                <dd>{canvasStatusLabel(hovered)}</dd>
+                <dd>{canvasStatusLabel(hovered, userId)}</dd>
               </div>
+              {isCanvasConflict(hovered) && ownsCanvas(hovered, userId) && (
+                <div>
+                  <dt>Versions</dt>
+                  <dd>{canvasConflictVersionLabel(hovered)}</dd>
+                </div>
+              )}
               <div>
                 <dt>Updated</dt>
                 <dd>{canvasUpdatedLabel(hovered)}</dd>
               </div>
             </dl>
+            {ownerCanResolveConflict && (
+              <div className="canvas-toolbar__conflict-panel">
+                <div className="canvas-toolbar__conflict-copy">
+                  <AlertTriangle size={14} aria-hidden />
+                  <span>
+                    <strong>Sync conflict</strong>
+                    <small>{canvasConflictDetail(hovered)}</small>
+                  </span>
+                </div>
+                <div className="canvas-toolbar__conflict-actions">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={resolvingConflict}
+                    onClick={() => resolveConflict(hovered, 'remote')}
+                  >
+                    Use team version
+                  </button>
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={resolvingConflict}
+                    onClick={() => resolveConflict(hovered, 'current')}
+                  >
+                    Keep local
+                  </button>
+                </div>
+                {conflictResolveError && resolvingConflictCanvasId === null && (
+                  <div className="canvas-toolbar__conflict-error">{conflictResolveError}</div>
+                )}
+              </div>
+            )}
           </div>
         )
       })()}
@@ -1351,18 +1439,38 @@ function initialsFor(value: string): string {
   return value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2).toUpperCase().padEnd(2, '?')
 }
 
-function canvasStatusTone(canvas: CanvasInfo): 'local' | 'synced' | 'pending' | 'error' {
+function isCanvasConflict(canvas: CanvasInfo): boolean {
   const syncStatus = (canvas.syncStatus ?? '').toLowerCase()
+  return syncStatus.includes('conflict')
+}
+
+function canvasStatusTone(canvas: CanvasInfo, userId = ''): 'local' | 'synced' | 'pending' | 'error' {
+  const syncStatus = (canvas.syncStatus ?? '').toLowerCase()
+  if (isCanvasConflict(canvas) && canvas.scope === 'team' && !ownsCanvas(canvas, userId)) return 'pending'
   if (syncStatus.includes('conflict') || syncStatus.includes('fail') || syncStatus.includes('error')) return 'error'
   if (canvas.scope !== 'team') return 'local'
-  if (canvas.dirtySince || syncStatus.includes('pending') || syncStatus.includes('force')) return 'pending'
+  if (
+    canvas.dirtySince ||
+    syncStatus.includes('pending') ||
+    syncStatus.includes('syncing') ||
+    syncStatus.includes('refreshing') ||
+    syncStatus.includes('force')
+  ) return 'pending'
   return 'synced'
 }
 
-function canvasStatusLabel(canvas: CanvasInfo): string {
+function canvasStatusLabel(canvas: CanvasInfo, userId = ''): string {
+  const syncStatus = (canvas.syncStatus ?? '').toLowerCase()
+  if (isCanvasConflict(canvas)) {
+    return canvas.scope === 'team' && !ownsCanvas(canvas, userId)
+      ? 'Refreshing read-only copy'
+      : 'Sync conflict'
+  }
+  if (syncStatus.includes('syncing')) return 'Syncing to team'
+  if (syncStatus.includes('refreshing')) return 'Refreshing read-only copy'
   switch (canvasStatusTone(canvas)) {
     case 'error':
-      return 'Sync needs attention'
+      return 'Sync error'
     case 'pending':
       return 'Sync pending'
     case 'synced':
@@ -1371,6 +1479,25 @@ function canvasStatusLabel(canvas: CanvasInfo): string {
     default:
       return 'Local only'
   }
+}
+
+function canvasConflictVersionLabel(canvas: CanvasInfo): string {
+  const localVersion = canvas.remoteVersion ?? 0
+  const remoteVersion = canvas.conflictRemoteVersion ?? null
+  if (remoteVersion === null) return `local v${localVersion}`
+  return `local v${localVersion} / team v${remoteVersion}`
+}
+
+function canvasConflictDetail(canvas: CanvasInfo): string {
+  if (canvas.conflictRemoteDeleted) {
+    return 'The team version was deleted while this local copy still has changes.'
+  }
+  const localVersion = canvas.remoteVersion ?? 0
+  const remoteVersion = canvas.conflictRemoteVersion ?? null
+  if (remoteVersion !== null) {
+    return `Local changes were made from v${localVersion}, but Team is already v${remoteVersion}.`
+  }
+  return 'Local changes and the team version both moved forward.'
 }
 
 function canvasUpdatedLabel(canvas: CanvasInfo): string {
