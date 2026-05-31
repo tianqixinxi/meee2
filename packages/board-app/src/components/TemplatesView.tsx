@@ -260,13 +260,16 @@ export function TemplatesView({
       setMetadataError('Template name is required')
       return
     }
+    const defaultCanvasKind = metadataMode === 'edit'
+      ? metadataTarget?.defaultCanvasKind
+      : reusableCanvasKind(activeCanvas)
     const input: TemplateMetadataInput = {
       name,
       description: metadataDescription.trim(),
       scope: metadataScope,
       tags: metadataTags,
       icon: metadataTarget?.icon ?? 'sparkles',
-      defaultCanvasKind: 'board',
+      ...(defaultCanvasKind ? { defaultCanvasKind } : {}),
     }
     setMetadataSaving(true)
     setMetadataError(null)
@@ -695,6 +698,11 @@ function ownerMatchesProfile(ownerId: string, userProfile: UserProfile): boolean
 
 function displayCanvasName(canvas: CanvasInfo): string {
   return canvas.name === 'Default canvas' ? 'My' : canvas.name
+}
+
+function reusableCanvasKind(canvas: CanvasInfo | null): TemplateMetadataInput['defaultCanvasKind'] {
+  if (canvas?.kind && canvas.kind !== 'template') return canvas.kind
+  return undefined
 }
 
 function initialsFor(name: string): string {

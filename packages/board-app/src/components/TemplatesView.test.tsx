@@ -227,4 +227,33 @@ describe('TemplatesView Claude Code workflow imports', () => {
     expect(screen.getByText('Alice')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Edit draft' })).toBeDisabled()
   })
+
+  it('preserves active canvas kind when saving as template', async () => {
+    const onSaveCanvasAsTemplate = vi.fn().mockResolvedValue('template-canvas')
+    renderView({
+      canvases: [{
+        id: 'monitor-canvas',
+        name: 'Monitor',
+        scope: 'personal',
+        kind: 'monitor',
+        isDefault: false,
+        workspacePath: '',
+        ownerUserId: 'local-user',
+        teamId: null,
+      }],
+      activeCanvasId: 'monitor-canvas',
+      onSaveCanvasAsTemplate,
+    })
+
+    await screen.findByText('Claude Code workflows')
+    fireEvent.click(screen.getByRole('button', { name: 'Save current' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(onSaveCanvasAsTemplate).toHaveBeenCalledWith(
+        'monitor-canvas',
+        expect.objectContaining({ defaultCanvasKind: 'monitor' }),
+      )
+    })
+  })
 })

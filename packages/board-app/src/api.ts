@@ -679,7 +679,7 @@ export interface CanvasTemplate {
    * canvases), so we declare it non-optional here.
    */
   kind: NonNullable<CanvasList['canvases'][number]['kind']>
-  defaultCanvasKind: NonNullable<CanvasList['canvases'][number]['kind']>
+  defaultCanvasKind: Exclude<NonNullable<CanvasList['canvases'][number]['kind']>, 'template'>
   /** Legacy bucket retained for older callers; source is the catalog grouping. */
   category: string
   tags: string[]

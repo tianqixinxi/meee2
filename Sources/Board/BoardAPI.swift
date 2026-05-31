@@ -5299,6 +5299,13 @@ enum BoardAPI {
         }
         do {
             let snapshot = try BoardLayoutStore.shared.createCanvas(name: name, scope: scope, kind: kind)
+            if kind == .template,
+               let templateCanvas = snapshot.canvases.first(where: { $0.id == snapshot.activeCanvasId }) {
+                _ = try PlannerBoardBridge.store.record(
+                    for: planningCanvas(for: templateCanvas, context: "template:\(templateCanvas.id):version:1"),
+                    seedNodes: []
+                )
+            }
             return jsonResponse(canvasEnvelope(snapshot), status: 201, reason: "Created")
         } catch {
             return errorResponse("bad_request", error.localizedDescription, status: 400)
