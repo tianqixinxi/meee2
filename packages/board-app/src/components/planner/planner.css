@@ -4880,7 +4880,7 @@
 
 .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card {
   gap: 7px;
-  min-height: 108px;
+  min-height: 132px;
   padding: 10px;
 }
 
@@ -4970,6 +4970,11 @@
   background: rgba(245, 244, 239, 0.06);
 }
 
+.planner-monitor-card--comfortable .planner-monitor-card__meta {
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
 .planner-monitor-card p {
   overflow: hidden;
   margin: 0;
@@ -4981,7 +4986,12 @@
 }
 
 .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card h3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-size: 13px;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .planner-monitor__kanban[data-density="comfortable"] .planner-monitor-card p {
@@ -4992,7 +5002,34 @@
   white-space: normal;
 }
 
-.planner-monitor-card p.is-blocker {
+.planner-monitor-card__summary,
+.planner-monitor-card__attention {
+  gap: 2px;
+}
+
+.planner-monitor-card__summary strong,
+.planner-monitor-card__attention strong {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.planner-monitor-card__attention {
+  padding-left: 8px;
+  border-left: 2px solid rgba(168, 165, 155, 0.22);
+}
+
+.planner-monitor-card__attention.is-blocker {
+  border-left-color: rgba(194, 106, 106, 0.72);
+}
+
+.planner-monitor-card p.is-blocker,
+.planner-monitor-card__attention.is-blocker {
   color: #edb0b0;
 }
 
@@ -5000,8 +5037,22 @@
   justify-content: space-between;
 }
 
+.planner-monitor-card--comfortable .planner-monitor-card__footer {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+
 .planner-monitor-card__footer .has-evidence {
   color: var(--accent-hover);
+}
+
+.planner-monitor-card__wait {
+  color: var(--warning);
+}
+
+.planner-monitor-card__open-target {
+  margin-left: auto;
 }
 
 .planner-monitor__empty {
