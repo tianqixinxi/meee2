@@ -5473,7 +5473,7 @@ html.board-planner-chat-collapsed .canvas-toolbar {
 
 html.board-empty-omni .canvas-toolbar {
   left: 16px;
-  width: min(520px, calc(100% - 32px));
+  width: min(380px, calc(100% - 32px));
 }
 
 html.board-empty-omni .canvas-toolbar__context {
@@ -5610,7 +5610,7 @@ html.board-empty-omni .canvas-toolbar__context {
   top: calc(100% + 8px);
   left: 0;
   z-index: 250;
-  width: min(360px, calc(100vw - var(--sidebar-width, 208px) - var(--planner-chat-width, 0px) - 40px));
+  width: min(320px, calc(100vw - var(--sidebar-width, 208px) - var(--planner-chat-width, 0px) - 40px));
   max-height: min(420px, calc(100vh - 86px));
   overflow: visible;
   margin-top: 0;
@@ -5624,7 +5624,7 @@ html.board-empty-omni .canvas-toolbar__context {
 
 html.board-planner-chat-collapsed .canvas-toolbar__panel,
 html.board-empty-omni .canvas-toolbar__panel {
-  width: min(360px, calc(100vw - var(--sidebar-width, 208px) - 40px));
+  width: min(320px, calc(100vw - var(--sidebar-width, 208px) - 40px));
 }
 
 .canvas-toolbar__context {
@@ -6241,11 +6241,11 @@ html.board-empty-omni .canvas-toolbar__panel {
   html.board-empty-omni .canvas-toolbar {
     top: 12px;
     left: 12px;
-    width: min(520px, calc(100% - 24px));
+    width: min(420px, calc(100% - 24px));
   }
 
   .canvas-toolbar__panel {
-    width: min(360px, calc(100vw - var(--sidebar-width, 52px) - 32px));
+    width: min(320px, calc(100vw - var(--sidebar-width, 52px) - 32px));
   }
 }
 

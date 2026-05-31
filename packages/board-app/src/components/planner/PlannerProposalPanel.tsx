@@ -1156,6 +1156,8 @@ function buildEmptyCanvasAIMessages(
       'For action=ask, choices must come from your reasoning about the user request, not a generic fixed template.',
       'For action=plan, include 3-5 node steps. Every step must be actionable on the canvas.',
       'For action=plan, the prompt must preserve all user details and describe the exact node graph the canvas proposal generator should draft.',
+      'If the response contains a concrete plan object with steps, action must be plan, never ask.',
+      'Do not ask a generic optimization question when the request already specifies source, goal, and output.',
       'If the user is correcting a previous plan, produce an updated plan instead of asking again unless one key detail is still missing.',
     ],
     canvas: {
@@ -1246,6 +1248,17 @@ function emptyCanvasAIReplyToMessage(rawText: string, history: PlannerChatMessag
 
 function normalizeEmptyCanvasAIReply(parsed: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!parsed) return null
+  const plan = objectValue(parsed.plan)
+  if (plan && looksLikePlanObject(plan)) {
+    return { ...parsed, action: 'plan', plan }
+  }
+  if (looksLikePlanObject(parsed)) {
+    return {
+      action: 'plan',
+      message: parsed.message,
+      plan: parsed,
+    }
+  }
   const action = normalizedEmptyCanvasAction(parsed.action) ?? normalizedEmptyCanvasAction(parsed.type)
   if (action) {
     return { ...parsed, action }
@@ -1254,19 +1267,8 @@ function normalizeEmptyCanvasAIReply(parsed: Record<string, unknown> | null): Re
   if (ask) {
     return { ...ask, action: 'ask' }
   }
-  const plan = objectValue(parsed.plan)
-  if (plan && looksLikePlanObject(plan)) {
-    return { ...parsed, action: 'plan', plan }
-  }
   if (typeof parsed.question === 'string' || Array.isArray(parsed.choices)) {
     return { ...parsed, action: 'ask' }
-  }
-  if (looksLikePlanObject(parsed)) {
-    return {
-      action: 'plan',
-      message: parsed.message,
-      plan: parsed,
-    }
   }
   return parsed
 }

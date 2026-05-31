@@ -1,0 +1,89 @@
+import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { I18nProvider } from '../../lib/i18n'
+import { PlannerProposalPanel } from './PlannerProposalPanel'
+
+const apiMocks = vi.hoisted(() => ({
+  fetchLocalAssistantSessionMessages: vi.fn(),
+  streamAssistantChat: vi.fn(),
+}))
+
+vi.mock('../../api', async () => {
+  const actual = await vi.importActual<typeof import('../../api')>('../../api')
+  return {
+    ...actual,
+    fetchLocalAssistantSessionMessages: apiMocks.fetchLocalAssistantSessionMessages,
+    streamAssistantChat: apiMocks.streamAssistantChat,
+  }
+})
+
+function streamText(text: string) {
+  return (async function* () {
+    yield { type: 'delta' as const, text }
+  })()
+}
+
+describe('PlannerProposalPanel empty canvas intake', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    apiMocks.fetchLocalAssistantSessionMessages.mockResolvedValue({ sessionId: null, messages: [] })
+    apiMocks.streamAssistantChat.mockReset()
+  })
+
+  it('renders a plan card when the model returns an ask action with a concrete plan object', async () => {
+    apiMocks.streamAssistantChat.mockImplementation(() => streamText(JSON.stringify({
+      action: 'ask',
+      message: '我来帮你规划节点流程。以下是执行计划：',
+      question: 'What should I optimize for?',
+      plan: {
+        title: '舆情洞察执行计划',
+        intro: '下面是可执行节点草案，请确认是否继续。',
+        steps: [
+          {
+            title: '收集公开舆情',
+            body: '输入产品关键词，从公开网页检索相关讨论，输出原始来源列表。',
+          },
+          {
+            title: '生成飞书文档',
+            body: '输入分析结论和引用来源，输出结构化飞书文档草稿。',
+          },
+        ],
+        prompt: 'Draft a concrete meee2 canvas for public sentiment collection and Feishu document output.',
+      },
+    })))
+
+    render(
+      <I18nProvider>
+        <PlannerProposalPanel
+          canvasId="empty-canvas-plan-test"
+          canvasName="Meee2舆情洞察"
+          proposal={null}
+          previewGraph={{ nodes: [], edges: [] }}
+          busy={false}
+          error={null}
+          access={{
+            actorId: 'local-user',
+            role: 'owner',
+            canCreateProposal: true,
+            canApproveProposal: true,
+            canApplyProposal: true,
+            canRejectProposal: true,
+            canUpdateAssignedNode: true,
+          }}
+          nodeCount={0}
+          hasActionableDrift={false}
+          onSubmit={vi.fn()}
+          onApproveAndApply={vi.fn()}
+          onReject={vi.fn()}
+          initialIntakeMessage={{ id: 1, text: '收集互联网关于Meee2产品的舆情，并总结分析，输出飞书文档' }}
+          emptyMode
+          layout="omni"
+        />
+      </I18nProvider>,
+    )
+
+    expect(await screen.findByRole('heading', { name: '舆情洞察执行计划' })).toBeInTheDocument()
+    expect(screen.getByText('收集公开舆情')).toBeInTheDocument()
+    expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
+  })
+})
