@@ -89,9 +89,11 @@ public enum InternalSessionIdentity {
 
     /// Given a managed-workspace cwd and a pool of session records, find the
     /// real `claude` CLI session that is running inside the surface bound to a
-    /// planner node. The surface record and the CLI record share ONE
-    /// correlation key — the managed-workspace cwd — because
-    /// `session-terminals.json` never captures `providerResumeSessionId`.
+    /// planner node. This is the FALLBACK correlation, keyed on the managed-
+    /// workspace cwd; prefer `authoritativeCliSession(forProviderResumeSessionId:)`
+    /// whenever the surface's `providerResumeSessionId` is known (it is, once the
+    /// first hook arrives). cwd-only correlation is inherently ambiguous when a
+    /// workspace is shared by several nodes / re-dispatches — see that function.
     ///
     /// Selection rules (all guard against false adoption):
     /// - candidate cwd MUST normalize to the SAME managed-workspace path
@@ -184,6 +186,36 @@ public enum InternalSessionIdentity {
                 return lhs.lastActivity < rhs.lastActivity
             }
             return lhs.startedAt < rhs.startedAt
+        }
+    }
+
+    /// AUTHORITATIVE surface→CLI correlation, keyed by the surface's own
+    /// `providerResumeSessionId` rather than the shared workspace cwd.
+    ///
+    /// `ClaudePlugin` records, on the first hook of a meee2-internal surface, the
+    /// real `claude` CLI session id that the surface actually launched
+    /// (`SessionTerminalStore.setProviderResumeSessionId`). That id is the ONE
+    /// CLI session this surface owns — so matching on it can never adopt a
+    /// *sibling node's* CLI session that merely shares the per-canvas workspace
+    /// dir. (The cwd heuristic in `correlatedCliSession` can: a venture canvas
+    /// gives every node + every re-dispatch the SAME cwd, so cwd+recency picks
+    /// whichever CLI most recently wrote a transcript — bleeding that session's
+    /// `.dead` status onto a live surface and resetting the node to 未启动.)
+    ///
+    /// Returns `nil` when no `providerResumeSessionId` is recorded yet (the brief
+    /// window before the first hook) or the referenced CLI record is gone — the
+    /// caller falls back to `correlatedCliSession`.
+    public static func authoritativeCliSession(
+        forProviderResumeSessionId resumeId: String?,
+        among candidates: [SessionData]
+    ) -> SessionData? {
+        guard let resumeId = resumeId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !resumeId.isEmpty else { return nil }
+        return candidates.first { candidate in
+            candidate.sessionId == resumeId
+                && !isSurface(candidate)
+                && !(candidate.transcriptPath ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 }

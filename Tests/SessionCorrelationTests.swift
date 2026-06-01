@@ -231,6 +231,97 @@ final class SessionCorrelationTests: XCTestCase {
         )
     }
 
+    // MARK: - 1b. Authoritative correlation by providerResumeSessionId
+
+    /// The real bug behind "a node keeps reverting to 未启动": a venture canvas
+    /// gives every node + every re-dispatch the SAME workspace cwd, so the cwd
+    /// heuristic resolves two sibling surfaces to the SAME CLI session. When one
+    /// sibling's CLI goes `.dead`, that dead status bleeds onto the OTHER, still
+    /// live, surface and resets its node. `authoritativeCliSession` keys on the
+    /// surface's own `providerResumeSessionId`, so each surface adopts ONLY the
+    /// CLI it actually launched — sibling state can never cross over.
+    func testAuthoritativeCorrelationBindsEachSurfaceToItsOwnCli() throws {
+        let cwd = managedWorkspaceCwd()
+        let path = try writeTranscript(lines: [
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#
+        ])
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent()
+            )
+        }
+        func cli(_ id: String, status: SessionStatus, last: TimeInterval) -> SessionData {
+            SessionData(
+                sessionId: id, project: cwd, cwd: cwd, transcriptPath: path,
+                startedAt: Date(timeIntervalSince1970: 1_000),
+                lastActivity: Date(timeIntervalSince1970: last),
+                status: status,
+                terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+            )
+        }
+        // Node A's own CLI is live but quiet; node B's CLI is dead but the most
+        // recently active in the shared cwd — exactly what made cwd+recency pick
+        // B for BOTH surfaces.
+        let cliA = cli("cli-A-\(UUID().uuidString)", status: .active, last: 1_100)
+        let cliB = cli("cli-B-\(UUID().uuidString)", status: .dead, last: 9_999)
+        let pool = [cliA, cliB]
+
+        let resolvedA = InternalSessionIdentity.authoritativeCliSession(
+            forProviderResumeSessionId: cliA.sessionId, among: pool
+        )
+        let resolvedB = InternalSessionIdentity.authoritativeCliSession(
+            forProviderResumeSessionId: cliB.sessionId, among: pool
+        )
+        XCTAssertEqual(resolvedA?.sessionId, cliA.sessionId,
+                       "Surface A must adopt its OWN CLI (by providerResumeSessionId), not the more-recent sibling.")
+        XCTAssertEqual(resolvedB?.sessionId, cliB.sessionId,
+                       "Surface B must adopt its OWN CLI.")
+        XCTAssertNotEqual(resolvedA?.sessionId, resolvedB?.sessionId,
+                          "Two surfaces in one shared workspace must NOT collapse onto the same CLI session.")
+    }
+
+    /// Authoritative correlation returns nil when no id is recorded yet (pre-first
+    /// hook) or the referenced CLI is absent / transcript-less — the snapshot
+    /// provider then falls back to cwd correlation.
+    func testAuthoritativeCorrelationReturnsNilWhenUnresolvable() throws {
+        let cwd = managedWorkspaceCwd()
+        let path = try writeTranscript(lines: [
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#
+        ])
+        defer {
+            try? FileManager.default.removeItem(
+                at: URL(fileURLWithPath: path).deletingLastPathComponent()
+            )
+        }
+        let real = SessionData(
+            sessionId: "cli-\(UUID().uuidString)", project: cwd, cwd: cwd, transcriptPath: path,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_100),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        let transcriptless = SessionData(
+            sessionId: "cli-nt-\(UUID().uuidString)", project: cwd, cwd: cwd, transcriptPath: nil,
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            lastActivity: Date(timeIntervalSince1970: 1_100),
+            status: .active,
+            terminalInfo: PluginTerminalInfo(termProgram: "ghostty", termBundleId: "com.mitchellh.ghostty")
+        )
+        XCTAssertNil(
+            InternalSessionIdentity.authoritativeCliSession(forProviderResumeSessionId: nil, among: [real]),
+            "nil resumeId → nil (fall back to cwd correlation).")
+        XCTAssertNil(
+            InternalSessionIdentity.authoritativeCliSession(forProviderResumeSessionId: "   ", among: [real]),
+            "blank resumeId → nil.")
+        XCTAssertNil(
+            InternalSessionIdentity.authoritativeCliSession(forProviderResumeSessionId: "no-such-id", among: [real]),
+            "resumeId with no matching candidate → nil.")
+        XCTAssertNil(
+            InternalSessionIdentity.authoritativeCliSession(
+                forProviderResumeSessionId: transcriptless.sessionId, among: [transcriptless]),
+            "a transcript-less candidate can't drive progress → nil (fall back).")
+    }
+
     // MARK: - 2. Permission-required CLI drives the bound node to .gateWait
 
     func testPermissionRequiredCliDrivesBoundNodeToGateWait() throws {
