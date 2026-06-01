@@ -1128,6 +1128,10 @@ function parseKanbanPayload(payload: unknown): KanbanArtifactPayload | null {
       title: item.title,
       description: typeof item.description === 'string' ? item.description : undefined,
       subCanvasId: typeof item.subCanvasId === 'string' ? item.subCanvasId : null,
+      // 保留后端读时注入的派生态 + 消费源(否则派生摆放/徽章拿不到值,见 PR#112 review)。
+      derivedColumnId: typeof item.derivedColumnId === 'string' ? item.derivedColumnId : null,
+      consumptionSourceId: typeof item.consumptionSourceId === 'string' ? item.consumptionSourceId : null,
+      consumptionItemId: typeof item.consumptionItemId === 'string' ? item.consumptionItemId : null,
     }))
   if (columns.length === 0) return null
   return { version: 1, columns, items }

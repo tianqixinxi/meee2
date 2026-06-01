@@ -2560,35 +2560,44 @@ enum BoardAPI {
         // increment) before they decode into a v2-shaped model, so adapters
         // fail loudly with an actionable error instead of silently dropping
         // the offending fields.
-        if let raw = try? JSONSerialization.jsonObject(with: Data(req.body)) as? [String: Any] {
+        var bodyData = Data(req.body)
+        if let raw = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
             do {
                 try NodeContractValidator.validateRawOutputPayload(raw)
             } catch {
                 return errorResponse("invalid_node_output", error.localizedDescription, status: 400)
             }
+            // Part D — 可配置节点状态(spec §5): 在 decode 前解析动态 `state`。校验它在
+            // 该节点 stateSchema 内、据 kind 映射成引擎 outcome,并把 status 注入 body ——
+            // 这样纯 `state`(省略 status)的提交也能 decode(PlannerNodeOutput 要求 status),
+            // 自定义态节点可只凭 state 完成(PR#112 review)。缺省 schema 省略 state →
+            // 走 status 原逻辑(向后兼容)。校验失败返回 agent 自纠。
+            if let stateId = (raw["state"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !stateId.isEmpty {
+                let schema = (try? PlannerBoardBridge.canvasState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                ))?.nodes.first(where: { $0.id == nodeId })?.effectiveStateSchema ?? .default
+                guard let def = schema.def(forStateId: stateId) else {
+                    let allowed = schema.states.map { $0.id }.joined(separator: ", ")
+                    return errorResponse("invalid_node_output", "state '\(stateId)' is not in this node's stateSchema; allowed: \(allowed)", status: 400)
+                }
+                guard let mapped = def.submittableStatus else {
+                    return errorResponse("invalid_node_output", "state '\(stateId)' (kind \(def.kind.rawValue)) is not a submittable terminal/gating state", status: 400)
+                }
+                var patched = raw
+                patched["status"] = mapped.rawValue
+                if let reserialized = try? JSONSerialization.data(withJSONObject: patched) {
+                    bodyData = reserialized
+                }
+            }
         }
-        guard var output = decodeJSONBody(req, as: PlannerNodeOutput.self) else {
+        let outputDecoder = JSONDecoder()
+        outputDecoder.dateDecodingStrategy = .iso8601
+        guard !bodyData.isEmpty,
+              let output = try? outputDecoder.decode(PlannerNodeOutput.self, from: bodyData) else {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
-        }
-        // Part D — 可配置节点状态(spec §5): 请求带动态 `state` 时,校验它在该节点的
-        // stateSchema 内并据 kind 映射成引擎 outcome,覆盖 output.status。缺省 schema 下
-        // 省略 `state` → 走 status 原逻辑(向后兼容)。校验失败返回 agent 自纠。
-        if let raw = try? JSONSerialization.jsonObject(with: Data(req.body)) as? [String: Any],
-           let stateId = (raw["state"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stateId.isEmpty {
-            let schema = (try? PlannerBoardBridge.canvasState(
-                for: canvasId,
-                snapshot: BoardLayoutStore.shared.snapshot(),
-                actorUserId: PlannerPermission.currentActorId()
-            ))?.nodes.first(where: { $0.id == nodeId })?.effectiveStateSchema ?? .default
-            guard let def = schema.def(forStateId: stateId) else {
-                let allowed = schema.states.map { $0.id }.joined(separator: ", ")
-                return errorResponse("invalid_node_output", "state '\(stateId)' is not in this node's stateSchema; allowed: \(allowed)", status: 400)
-            }
-            guard let mapped = def.submittableStatus else {
-                return errorResponse("invalid_node_output", "state '\(stateId)' (kind \(def.kind.rawValue)) is not a submittable terminal/gating state", status: 400)
-            }
-            output.status = mapped
         }
         do {
             // Capture the pre-submit node.status so we can detect the
