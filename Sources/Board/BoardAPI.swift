@@ -1955,18 +1955,18 @@ enum BoardAPI {
                !sessionId.isEmpty {
                 if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
                    isReusableInternalSurface(existingSurface) {
+                    // 绑定的会话还活着 → 直接复用并 focus（前端拿到 graph 后会
+                    // dispatch meee2:open-session 把终端拉到前台）。
                     surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
-                } else if body?.openOnly == true {
-                    // The caller only asked to open the already-bound managed
-                    // session. External terminal sessions are no longer managed
-                    // by meee2, so any non-reusable internal binding is treated
-                    // as ended and the user can re-dispatch into a managed surface.
-                    return errorResponse(
-                        "session_ended",
-                        "The session bound to this node has ended. Re-dispatch the node to start a new one.",
-                        status: 409
-                    )
                 } else {
+                    // 绑定的会话已死。早前 BUG 1.2 在 openOnly 时直接报 session_ended
+                    // 让用户手动重新派发,但那是个死胡同(toast 无动作,卡片当下也没有
+                    // 重新派发入口)。owner 决策(2026-06-01):「打开会话查看进展」点到
+                    // 死会话应当直接续上 —— 能拿到 provider resume id 就 `--resume`
+                    // 找回原对话上下文(ClaudePlugin 在 hook 回来时已把真实 claude
+                    // session id 链进 SessionTerminalStore);拿不到就在同 cwd fresh
+                    // recreate(优雅降级,遗留 ghostty 绑定没存底层 session id 时走这条)。
+                    // openOnly 不再是死胡同,与 create/replace 在 dead 分支上汇合。
                     try PlannerPermission.requireNodeUpdate(on: existingNode, access: state.access)
                     let cwd = try explicitSessionCwd(body?.cwd) ?? BoardLayoutStore.shared.workspacePath(canvasId: canvasId)
                     let resumeSessionId = providerResumeSessionId(forPlannerSessionId: sessionId)
@@ -1998,6 +1998,25 @@ enum BoardAPI {
                             sessionId: surface.sessionId,
                             purpose: "planner:\(nodeId)",
                             status: .active
+                        )
+                    }
+                    // recreate/resume 出新 surface 后,必须把节点 sessionId 重绑到
+                    // 这个活 surface —— 否则节点仍指向旧的死 id,下次「打开会话」又
+                    // 查不到活会话、再 recreate,表现为「每次点都新建一个 session」。
+                    // 重绑后下次 open 命中上面 isReusableInternalSurface 分支直接复用
+                    // /聚焦。resume 时 surface.sessionId 即旧 id,这里跳过(no-op)。
+                    if surface.sessionId != sessionId {
+                        // allowReplace: 我们就在「绑定会话已死」分支里,这次重绑是
+                        // 自愈式替换死 surface。死会话的 runState 可能还停在 .running
+                        // (death 未及时写回),不放行会被 hasActiveSession 守卫拦成
+                        // activeSessionExists,导致节点永久卡死、每次点都 recreate。
+                        _ = try PlannerBoardBridge.bindSession(
+                            nodeId: nodeId,
+                            sessionId: surface.sessionId,
+                            for: canvasId,
+                            snapshot: BoardLayoutStore.shared.snapshot(),
+                            actorUserId: PlannerPermission.currentActorId(),
+                            allowReplace: true
                         )
                     }
                     BoardServer.shared.broadcastStateChanged()
@@ -2541,14 +2560,43 @@ enum BoardAPI {
         // increment) before they decode into a v2-shaped model, so adapters
         // fail loudly with an actionable error instead of silently dropping
         // the offending fields.
-        if let raw = try? JSONSerialization.jsonObject(with: Data(req.body)) as? [String: Any] {
+        var bodyData = Data(req.body)
+        if let raw = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
             do {
                 try NodeContractValidator.validateRawOutputPayload(raw)
             } catch {
                 return errorResponse("invalid_node_output", error.localizedDescription, status: 400)
             }
+            // Part D — 可配置节点状态(spec §5): 在 decode 前解析动态 `state`。校验它在
+            // 该节点 stateSchema 内、据 kind 映射成引擎 outcome,并把 status 注入 body ——
+            // 这样纯 `state`(省略 status)的提交也能 decode(PlannerNodeOutput 要求 status),
+            // 自定义态节点可只凭 state 完成(PR#112 review)。缺省 schema 省略 state →
+            // 走 status 原逻辑(向后兼容)。校验失败返回 agent 自纠。
+            if let stateId = (raw["state"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !stateId.isEmpty {
+                let schema = (try? PlannerBoardBridge.canvasState(
+                    for: canvasId,
+                    snapshot: BoardLayoutStore.shared.snapshot(),
+                    actorUserId: PlannerPermission.currentActorId()
+                ))?.nodes.first(where: { $0.id == nodeId })?.effectiveStateSchema ?? .default
+                guard let def = schema.def(forStateId: stateId) else {
+                    let allowed = schema.states.map { $0.id }.joined(separator: ", ")
+                    return errorResponse("invalid_node_output", "state '\(stateId)' is not in this node's stateSchema; allowed: \(allowed)", status: 400)
+                }
+                guard let mapped = def.submittableStatus else {
+                    return errorResponse("invalid_node_output", "state '\(stateId)' (kind \(def.kind.rawValue)) is not a submittable terminal/gating state", status: 400)
+                }
+                var patched = raw
+                patched["status"] = mapped.rawValue
+                if let reserialized = try? JSONSerialization.data(withJSONObject: patched) {
+                    bodyData = reserialized
+                }
+            }
         }
-        guard let output = decodeJSONBody(req, as: PlannerNodeOutput.self) else {
+        let outputDecoder = JSONDecoder()
+        outputDecoder.dateDecodingStrategy = .iso8601
+        guard !bodyData.isEmpty,
+              let output = try? outputDecoder.decode(PlannerNodeOutput.self, from: bodyData) else {
             return errorResponse("invalid_json", "body must be a valid node output payload", status: 400)
         }
         do {

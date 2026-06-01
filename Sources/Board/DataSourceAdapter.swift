@@ -348,6 +348,15 @@ extension PlannerBoardBridge {
         }
     }
 
+    /// 读取某队列项的当前消费态(给 kanban 下游消费订阅派生用,只读)。
+    /// 仅 managed 队列源支持;源/项不存在或非 managed → nil。
+    static func dataSourceItemState(canvasId: String, sourceId: String, itemId: String) -> DataSourceItemState? {
+        guard let managed = try? dataSourceAdapter(canvasId: canvasId, sourceId: sourceId) as? ManagedAdapter else {
+            return nil
+        }
+        return managed.item(itemId)?.state
+    }
+
     /// §3.8 claim: claim up to `n` items for the given attempt causalKey.
     static func dataSourceClaim(canvasId: String, sourceId: String, n: Int, claimant: String) throws -> [DataSourceItem] {
         try dataSourceAdapter(canvasId: canvasId, sourceId: sourceId).claim(n: n, claimant: claimant)

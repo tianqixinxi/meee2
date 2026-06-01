@@ -342,19 +342,22 @@ export function NodeInspectorModal({
             {(() => {
               const wfs = node.workflowRunState
               const hasSession = Boolean(node.sessionId?.trim())
-              const isAwaiting = wfs === 'awaiting-input' || wfs === 'gate-wait'
+              // 3-态会话模型(2026-06-01): awaiting-input / gate-wait / failed → 「需要人回应」;
+              // running / dispatched → 「运行中」;ready_to_start / pending → 「未启动」。「失败」下线
+              // (会话结束=回到未启动;残留 failed 来自显式 blocked-submit,本质需要人回应)。
+              const isAwaiting = wfs === 'awaiting-input' || wfs === 'gate-wait' || wfs === 'failed'
               const isRunning = wfs === 'running' || wfs === 'dispatched'
-              const isFailed = wfs === 'failed'
+              // isDone 仅用于「进展」实时信息块的取舍(完成的会话只留最近消息+最后活动,
+              // 不显示过期的 currentTask/currentTool),不再驱动「完成」标签或绿色样式。
               const isDone = wfs === 'done'
+              // step / session 工作节点没有「完成」态(canvas 是账本不是 PM):
+              // done = 会话结束 = 回到「未启动」,产物留在账本。本块仅渲染 step/session。
               const wfsLabel =
-                wfs === 'awaiting-input' ? '等反馈'
-                : wfs === 'gate-wait' ? '等审核'
-                : wfs === 'running' ? '运行中'
-                : wfs === 'dispatched' ? '排队中'
-                : wfs === 'ready_to_start' ? '已就绪 · 待启动'
-                : wfs === 'pending' ? '等待开始'
-                : wfs === 'done' ? '已完成'
-                : wfs === 'failed' ? '失败,需改方案'
+                isAwaiting ? '需要人回应'
+                : isRunning ? '运行中'
+                : wfs === 'ready_to_start' ? '未启动'
+                : wfs === 'pending' ? '未启动'
+                : wfs === 'done' ? '未启动'
                 : null
               return (
                 <>
@@ -362,7 +365,7 @@ export function NodeInspectorModal({
                     <div
                       className={
                         'planner-node-modal__progress-runtime-state '
-                        + (isAwaiting ? 'is-awaiting' : isRunning ? 'is-running' : isFailed ? 'is-failed' : isDone ? 'is-done' : '')
+                        + (isAwaiting ? 'is-awaiting' : isRunning ? 'is-running' : '')
                       }
                     >
                       <span className="planner-node-modal__progress-runtime-dot" aria-hidden />
@@ -443,11 +446,6 @@ export function NodeInspectorModal({
                     >
                       <Sparkles size={12} aria-hidden /> 开干 · 起会话
                     </button>
-                  )}
-                  {isFailed && (
-                    <p className="planner-node-modal__progress-runtime-hint">
-                      上一次跑出错了。可以从「更多 · 换一次进展」重启,或先看一眼会话日志再决定。
-                    </p>
                   )}
                 </>
               )

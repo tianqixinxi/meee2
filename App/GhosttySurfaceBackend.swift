@@ -120,6 +120,12 @@ final class GhosttySurfaceBackend: meee2Kit.TerminalSessionBackend {
     @MainActor
     private func markExited(surfaceId: String) {
         guard let session = sessions[surfaceId] else { return }
+        let snap = session.snapshot()
+        // DIAGNOSTIC: the exec process (shell hosting the typed launch command)
+        // exited — the surface is now dead, so the bound planner node flips to
+        // failed and "open session" returns session_ended. Log which session +
+        // command so a dispatched-node death is traceable.
+        MWarn("[ghostty-surface] process_exit surface=\(surfaceId.prefix(12)) session=\(snap.sessionId.prefix(12)) cwd=\(snap.cwd) cmd=\(snap.command)")
         session.markExited()
         recordStatusChange(surfaceId: surfaceId, event: "process_exit")
     }
@@ -594,13 +600,19 @@ extension GhosttySurfaceSession:
     }
 
     func terminalDidFinishCommand(exitCode: Int?, durationNanos: UInt64) {
-        _ = exitCode
         noteSurfaceActivity()
         touch()
         let durationMs = Double(durationNanos) / 1_000_000
-        MInfo(String(format: "[TerminalPerf][ghostty-surface] event=command_finished session=%@ surface=%@ duration_ms=%.1f",
+        // DIAGNOSTIC: surface the command exit code (was discarded). For a
+        // dispatched node this is the typed launch command's result —
+        // exit_code=127 ⇒ command not found (e.g. nvm `claude` not on the
+        // exec shell's PATH), 0 ⇒ clean exit, etc. Helps explain "claude
+        // produced no transcript / session ended immediately".
+        MWarn(String(format: "[TerminalPerf][ghostty-surface] event=command_finished session=%@ surface=%@ exit_code=%@ duration_ms=%.1f cmd=%@",
                      String(sessionId.prefix(12)),
                      String(surfaceId.prefix(12)),
-                     durationMs))
+                     exitCode.map { String($0) } ?? "nil",
+                     durationMs,
+                     command.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
 }

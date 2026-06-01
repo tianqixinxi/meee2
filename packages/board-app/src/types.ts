@@ -689,6 +689,14 @@ export interface KanbanArtifactPayload {
     title: string
     description?: string
     subCanvasId?: string | null
+    /** slice 3 — 订阅下游消费源(queue-claim): 绑定一个 managed 队列项,其消费态
+     *  (ready/claimed/in-progress/done)派生成列。与 subCanvasId 二选一。 */
+    consumptionSourceId?: string | null
+    consumptionItemId?: string | null
+    /** 派生态(slice 2/3 后端读时注入,不落库): item 绑定状态源(下钻 subcanvas 或
+     *  下游消费)时 = 回卷的 §6 列(not_started/in_progress/needs_response/blocked/done)。
+     *  缺省 = 用手动 columnId。前端摆放优先用它,并渲染派生态徽章。 */
+    derivedColumnId?: string | null
   }>
 }
 

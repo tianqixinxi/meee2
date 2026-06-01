@@ -511,6 +511,17 @@ struct LocalClaudeProvider: AssistantProvider {
     ) -> AsyncThrowingStream<ProviderEvent, Error> {
         AsyncThrowingStream { continuation in
             Task.detached {
+                // Defensive backstop (recap-respawn hang): the local `claude -p`
+                // run is rate-gated per canvas — max-in-flight=1 + a cooldown —
+                // so a failing recap can never spawn unbounded and starve the
+                // board HTTP server / main thread. A rejected run yields a plain
+                // error event (caller keeps its local baseRecap), never a spin.
+                guard var lease = AssistantLocalRunGate.shared.acquire(key: settings.canvasId) else {
+                    continuation.yield(.error("local assistant busy for this canvas (in-flight or cooling down)"))
+                    continuation.finish()
+                    return
+                }
+                defer { lease.release() }
                 do {
                     let store = AssistantLocalSessionStore.shared
                     let sessionId = store.sessionId(forCanvasId: settings.canvasId)

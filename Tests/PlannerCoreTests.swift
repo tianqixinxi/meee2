@@ -239,6 +239,138 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(summary.needsOwnerReview, true)
     }
 
+    // MARK: - Kanban item 状态派生 (spec §6 / decision #7b · slice 1)
+
+    /// §6 词表: subcanvas worst-case runtime → kanban 列。穷举映射。
+    func testKanbanDerivedColumnMapping() {
+        XCTAssertEqual(KanbanDerivedColumn.from(subCanvasRunState: .ready), .notStarted)
+        XCTAssertEqual(KanbanDerivedColumn.from(subCanvasRunState: .working), .inProgress)
+        XCTAssertEqual(KanbanDerivedColumn.from(subCanvasRunState: .draft), .needsResponse)
+        XCTAssertEqual(KanbanDerivedColumn.from(subCanvasRunState: .blocked), .blocked)
+        XCTAssertEqual(KanbanDerivedColumn.from(subCanvasRunState: .done), .done)
+    }
+
+    /// deriveKanbanColumn wiring: 子画板内有 blocked 节点 → worst-case blocked → 「阻塞」;
+    /// 有 pending proposal → draft → 「需要人回复」;空子画板 → ready → 「待开始」。
+    func testDeriveKanbanColumnFromSubCanvas() {
+        // 空子画板 → 待开始
+        XCTAssertEqual(
+            service.deriveKanbanColumn(subCanvasId: "child", subCanvasNodes: [], subCanvasProposals: []),
+            .notStarted
+        )
+        // 子画板有节点(经 readNodeState)→ 非空;再用 summarizeSubCanvas 已测的 worst-case 规则。
+        // 这里复用 service.nodeMock 造一组真实节点,确保 wiring(readNodeState→summarize→map)连通。
+        let nodes = service.nodeMock(canvasId: "child")
+        let col = service.deriveKanbanColumn(
+            subCanvasId: "child",
+            subCanvasNodes: nodes,
+            subCanvasProposals: []
+        )
+        // nodeMock 的混合态 worst-case 一定落在五列之一(连通性断言,不假设具体列)。
+        XCTAssertTrue(KanbanDerivedColumn.allCases.contains(col))
+    }
+
+    /// slice 2: injectDerivedKanbanColumns 读时把派生列注入有 subCanvasId 的 item,
+    /// 不带 subCanvasId 的 item 不动(退回手动 columnId)。
+    func testInjectDerivedKanbanColumnsInjectsForLinkedItemsOnly() {
+        let payload: BoardJSONValue = .object([
+            "version": .number(1),
+            "columns": .array([]),
+            "items": .array([
+                .object(["id": .string("i1"), "title": .string("A"), "subCanvasId": .string("child-1")]),
+                .object(["id": .string("i2"), "title": .string("B")]),
+            ]),
+        ])
+        let artifact = PlannerArtifact(
+            id: "art-1", canvasId: "canvas-a", nodeId: "node-1", kind: .kanban,
+            title: "Board", reference: "kanban", status: "attached",
+            createdAt: Date(timeIntervalSince1970: 0), payload: payload
+        )
+        let result = service.injectDerivedKanbanColumns(into: artifact) { childId in
+            childId == "child-1" ? (nodes: service.nodeMock(canvasId: "child-1"), proposals: []) : nil
+        }
+        guard case .object(let obj)? = result.payload, case .array(let items)? = obj["items"] else {
+            return XCTFail("payload shape lost")
+        }
+        // i1: 有 subCanvasId → 注入合法 derivedColumnId
+        guard case .object(let i1) = items[0], case .string(let col)? = i1["derivedColumnId"] else {
+            return XCTFail("i1 missing derivedColumnId")
+        }
+        XCTAssertNotNil(KanbanDerivedColumn(rawValue: col))
+        // i2: 无 subCanvasId → 不动
+        guard case .object(let i2) = items[1] else { return XCTFail("i2 shape") }
+        XCTAssertNil(i2["derivedColumnId"])
+    }
+
+    // MARK: - Kanban 下游消费订阅源 (spec §4.5 · slice 3)
+
+    /// §4.5: DataSourceItem 消费态 → kanban 列。
+    func testKanbanConsumptionStateMapping() {
+        XCTAssertEqual(KanbanDerivedColumn.from(consumptionState: .ready), .notStarted)
+        XCTAssertEqual(KanbanDerivedColumn.from(consumptionState: .claimed), .inProgress)
+        XCTAssertEqual(KanbanDerivedColumn.from(consumptionState: .inProgress), .inProgress)
+        XCTAssertEqual(KanbanDerivedColumn.from(consumptionState: .done), .done)
+    }
+
+    /// slice 3: 订阅下游消费的 item(consumptionSourceId/ItemId)→ 用队列消费态派生列。
+    func testInjectDerivedKanbanColumnsConsumptionSource() {
+        let payload: BoardJSONValue = .object([
+            "items": .array([
+                .object([
+                    "id": .string("c1"), "title": .string("Q"),
+                    "consumptionSourceId": .string("src-1"),
+                    "consumptionItemId": .string("q1"),
+                ]),
+            ]),
+        ])
+        let artifact = PlannerArtifact(
+            id: "a", canvasId: "c", nodeId: "n", kind: .kanban,
+            title: "K", reference: "k", status: "attached",
+            createdAt: Date(timeIntervalSince1970: 0), payload: payload
+        )
+        let result = service.injectDerivedKanbanColumns(
+            into: artifact,
+            resolveChild: { _ in nil },
+            resolveConsumption: { sid, iid in (sid == "src-1" && iid == "q1") ? .claimed : nil }
+        )
+        guard case .object(let obj)? = result.payload,
+              case .array(let items)? = obj["items"],
+              case .object(let c1) = items[0],
+              case .string(let col)? = c1["derivedColumnId"] else {
+            return XCTFail("consumption derive missing")
+        }
+        XCTAssertEqual(col, KanbanDerivedColumn.inProgress.rawValue)  // claimed → 进行中
+    }
+
+    // MARK: - Part D 可配置节点状态 (spec §5 · slice 5)
+
+    func testNodeStateSchemaDefaultAndValidation() {
+        let schema = NodeStateSchema.default
+        XCTAssertEqual(schema.defaultStateId, "not_started")
+        XCTAssertEqual(schema.states.count, 4)
+        XCTAssertNotNil(schema.def(forStateId: "running"))
+        XCTAssertNil(schema.def(forStateId: "nope"))
+        XCTAssertEqual(schema.def(forStateId: "done")?.gatesDownstream, true)
+        XCTAssertEqual(schema.def(forStateId: "running")?.gatesDownstream, false)
+    }
+
+    /// submit_node_output 动态 state → 引擎 outcome 映射(spec §5.3)。
+    func testNodeStateSubmittableStatusMapping() {
+        func def(_ kind: NodeStateKind, gates: Bool) -> NodeStateDef {
+            NodeStateDef(id: "x", label: "X", kind: kind, gatesDownstream: gates)
+        }
+        XCTAssertEqual(def(.done, gates: false).submittableStatus, .done)
+        XCTAssertEqual(def(.custom, gates: true).submittableStatus, .done)         // 自定义门控态 → done
+        XCTAssertEqual(def(.needsResponse, gates: false).submittableStatus, .needsReview)
+        XCTAssertNil(def(.running, gates: false).submittableStatus)                // 非终态不可提交
+        XCTAssertNil(def(.notStarted, gates: false).submittableStatus)
+    }
+
+    func testEffectiveStateSchemaFallsBackToDefault() {
+        let nodes = service.nodeMock(canvasId: "c")
+        XCTAssertEqual(nodes.first?.effectiveStateSchema.defaultStateId, "not_started")
+    }
+
     // MARK: - Phase 6 — workflow guidance (nextAction)
 
     /// Builds a minimal `step` node carrying the given workflow run state plus
@@ -3647,6 +3779,40 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertNil(node.blockedReason)
     }
 
+    // 3-态会话模型(2026-06-01): 会话结束(.dead → runState .pending)时,没有显式
+    // submit 的节点应回到「未启动 session」—— 清掉死会话绑定、status .ready、
+    // 无 blockedReason、不再终态「失败」。这样卡片回到可「开干」且能干净重新派发。
+    func testSessionEndResetsNodeToNotStarted() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let stepId = "canvas-a-node-1"
+
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: stepId,
+            sessionId: "claude-dead",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: .running
+        )
+
+        // Session dies — SessionMonitor maps .dead → .pending.
+        _ = try PlannerBoardBridge.store.applyRunStateForSession(
+            sessionId: "claude-dead",
+            runState: PlannerSessionRunStateBridge.runState(for: .dead)
+        )
+
+        let state = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let node = try XCTUnwrap(state.nodes.first { $0.id == stepId })
+        XCTAssertNil(node.sessionId, "dead session binding must be cleared (未启动 session)")
+        XCTAssertEqual(node.workflowRunState, .pending)
+        XCTAssertEqual(node.status, .ready)
+        XCTAssertNil(node.blockedReason, "session end is not a failure — no blocked reason")
+    }
+
     /// Regression: when an agent calls `submit_node_output` with status=blocked,
     /// the Claude session returning to idle right after must NOT flip the node
     /// back to dispatched / wipe the blockedReason. Reproduces the
@@ -4233,6 +4399,50 @@ final class PlannerCoreTests: XCTestCase {
         }
     }
 
+    // 回归: 节点绑着一个已死的会话(runState 还停在 .running,death 未及时写回)
+    // 时,「打开会话」走 recreate 自愈式重绑必须能成功。没有 allowReplace 会被
+    // hasActiveSession 守卫拦成 activeSessionExists —— 节点永久卡死、每次点都
+    // recreate 出新 session。allowReplace 由 BoardAPI(掌握运行态死活)在「绑定
+    // 会话已死」分支显式放行。
+    func testBindSessionAllowReplaceRebindsOverDeadBinding() throws {
+        let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
+        _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
+        let before = try PlannerBoardBridge.canvasState(for: "canvas-a", snapshot: snapshot, actorUserId: "owner-a")
+        let step = try XCTUnwrap(before.nodes.first { $0.nodeKind == .step })
+
+        // 先绑一个会话 —— 节点现在持有一个「活」(running)绑定。
+        _ = try PlannerBoardBridge.bindSession(
+            nodeId: step.id,
+            sessionId: "dead-session",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )
+
+        // 不带 allowReplace 的重绑被拒 —— 旧绑定看起来仍 active(其 surface 实际
+        // 已死,但 core 看不到运行态)。
+        XCTAssertThrowsError(try PlannerBoardBridge.bindSession(
+            nodeId: step.id,
+            sessionId: "fresh-session",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a"
+        )) { error in
+            XCTAssertEqual(error as? PlannerCoreError, .activeSessionExists(nodeId: step.id))
+        }
+
+        // allowReplace: open-flow 自愈,替换掉死绑定。
+        let healed = try PlannerBoardBridge.bindSession(
+            nodeId: step.id,
+            sessionId: "fresh-session",
+            for: "canvas-a",
+            snapshot: snapshot,
+            actorUserId: "owner-a",
+            allowReplace: true
+        )
+        XCTAssertEqual(healed.nodes.first { $0.id == step.id }?.sessionId, "fresh-session")
+    }
+
     func testAbandonNodeSessionClearsUnboundDispatchForRetry() throws {
         let snapshot = boardSnapshot(canvasId: "canvas-a", ownerId: "owner-a")
         _ = try seedPlannerNodes(canvasId: "canvas-a", ownerId: "owner-a")
@@ -4329,7 +4539,8 @@ final class PlannerCoreTests: XCTestCase {
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .waitingForUser), .awaitingInput)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .permissionRequired), .gateWait)
         XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .completed), .done)
-        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .dead), .failed)
+        // 3-态会话模型(2026-06-01): 会话结束 = 回到「未启动 session」可重开,不再终态失败。
+        XCTAssertEqual(PlannerSessionRunStateBridge.runState(for: .dead), .pending)
 
         XCTAssertEqual(PlannerSessionRunStateBridge.stepNodeId(fromPurpose: "planner:node-7"), "node-7")
         XCTAssertNil(PlannerSessionRunStateBridge.stepNodeId(fromPurpose: "global"))
