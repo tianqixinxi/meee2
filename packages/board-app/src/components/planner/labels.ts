@@ -27,26 +27,28 @@ export interface DisplayStatus {
 }
 
 export function deriveDisplayStatus(node: PlanningNode): DisplayStatus {
+  // 3-态会话模型(2026-06-01): 用户面只看「未启动 / 运行中 / 需要人回应」三态 + 「完成」。
+  // 「失败」已下线 —— 会话结束=回到未启动(后端 dead→pending+清绑定);唯一残留的
+  // failed 来自显式 submit blocked,本质是 agent/人「需要人回应」,统一并入该桶。
+  // 纯上游依赖未就绪的 blocked(无 runState)仍显示「卡住」(等上游),非会话态。
   const wfs = node.workflowRunState ?? null
+  // canvas 是活动账本不是 PM(见 canvas-is-ledger-not-pm): step / session 这类
+  // 「工作节点」没有「完成」态 —— 做完=会话结束=回到「未启动」,产物留在账本
+  // (卡片产物区)。只有 subCanvas / artifact / external 等非工作节点保留「完成」。
+  const isWorkNode = (node.nodeKind ?? 'step') === 'step' || node.nodeKind === 'session'
   if (wfs === 'running' || wfs === 'dispatched') {
     return { label: '运行中', tone: 'running' }
   }
-  if (wfs === 'awaiting-input') {
-    return { label: '等反馈', tone: 'awaiting' }
+  if (wfs === 'awaiting-input' || wfs === 'gate-wait' || wfs === 'failed') {
+    return { label: '需要人回应', tone: 'awaiting' }
   }
-  if (wfs === 'gate-wait') {
-    return { label: '等审核', tone: 'awaiting' }
-  }
-  if (wfs === 'failed') {
-    return { label: '失败', tone: 'failed' }
-  }
-  if (wfs === 'done' || node.status === 'done') {
+  if (!isWorkNode && (wfs === 'done' || node.status === 'done')) {
     return { label: '完成', tone: 'done' }
   }
   if (node.status === 'blocked') {
     return { label: '卡住', tone: 'blocked' }
   }
-  return { label: planStatusLabel(node.status), tone: 'ready' }
+  return { label: '未启动', tone: 'ready' }
 }
 
 // === 运行态徽章 (§1 五种统一) ===
@@ -58,15 +60,15 @@ export function workStatusLabel(
   switch (status) {
     case 'pending':
     case 'ready_to_start':
-      return '待办'
+      return '未启动'
     case 'dispatched':
     case 'running':
       return '运行中'
     case 'awaiting-input':
     case 'gate-wait':
-      return '等反馈'
+    // 3-态会话模型: 显式 blocked-submit 仍内部记 failed,但用户面=「需要人回应」,不显示「失败」。
     case 'failed':
-      return '卡住'
+      return '需要人回应'
     case 'done':
       return '完成'
   }

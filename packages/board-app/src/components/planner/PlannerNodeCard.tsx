@@ -994,6 +994,15 @@ function ArtifactMetadata({
   )
 }
 
+// slice 4 (§6 词表): kanban item 派生态(子画板 runtime 回卷) → 中文徽章。
+const KANBAN_DERIVED_LABEL: Record<string, string> = {
+  not_started: '待开始',
+  in_progress: '进行中',
+  needs_response: '需要人回复',
+  blocked: '阻塞',
+  done: '完成',
+}
+
 function KanbanArtifactPreview({
   artifact,
   payload,
@@ -1006,7 +1015,8 @@ function KanbanArtifactPreview({
   return (
     <div className="planner-node__kanban">
       {payload.columns.map((column) => {
-        const items = payload.items.filter((item) => item.columnId === column.id)
+        // slice 4: 有派生态(下钻 subcanvas)的 item 按派生列摆放,否则手动 columnId。
+        const items = payload.items.filter((item) => (item.derivedColumnId ?? item.columnId) === column.id)
         return (
           <section key={column.id} className="planner-node__kanban-column">
             <div className="planner-node__kanban-column-title">
@@ -1026,6 +1036,11 @@ function KanbanArtifactPreview({
                 >
                   <span>{item.title}</span>
                   {item.description && <small>{item.description}</small>}
+                  {item.derivedColumnId && (
+                    <strong className="planner-node__kanban-item-derived">
+                      {KANBAN_DERIVED_LABEL[item.derivedColumnId] ?? item.derivedColumnId}
+                    </strong>
+                  )}
                   <em>{item.subCanvasId ? 'Open sub canvas' : 'Create sub canvas'}</em>
                 </button>
               )) : (

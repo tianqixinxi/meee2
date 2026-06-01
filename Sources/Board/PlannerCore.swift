@@ -846,6 +846,12 @@ struct PlanningNode: Codable, Equatable {
     /// slot|dataSource|canvas-runtime origin. nil on non-artifact nodes and on
     /// legacy data (decode falls back to deriving from `artifactDataSource`).
     var artifactSource: ArtifactSource?
+    /// Part D — 可配置节点状态(spec §5)。nil = 默认 schema(三态+done 门控)。
+    /// 用户可经 planner 给节点定义自定义状态集;读 `effectiveStateSchema`。
+    var stateSchema: NodeStateSchema?
+
+    /// 生效的状态 schema:显式 `stateSchema` 否则默认。引擎/契约/校验都读这个。
+    var effectiveStateSchema: NodeStateSchema { stateSchema ?? .default }
 
     /// The effective unified source: explicit `artifactSource` if present,
     /// else the legacy `artifactDataSource` string normalized via §7.4 mapping.
@@ -892,7 +898,8 @@ struct PlanningNode: Codable, Equatable {
         outputSubmittedAt: Date? = nil,
         widget: Widget? = nil,
         artifactDataSource: String? = nil,
-        artifactSource: ArtifactSource? = nil
+        artifactSource: ArtifactSource? = nil,
+        stateSchema: NodeStateSchema? = nil
     ) {
         self.id = id
         self.canvasId = canvasId
@@ -926,6 +933,7 @@ struct PlanningNode: Codable, Equatable {
         self.widget = widget
         self.artifactDataSource = artifactDataSource
         self.artifactSource = artifactSource
+        self.stateSchema = stateSchema
     }
 
     // MARK: - Workflow guidance (Phase 6)
@@ -950,6 +958,8 @@ struct PlanningNode: Codable, Equatable {
         // Unified Artifact.source (2026-05-29). Canonical origin; supersedes
         // the legacy `artifactDataSource` string.
         case artifactSource
+        // Part D — 可配置节点状态(2026-06-01). nil = 默认三态+done schema.
+        case stateSchema
     }
 
     /// Extra (encode-only) keys layered on top of the stored shape.
@@ -993,6 +1003,7 @@ struct PlanningNode: Codable, Equatable {
         widget = try container.decodeIfPresent(Widget.self, forKey: .widget)
         artifactDataSource = try container.decodeIfPresent(String.self, forKey: .artifactDataSource)
         artifactSource = try container.decodeIfPresent(ArtifactSource.self, forKey: .artifactSource)
+        stateSchema = try container.decodeIfPresent(NodeStateSchema.self, forKey: .stateSchema)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -1029,6 +1040,7 @@ struct PlanningNode: Codable, Equatable {
         try container.encodeIfPresent(outputSubmittedAt, forKey: .outputSubmittedAt)
         try container.encodeIfPresent(widget, forKey: .widget)
         try container.encodeIfPresent(artifactDataSource, forKey: .artifactDataSource)
+        try container.encodeIfPresent(stateSchema, forKey: .stateSchema)
         // Emit the unified source (resolved from legacy if unset) so the
         // board-app reads one canonical `artifactSource`. Legacy
         // `artifactDataSource` is still emitted above for one-release compat.
@@ -1690,6 +1702,100 @@ enum NodeRunState: String, Codable, Equatable {
     case done
 }
 
+/// Part D — 可配置节点状态(spec §5)。引擎只认 `kind` 这层抽象(驱动会话 UI 与
+/// 下游门控);`id/label/definition` 是用户/planner 自定义的皮肤与语义。
+enum NodeStateKind: String, Codable, Equatable {
+    case notStarted = "not_started"
+    case running
+    case needsResponse = "needs_response"
+    case done
+    case custom
+}
+
+struct NodeStateDef: Codable, Equatable {
+    var id: String
+    var label: String
+    var kind: NodeStateKind
+    /// 进入此态是否解锁下游(取代写死的 done 门控)。默认 schema 里只有 done 为真。
+    var gatesDownstream: Bool
+    var definition: String?
+
+    init(id: String, label: String, kind: NodeStateKind, gatesDownstream: Bool, definition: String? = nil) {
+        self.id = id
+        self.label = label
+        self.kind = kind
+        self.gatesDownstream = gatesDownstream
+        self.definition = definition
+    }
+}
+
+struct NodeStateSchema: Codable, Equatable {
+    var states: [NodeStateDef]
+    var defaultStateId: String
+
+    /// flow 默认状态机:三态 + done 门控(spec §6 词表 v1)。
+    static let `default` = NodeStateSchema(
+        states: [
+            NodeStateDef(id: "not_started", label: "待开始", kind: .notStarted, gatesDownstream: false),
+            NodeStateDef(id: "running", label: "运行中", kind: .running, gatesDownstream: false),
+            NodeStateDef(id: "needs_response", label: "需要人回复", kind: .needsResponse, gatesDownstream: false),
+            NodeStateDef(id: "done", label: "完成", kind: .done, gatesDownstream: true)
+        ],
+        defaultStateId: "not_started"
+    )
+
+    /// 动态状态校验:返回该 state id 的定义,不在 schema 内 → nil(调用方把错误返回
+    /// 给 agent 自纠,见 meee2-ai-is-claude-harness-self-correct)。
+    func def(forStateId id: String) -> NodeStateDef? {
+        states.first { $0.id == id.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+}
+
+extension NodeStateDef {
+    /// 作为 submit_node_output 提交时,该状态映射到的引擎 outcome。
+    /// done / 任意 gatesDownstream → .done(放行下游);needsResponse → .needsReview;
+    /// notStarted / running / 非门控 custom → nil(不是可提交的终态/门控态)。
+    var submittableStatus: PlannerNodeOutputStatus? {
+        if gatesDownstream || kind == .done { return .done }
+        if kind == .needsResponse { return .needsReview }
+        return nil
+    }
+}
+
+/// kanban item 列（spec §6 词表 v1）。canvas-is-ledger-not-pm: item 状态不落库,由
+/// 所绑「状态源」派生。slice 1 落「下钻 subcanvas」源 —— item.subCanvasId → 子画板
+/// runtime worst-case(summarizeSubCanvas)→ 列。decision #7(b): 与 monitor 共享
+/// summarizeSubCanvas 同源派生。
+enum KanbanDerivedColumn: String, Codable, Equatable, CaseIterable {
+    case notStarted = "not_started"        // 待开始
+    case inProgress = "in_progress"        // 进行中
+    case needsResponse = "needs_response"  // 需要人回复
+    case blocked                           // 阻塞
+    case done                              // 完成
+
+    /// subcanvas worst-case runtime → kanban 列。
+    static func from(subCanvasRunState runState: NodeRunState) -> KanbanDerivedColumn {
+        switch runState {
+        case .ready:   return .notStarted
+        case .working: return .inProgress
+        case .draft:   return .needsResponse   // pending proposal / needsOwnerReview
+        case .blocked: return .blocked
+        case .done:    return .done
+        }
+    }
+
+    /// 下游消费订阅(queue-claim): DataSourceItem 消费态 → kanban 列(spec §4.5)。
+    /// ready=未认领→待开始 / claimed·in-progress=认领处理中→进行中 / done=消费完成→完成。
+    static func from(consumptionState state: DataSourceItemState) -> KanbanDerivedColumn {
+        switch state {
+        case .ready:      return .notStarted
+        case .claimed:    return .inProgress
+        case .inProgress: return .inProgress
+        case .done:       return .done
+        }
+    }
+}
+
 struct NodeStateSnapshot: Codable, Equatable {
     var nodeId: String
     var runState: NodeRunState
@@ -1827,6 +1933,9 @@ struct PlannerNodeContract: Codable, Equatable {
     var inlinePayloadLimitBytes: Int
     var artifactPayloadTypes: [PlannerArtifactPayloadType]
     var completionCriteria: [String]
+    /// Part D — 该节点可进入的状态集(可配置;缺省=默认三态+done)。agent 读它知道
+    /// 能提交哪些 state、各是什么意思、哪个放行下游(spec §5)。
+    var stateSchema: NodeStateSchema
     /// v2 contract block — three-source input model + cardinality/payload_kind
     /// output model. See `NodeContractV2`. Embedded inside the existing
     /// `PlannerNodeContract` envelope so v1 consumers keep working while v2
@@ -3337,6 +3446,69 @@ final class PlannerCoreService {
         )
     }
 
+    /// kanban item 下钻 subcanvas 时派生其列(读时,不落库)。给定子画板 nodes +
+    /// proposals → readNodeState → summarizeSubCanvas worst-case → spec §6 列。
+    /// decision #1 派生不落库 / #7(b) 复用 summarizeSubCanvas 同源派生(slice 1 先落
+    /// subcanvas 源;下游消费 / 单节点源为后续切片)。
+    func deriveKanbanColumn(
+        subCanvasId: String,
+        subCanvasNodes: [PlanningNode],
+        subCanvasProposals: [PlanProposal]
+    ) -> KanbanDerivedColumn {
+        let states = readNodeState(nodes: subCanvasNodes)
+        let summary = summarizeSubCanvas(
+            subCanvasId: subCanvasId,
+            states: states,
+            proposals: subCanvasProposals
+        )
+        return KanbanDerivedColumn.from(subCanvasRunState: summary.runState)
+    }
+
+    /// slice 2: 读时把 kanban item 的派生列(下钻 subcanvas 源)注入 payload —— 不落库,
+    /// 每次构建 graphState 现算。item 有 subCanvasId 且子画板可达 → 注入
+    /// `derivedColumnId`(§6 列);否则不动(前端退回手动 columnId)。
+    func injectDerivedKanbanColumns(
+        into artifact: PlannerArtifact,
+        resolveChild: (String) -> (nodes: [PlanningNode], proposals: [PlanProposal])?,
+        resolveConsumption: (String, String) -> DataSourceItemState? = { _, _ in nil }
+    ) -> PlannerArtifact {
+        guard artifact.kind == .kanban,
+              case .object(var object)? = artifact.payload,
+              case .array(let rawItems)? = object["items"] else {
+            return artifact
+        }
+        var changed = false
+        let items = rawItems.map { value -> BoardJSONValue in
+            guard case .object(var item) = value else { return value }
+            // 多态状态源派生(spec §4):①下钻 subcanvas ②订阅下游消费(queue-claim)。
+            var derived: KanbanDerivedColumn?
+            if case .string(let sub)? = item["subCanvasId"],
+               !sub.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let child = resolveChild(sub) {
+                derived = deriveKanbanColumn(
+                    subCanvasId: sub,
+                    subCanvasNodes: child.nodes,
+                    subCanvasProposals: child.proposals
+                )
+            } else if case .string(let sid)? = item["consumptionSourceId"],
+                      case .string(let iid)? = item["consumptionItemId"],
+                      !sid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !iid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let state = resolveConsumption(sid, iid) {
+                derived = KanbanDerivedColumn.from(consumptionState: state)
+            }
+            guard let col = derived else { return value }
+            item["derivedColumnId"] = .string(col.rawValue)
+            changed = true
+            return .object(item)
+        }
+        guard changed else { return artifact }
+        object["items"] = .array(items)
+        var updated = artifact
+        updated.payload = .object(object)
+        return updated
+    }
+
     func createCrossCanvasSuggestion(
         id: String = "suggestion-\(UUID().uuidString.lowercased())",
         sourceCanvasId: String,
@@ -4382,6 +4554,47 @@ final class PlannerStore {
                 hasGate: record.nodes[stepIndex].gate != nil
             )
             let currentStepRunState = record.nodes[stepIndex].workflowRunState
+            // 3-态会话模型(2026-06-01): stepRunState == .pending 只可能来自
+            // runState(for: .dead) —— 绑定的会话结束了。把节点重置回「未启动
+            // session」(清绑定 + status .ready),而不是把死会话继续绑着标失败。
+            // 这样卡片回到可「开干」、hasActiveSession 不再把死绑定当 active 卡住
+            // 重新派发。已显式 submit(done/blocked latch)或已是 done 的节点不动;
+            // 已绑到另一个活会话的节点忽略这条过期的结束信号。
+            if stepRunState == .pending {
+                let boundToThisSession = record.nodes[stepIndex].sessionId == sessionId
+                let alreadyTerminal = record.nodes[stepIndex].outputSubmittedAt != nil
+                    || record.nodes[stepIndex].workflowRunState == .done
+                guard boundToThisSession, !alreadyTerminal else { return record }
+                record.nodes[stepIndex].sessionId = nil
+                record.nodes[stepIndex].chatThreadId = nil
+                record.nodes[stepIndex].source = .planner
+                record.nodes[stepIndex].workflowRunState = .pending
+                record.nodes[stepIndex].status = .ready
+                record.nodes[stepIndex].blockedReason = nil
+                if let legacySessionIndex {
+                    record.nodes[legacySessionIndex].sessionId = nil
+                    record.nodes[legacySessionIndex].chatThreadId = nil
+                    record.nodes[legacySessionIndex].workflowRunState = .pending
+                    record.nodes[legacySessionIndex].status = .ready
+                }
+                record.events.append(event(
+                    canvasId: canvasId,
+                    type: .nodeStateChanged,
+                    nodeId: record.nodes[stepIndex].id,
+                    summary: "\(record.nodes[stepIndex].title) — session ended, back to not-started"
+                ))
+                mirrorIntoActiveRun(&record, nodeId: stepNodeId) { state in
+                    state.sessionId = nil
+                    state.chatThreadId = nil
+                    state.runState = .pending
+                    state.finishedAt = nil
+                    state.nextAction = nil
+                }
+                recomputeActiveRun(&record)
+                document.canvases[canvasId] = record
+                try save(canvasId: canvasId)
+                return record
+            }
             if record.nodes[stepIndex].sessionId != sessionId {
                 record.nodes[stepIndex].sessionId = sessionId
                 record.nodes[stepIndex].chatThreadId = sessionId
@@ -6221,14 +6434,19 @@ final class PlannerStore {
     func bindSession(
         canvasId: String,
         nodeId: String,
-        sessionId: String
+        sessionId: String,
+        // allowReplace: 调用方(BoardAPI,掌握运行态死活)已确认旧绑定会话已死,
+        // 是在「打开会话」时自愈式替换一个死 surface。此时跳过「一个节点一个活
+        // 会话」守卫 —— 不变量仍成立(替换的是死的),否则死会话 runState 还停在
+        // .running 的窗口里会把节点永久卡成 activeSessionExists。
+        allowReplace: Bool = false
     ) throws -> CanvasRecord {
         try withLock {
             var record = try requireRecord(canvasId: canvasId)
             guard let index = record.nodes.firstIndex(where: { $0.id == nodeId }) else {
                 throw PlannerCoreError.nodeNotFound(nodeId)
             }
-            guard !hasActiveSessionLocked(nodeId: nodeId, nodes: record.nodes) else {
+            guard allowReplace || !hasActiveSessionLocked(nodeId: nodeId, nodes: record.nodes) else {
                 throw PlannerCoreError.activeSessionExists(nodeId: nodeId)
             }
             record.nodes[index].sessionId = sessionId
@@ -6447,6 +6665,7 @@ final class PlannerStore {
                 "Route messages and artifacts only to downstream nodes or owner.",
                 "Output is always a full snapshot — never submit an increment / diff payload (see Node Contract v2)."
             ],
+            stateSchema: node.effectiveStateSchema,
             v2: v2
         )
     }
@@ -6504,6 +6723,15 @@ final class PlannerStore {
     /// one surfaced on the canvas) is the chain head, so its `versionIndex`
     /// equals the chain length (`versionCount`). Pure / additive — derived from
     /// `record.artifactVersions`, never persisted onto the artifact.
+    /// 只读:取某画板的 nodes+proposals(给 kanban item 派生用)。不触发 mock/seed,
+    /// 画板不存在 → nil。
+    func canvasNodesProposals(canvasId: String) -> (nodes: [PlanningNode], proposals: [PlanProposal])? {
+        withLock {
+            guard let record = document.canvases[canvasId] else { return nil }
+            return (record.nodes, record.proposals)
+        }
+    }
+
     func artifactsWithVersionInfo(
         _ artifacts: [PlannerArtifact],
         versions: [PlannerArtifactVersion]
@@ -6835,7 +7063,20 @@ enum PlannerBoardBridge {
             record.events.sorted { $0.createdAt > $1.createdAt },
             // P4 · surface the per-artifact version index/count so the card
             // can render `v{n}` (derived from the slot's version chain).
-            store.artifactsWithVersionInfo(record.artifacts, versions: record.artifactVersions),
+            // slice 2 (kanban PM 回卷): 读时把有 subCanvasId 的 kanban item 的派生列
+            // 注入 payload —— 不落库,子画板 record 从 store 只读取。
+            store.artifactsWithVersionInfo(record.artifacts, versions: record.artifactVersions)
+                .map { artifact in
+                    service.injectDerivedKanbanColumns(
+                        into: artifact,
+                        resolveChild: { childId in store.canvasNodesProposals(canvasId: childId) },
+                        resolveConsumption: { sourceId, itemId in
+                            PlannerBoardBridge.dataSourceItemState(
+                                canvasId: canvasId, sourceId: sourceId, itemId: itemId
+                            )
+                        }
+                    )
+                },
             graphEdges(for: nodes)
         )
     }
@@ -7145,7 +7386,8 @@ enum PlannerBoardBridge {
         sessionId: String,
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
-        actorUserId: String? = nil
+        actorUserId: String? = nil,
+        allowReplace: Bool = false
     ) throws -> PlannerGraphState {
         let state = try canvasState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
         guard let node = state.nodes.first(where: { $0.id == nodeId }) else {
@@ -7154,7 +7396,7 @@ enum PlannerBoardBridge {
         // bind-session is a node execution-state mutation: owner anywhere, doer
         // only on their own node, viewer denied.
         try PlannerPermission.requireNodeUpdate(on: node, access: state.access)
-        _ = try store.bindSession(canvasId: canvasId, nodeId: nodeId, sessionId: sessionId)
+        _ = try store.bindSession(canvasId: canvasId, nodeId: nodeId, sessionId: sessionId, allowReplace: allowReplace)
         return try graphState(for: canvasId, snapshot: snapshot, actorUserId: actorUserId)
     }
 
@@ -8344,7 +8586,8 @@ enum PlannerSessionRunStateBridge {
     ///   human's court — needs context or a decision to advance)
     /// - `permissionRequired` → `gateWait` (blocked awaiting a human)
     /// - `completed` → `done`
-    /// - `dead` → `failed`
+    /// - `dead` → `pending` (3-态会话模型 2026-06-01: 会话结束 = 回到「未启动
+    ///   session」可重开,不再是终态「失败」。绑定清理见 applySessionRunStateLocked)
     static func runState(for status: SessionStatus) -> PlannerWorkflowRunState {
         switch status {
         case .thinking, .tooling, .active, .compacting:
@@ -8358,7 +8601,7 @@ enum PlannerSessionRunStateBridge {
         case .completed:
             return .done
         case .dead:
-            return .failed
+            return .pending
         }
     }
 

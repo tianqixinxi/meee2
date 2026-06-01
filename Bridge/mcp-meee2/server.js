@@ -84,6 +84,10 @@ const TOOLS = [
         canvasId: { type: 'string', description: 'Planner canvas id.' },
         nodeId: { type: 'string', description: 'Planner step node id.' },
         status: { type: 'string', enum: ['done', 'blocked', 'needs_review'] },
+        // Part D — 可配置节点状态: 节点若有自定义 stateSchema(见 read_node_contract),
+        // 传 `state` = 其中一个 state id;后端据该 state 的 kind 映射成引擎 outcome,
+        // 覆盖 status。缺省节点省略 state、只用 status 即可(向后兼容)。
+        state: { type: 'string', description: 'Optional dynamic state id from the node stateSchema (read_node_contract). Overrides status via the state kind.' },
         message: {
           type: 'object',
           properties: {
@@ -375,6 +379,7 @@ async function handleSubmitNodeOutput(args) {
     {
       nodeId,
       status: args.status,
+      state: args.state,
       message: args.message || null,
       artifacts,
       next: args.next,
