@@ -211,6 +211,55 @@ describe('CanvasToolbar template save flow', () => {
     expect(within(list as HTMLElement).queryByRole('button', { name: /Own Canvas/ })).not.toBeInTheDocument()
   })
 
+  it('keeps the Team tab visible for connected users when no team canvases exist yet', async () => {
+    render(
+      <I18nProvider>
+        <CanvasToolbar
+          canvases={[{
+            id: 'my-canvas',
+            name: 'Own Canvas',
+            scope: 'personal',
+            kind: 'board',
+            isDefault: false,
+            workspacePath: '',
+            ownerUserId: 'local-user',
+            teamId: null,
+          }]}
+          activeCanvasId="my-canvas"
+          onActiveCanvasChange={vi.fn()}
+          onCreateCanvas={vi.fn()}
+          onRenameCanvas={vi.fn()}
+          onDeleteCanvas={vi.fn()}
+          userProfile={{
+            connected: true,
+            userId: 'local-user',
+            userEmail: 'local@example.com',
+            userName: 'Local User',
+            displayName: 'Local User',
+            userAvatarUrl: '',
+            initials: 'LU',
+            dashboardUrl: '',
+            connectUrl: '',
+            teams: [{ id: 'team-1', name: 'Local Team', role: 'owner', isDefault: true }],
+          }}
+        />
+      </I18nProvider>,
+    )
+
+    await waitFor(() => {
+      expect(apiMocks.fetchTeamMembers).toHaveBeenCalled()
+    })
+
+    fireEvent.click(screen.getByText('Own Canvas'))
+
+    expect(screen.getByRole('tab', { name: /My\s+1/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /Team\s+0/ })).toHaveAttribute('aria-selected', 'false')
+
+    fireEvent.click(screen.getByRole('tab', { name: /Team\s+0/ }))
+
+    expect(screen.getByText('No Team Canvas yet')).toBeInTheDocument()
+  })
+
   it('lets the team canvas owner resolve a sync conflict from the menu hover', async () => {
     const onResolveCanvasConflict = vi.fn().mockResolvedValue(undefined)
     render(

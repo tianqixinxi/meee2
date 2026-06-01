@@ -194,19 +194,20 @@ export function CanvasToolbar({
   }, [attentionMenuOpen])
 
   const activeCanvas = canvases.find((canvas) => canvas.id === activeCanvasId) ?? canvases[0]
+  const shouldShowCanvasTabs = Boolean(userProfile?.connected || canvases.some((canvas) => canvas.scope === 'team'))
   const filteredCanvasEntries = useMemo(
     () => buildCanvasListEntries(canvases, canvasQuery, t),
     [canvasQuery, canvases, t],
   )
   const groupedCanvasEntries = useMemo(
-    () => groupCanvasEntries(filteredCanvasEntries),
-    [filteredCanvasEntries],
+    () => groupCanvasEntries(filteredCanvasEntries, { includeEmptyGroups: shouldShowCanvasTabs }),
+    [filteredCanvasEntries, shouldShowCanvasTabs],
   )
   const canvasEntryGroups = useMemo(
-    () => groupCanvasEntries(buildCanvasListEntries(canvases, '', t)),
-    [canvases, t],
+    () => groupCanvasEntries(buildCanvasListEntries(canvases, '', t), { includeEmptyGroups: shouldShowCanvasTabs }),
+    [canvases, shouldShowCanvasTabs, t],
   )
-  const showCanvasTabs = canvasEntryGroups.length > 1
+  const showCanvasTabs = shouldShowCanvasTabs && canvasEntryGroups.length > 1
   const selectedCanvasGroup = groupedCanvasEntries.find((group) => group.id === canvasListTab)
     ?? (showCanvasTabs
       ? { id: canvasListTab, label: canvasListTab === 'my' ? 'My Canvases' : 'Team Canvases', entries: [] }
@@ -743,7 +744,11 @@ export function CanvasToolbar({
                 </div>
               ) : null}
               {(!selectedCanvasGroup || selectedCanvasGroup.entries.length === 0) && (
-                <div className="canvas-toolbar__empty">{t('canvas.noMatch')}</div>
+                <div className="canvas-toolbar__empty">
+                  {selectedCanvasGroup?.id === 'team' && canvasQuery.trim().length === 0
+                    ? t('canvas.noTeamCanvas')
+                    : t('canvas.noMatch')}
+                </div>
               )}
             </div>
           </div>
@@ -1559,6 +1564,7 @@ function canvasListSubtitle(
 
 function groupCanvasEntries(
   entries: Array<{ canvas: CanvasInfo; depth: number }>,
+  options: { includeEmptyGroups?: boolean } = {},
 ): Array<{ id: CanvasListTab; label: string; entries: Array<{ canvas: CanvasInfo; depth: number }> }> {
   const myEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
   const teamEntries: Array<{ canvas: CanvasInfo; depth: number }> = []
@@ -1572,7 +1578,7 @@ function groupCanvasEntries(
   return [
     { id: 'my' as const, label: 'My Canvases', entries: myEntries },
     { id: 'team' as const, label: 'Team Canvases', entries: teamEntries },
-  ].filter((group) => group.entries.length > 0)
+  ].filter((group) => options.includeEmptyGroups || group.entries.length > 0)
 }
 
 function displayCanvasName(canvas: CanvasInfo): string {
