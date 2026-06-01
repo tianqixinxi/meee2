@@ -336,19 +336,30 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     private func handleEvent(_ event: SessionEvent) {
         guard shouldStayActive else { return }
 
+        // DEADLOCK FIX (team-mode): `SessionEventBus` is a `PassthroughSubject`,
+        // so `.sink` subscribers run SYNCHRONOUSLY on the thread that published
+        // the event. Session events are published from inside
+        // `SessionStore.upsert/update` WHILE SessionStore's observation lock is
+        // held. `shouldSyncSessionId(_:)` reaches into `PlannerStore` (acquiring
+        // its `NSRecursiveLock` via `canvasRecordForBridge`) — so doing it here
+        // would take PlannerStore's lock while holding SessionStore's. The
+        // reconcile path holds them in the opposite order (PlannerStore lock →
+        // `save` → SessionStore), giving a classic AB-BA deadlock that froze the
+        // whole app. Fix: never touch PlannerStore from this synchronous
+        // critical section — defer the team-canvas-reference check onto
+        // `syncQueue`, after the publishing lock has been released.
         switch event {
         case .transcriptAppended(sessionId: let sid):
-            guard shouldSyncSessionId(sid) else { return }
             syncQueue.async { [weak self] in
-                self?.pushNewMessage(sessionId: sid)
+                guard let self, self.shouldSyncSessionId(sid) else { return }
+                self.pushNewMessage(sessionId: sid)
             }
         case .sessionMetadataChanged(sessionId: let sid):
-            guard shouldSyncSessionId(sid) else { return }
             scheduleSessionUpdate(sessionId: sid)
         case .sessionAdded(sessionId: let sid):
-            guard shouldSyncSessionId(sid) else { return }
             syncQueue.async { [weak self] in
-                self?.pushSessionCreate(sessionId: sid)
+                guard let self, self.shouldSyncSessionId(sid) else { return }
+                self.pushSessionCreate(sessionId: sid)
             }
         case .boardLayoutChanged:
             scheduleCanvasSync()
@@ -374,12 +385,19 @@ public final class Meee2OnlinePusher: @unchecked Sendable {
     }
 
     private func scheduleSessionUpdate(sessionId: String) {
+        // Runs on `syncQueue` (off the SessionStore publish lock — see the
+        // deadlock note in `handleEvent`), so the `shouldSyncSessionId` check
+        // that reaches into PlannerStore is safe here. We debounce first, then
+        // re-check at fire time so a session that becomes team-referenced (or
+        // stops being) between schedule and fire is handled correctly.
         syncQueue.async { [weak self] in
             guard let self = self else { return }
             self.pendingSessionUpdateWorkItems[sessionId]?.cancel()
             let workItem = DispatchWorkItem { [weak self] in
-                self?.pendingSessionUpdateWorkItems.removeValue(forKey: sessionId)
-                self?.pushSessionUpdate(sessionId: sessionId)
+                guard let self else { return }
+                self.pendingSessionUpdateWorkItems.removeValue(forKey: sessionId)
+                guard self.shouldSyncSessionId(sessionId) else { return }
+                self.pushSessionUpdate(sessionId: sessionId)
             }
             self.pendingSessionUpdateWorkItems[sessionId] = workItem
             self.syncQueue.asyncAfter(deadline: .now() + self.metadataDebounceInterval, execute: workItem)
