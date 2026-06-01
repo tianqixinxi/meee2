@@ -91,6 +91,13 @@ type CanvasListTab = 'my' | 'team'
 
 const DEFAULT_TEMPLATE_TAGS = ['engineering', 'code-review', 'release', 'monitor', 'workflow', 'recap', 'research', 'design', 'ops', 'demo']
 
+// Minimum gap between AUTO recap attempts for the same canvas. The auto-trigger
+// fires off `plannerState` changes (which churn every few seconds); without a
+// cooldown a failing recap re-spawns a `claude -p` run on every churn and
+// starves the app. Manual refresh (the ↻ button) bypasses this. 30s is well
+// below the minutes-scale recap interval, so legitimate recaps are unaffected.
+const RECAP_AUTO_COOLDOWN_MS = 30_000
+
 // 用户只能创建 board canvas。
 //  - monitor 是系统预置的默认首页(isDefault + 唯一),不暴露给用户创建,否则会
 //    出现「我新建一个 monitor,它默认监控所有 canvas」的行为错位
@@ -123,6 +130,14 @@ export function CanvasToolbar({
   const rootRef = useRef<HTMLDivElement | null>(null)
   const recapRequestRef = useRef(0)
   const recapCacheRef = useRef<Record<string, CanvasRecap>>({})
+  // Recap-respawn guard: a failing recap used to re-trigger on every
+  // `plannerState` change (which churns every few seconds), spawning a fresh
+  // `claude -p` recap each time → hook storm → app freeze. These two refs make
+  // the auto-trigger idempotent: never run two recaps for a canvas at once
+  // (`recapInFlightRef`), and never auto-retry a canvas more than once per
+  // cooldown window even when generation keeps failing (`recapLastAttemptRef`).
+  const recapInFlightRef = useRef<Set<string>>(new Set())
+  const recapLastAttemptRef = useRef<Record<string, number>>({})
   const plannerStateRef = useRef<PlannerGraphState | null>(plannerState)
   const canvasMonitorRef = useRef<CanvasMonitor | null>(canvasMonitor)
   const hoverHideTimerRef = useRef<number | null>(null)
@@ -269,6 +284,13 @@ export function CanvasToolbar({
 
   const refreshRecap = useCallback(async () => {
     if (!activeCanvas) return
+    const canvasId = activeCanvas.id
+    // Hard guard: never run two recaps for the same canvas concurrently. A
+    // generation can outlive several state churns; without this the auto-trigger
+    // (or a stuck request) could stack up `claude -p` spawns and freeze the app.
+    if (recapInFlightRef.current.has(canvasId)) return
+    recapInFlightRef.current.add(canvasId)
+    recapLastAttemptRef.current[canvasId] = Date.now()
     const requestId = recapRequestRef.current + 1
     recapRequestRef.current = requestId
     setRecapLoading(true)
@@ -306,6 +328,10 @@ export function CanvasToolbar({
       setRecapError((err as Error).message || 'Recap unavailable')
       setRecap(buildEmptyCanvasRecap(t, t('canvas.recapUnavailable')))
     } finally {
+      // Always release the per-canvas in-flight slot, even when this request was
+      // superseded (requestId mismatch) — otherwise the slot leaks and the
+      // canvas can never auto-recap again.
+      recapInFlightRef.current.delete(canvasId)
       if (recapRequestRef.current === requestId) setRecapLoading(false)
     }
   }, [activeCanvas?.id, activeCanvas?.name, t])
@@ -339,6 +365,13 @@ export function CanvasToolbar({
     if (!activeCanvas) return
     if (recapCacheRef.current[activeCanvas.id]) return
     if (plannerState?.canvas.id !== activeCanvas.id) return
+    // Recap-respawn guard: this effect re-runs on every `plannerState` change
+    // (every few seconds). On the failure path the cache is never populated, so
+    // without these gates it would re-spawn a recap each churn → app freeze.
+    // Skip if one is already in flight, or if we attempted within the cooldown.
+    if (recapInFlightRef.current.has(activeCanvas.id)) return
+    const lastAttempt = recapLastAttemptRef.current[activeCanvas.id]
+    if (lastAttempt && Date.now() - lastAttempt < RECAP_AUTO_COOLDOWN_MS) return
     void refreshRecap()
   }, [activeCanvas?.id, plannerState?.canvas.id, refreshRecap])
 
