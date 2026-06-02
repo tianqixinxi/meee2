@@ -550,6 +550,10 @@ final class InternalTerminalSurface {
     // measured size via `resize()`. A short fallback guarantees headless sessions
     // (no renderer ever attaches) still launch.
     private static let deferredSpawnFallback: TimeInterval = 0.35
+    /// Pause between writing the initial prompt body and sending Enter, so the
+    /// agent TUI's paste-detection window closes and the lone "\r" registers as
+    /// a submit keystroke rather than being absorbed into the pasted text.
+    private static let initialPromptSubmitDelay: TimeInterval = 0.5
     private var hasSpawned = false
     private var awaitingInitialResize = false
     private var deferredSecondaryFD: Int32 = -1
@@ -766,7 +770,17 @@ final class InternalTerminalSurface {
                 if initialPromptDelivered { lock.unlock(); return }
                 initialPromptDelivered = true
                 lock.unlock()
-                writeInput(prompt + "\r")
+                // Deliver the prompt body and the submit (Enter) as SEPARATE
+                // writes. Agent TUIs (claude/codex) detect a fast multi-line
+                // burst as a *paste*, so a trailing "\r" in the same write is
+                // absorbed as a literal newline and the prompt just sits unsent
+                // in the input box. Write the body, pause past the
+                // paste-detection window, then send Enter on its own so it
+                // registers as a submit keystroke.
+                writeInput(prompt)
+                queue.asyncAfter(deadline: .now() + Self.initialPromptSubmitDelay) { [weak self] in
+                    self?.writeInput("\r")
+                }
                 return
             }
             queue.asyncAfter(deadline: .now() + 0.3) { probe() }
