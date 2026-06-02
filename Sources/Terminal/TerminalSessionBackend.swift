@@ -245,16 +245,21 @@ public final class TerminalSessionBackendRegistry {
     public func createSession(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
         let kind = preferredKind()
         guard let selectedBackend = registeredBackend(for: kind) else {
-            return try createFallbackSession(
-                request: request,
-                attemptedKind: kind,
-                reason: "backend is not registered in this process"
+            if shouldFallbackToLegacy(for: kind) {
+                return try createFallbackSession(
+                    request: request,
+                    attemptedKind: kind,
+                    reason: "backend is not registered in this process"
+                )
+            }
+            throw TerminalSessionBackendError.backendUnavailable(
+                "\(kind.rawValue) backend is not registered in this process"
             )
         }
         do {
             return try selectedBackend.createSession(request: request)
         } catch {
-            guard kind != .legacyInternal else { throw error }
+            guard kind != .legacyInternal, shouldFallbackToLegacy(for: kind) else { throw error }
             return try createFallbackSession(
                 request: request,
                 attemptedKind: kind,
@@ -340,6 +345,14 @@ public final class TerminalSessionBackendRegistry {
             fallbackReason: "\(attemptedKind.rawValue): \(reason)"
         )
         return fallback
+    }
+
+    private func shouldFallbackToLegacy(for kind: TerminalSessionBackendKind) -> Bool {
+        guard kind != .legacyInternal else { return false }
+        let raw = ProcessInfo.processInfo.environment["MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return raw == "1" || raw == "true" || raw == "yes"
     }
 
     private func backendForExistingSession(id: String) -> TerminalSessionBackend? {

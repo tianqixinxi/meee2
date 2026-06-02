@@ -39,8 +39,11 @@ function session(overrides: Partial<Session> = {}): Session {
     backgroundAgents: [],
     latestRecap: null,
     terminalKind: 'internal',
+    terminalBackend: 'ghostty-surface',
     surfaceId: 'surface-1',
     surfaceStatus: 'running',
+    nativeWorkspaceAvailable: true,
+    openTarget: 'native-workspace',
     syncEnabled: false,
     syncTeamId: null,
     syncTeamName: null,
@@ -65,9 +68,18 @@ describe('session terminal routing helpers', () => {
   it('recognizes unmanaged external sessions as not overlay-capable', () => {
     expect(isLiveInternalTerminalSession(session({
       terminalKind: 'external',
+      terminalBackend: 'external',
       surfaceId: null,
       nativeWorkspaceAvailable: false,
       openTarget: 'external',
+    }))).toBe(false)
+  })
+
+  it('rejects legacy replay terminals as overlay-capable', () => {
+    expect(isLiveInternalTerminalSession(session({
+      terminalBackend: 'legacy-internal',
+      nativeWorkspaceAvailable: false,
+      openTarget: 'web-fallback',
     }))).toBe(false)
   })
 })

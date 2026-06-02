@@ -10,6 +10,8 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
     let sessionId: String?
     let view: TerminalView
     var paneView: NSView { view }
+    var terminalSurfaceId: String { surfaceId }
+    var terminalSessionId: String? { sessionId }
 
     private let terminalSession: InMemoryTerminalSession
     private let terminalController: GhosttyTerminal.TerminalController

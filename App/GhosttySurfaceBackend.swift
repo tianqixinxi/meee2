@@ -216,6 +216,8 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     let nodeId: String?
     let view: NSView
     var paneView: NSView { view }
+    var terminalSurfaceId: String { surfaceId }
+    var terminalSessionId: String? { sessionId }
 
     private let terminalView: TerminalView
     private let terminalController: GhosttyTerminal.TerminalController
@@ -338,6 +340,13 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         terminalView.window?.makeFirstResponder(terminalView)
         terminalView.setSurfaceVisible(true)
         logPerf("focus", startedAt: startedAt)
+    }
+
+    func scrollWheel(with event: NSEvent) {
+        guard !detached, !terminalView.isHidden else { return }
+        terminalView.window?.makeFirstResponder(terminalView)
+        terminalView.setSurfaceVisible(true)
+        terminalView.scrollWheel(with: event)
     }
 
     func hide() {

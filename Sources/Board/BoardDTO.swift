@@ -1168,7 +1168,8 @@ enum BoardDTOBuilder {
             .filter { !$0.isEmpty }
         let controlState = SessionControlStore.shared.state(for: controlIds)
         let backend = TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? surface.backend
-        let termProgram = backend == .ghosttySurface ? "meee2-ghostty-surface" : "meee2-internal"
+        let nativeWorkspaceAvailable = backend == .ghosttySurface
+        let termProgram = nativeWorkspaceAvailable ? "meee2-ghostty-surface" : "meee2-internal"
         return SessionDTO(
             id: surface.sessionId,
             title: "\(displayName) - \(URL(fileURLWithPath: surface.cwd).lastPathComponent)",
@@ -1195,8 +1196,8 @@ enum BoardDTOBuilder {
             surfaceStatus: surface.status,
             canOpenExternal: false,
             terminalBackend: backend.rawValue,
-            nativeWorkspaceAvailable: true,
-            openTarget: "native-workspace",
+            nativeWorkspaceAvailable: nativeWorkspaceAvailable,
+            openTarget: nativeWorkspaceAvailable ? "native-workspace" : "web-fallback",
             controlState: controlState.rawValue,
             backgroundAgents: [],
             latestRecap: nil,

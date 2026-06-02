@@ -615,15 +615,7 @@ private final class TerminalPaneRegistry {
                 created = GhosttySurfaceBackend.shared.paneController(id: surface.surfaceId)
                     ?? GhosttySurfaceBackend.shared.paneController(id: surface.sessionId)
             case .legacyInternal, .external:
-                created = EmbeddedNativeTerminalController(
-                    surfaceId: surface.surfaceId,
-                    sessionId: surface.sessionId,
-                    onExit: { [weak self] exitedSurfaceId, _ in
-                        Task { @MainActor in
-                            self?.remove(surfaceId: exitedSurfaceId)
-                        }
-                    }
-                )
+                created = nil
             }
             guard let created else {
                 Self.logTrace(
@@ -745,10 +737,28 @@ private final class TerminalPaneRegistry {
 @MainActor
 protocol NativeTerminalPaneControlling: AnyObject {
     var paneView: NSView { get }
+    var terminalSurfaceId: String { get }
+    var terminalSessionId: String? { get }
     func layout(in frame: NSRect, hidden: Bool)
     func focus()
     func hide()
     func detach()
+    func matches(surfaceId: String, sessionId: String?) -> Bool
+    func scrollWheel(with event: NSEvent)
+}
+
+extension NativeTerminalPaneControlling {
+    func matches(surfaceId rawSurfaceId: String, sessionId rawSessionId: String?) -> Bool {
+        if !rawSurfaceId.isEmpty, rawSurfaceId == terminalSurfaceId { return true }
+        if let rawSessionId, !rawSessionId.isEmpty, rawSessionId == terminalSessionId { return true }
+        return false
+    }
+
+    func scrollWheel(with event: NSEvent) {
+        guard !paneView.isHidden else { return }
+        paneView.window?.makeFirstResponder(paneView)
+        paneView.scrollWheel(with: event)
+    }
 }
 
 private final class NativeTerminalPaneHostView: NSView {

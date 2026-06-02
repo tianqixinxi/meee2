@@ -98,6 +98,34 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertEqual(decoded.fallbackReason, "legacy fallback")
     }
 
+    func testGhosttyPreferredBackendDoesNotFallBackToLegacyByDefault() {
+        let previousFallback = getenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK").map { String(cString: $0) }
+        unsetenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK")
+        TerminalSessionBackendRegistry.shared.setPreferredKind(.ghosttySurface)
+        defer {
+            TerminalSessionBackendRegistry.shared.setPreferredKind(nil)
+            if let previousFallback {
+                setenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK", previousFallback, 1)
+            }
+        }
+
+        XCTAssertThrowsError(try TerminalSessionBackendRegistry.shared.createSession(
+            request: TerminalSessionRequest(
+                provider: "claude",
+                cwd: NSTemporaryDirectory(),
+                command: "shell",
+                canvasId: "canvas-a",
+                nodeId: "node-a",
+                initialPrompt: nil
+            )
+        )) { error in
+            XCTAssertEqual(
+                error as? TerminalSessionBackendError,
+                .backendUnavailable("ghostty-surface backend is not registered in this process")
+            )
+        }
+    }
+
     func testStaleInternalSessionDTODoesNotFallBackToExternal() {
         let now = Date(timeIntervalSince1970: 10)
         let terminalInfo = PluginTerminalInfo(

@@ -13,10 +13,12 @@ export function sessionMatchesId(session: Session, id: string): boolean {
 }
 
 export function isInternalTerminalSession(session: Session): boolean {
-  return session.openTarget === 'native-workspace'
-    || session.nativeWorkspaceAvailable === true
-    || session.terminalKind === 'internal'
-    || Boolean(session.surfaceId)
+  return session.terminalBackend === 'ghostty-surface'
+    && Boolean(session.surfaceId)
+    && (
+      session.openTarget === 'native-workspace'
+      || session.nativeWorkspaceAvailable === true
+    )
 }
 
 export function isLiveInternalTerminalSession(session: Session): boolean {
