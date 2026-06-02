@@ -421,6 +421,19 @@ public class SessionStore: ObservableObject {
             if incomingEmpty, let prevInfo = ex.terminalInfo {
                 merged.terminalInfo = prevInfo
             }
+            // cmuxSurfaceId 单独 sticky:PID 扫描那条 update 会带 tty/termProgram
+            // 但不带 surface id,于是上面的 incomingEmpty(只看 tty/termProgram/
+            // cmuxSocket)判 false、保留 incoming,把 createSurface 设好的 surface
+            // 洗掉。surface 一丢,Web UI 打开会话时原生终端 attach 不上 → 面板空白。
+            // 所以这里给 surface id 也加 sticky-empty 语义,单独保住。
+            if (merged.terminalInfo?.cmuxSurfaceId ?? "").isEmpty,
+               let prevSurface = ex.terminalInfo?.cmuxSurfaceId, !prevSurface.isEmpty {
+                if merged.terminalInfo == nil {
+                    merged.terminalInfo = ex.terminalInfo
+                } else {
+                    merged.terminalInfo?.cmuxSurfaceId = prevSurface
+                }
+            }
         }
 
         let existed = existing != nil
