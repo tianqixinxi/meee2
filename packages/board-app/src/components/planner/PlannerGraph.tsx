@@ -1142,9 +1142,57 @@ function PlannerGraphInner({
     setFlowNodes((current) => mergeGraphNodesPreservingPositions(graph.nodes, current))
   }, [graph.nodes])
 
+  // 位置 / 宽高统一通过这里落库:乐观更新 plannerState.layout,再 PATCH 后端。
+  // 拖动结束(handleNodeDragStop)和 NodeResizer 调整结束都复用它。
+  const persistNodeLayout = useCallback((
+    nodeId: string,
+    layout: { x: number; y: number; width: number | null; height: number | null },
+  ) => {
+    setPlannerState((current) => current
+      ? {
+        ...current,
+        nodes: current.nodes.map((item) => item.id === nodeId ? { ...item, layout } : item),
+      }
+      : current)
+    updatePlannerNodeLayout(canvasId, nodeId, layout)
+      .then(handleGraphStateChanged)
+      .catch((err) => notifyError((err as Error).message || 'Failed to save node layout'))
+  }, [canvasId, handleGraphStateChanged, notifyError])
+
   const handleNodesChange = useCallback((changes: NodeChange<PlannerGraphNode>[]) => {
-    setFlowNodes((current) => applyNodeChanges(changes, current) as PlannerGraphNode[])
-  }, [])
+    setFlowNodes((current) => {
+      const next = applyNodeChanges(changes, current) as PlannerGraphNode[]
+      // 宽高自由调整 — NodeResizer 拖动过程中发 type:'dimensions' & resizing:true,
+      // 松手那一帧 resizing:false。只在松手时落库,避免拖动途中狂刷后端。
+      // 用 next(已应用本帧变更)取最终 position + 尺寸;从顶/左边把手缩放也会改
+      // position,所以要读应用后的值。虚拟 I/O artifact 节点不落库(派生节点)。
+      const finished = changes.filter(
+        (change): change is Extract<NodeChange<PlannerGraphNode>, { type: 'dimensions' }> =>
+          change.type === 'dimensions' && change.resizing === false,
+      )
+      if (finished.length > 0) {
+        const pending = finished
+          .map((change) => next.find((node) => node.id === change.id))
+          .filter((node): node is PlannerGraphNode => Boolean(node) && !node!.data.virtual)
+          .map((node) => ({
+            nodeId: node.data.node.id,
+            layout: {
+              x: node.position.x,
+              y: node.position.y,
+              width: node.width ?? node.measured?.width ?? null,
+              height: node.height ?? node.measured?.height ?? null,
+            },
+          }))
+        if (pending.length > 0) {
+          // setState updater 里不能直接触发别的 state 更新 / 网络请求,推到微任务。
+          queueMicrotask(() => {
+            for (const item of pending) persistNodeLayout(item.nodeId, item.layout)
+          })
+        }
+      }
+      return next
+    })
+  }, [persistNodeLayout])
 
   // UI-5.2 — persist per-canvas viewport pose after every pan/zoom so the user
   // can opt in to "Lock viewport on switch" later and still get the right
@@ -1175,22 +1223,17 @@ function PlannerGraphInner({
 
   const handleNodeDragStop = useCallback((node: PlannerGraphNode) => {
     if (node.data.virtual) return
-    const layout = {
+    // 拖动只改位置 —— 尺寸保留 layout 里已有的值(可能为空)。不要把当时测量到的
+    // 内容高度写进 layout,否则一拖动就把高度冻死,后续内容变多会被裁切。宽高只由
+    // NodeResizer 调整结束时落库(见 handleNodesChange)。
+    const prior = node.data.node.layout
+    persistNodeLayout(node.data.node.id, {
       x: node.position.x,
       y: node.position.y,
-      width: node.width ?? node.measured?.width ?? null,
-      height: node.height ?? node.measured?.height ?? null,
-    }
-    setPlannerState((current) => current
-      ? {
-        ...current,
-        nodes: current.nodes.map((item) => item.id === node.data.node.id ? { ...item, layout } : item),
-      }
-      : current)
-    updatePlannerNodeLayout(canvasId, node.data.node.id, layout)
-      .then(handleGraphStateChanged)
-      .catch((err) => notifyError((err as Error).message || 'Failed to save node position'))
-  }, [canvasId, handleGraphStateChanged, notifyError])
+      width: prior?.width ?? null,
+      height: prior?.height ?? null,
+    })
+  }, [persistNodeLayout])
 
   useEffect(() => {
     window.localStorage.setItem(PANEL_COLLAPSED_KEY, plannerPanelCollapsed ? '1' : '0')
@@ -2415,6 +2458,12 @@ function mergeGraphNodesPreservingPositions(
       position: current.position,
       selected: current.selected,
       dragging: current.dragging,
+      // 宽高自由调整 — NodeResizer 把用户调整后的尺寸记在 width/height 上。和
+      // position 一样要保留:落库还没回来的那个间隙里若来一次无关轮询重建,
+      // 不保留就会把正在调整的卡片弹回默认尺寸。measured 不保留,交给 react-flow
+      // 的 ResizeObserver 重新量,避免内容变化后高度记成旧值。
+      width: current.width ?? nextNode.width,
+      height: current.height ?? nextNode.height,
     }
   })
 }

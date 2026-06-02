@@ -1559,7 +1559,12 @@
 }
 
 .planner-node {
-  width: 320px;
+  /* 宽高自由调整 — 卡片填满 react-flow 节点外框。adapter 始终给外框确定的 width
+   * (默认 / layout.width),所以这里 width:100% 解析成固定像素、文案正常换行;
+   * height 只有用户调整过才确定,否则外框高度 auto → height:100% 退化成内容高度,
+   * 保持原来的自适应高度。NodeResizer 调整后把显式 px 写到外框,卡片随之填满。 */
+  width: 100%;
+  height: 100%;
   padding: 12px;
   /* UI-simplification — min-height 让 Push 1 精简内容后卡片不缩成几十像素的小条:
    * 内容变短了但点击 / 拖动目标仍需有合理高度。也让 layout 上的相对位置稳定,
@@ -1630,6 +1635,29 @@
   cursor: grabbing;
 }
 
+/* 宽高自由调整 — NodeResizer 把手/边框只在节点选中时显示(isVisible={selected}),
+ * 配色对齐深色画布:边框用强调描边、角把手用浅色小方块。 */
+.planner-node__resize-line {
+  border-color: rgba(245, 244, 239, 0.45);
+}
+
+.planner-node__resize-handle {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid rgba(245, 244, 239, 0.7);
+  background: rgba(44, 43, 41, 0.96);
+}
+
+:root[data-theme="light"] .planner-node__resize-line {
+  border-color: rgba(60, 58, 52, 0.4);
+}
+
+:root[data-theme="light"] .planner-node__resize-handle {
+  border-color: rgba(60, 58, 52, 0.6);
+  background: #fff;
+}
+
 .planner-node--blocked {
   border-left-color: var(--danger);
 }
@@ -1695,22 +1723,14 @@
 }
 
 .planner-node--artifact-node {
-  width: 240px;
+  /* 宽度同样跟随 react-flow 外框(adapter 按 artifact kind 给确定的 width),
+   * 以支持自由调整;kanban 420 / html·json·file 360 / 其余 240。 */
+  width: 100%;
   min-height: 116px;
   border-left-width: 3px;
   border-color: rgba(170, 157, 132, 0.3);
   border-left-color: #aa9d84;
   background: rgba(45, 42, 36, 0.95);
-}
-
-.planner-node--artifact-kanban {
-  width: 420px;
-}
-
-.planner-node--artifact-html,
-.planner-node--artifact-json,
-.planner-node--artifact-file {
-  width: 360px;
 }
 
 .planner-node__artifact-ref {
@@ -5246,7 +5266,7 @@
   }
 
   .planner-node {
-    width: min(250px, calc(100vw - 96px));
+    /* 宽度由 react-flow 外框给(自由调整);窄屏下只压缩内边距。 */
     padding: 10px;
   }
 
@@ -5355,7 +5375,8 @@
   }
 
   .planner-node {
-    width: min(232px, calc(100vw - 88px));
+    /* 宽度由 react-flow 外框给(自由调整),窄屏不再写死。 */
+    min-width: 0;
   }
 }
 

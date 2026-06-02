@@ -1,4 +1,4 @@
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
@@ -212,6 +212,13 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           data.guided ? 'is-guided' : '',
         ].filter(Boolean).join(' ')}
       >
+        <NodeResizer
+          minWidth={180}
+          minHeight={120}
+          isVisible={selected}
+          lineClassName="planner-node__resize-line"
+          handleClassName="planner-node__resize-handle"
+        />
         <Handle type="target" position={Position.Left} className="planner-node__handle" />
         <div className="planner-node__header">
           <span className="planner-node__status planner-node__status--design">
@@ -434,6 +441,13 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
       ].filter(Boolean).join(' ')}
     >
+      <NodeResizer
+        minWidth={220}
+        minHeight={140}
+        isVisible={selected}
+        lineClassName="planner-node__resize-line"
+        handleClassName="planner-node__resize-handle"
+      />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
       <div className="planner-node__header">
@@ -1789,6 +1803,13 @@ function SubCanvasRefCard({
         guided ? 'is-guided' : '',
       ].filter(Boolean).join(' ')}
     >
+      <NodeResizer
+        minWidth={220}
+        minHeight={140}
+        isVisible={selected}
+        lineClassName="planner-node__resize-line"
+        handleClassName="planner-node__resize-handle"
+      />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
       <div className="planner-node__header">
         <span className="planner-node__status planner-node__status--design">
