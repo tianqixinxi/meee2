@@ -49,6 +49,8 @@ import {
   FOOTER_LABELS,
   modeBadgeLabel,
   modeBadgeTooltip,
+  UPSTREAM_STALE_LABEL,
+  upstreamStaleTooltip,
   OWNER_CHIP,
   PRIMARY_ACTION_TEXT,
   SUBCANVAS_REF_LABELS,
@@ -503,6 +505,17 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             不再另起独立 schedule chip。*/}
         {nodeKind === 'step' && !data.virtual && (
           <NodeModeBadge mode={nodeMode} scheduleInterval={scheduleLabel} />
+        )}
+        {/* P5 · 上游版本 staleness 提示 — 仅指示,不带会误导的清除按钮。
+            数据来自后端只读派生 `upstreamFreshness`(不落库)。 */}
+        {node.upstreamFreshness?.state === 'stale' && (
+          <span
+            className="planner-node__stale-badge"
+            title={upstreamStaleTooltip(node.upstreamFreshness.staleUpstreams)}
+          >
+            <AlertTriangle size={11} aria-hidden />
+            {UPSTREAM_STALE_LABEL}
+          </span>
         )}
         {durationChip && (
           <span

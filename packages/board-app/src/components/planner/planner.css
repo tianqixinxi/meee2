@@ -1755,14 +1755,22 @@
 }
 
 .planner-node--artifact-node {
-  /* 宽度同样跟随 react-flow 外框(adapter 按 artifact kind 给确定的 width),
-   * 以支持自由调整;kanban 420 / html·json·file 360 / 其余 240。 */
-  width: 100%;
+  width: 240px;
   min-height: 116px;
   border-left-width: 3px;
   border-color: rgba(170, 157, 132, 0.3);
   border-left-color: #aa9d84;
   background: rgba(45, 42, 36, 0.95);
+}
+
+.planner-node--artifact-kanban {
+  width: 420px;
+}
+
+.planner-node--artifact-html,
+.planner-node--artifact-json,
+.planner-node--artifact-file {
+  width: 360px;
 }
 
 .planner-node__artifact-ref {
@@ -2977,6 +2985,23 @@
   background: rgba(201, 164, 93, 0.18);
   color: #e6ca8f;
   border-color: rgba(201, 164, 93, 0.32);
+}
+
+/* P5 · 上游版本已更新提示(琥珀色,贴在 mode badge 旁)。仅指示节点输入
+   已过期,清除靠用户重新运行该节点。 */
+.planner-node__stale-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(214, 158, 74, 0.18);
+  color: #ecca8c;
+  border: 1px solid rgba(214, 158, 74, 0.4);
+  cursor: help;
 }
 
 /* Duration chip — running / awaiting 时长。awaiting 用红色高亮促人响应。 */
@@ -5298,7 +5323,7 @@
   }
 
   .planner-node {
-    /* 宽度由 react-flow 外框给(自由调整);窄屏下只压缩内边距。 */
+    width: min(250px, calc(100vw - 96px));
     padding: 10px;
   }
 
@@ -5407,8 +5432,7 @@
   }
 
   .planner-node {
-    /* 宽度由 react-flow 外框给(自由调整),窄屏不再写死。 */
-    min-width: 0;
+    width: min(232px, calc(100vw - 88px));
   }
 }
 
