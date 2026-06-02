@@ -981,7 +981,7 @@ export interface SessionSurface {
   error?: string | null
   createdAt: string
   updatedAt: string
-  terminalBackend?: 'legacy-internal' | 'ghostty-surface' | 'external' | string
+  terminalBackend?: 'ghostty-surface' | 'external' | string
   nativeWorkspaceAvailable?: boolean
   openTarget?: 'native-workspace' | 'external' | 'web-fallback' | string
   fallbackReason?: string | null

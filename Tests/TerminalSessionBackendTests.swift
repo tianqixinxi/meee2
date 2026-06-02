@@ -56,7 +56,7 @@ final class TerminalSessionBackendTests: XCTestCase {
         let snapshot = TerminalSessionSnapshot(
             sessionId: "session-a",
             surfaceId: "surface-a",
-            backend: .legacyInternal,
+            backend: .ghosttySurface,
             status: "running",
             pid: 42,
             cwd: "/tmp/project",
@@ -68,7 +68,7 @@ final class TerminalSessionBackendTests: XCTestCase {
             updatedAt: now
         )
 
-        XCTAssertEqual(snapshot.backend, .legacyInternal)
+        XCTAssertEqual(snapshot.backend, .ghosttySurface)
         XCTAssertEqual(snapshot.surfaceId, "surface-a")
         XCTAssertNil(snapshot.fallbackReason)
     }
@@ -88,25 +88,20 @@ final class TerminalSessionBackendTests: XCTestCase {
             nodeId: "node-a",
             createdAt: now,
             updatedAt: now,
-            fallbackReason: "legacy fallback"
+            fallbackReason: "startup failed"
         )
 
         let data = try JSONEncoder().encode(snapshot)
         let decoded = try JSONDecoder().decode(TerminalSessionSnapshot.self, from: data)
 
         XCTAssertEqual(decoded.backend, .ghosttySurface)
-        XCTAssertEqual(decoded.fallbackReason, "legacy fallback")
+        XCTAssertEqual(decoded.fallbackReason, "startup failed")
     }
 
-    func testGhosttyPreferredBackendDoesNotFallBackToLegacyByDefault() {
-        let previousFallback = getenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK").map { String(cString: $0) }
-        unsetenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK")
+    func testGhosttyPreferredBackendRequiresRegisteredBackend() {
         TerminalSessionBackendRegistry.shared.setPreferredKind(.ghosttySurface)
         defer {
             TerminalSessionBackendRegistry.shared.setPreferredKind(nil)
-            if let previousFallback {
-                setenv("MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK", previousFallback, 1)
-            }
         }
 
         XCTAssertThrowsError(try TerminalSessionBackendRegistry.shared.createSession(
@@ -126,7 +121,7 @@ final class TerminalSessionBackendTests: XCTestCase {
         }
     }
 
-    func testStaleInternalSessionDTODoesNotFallBackToExternal() {
+    func testStaleInternalSessionDTOIsNotNativeWorkspaceOpenable() {
         let now = Date(timeIntervalSince1970: 10)
         let terminalInfo = PluginTerminalInfo(
             tty: nil,
@@ -159,7 +154,7 @@ final class TerminalSessionBackendTests: XCTestCase {
             providerResumeSessionId: "provider-session-a",
             canvasId: "canvas-a",
             nodeId: "node-a",
-            backend: TerminalSessionBackendKind.legacyInternal.rawValue,
+            backend: TerminalSessionBackendKind.external.rawValue,
             fallbackReason: nil,
             cmuxSocketPath: nil,
             cmuxSurfaceId: "surface-a"

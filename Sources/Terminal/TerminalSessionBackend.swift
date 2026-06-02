@@ -2,7 +2,6 @@ import Foundation
 import Meee2PluginKit
 
 public enum TerminalSessionBackendKind: String, Codable {
-    case legacyInternal = "legacy-internal"
     case ghosttySurface = "ghostty-surface"
     case external = "external"
 }
@@ -212,9 +211,7 @@ public final class TerminalSessionBackendRegistry {
     private var backends: [TerminalSessionBackendKind: TerminalSessionBackend] = [:]
     private var preferredOverride: TerminalSessionBackendKind?
 
-    private init() {
-        backends[LegacyInternalTerminalBackend.shared.kind] = LegacyInternalTerminalBackend.shared
-    }
+    private init() {}
 
     public func register(_ backend: TerminalSessionBackend) {
         lock.lock()
@@ -233,10 +230,6 @@ public final class TerminalSessionBackendRegistry {
             return envKind
         }
         lock.lock()
-        // New Canvas terminal sessions default to the persistent Ghostty native
-        // surface backend. The legacy in-memory PTY backend remains as a
-        // fallback or explicit MEEE2_TERMINAL_BACKEND override, but new sessions
-        // should not depend on raw scrollback replay into a fresh TerminalView.
         let preferred = preferredOverride ?? .ghosttySurface
         lock.unlock()
         return preferred
@@ -245,27 +238,11 @@ public final class TerminalSessionBackendRegistry {
     public func createSession(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
         let kind = preferredKind()
         guard let selectedBackend = registeredBackend(for: kind) else {
-            if shouldFallbackToLegacy(for: kind) {
-                return try createFallbackSession(
-                    request: request,
-                    attemptedKind: kind,
-                    reason: "backend is not registered in this process"
-                )
-            }
             throw TerminalSessionBackendError.backendUnavailable(
                 "\(kind.rawValue) backend is not registered in this process"
             )
         }
-        do {
-            return try selectedBackend.createSession(request: request)
-        } catch {
-            guard kind != .legacyInternal, shouldFallbackToLegacy(for: kind) else { throw error }
-            return try createFallbackSession(
-                request: request,
-                attemptedKind: kind,
-                reason: error.localizedDescription
-            )
-        }
+        return try selectedBackend.createSession(request: request)
     }
 
     public func closeSession(id: String) throws {
@@ -318,41 +295,11 @@ public final class TerminalSessionBackendRegistry {
         snapshot(id: id) != nil
     }
 
-    private func backend(for kind: TerminalSessionBackendKind) -> TerminalSessionBackend {
-        lock.lock()
-        let backend = backends[kind] ?? backends[.legacyInternal] ?? LegacyInternalTerminalBackend.shared
-        lock.unlock()
-        return backend
-    }
-
     private func registeredBackend(for kind: TerminalSessionBackendKind) -> TerminalSessionBackend? {
         lock.lock()
         let backend = backends[kind]
         lock.unlock()
         return backend
-    }
-
-    private func createFallbackSession(
-        request: TerminalSessionRequest,
-        attemptedKind: TerminalSessionBackendKind,
-        reason: String
-    ) throws -> TerminalSessionHandle {
-        let legacy = backend(for: TerminalSessionBackendKind.legacyInternal)
-        let fallback = try legacy.createSession(request: request)
-        SessionTerminalStore.shared.updateBackend(
-            sessionId: fallback.snapshot.sessionId,
-            backend: TerminalSessionBackendKind.legacyInternal.rawValue,
-            fallbackReason: "\(attemptedKind.rawValue): \(reason)"
-        )
-        return fallback
-    }
-
-    private func shouldFallbackToLegacy(for kind: TerminalSessionBackendKind) -> Bool {
-        guard kind != .legacyInternal else { return false }
-        let raw = ProcessInfo.processInfo.environment["MEEE2_ALLOW_LEGACY_TERMINAL_FALLBACK"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        return raw == "1" || raw == "true" || raw == "yes"
     }
 
     private func backendForExistingSession(id: String) -> TerminalSessionBackend? {
@@ -378,97 +325,5 @@ public final class TerminalSessionBackendRegistry {
             return nil
         }
         return TerminalSessionBackendKind(rawValue: raw)
-    }
-}
-
-public final class LegacyInternalTerminalBackend: TerminalSessionBackend {
-    public static let shared = LegacyInternalTerminalBackend()
-
-    public let kind: TerminalSessionBackendKind = .legacyInternal
-
-    public init() {}
-
-    public func createSession(request: TerminalSessionRequest) throws -> TerminalSessionHandle {
-        let surface = try InternalTerminalRuntime.shared.createSurface(
-            provider: request.provider,
-            cwd: request.cwd,
-            command: request.command,
-            canvasId: request.canvasId,
-            nodeId: request.nodeId,
-            initialPrompt: request.initialPrompt,
-            preferredSessionId: request.preferredSessionId,
-            cols: request.cols,
-            rows: request.rows
-        )
-        markBackend(sessionId: surface.sessionId, surfaceId: surface.surfaceId)
-        return TerminalSessionHandle(snapshot: Self.snapshot(from: surface, backend: kind))
-    }
-
-    public func closeSession(id: String) throws {
-        guard InternalTerminalRuntime.shared.close(surfaceOrSessionId: id) else {
-            throw TerminalSessionBackendError.sessionNotFound(id)
-        }
-    }
-
-    public func resizeSession(id: String, cols: UInt16, rows: UInt16) {
-        _ = InternalTerminalRuntime.shared.resize(surfaceOrSessionId: id, cols: cols, rows: rows)
-    }
-
-    public func focusSession(id: String) {
-        _ = id
-    }
-
-    public func writeInput(id: String, data: Data) {
-        _ = InternalTerminalRuntime.shared.writeInputData(surfaceOrSessionId: id, data: data)
-    }
-
-    public func snapshot(id: String) -> TerminalSessionSnapshot? {
-        InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: id)
-            .map { Self.snapshot(from: $0, backend: kind) }
-    }
-
-    public func listSnapshots() -> [TerminalSessionSnapshot] {
-        InternalTerminalRuntime.shared.listSnapshots()
-            .map { Self.snapshot(from: $0, backend: kind) }
-    }
-
-    private func markBackend(sessionId: String, surfaceId: String) {
-        guard let existing = SessionTerminalStore.shared.get(sessionId: sessionId) else { return }
-        SessionTerminalStore.shared.update(
-            sessionId: sessionId,
-            tty: existing.tty,
-            termProgram: existing.termProgram,
-            termBundleId: existing.termBundleId,
-            cmuxSocketPath: existing.cmuxSocketPath,
-            cmuxSurfaceId: existing.cmuxSurfaceId ?? surfaceId,
-            cwd: existing.cwd,
-            status: existing.status,
-            command: existing.command,
-            provider: existing.provider,
-            providerResumeSessionId: existing.providerResumeSessionId,
-            canvasId: existing.canvasId,
-            nodeId: existing.nodeId,
-            backend: kind.rawValue
-        )
-    }
-
-    private static func snapshot(
-        from surface: InternalTerminalSurfaceSnapshot,
-        backend: TerminalSessionBackendKind
-    ) -> TerminalSessionSnapshot {
-        TerminalSessionSnapshot(
-            sessionId: surface.sessionId,
-            surfaceId: surface.surfaceId,
-            backend: backend,
-            status: surface.status,
-            pid: surface.pid,
-            cwd: surface.cwd,
-            command: surface.command,
-            provider: surface.provider,
-            canvasId: surface.canvasId,
-            nodeId: surface.nodeId,
-            createdAt: surface.createdAt,
-            updatedAt: surface.updatedAt
-        )
     }
 }

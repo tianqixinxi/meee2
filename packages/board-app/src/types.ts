@@ -165,7 +165,7 @@ export interface Session {
   surfaceId?: string | null
   surfaceStatus?: 'starting' | 'running' | 'exited' | 'failed' | string | null
   canOpenExternal?: boolean
-  terminalBackend?: 'legacy-internal' | 'ghostty-surface' | 'external' | string
+  terminalBackend?: 'ghostty-surface' | 'external' | string
   nativeWorkspaceAvailable?: boolean
   openTarget?: 'native-workspace' | 'external' | 'web-fallback' | string
   controlState?: 'active' | 'hidden' | 'archived' | string

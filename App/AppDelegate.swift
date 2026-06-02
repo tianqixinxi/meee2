@@ -226,10 +226,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // 启动状态监控
         statusManager.start()
         CoordinationWatcher.shared.start()
-        DispatchQueue.global(qos: .utility).async {
-            _ = InternalTerminalRuntime.shared.restorePersistedSurfaces()
-        }
-
         // Codex / Cursor / OpenClaw 是 dylib 形式的外部 plugin，加载阶段会做文件
         // 同步、dlopen 和 plugin.json 扫描。先让 Claude/ExternalChat 这些进程内
         // plugin 出结果，再延后加载动态插件，避免它们拖慢启动后的首批可见 session。

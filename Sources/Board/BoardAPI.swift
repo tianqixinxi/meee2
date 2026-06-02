@@ -491,15 +491,21 @@ enum BoardAPI {
                 throw NSError(domain: "BoardAPI", code: 400, userInfo: [NSLocalizedDescriptionKey: "cwd does not exist: \(cwd)"])
             }
         }
+        let trimmedPreferredSessionId = preferredSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reusablePreferredSessionId = trimmedPreferredSessionId?.isEmpty == false ? trimmedPreferredSessionId : nil
+        let resumeSessionId = reusablePreferredSessionId.flatMap(providerResumeSessionId(forPlannerSessionId:))
+        let launchCommand = resumeSessionId.map {
+            AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: $0)
+        } ?? command
         let handle = try TerminalSessionBackendRegistry.shared.createSession(
             request: TerminalSessionRequest(
                 provider: provider,
                 cwd: cwd,
-                command: command,
+                command: launchCommand,
                 canvasId: canvasId,
                 nodeId: nodeId,
-                initialPrompt: initialPrompt,
-                preferredSessionId: preferredSessionId
+                initialPrompt: resumeSessionId == nil ? initialPrompt : nil,
+                preferredSessionId: reusablePreferredSessionId
             )
         )
         BoardServer.shared.broadcastStateChanged()
@@ -1953,11 +1959,11 @@ enum BoardAPI {
             var action = "reuse"
             if let sessionId = existingNode.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
                !sessionId.isEmpty {
-                if let existingSurface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sessionId),
+                if let existingSurface = TerminalSessionBackendRegistry.shared.snapshot(id: sessionId),
                    isReusableInternalSurface(existingSurface) {
                     // 绑定的会话还活着 → 直接复用并 focus（前端拿到 graph 后会
                     // dispatch meee2:open-session 把终端拉到前台）。
-                    surface = LegacyInternalTerminalBackend.shared.snapshot(id: existingSurface.surfaceId)!
+                    surface = existingSurface
                 } else {
                     // 绑定的会话已死。早前 BUG 1.2 在 openOnly 时直接报 session_ended
                     // 让用户手动重新派发,但那是个死胡同(toast 无动作,卡片当下也没有
@@ -2086,7 +2092,7 @@ enum BoardAPI {
         }
     }
 
-    private static func isReusableInternalSurface(_ surface: InternalTerminalSurfaceSnapshot) -> Bool {
+    private static func isReusableInternalSurface(_ surface: TerminalSessionSnapshot) -> Bool {
         surface.status == InternalTerminalLifecycle.starting.rawValue
             || surface.status == InternalTerminalLifecycle.running.rawValue
     }
@@ -3534,11 +3540,7 @@ enum BoardAPI {
         if AgentLaunchCommand.isMeee2InternalSessionId(sessionId) {
             return AgentLaunchCommand.fullAccessCommand(forProvider: provider)
         }
-        let quotedSessionId = shellQuote(sessionId)
-        if provider == "codex" {
-            return "codex \(AgentLaunchCommand.codexAutomationFlags) resume \(quotedSessionId)"
-        }
-        return "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+        return AgentLaunchCommand.resumeCommand(forProvider: provider, sessionId: sessionId)
     }
 
     private static func plannerFreshCommand(for node: PlanningNode?) -> String {
@@ -3559,17 +3561,18 @@ enum BoardAPI {
     }
 
     private static func providerResumeSessionId(forPlannerSessionId sessionId: String) -> String? {
+        providerResumeSessionIdForManagedSurface(sessionId)
+            ?? (isProviderResumeSessionId(sessionId) ? sessionId : nil)
+    }
+
+    private static func providerResumeSessionIdForManagedSurface(_ sessionId: String) -> String? {
         if let mapped = SessionTerminalStore.shared.get(sessionId: sessionId)?.providerResumeSessionId?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !mapped.isEmpty,
            !AgentLaunchCommand.isMeee2InternalSessionId(mapped) {
             return mapped
         }
-        return isProviderResumeSessionId(sessionId) ? sessionId : nil
-    }
-
-    private static func shellQuote(_ raw: String) -> String {
-        "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
+        return nil
     }
 
     private static func canonicalSessionKey(_ session: PluginSession) -> String {
@@ -4229,7 +4232,7 @@ enum BoardAPI {
                 terminalKind: "internal",
                 surfaceId: surface.surfaceId,
                 sessionId: surface.sessionId,
-                terminalBackend: (TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? .legacyInternal).rawValue,
+                terminalBackend: (TerminalSessionBackendMetadata.kind(forSessionId: surface.sessionId) ?? surface.backend).rawValue,
                 nativeWorkspaceAvailable: true,
                 openTarget: "native-workspace"
             ))
@@ -4351,7 +4354,7 @@ enum BoardAPI {
     }
 
     private static func resolveSessionControlId(_ sid: String) -> String? {
-        if let surface = InternalTerminalRuntime.shared.snapshot(surfaceOrSessionId: sid) {
+        if let surface = TerminalSessionBackendRegistry.shared.snapshot(id: sid) {
             return surface.sessionId
         }
         if let metadataSid = resolveDesktopMetadataSid(sid) {

@@ -263,8 +263,6 @@ class SessionTerminalStore {
 
     private static func inferBackend(termProgram: String?) -> String? {
         switch termProgram?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "meee2-internal":
-            return TerminalSessionBackendKind.legacyInternal.rawValue
         case "meee2-ghostty-surface":
             return TerminalSessionBackendKind.ghosttySurface.rawValue
         case .some:

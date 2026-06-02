@@ -941,9 +941,7 @@ enum BoardDTOBuilder {
         let displayStatus = orphanedInternalResume ? SessionStatus.dead : resolvedStatus
         let externalSurfaceStatus = orphanedInternalResume || resolvedStatus.isHistorical ? "exited" : nil
         let terminalKind = orphanedInternalResume ? "internal" : "external"
-        let terminalBackend = orphanedInternalResume
-            ? TerminalSessionBackendKind.legacyInternal.rawValue
-            : TerminalSessionBackendKind.external.rawValue
+        let terminalBackend = TerminalSessionBackendKind.external.rawValue
         let openTarget = orphanedInternalResume ? "web-fallback" : "external"
         let sync = syncInfo(forSessionId: session.id)
         let controlState = SessionControlStore.shared.state(for: [session.id, realSessionId])
@@ -1085,7 +1083,7 @@ enum BoardDTOBuilder {
                sessionData.terminalInfo?.termProgram?.lowercased() == "meee2-ghostty-surface" {
                 return TerminalSessionBackendKind.ghosttySurface.rawValue
             }
-            return TerminalSessionBackendKind.legacyInternal.rawValue
+            return TerminalSessionBackendKind.external.rawValue
         }()
         let sync = syncInfo(forSessionId: sessionData.sessionId)
         let providerResumeId = terminalInfo?.providerResumeSessionId?

@@ -75,9 +75,9 @@ describe('session terminal routing helpers', () => {
     }))).toBe(false)
   })
 
-  it('rejects legacy replay terminals as overlay-capable', () => {
+  it('rejects non-ghostty terminals as overlay-capable', () => {
     expect(isLiveInternalTerminalSession(session({
-      terminalBackend: 'legacy-internal',
+      terminalBackend: 'old-internal',
       nativeWorkspaceAvailable: false,
       openTarget: 'web-fallback',
     }))).toBe(false)

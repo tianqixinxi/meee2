@@ -9,6 +9,13 @@ enum AgentLaunchCommand {
             : "claude --dangerously-skip-permissions"
     }
 
+    static func resumeCommand(forProvider provider: String, sessionId: String) -> String {
+        let quotedSessionId = "'\(sessionId.replacingOccurrences(of: "'", with: "'\\''"))'"
+        return normalizedProvider(provider) == "codex"
+            ? "codex \(codexAutomationFlags) resume \(quotedSessionId)"
+            : "claude --resume \(quotedSessionId) --dangerously-skip-permissions"
+    }
+
     static func normalizedProvider(_ raw: String) -> String {
         raw.lowercased().contains("codex") ? "codex" : "claude"
     }

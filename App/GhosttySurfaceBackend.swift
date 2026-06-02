@@ -232,14 +232,13 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var detached = false
     private var lastLayoutFrame: NSRect = .zero
 
-    // BUG A — ready-gated initialPrompt delivery (mirrors InternalTerminalRuntime
-    // `deliverInitialPromptWhenReady`). Ghostty exec surfaces do NOT expose
+    // Ready-gated initialPrompt delivery. Ghostty exec surfaces do not expose
     // stdout, so we can't poll PTY bytes; instead we treat any surface signal
     // (grid resize / title / pwd / progress / command-finished) as "the TUI is
     // rendering" and update `lastSurfaceActivityAt`. The poller waits until the
-    // surface has produced activity AND gone quiet for a settle window (TUI
-    // finished booting its input box), then submits `prompt + \r`. A hard
-    // ceiling guarantees delivery even if signals never arrive; abort on exit.
+    // surface has produced activity and gone quiet for a settle window, then
+    // sends the prompt text and return key separately. A hard ceiling guarantees
+    // delivery even if signals never arrive; abort on exit.
     private var lastSurfaceActivityAt: Date?
     private var promptDeliveryStartedAt: Date?
 
@@ -424,7 +423,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
 
         // Output (here: surface signals) must be quiet this long before we treat
         // the TUI as "ready". Hard ceiling delivers anyway even if no signal ever
-        // arrives. Both mirror InternalTerminalRuntime.deliverInitialPromptWhenReady.
+        // arrives.
         let settleWindow: TimeInterval = 0.8
         let ceiling: TimeInterval = 20.0
         let firstProbe: DispatchTimeInterval = .milliseconds(700)
@@ -451,7 +450,11 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
             if trustReady, settled || pastCeiling {
                 didSendInitialPrompt = true
                 let startedAt = Date()
-                terminalView.sendText(prompt + "\r")
+                terminalView.sendText(prompt)
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(180)) { [weak self] in
+                    guard let self, !self.detached else { return }
+                    self.terminalView.sendText("\r")
+                }
                 touch()
                 logPerf("initial_prompt", startedAt: startedAt,
                         extra: "bytes=\(prompt.utf8.count) reason=\(pastCeiling ? "ceiling" : "settled")")

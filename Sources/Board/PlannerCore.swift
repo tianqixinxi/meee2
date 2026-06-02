@@ -4768,7 +4768,7 @@ final class PlannerStore {
     /// submitted output (`outputSubmittedAt`), terminal nodes (`done`/`failed`),
     /// and genuinely live sessions are left untouched. `isLive` is supplied by
     /// the caller (BoardAPI) so PlannerCore stays decoupled from the session
-    /// machinery (PluginManager / InternalTerminalRuntime / SessionStore).
+    /// machinery (PluginManager / terminal backend registry / SessionStore).
     ///
     /// Returns the number of nodes demoted (0 when nothing changed).
     @discardableResult

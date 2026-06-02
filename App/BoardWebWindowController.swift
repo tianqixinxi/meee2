@@ -672,9 +672,7 @@ final class BoardWebWindowController: NSWindowController, NSWindowDelegate, WKNa
             ?? sessionId.flatMap({ GhosttySurfaceBackend.shared.paneController(id: $0) }) {
             return ghostty
         }
-        return EmbeddedNativeTerminalController(surfaceId: surfaceId, sessionId: sessionId) { [weak self] exitedSurfaceId, exitedSessionId in
-            self?.removeEmbeddedTerminal(surfaceId: exitedSurfaceId, sessionId: exitedSessionId)
-        }
+        return nil
     }
 
     private func hostEmbeddedTerminalView(_ controller: NativeTerminalPaneControlling, frame: NSRect, hidden: Bool) {

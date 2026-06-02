@@ -614,7 +614,7 @@ private final class TerminalPaneRegistry {
             case .ghosttySurface:
                 created = GhosttySurfaceBackend.shared.paneController(id: surface.surfaceId)
                     ?? GhosttySurfaceBackend.shared.paneController(id: surface.sessionId)
-            case .legacyInternal, .external:
+            case .external:
                 created = nil
             }
             guard let created else {
