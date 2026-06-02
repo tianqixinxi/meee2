@@ -62,7 +62,17 @@ struct AssistantSettings {
     let canvasId: String      // current canvas id for canvas-aware tools
     let workspacePath: String // current canvas workspace for local temporary assistant
     let canvasName: String
+    let localRunPurpose: LocalRunPurpose
     let selectedElements: [AssistantSelectedElement]
+
+    enum LocalRunPurpose: String {
+        case interactive
+        case recap
+
+        var appliesCompletionCooldown: Bool {
+            self == .recap
+        }
+    }
 }
 
 extension AssistantSettings {
@@ -79,6 +89,7 @@ extension AssistantSettings {
             canvasId: canvasId.isEmpty ? trimmedCanvasId : canvasId,
             workspacePath: workspacePath,
             canvasName: canvasName == "Canvas" && !trimmedCanvasName.isEmpty ? trimmedCanvasName : canvasName,
+            localRunPurpose: localRunPurpose,
             selectedElements: selectedElements
         )
     }
@@ -516,12 +527,22 @@ struct LocalClaudeProvider: AssistantProvider {
                 // so a failing recap can never spawn unbounded and starve the
                 // board HTTP server / main thread. A rejected run yields a plain
                 // error event (caller keeps its local baseRecap), never a spin.
-                guard var lease = AssistantLocalRunGate.shared.acquire(key: settings.canvasId) else {
-                    continuation.yield(.error("local assistant busy for this canvas (in-flight or cooling down)"))
+                let gateResult = AssistantLocalRunGate.shared.acquireDetailed(
+                    key: settings.canvasId,
+                    completionCooldown: settings.localRunPurpose.appliesCompletionCooldown
+                )
+                let lease: AssistantLocalRunGate.Lease
+                switch gateResult {
+                case .acquired(let acquiredLease):
+                    lease = acquiredLease
+                case .rejected(let reason):
+                    MLog("[AssistantLocalRunGate] rejected canvas=\(settings.canvasId.isEmpty ? "global" : settings.canvasId) purpose=\(settings.localRunPurpose.rawValue) reason=\(reason.description)")
+                    continuation.yield(.error("local assistant busy for this canvas (\(reason.description))"))
                     continuation.finish()
                     return
                 }
-                defer { lease.release() }
+                var mutableLease = lease
+                defer { mutableLease.release() }
                 do {
                     let store = AssistantLocalSessionStore.shared
                     let sessionId = store.sessionId(forCanvasId: settings.canvasId)

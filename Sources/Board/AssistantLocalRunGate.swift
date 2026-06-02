@@ -22,6 +22,25 @@ import Foundation
 final class AssistantLocalRunGate {
     static let shared = AssistantLocalRunGate()
 
+    enum RejectionReason: Equatable {
+        case inFlight
+        case coolingDown(remainingSeconds: TimeInterval)
+
+        var description: String {
+            switch self {
+            case .inFlight:
+                return "in-flight"
+            case .coolingDown(let remaining):
+                return "cooling down \(max(1, Int(ceil(remaining))))s"
+            }
+        }
+    }
+
+    enum AcquireResult {
+        case acquired(Lease)
+        case rejected(RejectionReason)
+    }
+
     struct Lease {
         fileprivate let gate: AssistantLocalRunGate
         fileprivate let key: String
@@ -58,17 +77,30 @@ final class AssistantLocalRunGate {
     /// success, or `nil` when a run is already in flight or the cooldown after
     /// the last run has not elapsed. Caller must `release()` the lease when the
     /// run finishes (success OR failure).
-    func acquire(key rawKey: String) -> Lease? {
+    func acquire(key rawKey: String, completionCooldown: Bool = true) -> Lease? {
+        switch acquireDetailed(key: rawKey, completionCooldown: completionCooldown) {
+        case .acquired(let lease):
+            return lease
+        case .rejected:
+            return nil
+        }
+    }
+
+    func acquireDetailed(key rawKey: String, completionCooldown: Bool = true) -> AcquireResult {
         let key = normalizedKey(rawKey)
         lock.lock()
         defer { lock.unlock() }
 
-        if inFlight.contains(key) { return nil }
-        if let last = lastFinishedAt[key], now().timeIntervalSince(last) < cooldown {
-            return nil
+        if inFlight.contains(key) { return .rejected(.inFlight) }
+        if completionCooldown,
+           let last = lastFinishedAt[key] {
+            let elapsed = now().timeIntervalSince(last)
+            if elapsed < cooldown {
+                return .rejected(.coolingDown(remainingSeconds: cooldown - elapsed))
+            }
         }
         inFlight.insert(key)
-        return Lease(gate: self, key: key)
+        return .acquired(Lease(gate: self, key: key))
     }
 
     private func finish(key: String) {

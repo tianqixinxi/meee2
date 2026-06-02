@@ -988,7 +988,7 @@ function PlannerPlanCardView({
         {plan.steps.map((step) => (
           <li key={step.title}>
             <strong>{step.title}</strong>
-            <span>{step.body}</span>
+            <PlannerPlanStepBody body={step.body} />
           </li>
         ))}
       </ol>
@@ -1013,6 +1013,56 @@ function PlannerPlanCardView({
       </div>
     </div>
   )
+}
+
+function PlannerPlanStepBody({ body }: { body: string }) {
+  const fields = parsePlanStepFields(body)
+  if (fields.length === 0) {
+    return <span className="planner-plan-card__step-body">{stripInlineMarkdown(body)}</span>
+  }
+  return (
+    <dl className="planner-plan-card__step-fields">
+      {fields.map((field, index) => (
+        <div key={`${field.label}-${index}`} className="planner-plan-card__step-field">
+          <dt>{field.label}</dt>
+          <dd>{field.value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function parsePlanStepFields(body: string): Array<{ label: string; value: string }> {
+  const pattern = /\*\*\s*(Input|Actor\/Tool|Actor|Tool|Output\/Artifact|Output|Artifact)\s*[:：]\s*\*\*/gi
+  const matches = Array.from(body.matchAll(pattern))
+  if (matches.length === 0) return []
+
+  const fields: Array<{ label: string; value: string }> = []
+  const prefix = stripInlineMarkdown(body.slice(0, matches[0].index ?? 0))
+  if (prefix) fields.push({ label: 'Details', value: prefix })
+
+  matches.forEach((match, index) => {
+    const label = normalizePlanStepFieldLabel(match[1])
+    const valueStart = (match.index ?? 0) + match[0].length
+    const valueEnd = matches[index + 1]?.index ?? body.length
+    const value = stripInlineMarkdown(body.slice(valueStart, valueEnd))
+    if (value) fields.push({ label, value })
+  })
+  return fields
+}
+
+function normalizePlanStepFieldLabel(raw: string): string {
+  const normalized = raw.toLowerCase()
+  if (normalized === 'actor/tool') return 'Actor / Tool'
+  if (normalized === 'output/artifact') return 'Output'
+  return raw.charAt(0).toUpperCase() + raw.slice(1)
+}
+
+function stripInlineMarkdown(value: string): string {
+  return value
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 async function requestEmptyCanvasAIReply({
@@ -1042,6 +1092,7 @@ async function requestEmptyCanvasAIReply({
         scope: 'this-mac',
         canvasId,
         canvasName,
+        localRunPurpose: 'interactive',
       },
       signal,
     })) {
@@ -1102,6 +1153,7 @@ async function repairEmptyCanvasAIReply({
       scope: 'this-mac',
       canvasId,
       canvasName,
+      localRunPurpose: 'interactive',
     },
     signal,
   })) {

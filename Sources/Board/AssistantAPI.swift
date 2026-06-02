@@ -226,6 +226,8 @@ enum AssistantAPI {
         let canvasId = ((dict["canvasId"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let workspacePath = ((dict["workspacePath"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let canvasName = ((dict["canvasName"] as? String) ?? "Canvas").trimmingCharacters(in: .whitespacesAndNewlines)
+        let purposeRaw = ((dict["localRunPurpose"] as? String) ?? "interactive").trimmingCharacters(in: .whitespacesAndNewlines)
+        let localRunPurpose = AssistantSettings.LocalRunPurpose(rawValue: purposeRaw) ?? .interactive
         let selectedElements = parseSelectedElements(dict["selectedElements"] as? [[String: Any]])
         return AssistantSettings(
             provider: provider,
@@ -237,6 +239,7 @@ enum AssistantAPI {
             canvasId: canvasId,
             workspacePath: workspacePath,
             canvasName: canvasName.isEmpty ? "Canvas" : canvasName,
+            localRunPurpose: localRunPurpose,
             selectedElements: selectedElements
         )
     }

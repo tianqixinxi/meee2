@@ -1755,6 +1755,7 @@ async function generateAIRecap(
       canvasId: canvas.id,
       workspacePath: canvas.workspacePath ?? '',
       canvasName: canvas.name,
+      localRunPurpose: 'recap',
     },
   })) {
     if (ev.type === 'delta') text += ev.text

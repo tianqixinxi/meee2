@@ -1319,6 +1319,7 @@ function NativeTerminalPanel({
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
+  const layoutTimerRefs = useRef<number[]>([])
   const lastSentRectRef = useRef<NativeTerminalRect | null>(null)
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null)
   const [openError, setOpenError] = useState(false)
@@ -1349,7 +1350,7 @@ function NativeTerminalPanel({
     return () => window.removeEventListener('meee2:native-terminal-sync', handleSyncAck)
   }, [session.id, session.surfaceId])
 
-  const syncNative = useCallback((type: NativeTerminalSyncType = 'attach') => {
+  const syncNative = useCallback((type: NativeTerminalSyncType = 'attach', options?: { force?: boolean }) => {
     if (!session.surfaceId || !hostRef.current) return false
     const rect = hostRef.current.getBoundingClientRect()
     const nativeRect = {
@@ -1358,7 +1359,7 @@ function NativeTerminalPanel({
       width: rect.width,
       height: rect.height,
     }
-    if (type === 'layout' && sameNativeRect(lastSentRectRef.current, nativeRect)) {
+    if (type === 'layout' && !options?.force && sameNativeRect(lastSentRectRef.current, nativeRect)) {
       return true
     }
     const sentAtMs = Date.now()
@@ -1397,11 +1398,19 @@ function NativeTerminalPanel({
     })
   }, [syncNative])
 
+  const scheduleStabilizedLayouts = useCallback(() => {
+    layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
+    layoutTimerRefs.current = [40, 140, 320].map((delay) => window.setTimeout(() => {
+      syncNative('layout', { force: true })
+    }, delay))
+  }, [syncNative])
+
   useLayoutEffect(() => {
     if (!session.surfaceId) return
     lastSentRectRef.current = null
     lastObservedSizeRef.current = null
     syncNative('attach')
+    scheduleStabilizedLayouts()
     const surfaceId = session.surfaceId
     const sessionId = session.id
     const resizeObserver = hostRef.current ? new ResizeObserver((entries) => {
@@ -1429,12 +1438,14 @@ function NativeTerminalPanel({
         window.cancelAnimationFrame(layoutFrameRef.current)
         layoutFrameRef.current = null
       }
+      layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
+      layoutTimerRefs.current = []
       resizeObserver?.disconnect()
       window.removeEventListener('resize', scheduleLayout)
       window.removeEventListener('meee2:layout-native-terminal', scheduleLayout)
       openNativeTerminalSurface({ type: 'hide', surfaceId, sessionId })
     }
-  }, [scheduleLayout, session.id, session.surfaceId, syncNative])
+  }, [scheduleLayout, scheduleStabilizedLayouts, session.id, session.surfaceId, syncNative])
 
   return (
     <div
@@ -1442,8 +1453,14 @@ function NativeTerminalPanel({
       className={`sessions-native-terminal${openError ? ' is-unavailable' : ''}`}
       aria-label={t('sessions.terminal')}
       tabIndex={0}
-      onFocus={() => syncNative('focus')}
-      onDoubleClick={() => syncNative('focus')}
+      onFocus={() => {
+        syncNative('focus')
+        scheduleStabilizedLayouts()
+      }}
+      onDoubleClick={() => {
+        syncNative('focus')
+        scheduleStabilizedLayouts()
+      }}
     >
       {openError && (
         <div className="sessions-native-terminal__fallback" role="status">
