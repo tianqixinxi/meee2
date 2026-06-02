@@ -267,8 +267,14 @@ export function buildPlannerGraph(input: PlannerGraphInput): {
       id: node.id,
       type: 'plannerNode' as const,
       position,
-      initialWidth: node.layout?.width ?? widgetSize.width,
-      initialHeight: node.layout?.height ?? widgetSize.height,
+      // 宽高自由调整 — width 始终给确定值(默认 / 用户调整后的 layout.width),
+      // 这样卡片 width:100% 能解析成固定像素、文案正常换行;不给确定 width 时
+      // react-flow 外框会 shrink-to-fit 内容,卡片宽度失控。
+      // height 反过来:只有用户调整过(layout.height 有值)才给确定值,否则留空,
+      // 外框高度 auto → 卡片 height:100% 退化成内容高度,保持原来的自适应高度。
+      width: node.layout?.width ?? widgetSize.width,
+      height: node.layout?.height ?? undefined,
+      initialHeight: widgetSize.height,
       data: {
         node,
         allNodes: allCanvasNodes,
@@ -411,6 +417,13 @@ function buildVisibleIOArtifactNodes(input: {
       const artifactKind = entry.artifact ? artifactKindForArtifact(entry.artifact, entry.reference) : artifactKindFor(entry.reference)
       const xOffset = entry.direction === 'input' ? -300 : 360
       const height = artifactKind === 'kanban' ? 280 : 120
+      // 默认宽度 seed:kanban 420、html/json/file 360、其余 240。原来这些宽度写死
+      // 在 CSS 里;改成 NodeResizer 自由调整后,默认宽度统一由外框 initialWidth 给。
+      const initialWidth = artifactKind === 'kanban'
+        ? 420
+        : artifactKind === 'html' || artifactKind === 'json' || artifactKind === 'file'
+          ? 360
+          : 240
       const yOffset = entry.index * (artifactKind === 'kanban' ? 292 : 112)
       const artifactNode: PlanningNode = {
         id,
@@ -443,7 +456,9 @@ function buildVisibleIOArtifactNodes(input: {
             x: sourceGraphNode.position.x + xOffset,
             y: sourceGraphNode.position.y + yOffset,
           },
-          initialWidth: artifactKind === 'kanban' ? 420 : 240,
+          // 同主节点:width 确定、height 留给内容自适应(虚拟 I/O 节点不落库,
+          // 调整仅在本次会话内有效)。
+          width: initialWidth,
           initialHeight: height,
           data: {
             node: artifactNode,

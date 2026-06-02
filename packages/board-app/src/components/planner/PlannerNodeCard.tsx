@@ -1,4 +1,4 @@
-import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, NodeResizer, Position, type NodeProps } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
@@ -49,6 +49,8 @@ import {
   FOOTER_LABELS,
   modeBadgeLabel,
   modeBadgeTooltip,
+  UPSTREAM_STALE_LABEL,
+  upstreamStaleTooltip,
   OWNER_CHIP,
   PRIMARY_ACTION_TEXT,
   SUBCANVAS_REF_LABELS,
@@ -212,7 +214,14 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           data.guided ? 'is-guided' : '',
         ].filter(Boolean).join(' ')}
       >
+        <NodeResizer
+          minWidth={180}
+          minHeight={120}
+          lineClassName="planner-node__resize-line"
+          handleClassName="planner-node__resize-handle"
+        />
         <Handle type="target" position={Position.Left} className="planner-node__handle" />
+        <div className="planner-node__content">
         <div className="planner-node__header">
           <span className="planner-node__status planner-node__status--design">
             <ArtifactIcon kind={renderKind} size={13} />
@@ -315,6 +324,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             展开 ▾
           </button>
         )}
+        </div>
         <Handle type="source" position={Position.Right} className="planner-node__handle" />
       </div>
     )
@@ -434,8 +444,15 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
         data.previewKind !== 'none' ? `planner-node--preview-${data.previewKind}` : '',
       ].filter(Boolean).join(' ')}
     >
+      <NodeResizer
+        minWidth={220}
+        minHeight={140}
+        lineClassName="planner-node__resize-line"
+        handleClassName="planner-node__resize-handle"
+      />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
 
+      <div className="planner-node__content">
       <div className="planner-node__header">
         {/* nodeKind 视觉分辨 (2026-05-28) — 让用户一眼看出 artifact 是数据 /
             session 是 AI 会话 / step 是动作 / external 是外部引用 / subCanvas
@@ -488,6 +505,17 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
             不再另起独立 schedule chip。*/}
         {nodeKind === 'step' && !data.virtual && (
           <NodeModeBadge mode={nodeMode} scheduleInterval={scheduleLabel} />
+        )}
+        {/* P5 · 上游版本 staleness 提示 — 仅指示,不带会误导的清除按钮。
+            数据来自后端只读派生 `upstreamFreshness`(不落库)。 */}
+        {node.upstreamFreshness?.state === 'stale' && (
+          <span
+            className="planner-node__stale-badge"
+            title={upstreamStaleTooltip(node.upstreamFreshness.staleUpstreams)}
+          >
+            <AlertTriangle size={11} aria-hidden />
+            {UPSTREAM_STALE_LABEL}
+          </span>
         )}
         {durationChip && (
           <span
@@ -819,6 +847,7 @@ export function PlannerNodeCard({ data, selected }: NodeProps<PlannerGraphNode>)
           )}
         </div>
       )}
+      </div>
       <Handle type="source" position={Position.Right} className="planner-node__handle" />
     </div>
   )
@@ -1789,7 +1818,14 @@ function SubCanvasRefCard({
         guided ? 'is-guided' : '',
       ].filter(Boolean).join(' ')}
     >
+      <NodeResizer
+        minWidth={220}
+        minHeight={140}
+        lineClassName="planner-node__resize-line"
+        handleClassName="planner-node__resize-handle"
+      />
       <Handle type="target" position={Position.Left} className="planner-node__handle" />
+      <div className="planner-node__content">
       <div className="planner-node__header">
         <span className="planner-node__status planner-node__status--design">
           <Lock size={12} aria-hidden />
@@ -1843,6 +1879,7 @@ function SubCanvasRefCard({
           </button>
         </div>
       )}
+      </div>
       <Handle type="source" position={Position.Right} className="planner-node__handle" />
     </div>
   )
