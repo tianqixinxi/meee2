@@ -398,8 +398,9 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if shouldSendLaunchCommand(trimmedCommand) {
             let startedAt = Date()
-            terminalView.sendText(trimmedCommand + "\n")
-            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(trimmedCommand.utf8.count)")
+            let launchCommand = commandWithSurfaceIdentity(trimmedCommand)
+            terminalView.sendText(launchCommand + "\n")
+            logPerf("launch_command", startedAt: startedAt, extra: "bytes=\(launchCommand.utf8.count)")
             _ = scheduleWorkspaceTrustAutoAcceptIfNeeded(command: trimmedCommand)
         }
         guard let initialPrompt, !initialPrompt.isEmpty else { return }
@@ -535,6 +536,14 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         return lower != "shell" && lower != "/bin/zsh" && lower != "/bin/bash"
     }
 
+    private func commandWithSurfaceIdentity(_ rawCommand: String) -> String {
+        [
+            "CMUX_SURFACE_ID=\(Self.shellQuote(surfaceId))",
+            "MEEE2_SURFACE_SESSION_ID=\(Self.shellQuote(sessionId))",
+            rawCommand
+        ].joined(separator: " ")
+    }
+
     private func touch() {
         updatedAt = Date()
     }
@@ -585,6 +594,10 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
         }
         let prompt = lines.joined(separator: "\n")
         return prompt.isEmpty ? nil : prompt
+    }
+
+    private static func shellQuote(_ raw: String) -> String {
+        "'\(raw.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private static func configureGhosttyResourcesIfNeeded() {

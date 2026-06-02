@@ -169,6 +169,38 @@ class SessionTerminalStore {
         }
     }
 
+    @discardableResult
+    func setProviderResumeSessionIdForSurface(
+        cmuxSurfaceId: String?,
+        providerResumeSessionId: String
+    ) -> String? {
+        let surfaceId = cmuxSurfaceId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resumeId = providerResumeSessionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !surfaceId.isEmpty,
+              let validResumeId = Self.validProviderResumeSessionId(resumeId) else {
+            return nil
+        }
+        return performSyncReturning {
+            guard let sessionId = store.first(where: { _, info in
+                info.cmuxSurfaceId == surfaceId
+                    && InternalSessionIdentity.isSurfaceTerminal(
+                        termProgram: info.termProgram,
+                        termBundleId: info.termBundleId
+                    )
+            })?.key else {
+                return nil
+            }
+            var info = store[sessionId]!
+            guard info.providerResumeSessionId != validResumeId else { return sessionId }
+            info.providerResumeSessionId = validResumeId
+            info.lastActivityAt = Date()
+            store[sessionId] = info
+            save()
+            NSLog("[SessionTerminalStore] Linked surface \(surfaceId.prefix(12)) session \(sessionId.prefix(8)) to provider resume id \(validResumeId.prefix(8))")
+            return sessionId
+        }
+    }
+
     /// 清理过期 session (超过 24 小时无活动)
     func cleanupExpired() {
         performSync {
@@ -216,6 +248,13 @@ class SessionTerminalStore {
         } else {
             queue.sync(execute: work)
         }
+    }
+
+    private func performSyncReturning<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            return work()
+        }
+        return queue.sync(execute: work)
     }
 
     private func migrateInvalidInternalResumeCommandsLocked() -> Bool {
