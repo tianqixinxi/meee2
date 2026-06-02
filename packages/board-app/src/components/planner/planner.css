@@ -1559,12 +1559,7 @@
 }
 
 .planner-node {
-  /* 宽高自由调整 — 卡片填满 react-flow 节点外框。adapter 始终给外框确定的 width
-   * (默认 / layout.width),所以这里 width:100% 解析成固定像素、文案正常换行;
-   * height 只有用户调整过才确定,否则外框高度 auto → height:100% 退化成内容高度,
-   * 保持原来的自适应高度。NodeResizer 调整后把显式 px 写到外框,卡片随之填满。 */
-  width: 100%;
-  height: 100%;
+  width: 320px;
   padding: 12px;
   /* UI-simplification — min-height 让 Push 1 精简内容后卡片不缩成几十像素的小条:
    * 内容变短了但点击 / 拖动目标仍需有合理高度。也让 layout 上的相对位置稳定,
@@ -1635,46 +1630,6 @@
   cursor: grabbing;
 }
 
-/* 宽高自由调整 — NodeResizer 把手/边框默认隐藏,鼠标悬停节点(或节点被选中)时
- * 才显示。不用 isVisible={selected} 是因为点节点会直接弹出 NodeInspectorModal、
- * 盖住画布,选中态根本看不到把手;hover 揭示既可发现又不打扰,而且抓角缩放是
- * 拖拽不是点击,不会触发 modal。配色对齐深色画布。 */
-.react-flow__node .react-flow__resize-control.handle,
-.react-flow__node .react-flow__resize-control.line {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.react-flow__node:hover .react-flow__resize-control.handle,
-.react-flow__node.selected .react-flow__resize-control.handle,
-.react-flow__node:hover .react-flow__resize-control.line,
-.react-flow__node.selected .react-flow__resize-control.line {
-  opacity: 1;
-  pointer-events: all;
-}
-
-.planner-node__resize-line {
-  border-color: rgba(245, 244, 239, 0.45);
-}
-
-.planner-node__resize-handle {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  border: 1px solid rgba(245, 244, 239, 0.7);
-  background: rgba(44, 43, 41, 0.96);
-}
-
-:root[data-theme="light"] .planner-node__resize-line {
-  border-color: rgba(60, 58, 52, 0.4);
-}
-
-:root[data-theme="light"] .planner-node__resize-handle {
-  border-color: rgba(60, 58, 52, 0.6);
-  background: #fff;
-}
-
 .planner-node--blocked {
   border-left-color: var(--danger);
 }
@@ -1740,14 +1695,22 @@
 }
 
 .planner-node--artifact-node {
-  /* 宽度同样跟随 react-flow 外框(adapter 按 artifact kind 给确定的 width),
-   * 以支持自由调整;kanban 420 / html·json·file 360 / 其余 240。 */
-  width: 100%;
+  width: 240px;
   min-height: 116px;
   border-left-width: 3px;
   border-color: rgba(170, 157, 132, 0.3);
   border-left-color: #aa9d84;
   background: rgba(45, 42, 36, 0.95);
+}
+
+.planner-node--artifact-kanban {
+  width: 420px;
+}
+
+.planner-node--artifact-html,
+.planner-node--artifact-json,
+.planner-node--artifact-file {
+  width: 360px;
 }
 
 .planner-node__artifact-ref {
@@ -2962,6 +2925,23 @@
   background: rgba(201, 164, 93, 0.18);
   color: #e6ca8f;
   border-color: rgba(201, 164, 93, 0.32);
+}
+
+/* P5 · 上游版本已更新提示(琥珀色,贴在 mode badge 旁)。仅指示节点输入
+   已过期,清除靠用户重新运行该节点。 */
+.planner-node__stale-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(214, 158, 74, 0.18);
+  color: #ecca8c;
+  border: 1px solid rgba(214, 158, 74, 0.4);
+  cursor: help;
 }
 
 /* Duration chip — running / awaiting 时长。awaiting 用红色高亮促人响应。 */
@@ -5283,7 +5263,7 @@
   }
 
   .planner-node {
-    /* 宽度由 react-flow 外框给(自由调整);窄屏下只压缩内边距。 */
+    width: min(250px, calc(100vw - 96px));
     padding: 10px;
   }
 
@@ -5392,8 +5372,7 @@
   }
 
   .planner-node {
-    /* 宽度由 react-flow 外框给(自由调整),窄屏不再写死。 */
-    min-width: 0;
+    width: min(232px, calc(100vw - 88px));
   }
 }
 

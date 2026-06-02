@@ -126,6 +126,21 @@ export function modeBadgeTooltip(mode: NodeMode, scheduleInterval: string | null
   return MODE_TOOLTIP[mode]
 }
 
+// P5 · 上游版本 staleness 提示。来自后端只读派生的 `upstreamFreshness`
+// (从 append-only nodeVersions 算出,不落库)。仅做提示,不自动清除——
+// 清除要靠用户真的重新运行该节点(否则只升版不重跑会「不干活就消警告」)。
+export const UPSTREAM_STALE_LABEL = '上游已更新'
+
+export function upstreamStaleTooltip(
+  stale: { title: string; consumedVersion: number; latestVersion: number }[],
+): string {
+  if (stale.length === 0) return ''
+  const lines = stale.map(
+    (u) => `上游「${u.title}」已更新到 v${u.latestVersion},本步仍基于 v${u.consumedVersion}`,
+  )
+  return `${lines.join(';')} — 重新运行该节点可用最新输入刷新`
+}
+
 // === Primary action — 结构化枚举 + 显示文本 ===
 //
 // 'none' = 不显示按钮。其他值是分发到的具体行为。文案改中文后不能再用

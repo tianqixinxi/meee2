@@ -778,6 +778,28 @@ final class PlannerActivityStore {
     }
 }
 
+/// Derived (read-time only) upstream-staleness signal. Set by `canvasState`'s
+/// read projection, **encode-only** on the graph DTO, never decoded or
+/// persisted — same contract as `PlanningNode.nextAction`. A node is `.stale`
+/// when an upstream it already consumed has since produced a newer *done*
+/// version. Pure projection over the append-only `nodeVersions` log; introduces
+/// no new stored state (canvas stays a ledger — staleness is computed, not
+/// stored). See [[canvas-is-ledger-not-pm]].
+struct UpstreamFreshness: Codable, Equatable {
+    enum State: String, Codable { case fresh, stale }
+    /// One upstream whose head version is newer than what this node consumed.
+    struct StaleUpstream: Codable, Equatable {
+        var nodeId: String
+        var title: String
+        /// `versionIndex` of the upstream version this node actually ran on.
+        var consumedVersion: Int
+        /// `versionIndex` of the upstream's current head (done) version.
+        var latestVersion: Int
+    }
+    var state: State
+    var staleUpstreams: [StaleUpstream]
+}
+
 struct PlanningNode: Codable, Equatable {
     var id: String
     var canvasId: String
@@ -849,6 +871,13 @@ struct PlanningNode: Codable, Equatable {
     /// Part D — 可配置节点状态(spec §5)。nil = 默认 schema(三态+done 门控)。
     /// 用户可经 planner 给节点定义自定义状态集;读 `effectiveStateSchema`。
     var stateSchema: NodeStateSchema?
+
+    /// Derived upstream-staleness signal — set ONLY by `canvasState`'s read
+    /// projection (`injectUpstreamFreshness`). Optional ⇒ implicit nil default,
+    /// so the custom `init(...)` / `init(from:)` never need to set it and stored
+    /// `record.nodes` always carry nil (never persisted; see `DerivedCodingKeys`
+    /// + `encode(to:)`). nil on nodes with no upstream or that never ran.
+    var upstreamFreshness: UpstreamFreshness?
 
     /// 生效的状态 schema:显式 `stateSchema` 否则默认。引擎/契约/校验都读这个。
     var effectiveStateSchema: NodeStateSchema { stateSchema ?? .default }
@@ -965,6 +994,7 @@ struct PlanningNode: Codable, Equatable {
     /// Extra (encode-only) keys layered on top of the stored shape.
     private enum DerivedCodingKeys: String, CodingKey {
         case nextAction
+        case upstreamFreshness
     }
 
     init(from decoder: Decoder) throws {
@@ -1048,6 +1078,9 @@ struct PlanningNode: Codable, Equatable {
         // Derived guidance — encode-only, never decoded back.
         var derived = encoder.container(keyedBy: DerivedCodingKeys.self)
         try derived.encodeIfPresent(nextAction, forKey: .nextAction)
+        // Derived upstream-staleness — encode-only; nil on stored nodes (set
+        // only in the read projection), so storage never carries it.
+        try derived.encodeIfPresent(upstreamFreshness, forKey: .upstreamFreshness)
     }
 
     /// A short imperative "what to do next" guidance line for this node,
@@ -7016,6 +7049,52 @@ enum PlannerBoardBridge {
     private static let service = PlannerCoreService()
     static var store = PlannerStore.shared
 
+    /// Read-time projection: stamp each node with a derived `upstreamFreshness`
+    /// by comparing the upstream version it last consumed
+    /// (`nodeVersions[D].inputs.upstreamVersionId`) against the upstream's
+    /// current head (`nodeVersions.latest(upstream)`). Pure over the append-only
+    /// `nodeVersions` log — nothing is written back. Phase 0: `upstreamVersionId`
+    /// is singular (primary upstream only), so a fan-in node is checked against
+    /// whichever upstream that snapshot recorded; multi-upstream coverage lands
+    /// when the snapshot becomes a per-upstream list.
+    private static func injectUpstreamFreshness(
+        nodes: [PlanningNode],
+        nodeVersions: [NodeVersion]
+    ) -> [PlanningNode] {
+        guard !nodeVersions.isEmpty else { return nodes }
+        let versionById = Dictionary(nodeVersions.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let titleById = Dictionary(nodes.map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
+        return nodes.map { node in
+            guard let deps = node.dependsOnNodeIds, !deps.isEmpty else { return node }
+            // Only flag a node that has actually run at least once.
+            guard let myRun = nodeVersions.latest(canvasId: node.canvasId, nodeId: node.id) else { return node }
+            // What this run consumed (Phase 0: a single upstream version id).
+            let consumed = myRun.inputs.upstreamVersionId.flatMap { versionById[$0] }
+            var stale: [UpstreamFreshness.StaleUpstream] = []
+            for upId in deps {
+                guard let head = nodeVersions.latest(canvasId: node.canvasId, nodeId: upId) else { continue }
+                // Don't flag while the newer upstream version is mid-flight —
+                // only a settled (done) head counts as a real divergence.
+                guard head.status == .done else { continue }
+                guard let consumed, consumed.nodeId == upId else { continue }
+                if consumed.id != head.id {
+                    stale.append(UpstreamFreshness.StaleUpstream(
+                        nodeId: upId,
+                        title: titleById[upId] ?? upId,
+                        consumedVersion: consumed.versionIndex,
+                        latestVersion: head.versionIndex
+                    ))
+                }
+            }
+            var node = node
+            node.upstreamFreshness = UpstreamFreshness(
+                state: stale.isEmpty ? .fresh : .stale,
+                staleUpstreams: stale
+            )
+            return node
+        }
+    }
+
     static func canvasState(
         for canvasId: String,
         snapshot: BoardLayoutStore.Snapshot,
@@ -7052,7 +7131,10 @@ enum PlannerBoardBridge {
         try requireCanvasVisible(record.canvas, access: access)
         return (
             record.canvas,
-            nodes,
+            // P5 · derived upstream-staleness, injected at read time only (never
+            // persisted) so cards can flag "上游已更新". Same encode-only contract
+            // as `nextAction`.
+            injectUpstreamFreshness(nodes: nodes, nodeVersions: record.nodeVersions),
             service.readNodeState(nodes: nodes),
             record.proposals,
             access,
