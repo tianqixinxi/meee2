@@ -18,10 +18,11 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
   const { t } = useI18n()
   const terminalHostRef = useRef<HTMLDivElement | null>(null)
   const layoutFrameRef = useRef<number | null>(null)
+  const layoutTimerRefs = useRef<number[]>([])
   const lastRectRef = useRef<NativeTerminalRect | null>(null)
   const switchStartedAtRef = useRef<Record<string, number>>({})
   const switchTraceIdRef = useRef<Record<string, string>>({})
-  const latestSyncRef = useRef<(phase?: 'show' | 'layout' | 'focus') => void>(() => {})
+  const latestSyncRef = useRef<(phase?: 'show' | 'layout' | 'focus', options?: { force?: boolean }) => void>(() => {})
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(selectedSessionId ?? null)
@@ -130,7 +131,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
     }
   }, [pendingNativeTarget, selectedSession])
 
-  const syncTerminal = useCallback((phase: 'show' | 'layout' | 'focus' = 'layout') => {
+  const syncTerminal = useCallback((phase: 'show' | 'layout' | 'focus' = 'layout', options?: { force?: boolean }) => {
     const host = terminalHostRef.current
     if (!host) return
     if (!terminalTarget.sessionId && !terminalTarget.surfaceId) {
@@ -145,7 +146,7 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
       width: rect.width,
       height: rect.height,
     }
-    if (phase === 'layout' && sameRect(lastRectRef.current, nextRect)) return
+    if (phase === 'layout' && !options?.force && sameRect(lastRectRef.current, nextRect)) return
     lastRectRef.current = nextRect
     const sentAtMs = Date.now()
     const traceId = selectedTrace ?? `workspace-${terminalTarget.sessionId?.slice(0, 8) ?? 'unknown'}-${sentAtMs.toString(36)}`
@@ -188,8 +189,16 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
     })
   }, [])
 
+  const scheduleStabilizedLayouts = useCallback(() => {
+    layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
+    layoutTimerRefs.current = [40, 140, 320].map((delay) => window.setTimeout(() => {
+      latestSyncRef.current('layout', { force: true })
+    }, delay))
+  }, [])
+
   useLayoutEffect(() => {
     syncTerminal('show')
+    scheduleStabilizedLayouts()
     const host = terminalHostRef.current
     if (!host) return undefined
     const resizeObserver = new ResizeObserver(() => scheduleLayout())
@@ -202,17 +211,20 @@ export function NativeSessionsWorkspaceHost({ state, selectedSessionId, onSelect
         window.cancelAnimationFrame(layoutFrameRef.current)
         layoutFrameRef.current = null
       }
+      layoutTimerRefs.current.forEach((timer) => window.clearTimeout(timer))
+      layoutTimerRefs.current = []
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleWindowLayout)
       window.removeEventListener('meee2:layout-native-sessions-workspace', handleWindowLayout)
       syncNativeSessionsWorkspace({ phase: 'hide', mode: 'terminal' })
       lastRectRef.current = null
     }
-  }, [scheduleLayout])
+  }, [scheduleLayout, scheduleStabilizedLayouts])
 
   useEffect(() => {
     syncTerminal('focus')
-  }, [syncTerminal])
+    scheduleStabilizedLayouts()
+  }, [scheduleStabilizedLayouts, syncTerminal])
 
   const selectSession = useCallback((session: Session) => {
     const startedAt = Date.now()

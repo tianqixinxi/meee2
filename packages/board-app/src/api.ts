@@ -46,6 +46,7 @@ import type {
   AssignPlannerNodeResult,
   OwnedCanvasSummary,
 } from './types'
+import { readLlmSettings } from './lib/llmSettings'
 
 declare global {
   interface Window {
@@ -1192,11 +1193,23 @@ export async function generatePlannerProposal(
     )
     return demoProposal
   }
+  const llm = readLlmSettings()
+  const settings: AssistantChatSettings = {
+    provider: llm.provider,
+    apiKey: llm.apiKey,
+    baseUrl: llm.baseUrl,
+    model: llm.model,
+    enabledTools: [],
+    scope: 'this-mac',
+    canvasId,
+    localRunPurpose: 'interactive',
+  }
+  const payload = context?.trim() ? { goal, context, settings } : { goal, settings }
   const response = await jsonRequest<{ proposal: PlanProposal | null }>(
     `/api/planner/canvases/${encodeURIComponent(canvasId)}/proposals/generate`,
     {
       method: 'POST',
-      body: JSON.stringify(context?.trim() ? { goal, context } : { goal }),
+      body: JSON.stringify(payload),
     },
   )
   return response.proposal
@@ -2498,6 +2511,7 @@ export interface AssistantChatSettings {
   canvasId?: string
   workspacePath?: string
   canvasName?: string
+  localRunPurpose?: 'interactive' | 'recap'
   selectedElements?: SelectedCanvasElementContext[]
 }
 

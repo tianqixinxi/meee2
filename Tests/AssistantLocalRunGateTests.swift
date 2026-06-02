@@ -48,6 +48,22 @@ final class AssistantLocalRunGateTests: XCTestCase {
                         "after the cooldown elapses, a fresh run is allowed")
     }
 
+    /// User-triggered local runs still use the same max-in-flight guard, but
+    /// skip the post-completion cooldown so a finished recap does not block an
+    /// intentional chat / proposal action.
+    func testInteractiveRunCanStartImmediatelyAfterRelease() {
+        let gate = AssistantLocalRunGate(cooldown: 8)
+
+        var lease = gate.acquire(key: "canvas-a")
+        XCTAssertNotNil(lease)
+        lease?.release()
+
+        XCTAssertNotNil(
+            gate.acquire(key: "canvas-a", completionCooldown: false),
+            "interactive runs should not be blocked by the recap cooldown"
+        )
+    }
+
     /// Simulate the storm: a recap that fails immediately and is re-attempted in
     /// a tight loop. With the gate, only a bounded number of spawns get through
     /// over a fixed window — NOT one per loop iteration.

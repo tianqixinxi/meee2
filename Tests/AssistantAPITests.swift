@@ -145,6 +145,7 @@ final class AssistantAPITests: XCTestCase {
 	                canvasId: "personal-default",
 	                workspacePath: "",
 	                canvasName: "Canvas",
+                localRunPurpose: .interactive,
 	                selectedElements: [])
             let prompt = AssistantAPI.buildSystemPrompt(settings: s)
             XCTAssertFalse(prompt.isEmpty, "empty prompt for provider=\(kind)")

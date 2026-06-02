@@ -48,7 +48,13 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             write: { data in
                 _ = InternalTerminalRuntime.shared.writeInputData(surfaceOrSessionId: resolvedSurfaceId, data: data)
             },
-            resize: { _ in }
+            resize: { viewport in
+                Self.resizeRuntimeSurface(
+                    surfaceId: resolvedSurfaceId,
+                    columns: viewport.columns,
+                    rows: viewport.rows
+                )
+            }
         )
         self.terminalSession = terminalSession
         Self.configureGhosttyResourcesIfNeeded()
@@ -266,7 +272,15 @@ final class EmbeddedNativeTerminalController: NSObject, InternalTerminalSurfaceC
             return
         }
         lastSyncedSize = (cols, rows)
-        _ = InternalTerminalRuntime.shared.resize(surfaceOrSessionId: surfaceId, cols: cols, rows: rows)
+        Self.resizeRuntimeSurface(surfaceId: surfaceId, columns: cols, rows: rows)
+    }
+
+    nonisolated private static func resizeRuntimeSurface(surfaceId: String, columns: UInt16, rows: UInt16) {
+        _ = InternalTerminalRuntime.shared.resize(
+            surfaceOrSessionId: surfaceId,
+            cols: clamped(columns, lower: 20, upper: 500),
+            rows: clamped(rows, lower: 8, upper: 200)
+        )
     }
 }
 
@@ -281,6 +295,7 @@ extension EmbeddedNativeTerminalController:
 
     func terminalDidAttachSurface(_ surface: TerminalSurface) {
         terminalSurfaceAttached = true
+        scheduleRefit(includeFollowUp: true)
         flushPendingOutput(includeFollowUpRefit: true)
     }
 

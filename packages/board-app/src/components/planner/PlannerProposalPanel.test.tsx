@@ -42,7 +42,7 @@ describe('PlannerProposalPanel empty canvas intake', () => {
         steps: [
           {
             title: '收集公开舆情',
-            body: '输入产品关键词，从公开网页检索相关讨论，输出原始来源列表。',
+            body: '**Input:** 产品关键词 **Actor/Tool:** Web 检索工具 **Output/Artifact:** 原始来源列表。',
           },
           {
             title: '生成飞书文档',
@@ -85,6 +85,10 @@ describe('PlannerProposalPanel empty canvas intake', () => {
 
     expect(await screen.findByRole('heading', { name: '舆情洞察执行计划' })).toBeInTheDocument()
     expect(screen.getByText('收集公开舆情')).toBeInTheDocument()
+    expect(screen.getByText('Input')).toBeInTheDocument()
+    expect(screen.getByText('Actor / Tool')).toBeInTheDocument()
+    expect(screen.getByText('Output')).toBeInTheDocument()
+    expect(screen.queryByText(/\*\*Input:/)).not.toBeInTheDocument()
     expect(screen.queryByText('What should I optimize for?')).not.toBeInTheDocument()
   })
 
