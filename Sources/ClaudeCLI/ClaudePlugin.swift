@@ -938,27 +938,32 @@ class ClaudePlugin: SessionPlugin {
                     .map { FileManager.default.fileExists(atPath: $0) } ?? false
 
                 if !ownTranscriptExists {
-                    // 只有自己的 transcript 不存在才怀疑是 stale ID
+                    // 只有自己的 transcript 不存在才怀疑是 stale ID。归属交给
+                    // resolveStaleSessionId:优先 surface-id 精确匹配、拒绝无
+                    // transcript 的幽灵候选(共 cwd 的同胞/夭折会话),避免把
+                    // 节点绑到一个永远 resume 不了的假 id。
                     hookStatesLock.lock()
-                    let candidates = hookStates.compactMap { (sid, evt) -> String? in
-                        evt.cwd == aiSession.cwd ? sid : nil
+                    let candidates = hookStates.map { (sid, evt) in
+                        ProviderSessionCandidate(sessionId: sid, cwd: evt.cwd ?? "", surfaceId: evt.cmuxSurfaceId)
                     }
                     hookStatesLock.unlock()
 
-                    for candidate in candidates {
-                        // 候选 sid 已经被另一个活着的 PID 占用？那它不是给我的
-                        let claimedByOther = sessionStore.sessions.contains(where: {
-                            $0.sessionId == candidate
-                                && $0.pid != aiSession.pid
-                                && $0.pid.map { SessionStore.processAlive($0) } == true
-                        })
-                        if claimedByOther {
-                            logSkippedCwdRemap(candidate: candidate, aiSession: aiSession)
-                            continue
-                        }
-                        realSessionId = candidate
-                        NSLog("[ClaudePlugin] Remapped stale session ID via cwd: \(candidate.prefix(8)) (PID.json had \(aiSession.id.prefix(8)))")
-                        break
+                    if let resolved = Self.resolveStaleSessionId(
+                        surfaceId: aiSession.cmuxSurfaceId,
+                        cwd: aiSession.cwd,
+                        candidates: candidates,
+                        isClaimedByOther: { candidate in
+                            self.sessionStore.sessions.contains(where: {
+                                $0.sessionId == candidate
+                                    && $0.pid != aiSession.pid
+                                    && $0.pid.map { SessionStore.processAlive($0) } == true
+                            })
+                        },
+                        transcriptExists: { self.getTranscriptPath(for: $0) != nil },
+                        logSkipped: { self.logSkippedCwdRemap(candidate: $0, aiSession: aiSession) }
+                    ) {
+                        realSessionId = resolved
+                        NSLog("[ClaudePlugin] Remapped stale session ID: \(resolved.prefix(8)) (PID.json had \(aiSession.id.prefix(8)))")
                     }
                 }
             }
@@ -969,7 +974,13 @@ class ClaudePlugin: SessionPlugin {
                 // 需要把旧记录迁移到真实 ID，不能 delete/create 丢掉用户状态
                 if existingPidMatch.sessionId != realSessionId {
                     NSLog("[ClaudePlugin] Session ID mismatch: store has \(existingPidMatch.sessionId), real is \(realSessionId). Rekeying continuity record.")
-                    if Self.isMeee2InternalSessionId(existingPidMatch.sessionId) {
+                    // Belt-and-suspenders: never freeze a resume target whose
+                    // transcript doesn't exist. resolveStaleSessionId already
+                    // rejects phantoms during remap, but `realSessionId` may also
+                    // be the un-remapped PID-scan id; guard here too so a phantom
+                    // can never become a node's permanent (broken) resume id.
+                    if Self.isMeee2InternalSessionId(existingPidMatch.sessionId),
+                       getTranscriptPath(for: realSessionId) != nil {
                         SessionTerminalStore.shared.setProviderResumeSessionId(
                             sessionId: existingPidMatch.sessionId,
                             providerResumeSessionId: realSessionId
@@ -1221,6 +1232,67 @@ class ClaudePlugin: SessionPlugin {
     private static func isMeee2InternalSessionId(_ sessionId: String) -> Bool {
         let lower = sessionId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return lower.hasPrefix("claude-internal-") || lower.hasPrefix("codex-internal-")
+    }
+
+    /// A candidate CLI (`claude`) session, surfaced from a hook event, that a
+    /// stale PID-scanned session might actually be.
+    struct ProviderSessionCandidate: Equatable {
+        let sessionId: String
+        let cwd: String
+        let surfaceId: String?
+    }
+
+    /// Resolve which provider (CLI) session id a stale internal/PID session
+    /// should adopt.
+    ///
+    /// Root-cause fix: every node's internal session in a canvas runs `claude`
+    /// in the SAME managed-workspace cwd, so resolving "which CLI session is
+    /// this surface's" by cwd alone is ambiguous — under collision an internal
+    /// session can get bound to a *sibling's* (or an aborted/phantom) CLI id.
+    /// If that phantom id (no transcript on disk) is then frozen as the resume
+    /// target, `claude --resume <id>` fails forever and the node sticks at
+    /// "running / needs-response" with no live session.
+    ///
+    /// This resolver makes attribution deterministic and safe:
+    ///  1. Prefer an **exact surface-id match** (now that internal sessions
+    ///     export `CMUX_SURFACE_ID`, hooks carry the surface id) over a cwd
+    ///     match.
+    ///  2. **Never** adopt a candidate whose transcript is missing — that's the
+    ///     phantom that permanently breaks resume.
+    ///  3. Skip candidates already claimed by another live PID.
+    /// Returns `nil` when no trustworthy candidate exists (caller keeps the
+    /// original id rather than freezing garbage).
+    static func resolveStaleSessionId(
+        surfaceId: String?,
+        cwd: String,
+        candidates: [ProviderSessionCandidate],
+        isClaimedByOther: (String) -> Bool,
+        transcriptExists: (String) -> Bool,
+        logSkipped: (String) -> Void = { _ in }
+    ) -> String? {
+        func norm(_ s: String?) -> String? {
+            let t = (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return t.isEmpty ? nil : t
+        }
+        let mySurface = norm(surfaceId)
+        let myCwd = norm(cwd)
+        // Exact surface-id matches first (deterministic), then cwd matches.
+        let bySurface: [ProviderSessionCandidate] = mySurface == nil ? [] :
+            candidates.filter { norm($0.surfaceId) == mySurface }
+        let byCwd: [ProviderSessionCandidate] = myCwd == nil ? [] :
+            candidates.filter { norm($0.cwd) == myCwd }
+        var ordered: [String] = []
+        for candidate in bySurface + byCwd where !ordered.contains(candidate.sessionId) {
+            ordered.append(candidate.sessionId)
+        }
+        for candidate in ordered {
+            if isClaimedByOther(candidate) { logSkipped(candidate); continue }
+            // A candidate without a transcript is a phantom — adopting/freezing
+            // it permanently breaks resume. Reject it.
+            if !transcriptExists(candidate) { logSkipped(candidate); continue }
+            return candidate
+        }
+        return nil
     }
 
     private static func fileFingerprint(path: String) -> (fileSize: UInt64, modifiedAt: TimeInterval)? {

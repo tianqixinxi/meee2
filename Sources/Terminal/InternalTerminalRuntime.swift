@@ -1249,6 +1249,14 @@ final class InternalTerminalSurface {
         env["PWD"] = cwd
         env["MEEE2_SESSION_ID"] = sessionId
         env["MEEE2_SURFACE_ID"] = surfaceId
+        // The Claude hook bridge forwards the surface id to meee2 as
+        // `cmuxSurfaceId` by reading the `CMUX_SURFACE_ID` env var (see
+        // claude-hook-bridge.sh). Without this, an internal session's hooks
+        // carry no surface id and ClaudePlugin can only attribute the CLI
+        // session by cwd — which is ambiguous because every node's internal
+        // session in a canvas shares one managed-workspace cwd, leading to
+        // mis-binding the resume id. Export it so attribution is deterministic.
+        env["CMUX_SURFACE_ID"] = surfaceId
         env["MEEE2_TERMINAL_KIND"] = "internal"
         if let canvasId { env["MEEE2_CANVAS_ID"] = canvasId }
         if let nodeId { env["MEEE2_NODE_ID"] = nodeId }
