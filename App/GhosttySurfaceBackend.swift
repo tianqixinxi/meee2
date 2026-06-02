@@ -228,6 +228,7 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private var didSendCommand = false
     private var didSendInitialPrompt = false
     private var detached = false
+    private var lastLayoutFrame: NSRect = .zero
 
     // BUG A — ready-gated initialPrompt delivery (mirrors InternalTerminalRuntime
     // `deliverInitialPromptWhenReady`). Ghostty exec surfaces do NOT expose
@@ -315,13 +316,20 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     func layout(in frame: NSRect, hidden: Bool, reason: String) {
         guard !detached else { return }
         let startedAt = Date()
-        terminalView.frame = frame
-        terminalView.isHidden = hidden
+        let frameChanged = frame != lastLayoutFrame
+        let visibilityChanged = terminalView.isHidden != hidden
+        lastLayoutFrame = frame
+        if frameChanged {
+            terminalView.frame = frame
+        }
+        if visibilityChanged {
+            terminalView.isHidden = hidden
+        }
         terminalView.setSurfaceVisible(!hidden)
-        if !hidden {
+        if !hidden && (frameChanged || visibilityChanged) {
             fitToCurrentSize()
         }
-        logPerf("layout", startedAt: startedAt, extra: "reason=\(reason) hidden=\(hidden)")
+        logPerf("layout", startedAt: startedAt, extra: "reason=\(reason) hidden=\(hidden) frameChanged=\(frameChanged) visibilityChanged=\(visibilityChanged)")
     }
 
     func focus() {

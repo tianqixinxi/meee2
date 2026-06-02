@@ -37,7 +37,7 @@ interface CommandPaletteProps {
   boardState: BoardState | null
   onOpenCanvas: (canvasId: string) => void
   onOpenNodeInspector: (canvasId: string, nodeId: string) => void
-  onOpenSession: (sessionId: string) => void
+  onOpenSession: (sessionId: string, canvasIdHint?: string | null) => void
 }
 
 const MAX_PER_SECTION = 5
@@ -109,6 +109,17 @@ export function CommandPalette({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open])
 
+  useEffect(() => {
+    const openPalette = (event: Event) => {
+      const detail = (event as CustomEvent<{ query?: string }>).detail
+      setOpen(true)
+      setQuery(detail?.query ?? '')
+      setSelectedIndex(0)
+    }
+    window.addEventListener('meee2:open-command-palette', openPalette)
+    return () => window.removeEventListener('meee2:open-command-palette', openPalette)
+  }, [])
+
   // Refresh planner monitor (cross-canvas nodes) each time the palette opens
   // so search reflects current workflow state without a hot reactive feed.
   useEffect(() => {
@@ -170,16 +181,22 @@ export function CommandPalette({
   )
 
   const allSessionItems = useMemo<PaletteItem[]>(
-    () =>
-      (boardState?.sessions ?? []).map((session) => ({
+    () => {
+      const canvasIdBySessionId = new Map<string, string>()
+      for (const item of monitorItems) {
+        const sessionId = item.sessionId?.trim()
+        if (sessionId && item.canvasId) canvasIdBySessionId.set(sessionId, item.canvasId)
+      }
+      return (boardState?.sessions ?? []).map((session) => ({
         kind: 'session',
         id: session.id,
         label: session.title || session.id,
         detail: session.status,
         haystack: `${session.title ?? ''} ${session.project ?? ''} ${session.status ?? ''} ${session.id}`.toLowerCase(),
-        payload: { kind: 'session', sessionId: session.id },
-      })),
-    [boardState],
+        payload: { kind: 'session', sessionId: session.id, canvasIdHint: canvasIdBySessionId.get(session.id) ?? null },
+      }))
+    },
+    [boardState, monitorItems],
   )
 
   // Filter + score within each domain, cap to MAX_PER_SECTION.
@@ -228,7 +245,7 @@ export function CommandPalette({
         if (!canvasId || !nodeId) return
         onOpenNodeInspector(canvasId, nodeId)
       } else if (payload.kind === 'session') {
-        onOpenSession(payload.sessionId)
+        onOpenSession(payload.sessionId, payload.canvasIdHint)
       }
     },
     [onOpenCanvas, onOpenNodeInspector, onOpenSession],

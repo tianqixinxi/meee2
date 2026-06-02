@@ -84,6 +84,10 @@ _Avoid_: Generic empty state, silent recovery failure
 A default monitoring surface that shows sessions still relevant to current work. Completed and dead sessions remain stored for Session Continuity but leave Live Session Surfaces unless they still carry an unresolved user-action signal.
 _Avoid_: History list as monitor, delete-to-hide
 
+**Session Terminal Overlay**:
+A Canvas-scoped modal that opens one meee2-managed local session terminal in place. A Session Terminal Overlay is not a global session list, not a separate workspace mode, and not the home for session search or bulk session controls.
+_Avoid_: Sessions page, terminal workspace, session list modal
+
 **Canvas Workspace**:
 A user-owned container that organizes live sessions, workflow nodes, subcanvases, recap, and evidence. A Canvas Workspace may be shown as a monitor, board, or workflow, but it remains the same organizing concept.
 _Avoid_: Graph editor as the product, separate monitor workspace

@@ -233,13 +233,11 @@ public final class TerminalSessionBackendRegistry {
             return envKind
         }
         lock.lock()
-        // owner 决策(2026-06-01): ghostty-surface 后端基本弃用 —— 它的会话生命周期
-        // 绑在 GUI 原生 surface 宿主上,从 board 打开后 surface 没被常驻窗口托住就
-        // 被拆,会话一创建就 dead;且没在本 registry 注册、不被复用检查追踪,导致每次
-        // 「打开会话」都 recreate 一个马上就死的会话。默认改成 legacy PTY
-        // (InternalTerminalRuntime):进程内真 PTY、有持久 claude 进程、被复用检查
-        // 正确追踪。想用 ghostty-surface 仍可经 MEEE2_TERMINAL_BACKEND 或 override。
-        let preferred = preferredOverride ?? .legacyInternal
+        // New Canvas terminal sessions default to the persistent Ghostty native
+        // surface backend. The legacy in-memory PTY backend remains as a
+        // fallback or explicit MEEE2_TERMINAL_BACKEND override, but new sessions
+        // should not depend on raw scrollback replay into a fresh TerminalView.
+        let preferred = preferredOverride ?? .ghosttySurface
         lock.unlock()
         return preferred
     }

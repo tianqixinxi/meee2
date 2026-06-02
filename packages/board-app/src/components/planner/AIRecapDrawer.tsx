@@ -11,12 +11,11 @@
  *       · Blocked / failed nodes           (live from recap-core monitor)
  *       · New artifact versions <1h        (live from ENG-3 once wired)
  *   - Middle: aggregated activity, groupable by owner / node / time
- *   - Bottom: CTA → hand off to the global `SessionsView` rail mode
+ *   - Bottom: CTA → open Quick for session search
  *
- * The full session list lives in `SessionsView` (left-rail mode). This drawer
- * intentionally does NOT re-list sessions — it only surfaces attention signals
- * (gate-blocked, failed) and quick-jumps; clicking the bottom CTA routes the
- * user to the canonical session list.
+ * The full session search path lives in Quick. This drawer intentionally does
+ * NOT re-list sessions — it only surfaces attention signals (gate-blocked,
+ * failed) and quick-jumps; clicking the bottom CTA opens the command palette.
  *
  * Quick-jump URL contract (proposed for UI-1 coordination):
  *   ?node=<nodeId>&version=<versionId>
@@ -64,9 +63,8 @@ interface Props {
    */
   onJumpToNode?: (nodeId: string, versionId?: string) => void
   /**
-   * Switch the workspace rail to the global `SessionsView`. Provided by
-   * `CanvasToolbar`, which receives it from `App.tsx`. When wired, the bottom
-   * CTA hands the user off there instead of duplicating the session list here.
+   * Open Quick so the bottom CTA can hand off session search without
+   * duplicating the session list here.
    */
   onOpenAllSessions?: () => void
 }
@@ -348,7 +346,7 @@ export function AIRecapDrawer({
         )}
       </section>
 
-      {/* ── Bottom: hand off to the global SessionsView ─────────────── */}
+      {/* ── Bottom: hand off to Quick session search ─────────────────── */}
       {onOpenAllSessions && (
         <section className="ai-recap-drawer__section ai-recap-drawer__footer">
           <button
@@ -359,11 +357,11 @@ export function AIRecapDrawer({
               onClose()
             }}
           >
-            <span>View all sessions</span>
+            <span>Quick Open sessions</span>
             <ArrowUpRight size={12} aria-hidden />
           </button>
           <p className="ai-recap-drawer__cta-hint">
-            Live status, search and filtering live in the Sessions rail.
+            Search sessions, canvases and nodes from Quick Open.
           </p>
         </section>
       )}
