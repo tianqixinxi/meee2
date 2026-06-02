@@ -539,6 +539,27 @@ final class InternalTerminalSurface {
     /// Guards against delivering the spawn `initialPrompt` more than once.
     private var initialPromptDelivered = false
 
+    // MARK: Deferred spawn (startup layout fix)
+    //
+    // The agent (claude/codex) paints its full-screen banner the instant it
+    // execs, sized to the PTY winsize at that moment. If we exec at the guessed
+    // default (120×30) and the surface is later rendered in a narrower grid, the
+    // banner is hard-wrapped at 120 cols and can never reflow → scrambled output
+    // (single words scattered into vertical columns). So `start()` opens the PTY
+    // but holds off exec'ing the agent until the renderer reports its first real
+    // measured size via `resize()`. A short fallback guarantees headless sessions
+    // (no renderer ever attaches) still launch.
+    private static let deferredSpawnFallback: TimeInterval = 0.35
+    /// Pause between writing the initial prompt body and sending Enter, so the
+    /// agent TUI's paste-detection window closes and the lone "\r" registers as
+    /// a submit keystroke rather than being absorbed into the pasted text.
+    private static let initialPromptSubmitDelay: TimeInterval = 0.5
+    private var hasSpawned = false
+    private var awaitingInitialResize = false
+    private var deferredSecondaryFD: Int32 = -1
+    private var deferredCols: UInt16 = 0
+    private var deferredRows: UInt16 = 0
+
     init(surfaceId: String, sessionId: String, provider: String, cwd: String, command: String, canvasId: String?, nodeId: String?) {
         self.surfaceId = surfaceId
         self.sessionId = sessionId
@@ -551,6 +572,10 @@ final class InternalTerminalSurface {
         self.updatedAt = self.createdAt
     }
 
+    /// Open the PTY but defer exec'ing the agent until the renderer reports its
+    /// first real measured size (see `deferredSpawnFallback`). `cols`/`rows` are
+    /// the provisional size used both for the initial `openpty` winsize and as
+    /// the fallback if no renderer ever attaches.
     func start(cols: UInt16, rows: UInt16) throws {
         Self.ensureStandardFileDescriptors()
         Self.markHostFileDescriptorsCloseOnExec()
@@ -568,15 +593,74 @@ final class InternalTerminalSurface {
         let primaryHandle = FileHandle(fileDescriptor: primary, closeOnDealloc: true)
         self.primaryHandle = primaryHandle
 
-        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
-        let arguments = [shell, "-l", "-c", "cd \(Self.shellQuote(cwd)) && exec \(command)"]
-        let environment = startupEnvironment(cols: cols, rows: rows)
-
         primaryHandle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
             self?.emitOutput(data)
         }
+
+        // Hold the slave open and remember the provisional size; exec happens in
+        // `spawnIfPending` once the first `resize` (real grid) arrives or the
+        // fallback fires. Status stays `.starting` until then.
+        lock.lock()
+        deferredSecondaryFD = secondary
+        deferredCols = cols
+        deferredRows = rows
+        awaitingInitialResize = true
+        lock.unlock()
+
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + Self.deferredSpawnFallback) { [weak self] in
+            self?.spawnIfPending(preferredCols: nil, preferredRows: nil)
+        }
+    }
+
+    /// Exec the deferred agent process. Idempotent — only the first caller (the
+    /// first real `resize`, or the fallback timer) wins; the rest no-op. When a
+    /// renderer-measured size is supplied it overrides the provisional one so the
+    /// agent's very first paint matches the on-screen grid.
+    private func spawnIfPending(preferredCols: UInt16?, preferredRows: UInt16?) {
+        lock.lock()
+        guard awaitingInitialResize, !hasSpawned, primaryFD >= 0 else { lock.unlock(); return }
+        hasSpawned = true
+        awaitingInitialResize = false
+        let secondary = deferredSecondaryFD
+        deferredSecondaryFD = -1
+        let cols = preferredCols ?? deferredCols
+        let rows = preferredRows ?? deferredRows
+        lock.unlock()
+        // Always exec off the main thread. The first real `resize` arrives on the
+        // MainActor (`terminalDidResize`), and `performDeferredSpawn` does process
+        // spawn + SessionStore/SessionTerminalStore persistence + a BoardServer
+        // broadcast — running that synchronously on main deadlocks the app. The
+        // pre-defer code path ran on the background createSession thread; preserve
+        // that. `hasSpawned` is already set above, so this stays idempotent.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.performDeferredSpawn(cols: cols, rows: rows, secondary: secondary)
+        }
+    }
+
+    private func performDeferredSpawn(cols: UInt16, rows: UInt16, secondary: Int32) {
+        // Recheck cancellation UNDER LOCK right before spawning. The user can
+        // close a just-opened session during the deferred window: terminate()→
+        // handleExit() then closes the PTY (primaryFD = -1, status = .exited).
+        // The old unlocked `primaryFD >= 0` guard could race past that and
+        // posix_spawn an orphan agent that survives the closed session. Take a
+        // consistent snapshot under the lock instead.
+        lock.lock()
+        let cancelled = status == .exited || status == .failed || primaryFD < 0
+        lock.unlock()
+        guard !cancelled, secondary >= 0 else {
+            if secondary >= 0 { Darwin.close(secondary) }
+            return
+        }
+
+        // Size the PTY before exec so the agent boots straight into the right width.
+        var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
+        _ = ioctl(primaryFD, TIOCSWINSZ, &size)
+
+        let shell = ProcessInfo.processInfo.environment["SHELL"].flatMap { $0.isEmpty ? nil : $0 } ?? "/bin/zsh"
+        let arguments = [shell, "-l", "-c", "cd \(Self.shellQuote(cwd)) && exec \(command)"]
+        let environment = startupEnvironment(cols: cols, rows: rows)
 
         do {
             let launchedPid = try Self.spawnProcess(
@@ -586,9 +670,20 @@ final class InternalTerminalSurface {
                 secondaryFD: secondary
             )
             Darwin.close(secondary)
+            // If termination won the race while we were spawning, don't resurrect
+            // the surface — reap the child we just created so it isn't orphaned.
+            lock.lock()
+            if status == .exited || status == .failed || primaryFD < 0 {
+                lock.unlock()
+                _ = Darwin.kill(-pid_t(launchedPid), SIGTERM)
+                _ = Darwin.kill(pid_t(launchedPid), SIGTERM)
+                return
+            }
+            let exitSource = makeProcessExitSource(pid: launchedPid)
             pid = Int(launchedPid)
-            processSource = makeProcessExitSource(pid: launchedPid)
+            processSource = exitSource
             status = .running
+            lock.unlock()
             touch()
             notifyNativeClientsStatus(snapshot())
             SessionStore.shared.update(sessionId) { session in
@@ -613,11 +708,13 @@ final class InternalTerminalSurface {
             )
         } catch {
             Darwin.close(secondary)
-            primaryHandle.readabilityHandler = nil
-            primaryHandle.closeFile()
+            let handle = primaryHandle
+            handle?.readabilityHandler = nil
+            handle?.closeFile()
+            lock.lock()
             primaryFD = -1
+            lock.unlock()
             markFailed("process start failed: \(error.localizedDescription)")
-            throw error
         }
     }
 
@@ -693,7 +790,17 @@ final class InternalTerminalSurface {
                 if initialPromptDelivered { lock.unlock(); return }
                 initialPromptDelivered = true
                 lock.unlock()
-                writeInput(prompt + "\r")
+                // Deliver the prompt body and the submit (Enter) as SEPARATE
+                // writes. Agent TUIs (claude/codex) detect a fast multi-line
+                // burst as a *paste*, so a trailing "\r" in the same write is
+                // absorbed as a literal newline and the prompt just sits unsent
+                // in the input box. Write the body, pause past the
+                // paste-detection window, then send Enter on its own so it
+                // registers as a submit keystroke.
+                writeInput(prompt)
+                queue.asyncAfter(deadline: .now() + Self.initialPromptSubmitDelay) { [weak self] in
+                    self?.writeInput("\r")
+                }
                 return
             }
             queue.asyncAfter(deadline: .now() + 0.3) { probe() }
@@ -759,6 +866,16 @@ final class InternalTerminalSurface {
     }
 
     func resize(cols: UInt16, rows: UInt16) {
+        // First real measured size from the renderer: this is what we were
+        // waiting for — exec the agent now at this width so its banner is born
+        // correct, instead of SIGWINCH-ing a process that doesn't exist yet.
+        lock.lock()
+        let pending = awaitingInitialResize && !hasSpawned
+        lock.unlock()
+        if pending {
+            spawnIfPending(preferredCols: cols, preferredRows: rows)
+            return
+        }
         guard primaryFD >= 0 else { return }
         var size = winsize(ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0)
         _ = ioctl(primaryFD, TIOCSWINSZ, &size)
@@ -783,6 +900,19 @@ final class InternalTerminalSurface {
     }
 
     private func handleExit(code: Int) {
+        // If we exit while still in the deferred-spawn window (terminated before
+        // the agent ever execs), neutralize any pending spawn and release the
+        // slave fd we were holding open for it.
+        lock.lock()
+        awaitingInitialResize = false
+        hasSpawned = true
+        let leakedSecondary = deferredSecondaryFD
+        deferredSecondaryFD = -1
+        lock.unlock()
+        if leakedSecondary >= 0 {
+            Darwin.close(leakedSecondary)
+        }
+
         processSource?.cancel()
         processSource = nil
         primaryHandle?.readabilityHandler = nil
@@ -1153,6 +1283,14 @@ final class InternalTerminalSurface {
         env["PWD"] = cwd
         env["MEEE2_SESSION_ID"] = sessionId
         env["MEEE2_SURFACE_ID"] = surfaceId
+        // The Claude hook bridge forwards the surface id to meee2 as
+        // `cmuxSurfaceId` by reading the `CMUX_SURFACE_ID` env var (see
+        // claude-hook-bridge.sh). Without this, an internal session's hooks
+        // carry no surface id and ClaudePlugin can only attribute the CLI
+        // session by cwd — which is ambiguous because every node's internal
+        // session in a canvas shares one managed-workspace cwd, leading to
+        // mis-binding the resume id. Export it so attribution is deterministic.
+        env["CMUX_SURFACE_ID"] = surfaceId
         env["MEEE2_TERMINAL_KIND"] = "internal"
         if let canvasId { env["MEEE2_CANVAS_ID"] = canvasId }
         if let nodeId { env["MEEE2_NODE_ID"] = nodeId }

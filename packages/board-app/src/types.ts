@@ -1010,6 +1010,24 @@ export interface Widget {
   html?: string
 }
 
+/** One upstream whose head version is newer than what this node consumed. */
+export interface StaleUpstream {
+  nodeId: string
+  title: string
+  /** versionIndex of the upstream version this node actually ran on. */
+  consumedVersion: number
+  /** versionIndex of the upstream's current head (done) version. */
+  latestVersion: number
+}
+
+/**
+ * Derived (read-only) upstream-staleness signal — see PlanningNode.upstreamFreshness.
+ */
+export interface UpstreamFreshness {
+  state: 'fresh' | 'stale'
+  staleUpstreams: StaleUpstream[]
+}
+
 export interface PlanningNode {
   id: string
   canvasId: string
@@ -1052,6 +1070,15 @@ export interface PlanningNode {
    * with no actionable workflow state.
    */
   nextAction?: string | null
+  /**
+   * Derived upstream-staleness signal, computed server-side at read time from
+   * the append-only `nodeVersions` log. Encode-only / read-only — never
+   * persisted. `state: 'stale'` means an upstream this node already consumed has
+   * since produced a newer (done) version; `staleUpstreams` lists which, with
+   * the consumed vs latest version index. Absent on nodes with no upstream or
+   * that never ran.
+   */
+  upstreamFreshness?: UpstreamFreshness | null
   /**
    * Node-level view widget (2026-05-28). Absent = standard view (title +
    * assignee + run state). Present = render as kanban / inbox / matrix /
