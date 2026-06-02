@@ -169,6 +169,7 @@ final class TerminalSessionBackendTests: XCTestCase {
         XCTAssertFalse(dto.canOpenExternal)
         XCTAssertFalse(dto.nativeWorkspaceAvailable)
         XCTAssertEqual(dto.openTarget, "web-fallback")
+        XCTAssertNil(dto.providerResumeSessionId)
     }
 
     func testNonJumpableExternalSessionKeepsResolvedLiveStatus() {

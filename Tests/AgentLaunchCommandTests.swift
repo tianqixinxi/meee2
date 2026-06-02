@@ -68,6 +68,7 @@ final class AgentLaunchCommandTests: XCTestCase {
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-ghostty-8db44e39-685d-47ab-bd0e-5e97386ded80"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("claude-internal-123"))
+        XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("provider-session-claude-123"))
         XCTAssertFalse(AgentLaunchCommand.isLikelyProviderResumeSessionId("planner-node-session"))
     }
 }

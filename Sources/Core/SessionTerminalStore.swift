@@ -287,7 +287,7 @@ class SessionTerminalStore {
 
     private static func validProviderResumeSessionId(_ raw: String?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, !AgentLaunchCommand.isMeee2InternalSessionId(trimmed) else {
+        guard AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) else {
             return nil
         }
         return trimmed

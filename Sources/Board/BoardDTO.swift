@@ -1089,8 +1089,7 @@ enum BoardDTOBuilder {
             return TerminalSessionBackendKind.external.rawValue
         }()
         let sync = syncInfo(forSessionId: sessionData.sessionId)
-        let providerResumeId = terminalInfo?.providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerResumeId = validProviderResumeSessionId(terminalInfo?.providerResumeSessionId)
         let controlIds = [sessionData.sessionId, terminalInfo?.cmuxSurfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1162,9 +1161,9 @@ enum BoardDTOBuilder {
             }
         }()
         let sync = syncInfo(forSessionId: surface.sessionId)
-        let providerResumeId = SessionTerminalStore.shared.get(sessionId: surface.sessionId)?
-            .providerResumeSessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerResumeId = validProviderResumeSessionId(
+            SessionTerminalStore.shared.get(sessionId: surface.sessionId)?.providerResumeSessionId
+        )
         let controlIds = [surface.sessionId, surface.surfaceId, providerResumeId]
             .compactMap { $0 }
             .filter { !$0.isEmpty }
@@ -1274,7 +1273,7 @@ enum BoardDTOBuilder {
             termProgram: surface.termProgram,
             terminalKind: surface.terminalKind,
             surfaceId: surface.surfaceId,
-            providerResumeSessionId: surface.providerResumeSessionId,
+            providerResumeSessionId: validProviderResumeSessionId(surface.providerResumeSessionId),
             surfaceStatus: surface.surfaceStatus,
             canOpenExternal: surface.canOpenExternal,
             terminalBackend: surface.terminalBackend,
@@ -1288,6 +1287,11 @@ enum BoardDTOBuilder {
             syncTeamId: surface.syncTeamId,
             syncTeamName: surface.syncTeamName
         )
+    }
+
+    private static func validProviderResumeSessionId(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return AgentLaunchCommand.isLikelyProviderResumeSessionId(trimmed) ? trimmed : nil
     }
 
     private static func externalSessionCanOpen(

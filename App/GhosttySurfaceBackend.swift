@@ -539,7 +539,6 @@ private final class GhosttySurfaceSession: NSObject, NativeTerminalPaneControlli
     private func commandWithSurfaceIdentity(_ rawCommand: String) -> String {
         [
             "CMUX_SURFACE_ID=\(Self.shellQuote(surfaceId))",
-            "MEEE2_SURFACE_SESSION_ID=\(Self.shellQuote(sessionId))",
             rawCommand
         ].joined(separator: " ")
     }

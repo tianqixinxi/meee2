@@ -109,7 +109,7 @@ describe('NodeInspectorModal 进展 live-block gating', () => {
 
   it('shows low-contrast terminal ids for a bound session', () => {
     const surfaceId = 'ghostty-surface-node-abcdef1234567890'
-    const providerResumeSessionId = 'provider-session-claude-1234567890abcdef'
+    const providerResumeSessionId = '8db44e39-685d-47ab-bd0e-5e97386ded80'
     const { container } = renderModal({
       node: node({
         sessionId: 'sess-abcdef1234',
